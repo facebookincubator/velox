@@ -12,7 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(common)
-add_subdirectory(dwrf)
-add_subdirectory(parquet)
-add_subdirectory(type)
+add_subdirectory(reader)
+add_subdirectory(test)

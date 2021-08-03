@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(common)
-add_subdirectory(dwrf)
-add_subdirectory(parquet)
-add_subdirectory(type)
+add_subdirectory(duckdb)
+
+add_library(velox_dwio_parquet_reader ParquetReader.cpp)
+
+target_link_libraries(
+  velox_dwio_parquet_reader velox_dwio_parquet_reader_duckdb velox_dwio_common
+  velox_duckdb_conversion duckdb ${FMT})
