@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/connectors/hive/HiveConnector.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 
 class TaskTest : public testing::Test {};
@@ -25,7 +26,7 @@ class TaskTest : public testing::Test {};
 TEST_F(TaskTest, splitGroup) {
   // Create single hive connector split and the task.
   auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
-      "test", "file:/tmp/abc", 0, 100);
+      "test", "file:/tmp/abc", dwio::common::FileFormat::ORC, 0, 100);
   core::PlanNodeId planNodeId{"0"};
   auto queryCtx = std::make_shared<core::QueryCtx>();
   exec::Task task("0", nullptr, 0, queryCtx);

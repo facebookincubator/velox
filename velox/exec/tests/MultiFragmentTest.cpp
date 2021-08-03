@@ -23,6 +23,7 @@
 #include "velox/exec/tests/OperatorTestBase.h"
 #include "velox/exec/tests/PlanBuilder.h"
 
+using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -113,7 +114,9 @@ class MultiFragmentTest : public OperatorTestBase {
     for (auto& filePath : filePaths) {
       auto split = exec::Split(
           std::make_shared<HiveConnectorSplit>(
-              kHiveConnectorId, "file:" + filePath->path),
+              kHiveConnectorId,
+              "file:" + filePath->path,
+              dwio::common::FileFormat::ORC),
           -1);
       task->addSplit("0", std::move(split));
       VLOG(1) << filePath->path << "\n";

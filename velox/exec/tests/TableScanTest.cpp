@@ -30,6 +30,7 @@ namespace fs = std::filesystem;
 namespace fs = std::experimental::filesystem;
 #endif
 
+using namespace facebook;
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
@@ -118,7 +119,12 @@ class TableScanTest : public HiveConnectorTestBase {
     std::unordered_map<std::string, std::string> partitionKeys = {
         {"ds", "2020-11-01"}};
     auto split = std::make_shared<HiveConnectorSplit>(
-        kHiveConnectorId, filePath, 0, fs::file_size(filePath), partitionKeys);
+        kHiveConnectorId,
+        filePath,
+        dwio::common::FileFormat::ORC,
+        0,
+        fs::file_size(filePath),
+        partitionKeys);
 
     auto op = PlanBuilder()
                   .tableScan(outputType, tableHandle, assignments)
@@ -503,7 +509,11 @@ TEST_F(TableScanTest, validFileNoData) {
   auto filePath = facebook::velox::test::getDataFilePath(
       "velox/exec/tests", "data/emptyPresto.dwrf");
   auto split = std::make_shared<HiveConnectorSplit>(
-      kHiveConnectorId, "file:" + filePath, 0, fs::file_size(filePath) / 2);
+      kHiveConnectorId,
+      "file:" + filePath,
+      dwio::common::FileFormat::ORC,
+      0,
+      fs::file_size(filePath) / 2);
 
   auto op = tableScanNode(rowType);
   assertQuery(op, split, "");
@@ -1411,6 +1421,7 @@ TEST_F(TableScanTest, bucket) {
     splits.emplace_back(std::make_shared<HiveConnectorSplit>(
         kHiveConnectorId,
         filePaths[i]->path,
+        dwio::common::FileFormat::ORC,
         0,
         fs::file_size(filePaths[i]->path),
         std::unordered_map<std::string, std::string>(),
