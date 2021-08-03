@@ -35,7 +35,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::memory;
 using folly::Random;
 
-std::unique_ptr<DwrfRowReader> writeAndGetReader(
+std::unique_ptr<RowReader> writeAndGetReader(
     MemoryPool& pool,
     const std::shared_ptr<const Type>& type,
     VectorPtr batch,

@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# for generated headers
+# TODO: remove at some point when common doesn't use classes from DWRF
+include_directories(${CMAKE_BINARY_DIR})
+
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
@@ -25,6 +30,7 @@ add_library(
   IoStatistics.cpp
   MemoryInputStream.cpp
   Options.cpp
+  ReaderFactory.cpp
   TypeWithId.cpp)
 
 target_link_libraries(
@@ -32,6 +38,7 @@ target_link_libraries(
   velox_exception
   velox_dwio_common_encryption
   velox_dwio_common_compression
+  velox_dwio_dwrf_proto # TODO: remove dependency on DWRF
   Boost::regex
   ${FOLLY_WITH_DEPENDENCIES}
   ${GLOG})

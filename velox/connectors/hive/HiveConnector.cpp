@@ -200,10 +200,10 @@ namespace {
 
 bool testFilters(
     common::ScanSpec* scanSpec,
-    dwrf::DwrfReader* reader,
+    dwio::common::Reader* reader,
     const std::string& filePath) {
-  auto stats = reader->getStatistics();
-  auto totalRows = reader->getFooter().numberofrows();
+  // auto stats = reader->getStatistics();
+  auto totalRows = reader->getNumberOfRows();
   const auto& fileTypeWithId = reader->getTypeWithId();
   const auto& rowType = reader->getType();
   for (const auto& child : scanSpec->children()) {
@@ -221,7 +221,7 @@ bool testFilters(
         if (!testFilter(
                 child->filter(),
                 columnStats.get(),
-                totalRows,
+                totalRows.value(),
                 typeWithId->type)) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
@@ -269,17 +269,26 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     dataCacheConfig->filenum = fileHandle_->uuid.id();
     readerOpts_.setDataCacheConfig(std::move(dataCacheConfig));
   }
+  if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {
+    VELOX_CHECK(
+        readerOpts_.getFileFormat() == split_->inputFormat,
+        "Splits of different formats ({} and {}) are fed to HiveDataSource",
+        ToString(readerOpts_.getFileFormat()),
+        ToString(split_->inputFormat));
+  } else {
+    readerOpts_.setFileFormat(split_->inputFormat);
+  }
 
-  reader_ = dwrf::DwrfReader::create(
-      std::make_unique<dwio::common::ReadFileInputStream>(
-          fileHandle_->file.get(),
-          dwio::common::MetricsLog::voidLog(),
-          ioStats_.get()),
-      readerOpts_);
+  reader_ = dwio::common::getReaderFactory(readerOpts_.getFileFormat())
+                ->createReader(
+                    std::make_unique<dwio::common::ReadFileInputStream>(
+                        fileHandle_->file.get(),
+                        dwio::common::MetricsLog::voidLog(),
+                        ioStats_.get()),
+                    readerOpts_);
 
   emptySplit_ = false;
-  if (reader_->getFooter().has_numberofrows() &&
-      reader_->getFooter().numberofrows() == 0) {
+  if (reader_->getNumberOfRows() == 0) {
     emptySplit_ = true;
     return;
   }

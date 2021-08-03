@@ -14,5 +14,15 @@
 
 add_library(velox_hive_connector OBJECT HiveConnector.cpp FileHandle.cpp)
 
+# This is due to reader factories that have to be linked into dependent
+# target (dependencies on OBJECT libraries are not transitive).
+# Move factories into a separate lib to not include whole reader libs
+# here? Remove DWRF/Parquet dependencies from here and let executable
+# decide which readers/writers to include?
+target_sources(
+  velox_hive_connector
+  INTERFACE
+  $<TARGET_OBJECTS:velox_dwio_dwrf_reader>)
+
 target_link_libraries(velox_hive_connector velox_connector
                       velox_dwio_dwrf_reader velox_dwio_dwrf_writer file)
