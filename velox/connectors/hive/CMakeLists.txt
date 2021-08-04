@@ -22,7 +22,8 @@ add_library(velox_hive_connector OBJECT HiveConnector.cpp FileHandle.cpp)
 target_sources(
   velox_hive_connector
   INTERFACE
-  $<TARGET_OBJECTS:velox_dwio_dwrf_reader>)
+  $<TARGET_OBJECTS:velox_dwio_dwrf_reader>
+  $<TARGET_OBJECTS:velox_dwio_parquet_reader>)
 
-target_link_libraries(velox_hive_connector velox_connector
-                      velox_dwio_dwrf_reader velox_dwio_dwrf_writer file)
+target_link_libraries(velox_hive_connector PUBLIC velox_connector
+                      velox_dwio_dwrf_writer file INTERFACE velox_dwio_dwrf_reader velox_dwio_parquet_reader)
