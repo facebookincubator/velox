@@ -40,6 +40,7 @@ class ParquetRowReader : public dwio::common::RowReader {
   ::duckdb::ParquetReaderScanState state;
   memory::MemoryPool& pool;
   std::shared_ptr<const velox::RowType> rowType;
+  std::vector<::duckdb::LogicalType> duckdbRowType;
 };
 
 class ParquetReader : public dwio::common::Reader {

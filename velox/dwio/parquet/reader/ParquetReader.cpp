@@ -23,10 +23,17 @@ ParquetRowReader::ParquetRowReader(
     const dwio::common::RowReaderOptions& options,
     memory::MemoryPool& _pool)
     : reader(std::move(_reader)), pool(_pool) {
-  // TODO: select proper columns
-  std::vector<::duckdb::column_t> columnIds;
-  for (auto i = 0; i < reader->names.size(); i++) {
-    columnIds.push_back(i);
+  auto& selector = *options.getSelector();
+  rowType = selector.buildSelectedReordered();
+
+  std::vector<::duckdb::column_t> columnIds(rowType->size());
+  duckdbRowType.resize(rowType->size());
+  for (size_t i = 0; i < reader->names.size(); i++) {
+    auto& filter = *selector.findColumn(i);
+    if (filter.shouldRead()) {
+      columnIds[filter.getProjectOrder()] = i;
+      duckdbRowType[filter.getProjectOrder()] = reader->return_types[i];
+    }
   }
 
   // TODO: select proper groups
@@ -34,16 +41,6 @@ ParquetRowReader::ParquetRowReader(
   for (idx_t i = 0; i < reader->NumRowGroups(); i++) {
     groups.push_back(i);
   }
-
-  std::vector<std::string> names;
-  names.reserve(columnIds.size());
-  std::vector<TypePtr> types;
-  types.reserve(columnIds.size());
-  for (auto i : columnIds) {
-    names.push_back(reader->names[i]);
-    types.emplace_back(duckdb::toF4dType(reader->return_types[i]));
-  }
-  rowType = ROW(std::move(names), std::move(types));
 
   // TODO: set filters
   reader->InitializeScan(
@@ -57,7 +54,7 @@ uint64_t ParquetRowReader::seekToRow(uint64_t rowNumber) {
 
 uint64_t ParquetRowReader::next(uint64_t size, velox::VectorPtr& result) {
   ::duckdb::DataChunk output;
-  output.Initialize(reader->return_types);
+  output.Initialize(duckdbRowType);
 
   reader->Scan(state, output);
 
