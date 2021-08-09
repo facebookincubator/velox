@@ -266,9 +266,9 @@ core::StopReason Driver::runInternal(
           guard.notThrown();
           return core::StopReason::kBlock;
         }
-        Operator* nextOp = nullptr;
-        if (i < operators_.size() - 1) {
-          nextOp = operators_[i + 1].get();
+
+        if (i < numOperators - 1) {
+          auto nextOp = operators_[i + 1].get();
           blockingReason_ = nextOp->isBlocked(&future);
           if (blockingReason_ != BlockingReason::kNotBlocked) {
             *blockingState = std::make_shared<BlockingState>(
@@ -297,32 +297,28 @@ core::StopReason Driver::runInternal(
               // output now that it got input.
               i += 2;
               continue;
-            } else {
-              stop = cancelPool_->shouldStop();
-              if (stop != core::StopReason::kNone) {
-                guard.notThrown();
-                return stop;
-              }
-              // The op is at end. If this is finishing, propagate the
-              // finish to the next op. The op could have run out
-              // because it is blocked. If the op is the source and it
-              // is not blocked and empty, this is finished. If this is
-              // not the source, just try to get output from the one
-              // before.
-              blockingReason_ = op->isBlocked(&future);
-              if (blockingReason_ != BlockingReason::kNotBlocked) {
-                *blockingState = std::make_shared<BlockingState>(
-                    self, std::move(future), op, blockingReason_);
-                guard.notThrown();
-                return core::StopReason::kBlock;
-              }
-              if (op->isFinishing()) {
-                if (!nextOp->isFinishing()) {
-                  OperationTimer timer(nextOp->stats().finishTiming);
-                  nextOp->finish();
-                  break;
-                }
-              }
+            }
+            stop = cancelPool_->shouldStop();
+            if (stop != core::StopReason::kNone) {
+              guard.notThrown();
+              return stop;
+            }
+            // The operator may not have output because it is blocked.
+            blockingReason_ = op->isBlocked(&future);
+            if (blockingReason_ != BlockingReason::kNotBlocked) {
+              *blockingState = std::make_shared<BlockingState>(
+                  self, std::move(future), op, blockingReason_);
+              guard.notThrown();
+              return core::StopReason::kBlock;
+            }
+          }
+          // The operator is at end. If it is finishing, propagate the finish
+          // to the next operator.
+          if (op->isFinishing()) {
+            if (!nextOp->isFinishing()) {
+              OperationTimer timer(nextOp->stats().finishTiming);
+              nextOp->finish();
+              break;
             }
           }
         } else {
