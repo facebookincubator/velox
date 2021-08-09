@@ -189,9 +189,7 @@ HiveDataSource::HiveDataSource(
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
 
-  columnReaderFactory_ =
-      std::make_unique<dwrf::SelectiveColumnReaderFactory>(scanSpec_.get());
-  rowReaderOpts_.setColumnReaderFactory(columnReaderFactory_.get());
+  rowReaderOpts_.setScanSpec(scanSpec_.get());
 
   ioStats_ = std::make_unique<dwio::common::IoStatistics>();
 }
