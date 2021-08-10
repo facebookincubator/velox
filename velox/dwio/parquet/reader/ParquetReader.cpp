@@ -36,10 +36,13 @@ ParquetRowReader::ParquetRowReader(
     }
   }
 
-  // TODO: select proper groups
   std::vector<idx_t> groups;
   for (idx_t i = 0; i < reader->NumRowGroups(); i++) {
-    groups.push_back(i);
+    auto groupOffset = reader->GetFileMetadata()->row_groups[i].file_offset;
+    if (groupOffset >= options.getOffset() &&
+        groupOffset < (options.getLength() + options.getOffset())) {
+      groups.push_back(i);
+    }
   }
 
   // TODO: set filters
