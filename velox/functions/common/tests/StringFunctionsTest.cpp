@@ -160,8 +160,6 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto result = evaluate<FlatVector<StringView>>(
         "upper(c0)", makeRowVector({inputsFlatVector}));
 
-    ASSERT_EQ(result->getStringEncoding().value(), expectedResultEncoding);
-
     for (int32_t i = 0; i < tests.size(); ++i) {
       ASSERT_EQ(result->valueAt(i), StringView(std::get<1>(tests[i])));
     }
@@ -192,7 +190,6 @@ class StringFunctionsTest : public FunctionBaseTest {
     auto testQuery = [&](const std::string& query) {
       auto result = evaluate<FlatVector<StringView>>(
           query, makeRowVector({inputsFlatVector}));
-      ASSERT_EQ(result->getStringEncoding().value(), expectedResultEncoding);
 
       for (int32_t i = 0; i < tests.size(); ++i) {
         ASSERT_EQ(result->valueAt(i), StringView(std::get<1>(tests[i])));
@@ -769,14 +766,6 @@ TEST_F(StringFunctionsTest, concat) {
     EXPECT_EQ(result->valueAt(i), StringView(c0 + c1));
   }
 
-  // Test string encoding propagation
-  result =
-      evaluate<SimpleVector<StringView>>("concat('ali', 'ali','ali')", rows);
-  EXPECT_EQ(result->getStringEncoding().value(), StringEncodingMode::ASCII);
-
-  result = evaluate<SimpleVector<StringView>>(
-      "concat('ali', 'àáâãäåæçè','ali')", rows);
-  EXPECT_EQ(result->getStringEncoding().value(), StringEncodingMode::UTF8);
 }
 
 // Test length vector function
@@ -1168,13 +1157,12 @@ void StringFunctionsTest::testStringEncodingResolution(
   auto resolvedEncoding = StringEncodingMode::ASCII;
   for (auto vector : baseVectors) {
     auto simpleVector = vector->as<SimpleVector<StringView>>();
-    if (!simpleVector->getStringEncoding().has_value()) {
-      SelectivityVector allRows(simpleVector->size());
+    SelectivityVector allRows(simpleVector->size());
+    if (!simpleVector->hasStringAsciiMap()) {
       determineStringEncoding(&evalCtx, simpleVector, allRows);
     }
-
     resolvedEncoding = functions::maxEncoding(
-        resolvedEncoding, simpleVector->getStringEncoding().value());
+        resolvedEncoding, simpleVector->getStringEncodingFor(allRows));
   }
   ASSERT_EQ(resolvedEncoding, expectedResolvedEncoding);
 }
@@ -1193,8 +1181,9 @@ TEST_F(StringFunctionsTest, controlExprEncodingPropagation) {
             makeFlatVector(dataASCII),
             makeFlatVector(dataUTF8),
         }));
-    ASSERT_TRUE(result->getStringEncoding().has_value());
-    ASSERT_EQ(result->getStringEncoding().value(), expectedEncoding);
+    ASSERT_TRUE(result->hasStringAsciiMap());
+    SelectivityVector all(3);
+    ASSERT_EQ(result->getStringEncodingFor(all), expectedEncoding);
   };
 
   auto testEncodingNotSet = [&](std::string query) {
@@ -1330,25 +1319,6 @@ TEST_F(StringFunctionsTest, findCommonEncoding) {
       {asciiCol, asciiCol, asciiCol},
       {folly::none, folly::none, folly::none},
       StringEncodingMode::ASCII);
-
-  // Test identifying likely ascii
-  testStringEncodingResolution(
-      {mostlyAsciiCol}, {folly::none}, StringEncodingMode::MOSTLY_ASCII);
-
-  testStringEncodingResolution(
-      {asciiCol, mostlyAsciiCol},
-      {folly::none, folly::none},
-      StringEncodingMode::MOSTLY_ASCII);
-
-  testStringEncodingResolution(
-      {asciiCol, mostlyAsciiCol},
-      {StringEncodingMode::ASCII, StringEncodingMode::MOSTLY_ASCII},
-      StringEncodingMode::MOSTLY_ASCII);
-
-  testStringEncodingResolution(
-      {asciiCol, asciiCol},
-      {StringEncodingMode::MOSTLY_ASCII, StringEncodingMode::ASCII},
-      StringEncodingMode::MOSTLY_ASCII);
 
   // Test identifying UTF8
   testStringEncodingResolution(

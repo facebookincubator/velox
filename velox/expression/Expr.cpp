@@ -705,12 +705,13 @@ void scanVectorFunctionInputsStringEncoding(
   }
 }
 
-// Determine the string encoding of the result based on the inputs encoding if
+// Propogate the string encoding of the result based on the inputs encoding if
 // encoding propagation is configured. Return std::nullopt if not determined.
-std::optional<functions::stringCore::StringEncodingMode>
+void
 getVectorFunctionResultStringEncoding(
     const VectorFunction* vectorFunction,
-    std::vector<VectorPtr>& inputValues) {
+    std::vector<VectorPtr>& inputValues,
+    VectorPtr* result) {
   std::vector<size_t> indices;
   if (vectorFunction->propagateStringEncodingFromAllInputs()) {
     for (auto i = 0; i < inputValues.size(); i++) {
@@ -720,27 +721,40 @@ getVectorFunctionResultStringEncoding(
     indices = vectorFunction->propagateStringEncodingFrom().value();
   } else {
     // no propagation is done
-    return std::nullopt;
+    return ;
   }
 
-  auto resultEncoding = StringEncodingMode::ASCII;
+  auto resultVector = (*result)->as<SimpleVector<StringView>>();
+
+  if (!resultVector->hasStringAsciiMap()) {
+    auto getMaxSize = [&](size_t a, size_t b) {
+      if (inputValues[a]->size() > inputValues[b] -> size()) {
+        return a;
+      }
+      return b;
+    };
+    size_t largestIndex = std::accumulate(indices.begin(), indices.end(), 0, getMaxSize);
+
+    resultVector->createAsciiMap(inputValues[largestIndex]->size());
+  }
+
   for (auto& index : indices) {
     // Some arguments are optionals and hence may not exist. And some functions
     // operates on dynamic types.
     if (index >= inputValues.size() ||
+        inputValues[index] == nullptr ||
         inputValues[index]->type()->kind() != TypeKind::VARCHAR) {
       continue;
     }
 
     auto inputVector = inputValues[index]->as<SimpleVector<StringView>>();
-    if (!inputVector->getStringEncoding().has_value()) {
-      return std::nullopt;
-    } else {
-      resultEncoding =
-          maxEncoding(resultEncoding, inputVector->getStringEncoding().value());
+
+    if (!inputVector->hasStringAsciiMap()) {
+      inputVector->createAsciiMap(inputVector->size(), false);
     }
+
+    resultVector->intersectOther(*inputVector);
   }
-  return resultEncoding;
 }
 
 inline bool isPeelable(VectorEncoding::Simple encoding) {
@@ -939,13 +953,9 @@ void Expr::applyFunction(
     VectorPtr* result) {
   scanVectorFunctionInputsStringEncoding(
       vectorFunction_.get(), inputValues_, context, rows);
-  auto resultEncoding = getVectorFunctionResultStringEncoding(
-      vectorFunction_.get(), inputValues_);
   applyVectorFunction(applyRows, context, result);
-  if (resultEncoding.has_value()) {
-    (*result)->as<SimpleVector<StringView>>()->setStringEncoding(
-        *resultEncoding);
-  }
+  getVectorFunctionResultStringEncoding(
+      vectorFunction_.get(), inputValues_, result);
 }
 
 void Expr::applyVectorFunction(
@@ -1063,46 +1073,44 @@ void ExprSet::clear() {
   }
 }
 
-void determineStringEncoding(
-    exec::EvalCtx* context,
-    SimpleVector<StringView>* vector,
-    const SelectivityVector& rows) {
-  if (vector->getStringEncoding().has_value()) {
+namespace {
+
+void computeAndSetAsciiMap(exec::EvalCtx* context,
+                           SimpleVector<StringView>* vector) {
+
+  if (vector->hasStringAsciiMap()) {
     return;
   }
 
-  if (!vector->isConstantEncoding() &&
-      !(rows.size() >= vector->size() && rows.isAllSelected())) {
-    // TODO Allow setting string encoding for a subset of rows.
-    return;
-  }
-
-  vector_size_t totalValuesCount = 0;
-  vector_size_t totalAsciiCount = 0;
-
-  auto countAscii = [&](const StringView& string) {
-    totalValuesCount++;
+  auto isAscii = [=](const StringView& string) {
     if (functions::stringCore::isAscii(string.data(), string.size())) {
-      totalAsciiCount++;
       return true;
     }
     return false;
   };
 
-  if (vector->isConstantEncoding()) {
+
+
+  if (vector->encoding() == VectorEncoding::Simple::CONSTANT) {
+    //Special case of CONSTANT Vector ?
     auto* constantVector = vector->as<ConstantVector<StringView>>();
+    vector->createAsciiMap(1, false);
     if (!constantVector->isNullAt(0)) {
-      countAscii(*constantVector->rawValues());
+      vector->setValid(0, isAscii(*constantVector->rawValues()));
     }
+    vector->updateBounds();
   } else if (vector->encoding() == VectorEncoding::Simple::FLAT) {
     auto* flatVector = vector->as<FlatVector<StringView>>();
+    vector->createAsciiMap(vector->size(), false);
     for (auto i = 0; i < flatVector->size(); i++) {
       if (!vector->isNullAt(i)) {
-        countAscii(flatVector->valueAtFast(i));
+        vector->setValid(i, isAscii(flatVector->valueAtFast(i)));
       }
     }
+    vector->updateBounds();
   } else {
     // For the general case we use a decoder
+    vector->createAsciiMap(vector->size(), false);
     exec::LocalDecodedVector decodedVectorHolder(context);
     auto* decodedVector = decodedVectorHolder.get();
 
@@ -1110,10 +1118,9 @@ void determineStringEncoding(
     decodedVector->decode(*vector, localRows);
 
     // if encoding of underlying vector is set then use it
-    if (auto stringEncodung = decodedVector->base()
-                                  ->as<SimpleVector<StringView>>()
-                                  ->getStringEncoding()) {
-      vector->setStringEncoding(*stringEncodung);
+    auto baseVector = decodedVector->base()->as<SimpleVector<StringView>>();
+    if (baseVector->hasStringAsciiMap()) {
+      vector->copyStringEncodingFrom(baseVector);
       return;
     }
 
@@ -1127,29 +1134,25 @@ void determineStringEncoding(
       if (!decodedVector->isNullAt(i)) {
         if (!baseIndicesAscii.count(baseIndex)) {
           baseIndicesAscii[baseIndex] =
-              countAscii(decodedVector->valueAt<StringView>(i));
-          continue;
+              isAscii(decodedVector->valueAt<StringView>(i));
         }
-        // ascii already computed for underlying value
-        totalValuesCount++;
-        if (baseIndicesAscii[baseIndex]) {
-          totalAsciiCount++;
-        }
+        vector->setValid(i, baseIndicesAscii[baseIndex]);
+      } else {
+        // Assume null vectors as Ascii
+        vector->setValid(i, true);
       }
     }
   }
 
-  if (totalAsciiCount == totalValuesCount) {
-    vector->setStringEncoding(functions::stringCore::StringEncodingMode::ASCII);
-    return;
-  }
+}
 
-  double asciiRatio = (double)totalAsciiCount / totalValuesCount;
+}
 
-  vector->setStringEncoding(
-      asciiRatio > 0.80
-          ? functions::stringCore::StringEncodingMode::MOSTLY_ASCII
-          : functions::stringCore::StringEncodingMode::UTF8);
+void determineStringEncoding(
+    exec::EvalCtx* context,
+    SimpleVector<StringView>* vector,
+    const SelectivityVector& rows) {
+  computeAndSetAsciiMap(context, vector);
 }
 
 } // namespace facebook::velox::exec

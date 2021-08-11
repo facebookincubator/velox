@@ -236,6 +236,10 @@ class SimpleVector : public BaseVector {
   copyStringEncodingFrom(const BaseVector* vector) {
     encodingMode_ =
         vector->asUnchecked<SimpleVector<StringView>>()->getStringEncoding();
+    auto source = vector->asUnchecked<SimpleVector<StringView>>();
+    if (source->template hasStringAsciiMap()) {
+      asciiMap_ = std::optional(std::move(source->asciiMap_.value()));
+    }
   }
 
   /// Invalidate string encoding
@@ -269,6 +273,62 @@ class SimpleVector : public BaseVector {
       }
     }
     return out.str();
+  }
+
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, functions::stringCore::StringEncodingMode>::type
+  getStringEncodingFor(const SelectivityVector& other ) {
+    if (!asciiMap_.has_value()) {
+      // By default return UTF8 if nothing set
+      return functions::stringCore::StringEncodingMode::UTF8;
+    }
+
+    auto ours = asciiMap_->get();
+
+    auto otherIter = SelectivityIterator(other);
+    vector_size_t idx;
+    while (otherIter.next(idx)) {
+      if(!ours->isValid(idx) && other.isValid(idx)) {
+        return functions::stringCore::StringEncodingMode::UTF8;
+      }
+    }
+
+    return functions::stringCore::StringEncodingMode::ASCII;
+  }
+
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  createAsciiMap(vector_size_t size, bool set=true) {
+    asciiMap_ = std::optional(std::make_shared<SelectivityVector>(size, set));
+  }
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setValid(vector_size_t idx, bool set) {
+    asciiMap_.value()->setValid(idx, set);
+  }
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  updateBounds() {
+    asciiMap_.value()->updateBounds();
+  }
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  intersectOther(const SimpleVector<StringView>& other) {
+    if(!asciiMap_.has_value() or !other.asciiMap_.has_value()) {
+      return ;
+    }
+    asciiMap_.value()->intersect(*other.asciiMap_.value());
+  }
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, bool>::type
+  hasStringAsciiMap() const{
+    return asciiMap_.has_value();
   }
 
  protected:
@@ -321,6 +381,10 @@ class SimpleVector : public BaseVector {
   // If T is velox::StringView, specifies the string encoding mode
   folly::Optional<functions::stringCore::StringEncodingMode> encodingMode_ =
       folly::none;
+
+  // If T is f4d::StringView, we create a bitmap to store asciiness for each
+  // string. A set bit means the corresponding string is ascii.
+  std::optional<std::shared_ptr<SelectivityVector>> asciiMap_ = std::nullopt;
 }; // namespace velox
 
 template <>
