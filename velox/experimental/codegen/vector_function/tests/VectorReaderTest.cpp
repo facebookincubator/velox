@@ -15,19 +15,19 @@
 #include <folly/Random.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <optional>
+#include <vector>
 #include "velox/experimental/codegen/vector_function/GeneratedVectorFunction-inl.h" // NOLINT (CLANGTIDY  )
-#include "velox/experimental/codegen/vector_function/StringTypes.h"
+#include "velox/experimental/codegen/vector_function/tests/VectorReaderTestBase.h"
+#include "velox/type/Type.h"
+#include "velox/vector/tests/VectorMaker.h"
 
 namespace facebook::velox::codegen {
-TEST(VectorReader, ReadDoublesVectors) {
+
+TEST_F(VectorReaderTestBase, ReadDoublesVectors) {
   const size_t vectorSize = 1000;
   auto inRowType = ROW({"columnA", "columnB"}, {DOUBLE(), DOUBLE()});
-  auto outRowType = ROW({"expr1", "expr2"}, {DOUBLE(), DOUBLE()});
-
-  auto pool_ = memory::getDefaultScopedMemoryPool();
-  auto pool = pool_.get();
-  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool);
-  auto outRowVector = BaseVector::create(outRowType, vectorSize, pool);
+  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool_.get());
 
   VectorPtr& in1 = inRowVector->as<RowVector>()->childAt(0);
 
@@ -51,17 +51,11 @@ TEST(VectorReader, ReadDoublesVectors) {
   }
 }
 
-TEST(VectorReader, ReadBoolVectors) {
-  // TODO: Move those to test class
-  auto pool_ = memory::getDefaultScopedMemoryPool();
-  auto pool = pool_.get();
+TEST_F(VectorReaderTestBase, ReadBoolVectors) {
   const size_t vectorSize = 1000;
-
   auto inRowType = ROW({"columnA", "columnB"}, {BOOLEAN(), BOOLEAN()});
-  auto outRowType = ROW({"expr1", "expr2"}, {BOOLEAN(), BOOLEAN()});
 
-  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool);
-  auto outRowVector = BaseVector::create(outRowType, vectorSize, pool);
+  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool_.get());
 
   VectorPtr& inputVector = inRowVector->as<RowVector>()->childAt(0);
   inputVector->resize(vectorSize);
@@ -92,4 +86,49 @@ TEST(VectorReader, ReadBoolVectors) {
     ASSERT_EQ(inputVector->asFlatVector<bool>()->isNullAt(row), row % 2);
   }
 }
+
+TEST_F(VectorReaderTestBase, ReadStringVectors) {
+  const size_t vectorSize = 4;
+  auto inRowType = ROW({"columnA"}, {VARCHAR()});
+
+  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool_.get());
+
+  VectorPtr& inputVector = inRowVector->as<RowVector>()->childAt(0);
+  inputVector->resize(vectorSize);
+
+  VectorReader<VarcharType, OutputReaderConfig<false, false>> writer(
+      inputVector);
+  VectorReader<VarcharType, InputReaderConfig<false, false>> reader(
+      inputVector);
+
+  auto helloWorldRef = facebook::velox::StringView(u8"Hello, World!", 13);
+  InputReferenceStringNullable helloWorld{InputReferenceString(helloWorldRef)};
+  auto emptyStringRef = StringView(u8"", 0);
+  InputReferenceStringNullable emptyString{
+      InputReferenceString(emptyStringRef)};
+  auto inlineRef = StringView(u8"INLINE", 6);
+  InputReferenceStringNullable inlineString{InputReferenceString(inlineRef)};
+
+  writer[0] = helloWorld;
+  writer[1] = emptyString;
+  writer[2] = std::nullopt;
+  writer[3] = inlineString;
+
+  ASSERT_TRUE(reader[0].has_value());
+  ASSERT_EQ(reader[0].value().size(), 13);
+  ASSERT_TRUE(gtestMemcmp(
+      (*reader[0]).data(), (void*)"Hello, World!", (*reader[0]).size()));
+
+  ASSERT_TRUE(reader[1].has_value());
+  ASSERT_EQ(reader[1].value().size(), 0);
+  ASSERT_TRUE(gtestMemcmp((*reader[1]).data(), (void*)"", (*reader[1]).size()));
+
+  ASSERT_FALSE(reader[2].has_value());
+
+  ASSERT_TRUE(reader[3].has_value());
+  ASSERT_EQ(reader[3].value().size(), 6);
+  ASSERT_TRUE(
+      gtestMemcmp((*reader[3]).data(), (void*)"INLINE", (*reader[3]).size()));
+}
+
 } // namespace facebook::velox::codegen

@@ -18,6 +18,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include "velox/experimental/codegen/vector_function/ComplexVectorReader.h"
 #include "velox/experimental/codegen/vector_function/ConcatExpression-inl.h"
 #include "velox/experimental/codegen/vector_function/Perf.h"
 #include "velox/experimental/codegen/vector_function/VectorReader-inl.h"

@@ -13,6 +13,7 @@
  */
 #pragma once
 
+#include <stdexcept>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/experimental/codegen/vector_function/StringTypes.h"
@@ -42,6 +43,8 @@ namespace codegen {
 //  constexpr static bool constantStringBuffersShared = false;
 // };
 
+// TODO: add bounds check everywhere
+
 // TODO: move readers to different directory
 /// Only support scalarType for now
 template <TypeKind SQLType>
@@ -69,7 +72,8 @@ struct VectorReader {
   // The type used for codegen expression inputs
   using ValueType = std::optional<NativeType>;
   using InputType = ValueType;
-  explicit VectorReader(VectorPtr& vector) {
+  explicit VectorReader(VectorPtr& vector, vector_size_t offset = 0)
+      : offset_(offset) {
     VELOX_CHECK_NOT_NULL(
         std::dynamic_pointer_cast<FlatVector<NativeType>>(vector));
     VELOX_CHECK_EQ(vector->typeKind(), SQLType::NativeType::typeKind);
@@ -89,13 +93,19 @@ struct VectorReader {
     }
   }
 
-  uint64_t* mutableRawNulls_;
   NativeType* mutableRawValues_;
+  uint64_t* mutableRawNulls_;
+  vector_size_t offset_ = 0;
 
   struct PointerType {
     size_t rowIndex_;
     NativeType* mutableValues_;
     uint64_t* mutableNulls_;
+    vector_size_t offset_;
+
+    inline size_t index() const {
+      return rowIndex_ + offset_;
+    }
 
     inline bool has_value() {
       // FIXME: generated code should avoid calling on this on the writer and
@@ -106,26 +116,33 @@ struct VectorReader {
 
       } else {
         // read nullability
-        return !bits::isBitNull(mutableNulls_, rowIndex_);
+        return !bits::isBitNull(mutableNulls_, index());
       }
     }
 
+    inline NativeType& value() {
+      if (!has_value()) {
+        throw std::logic_error("element has no value");
+      }
+      return mutableValues_[index()];
+    }
+
     inline NativeType& operator*() {
-      return mutableValues_[rowIndex_];
+      return mutableValues_[index()];
     }
 
     inline const NativeType& operator*() const {
-      return mutableValues_[rowIndex_];
+      return mutableValues_[index()];
     }
 
     inline PointerType& operator=(const NativeType& other) {
       static_assert(Config::isWriter_);
 
       if constexpr (Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, rowIndex_, bits::kNotNull);
+        bits::setBit(mutableNulls_, index(), bits::kNotNull);
       }
 
-      mutableValues_[rowIndex_] = other;
+      mutableValues_[index()] = other;
       return *this;
     }
 
@@ -140,7 +157,7 @@ struct VectorReader {
           *this = *other;
         } else {
           if constexpr (!Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, rowIndex_, bits::kNull);
+            bits::setBit(mutableNulls_, index(), bits::kNull);
           }
         }
         return *this;
@@ -156,7 +173,11 @@ struct VectorReader {
   };
 
   inline PointerType operator[](size_t rowIndex) {
-    return {rowIndex, this->mutableRawValues_, this->mutableRawNulls_};
+    return {
+        rowIndex,
+        this->mutableRawValues_,
+        this->mutableRawNulls_,
+        this->offset_};
   }
 };
 
@@ -172,7 +193,8 @@ struct VectorReader<
     Config,
     std::
         enable_if_t<SQLType::NativeType::typeKind == TypeKind::BOOLEAN, bool>> {
-  explicit VectorReader(VectorPtr& vector) {
+  explicit VectorReader(VectorPtr& vector, vector_size_t offset = 0)
+      : offset_(offset) {
     VELOX_CHECK(vector->type()->kind() == TypeKind::BOOLEAN);
     auto flatVector = vector->asFlatVector<bool>();
     VELOX_CHECK_NOT_NULL(flatVector);
@@ -192,10 +214,10 @@ struct VectorReader<
   }
 
   // The type used for codegen expression inputs
-  using ValueType = const std::optional<bool>;
+  using ValueType = std::optional<bool>;
   using InputType = ValueType;
   struct ReferenceType {
-    size_t rowIndex_;
+    size_t index_;
     uint64_t* mutableValues_;
     uint64_t* mutableNulls_;
 
@@ -203,15 +225,15 @@ struct VectorReader<
       static_assert(Config::isWriter_);
 
       if constexpr (Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, rowIndex_, bits::kNotNull);
+        bits::setBit(mutableNulls_, index_, bits::kNotNull);
       }
 
-      bits::setBit(mutableValues_, rowIndex_, other);
+      bits::setBit(mutableValues_, index_, other);
       return *this;
     }
 
     operator bool() const {
-      return bits::isBitSet(mutableValues_, rowIndex_);
+      return bits::isBitSet(mutableValues_, index_);
     }
   };
 
@@ -219,6 +241,11 @@ struct VectorReader<
     size_t rowIndex_;
     uint64_t* mutableValues_;
     uint64_t* mutableNulls_;
+    vector_size_t offset_;
+
+    inline size_t index() {
+      return offset_ + rowIndex_;
+    }
 
     inline bool has_value() {
       static_assert(!Config::isWriter_);
@@ -226,24 +253,32 @@ struct VectorReader<
         return true;
       } else {
         // read nullability
-        return !bits::isBitNull(mutableNulls_, rowIndex_);
+        return !bits::isBitNull(mutableNulls_, index());
       }
     }
 
+    inline ReferenceType value() {
+      if (!has_value()) {
+        throw std::logic_error("element has no value");
+      }
+
+      return ReferenceType{index(), mutableValues_, mutableNulls_};
+    }
+
     inline ReferenceType operator*() {
-      return ReferenceType{rowIndex_, mutableValues_, mutableNulls_};
+      return ReferenceType{index(), mutableValues_, mutableNulls_};
     }
 
     inline const ReferenceType operator*() const {
-      return ReferenceType{rowIndex_, mutableValues_, mutableNulls_};
+      return ReferenceType{index(), mutableValues_, mutableNulls_};
     }
 
     inline PointerType& operator=(const bool& other) {
       static_assert(Config::isWriter_);
       if constexpr (Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, rowIndex_, bits::kNotNull);
+        bits::setBit(mutableNulls_, index(), bits::kNotNull);
       }
-      bits::setBit(mutableValues_, rowIndex_, other);
+      bits::setBit(mutableValues_, index(), other);
       return *this;
     }
 
@@ -258,7 +293,7 @@ struct VectorReader<
           *this = *other;
         } else {
           if constexpr (!Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, rowIndex_, bits::kNull);
+            bits::setBit(mutableNulls_, index(), bits::kNull);
           }
         }
         return *this;
@@ -275,12 +310,16 @@ struct VectorReader<
 
   inline PointerType operator[](size_t rowIndex) {
     return PointerType{
-        rowIndex, this->mutableRawValues_, this->mutableRawNulls_};
+        rowIndex,
+        this->mutableRawValues_,
+        this->mutableRawNulls_,
+        this->offset_};
   }
 
  private:
-  uint64_t* mutableRawNulls_;
   uint64_t* mutableRawValues_;
+  uint64_t* mutableRawNulls_;
+  vector_size_t offset_ = 0;
 };
 
 //****************************************************************************
@@ -295,8 +334,8 @@ struct VectorReader<
     std::enable_if_t<
         SQLType::NativeType::typeKind == TypeKind::VARCHAR,
         StringView>> {
-  explicit VectorReader(VectorPtr& vector)
-      : vector_(vector->template asFlatVector<StringView>()) {
+  explicit VectorReader(VectorPtr& vector, vector_size_t offset = 0)
+      : vector_(vector->asFlatVector<StringView>()), offset_(offset) {
     VELOX_CHECK(vector->type()->kind() == TypeKind::VARCHAR);
     auto flatVector = vector->asFlatVector<StringView>();
     VELOX_CHECK_NOT_NULL(flatVector);
@@ -325,15 +364,29 @@ struct VectorReader<
     StringProxy(
         FlatVector<StringView>* vector,
         vector_size_t rowIndex,
-        StringView* mutableValues)
-        : vector_(vector), rowIndex_(rowIndex), mutableValues_(mutableValues) {}
+        StringView* mutableValues,
+        vector_size_t offset)
+        : vector_(vector),
+          rowIndex_(rowIndex),
+          mutableValues_(mutableValues),
+          offset_(offset) {
+      // We need to get a reference to the StringView to avoid inlined
+      // prefix
+      auto& string = vector->rawValues()[index()];
+      setData(const_cast<char*>(string.data()));
+      setSize(string.size());
+    }
+
+    inline size_t index() const {
+      return offset_ + rowIndex_;
+    }
 
     void operator=(const InputReferenceString& other_) {
       static_assert(Config::isWriter_);
 
       auto& other = other_.get();
       if constexpr (Config::inputStringBuffersShared) {
-        mutableValues_[rowIndex_] = other_;
+        mutableValues_[index()] = other_;
       } else {
         reserve(other.size());
         if (other.size() != 0) {
@@ -349,7 +402,7 @@ struct VectorReader<
 
       auto& other = other_.get();
       if constexpr (Config::constantStringBuffersShared) {
-        mutableValues_[rowIndex_] = other_;
+        mutableValues_[index()] = other_;
       } else {
         reserve(other.size());
         if (other.size() != 0) {
@@ -425,7 +478,7 @@ struct VectorReader<
       if (buffer_) {
         buffer_->setSize(buffer_->size() + size());
       }
-      mutableValues_[rowIndex_] = StringView(data(), size());
+      mutableValues_[index()] = StringView(data(), size());
       return;
     }
 
@@ -468,18 +521,25 @@ struct VectorReader<
     int32_t rowIndex_;
 
     StringView* mutableValues_;
+
+    vector_size_t offset_ = 0;
   };
 
   struct PointerType {
     uint64_t* mutableNulls_;
     StringProxy proxy_;
+    vector_size_t offset_;
 
     inline bool has_value() {
       if constexpr (Config::mayReadNull_) {
-        return !bits::isBitNull(mutableNulls_, proxy_.rowIndex());
+        return !bits::isBitNull(mutableNulls_, proxy_.index());
       } else {
         return true;
       }
+    }
+
+    inline StringProxy& value() {
+      return proxy_;
     }
 
     operator codegen::InputReferenceStringNullable const() {
@@ -490,14 +550,14 @@ struct VectorReader<
       }
 
       return codegen::InputReferenceStringNullable{
-          InputReferenceString{proxy_.mutableValues()[proxy_.rowIndex()]}};
+          InputReferenceString{proxy_.mutableValues()[proxy_.index()]}};
     }
 
     inline PointerType& operator=(const InputReferenceStringNullable& other) {
       static_assert(Config::isWriter_);
       if constexpr (!Config::mayWriteNull_) {
         if constexpr (Config::intializedWithNullSet_) {
-          bits::setBit(mutableNulls_, proxy_.rowIndex(), !bits::kNull);
+          bits::setBit(mutableNulls_, proxy_.index(), !bits::kNull);
         }
         proxy_ = *other;
 
@@ -505,13 +565,13 @@ struct VectorReader<
         // may have null
         if (other.has_value()) {
           if constexpr (Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, proxy_.rowIndex(), !bits::kNull);
+            bits::setBit(mutableNulls_, proxy_.index(), !bits::kNull);
           }
           proxy_ = *other;
 
         } else {
           if constexpr (!Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNull);
+            bits::setBit(mutableNulls_, proxy_.index(), bits::kNull);
           }
         }
       }
@@ -523,7 +583,7 @@ struct VectorReader<
       static_assert(Config::isWriter_);
       if constexpr (!Config::mayWriteNull_) {
         if constexpr (Config::intializedWithNullSet_) {
-          bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNotNull);
+          bits::setBit(mutableNulls_, proxy_.index(), bits::kNotNull);
         }
         proxy_ = *other;
 
@@ -531,13 +591,13 @@ struct VectorReader<
         // may have null
         if (other.has_value()) {
           if constexpr (Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNotNull);
+            bits::setBit(mutableNulls_, proxy_.index(), bits::kNotNull);
           }
           proxy_ = *other;
 
         } else {
           if constexpr (!Config::intializedWithNullSet_) {
-            bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNull);
+            bits::setBit(mutableNulls_, proxy_.index(), bits::kNull);
           }
         }
       }
@@ -549,23 +609,23 @@ struct VectorReader<
       static_assert(Config::isWriter_);
 
       if constexpr (!Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNull);
+        bits::setBit(mutableNulls_, proxy_.index(), bits::kNull);
       }
       return *this;
     }
 
     inline StringProxy& operator*() {
-      static_assert(Config::isWriter_);
+      // static_assert(Config::isWriter_);
       if constexpr (Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNotNull);
+        bits::setBit(mutableNulls_, proxy_.index(), bits::kNotNull);
       }
       return proxy_;
     }
 
     inline const StringProxy& operator*() const {
-      static_assert(Config::isWriter_);
+      // static_assert(Config::isWriter_);
       if constexpr (Config::intializedWithNullSet_) {
-        bits::setBit(mutableNulls_, proxy_.rowIndex(), bits::kNotNull);
+        bits::setBit(mutableNulls_, proxy_.index(), bits::kNotNull);
       }
       return proxy_;
     }
@@ -573,13 +633,16 @@ struct VectorReader<
 
   inline PointerType operator[](size_t rowIndex) {
     return PointerType{
-        mutableRawNulls_, StringProxy(vector_, rowIndex, mutableRawValues_)};
+        mutableRawNulls_,
+        StringProxy(vector_, rowIndex, mutableRawValues_, this->offset_),
+        this->offset_};
   }
 
  private:
-  uint64_t* mutableRawNulls_;
   StringView* mutableRawValues_;
+  uint64_t* mutableRawNulls_;
   FlatVector<StringView>* vector_;
+  vector_size_t offset_ = 0;
 };
 
 } // namespace codegen
