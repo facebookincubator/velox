@@ -56,6 +56,7 @@ void registerArithmeticFunctions() {
       {"width_bucket"});
   registerBinaryIntegral<udf_bitwise_and>({});
   registerBinaryIntegral<udf_bitwise_or>({});
+  registerBinaryIntegral<udf_bitwise_xor>({});
 }
 
 } // namespace facebook::velox::functions
