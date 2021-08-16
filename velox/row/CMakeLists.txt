@@ -12,4 +12,4 @@
 
 add_subdirectory(tests)
 
-add_library(velox_row INTERFACE)
+add_library(velox_row INTERFACE UnsafeRowDeserializer.h)
