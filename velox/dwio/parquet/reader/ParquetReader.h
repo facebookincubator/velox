@@ -53,10 +53,7 @@ class ParquetReader : public dwio::common::Reader {
   std::optional<uint64_t> getNumberOfRows() const override;
 
   std::unique_ptr<velox::dwrf::ColumnStatistics> getColumnStatistics(
-      uint32_t index) const override {
-    VELOX_CHECK(false, "ParquetReader::getColumnStatistics is NYI");
-    return nullptr;
-  }
+      uint32_t index) const override;
 
   const std::shared_ptr<const velox::RowType>& getType() const override;
 

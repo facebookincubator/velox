@@ -15,6 +15,7 @@
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/duckdb/conversion/DuckWrapper.h"
+#include "velox/dwio/parquet/reader/Statistics.h"
 
 namespace facebook::velox::parquet {
 
@@ -104,6 +105,12 @@ ParquetReader::ParquetReader(
 
 std::optional<uint64_t> ParquetReader::getNumberOfRows() const {
   return const_cast<::duckdb::ParquetReader*>(reader.get())->NumRows();
+}
+
+std::unique_ptr<velox::dwrf::ColumnStatistics>
+ParquetReader::getColumnStatistics(uint32_t index) const {
+  // TODO: implement proper stats
+  return std::make_unique<ColumnStatistics>();
 }
 
 const std::shared_ptr<const velox::RowType>& ParquetReader::getType() const {
