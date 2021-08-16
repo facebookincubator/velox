@@ -30,13 +30,13 @@ Task::Task(
     std::shared_ptr<const core::PlanNode> planNode,
     int destination,
     std::shared_ptr<core::QueryCtx>&& queryCtx,
-    std::function<BlockingReason(RowVectorPtr, ContinueFuture*)> consumer,
+    ConsumerSupplier consumerSupplier,
     std::function<void(std::exception_ptr)> onError)
     : taskId_(taskId),
       planNode_(planNode),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
-      consumer_(consumer),
+      consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       pool_(queryCtx_->pool()->addScopedChild("task_root")),
       bufferManager_(
@@ -82,7 +82,7 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
 #endif
 
   LocalPlanner::plan(
-      self->planNode_, self->consumer(), &self->driverFactories_);
+      self->planNode_, self->consumerSupplier(), &self->driverFactories_);
 
   for (auto& factory : self->driverFactories_) {
     self->numDrivers_ += std::min(factory->maxDrivers, maxDrivers);
@@ -132,7 +132,7 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
         self->drivers_.back()->initializeOperatorStats(
             self->taskStats_.pipelineStats[pipeline].operatorStats);
       }
-      Driver::enqueue(self->drivers_.back());
+      Driver::enqueue(self->drivers_.back(), self->queryCtx_->executor());
     }
   }
   self->noMoreLocalExchangeProducers();
@@ -145,7 +145,7 @@ void Task::resume(std::shared_ptr<Task> self) {
   for (auto& driver : self->drivers_) {
     if (driver) {
       VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-      Driver::enqueue(driver);
+      Driver::enqueue(driver, self->queryCtx_->executor());
     }
   }
 }
