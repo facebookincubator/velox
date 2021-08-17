@@ -36,6 +36,7 @@ class ParquetRowReader : public dwio::common::RowReader {
   size_t estimatedRowSize() const override;
 
  private:
+  ::duckdb::TableFilterSet filters;
   std::shared_ptr<::duckdb::ParquetReader> reader;
   ::duckdb::ParquetReaderScanState state;
   memory::MemoryPool& pool;

@@ -19,6 +19,50 @@
 
 namespace facebook::velox::parquet {
 
+void toDuckDbFilter(
+    uint64_t colIdx,
+    common::Filter* filter,
+    ::duckdb::TableFilterSet& filters) {
+  switch (filter->kind()) {
+    case common::FilterKind::kBigintRange: {
+      auto rangeFilter = dynamic_cast<common::BigintRange*>(filter);
+      if (rangeFilter->lower() != std::numeric_limits<int64_t>::min()) {
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+                ::duckdb::Value(rangeFilter->lower())));
+      }
+      if (rangeFilter->upper() != std::numeric_limits<int64_t>::max()) {
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO,
+                ::duckdb::Value(rangeFilter->upper())));
+      }
+    } break;
+
+    case common::FilterKind::kAlwaysFalse:
+    case common::FilterKind::kAlwaysTrue:
+    case common::FilterKind::kIsNull:
+    case common::FilterKind::kIsNotNull:
+    case common::FilterKind::kBoolValue:
+    case common::FilterKind::kBigintValuesUsingHashTable:
+    case common::FilterKind::kBigintValuesUsingBitmask:
+    case common::FilterKind::kDoubleRange:
+    case common::FilterKind::kFloatRange:
+    case common::FilterKind::kBytesRange:
+    case common::FilterKind::kBytesValues:
+    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kMultiRange:
+    default:
+      VELOX_CHECK(
+          false,
+          "Unsupported filter in parquet reader: {}",
+          filter->toString());
+  }
+}
+
 ParquetRowReader::ParquetRowReader(
     std::shared_ptr<::duckdb::ParquetReader> _reader,
     const dwio::common::RowReaderOptions& options,
@@ -46,9 +90,27 @@ ParquetRowReader::ParquetRowReader(
     }
   }
 
-  // TODO: set filters
+  auto& scanSpec = *options.getScanSpec();
+  for (auto& colSpec : scanSpec.children()) {
+    VELOX_CHECK(
+        !colSpec->extractValues(), "Subfield access is NYI in parquet reader");
+    if (colSpec->filter()) {
+      // TODO: remove linear search
+      uint64_t colIdx = std::find(
+                            reader->names.begin(),
+                            reader->names.end(),
+                            colSpec->fieldName()) -
+          reader->names.begin();
+      VELOX_CHECK(
+          colIdx < reader->names.size(),
+          "Unexpected columns name: {}",
+          colSpec->fieldName());
+      toDuckDbFilter(colIdx, colSpec->filter(), filters);
+    }
+  }
+
   reader->InitializeScan(
-      state, std::move(columnIds), std::move(groups), nullptr);
+      state, std::move(columnIds), std::move(groups), &filters);
 }
 
 uint64_t ParquetRowReader::seekToRow(uint64_t rowNumber) {
