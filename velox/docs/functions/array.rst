@@ -10,7 +10,7 @@ Array Functions
         SELECT array_intersect(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
         SELECT array_intersect(ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]); -- [1, NULL]
 
-.. function:: array_min(X) -> X
+.. function:: array_min(array(E)) -> E
 
     Returns the minimum value of input array.
 
