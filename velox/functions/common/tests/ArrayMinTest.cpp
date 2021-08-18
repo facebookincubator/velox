@@ -102,11 +102,33 @@ class ArrayMinTest : public FunctionBaseTest {
          {false},
          {},
          {true, false, true, std::nullopt},
+         {std::nullopt, true, false, true},
          {false, false, false},
          {true, true, true}});
 
     auto expected = makeNullableFlatVector<bool>(
-        {false, true, false, std::nullopt, std::nullopt, false, true});
+        {false,
+         true,
+         false,
+         std::nullopt,
+         std::nullopt,
+         std::nullopt,
+         false,
+         true});
+    testExpr<bool>(expected, "array_min(C0)", {arrayVector});
+  }
+
+  void testBool() {
+    auto arrayVector = makeArrayVector<bool>(
+        {{true, false},
+         {true},
+         {false},
+         {},
+         {false, false, false},
+         {true, true, true}});
+
+    auto expected = makeNullableFlatVector<bool>(
+        {false, true, false, std::nullopt, false, true});
     testExpr<bool>(expected, "array_min(C0)", {arrayVector});
   }
 };
@@ -131,4 +153,5 @@ TEST_F(ArrayMinTest, varcharArrays) {
 
 TEST_F(ArrayMinTest, boolArrays) {
   testBoolNullable();
+  testBool();
 }

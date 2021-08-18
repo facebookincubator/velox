@@ -47,10 +47,7 @@ VectorPtr applyTyped(
     bits::setNull(rawNulls, row, true);
   };
 
-  constexpr bool isBoolType = std::is_same_v<bool, T>;
-
-  if (!isBoolType && elementsDecoded.isIdentityMapping() &&
-      !elementsDecoded.mayHaveNulls()) {
+  if (elementsDecoded.isIdentityMapping() && !elementsDecoded.mayHaveNulls()) {
     auto rawElements = elementsDecoded.values<T>();
 
     rows.applyToSelected([&](auto row) {
@@ -91,6 +88,68 @@ VectorPtr applyTyped(
       }
     });
   }
+
+  return BaseVector::wrapInDictionary(
+      nulls, indices, rows.size(), baseArray->elements());
+}
+
+template <>
+VectorPtr applyTyped<TypeKind::BOOLEAN>(
+    const SelectivityVector& rows,
+    DecodedVector& arrayDecoded,
+    DecodedVector& elementsDecoded,
+    exec::EvalCtx* context) {
+  auto pool = context->pool();
+  using T = typename TypeTraits<TypeKind::BOOLEAN>::NativeType;
+
+  auto baseArray = arrayDecoded.base()->as<ArrayVector>();
+  auto inIndices = arrayDecoded.indices();
+  auto rawSizes = baseArray->rawSizes();
+  auto rawOffsets = baseArray->rawOffsets();
+
+  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(rows.size(), pool);
+  auto rawIndices = indices->asMutable<vector_size_t>();
+
+  // Create nulls for lazy initialization.
+  BufferPtr nulls(nullptr);
+  uint64_t* rawNulls = nullptr;
+
+  auto processNull = [&](vector_size_t row) {
+    if (nulls == nullptr) {
+      nulls = AlignedBuffer::allocate<bool>(rows.size(), pool, bits::kNotNull);
+      rawNulls = nulls->asMutable<uint64_t>();
+    }
+    bits::setNull(rawNulls, row, true);
+  };
+
+  rows.applyToSelected([&](auto row) {
+    auto size = rawSizes[inIndices[row]];
+    if (size == 0) {
+      processNull(row);
+    } else {
+      auto offset = rawOffsets[inIndices[row]];
+      bool mayHaveNulls = elementsDecoded.mayHaveNulls();
+      bool foundFalse = false;
+      auto minElementIndex = offset;
+      for (auto i = 0; i < size; i++) {
+        if (elementsDecoded.isNullAt(offset + i)) {
+          // If a NULL value is encountered, min is always NULL
+          processNull(row);
+          break;
+        } else if (
+            !foundFalse && elementsDecoded.valueAt<T>(offset + i) == false) {
+          // check for false only if we did not find it yet.
+          minElementIndex = offset + i;
+          foundFalse = true;
+          // if there are no Nulls, break
+          if (!elementsDecoded.mayHaveNulls()) {
+            break;
+          }
+        }
+      }
+      rawIndices[row] = minElementIndex;
+    }
+  });
 
   return BaseVector::wrapInDictionary(
       nulls, indices, rows.size(), baseArray->elements());
