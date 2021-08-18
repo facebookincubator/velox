@@ -56,13 +56,13 @@ VectorPtr applyTyped(
       if (size == 0) {
         processNull(row);
       } else {
-        auto minElementIndex = offset;
+        auto maxElementIndex = offset;
         for (auto i = 1; i < size; i++) {
-          if (rawElements[offset + i] < rawElements[minElementIndex]) {
-            minElementIndex = offset + i;
+          if (rawElements[offset + i] > rawElements[maxElementIndex]) {
+            maxElementIndex = offset + i;
           }
         }
-        rawIndices[row] = minElementIndex;
+        rawIndices[row] = maxElementIndex;
       }
     });
   } else {
@@ -72,19 +72,19 @@ VectorPtr applyTyped(
         processNull(row);
       } else {
         auto offset = rawOffsets[inIndices[row]];
-        auto minElementIndex = offset;
+        auto maxElementIndex = offset;
         for (auto i = 0; i < size; i++) {
           if (elementsDecoded.isNullAt(offset + i)) {
-            // If a NULL value is encountered, min is always NULL
+            // If a NULL value is encountered, max is always NULL
             processNull(row);
             break;
           } else if (
-              elementsDecoded.valueAt<T>(offset + i) <
-              elementsDecoded.valueAt<T>(minElementIndex)) {
-            minElementIndex = offset + i;
+              elementsDecoded.valueAt<T>(offset + i) >
+              elementsDecoded.valueAt<T>(maxElementIndex)) {
+            maxElementIndex = offset + i;
           }
         }
-        rawIndices[row] = minElementIndex;
+        rawIndices[row] = maxElementIndex;
       }
     });
   }
@@ -129,25 +129,25 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
     } else {
       auto offset = rawOffsets[inIndices[row]];
       bool mayHaveNulls = elementsDecoded.mayHaveNulls();
-      bool foundFalse = false;
-      auto minElementIndex = offset;
+      bool foundTrue = false;
+      auto maxElementIndex = offset;
       for (auto i = 0; i < size; i++) {
         if (elementsDecoded.isNullAt(offset + i)) {
-          // If a NULL value is encountered, min is always NULL
+          // If a NULL value is encountered, max is always NULL
           processNull(row);
           break;
         } else if (
-            !foundFalse && elementsDecoded.valueAt<T>(offset + i) == false) {
+            !foundTrue && elementsDecoded.valueAt<T>(offset + i) == true) {
           // check for false only if we did not find it yet.
-          minElementIndex = offset + i;
-          foundFalse = true;
+          maxElementIndex = offset + i;
+          foundTrue = true;
           // if there are no Nulls, break
           if (!mayHaveNulls) {
             break;
           }
         }
       }
-      rawIndices[row] = minElementIndex;
+      rawIndices[row] = maxElementIndex;
     }
   });
 
@@ -155,7 +155,7 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
       nulls, indices, rows.size(), baseArray->elements());
 }
 
-class ArrayMinFunction : public exec::VectorFunction {
+class ArrayMaxFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -200,8 +200,8 @@ class ArrayMinFunction : public exec::VectorFunction {
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_array_min,
-    ArrayMinFunction::signatures(),
-    std::make_unique<ArrayMinFunction>());
+    udf_array_max,
+    ArrayMaxFunction::signatures(),
+    std::make_unique<ArrayMaxFunction>());
 
 } // namespace facebook::velox::functions

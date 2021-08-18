@@ -23,6 +23,7 @@ add_executable(
   ArrayContainsTest.cpp
   ArrayFilterTest.cpp
   ArrayIntersectTest.cpp
+  ArrayMaxTest.cpp
   ArrayMinTest.cpp
   CoalesceTest.cpp
   ComparisonsTest.cpp
