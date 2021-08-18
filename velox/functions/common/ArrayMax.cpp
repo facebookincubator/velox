@@ -138,7 +138,7 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
           break;
         } else if (
             !foundTrue && elementsDecoded.valueAt<T>(offset + i) == true) {
-          // check for false only if we did not find it yet.
+          // check for true only if we did not find it yet.
           maxElementIndex = offset + i;
           foundTrue = true;
           // if there are no Nulls, break
