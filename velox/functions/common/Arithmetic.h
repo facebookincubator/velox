@@ -201,7 +201,7 @@ VELOX_UDF_END();
 
 template <typename T>
 VELOX_UDF_BEGIN(bitwise_and)
-FOLLY_ALWAYS_INLINE bool call(T& result, T a, T b) {
+FOLLY_ALWAYS_INLINE bool call(int64_t& result, T a, T b) {
   result = a & b;
   return true;
 }
@@ -209,7 +209,7 @@ VELOX_UDF_END();
 
 template <typename T>
 VELOX_UDF_BEGIN(bitwise_not)
-FOLLY_ALWAYS_INLINE bool call(T& result, T a) {
+FOLLY_ALWAYS_INLINE bool call(int64_t& result, T a) {
   result = ~a;
   return true;
 }
@@ -217,7 +217,7 @@ VELOX_UDF_END();
 
 template <typename T>
 VELOX_UDF_BEGIN(bitwise_or)
-FOLLY_ALWAYS_INLINE bool call(T& result, T a, T b) {
+FOLLY_ALWAYS_INLINE bool call(int64_t& result, T a, T b) {
   result = a | b;
   return true;
 }
@@ -225,7 +225,7 @@ VELOX_UDF_END();
 
 template <typename T>
 VELOX_UDF_BEGIN(bitwise_xor)
-FOLLY_ALWAYS_INLINE bool call(T& result, T a, T b) {
+FOLLY_ALWAYS_INLINE bool call(int64_t& result, T a, T b) {
   result = a ^ b;
   return true;
 }

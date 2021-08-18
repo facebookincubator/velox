@@ -27,6 +27,14 @@ void registerBinaryIntegral(const std::vector<std::string>& aliases) {
 }
 
 template <template <class> class T>
+void registerBitwiseBinaryIntegral(const std::vector<std::string>& aliases) {
+  registerFunction<T<int8_t>, int64_t, int8_t, int8_t>(aliases);
+  registerFunction<T<int16_t>, int64_t, int16_t, int16_t>(aliases);
+  registerFunction<T<int32_t>, int64_t, int32_t, int32_t>(aliases);
+  registerFunction<T<int64_t>, int64_t, int64_t, int64_t>(aliases);
+}
+
+template <template <class> class T>
 void registerBinaryFloatingPoint(const std::vector<std::string>& aliases) {
   registerFunction<T<double>, double, double, double>(aliases);
   registerFunction<T<float>, float, float, float>(aliases);
@@ -81,6 +89,14 @@ void registerUnaryIntegral(const std::vector<std::string>& aliases) {
   registerFunction<T<int8_t>, int8_t, int8_t>(aliases);
   registerFunction<T<int16_t>, int16_t, int16_t>(aliases);
   registerFunction<T<int32_t>, int32_t, int32_t>(aliases);
+  registerFunction<T<int64_t>, int64_t, int64_t>(aliases);
+}
+
+template <template <class> class T>
+void registerBitwiseUnaryIntegral(const std::vector<std::string>& aliases) {
+  registerFunction<T<int8_t>, int64_t, int8_t>(aliases);
+  registerFunction<T<int16_t>, int64_t, int16_t>(aliases);
+  registerFunction<T<int32_t>, int64_t, int32_t>(aliases);
   registerFunction<T<int64_t>, int64_t, int64_t>(aliases);
 }
 

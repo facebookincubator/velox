@@ -54,10 +54,10 @@ void registerArithmeticFunctions() {
   registerFunction<udf_cbrt, double, double>({"cbrt"});
   registerFunction<udf_width_bucket, int64_t, double, double, double, int64_t>(
       {"width_bucket"});
-  registerBinaryIntegral<udf_bitwise_and>({});
-  registerUnaryIntegral<udf_bitwise_not>({});
-  registerBinaryIntegral<udf_bitwise_or>({});
-  registerBinaryIntegral<udf_bitwise_xor>({});
+  registerBitwiseBinaryIntegral<udf_bitwise_and>({});
+  registerBitwiseUnaryIntegral<udf_bitwise_not>({});
+  registerBitwiseBinaryIntegral<udf_bitwise_or>({});
+  registerBitwiseBinaryIntegral<udf_bitwise_xor>({});
 }
 
 } // namespace facebook::velox::functions
