@@ -31,6 +31,12 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<int32_t, std::string>(
         "length(c0)", {arg}, {VarbinaryType::create()});
   }
+
+  std::optional<int32_t> instr(
+      std::optional<std::string> haystack,
+      std::optional<std::string> needle) {
+    return evaluateOnce<int32_t>("instr(c0, c1)", haystack, needle);
+  }
 };
 
 TEST_F(StringTest, LengthString) {
@@ -47,6 +53,18 @@ TEST_F(StringTest, LengthBytes) {
   EXPECT_EQ(length_bytes("1"), 1);
   EXPECT_EQ(length_bytes("😋"), 4);
   EXPECT_EQ(length_bytes("1234567890abdef"), 15);
+}
+
+TEST_F(StringTest, Instr) {
+  EXPECT_EQ(instr("SparkSQL", "SQL"), 6);
+  EXPECT_EQ(instr(std::nullopt, "SQL"), std::nullopt);
+  EXPECT_EQ(instr("SparkSQL", std::nullopt), std::nullopt);
+  EXPECT_EQ(instr("SparkSQL", "Spark"), 1);
+  EXPECT_EQ(instr("SQL", "SparkSQL"), 0);
+  EXPECT_EQ(instr("", ""), 1);
+  EXPECT_EQ(instr("abdef", "g"), 0);
+  EXPECT_EQ(instr("", "a"), 0);
+  EXPECT_EQ(instr("abdef", ""), 1);
 }
 
 } // namespace

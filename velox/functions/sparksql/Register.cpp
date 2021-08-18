@@ -47,7 +47,7 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, prefix + "lower");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, prefix + "upper");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_strpos, prefix + "strpos");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_strpos_int32, prefix + "instr");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, prefix + "ROW");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");

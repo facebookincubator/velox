@@ -488,15 +488,16 @@ class ConcatFunction : public exec::VectorFunction {
 };
 
 /**
- * strpos(string, substring) → bigint
+ * strpos(string, substring) → T
  * Returns the starting position of the first instance of substring in string.
  * Positions start with 1. If not found, 0 is returned.
  *
- * strpos(string, substring, instance) → bigint
+ * strpos(string, substring, instance) → T
  * Returns the position of the N-th instance of substring in string. instance
  * must be a positive number. Positions start with 1. If not found, 0 is
  * returned.
  **/
+template <typename T>
 class StringPosition : public exec::VectorFunction {
  private:
   /// A function that can be wrapped with ascii mode
@@ -511,7 +512,7 @@ class StringPosition : public exec::VectorFunction {
         SubStringReader subStringReader,
         InstanceReader instanceReader,
         const SelectivityVector& rows,
-        FlatVector<int64_t>* resultFlatVector) {
+        FlatVector<T>* resultFlatVector) {
       rows.applyToSelected([&](int row) {
         auto result = stringImpl::stringPosition<stringEncoding>(
             stringReader(row), subStringReader(row), instanceReader(row));
@@ -550,9 +551,10 @@ class StringPosition : public exec::VectorFunction {
     }
 
     auto stringArgStringEncoding = getStringEncodingOrUTF8(args.at(0).get());
-    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
+    BaseVector::ensureWritable(
+        rows, CppToType<T>::ImplType::create(), context->pool(), result);
 
-    auto* resultFlatVector = (*result)->as<FlatVector<int64_t>>();
+    auto* resultFlatVector = (*result)->as<FlatVector<T>>();
 
     auto stringReader = [&](const vector_size_t row) {
       return decodedStringInput->valueAt<StringView>(row);
@@ -583,20 +585,20 @@ class StringPosition : public exec::VectorFunction {
     return {
         // varchar, varchar -> bigint
         exec::FunctionSignatureBuilder()
-            .returnType("bigint")
+            .returnType(CppToType<T>::name)
             .argumentType("varchar")
             .argumentType("varchar")
             .build(),
         // varchar, varchar, integer -> bigint
         exec::FunctionSignatureBuilder()
-            .returnType("bigint")
+            .returnType(CppToType<T>::name)
             .argumentType("varchar")
             .argumentType("varchar")
             .argumentType("integer")
             .build(),
         // varchar, varchar, bigint -> bigint
         exec::FunctionSignatureBuilder()
-            .returnType("bigint")
+            .returnType(CppToType<T>::name)
             .argumentType("varchar")
             .argumentType("varchar")
             .argumentType("bigint")
@@ -791,8 +793,13 @@ VELOX_DECLARE_VECTOR_FUNCTION(
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_strpos,
-    StringPosition::signatures(),
-    std::make_unique<StringPosition>());
+    StringPosition<int64_t>::signatures(),
+    std::make_unique<StringPosition<int64_t>>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_strpos_int32,
+    StringPosition<int32_t>::signatures(),
+    std::make_unique<StringPosition<int32_t>>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,
