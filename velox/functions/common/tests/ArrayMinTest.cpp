@@ -32,6 +32,14 @@ class ArrayMinTest : public FunctionBaseTest {
     assertEqualVectors(expected, result);
   }
 
+  void testDocExample() {
+    auto arrayVector = makeNullableArrayVector<int64_t>(
+        {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
+    auto expected =
+        makeNullableFlatVector<int64_t>({1, -2, std::nullopt, std::nullopt});
+    testExpr<int64_t>(expected, "array_min(C0)", {arrayVector});
+  }
+
   template <typename T>
   void testIntNullable() {
     auto arrayVector = makeNullableArrayVector<T>(
@@ -134,6 +142,9 @@ class ArrayMinTest : public FunctionBaseTest {
 };
 
 } // namespace
+TEST_F(ArrayMinTest, docArrays) {
+  testDocExample();
+}
 
 TEST_F(ArrayMinTest, intArrays) {
   testIntNullable<int8_t>();
