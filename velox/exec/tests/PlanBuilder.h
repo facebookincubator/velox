@@ -140,7 +140,19 @@ class PlanBuilder {
   PlanBuilder& partitionedOutput(
       const std::vector<ChannelIndex>& keyIndices,
       int numPartitions,
+      bool broadcast,
       const std::vector<ChannelIndex>& outputLayout = {});
+
+  PlanBuilder& partitionedOutputSingle(
+      const std::vector<ChannelIndex>& outputLayout = {}) {
+    return partitionedOutput({}, 1, false, outputLayout);
+  }
+
+  PlanBuilder& partitionedOutputBroadcast(
+      int numPartitions,
+      const std::vector<ChannelIndex>& outputLayout = {}) {
+    return partitionedOutput({}, numPartitions, true, outputLayout);
+  }
 
   PlanBuilder& localPartition(
       const std::vector<ChannelIndex>& keyIndices,

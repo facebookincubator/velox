@@ -207,14 +207,15 @@ struct DriverFactory {
       std::shared_ptr<ExchangeClient> exchangeClient,
       std::function<int(int pipelineId)> numDrivers);
 
-  int numDestinations() const {
+  std::optional<std::shared_ptr<const core::PartitionedOutputNode>>
+  needsPartitionedOutput() const {
     VELOX_CHECK(!planNodes.empty());
     if (auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
                 planNodes.back())) {
-      return partitionedOutputNode->numPartitions();
+      return partitionedOutputNode;
     } else {
-      return 0;
+      return std::nullopt;
     }
   }
 

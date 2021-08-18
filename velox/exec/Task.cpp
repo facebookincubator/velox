@@ -100,13 +100,17 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
        ++pipeline) {
     auto& factory = self->driverFactories_[pipeline];
     auto numDrivers = std::min(factory->maxDrivers, maxDrivers);
-    auto numDestinations = factory->numDestinations();
-    if (numDestinations) {
+    auto partitionedOutputNode = factory->needsPartitionedOutput();
+    if (partitionedOutputNode.has_value()) {
       VELOX_CHECK(
           !self->hasPartitionedOutput_,
           "Only one output pipeline per task is supported");
       self->hasPartitionedOutput_ = true;
-      bufferManager->initializeTask(self, numDestinations, numDrivers);
+      bufferManager->initializeTask(
+          self,
+          partitionedOutputNode.value()->numPartitions(),
+          partitionedOutputNode.value()->isBroadcast(),
+          numDrivers);
     }
 
     std::shared_ptr<ExchangeClient> exchangeClient = nullptr;

@@ -26,8 +26,12 @@ class Destination {
   Destination(
       const std::string& taskId,
       int destination,
+      bool broadcast,
       memory::MappedMemory* memory)
-      : taskId_(taskId), destination_(destination), memory_(memory) {}
+      : taskId_(taskId),
+        destination_(destination),
+        broadcast_(broadcast),
+        memory_(memory) {}
 
   // Resets the destination before starting a new batch.
   void beginBatch() {
@@ -73,6 +77,7 @@ class Destination {
 
   const std::string taskId_;
   const int destination_;
+  const bool broadcast_;
   memory::MappedMemory* const memory_;
   uint64_t bytesInCurrent_{0};
   std::vector<IndexRange> rows_;
@@ -106,6 +111,7 @@ class PartitionedOutput : public Operator {
             "PartitionedOutput"),
         keyChannels_(toChannels(planNode->inputType(), planNode->keys())),
         numDestinations_(planNode->numPartitions()),
+        broadcast_{planNode->isBroadcast()},
         outputChannels_(calculateOutputChannels(
             planNode->inputType(),
             planNode->outputType())),
@@ -148,6 +154,7 @@ class PartitionedOutput : public Operator {
 
   const std::vector<ChannelIndex> keyChannels_;
   const int numDestinations_;
+  const bool broadcast_;
   // Empty if column order in the output is exactly the same as in input.
   const std::vector<ChannelIndex> outputChannels_;
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};

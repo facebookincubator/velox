@@ -40,18 +40,12 @@ struct DataAvailable {
 
 class DestinationBuffer {
  public:
-  void enqueue(std::unique_ptr<VectorStreamGroup>&& data) {
+  void enqueue(std::shared_ptr<VectorStreamGroup> data) {
     // drop duplicate end markers
     if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
       return;
     }
-
-    // The ownership of 'data' moves from unique to shared. This
-    // allows for multiple re-fetches and acknowledging of one sequence number
-    // without any ordering guarantees, the data does not get deleted while some
-    // thread holds a reference.
-    std::shared_ptr<VectorStreamGroup> shared(std::move(data));
-    data_.push_back(std::move(shared));
+    data_.push_back(std::move(data));
   }
 
   // Copies data starting at 'sequence' into 'result', stopping after
@@ -67,19 +61,15 @@ class DestinationBuffer {
   // warning for the case where no data is removed, otherwise we
   // expect that data does get freed. We cannot assert that data gets
   // deleted because acknowledge messages can arrive out of order.
-  void acknowledge(
+  std::vector<std::shared_ptr<VectorStreamGroup>> acknowledge(
       int64_t sequence,
-      bool fromGetData,
-      std::vector<std::shared_ptr<VectorStreamGroup>>& freed,
-      uint64_t* totalFreed);
+      bool fromGetData);
 
   // Returns all data to be freed in 'freed' and their size in
   // 'totalFreed'. 'this' can be destroyed after this.
-  void deleteResults(
-      std::vector<std::shared_ptr<VectorStreamGroup>>& freed,
-      uint64_t* totalFreed);
+  std::vector<std::shared_ptr<VectorStreamGroup>> deleteResults();
 
-  // Returns and clears the notify callback, if any, along with arguments for
+  // Returns and clears the "notify" callback, if any, along with arguments for
   // the callback.
   DataAvailable getAndClearNotify();
 
@@ -100,8 +90,10 @@ class PartitionedOutputBuffer {
   PartitionedOutputBuffer(
       std::shared_ptr<Task> task,
       int numDestinations,
+      bool broadcast,
       int numDrivers)
       : task_(task),
+        broadcast_(broadcast),
         numDrivers_(numDrivers),
         maxSize_(task->queryCtx()->maxPartitionedOutputBufferSize()),
         continueSize_(maxSize_ / 2) {
@@ -113,7 +105,11 @@ class PartitionedOutputBuffer {
 
   BlockingReason enqueue(
       int destination,
-      std::unique_ptr<VectorStreamGroup>&& data,
+      std::unique_ptr<VectorStreamGroup> data,
+      ContinueFuture* future);
+
+  BlockingReason enqueueForBroadcast(
+      std::unique_ptr<VectorStreamGroup> data,
       ContinueFuture* future);
 
   void noMoreData();
@@ -146,10 +142,11 @@ class PartitionedOutputBuffer {
   // Updates buffered size and returns possibly continuable producer promises in
   // 'promises'.
   void updateAfterAcknowledgeLocked(
-      int64_t totalFreed,
+      const std::vector<std::shared_ptr<VectorStreamGroup>>& freed,
       std::vector<VeloxPromise<bool>>& promises);
 
   std::shared_ptr<Task> task_;
+  const bool broadcast_;
   const int numDrivers_ = 0;
   // If 'totalSize_' > 'maxSize_', each producer is blocked after adding data.
   const uint64_t maxSize_;
@@ -174,15 +171,21 @@ class PartitionedOutputBufferManager {
   void initializeTask(
       std::shared_ptr<Task> task,
       int numDestinations,
+      bool brodcast,
       int numDrivers);
 
   // Adds data to the outgoing queue for 'destination'. 'data' must not be
   // nullptr. 'data' is always added but if the buffers are full the future is
-  // set to a continue future that will be realized when there is space.
+  // set to a ContinueFuture that will be realized when there is space.
   BlockingReason enqueue(
       const std::string& taskId,
       int destination,
-      std::unique_ptr<VectorStreamGroup>&& data,
+      std::unique_ptr<VectorStreamGroup> data,
+      ContinueFuture* future);
+
+  BlockingReason enqueueForBroadcast(
+      const std::string& taskId,
+      std::unique_ptr<VectorStreamGroup> data,
       ContinueFuture* future);
 
   void noMoreData(const std::string& taskId);

@@ -323,11 +323,12 @@ RowTypePtr toRowType(
 PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<ChannelIndex>& keyIndices,
     int numPartitions,
+    bool broadcast,
     const std::vector<ChannelIndex>& outputLayout) {
   auto outputType = toRowType(planNode_->outputType(), outputLayout);
   auto keys = fields(keyIndices);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
-      nextPlanNodeId(), keys, numPartitions, outputType, planNode_);
+      nextPlanNodeId(), keys, numPartitions, broadcast, outputType, planNode_);
   return *this;
 }
 

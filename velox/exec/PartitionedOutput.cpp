@@ -76,8 +76,14 @@ BlockingReason Destination::flush(
     return BlockingReason::kNotBlocked;
   }
   bytesInCurrent_ = 0;
-  return bufferManager.enqueue(
-      taskId_, destination_, std::move(current_), future);
+
+  if (broadcast_) {
+    return bufferManager.enqueueForBroadcast(
+        taskId_, std::move(current_), future);
+  } else {
+    return bufferManager.enqueue(
+        taskId_, destination_, std::move(current_), future);
+  }
 }
 
 void PartitionedOutput::addInput(RowVectorPtr input) {
@@ -105,14 +111,23 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   if (destinations_.empty()) {
     auto memory = operatorCtx_->mappedMemory();
     auto taskId = operatorCtx_->taskId();
-    for (int i = 0; i < numDestinations_; ++i) {
-      destinations_.push_back(std::make_unique<Destination>(taskId, i, memory));
+
+    if (broadcast_) {
+      destinations_.emplace_back(
+          std::make_unique<Destination>(taskId, 0, true, memory));
+    } else {
+      for (int i = 0; i < numDestinations_; ++i) {
+        destinations_.push_back(
+            std::make_unique<Destination>(taskId, i, false, memory));
+      }
     }
+
     for (auto channel : keyChannels_) {
       hashers_.push_back(
           VectorHasher::create(input_->childAt(channel)->type(), channel));
     }
   }
+
   auto numInput = input_->size();
   if (numInput > topLevelRanges_.size()) {
     vector_size_t numOld = topLevelRanges_.size();
@@ -128,6 +143,7 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
       sizePointers_[i] = &rowSize_[i];
     }
   }
+
   if (!keyChannels_.empty()) {
     allRows_.resize(numInput);
     allRows_.setAll();
@@ -136,6 +152,7 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
           *input_->childAt(keyChannels_[i]), allRows_, i > 0, &hashes_);
     }
   }
+
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
   for (int i = 0; i < input_->childrenSize(); ++i) {
     VectorStreamGroup::estimateSerializedSize(
@@ -143,9 +160,11 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
         folly::Range(topLevelRanges_.data(), numInput),
         sizePointers_.data());
   }
+
   for (auto& destination : destinations_) {
     destination->beginBatch();
   }
+
   if (numDestinations_ == 1) {
     destinations_[0]->addRows(IndexRange{0, numInput});
   } else {
