@@ -17,6 +17,24 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 
 namespace facebook::velox::functions {
+namespace {
+template <template <class> class T>
+void registerBitwiseBinaryIntegral(const std::vector<std::string>& aliases) {
+  registerFunction<T<int8_t>, int64_t, int8_t, int8_t>(aliases);
+  registerFunction<T<int16_t>, int64_t, int16_t, int16_t>(aliases);
+  registerFunction<T<int32_t>, int64_t, int32_t, int32_t>(aliases);
+  registerFunction<T<int64_t>, int64_t, int64_t, int64_t>(aliases);
+}
+
+template <template <class> class T>
+void registerBitwiseUnaryIntegral(const std::vector<std::string>& aliases) {
+  registerFunction<T<int8_t>, int64_t, int8_t>(aliases);
+  registerFunction<T<int16_t>, int64_t, int16_t>(aliases);
+  registerFunction<T<int32_t>, int64_t, int32_t>(aliases);
+  registerFunction<T<int64_t>, int64_t, int64_t>(aliases);
+}
+
+} // namespace
 
 void registerArithmeticFunctions() {
   registerBinaryFloatingPoint<udf_plus>({});
