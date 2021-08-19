@@ -40,7 +40,7 @@ class Max {
   }
 };
 
-template <TypeKind kind, template <typename> class F>
+template <template <typename> class F, TypeKind kind>
 VectorPtr applyTyped(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -78,13 +78,13 @@ VectorPtr applyTyped(
       if (size == 0) {
         processNull(row);
       } else {
-        auto minElementIndex = offset;
+        auto elementIndex = offset;
         for (auto i = 1; i < size; i++) {
-          if (F<T>()(rawElements[offset + i], rawElements[minElementIndex])) {
-            minElementIndex = offset + i;
+          if (F<T>()(rawElements[offset + i], rawElements[elementIndex])) {
+            elementIndex = offset + i;
           }
         }
-        rawIndices[row] = minElementIndex;
+        rawIndices[row] = elementIndex;
       }
     });
   } else {
@@ -94,19 +94,19 @@ VectorPtr applyTyped(
         processNull(row);
       } else {
         auto offset = rawOffsets[inIndices[row]];
-        auto minElementIndex = offset;
+        auto elementIndex = offset;
         for (auto i = 0; i < size; i++) {
           if (elementsDecoded.isNullAt(offset + i)) {
-            // If a NULL value is encountered, min is always NULL
+            // If a NULL value is encountered, min/max are always NULL
             processNull(row);
             break;
           } else if (F<T>()(
                          elementsDecoded.valueAt<T>(offset + i),
-                         elementsDecoded.valueAt<T>(minElementIndex))) {
-            minElementIndex = offset + i;
+                         elementsDecoded.valueAt<T>(elementIndex))) {
+            elementIndex = offset + i;
           }
         }
-        rawIndices[row] = minElementIndex;
+        rawIndices[row] = elementIndex;
       }
     });
   }
@@ -150,26 +150,26 @@ VectorPtr applyBoolean(
       processNull(row);
     } else {
       auto offset = rawOffsets[inIndices[row]];
-      bool foundMinMax = false;
-      auto minElementIndex = offset;
+      auto elementIndex = offset;
+      bool foundElement = false;
       for (auto i = 0; i < size; i++) {
         if (elementsDecoded.isNullAt(offset + i)) {
-          // If a NULL value is encountered, min is always NULL
+          // If a NULL value is encountered, min/max is always NULL
           processNull(row);
           break;
         } else if (
-            !foundMinMax &&
+            !foundElement &&
             elementsDecoded.valueAt<T>(offset + i) == F<T>()()) {
-          // check for Min or Max only if we did not find it yet.
-          minElementIndex = offset + i;
-          foundMinMax = true;
+          // check for a new element only if we did not find one yet.
+          elementIndex = offset + i;
+          foundElement = true;
           // if there are no Nulls, break
           if (!mayHaveNulls) {
             break;
           }
         }
       }
-      rawIndices[row] = minElementIndex;
+      rawIndices[row] = elementIndex;
     }
   });
 
@@ -206,55 +206,16 @@ class ArrayMinMaxFunction : public exec::VectorFunction {
             applyBoolean<F>(rows, *decodedArray, *decodedElements, context);
         break;
       }
-      case ::facebook::velox::TypeKind::INTEGER: {
-        localResult = applyTyped<TypeKind::INTEGER, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::TINYINT: {
-        localResult = applyTyped<TypeKind::TINYINT, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::SMALLINT: {
-        localResult = applyTyped<TypeKind::SMALLINT, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::BIGINT: {
-        localResult = applyTyped<TypeKind::BIGINT, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::REAL: {
-        localResult = applyTyped<TypeKind::REAL, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::DOUBLE: {
-        localResult = applyTyped<TypeKind::DOUBLE, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::VARCHAR: {
-        localResult = applyTyped<TypeKind::VARCHAR, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::VARBINARY: {
-        localResult = applyTyped<TypeKind::VARBINARY, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
-      case ::facebook::velox::TypeKind::TIMESTAMP: {
-        localResult = applyTyped<TypeKind::TIMESTAMP, F>(
-            rows, *decodedArray, *decodedElements, context);
-        break;
-      }
       default:
-        VELOX_FAIL("not a scalar type! kind: {}", mapTypeKindToName(typeKind));
+        localResult = VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+            applyTyped,
+            F,
+            typeKind,
+            rows,
+            *decodedArray,
+            *decodedElements,
+            context);
     }
-
     context->moveOrCopyResult(localResult, rows, result);
   }
 
