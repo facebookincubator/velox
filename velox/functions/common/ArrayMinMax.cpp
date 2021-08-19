@@ -18,7 +18,29 @@
 namespace facebook::velox::functions {
 namespace {
 
-template <TypeKind kind>
+template <typename T>
+class Min {
+ public:
+  bool operator()(const T& arg1, const T& arg2) const {
+    return arg1 < arg2;
+  }
+  bool operator()() const {
+    return false;
+  }
+};
+
+template <typename T>
+class Max {
+ public:
+  bool operator()(const T& arg1, const T& arg2) const {
+    return arg1 > arg2;
+  }
+  bool operator()() const {
+    return true;
+  }
+};
+
+template <TypeKind kind, template <typename> class F>
 VectorPtr applyTyped(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -58,7 +80,7 @@ VectorPtr applyTyped(
       } else {
         auto minElementIndex = offset;
         for (auto i = 1; i < size; i++) {
-          if (rawElements[offset + i] < rawElements[minElementIndex]) {
+          if (F<T>()(rawElements[offset + i], rawElements[minElementIndex])) {
             minElementIndex = offset + i;
           }
         }
@@ -78,9 +100,9 @@ VectorPtr applyTyped(
             // If a NULL value is encountered, min is always NULL
             processNull(row);
             break;
-          } else if (
-              elementsDecoded.valueAt<T>(offset + i) <
-              elementsDecoded.valueAt<T>(minElementIndex)) {
+          } else if (F<T>()(
+                         elementsDecoded.valueAt<T>(offset + i),
+                         elementsDecoded.valueAt<T>(minElementIndex))) {
             minElementIndex = offset + i;
           }
         }
@@ -93,8 +115,8 @@ VectorPtr applyTyped(
       nulls, indices, rows.size(), baseArray->elements());
 }
 
-template <>
-VectorPtr applyTyped<TypeKind::BOOLEAN>(
+template <template <typename> class F>
+VectorPtr applyBoolean(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
     DecodedVector& elementsDecoded,
@@ -121,15 +143,14 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
     }
     bits::setNull(rawNulls, row, true);
   };
-
+  bool mayHaveNulls = elementsDecoded.mayHaveNulls();
   rows.applyToSelected([&](auto row) {
     auto size = rawSizes[inIndices[row]];
     if (size == 0) {
       processNull(row);
     } else {
       auto offset = rawOffsets[inIndices[row]];
-      bool mayHaveNulls = elementsDecoded.mayHaveNulls();
-      bool foundFalse = false;
+      bool foundMinMax = false;
       auto minElementIndex = offset;
       for (auto i = 0; i < size; i++) {
         if (elementsDecoded.isNullAt(offset + i)) {
@@ -137,10 +158,11 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
           processNull(row);
           break;
         } else if (
-            !foundFalse && elementsDecoded.valueAt<T>(offset + i) == false) {
-          // check for false only if we did not find it yet.
+            !foundMinMax &&
+            elementsDecoded.valueAt<T>(offset + i) == F<T>()()) {
+          // check for Min or Max only if we did not find it yet.
           minElementIndex = offset + i;
-          foundFalse = true;
+          foundMinMax = true;
           // if there are no Nulls, break
           if (!mayHaveNulls) {
             break;
@@ -155,12 +177,13 @@ VectorPtr applyTyped<TypeKind::BOOLEAN>(
       nulls, indices, rows.size(), baseArray->elements());
 }
 
-class ArrayMinFunction : public exec::VectorFunction {
+template <template <typename> class F>
+class ArrayMinMaxFunction : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      exec::Expr* caller,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
@@ -175,14 +198,62 @@ class ArrayMinFunction : public exec::VectorFunction {
     exec::LocalDecodedVector elementsHolder(
         context, *elementsVector, elementsRows);
     auto decodedElements = elementsHolder.get();
-
-    auto localResult = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        applyTyped,
-        elementsVector->typeKind(),
-        rows,
-        *decodedArray,
-        *decodedElements,
-        context);
+    VectorPtr localResult;
+    auto typeKind = elementsVector->typeKind();
+    switch (typeKind) {
+      case TypeKind::BOOLEAN: {
+        localResult =
+            applyBoolean<F>(rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::INTEGER: {
+        localResult = applyTyped<TypeKind::INTEGER, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::TINYINT: {
+        localResult = applyTyped<TypeKind::TINYINT, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::SMALLINT: {
+        localResult = applyTyped<TypeKind::SMALLINT, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::BIGINT: {
+        localResult = applyTyped<TypeKind::BIGINT, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::REAL: {
+        localResult = applyTyped<TypeKind::REAL, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::DOUBLE: {
+        localResult = applyTyped<TypeKind::DOUBLE, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::VARCHAR: {
+        localResult = applyTyped<TypeKind::VARCHAR, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::VARBINARY: {
+        localResult = applyTyped<TypeKind::VARBINARY, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      case ::facebook::velox::TypeKind::TIMESTAMP: {
+        localResult = applyTyped<TypeKind::TIMESTAMP, F>(
+            rows, *decodedArray, *decodedElements, context);
+        break;
+      }
+      default:
+        VELOX_FAIL("not a scalar type! kind: {}", mapTypeKindToName(typeKind));
+    }
 
     context->moveOrCopyResult(localResult, rows, result);
   }
@@ -201,7 +272,12 @@ class ArrayMinFunction : public exec::VectorFunction {
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_min,
-    ArrayMinFunction::signatures(),
-    std::make_unique<ArrayMinFunction>());
+    ArrayMinMaxFunction<Min>::signatures(),
+    std::make_unique<ArrayMinMaxFunction<Min>>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_array_max,
+    ArrayMinMaxFunction<Max>::signatures(),
+    std::make_unique<ArrayMinMaxFunction<Max>>());
 
 } // namespace facebook::velox::functions
