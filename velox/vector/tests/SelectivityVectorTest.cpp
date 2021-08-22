@@ -367,20 +367,19 @@ TEST(SelectivityVectorTest, iterator) {
 
 TEST(SelectivityVectorTest, resizeTest) {
   SelectivityVector vector(64, false);
-  vector.resize(128, /* value */true);
+  vector.resize(128, /* value */ true);
 
-  //Ensure last 50 bits are set to 1
-  for(int i=64; i < vector.size(); i++) {
+  // Ensure last 50 bits are set to 1
+  for (int i = 64; i < vector.size(); i++) {
     ASSERT_TRUE(vector.isValid(i));
   }
 
   SelectivityVector rows(64, false);
   rows.resize(128, /* value */ false);
 
-  for(int i=64; i < rows.size(); i++) {
+  for (int i = 64; i < rows.size(); i++) {
     ASSERT_TRUE(!rows.isValid(i));
   }
-
 }
 
 } // namespace test
