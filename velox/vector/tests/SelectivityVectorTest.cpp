@@ -369,7 +369,7 @@ TEST(SelectivityVectorTest, resizeTest) {
   SelectivityVector vector(64, false);
   vector.resize(128, /* value */ true);
 
-  // Ensure last 50 bits are set to 1
+  // Ensure last 64 bits are set to 1
   for (int i = 64; i < vector.size(); i++) {
     ASSERT_TRUE(vector.isValid(i));
   }
