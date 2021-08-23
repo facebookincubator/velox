@@ -114,7 +114,7 @@ TEST_F(ArrayIntersectTest, boolArrays) {
   testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
 }
 
-// Test inline Strings
+// Test inline strings.
 TEST_F(ArrayIntersectTest, strArrays) {
   using S = StringView;
 
@@ -140,7 +140,7 @@ TEST_F(ArrayIntersectTest, strArrays) {
   testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
 }
 
-// Test non-inline (>12 length) Strings
+// Test non-inline (> 12 length) strings.
 TEST_F(ArrayIntersectTest, longStrArrays) {
   using S = StringView;
 
