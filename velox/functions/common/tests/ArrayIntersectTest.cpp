@@ -79,6 +79,42 @@ TEST_F(ArrayIntersectTest, intArrays) {
   testInt<int64_t>();
 }
 
+TEST_F(ArrayIntersectTest, boolArrays) {
+  auto array1 = makeNullableArrayVector<bool>(
+      {{true, false},
+       {true, true},
+       {false, false},
+       {},
+       {true, false, true, std::nullopt},
+       {std::nullopt, true, false, true},
+       {false, true, false},
+       {true, false, true}});
+
+  auto array2 = makeNullableArrayVector<bool>(
+      {{true},
+       {true, true},
+       {false, false},
+       {},
+       {true, std::nullopt},
+       {std::nullopt, false},
+       {false, true, false},
+       {true, false, true}});
+
+  auto expected = makeNullableArrayVector<bool>(
+      {{true},
+       {true},
+       {false},
+       {},
+       {true, std::nullopt},
+       {std::nullopt, false},
+       {false, true},
+       {true, false}});
+
+  testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
+  testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
+}
+
+// Test inline Strings
 TEST_F(ArrayIntersectTest, strArrays) {
   using S = StringView;
 
@@ -99,6 +135,37 @@ TEST_F(ArrayIntersectTest, strArrays) {
       {S("a"), S("b")},
       {std::nullopt},
       {S("abc")},
+  });
+  testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
+  testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
+}
+
+// Test non-inline (>12 length) Strings
+TEST_F(ArrayIntersectTest, longStrArrays) {
+  using S = StringView;
+
+  auto array1 = makeNullableArrayVector<StringView>({
+      {S("red shiny car ahead"), S("blue clear sky above")},
+      {std::nullopt,
+       S("blue clear sky above"),
+       S("yellow rose flowers"),
+       S("orange beautiful sunset")},
+      {},
+      {S("red shiny car ahead"),
+       S("purple is an elegant color"),
+       S("green plants make us happy")},
+  });
+  auto array2 = makeNullableArrayVector<StringView>({
+      {S("red shiny car ahead")},
+      {std::nullopt},
+      {},
+      {S("red shiny car ahead"), S("green plants make us happy")},
+  });
+  auto expected = makeNullableArrayVector<StringView>({
+      {S("red shiny car ahead")},
+      {std::nullopt},
+      {},
+      {S("red shiny car ahead"), S("green plants make us happy")},
   });
   testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
   testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
