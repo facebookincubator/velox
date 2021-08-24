@@ -368,11 +368,7 @@ TEST(SelectivityVectorTest, iterator) {
 TEST(SelectivityVectorTest, resize) {
   auto checkFn = [&](int from, int to, SelectivityVector& vector, bool check) {
     for (int i = from; i < to; i++) {
-      if (check) {
-        ASSERT_TRUE(vector.isValid(i));
-      } else {
-        ASSERT_FALSE(vector.isValid(i));
-      }
+      ASSERT_EQ(check, vector.isValid(i));
     }
   };
 

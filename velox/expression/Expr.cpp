@@ -716,7 +716,6 @@ void Expr::evalWithMemo(
           *allUncached.get(), type(), context->pool(), &dictionaryCache_);
 
       if (cachedDictionaryIndices_->size() < newCacheSize) {
-        int32_t oldSize = cachedDictionaryIndices_->size();
         cachedDictionaryIndices_->resize(newCacheSize, false);
       }
 
