@@ -717,8 +717,7 @@ void Expr::evalWithMemo(
 
       if (cachedDictionaryIndices_->size() < newCacheSize) {
         int32_t oldSize = cachedDictionaryIndices_->size();
-        cachedDictionaryIndices_->resize(newCacheSize);
-        cachedDictionaryIndices_->setValidRange(oldSize, newCacheSize, false);
+        cachedDictionaryIndices_->resize(newCacheSize, false);
       }
 
       cachedDictionaryIndices_->select(*uncached);
