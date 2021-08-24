@@ -366,8 +366,7 @@ TEST(SelectivityVectorTest, iterator) {
 }
 
 TEST(SelectivityVectorTest, resizeTest) {
-
-  auto checkFn = [&] (int from, SelectivityVector& vector, bool check) {
+  auto checkFn = [&](int from, SelectivityVector& vector, bool check) {
     for (int i = from; i < vector.size(); i++) {
       if (check) {
         ASSERT_TRUE(vector.isValid(i));
@@ -389,7 +388,6 @@ TEST(SelectivityVectorTest, resizeTest) {
   auto range = rows.asRange();
   // Assert we dont set _end to 128.
   ASSERT_EQ(range.end(), 64);
-
 }
 
 } // namespace test
