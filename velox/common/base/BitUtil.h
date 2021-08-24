@@ -112,6 +112,15 @@ inline int32_t getAndClearLastSetBit(uint16_t& bits) {
   return trailingZeros;
 }
 
+/// Sets bits from position pos in bits to `value`.
+inline void setBitsFromPos(uint64_t& bits, uint32_t pos, bool value) {
+  if (value) {
+    bits = -1 << (64 - pos) | bits;
+  } else {
+    bits = ((unsigned long long)-1 >> (64 - pos))  & bits;
+  }
+}
+
 /**
  * Invokes a function for each batch of bits (partial or full words)
  * in a given range.

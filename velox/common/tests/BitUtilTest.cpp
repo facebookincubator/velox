@@ -625,6 +625,20 @@ TEST_F(BitUtilTest, scatterBits) {
   }
 }
 
+TEST_F(BitUtilTest, setBitsFromPosTest) {
+  uint64_t data = 33; // First and 6th bit set
+  bits::setBitsFromPos(data, 6, true);
+  ASSERT_EQ(data, 18446744073642442785l);
+
+  // Clear the set bits
+  bits::setBitsFromPos(data, 6, false);
+  ASSERT_EQ(data, 33);
+
+  bits::setBitsFromPos(data, 7, true);
+  bits::setBitsFromPos(data, 7, false);
+  ASSERT_EQ(data, 33);
+}
+
 } // namespace bits
 } // namespace velox
 } // namespace facebook

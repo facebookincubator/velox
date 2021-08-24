@@ -59,11 +59,18 @@ class SelectivityVector {
   /// Resizes the vector to new size and sets the new bits with value `value`.
   void resize(int32_t size, bool value = true) {
     auto numWords = bits::nwords(size);
-    bits_.resize(numWords, value ? -1 : 0);
-    if (value) {
-      end_ = size;
+    const auto wordlength = sizeof(bits_[0]) * 8;
+    //Set bits from size_ to bits_.back() to value
+    if (size > size_ && bits_.size() > 0) {
+      bits::setBitsFromPos(bits_.back(), size_ % wordlength , value);
     }
+
+    bits_.resize(numWords, value ? -1 : 0);
     size_ = size;
+
+    //Set bits at the very end after size_ to false
+    bits::setBitsFromPos(bits_.back(), size_ % wordlength , false);
+    updateBounds();
   }
 
   /**
