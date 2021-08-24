@@ -365,7 +365,7 @@ TEST(SelectivityVectorTest, iterator) {
   EXPECT_EQ(count, bits::countBits(&contiguous[0], 0, 240));
 }
 
-TEST(SelectivityVectorTest, resizeTest) {
+TEST(SelectivityVectorTest, resize) {
   auto checkFn = [&](int from, int to, SelectivityVector& vector, bool check) {
     for (int i = from; i < to; i++) {
       if (check) {
@@ -385,15 +385,11 @@ TEST(SelectivityVectorTest, resizeTest) {
   rows.resize(128, /* value */ false);
   // Ensure last 64 bits set to false
   checkFn(64, 128, rows, false);
-  auto range = rows.asRange();
-  // Assert we dont set _end to 128.
-  ASSERT_EQ(range.end(), 64);
   ASSERT_FALSE(rows.isAllSelected());
 
   // Now test more unusual ranges
   SelectivityVector unusual(37, true);
   checkFn(0, 37, unusual, true);
-  checkFn(37, 63, unusual, false);
   unusual.resize(63, /* value */ false);
   checkFn(0, 37, unusual, true);
   checkFn(37, 63, unusual, false);
@@ -401,16 +397,13 @@ TEST(SelectivityVectorTest, resizeTest) {
   // Test for much larger word lengths
   SelectivityVector larger(53, true);
   checkFn(0, 53, larger, true);
-  checkFn(53, 64, larger, false);
   larger.resize(656, true);
   checkFn(53, 64, larger, true);
   checkFn(640, 656, larger, true);
-  checkFn(656, 704, larger, false);
 
   // Check for word length reduction
   larger.resize(53);
   checkFn(0, 53, larger, true);
-  checkFn(53, 64, larger, false);
   // Check if all selected is true
   ASSERT_TRUE(larger.isAllSelected());
 }
