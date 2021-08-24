@@ -117,7 +117,7 @@ inline void setBitsFromPos(uint64_t& bits, uint32_t pos, bool value) {
   if (value) {
     bits = -1 << (64 - pos) | bits;
   } else {
-    bits = ((unsigned long long)-1 >> (64 - pos))  & bits;
+    bits = ((unsigned long long)-1 >> (64 - pos)) & bits;
   }
 }
 

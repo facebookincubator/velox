@@ -407,11 +407,11 @@ TEST(SelectivityVectorTest, resizeTest) {
   checkFn(640, 656, larger, true);
   checkFn(656, 704, larger, false);
 
-  //Check for word length reduction
+  // Check for word length reduction
   larger.resize(53);
   checkFn(0, 53, larger, true);
   checkFn(53, 64, larger, false);
-  //Check if all selected is true
+  // Check if all selected is true
   ASSERT_TRUE(larger.isAllSelected());
 }
 
