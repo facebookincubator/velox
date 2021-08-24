@@ -58,11 +58,11 @@ class SelectivityVector {
 
   /// Resizes the vector to new size and sets the new bits with value `value`.
   void resize(int32_t size, bool value = true) {
-    // Note default insert true's
     auto numWords = bits::nwords(size);
     bits_.resize(numWords, value ? -1 : 0);
-    begin_ = 0;
-    end_ = size;
+    if (value) {
+      end_ = size;
+    }
     size_ = size;
   }
 

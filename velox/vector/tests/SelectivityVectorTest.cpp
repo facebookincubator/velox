@@ -366,20 +366,30 @@ TEST(SelectivityVectorTest, iterator) {
 }
 
 TEST(SelectivityVectorTest, resizeTest) {
+
+  auto checkFn = [&] (int from, SelectivityVector& vector, bool check) {
+    for (int i = from; i < vector.size(); i++) {
+      if (check) {
+        ASSERT_TRUE(vector.isValid(i));
+      } else {
+        ASSERT_TRUE(!vector.isValid(i));
+      }
+    }
+  };
+
   SelectivityVector vector(64, false);
   vector.resize(128, /* value */ true);
-
   // Ensure last 64 bits are set to 1
-  for (int i = 64; i < vector.size(); i++) {
-    ASSERT_TRUE(vector.isValid(i));
-  }
+  checkFn(64, vector, true);
 
-  SelectivityVector rows(64, false);
+  SelectivityVector rows(64, true);
   rows.resize(128, /* value */ false);
+  // Ensure last 64 bits set to false
+  checkFn(64, rows, false);
+  auto range = rows.asRange();
+  // Assert we dont set _end to 128.
+  ASSERT_EQ(range.end(), 64);
 
-  for (int i = 64; i < rows.size(); i++) {
-    ASSERT_TRUE(!rows.isValid(i));
-  }
 }
 
 } // namespace test
