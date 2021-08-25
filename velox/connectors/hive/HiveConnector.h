@@ -128,6 +128,10 @@ class HiveDataSource : public DataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+  void addDynamicFilter(
+      ChannelIndex outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
+
   RowVectorPtr next(uint64_t size) override;
 
   uint64_t getCompletedRows() override {
@@ -157,12 +161,14 @@ class HiveDataSource : public DataSource {
 
   void setNullConstantValue(common::ScanSpec* spec, const TypePtr& type) const;
 
+  void addPendingDynamicFilters();
+
   const std::shared_ptr<const RowType> outputType_;
   FileHandleFactory* fileHandleFactory_;
   velox::memory::MemoryPool* pool_;
   std::vector<std::string> regularColumns_;
   std::unique_ptr<dwrf::ColumnReaderFactory> columnReaderFactory_;
-  std::unique_ptr<common::ScanSpec> scanSpec_ = nullptr;
+  std::unique_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<HiveConnectorSplit> split_;
   dwio::common::ReaderOptions readerOpts_;
   dwio::common::RowReaderOptions rowReaderOpts_;
@@ -172,6 +178,10 @@ class HiveDataSource : public DataSource {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;
   bool emptySplit_;
+
+  // Dynamically pushed down filters to be added to scanSpec_ on next split.
+  std::unordered_map<ChannelIndex, std::shared_ptr<common::Filter>>
+      pendingDynamicFilters_;
 
   // Number of splits skipped based on statistics.
   int64_t skippedSplits_{0};
