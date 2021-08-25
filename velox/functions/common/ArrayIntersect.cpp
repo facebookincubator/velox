@@ -196,7 +196,7 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
     // Optimized case when the right-hand side array is constant.
     if (constantSet_.has_value()) {
-      rows.applyToSelected([&](vector_size_t row) {
+      leftElementsRows.applyToSelected([&](vector_size_t row) {
         processRow(row, *constantSet_, outputSet);
       });
     }
@@ -216,7 +216,7 @@ class ArrayIntersectFunction : public exec::VectorFunction {
       auto decodedRightElements = rightElementsHolder.get();
       SetWithNull<T> rightSet;
 
-      rows.applyToSelected([&](vector_size_t row) {
+      leftElementsRows.applyToSelected([&](vector_size_t row) {
         auto idx = decodedRightArray->index(row);
         generateSet<T>(baseRightArray, decodedRightElements, idx, rightSet);
         processRow(row, rightSet, outputSet);
@@ -234,7 +234,7 @@ class ArrayIntersectFunction : public exec::VectorFunction {
         newLengths,
         newElements,
         0);
-    context->moveOrCopyResult(resultArray, rows, result);
+    context->moveOrCopyResult(resultArray, leftElementsRows, result);
   }
 
   // If one of the arrays is constant, this member will store a pointer to the
