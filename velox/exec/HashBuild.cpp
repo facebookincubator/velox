@@ -217,9 +217,29 @@ void HashBuild::finish() {
         ->setAntiJoinHasNullKeys();
   } else {
     table_->prepareJoinTable(std::move(otherTables));
+
+    addRuntimeStats();
+
     operatorCtx_->task()
         ->findOrCreateJoinBridge(planNodeId())
         ->setHashTable(std::move(table_));
+  }
+}
+
+void HashBuild::addRuntimeStats() {
+  const auto& hashers = table_->hashers();
+  uint64_t asRange;
+  uint64_t asDistinct;
+  for (auto i = 0; i < hashers.size(); i++) {
+    hashers[i]->cardinality(asRange, asDistinct);
+    if (asRange != VectorHasher::kRangeTooLarge) {
+      stats_.addRuntimeStat(
+          fmt::format("hashBuildRange_{}_{}", planNodeId(), i), asRange);
+    }
+    if (asDistinct != VectorHasher::kRangeTooLarge) {
+      stats_.addRuntimeStat(
+          fmt::format("hashBuildDistinct_{}_{}", planNodeId(), i), asDistinct);
+    }
   }
 }
 
