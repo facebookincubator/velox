@@ -227,18 +227,17 @@ void HashBuild::finish() {
 }
 
 void HashBuild::addRuntimeStats() {
+  // Report range sizes and number of distinct values for the join keys.
   const auto& hashers = table_->hashers();
   uint64_t asRange;
   uint64_t asDistinct;
   for (auto i = 0; i < hashers.size(); i++) {
     hashers[i]->cardinality(asRange, asDistinct);
     if (asRange != VectorHasher::kRangeTooLarge) {
-      stats_.addRuntimeStat(
-          fmt::format("hashBuildRange_{}_{}", planNodeId(), i), asRange);
+      stats_.addRuntimeStat(fmt::format("rangeKey{}", i), asRange);
     }
     if (asDistinct != VectorHasher::kRangeTooLarge) {
-      stats_.addRuntimeStat(
-          fmt::format("hashBuildDistinct_{}_{}", planNodeId(), i), asDistinct);
+      stats_.addRuntimeStat(fmt::format("distinctKey{}", i), asDistinct);
     }
   }
 }
