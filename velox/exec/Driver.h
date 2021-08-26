@@ -33,7 +33,8 @@ enum class BlockingReason {
   kWaitForConsumer,
   kWaitForSplit,
   kWaitForExchange,
-  kWaitForJoinBuild
+  kWaitForJoinBuild,
+  kWaitForMemory
 };
 
 using ContinueFuture = folly::SemiFuture<bool>;
@@ -134,11 +135,21 @@ class Driver {
   static void testingJoinAndReinitializeExecutor(int32_t threads = 0);
 
   bool isOnThread() const {
-    return isOnThread_;
+    return state_.isOnThread();
   }
 
   bool isTerminated() const {
-    return isTerminated_;
+    return state_.isTerminated;
+  }
+
+  std::string label();
+
+  core::ThreadState& state() {
+    return state_;
+  }
+
+  core::CancelPool* cancelPool() const {
+    return cancelPool_.get();
   }
 
   // Frees the resources associated with this if this is
@@ -169,6 +180,33 @@ class Driver {
     return ctx_.get();
   }
 
+  // Requests 'size' bytes of memory from the process memory manager,
+  // to be added to the limit of 'tracker'. If tracker is
+  // revocable and there is no ready supply, the reservation may be
+  // unchanged. If tracker is not revocable, the allocation will be
+  // made or an error is thrown. This must be called while on thread in a thread
+  // of the Task of 'this'. Returns true if the
+  // limit was increased.
+  bool reserveMemory(memory::MemoryUsageTracker* tracker, int64_t size);
+
+  // Tries to spill 'size' or more bytes of revocable memory from any
+  // of the operators in 'this'. Returns the amount of memory
+  // freed. 'this' must be off thread or in a cancel-free state.
+  int64_t spill(int64_t size);
+
+  // Attempts to increase the limit of 'tracker' by 'size'.  If 'type'
+  // is kRecoverable then this may fail to increase the limit if the
+  // limit is already high and there is no extra available. If 'type'
+  // is not 'kRecoverable' then this will make a serious effort to
+  // raise the limit, including spilling other queries and will fail
+  // only if this really was not possible. Returns true if the limit
+  // was raised by at least 'size'. The caller must be a thread of the Task of
+  // 'this'.
+  bool growTaskMemory(
+      memory::UsageType type,
+      int64_t size,
+      memory::MemoryUsageTracker* tracker);
+
  private:
   core::StopReason runInternal(
       std::shared_ptr<Driver>& self,
@@ -180,9 +218,8 @@ class Driver {
   std::shared_ptr<Task> task_;
   core::CancelPoolPtr cancelPool_;
 
-  // Set via cancelPool->enter()
-  bool isOnThread_ = false;
-  bool isTerminated_ = false;
+  // Set via 'cancelPool_' and serialized by ''cancelPool_'s  mutex.
+  core::ThreadState state_;
 
   std::vector<std::unique_ptr<Operator>> operators_;
 
@@ -242,6 +279,26 @@ struct DriverFactory {
 
     return std::nullopt;
   }
+};
+
+// Begins and ends a section where a thread is running but not
+// counted in its CancelPool. Using this, a Driver thread can for
+// example stop its own Task. For arbitrating memory overbooking,
+// the contending threads go cancel-free and each in turn enter a
+// global critical section. When running the arbitration strategy, a
+// thread can stop and restart Tasks, including its own. When a Task
+// is stopped, the strategy thread can alter its memory including
+// spilling or killing the whole Task. Other threads waiting to run
+// the arbitration (MemoryManagerStrategy::recover), are in a cancel
+// free state which also means that they are not altering their own
+// memory except via running recover.
+class CancelFreeSection {
+ public:
+  explicit CancelFreeSection(Driver* driver);
+  ~CancelFreeSection();
+
+ private:
+  Driver* driver_;
 };
 
 } // namespace facebook::velox::exec

@@ -43,14 +43,35 @@ Task::Task(
       pool_(queryCtx_->pool()->addScopedChild("task_root")),
       bufferManager_(
           PartitionedOutputBufferManager::getInstance(queryCtx_->host())) {
-  if (!pool_->getMemoryUsageTracker()) {
-    // Enable eager memory usage tracking for this task's pool and any child
-    // pool created from this task.
-    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+  constexpr int64_t kInitialTaskMemory = 8 << 20; // 8MB
+  constexpr int64_t kUnlimited = 100000000000LL;
+  auto strategy = memory::MemoryManagerStrategy::instance();
+  if (strategy->canResize()) {
+    auto tracker = pool_->getMemoryUsageTracker();
+    if (!tracker) {
+      auto topTracker =
+          memory::getProcessDefaultMemoryManager().getMemoryUsageTracker();
+
+      tracker = memory::MemoryUsageTracker::create(
+          topTracker,
+          memory::UsageType::kUserMem,
+          memory::MemoryUsageConfigBuilder()
+              .maxTotalMemory(kInitialTaskMemory)
+              .build());
+      pool_->setMemoryUsageTracker(tracker);
+    }
+    tracker->setGrowCallback([&](memory::UsageType type,
+                                 int64_t size,
+                                 memory::MemoryUsageTracker* limit) {
+      Driver* driver = thisDriver();
+      VELOX_CHECK(driver, "Allocating Task memory outside of Driver threads");
+      return driver->growTaskMemory(type, size, limit);
+    });
   }
 }
 
 Task::~Task() {
+  memory::getProcessDefaultMemoryManager().unregisterConsumer(this);
   try {
     if (hasPartitionedOutput_) {
       if (auto bufferManager = bufferManager_.lock()) {
@@ -90,7 +111,12 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
     self->numDrivers_ += std::min(factory->maxDrivers, maxDrivers);
   }
   self->taskStats_.pipelineStats.resize(self->driverFactories_.size());
-  self->drivers_.resize(self->numDrivers_);
+  // Register self for possible memory recovery callback. Do this
+  // after sizing 'drivers_' but before starting the
+  // Drivers. 'drivers_' can be read by memory recovery or
+  // cancellation while Drivers are being made, so the array should
+  // have final size from the start.
+  memory::getProcessDefaultMemoryManager().registerConsumer(self.get(), self);
 
   auto bufferManager = self->bufferManager_.lock();
   VELOX_CHECK_NOT_NULL(
@@ -98,6 +124,8 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
       "Unable to initialize task. "
       "PartitionedOutputBufferManager was already destructed");
 
+  std::vector<std::shared_ptr<Driver>> drivers;
+  drivers.reserve(self->numDrivers_);
   for (auto pipeline = 0; pipeline < self->driverFactories_.size();
        ++pipeline) {
     auto& factory = self->driverFactories_[pipeline];
@@ -126,7 +154,7 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
     }
 
     for (int32_t i = 0; i < numDrivers; ++i) {
-      self->drivers_.push_back(factory->createDriver(
+      drivers.push_back(factory->createDriver(
           std::make_unique<DriverCtx>(self, i, pipeline, numDrivers),
           exchangeClient,
           [self, maxDrivers](size_t i) {
@@ -135,23 +163,51 @@ void Task::start(std::shared_ptr<Task> self, uint32_t maxDrivers) {
                 : 0;
           }));
       if (i == 0) {
-        self->drivers_.back()->initializeOperatorStats(
+        drivers.back()->initializeOperatorStats(
             self->taskStats_.pipelineStats[pipeline].operatorStats);
       }
-      Driver::enqueue(self->drivers_.back(), self->queryCtx_->executor());
     }
   }
   self->noMoreLocalExchangeProducers();
+  // Set and start all Drivers together inside the CancelPool so that
+  // cancellations and pauses have well
+  // defined timing. For example, do not pause and restart a task
+  // while it is still adding Drivers.
+  std::lock_guard<std::mutex> l(*self->cancelPool()->mutex());
+  self->drivers_ = std::move(drivers);
+  for (auto& driver : self->drivers_) {
+    if (driver) {
+      SETCONT(driver->state());
+      Driver::enqueue(driver);
+    }
+  }
 }
 
 // static
 void Task::resume(std::shared_ptr<Task> self) {
   VELOX_CHECK(!self->exception_, "Cannot resume failed task");
-  std::lock_guard<std::mutex> l(self->mutex_);
+  std::lock_guard<std::mutex> l(*self->cancelPool()->mutex());
   for (auto& driver : self->drivers_) {
     if (driver) {
+      if (driver->state().isCancelFree) {
+        // The Driver will come on thread in its own time as long as
+        // the cancel flag is reset. This check needs to be inside the
+        // CancelPool mutex.
+        continue;
+      }
+      if (driver->state().enqueued) {
+        // A Driver can wait for a thread and there can be a
+        // pause/resume during the wait. The Driver should not be
+        // enqueued twice.
+        continue;
+      }
       VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
-      Driver::enqueue(driver, self->queryCtx_->executor());
+      if (!driver->state().hasBlockingFuture) {
+        // Do not continue a Driver that is blocked on external
+        // event. The Driver gets enqueued by the promise realization.
+        SETCONT(driver->state());
+        Driver::enqueue(driver);
+      }
     }
   }
 }
@@ -645,6 +701,124 @@ Task::getLocalExchangeSources(const core::PlanNodeId& planNodeId) {
       "Incorrect local exchange ID: {}",
       planNodeId);
   return it->second.sources;
+}
+
+Driver* Task::thisDriver() const {
+  auto thisThread = std::this_thread::get_id();
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& driver : drivers_) {
+      if (!driver) {
+        continue;
+      }
+      if (driver->state().thread == thisThread) {
+        return driver.get();
+      }
+    }
+  }
+  return nullptr;
+}
+
+int64_t Task::recover(int64_t size) {
+  int64_t recovered = 0;
+  for (auto& driver : drivers_) {
+    if (driver) {
+      recovered += driver->spill(size);
+    }
+  }
+  return recovered;
+}
+
+bool TaskMemoryStrategy::recover(
+    std::shared_ptr<memory::MemoryConsumer> requester,
+    memory::UsageType type,
+    int64_t size) {
+  Task* consumerTask = dynamic_cast<Task*>(requester.get());
+  auto topTracker =
+      memory::getProcessDefaultMemoryManager().getMemoryUsageTracker();
+  auto tracker =
+      consumerTask ? consumerTask->pool()->getMemoryUsageTracker() : nullptr;
+  std::lock_guard<std::mutex> l(mutex_);
+  // The limits of the consumers are stable inside this section but
+  // the allocation sizes are volatile until the consumer in question
+  // is stopped.
+
+  if (consumerTask) {
+    if (consumerTask->state() != kRunning) {
+      return false;
+    }
+    if (tracker->getIfCan(type, size)) {
+      topTracker->increment(type, size);
+      return true;
+    }
+    if (topTracker->getIfCan(type, size)) {
+      tracker->increment(type, size);
+      return true;
+    }
+  }
+
+  std::vector<ConsumerScore> candidates;
+  std::vector<std::shared_ptr<Task>> paused;
+  int64_t available = 0;
+  for (auto [raw, weak] : consumers_) {
+    auto ptr = weak.lock();
+    if (ptr) {
+      candidates.push_back(
+          {ptr,
+           std::dynamic_pointer_cast<Task>(ptr),
+           ptr->getRecoverableMemory()});
+      available += candidates.back().available;
+    }
+  }
+  std::sort(
+      candidates.begin(),
+      candidates.end(),
+      [&](const ConsumerScore& left, const ConsumerScore& right) {
+        // Most available first.
+        return left.available > right.available;
+      });
+  if (available < size) {
+    return false;
+  }
+  int64_t sizeToGo = size;
+  int64_t recovered = 0;
+  int64_t transfer = 0;
+  for (auto& candidate : candidates) {
+    if (auto& task = candidate.task) {
+      task->cancelPool()->requestPause(true);
+      paused.push_back(task);
+      auto& exec = folly::QueuedImmediateExecutor::instance();
+      auto future = task->cancelPool()->finishFuture();
+      std::move(future).via(&exec).wait();
+      auto delta = task->recover(sizeToGo);
+      recovered += delta;
+      if (task != requester) {
+        transfer += delta;
+      }
+      if (recovered >= size) {
+        break;
+      }
+      sizeToGo -= delta;
+    }
+  }
+  bool success = recovered >= size;
+  if (success && tracker) {
+    // The top tracker has shrunk from spill and now grows by the amount to be
+    // allocated.
+    topTracker->update(size);
+    // The requester's cap grows by the amount transferred from
+    // other consumers. Note that the requester itself may have
+    // spilled.
+    auto builder = memory::MemoryUsageConfigBuilder().maxTotalMemory(
+        transfer + tracker->getMaxTotalBytes());
+    tracker->updateConfig(builder.build());
+  }
+
+  for (auto& task : paused) {
+    task->cancelPool()->requestPause(false);
+    Task::resume(task);
+  }
+  return success;
 }
 
 } // namespace facebook::velox::exec

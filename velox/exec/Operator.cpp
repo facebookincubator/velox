@@ -25,12 +25,41 @@ namespace facebook {
 namespace velox {
 namespace exec {
 
+std::vector<Operator::PlanNodeTranslator>& Operator::translators() {
+  static std::vector<PlanNodeTranslator> translators;
+  return translators;
+}
+
+// static
+std::unique_ptr<Operator> Operator::fromPlanNode(
+    DriverCtx* ctx,
+    int32_t id,
+    std::shared_ptr<const core::PlanNode> planNode) {
+  for (auto& translator : translators()) {
+    auto op = translator(ctx, id, planNode);
+    if (op) {
+      return op;
+    }
+  }
+  return nullptr;
+}
+
 memory::MappedMemory* OperatorCtx::mappedMemory() const {
   if (!mappedMemory_) {
     auto parent = driverCtx_->task->queryCtx()->mappedMemory();
     mappedMemory_ = parent->addChild(pool_->getMemoryUsageTracker());
   }
   return mappedMemory_.get();
+}
+
+memory::MappedMemory* OperatorCtx::recoverableMappedMemory() const {
+  if (!recoverableMappedMemory_) {
+    auto parent = driverCtx_->task->queryCtx()->mappedMemory();
+    auto tracker = pool_->getMemoryUsageTracker()->addChild(
+        false, memory::MemoryUsageConfigBuilder().isRecoverable(true).build());
+    recoverableMappedMemory_ = parent->addChild(tracker);
+  }
+  return recoverableMappedMemory_.get();
 }
 
 const std::string& OperatorCtx::taskId() const {
@@ -250,6 +279,57 @@ void OperatorStats::clear() {
   finishTiming.clear();
 
   memoryStats.clear();
+}
+
+namespace {
+bool tryReserveAndRun(
+    const std::shared_ptr<memory::MemoryUsageTracker>& tracker,
+    int64_t reservationSize,
+    std::function<void(void)> runFunc) {
+  try {
+    tracker->reserve(reservationSize);
+    // Successfully reserved.
+    runFunc();
+    return true;
+  } catch (const VeloxRuntimeError& e) {
+    if (e.errorCode() != ::facebook::velox::error_code::kMemCapExceeded) {
+      // If it is not MemCapExceeded exception, rethrow original exception.
+      throw;
+    }
+  }
+  return false;
+}
+} // namespace
+
+bool Operator::reserveAndRun(
+    const std::shared_ptr<memory::MemoryUsageTracker>& tracker,
+    int64_t reservationSize,
+    std::function<int64_t(int64_t)> spillFunc,
+    std::function<void(void)> runFunc) {
+  if (tryReserveAndRun(tracker, reservationSize, runFunc)) {
+    return true;
+  }
+
+  // If spill func is specified, try spilling locally first.
+  if (spillFunc) {
+    // Spill any recoverable memory locally with
+    // the supplied spill function.
+    spillFunc(reservationSize);
+
+    // Try reserving again and run.
+    if (tryReserveAndRun(tracker, reservationSize, runFunc)) {
+      return true;
+    }
+  }
+
+  if (operatorCtx_->driverCtx()->driver->growTaskMemory(
+          tracker->type(),
+          reservationSize,
+          operatorCtx_->task()->pool()->getMemoryUsageTracker().get())) {
+    runFunc();
+    return true;
+  }
+  return false;
 }
 
 } // namespace exec

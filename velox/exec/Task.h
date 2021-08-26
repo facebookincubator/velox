@@ -64,7 +64,7 @@ struct TaskStats {
 
 class JoinBridge;
 
-class Task {
+class Task : public memory::MemoryConsumer {
  public:
   Task(
       const std::string& taskId,
@@ -89,9 +89,6 @@ class Task {
       std::shared_ptr<core::QueryCtx>&& queryCtx,
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
-
-  Task(const std::string& id, std::shared_ptr<core::QueryCtx> ctx)
-      : taskId_(id), destination_(0), queryCtx_(ctx) {}
 
   ~Task();
 
@@ -329,6 +326,23 @@ class Task {
     return cancelPool_;
   }
 
+  void updateMemoryUsageConfig(
+      const memory::MemoryUsageConfig& config) override {
+    pool_->getMemoryUsageTracker()->updateConfig(config);
+  }
+  int64_t getOvercommittedMemory() const override {
+    return pool_->getMemoryUsageTracker()->getOvercommittedMemory();
+  }
+  int64_t getRecoverableMemory() const override {
+    return pool_->getMemoryUsageTracker()->getCurrentRecoverableBytes();
+  }
+
+  int64_t recover(int64_t size) override;
+
+  // Returns the Driver running on the current thread or nullptr if the current
+  // thread is not running a Driver of 'this'.
+  Driver* thisDriver() const;
+
  private:
   struct BarrierState {
     int32_t numRequested;
@@ -380,6 +394,8 @@ class Task {
       std::unordered_map<int32_t, GroupSplitsInfo>::iterator it);
 
   void addSplitLocked(SplitsState& splitsState, exec::Split&& split);
+
+  folly::SemiFuture<bool> recoverMemory(int64_t minMemoryToRecover);
 
   const std::string taskId_;
   std::shared_ptr<const core::PlanNode> planNode_;
@@ -437,4 +453,35 @@ class Task {
   core::CancelPoolPtr cancelPool_{std::make_shared<core::CancelPool>()};
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
 };
+
+class TaskMemoryStrategy : public memory::MemoryManagerStrategyBase {
+ public:
+  explicit TaskMemoryStrategy(int64_t size) {
+    auto tracker =
+        memory::getProcessDefaultMemoryManager().getMemoryUsageTracker();
+    tracker->updateConfig(
+        memory::MemoryUsageConfigBuilder().maxTotalMemory(size).build());
+  }
+
+  bool canResize() const override {
+    return true;
+  }
+
+  // The requester is a Task and the calling thread is a thread running a Driver
+  // in the Task.
+  bool recover(
+      std::shared_ptr<memory::MemoryConsumer> requester,
+      memory::UsageType type,
+      int64_t size) override;
+
+ private:
+  using ConsumerPtr = std::shared_ptr<memory::MemoryConsumer>;
+  struct ConsumerScore {
+    ConsumerPtr consumer;
+    // 'candidate' if this is a Task.
+    std::shared_ptr<Task> task;
+    int64_t available;
+  };
+};
+
 } // namespace facebook::velox::exec

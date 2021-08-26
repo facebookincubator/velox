@@ -33,6 +33,7 @@
 #include "folly/Likely.h"
 #include "folly/Random.h"
 #include "folly/experimental/FunctionScheduler.h"
+#include "velox/common/memory/MemoryManagerStrategy.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
@@ -484,6 +485,12 @@ class IMemoryManager {
   virtual bool reserve(int64_t size) = 0;
   // Subtracts from current total and regain memory quota.
   virtual void release(int64_t size) = 0;
+  virtual void registerConsumer(
+      MemoryConsumer* consumer,
+      const std::shared_ptr<MemoryConsumer>& consumerPtr) = 0;
+  virtual void unregisterConsumer(MemoryConsumer* consumer) = 0;
+
+  virtual std::shared_ptr<MemoryUsageTracker> getMemoryUsageTracker() const = 0;
 };
 
 // For now, users wanting multiple different allocators would need to
@@ -531,6 +538,20 @@ class MemoryManager final : public IMemoryManager {
 
   Allocator& getAllocator();
 
+  std::shared_ptr<MemoryUsageTracker> getMemoryUsageTracker() const override {
+    return tracker_;
+  }
+
+  void registerConsumer(
+      MemoryConsumer* consumer,
+      const std::shared_ptr<MemoryConsumer>& consumerPtr) final {
+    MemoryManagerStrategy::instance()->registerConsumer(consumer, consumerPtr);
+  }
+
+  void unregisterConsumer(MemoryConsumer* consumer) final {
+    MemoryManagerStrategy::instance()->unregisterConsumer(consumer);
+  }
+
  private:
   FRIEND_TEST(MemoryPoolImplTest, CapSubtree);
   FRIEND_TEST(MemoryPoolImplTest, CapAllocation);
@@ -544,6 +565,8 @@ class MemoryManager final : public IMemoryManager {
   std::shared_ptr<MemoryPool> root_;
   mutable std::mutex mutex_;
   std::atomic_long totalBytes_{0};
+
+  std::shared_ptr<MemoryUsageTracker> tracker_;
 };
 
 template <typename Allocator, uint16_t ALIGNMENT>

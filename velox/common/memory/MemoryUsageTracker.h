@@ -37,6 +37,10 @@ struct MemoryUsageConfig {
   std::optional<int64_t> maxUserMemory;
   std::optional<int64_t> maxSystemMemory;
   std::optional<int64_t> maxTotalMemory;
+  std::optional<int64_t> maxRecoverableMemory;
+  bool allowOvercommit{false};
+  bool isRecoverable{false};
+  bool forMemoryManager{false};
 };
 
 struct MemoryUsageConfigBuilder {
@@ -60,9 +64,36 @@ struct MemoryUsageConfigBuilder {
     return *this;
   }
 
+  MemoryUsageConfigBuilder& maxRecoverableMemory(int64_t max) {
+    config.maxRecoverableMemory = max;
+    return *this;
+  }
+
+  MemoryUsageConfigBuilder& allowOvercommit(bool overcommit) {
+    config.allowOvercommit = overcommit;
+    return *this;
+  }
+
+  MemoryUsageConfigBuilder& isRecoverable(bool recoverable) {
+    config.isRecoverable = recoverable;
+    return *this;
+  }
+
+  MemoryUsageConfigBuilder& forMemoryManager(bool forMemMgr) {
+    config.forMemoryManager = forMemMgr;
+    return *this;
+  }
+
   MemoryUsageConfig build() {
     return config;
   }
+};
+
+enum class UsageType : int {
+  kUserMem = 0,
+  kSystemMem = 1,
+  kTotalMem = 2,
+  kRecoverableMem = 3
 };
 
 // Keeps track of currently outstanding and peak outstanding memory
@@ -71,11 +102,11 @@ struct MemoryUsageConfigBuilder {
 // MemoryPool or MappedMemory. These trackers form a tree. The
 // tracking information is aggregated from leaf to root. Each level
 // in the tree may specify a maximum allocation. Updating the
-// allocated amount past the maximum will throw. This is why the
-// update should precede the actual allocation. A tracker can
-// specify a reservation. Making a reservation means that no memory is
-// allocated but the allocated size  is updated so as to
-// make sure that at least the reserved  amount can be
+// allocated amount past the maximum will call an optional grow callback and
+// throw if the callback did not make more space. This is why the update should
+// precede the actual allocation. A tracker can specify a reservation. Making a
+// reservation means that no memory is allocated but the allocated size  is
+// updated so as to make sure that at least the reserved  amount can be
 // allocated. Allocations that fit within the reserved are not
 // counted as new because the counting  was done when
 // making the reservation.  Allocating past the reservation is possible, but
@@ -86,6 +117,13 @@ struct MemoryUsageConfigBuilder {
 class MemoryUsageTracker
     : public std::enable_shared_from_this<MemoryUsageTracker> {
  public:
+  // Function to increase size limit. Returns true if limit
+  // increased. On success, increases the limits in 'limit' so as to
+  // have 'size' more bytes of 'type'. This is responsible for updating all
+  // parent trackers of 'limit'.
+  using GrowCallback = std::function<
+      bool(UsageType type, int64_t size, MemoryUsageTracker* limit)>;
+
   // Create default usage tracker. It aggregates both 'user' and 'system' memory
   // from its children and tracks the allocations as 'user' memory. It returns a
   // 'root' tracker.
@@ -108,6 +146,16 @@ class MemoryUsageTracker
             .maxSystemMemory(maxSystemMemory)
             .maxTotalMemory(maxTotalMemory)
             .build());
+  }
+
+  static std::shared_ptr<MemoryUsageTracker> create(
+      const std::shared_ptr<MemoryUsageTracker>& parent,
+      UsageType type,
+      const MemoryUsageConfig& config);
+
+  int64_t getOvercommittedMemory() const {
+    return getCurrentTotalBytes() + getCurrentRecoverableBytes() -
+        getMaxTotalBytes();
   }
 
   // Increments the reservation for 'this' so that we can allocate
@@ -163,7 +211,11 @@ class MemoryUsageTracker
     return currentUsageInBytes_[static_cast<int>(UsageType::kSystemMem)];
   }
   int64_t getCurrentTotalBytes() const {
-    return getCurrentUserBytes() + getCurrentSystemBytes();
+    return getCurrentUserBytes() + getCurrentSystemBytes() +
+        getCurrentRecoverableBytes();
+  }
+  int64_t getCurrentRecoverableBytes() const {
+    return currentUsageInBytes_[static_cast<int>(UsageType::kRecoverableMem)];
   }
   int64_t getPeakUserBytes() const {
     return peakUsageInBytes_[static_cast<int>(UsageType::kUserMem)];
@@ -173,6 +225,12 @@ class MemoryUsageTracker
   }
   int64_t getPeakTotalBytes() const {
     return peakUsageInBytes_[static_cast<int>(UsageType::kTotalMem)];
+  }
+  int64_t getPeakRecoverableBytes() const {
+    return peakUsageInBytes_[static_cast<int>(UsageType::kRecoverableMem)];
+  }
+  int64_t getMaxTotalBytes() const {
+    return maxMemory_[static_cast<int>(UsageType::kTotalMem)];
   }
 
   int64_t getAvailableReservation() const {
@@ -196,34 +254,71 @@ class MemoryUsageTracker
         config);
   }
 
+  void updateConfig(const MemoryUsageConfig& config) {
+    if (config.maxUserMemory.has_value()) {
+      maxMemory_[static_cast<int>(UsageType::kUserMem)] =
+          config.maxUserMemory.value();
+    }
+    if (config.maxSystemMemory.has_value()) {
+      maxMemory_[static_cast<int>(UsageType::kSystemMem)] =
+          config.maxUserMemory.value();
+    }
+    if (config.maxTotalMemory.has_value()) {
+      maxMemory_[static_cast<int>(UsageType::kTotalMem)] =
+          config.maxTotalMemory.value();
+    }
+    if (config.maxRecoverableMemory.has_value()) {
+      maxMemory_[static_cast<int>(UsageType::kRecoverableMem)] =
+          config.maxRecoverableMemory.value();
+    }
+  }
+
+  void increment(UsageType type, int64_t size) {
+    currentUsageInBytes_[static_cast<int32_t>(UsageType::kTotalMem)].fetch_add(
+        size);
+
+    currentUsageInBytes_[static_cast<int32_t>(type)].fetch_add(size);
+  }
+
+  int64_t getIfCan(UsageType type, int64_t size) {
+    int64_t limit = maxMemory_[static_cast<int32_t>(UsageType::kTotalMem)];
+
+    if (currentUsageInBytes_[static_cast<int32_t>(UsageType::kTotalMem)]
+                .fetch_add(size) +
+            size >
+        limit) {
+      currentUsageInBytes_[static_cast<int32_t>(UsageType::kTotalMem)]
+          .fetch_sub(size);
+      return false;
+    }
+    currentUsageInBytes_[static_cast<int32_t>(type)].fetch_add(size);
+    return true;
+  }
+
+  UsageType type() const {
+    return type_;
+  }
+
+  void setGrowCallback(GrowCallback func) {
+    growCallback_ = func;
+  }
+
+  std::string toString() const;
+
  private:
-  enum class UsageType : int { kUserMem = 0, kSystemMem = 1, kTotalMem = 2 };
-  std::shared_ptr<MemoryUsageTracker> parent_;
-  UsageType type_;
-  std::array<std::atomic<int64_t>, 2> currentUsageInBytes_{};
-  std::array<std::atomic<int64_t>, 3> peakUsageInBytes_{};
-  std::array<int64_t, 3> maxMemory_;
-  std::array<int64_t, 3> numAllocs_{};
-  std::array<int64_t, 3> cumulativeBytes_{};
-
-  int64_t reservation_{0};
-  std::atomic<int64_t> usedReservation_{};
-
+  GrowCallback growCallback_;
   explicit MemoryUsageTracker(
       const std::shared_ptr<MemoryUsageTracker>& parent,
       UsageType type,
       const MemoryUsageConfig& config)
       : parent_(parent),
-        type_(type),
+        type_(config.isRecoverable ? UsageType::kRecoverableMem : type),
         maxMemory_{
             config.maxUserMemory.value_or(kMaxMemory),
             config.maxSystemMemory.value_or(kMaxMemory),
-            config.maxTotalMemory.value_or(kMaxMemory)} {}
-
-  static std::shared_ptr<MemoryUsageTracker> create(
-      const std::shared_ptr<MemoryUsageTracker>& parent,
-      UsageType type,
-      const MemoryUsageConfig& config);
+            config.maxTotalMemory.value_or(kMaxMemory)},
+        allowOvercommit_{config.allowOvercommit},
+        forMemoryManager_{config.forMemoryManager} {}
 
   void maySetMax(UsageType type, int64_t newPeak) {
     auto& peakUsage = peakUsageInBytes_[static_cast<int>(type)];
@@ -234,48 +329,7 @@ class MemoryUsageTracker
     }
   }
 
-  void update(UsageType type, int64_t size) {
-    // Update parent first. If one of the ancestor's limits are exceeded, it
-    // will throw VeloxMemoryCapExceeded exception.
-    if (parent_) {
-      parent_->update(type, size);
-    }
-
-    auto newPeak = currentUsageInBytes_[static_cast<int>(type)].fetch_add(
-                       size, std::memory_order_relaxed) +
-        size;
-
-    if (size > 0) {
-      ++numAllocs_[static_cast<int>(type)];
-      cumulativeBytes_[static_cast<int>(type)] += size;
-      ++numAllocs_[static_cast<int>(UsageType::kTotalMem)];
-      cumulativeBytes_[static_cast<int>(UsageType::kTotalMem)] += size;
-    }
-
-    // We track the peak usage of total memory independent of user and
-    // system memory since freed user memory can be reallocated as system
-    // memory and vice versa.
-    int64_t total = getCurrentUserBytes() + getCurrentSystemBytes();
-
-    // Enforce the limit. Throw VeloxMemoryCapException exception if the limits
-    // are exceeded.
-    if (size > 0 &&
-        (newPeak > maxMemory_[static_cast<int>(type)] ||
-         total > maxMemory_[static_cast<int>(UsageType::kTotalMem)])) {
-      // Exceeded the limit. Fail allocation after reverting changes to
-      // parent and currentUsageInBytes_.
-      if (parent_) {
-        parent_->update(type, -size);
-      }
-      currentUsageInBytes_[static_cast<int>(type)].fetch_add(
-          -size, std::memory_order_relaxed);
-
-      VELOX_MEM_CAP_EXCEEDED();
-    }
-
-    maySetMax(type, newPeak);
-    maySetMax(UsageType::kTotalMem, total);
-  }
+  void update(UsageType type, int64_t size);
 
   // Increments the amount of 'usedReservation_' by 'size'.  Returns the
   // amount by which current size must be incremented. If both old and
@@ -295,7 +349,7 @@ class MemoryUsageTracker
       do {
         oldUsed = usedReservation_;
         newUsed = oldUsed + size;
-        if (newUsed < reservation && oldUsed < reservation_) {
+        if (newUsed <= reservation && oldUsed <= reservation_) {
           // The usage stays below reservation. No change to allocated size.
           increment = 0;
         } else if (newUsed < reservation_ && oldUsed > reservation_) {
@@ -313,5 +367,19 @@ class MemoryUsageTracker
     }
     return increment;
   }
+
+  std::shared_ptr<MemoryUsageTracker> parent_;
+  UsageType type_;
+  std::array<std::atomic<int64_t>, 4> currentUsageInBytes_{};
+  std::array<std::atomic<int64_t>, 4> peakUsageInBytes_{};
+  std::array<int64_t, 3> maxMemory_;
+  std::array<int64_t, 3> numAllocs_{};
+  std::array<int64_t, 3> cumulativeBytes_{};
+
+  int64_t reservation_{0};
+  std::atomic<int64_t> usedReservation_{};
+
+  bool allowOvercommit_;
+  bool forMemoryManager_;
 };
 } // namespace facebook::velox::memory

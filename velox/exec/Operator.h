@@ -35,7 +35,7 @@ struct IdentityProjection {
 
 struct MemoryStats {
   uint64_t userMemoryReservation = {};
-  // TODO: Populate revocableMemoryReservation as well.
+  // TODO(venkatra): Populate revocableMemoryReservation as well.
   uint64_t revocableMemoryReservation = {};
   uint64_t systemMemoryReservation = {};
   uint64_t peakUserMemoryReservation = {};
@@ -142,6 +142,8 @@ class OperatorCtx {
 
   memory::MappedMemory* mappedMemory() const;
 
+  memory::MappedMemory* recoverableMappedMemory() const;
+
   const std::shared_ptr<Task>& task() const {
     return driverCtx_->task;
   }
@@ -167,11 +169,19 @@ class OperatorCtx {
   // These members are created on demand.
   mutable velox::memory::MemoryPool* systemMemPool_{nullptr};
   mutable std::shared_ptr<memory::MappedMemory> mappedMemory_;
+  mutable std::shared_ptr<memory::MappedMemory> recoverableMappedMemory_;
 };
 
 // Query operator
 class Operator {
  public:
+  // Function for mapping a user-registered PlanNode into the corresponding
+  // Operator.
+  using PlanNodeTranslator = std::function<std::unique_ptr<Operator>(
+      DriverCtx* ctx,
+      int32_t id,
+      std::shared_ptr<const core::PlanNode>& node)>;
+
   // 'operatorId' is the initial index of the 'this' in the Driver's
   // list of Operators. This is used as in index into OperatorStats
   // arrays in the Task. 'planNodeId' is a query-level unique
@@ -252,7 +262,37 @@ class Operator {
     return stats_.planNodeId;
   }
 
+  bool reserveAndRun(
+      const std::shared_ptr<memory::MemoryUsageTracker>& tracker,
+      int64_t quotaSize,
+      std::function<int64_t(int64_t)> spillFunc,
+      std::function<void(void)> runFunc);
+
+  // Tries to shrink the memory footprint of 'this' by at least
+  // 'minMemoryToRecover' bytes. Returns the approximate amount that
+  // was freed. The trackers of the different pools will have
+  // represent the actual state.
+  virtual int64_t spill(int64_t /* minMemoryToRecover */) {
+    return 0;
+  }
+
+  // Registers 'translator' for mapping user defined PlanNode subclass instances
+  // to user-defined Operators.
+  static void registerOperator(PlanNodeTranslator translator) {
+    translators().push_back(translator);
+  }
+
+  // Calls all the registered PlanNodeTranslators on 'planNode' and
+  // returns the the result of the first one that returns non-nullptr
+  // or nullptr if all return nullptr.
+  static std::unique_ptr<Operator> fromPlanNode(
+      DriverCtx* ctx,
+      int32_t id,
+      std::shared_ptr<const core::PlanNode> planNode);
+
  protected:
+  static std::vector<PlanNodeTranslator>& translators();
+
   // Clears the columns of 'output_' that are projected from
   // 'input_'. This should be done when preparing to produce a next
   // batch of output to drop any lingering references to row
