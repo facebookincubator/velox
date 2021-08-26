@@ -406,7 +406,6 @@ TEST(SelectivityVectorTest, resize) {
 }
 
 TEST(SelectivityVectorTest, select) {
-
   SelectivityVector first(64);
   SelectivityVector other(32, false);
 
@@ -414,7 +413,7 @@ TEST(SelectivityVectorTest, select) {
   checkFn(0, 32, other, true);
   ASSERT_TRUE(other.isAllSelected());
 
-  SelectivityVector a (16, false);
+  SelectivityVector a(16, false);
   a.resize(33, true);
   SelectivityVector b(32, false);
   b.select(a);
@@ -424,7 +423,6 @@ TEST(SelectivityVectorTest, select) {
   empty.select(first);
   ASSERT_FALSE(empty.isAllSelected());
 }
-
 
 } // namespace test
 } // namespace velox
