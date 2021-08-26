@@ -219,7 +219,7 @@ class SelectivityVector {
     bits::orBits(
         bits_.data(),
         other.bits_.data(),
-        begin_,
+        0,
         std::min(size_, other.size()));
     updateBounds();
   }

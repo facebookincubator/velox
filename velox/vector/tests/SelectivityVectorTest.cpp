@@ -60,9 +60,9 @@ void assertState(
   }
 }
 
-void checkFn(int from, int to, SelectivityVector& vector, bool check) {
+void assertIsValid(int from, int to, const SelectivityVector& vector, bool value) {
   for (int i = from; i < to; i++) {
-    ASSERT_EQ(check, vector.isValid(i));
+    ASSERT_EQ(value, vector.isValid(i));
   }
 }
 
@@ -376,31 +376,31 @@ TEST(SelectivityVectorTest, resize) {
   SelectivityVector vector(64, false);
   vector.resize(128, /* value */ true);
   // Ensure last 64 bits are set to 1
-  checkFn(64, 128, vector, true);
+  assertIsValid(64, 128, vector, true);
 
   SelectivityVector rows(64, true);
   rows.resize(128, /* value */ false);
   // Ensure last 64 bits set to false
-  checkFn(64, 128, rows, false);
+  assertIsValid(64, 128, rows, false);
   ASSERT_FALSE(rows.isAllSelected());
 
   // Now test more unusual ranges
   SelectivityVector unusual(37, true);
-  checkFn(0, 37, unusual, true);
+  assertIsValid(0, 37, unusual, true);
   unusual.resize(63, /* value */ false);
-  checkFn(0, 37, unusual, true);
-  checkFn(37, 63, unusual, false);
+  assertIsValid(0, 37, unusual, true);
+  assertIsValid(37, 63, unusual, false);
 
   // Test for much larger word lengths
   SelectivityVector larger(53, true);
-  checkFn(0, 53, larger, true);
+  assertIsValid(0, 53, larger, true);
   larger.resize(656, true);
-  checkFn(53, 64, larger, true);
-  checkFn(640, 656, larger, true);
+  assertIsValid(53, 64, larger, true);
+  assertIsValid(640, 656, larger, true);
 
   // Check for word length reduction
   larger.resize(53);
-  checkFn(0, 53, larger, true);
+  assertIsValid(0, 53, larger, true);
   // Check if all selected is true
   ASSERT_TRUE(larger.isAllSelected());
 }
@@ -410,18 +410,27 @@ TEST(SelectivityVectorTest, select) {
   SelectivityVector other(32, false);
 
   other.select(first);
-  checkFn(0, 32, other, true);
+  assertIsValid(0, 32, other, true);
   ASSERT_TRUE(other.isAllSelected());
 
   SelectivityVector a(16, false);
   a.resize(33, true);
   SelectivityVector b(32, false);
   b.select(a);
-  checkFn(17, 32, b, true);
+  assertIsValid(17, 32, b, true);
 
   SelectivityVector empty(0);
   empty.select(first);
   ASSERT_FALSE(empty.isAllSelected());
+
+  SelectivityVector bitAfter2(8);
+  bitAfter2.setValid(0, false);
+  bitAfter2.setValid(1, false);
+  bitAfter2.updateBounds();
+  SelectivityVector bitAfterCheck(8, false);
+  bitAfterCheck.setValid(3, true);
+  bitAfterCheck.select(bitAfter2);
+  assertIsValid(2, 8, bitAfterCheck, true);
 }
 
 } // namespace test
