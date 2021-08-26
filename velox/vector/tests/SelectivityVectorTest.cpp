@@ -60,7 +60,11 @@ void assertState(
   }
 }
 
-void assertIsValid(int from, int to, const SelectivityVector& vector, bool value) {
+void assertIsValid(
+    int from,
+    int to,
+    const SelectivityVector& vector,
+    bool value) {
   for (int i = from; i < to; i++) {
     ASSERT_EQ(value, vector.isValid(i));
   }
