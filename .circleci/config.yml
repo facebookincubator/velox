@@ -25,7 +25,7 @@ executors:
   build:
     docker:
       - image : prestocpp/velox-circleci:mikesh-20210610
-    resource_class: 2xlarge
+    resource_class: xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
@@ -58,11 +58,14 @@ jobs:
           paths:
             - ~/deps
       - run:
-          name: "Calculate merge-base date for CCache"
-          command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+          name: "Calculate merge-base and date for CCache"
+          command: |
+            git merge-base origin/main HEAD | tee merge-base
+            git show -s --format=%cd --date="format:%Y%m%d" $(cat merge-base) | tee merge-base-date
       - restore_cache:
           name: "Restore CCache cache"
           keys:
+            - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}-{{ checksum "merge-base" }}
             - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
       - run:
           name: "Build on MacOS"
@@ -77,7 +80,7 @@ jobs:
           no_output_timeout: 1h
       - save_cache:
           name: "Save CCache cache"
-          key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
+          key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}-{{ checksum "merge-base" }}
           paths:
             - .ccache/
 
@@ -86,11 +89,14 @@ jobs:
     steps:
       - checkout
       - run:
-          name: "Calculate merge-base date for CCache"
-          command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+          name: "Calculate merge-base and date for CCache"
+          command: |
+            git merge-base origin/main HEAD | tee merge-base
+            git show -s --format=%cd --date="format:%Y%m%d" $(cat merge-base) | tee merge-base-date
       - restore_cache:
           name: "Restore CCache cache"
           keys:
+            - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}-{{ checksum "merge-base" }}
             - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
       - run:
           name: Build
@@ -106,7 +112,7 @@ jobs:
           path: '_build/debug/.ninja_log'
       - save_cache:
           name: "Save CCache cache"
-          key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
+          key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}-{{ checksum "merge-base" }}
           paths:
             - .ccache/
       - run:
