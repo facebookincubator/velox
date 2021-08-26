@@ -60,6 +60,12 @@ void assertState(
   }
 }
 
+void checkFn(int from, int to, SelectivityVector& vector, bool check) {
+  for (int i = from; i < to; i++) {
+    ASSERT_EQ(check, vector.isValid(i));
+  }
+}
+
 void setValid_normal(bool setToValue) {
   // A little bit more than 2 simd widths, so overflow.
   const size_t vectorSize = 513;
@@ -366,11 +372,6 @@ TEST(SelectivityVectorTest, iterator) {
 }
 
 TEST(SelectivityVectorTest, resize) {
-  auto checkFn = [&](int from, int to, SelectivityVector& vector, bool check) {
-    for (int i = from; i < to; i++) {
-      ASSERT_EQ(check, vector.isValid(i));
-    }
-  };
 
   SelectivityVector vector(64, false);
   vector.resize(128, /* value */ true);
@@ -403,6 +404,27 @@ TEST(SelectivityVectorTest, resize) {
   // Check if all selected is true
   ASSERT_TRUE(larger.isAllSelected());
 }
+
+TEST(SelectivityVectorTest, select) {
+
+  SelectivityVector first(64);
+  SelectivityVector other(32, false);
+
+  other.select(first);
+  checkFn(0, 32, other, true);
+  ASSERT_TRUE(other.isAllSelected());
+
+  SelectivityVector a (16, false);
+  a.resize(33, true);
+  SelectivityVector b(32, false);
+  b.select(a);
+  checkFn(17, 32, b, true);
+
+  SelectivityVector empty(0);
+  empty.select(first);
+  ASSERT_FALSE(empty.isAllSelected());
+}
+
 
 } // namespace test
 } // namespace velox
