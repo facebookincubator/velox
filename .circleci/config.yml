@@ -112,7 +112,7 @@ jobs:
       - run:
           name: Run Unit Tests
           command: |
-            make unittest NUM_THREADS=8
+            make unittest NUM_THREADS=16
           no_output_timeout: 1h
 
   format-check:
