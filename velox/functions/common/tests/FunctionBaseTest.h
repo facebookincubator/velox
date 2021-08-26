@@ -25,6 +25,16 @@
 namespace facebook::velox::functions::test {
 
 class FunctionBaseTest : public testing::Test {
+ public:
+  class TypeNames {
+   public:
+    template <typename T>
+    static std::string GetName(int) {
+      T type;
+      return type.toString();
+    }
+  };
+
  protected:
   static void SetUpTestCase();
 
@@ -214,6 +224,14 @@ class FunctionBaseTest : public testing::Test {
       std::function<bool(vector_size_t /*row */)> isNullAt = nullptr) {
     return vectorMaker_.arrayVector<T>(size, sizeAt, valueAt, isNullAt);
   }
+
+  template <typename T>
+  ArrayVectorPtr makeSample1NullableArrayVector();
+  ArrayVectorPtr makeSample1NullableLongVarcharArrayVector();
+
+  template <typename T>
+  ArrayVectorPtr makeSample1ArrayVector();
+  ArrayVectorPtr makeSample1LongVarcharArrayVector();
 
   template <typename TKey, typename TValue>
   MapVectorPtr makeMapVector(
