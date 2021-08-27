@@ -21,6 +21,12 @@
 #include "velox/expression/VarSetter.h"
 #include "velox/expression/VectorFunction.h"
 
+DEFINE_bool(
+    force_eval_simplified,
+    false,
+    "Whether to overwrite queryCtx and force the "
+    "use of simplified expression evaluation path.");
+
 namespace facebook::velox::exec {
 
 using functions::stringCore::maxEncoding;
@@ -1146,6 +1152,19 @@ void ExprSetSimplified::eval(
   for (int32_t i = begin; i < end; ++i) {
     exprs_[i]->evalSimplified(rows, context, &(*result)[i]);
   }
+}
+
+// static
+std::unique_ptr<ExprSet> ExprSet::makeExprSet(
+    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    core::ExecCtx* execCtx,
+    bool enableConstantFolding) {
+  if (execCtx->queryCtx()->exprEvalSimplified() or
+      FLAGS_force_eval_simplified) {
+    return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
+  }
+  return std::make_unique<ExprSet>(
+      std::move(source), execCtx, enableConstantFolding);
 }
 
 void determineStringEncoding(
