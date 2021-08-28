@@ -116,7 +116,8 @@ ArrayVectorPtr generateArrayVectorForConstantLHS(
       if (flatVectorElements->isNullAt(i)) {
         bits::setNull(rawNewElementNulls, indicesCursor++, true);
       } else {
-        rawNewIndices[indicesCursor++] = indicesCursor;
+        rawNewIndices[indicesCursor] = indicesCursor;
+        indicesCursor++;
       }
     }
 
@@ -136,7 +137,7 @@ ArrayVectorPtr generateArrayVectorForConstantLHS(
       newLengths,
       elementsDict,
       0);
-  return std::move(elementsArray);
+  return elementsArray;
 }
 
 // See documentation at https://prestodb.io/docs/current/functions/array.html
@@ -198,9 +199,11 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
 
-    // If there's a constant input, then require it is on the right side for
-    // array_intersect. For array_except, if the constant is on the lhs then
-    // construct the output array. If the constant is on the rhs then the
+    // Optimizations for constant vector.
+    // For array_intersect, if there's a constant input, then require it is on
+    // the right side. For array_except, if the constant is on the lhs then
+    // construct the output array with the constant repeated for all rows.
+    // If the constant is on the rhs then the
     // constant optimization applies to array_except also.
     ArrayVectorPtr leftArray;
     if (constantSet_.has_value() && isLeftConstant_) {
@@ -364,6 +367,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     context->moveOrCopyResult(resultArray, rows, result);
   }
 
+  // Controls intersect or except behavior in this function.
+  ArrayFunctionType functionType_;
+
   // If one of the arrays is constant, this member will store a pointer to the
   // set generated from its elements, which is calculated only once, before
   // instantiating this object.
@@ -371,9 +377,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
   // If there's a `constantSet`, whether it refers to left or right-hand side.
   const bool isLeftConstant_{false};
-
-  // Controls intersect or except behavior in this function.
-  ArrayFunctionType functionType_;
 };
 
 void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
