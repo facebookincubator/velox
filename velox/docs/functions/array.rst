@@ -10,6 +10,15 @@ Array Functions
         SELECT array_intersect(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
         SELECT array_intersect(ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]); -- [1, NULL]
 
+.. function:: array_except(array(X), array(Y)) -> array(Z)
+
+    Returns an array of the elements in ``X`` but not in ``Y``, without duplicates.
+
+        SELECT array_except(ARRAY [1, 2, 3], ARRAY [4, 5, 6]); -- [1, 2, 3]
+        SELECT array_except(ARRAY [1, 2, 3], ARRAY [1, 2]); -- [3]
+        SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 1, 2]); -- []
+        SELECT array_except(ARRAY [1, NULL, NULL], ARRAY [1, 1, NULL]); -- []
+
 .. function:: array_max(array(E)) -> E
 
     Returns the maximum value of input array.

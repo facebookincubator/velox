@@ -20,6 +20,8 @@
 namespace facebook::velox::functions {
 namespace {
 
+enum class ArrayFunctionType { INTERSECT, EXCEPT };
+
 template <typename T>
 struct SetWithNull {
   SetWithNull(vector_size_t initialSetSize = kInitialSetSize) {
@@ -65,13 +67,87 @@ void generateSet(
   }
 }
 
+// Generates an ArrayVector that replicates constantVector rowCount number of
+// times. This array is used for the result Vector for an array_except function
+// which has a constantVector on the lhs. array_intersect doesn't require such a
+// construction since it is a symmetric operation and can use its non-constant
+// rhs for the result vector if the lhs is constant.
+template <typename T>
+ArrayVectorPtr generateArrayVectorForConstantLHS(
+    BaseVector* constantVector,
+    vector_size_t rowCount,
+    memory::MemoryPool* pool) {
+  auto constantArray = constantVector->as<ConstantVector<velox::ComplexType>>();
+  auto constantArrayVector = constantArray->valueVector()->as<ArrayVector>();
+  auto flatVectorElements =
+      constantArrayVector->elements()->as<FlatVector<T>>();
+
+  // Create the vector of elements.
+  auto elementTypePtr = CppToType<T>::create();
+  vector_size_t arrayElementsCount = flatVectorElements->size() * rowCount;
+  VectorPtr newElementsVector =
+      BaseVector::create(elementTypePtr, arrayElementsCount, pool);
+
+  // Allocate new vectors for indices, nulls, length and offsets.
+  BufferPtr newIndices =
+      AlignedBuffer::allocate<vector_size_t>(arrayElementsCount, pool);
+  BufferPtr newElementNulls =
+      AlignedBuffer::allocate<bool>(arrayElementsCount, pool, bits::kNotNull);
+  BufferPtr newLengths = AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+  BufferPtr newOffsets = AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+
+  // Pointers and cursors to the raw data.
+  auto rawNewIndices = newIndices->asMutable<vector_size_t>();
+  auto rawNewElementNulls = newElementNulls->asMutable<uint64_t>();
+  auto rawNewLengths = newLengths->asMutable<vector_size_t>();
+  auto rawNewOffsets = newOffsets->asMutable<vector_size_t>();
+
+  // Sets the elements of the new vector corresponding to rowCount number of
+  // repetitions of the constantVector.
+  vector_size_t indicesCursor = 0;
+  auto idx = constantArray->index();
+  auto size = constantArrayVector->sizeAt(idx);
+  auto offset = constantArrayVector->offsetAt(idx);
+  for (vector_size_t i = 0; i < rowCount; ++i) {
+    *rawNewOffsets = indicesCursor;
+    newElementsVector->copy(
+        constantArrayVector->elements().get(), indicesCursor, 0, size);
+    for (vector_size_t i = offset; i < (offset + size); ++i) {
+      if (flatVectorElements->isNullAt(i)) {
+        bits::setNull(rawNewElementNulls, indicesCursor++, true);
+      } else {
+        rawNewIndices[indicesCursor++] = indicesCursor;
+      }
+    }
+
+    *rawNewLengths = indicesCursor - *rawNewOffsets;
+    ++rawNewLengths;
+    ++rawNewOffsets;
+  }
+
+  auto elementsDict = BaseVector::wrapInDictionary(
+      newElementNulls, newIndices, indicesCursor, newElementsVector);
+  auto elementsArray = std::make_shared<ArrayVector>(
+      pool,
+      ARRAY(elementTypePtr),
+      BufferPtr(nullptr),
+      rowCount,
+      newOffsets,
+      newLengths,
+      elementsDict,
+      0);
+  return std::move(elementsArray);
+}
+
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 template <typename T>
-class ArrayIntersectFunction : public exec::VectorFunction {
+class ArrayIntersectExceptFunction : public exec::VectorFunction {
  public:
-  /// Array intersection takes two ArrayVectors as inputs (left and right) and
-  /// leverages two sets to calculate the intersection:
+  /// This class is used for both Array intersection and Array except functions.
+  /// Both these functions takes two ArrayVectors as inputs (left and right) and
+  /// leverages two sets to calculate the intersection (or except):
   ///
+  /// For each row processing the following are maintained:
   /// - rightSet: a set that contains all (distinct) elements from the
   ///   right-hand side array.
   /// - outputSet: a set that contains the elements that were already added to
@@ -96,13 +172,21 @@ class ArrayIntersectFunction : public exec::VectorFunction {
   /// If any of the values passed to array_intersect() are constant (array
   /// literals) we create a set before instantiating the object and pass as a
   /// constructor parameter (constantSet).
+  /// The same optimization applies for array_except() with a constant (array
+  /// literals on the rhs. If array_except() has an lhs constant, then the
+  /// output vector which duplicates the constant array literal over the number
+  /// of rows on the rhs needs to be constructed.
 
-  ArrayIntersectFunction() {}
+  ArrayIntersectExceptFunction(ArrayFunctionType functionType)
+      : functionType_(functionType) {}
 
-  explicit ArrayIntersectFunction(
+  explicit ArrayIntersectExceptFunction(
+      ArrayFunctionType functionType,
       SetWithNull<T> constantSet,
       bool isLeftConstant)
-      : constantSet_(std::move(constantSet)), isLeftConstant_(isLeftConstant) {}
+      : functionType_(functionType),
+        constantSet_(std::move(constantSet)),
+        isLeftConstant_(isLeftConstant) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -114,16 +198,24 @@ class ArrayIntersectFunction : public exec::VectorFunction {
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
 
-    // Ensure that if there's a constant input, it's on the right side.
+    // If there's a constant input, then require it is on the right side for
+    // array_intersect. For array_except, if the constant is on the lhs then
+    // construct the output array. If the constant is on the rhs then the
+    // constant optimization applies to array_except also.
+    ArrayVectorPtr leftArray;
     if (constantSet_.has_value() && isLeftConstant_) {
-      std::swap(left, right);
+      if (functionType_ == ArrayFunctionType::INTERSECT) {
+        std::swap(left, right);
+      } else {
+        leftArray =
+            generateArrayVectorForConstantLHS<T>(left, right->size(), pool);
+        left = leftArray.get();
+      }
     }
 
-    // Decode and acquire pointers to the left-hand side vector.
     exec::LocalDecodedVector leftHolder(context, *left, rows);
     auto decodedLeftArray = leftHolder.get();
     auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
-
     // Decode and acquire array elements vector.
     auto leftElementsVector = baseLeftArray->elements();
     auto leftElementsRows =
@@ -168,18 +260,44 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {
-        // If found a NULL value, insert only if it was contained in the
-        // right-hande side wasn't added to this output row yet.
         if (decodedLeftElements->isNullAt(i)) {
-          if (rightSet.hasNull && !outputSet.hasNull) {
+          bool setNull = false;
+          if (functionType_ == ArrayFunctionType::INTERSECT) {
+            // If found a NULL value for array_intersect, insert only if it was
+            // contained in the right-hande side wasn't added to this output row
+            // yet.
+            if (rightSet.hasNull && !outputSet.hasNull) {
+              setNull = true;
+            }
+          } else {
+            // If found a NULL value for array_except, insert only if it was not
+            // contained in the right-hande side wasn't added to this output row
+            // yet.
+            if (!rightSet.hasNull && !outputSet.hasNull) {
+              setNull = true;
+            }
+          }
+          if (setNull) {
             bits::setNull(rawNewElementNulls, indicesCursor++, true);
             outputSet.hasNull = true;
           }
         } else {
-          // If element exists in the right-hand side, only add if it wasn't
-          // added already (check outputSet).
           auto val = decodedLeftElements->valueAt<T>(i);
-          if (rightSet.set.find(val) != rightSet.set.end()) {
+          bool addValue = false;
+          if (functionType_ == ArrayFunctionType::INTERSECT) {
+            // For array_intersect, only add if element exists in the right-hand
+            // side, and wasn't added already (check outputSet).
+            if (rightSet.set.find(val) != rightSet.set.end()) {
+              addValue = true;
+            }
+          } else {
+            // For array_except, only add if element does not exist in the
+            // right-hand side, and wasn't added already (check outputSet).
+            if (rightSet.set.find(val) == rightSet.set.end()) {
+              addValue = true;
+            }
+          }
+          if (addValue) {
             auto it = outputSet.set.insert(val);
             if (it.second) {
               rawNewIndices[indicesCursor++] = i;
@@ -194,8 +312,17 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
     SetWithNull<T> outputSet;
 
-    // Optimized case when the right-hand side array is constant.
-    if (constantSet_.has_value()) {
+    // Optimized case when the right-hand side array is constant (applies for
+    // both constant lhs and rhs for array_intersect and only rhs for
+    // array_except.
+    if (functionType_ == ArrayFunctionType::INTERSECT &&
+        constantSet_.has_value()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        processRow(row, *constantSet_, outputSet);
+      });
+    } else if (
+        functionType_ == ArrayFunctionType::EXCEPT &&
+        constantSet_.has_value() && !isLeftConstant_) {
       rows.applyToSelected([&](vector_size_t row) {
         processRow(row, *constantSet_, outputSet);
       });
@@ -244,6 +371,9 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
   // If there's a `constantSet`, whether it refers to left or right-hand side.
   const bool isLeftConstant_{false};
+
+  // Controls intersect or except behavior in this function.
+  ArrayFunctionType functionType_;
 };
 
 void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
@@ -267,6 +397,7 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
 
 template <TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
+    ArrayFunctionType functionType,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   VELOX_CHECK_EQ(inputArgs.size(), 2);
   BaseVector* left = inputArgs[0].constantValue.get();
@@ -274,7 +405,7 @@ std::shared_ptr<exec::VectorFunction> createTyped(
   using T = typename TypeTraits<kind>::NativeType;
   // No constant values.
   if ((left == nullptr) && (right == nullptr)) {
-    return std::make_shared<ArrayIntersectFunction<T>>();
+    return std::make_shared<ArrayIntersectExceptFunction<T>>(functionType);
   }
 
   // From now on either left or right is constant; generate a set based on its
@@ -296,18 +427,31 @@ std::shared_ptr<exec::VectorFunction> createTyped(
   auto idx = constantArray->index();
   SetWithNull<T> constantSet;
   generateSet<T>(constantArrayVector, flatVectorElements, idx, constantSet);
-  return std::make_shared<ArrayIntersectFunction<T>>(
-      std::move(constantSet), isLeftConstant);
+  return std::make_shared<ArrayIntersectExceptFunction<T>>(
+      functionType, std::move(constantSet), isLeftConstant);
 }
 
-std::shared_ptr<exec::VectorFunction> create(
+std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      createTyped, elementType->kind(), inputArgs);
+      createTyped,
+      elementType->kind(),
+      ArrayFunctionType::INTERSECT,
+      inputArgs);
+}
+
+std::shared_ptr<exec::VectorFunction> createArrayExcept(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  validateType(inputArgs);
+  auto elementType = inputArgs.front().type->childAt(0);
+
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      createTyped, elementType->kind(), ArrayFunctionType::EXCEPT, inputArgs);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -325,6 +469,11 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_intersect,
     signatures(),
-    create);
+    createArrayIntersect);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_except,
+    signatures(),
+    createArrayExcept);
 
 } // namespace facebook::velox::functions
