@@ -19,6 +19,7 @@
 #include "velox/exec/tests/Cursor.h"
 #include "velox/exec/tests/HiveConnectorTestBase.h"
 #include "velox/exec/tests/PlanBuilder.h"
+#include "velox/type/tests/FilterBulder.h"
 
 #if __has_include("filesystem")
 #include <filesystem>
@@ -31,6 +32,7 @@ namespace fs = std::experimental::filesystem;
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
+using namespace facebook::velox::common::test;
 using namespace facebook::velox::exec::test;
 
 using ColumnHandleMap =
@@ -93,8 +95,16 @@ class TableScanTest : public HiveConnectorTestBase {
     return PlanBuilder().tableScan(outputType).planNode();
   }
 
-  static OperatorStats getTableScanStats(std::shared_ptr<Task> task) {
+  static OperatorStats getTableScanStats(const std::shared_ptr<Task>& task) {
     return task->taskStats().pipelineStats[0].operatorStats[0];
+  }
+
+  static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
+    return getTableScanStats(task).runtimeStats["skippedStrides"].sum;
+  }
+
+  static int64_t getSkippedSplitsStat(const std::shared_ptr<Task>& task) {
+    return getTableScanStats(task).runtimeStats["skippedSplits"].sum;
   }
 
   std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
@@ -170,188 +180,6 @@ class TableScanTest : public HiveConnectorTestBase {
 };
 
 namespace {
-
-std::unique_ptr<common::BigintRange> lessThanOrEqual(
-    int64_t max,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BigintRange>(
-      std::numeric_limits<int64_t>::min(), max, nullAllowed);
-}
-
-std::unique_ptr<common::BigintRange> greaterThanOrEqual(
-    int64_t min,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BigintRange>(
-      min, std::numeric_limits<int64_t>::max(), nullAllowed);
-}
-
-std::unique_ptr<common::DoubleRange> lessThanOrEqualDouble(
-    double max,
-    bool nullAllowed = false) {
-  return std::make_unique<common::DoubleRange>(
-      std::numeric_limits<double>::lowest(),
-      true,
-      true,
-      max,
-      false,
-      false,
-      nullAllowed);
-}
-
-std::unique_ptr<common::DoubleRange> greaterThanOrEqualDouble(
-    double min,
-    bool nullAllowed = false) {
-  return std::make_unique<common::DoubleRange>(
-      min,
-      false,
-      false,
-      std::numeric_limits<double>::max(),
-      true,
-      true,
-      nullAllowed);
-}
-
-std::unique_ptr<common::DoubleRange>
-betweenDouble(double min, double max, bool nullAllowed = false) {
-  return std::make_unique<common::DoubleRange>(
-      min, false, false, max, false, false, nullAllowed);
-}
-
-std::unique_ptr<common::FloatRange> lessThanOrEqualFloat(
-    float max,
-    bool nullAllowed = false) {
-  return std::make_unique<common::FloatRange>(
-      std::numeric_limits<float>::lowest(),
-      true,
-      true,
-      max,
-      false,
-      false,
-      nullAllowed);
-}
-
-std::unique_ptr<common::FloatRange> greaterThanOrEqualFloat(
-    float min,
-    bool nullAllowed = false) {
-  return std::make_unique<common::FloatRange>(
-      min,
-      false,
-      false,
-      std::numeric_limits<float>::max(),
-      true,
-      true,
-      nullAllowed);
-}
-
-std::unique_ptr<common::FloatRange>
-betweenFloat(float min, float max, bool nullAllowed = false) {
-  return std::make_unique<common::FloatRange>(
-      min, false, false, max, false, false, nullAllowed);
-}
-
-std::unique_ptr<common::BigintRange>
-between(int64_t min, int64_t max, bool nullAllowed = false) {
-  return std::make_unique<common::BigintRange>(min, max, nullAllowed);
-}
-
-std::unique_ptr<common::BigintMultiRange> bigintOr(
-    std::unique_ptr<common::BigintRange> a,
-    std::unique_ptr<common::BigintRange> b,
-    bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::BigintRange>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  return std::make_unique<common::BigintMultiRange>(
-      std::move(filters), nullAllowed);
-}
-
-std::unique_ptr<common::BigintMultiRange> bigintOr(
-    std::unique_ptr<common::BigintRange> a,
-    std::unique_ptr<common::BigintRange> b,
-    std::unique_ptr<common::BigintRange> c,
-    bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::BigintRange>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  filters.emplace_back(std::move(c));
-  return std::make_unique<common::BigintMultiRange>(
-      std::move(filters), nullAllowed);
-}
-
-std::unique_ptr<common::BytesValues> equal(
-    const std::string& value,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BytesValues>(
-      std::vector<std::string>{value}, nullAllowed);
-}
-
-std::unique_ptr<common::BigintRange> equal(
-    int64_t value,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BigintRange>(value, value, nullAllowed);
-}
-
-std::unique_ptr<common::BytesRange> lessThanOrEqual(
-    const std::string& max,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BytesRange>(
-      "", true, true, max, false, false, nullAllowed);
-}
-
-std::unique_ptr<common::BytesRange> greaterThanOrEqual(
-    const std::string& min,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BytesRange>(
-      min, false, false, "", true, true, nullAllowed);
-}
-
-std::unique_ptr<common::MultiRange> stringOr(
-    std::unique_ptr<common::BytesRange> a,
-    std::unique_ptr<common::BytesRange> b,
-    bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::Filter>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  return std::make_unique<common::MultiRange>(
-      std::move(filters), nullAllowed, false);
-}
-
-std::unique_ptr<common::Filter> in(
-    const std::vector<int64_t>& values,
-    bool nullAllowed = false) {
-  return common::createBigintValues(values, nullAllowed);
-}
-
-std::unique_ptr<common::BytesValues> in(
-    const std::vector<std::string>& values,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BytesValues>(values, nullAllowed);
-}
-
-std::unique_ptr<common::BoolValue> boolEqual(
-    bool value,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BoolValue>(value, nullAllowed);
-}
-
-std::unique_ptr<common::IsNull> isNull() {
-  return std::make_unique<common::IsNull>();
-}
-
-std::unique_ptr<common::IsNotNull> isNotNull() {
-  return std::make_unique<common::IsNotNull>();
-}
-
-template <typename T>
-std::unique_ptr<common::MultiRange>
-orFilter(std::unique_ptr<T> a, std::unique_ptr<T> b, bool nullAllowed = false) {
-  std::vector<std::unique_ptr<common::Filter>> filters;
-  filters.emplace_back(std::move(a));
-  filters.emplace_back(std::move(b));
-  return std::make_unique<common::MultiRange>(
-      std::move(filters), nullAllowed, false);
-}
-
 class SubfieldFiltersBuilder {
  public:
   SubfieldFiltersBuilder& add(
@@ -839,10 +667,12 @@ TEST_F(TableScanTest, statsBasedSkippingBool) {
   };
   auto task = assertQuery("SELECT c0 FROM tmp WHERE c1 = true");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 
   subfieldFilters = singleSubfieldFilter("c1", boolEqual(false));
   task = assertQuery("SELECT c0 FROM tmp WHERE c1 = false");
   EXPECT_EQ(size - 20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingDouble) {
@@ -872,12 +702,14 @@ TEST_F(TableScanTest, statsBasedSkippingDouble) {
 
   auto task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= -1.05");
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   subfieldFilters =
       singleSubfieldFilter("c0", greaterThanOrEqualDouble(11'111.06));
   task = assertQuery("SELECT c0 FROM tmp WHERE c0 >= 11111.06");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
@@ -886,12 +718,14 @@ TEST_F(TableScanTest, statsBasedSkippingDouble) {
   task =
       assertQuery("SELECT c0 FROM tmp WHERE c0 between 10100.06 AND 10500.08");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   subfieldFilters =
       singleSubfieldFilter("c0", lessThanOrEqualDouble(1'234.005));
   task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= 1234.005");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingFloat) {
@@ -921,12 +755,14 @@ TEST_F(TableScanTest, statsBasedSkippingFloat) {
 
   auto task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= -1.05");
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   subfieldFilters =
       singleSubfieldFilter("c0", greaterThanOrEqualFloat(11'111.06));
   task = assertQuery("SELECT c0 FROM tmp WHERE c0 >= 11111.06");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
@@ -935,11 +771,13 @@ TEST_F(TableScanTest, statsBasedSkippingFloat) {
   task =
       assertQuery("SELECT c0 FROM tmp WHERE c0 between 10100.06 AND 10500.08");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   subfieldFilters = singleSubfieldFilter("c0", lessThanOrEqualFloat(1'234.005));
   task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= 1234.005");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 }
 
 // Test skipping whole file based on statistics
@@ -999,56 +837,66 @@ TEST_F(TableScanTest, statsBasedSkipping) {
   subfieldFilters = singleSubfieldFilter("c2", equal("tomato"));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 = 'tomato'");
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c2 in ("x", "y") -> whole file should be skipped based on stats
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("x"), equal("y")));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 IN ('x', 'y')");
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c0 >= 11,111 - first stride should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c0", greaterThanOrEqual(11'111));
   task = assertQuery("SELECT c1 FROM tmp WHERE c0 >= 11111");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c2 = "banana" - odd stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("banana"));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 = 'banana'");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 
   // c2 in ("banana", "y") -> same as previous
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("banana"), equal("y")));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 IN ('banana', 'y')");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 
   // c2 = "squash" - even stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("squash"));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 = 'squash'");
   EXPECT_EQ(size - 20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 
   // c2 in ("banana", "squash") -> no skipping
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("banana"), equal("squash")));
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 IN ('banana', 'squash')");
   EXPECT_EQ(31'234, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(0, getSkippedStridesStat(task));
 
   // c0 <= 100 AND c0 >= 20'100 - skip second stride
   subfieldFilters = singleSubfieldFilter(
       "c0", bigintOr(lessThanOrEqual(100), greaterThanOrEqual(20'100)));
   task = assertQuery("SELECT c1 FROM tmp WHERE c0 <= 100 OR c0 >= 20100");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c0 between 10'100 and 10'500 - all strides but second should be skipped
   // based on stats
   subfieldFilters = singleSubfieldFilter("c0", between(10'100, 10'500));
   task = assertQuery("SELECT c1 FROM tmp WHERE c0 between 10100 AND 10500");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 <= 1,234 - all strides but first should be skipped
   subfieldFilters = singleSubfieldFilter("c0", lessThanOrEqual(1'234));
   task = assertQuery("SELECT c1 FROM tmp WHERE c0 <= 1234");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 >= 10234 AND c1 <= 20345 - first and last strides should be skipped
   subfieldFilters = SubfieldFiltersBuilder()
@@ -1057,6 +905,7 @@ TEST_F(TableScanTest, statsBasedSkipping) {
                         .build();
   task = assertQuery("SELECT c1 FROM tmp WHERE c0 >= 10234 AND c1 <= 20345");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(2, getSkippedStridesStat(task));
 }
 
 // Test skipping files and row groups containing constant values based on
@@ -1095,12 +944,14 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
 
   auto task = assertQuery("SELECT c1 FROM tmp WHERE c0 in (0, 10, 100, 1000)");
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // skip all but first rowgroup
   filters = singleSubfieldFilter("c1", in({0, 10, 100, 1000}));
   task = assertQuery("SELECT c1 FROM tmp WHERE c1 in (0, 10, 100, 1000)");
 
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // skip whole file
   filters = singleSubfieldFilter(
@@ -1108,6 +959,7 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   task = assertQuery("SELECT c1 FROM tmp WHERE c2 in ('apple', 'cherry')");
 
   EXPECT_EQ(0, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // skip all but second rowgroup
   filters = singleSubfieldFilter(
@@ -1115,6 +967,7 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   task = assertQuery("SELECT c1 FROM tmp WHERE c3 in ('banana', 'grapefruit')");
 
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputPositions);
+  EXPECT_EQ(3, getSkippedStridesStat(task));
 }
 
 // Test stats-based skipping for the IS NULL filter.
@@ -1212,7 +1065,7 @@ TEST_F(TableScanTest, statsBasedSkippingWithoutDecompression) {
   // skip 2nd row group
   filters = singleSubfieldFilter(
       "c0",
-      stringOr(
+      orFilter(
           lessThanOrEqual("com.facebook.presto.orc.stream.01234"),
           greaterThanOrEqual("com.facebook.presto.orc.stream.20123")));
   task = assertQuery(

@@ -15,8 +15,9 @@
 # for generated headers
 include_directories(${CMAKE_BINARY_DIR})
 
-add_executable(velox_expression_test ExprTest.cpp CastExprTest.cpp
-                                     EvalSimplifiedTest.cpp VectorFuzzer.cpp)
+add_executable(
+  velox_expression_test ExprTest.cpp CastExprTest.cpp EvalSimplifiedTest.cpp
+                        SimpleFunctionTest.cpp)
 
 add_test(
   NAME velox_expression_test
@@ -31,12 +32,13 @@ target_link_libraries(
   velox_exec_test_util
   velox_expression
   velox_functions_lib
-  velox_functions_common
+  velox_functions_prestosql
   velox_functions_test_lib
   velox_parse_parser
   velox_parse_expression
   velox_presto_serializer
   velox_vector_test_lib
+  velox_vector_fuzzer
   ${GTEST_BOTH_LIBRARIES}
   ${FOLLY_WITH_DEPENDENCIES}
   ${gflags_LIBRARIES}
@@ -55,4 +57,4 @@ target_link_libraries(velox_expression_fuzzer velox_type velox_vector_fuzzer
 add_executable(velox_expression_fuzzer_main ExpressionFuzzerMain.cpp)
 
 target_link_libraries(velox_expression_fuzzer_main velox_expression_fuzzer
-                      velox_functions_common)
+                      velox_functions_prestosql)
