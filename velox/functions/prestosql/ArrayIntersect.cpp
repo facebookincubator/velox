@@ -83,8 +83,6 @@ ArrayVectorPtr generateArrayVectorForConstantLHS(
   // Create the vector of elements.
   auto elementTypePtr = CppToType<T>::create();
   vector_size_t arrayElementsCount = flatVectorElements->size() * rowCount;
-  VectorPtr newElementsVector =
-      BaseVector::create(elementTypePtr, arrayElementsCount, pool);
 
   // Allocate new vectors for indices, nulls, length and offsets.
   BufferPtr newIndices =
@@ -108,12 +106,11 @@ ArrayVectorPtr generateArrayVectorForConstantLHS(
   auto offset = constantArrayVector->offsetAt(idx);
   for (vector_size_t i = 0; i < rowCount; ++i) {
     *rawNewOffsets = indicesCursor;
-    newElementsVector->copy(flatVectorElements, indicesCursor, 0, size);
-    for (vector_size_t i = offset; i < (offset + size); ++i) {
-      if (flatVectorElements->isNullAt(i)) {
+    for (vector_size_t j = offset; j < (offset + size); ++j) {
+      if (flatVectorElements->isNullAt(j)) {
         bits::setNull(rawNewElementNulls, indicesCursor++, true);
       } else {
-        rawNewIndices[indicesCursor] = indicesCursor;
+        rawNewIndices[indicesCursor] = j;
         indicesCursor++;
       }
     }
@@ -124,7 +121,10 @@ ArrayVectorPtr generateArrayVectorForConstantLHS(
   }
 
   auto elementsDict = BaseVector::wrapInDictionary(
-      newElementNulls, newIndices, indicesCursor, newElementsVector);
+      newElementNulls,
+      newIndices,
+      indicesCursor,
+      constantArrayVector->elements());
   auto elementsArray = std::make_shared<ArrayVector>(
       pool,
       ARRAY(elementTypePtr),
@@ -259,19 +259,18 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       for (vector_size_t i = offset; i < (offset + size); ++i) {
         if (decodedLeftElements->isNullAt(i)) {
           bool setNull = false;
-          if constexpr (isIntersect) {
-            // If found a NULL value for array_intersect, insert only if it was
-            // contained in the right-hande side wasn't added to this output row
-            // yet.
-            if (rightSet.hasNull && !outputSet.hasNull) {
-              setNull = true;
-            }
-          } else {
-            // If found a NULL value for array_except, insert only if it was not
-            // contained in the right-hande side wasn't added to this output row
-            // yet.
-            if (!rightSet.hasNull && !outputSet.hasNull) {
-              setNull = true;
+          // For a NULL value not added to the output row yet, insert in
+          // array_intersect if it was found on the rhs (and not found in the
+          // case of array_except).
+          if (!outputSet.hasNull) {
+            if constexpr (isIntersect) {
+              if (rightSet.hasNull) {
+                setNull = true;
+              }
+            } else {
+              if (!rightSet.hasNull) {
+                setNull = true;
+              }
             }
           }
           if (setNull) {
@@ -281,18 +280,13 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         } else {
           auto val = decodedLeftElements->valueAt<T>(i);
           bool addValue = false;
+          // For array_intersect, add the element if it exists (not exists for
+          // array_except) in the right-hand side, and wasn't added already
+          // (check outputSet).
           if constexpr (isIntersect) {
-            // For array_intersect, only add if element exists in the right-hand
-            // side, and wasn't added already (check outputSet).
-            if (rightSet.set.count(val) > 0) {
-              addValue = true;
-            }
+            addValue = rightSet.set.count(val) > 0;
           } else {
-            // For array_except, only add if element does not exist in the
-            // right-hand side, and wasn't added already (check outputSet).
-            if (rightSet.set.count(val) == 0) {
-              addValue = true;
-            }
+            addValue = rightSet.set.count(val) == 0;
           }
           if (addValue) {
             auto it = outputSet.set.insert(val);

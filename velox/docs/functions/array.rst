@@ -4,7 +4,7 @@ Array Functions
 
 .. function:: array_intersect(array(X), array(Y)) -> array(Z)
 
-    Returns an array of the elements in the intersection of ``X`` and ``Y``, without duplicates.
+    Returns an array of the elements in the intersection of array ``X`` and array ``Y``, without duplicates.
 
         SELECT array_intersect(ARRAY [1, 2, 3], ARRAY[4, 5, 6]); -- []
         SELECT array_intersect(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
@@ -12,11 +12,12 @@ Array Functions
 
 .. function:: array_except(array(X), array(Y)) -> array(Z)
 
-    Returns an array of the elements in ``X`` but not in ``Y``, without duplicates.
+    Returns an array of the elements in array ``X`` but not in array ``Y``, without duplicates.
 
         SELECT array_except(ARRAY [1, 2, 3], ARRAY [4, 5, 6]); -- [1, 2, 3]
         SELECT array_except(ARRAY [1, 2, 3], ARRAY [1, 2]); -- [3]
         SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 1, 2]); -- []
+        SELECT array_except(ARRAY [1, 2, 2], ARRAY [1, 3, 4]); -- [2]
         SELECT array_except(ARRAY [1, NULL, NULL], ARRAY [1, 1, NULL]); -- []
 
 .. function:: array_max(array(E)) -> E
