@@ -67,10 +67,9 @@ About comment style:
   comment).
 * Comments should be full english sentences, starting with a capital letter and
   ending with a period (.).
-  * Use: ``` // True if this node only sorts a portion of the final result.
-    ```
+  * Use: ``` // True if this node only sorts a portion of the final result.```
   * Instead of: ``` // true if this node only sorts a portion of the final
-    result ```
+    result. ```
 * For multi-line comments:
   * Velox will follow the doxygen comment style. 
   * For multi-line comments within actual code blocks (the ones which are not
