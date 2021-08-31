@@ -161,8 +161,6 @@ class HiveDataSource : public DataSource {
 
   void setNullConstantValue(common::ScanSpec* spec, const TypePtr& type) const;
 
-  void addPendingDynamicFilters();
-
   const std::shared_ptr<const RowType> outputType_;
   FileHandleFactory* fileHandleFactory_;
   velox::memory::MemoryPool* pool_;
@@ -178,10 +176,6 @@ class HiveDataSource : public DataSource {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;
   bool emptySplit_;
-
-  // Dynamically pushed down filters to be added to scanSpec_ on next split.
-  std::unordered_map<ChannelIndex, std::shared_ptr<common::Filter>>
-      pendingDynamicFilters_;
 
   // Number of splits skipped based on statistics.
   int64_t skippedSplits_{0};

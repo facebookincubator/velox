@@ -178,6 +178,10 @@ BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
     } else if (
         joinType_ == core::JoinType::kInner &&
         table_->hashMode() != BaseHashTable::HashMode::kHash) {
+      // Find out whether there are any upstream operators that can accept
+      // dynamic filters on all or a subset of the join keys. Setup dynamic
+      // filter builders to track join selectivity for these keys and generate
+      // dynamic filters to push down.
       const auto& buildHashers = table_->hashers();
       auto channels = operatorCtx_->driverCtx()->driver->canPushdownFilters(
           this, keyChannels_);
