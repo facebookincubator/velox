@@ -181,8 +181,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   explicit ArrayIntersectExceptFunction(
       SetWithNull<T> constantSet,
       bool isLeftConstant)
-      : constantSet_(std::move(constantSet)),
-        isLeftConstant_(isLeftConstant) {}
+      : constantSet_(std::move(constantSet)), isLeftConstant_(isLeftConstant) {}
 
   void apply(
       const SelectivityVector& rows,
@@ -260,7 +259,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       for (vector_size_t i = offset; i < (offset + size); ++i) {
         if (decodedLeftElements->isNullAt(i)) {
           bool setNull = false;
-          if constexpr (isIntersect)  {
+          if constexpr (isIntersect) {
             // If found a NULL value for array_intersect, insert only if it was
             // contained in the right-hande side wasn't added to this output row
             // yet.
@@ -310,14 +309,14 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     SetWithNull<T> outputSet;
 
-    // Optimized case when the right-hand side array is constant set : applies for
-    // both constant lhs and rhs for array_intersect and only rhs for
+    // Optimized case when the right-hand side array is constant set : applies
+    // for both constant lhs and rhs for array_intersect and only rhs for
     // array_except.
     bool isConstantOptimized = false;
     if constexpr (isIntersect) {
       if (constantSet_.has_value()) {
         rows.applyToSelected([&](vector_size_t row) {
-            processRow(row, *constantSet_, outputSet);
+          processRow(row, *constantSet_, outputSet);
         });
         isConstantOptimized = true;
       }
@@ -330,8 +329,8 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       }
     }
     if (!isConstantOptimized) {
-    // General case when no arrays are constant and both sets need to be
-    // computed for each row.
+      // General case when no arrays are constant and both sets need to be
+      // computed for each row.
       exec::LocalDecodedVector rightHolder(context, *right, rows);
       auto decodedRightArray = rightHolder.get();
       auto baseRightArray = decodedRightArray->base()->as<ArrayVector>();
@@ -426,7 +425,7 @@ std::shared_ptr<exec::VectorFunction> createTyped(
   SetWithNull<T> constantSet;
   generateSet<T>(constantArrayVector, flatVectorElements, idx, constantSet);
   return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>(
-          std::move(constantSet), isLeftConstant);
+      std::move(constantSet), isLeftConstant);
 }
 
 std::shared_ptr<exec::VectorFunction> createArrayIntersect(
@@ -449,7 +448,7 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
-          createTyped, /* isIntersect */ false, elementType->kind(), inputArgs);
+      createTyped, /* isIntersect */ false, elementType->kind(), inputArgs);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
