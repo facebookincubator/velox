@@ -264,18 +264,14 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           // case of array_except).
           if (!outputSet.hasNull) {
             if constexpr (isIntersect) {
-              if (rightSet.hasNull) {
-                setNull = true;
-              }
+              setNull = rightSet.hasNull;
             } else {
-              if (!rightSet.hasNull) {
-                setNull = true;
-              }
+              setNull = !rightSet.hasNull;
             }
-          }
-          if (setNull) {
-            bits::setNull(rawNewElementNulls, indicesCursor++, true);
-            outputSet.hasNull = true;
+            if (setNull) {
+                bits::setNull(rawNewElementNulls, indicesCursor++, true);
+                outputSet.hasNull = true;
+            }
           }
         } else {
           auto val = decodedLeftElements->valueAt<T>(i);

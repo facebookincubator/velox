@@ -2,7 +2,7 @@
 Array Functions
 =============================
 
-.. function:: array_intersect(array(X), array(Y)) -> array(Z)
+.. function:: array_intersect(array(E) X, array(E) Y) -> array(E)
 
     Returns an array of the elements in the intersection of array ``X`` and array ``Y``, without duplicates.
 
@@ -10,7 +10,7 @@ Array Functions
         SELECT array_intersect(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
         SELECT array_intersect(ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]); -- [1, NULL]
 
-.. function:: array_except(array(X), array(Y)) -> array(Z)
+.. function:: array_except(array(E) X, array(E) Y) -> array(E)
 
     Returns an array of the elements in array ``X`` but not in array ``Y``, without duplicates.
 
