@@ -25,20 +25,25 @@ namespace facebook::velox::dwrf {
 
 TEST(RangeTests, Add) {
   Ranges ranges;
+  ASSERT_EQ(ranges.size(), 0);
+  ASSERT_EQ(ranges.max(), 0);
   ASSERT_THROW(ranges.add(2, 1), exception::LoggedException);
   ASSERT_THROW(ranges.add(2, 2), exception::LoggedException);
   ranges.add(1, 3);
   ASSERT_THAT(ranges.ranges_, ElementsAre(std::tuple<size_t, size_t>{1, 3}));
   ASSERT_EQ(ranges.size(), 2);
+  ASSERT_EQ(ranges.max(), 3);
   ranges.add(3, 5);
   ASSERT_THAT(ranges.ranges_, ElementsAre(std::tuple<size_t, size_t>{1, 5}));
   ASSERT_EQ(ranges.size(), 4);
+  ASSERT_EQ(ranges.max(), 5);
   ranges.add(6, 9);
   ASSERT_THAT(
       ranges.ranges_,
       ElementsAre(
           std::tuple<size_t, size_t>{1, 5}, std::tuple<size_t, size_t>{6, 9}));
   ASSERT_EQ(ranges.size(), 7);
+  ASSERT_EQ(ranges.max(), 9);
   ranges.add(8, 10);
   ASSERT_THAT(
       ranges.ranges_,
@@ -46,8 +51,11 @@ TEST(RangeTests, Add) {
           std::tuple<size_t, size_t>{1, 5},
           std::tuple<size_t, size_t>{6, 9},
           std::tuple<size_t, size_t>{8, 10}));
+  ASSERT_EQ(ranges.size(), 9);
+  ASSERT_EQ(ranges.max(), 10);
   ranges.clear();
   ASSERT_EQ(ranges.size(), 0);
+  ASSERT_EQ(ranges.max(), 0);
 }
 
 TEST(RangeTests, ForEach) {

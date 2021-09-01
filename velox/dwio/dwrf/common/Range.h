@@ -34,6 +34,7 @@ class Ranges {
   void add(size_t begin, size_t end) {
     DWIO_ENSURE_LT(begin, end);
     size_ += (end - begin);
+    max_ = std::max(max_, end);
     if (ranges_.size()) {
       // try merge with last
       auto& last = ranges_.back();
@@ -101,9 +102,14 @@ class Ranges {
     return size_;
   }
 
+  size_t max() const {
+    return max_;
+  }
+
   void clear() {
     ranges_.clear();
     size_ = 0;
+    max_ = 0;
   }
 
   const std::vector<std::tuple<size_t, size_t>>& getRanges() const {
@@ -119,6 +125,7 @@ class Ranges {
  private:
   std::vector<std::tuple<size_t, size_t>> ranges_;
   size_t size_{0};
+  size_t max_{0};
 
   FRIEND_TEST(RangeTests, Add);
   FRIEND_TEST(RangeTests, Filter);

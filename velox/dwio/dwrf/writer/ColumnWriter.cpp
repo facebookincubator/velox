@@ -47,7 +47,7 @@ auto& decode(
     WriterContext::LocalDecodedVector& decoded,
     const VectorPtr& slice,
     const Ranges& ranges) {
-  auto localSv = context.getLocalSelectivityVector(slice->size());
+  auto localSv = context.getLocalSelectivityVector(ranges.max());
   initializeSelectivityVector(ranges, localSv.get());
   decoded.get().decode(*slice, localSv.get());
   return decoded.get();
@@ -489,10 +489,10 @@ uint64_t IntegerColumnWriter<T>::write(
     if (slice->encoding() != VectorEncoding::Simple::FLAT) {
       auto newBase = BaseVector::create(
           CppToType<T>::create(),
-          slice->size(),
+          ranges.max(),
           &getMemoryPool(MemoryUsageCategory::GENERAL));
       auto newVector = std::dynamic_pointer_cast<FlatVector<T>>(newBase);
-      newVector->copy(slice.get(), 0, 0, slice->size());
+      newVector->copy(slice.get(), 0, 0, ranges.max());
       return writeDirect(newVector, ranges);
     } else {
       // Directly write the flat vector
@@ -1898,7 +1898,6 @@ uint64_t MapColumnWriter::write(const VectorPtr& slice, const Ranges& ranges) {
 
   uint64_t rawSize = 0;
   if (childRanges.size()) {
-    DWIO_ENSURE_EQ(mapSlice->mapKeys()->size(), mapSlice->mapValues()->size());
     rawSize += children_.at(0)->write(mapSlice->mapKeys(), childRanges);
     rawSize += children_.at(1)->write(mapSlice->mapValues(), childRanges);
   }
