@@ -41,6 +41,11 @@ inline std::vector<VectorEncoding::Simple> kAllTypes = {
     VectorEncoding::Simple::BIASED,
     VectorEncoding::Simple::CONSTANT};
 
+inline std::vector<VectorEncoding::Simple> kAsciiTestTypes = {
+    VectorEncoding::Simple::DICTIONARY,
+    VectorEncoding::Simple::FLAT,
+    VectorEncoding::Simple::SEQUENCE};
+
 template <typename T>
 using ExpectedData = std::vector<std::optional<T>>;
 

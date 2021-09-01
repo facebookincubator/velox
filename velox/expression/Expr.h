@@ -448,12 +448,10 @@ std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
     core::ExecCtx* execCtx);
 
-/// Enabled for string vectors. Computes the ascii status of the vector by
-/// scanning all the vector values. No-op if rows doesn't include all rows in
-/// the vector.
-void determineStringEncoding(
-    exec::EvalCtx* context,
-    SimpleVector<StringView>* vector,
-    const SelectivityVector& rows);
+// Factory method that takes `kExprEvalSimplified` (query parameter) into
+// account and instantiates the correct ExprSet class.
+std::unique_ptr<ExprSet> makeExprSetFromFlag(
+    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    core::ExecCtx* execCtx);
 
 } // namespace facebook::velox::exec

@@ -54,7 +54,12 @@ bool isValidBiasOrDictionary(const VectorEncoding::Simple& vectorType) {
 
 } // namespace
 
-class SimpleVectorNonParameterizedTest : public SimpleVectorTest {};
+class SimpleVectorNonParameterizedTest : public SimpleVectorTest {
+ protected:
+  using S = StringView;
+  ExpectedData<StringView> stringData_ =
+      {S("àá"), S("abc"), S("xyz"), S("mno"), S("wv"), S("abc"), S("xyz")};
+};
 
 TEST_F(SimpleVectorNonParameterizedTest, ConstantVectorTest) {
   ExpectedData<int64_t> expected(10, 123456);
@@ -192,6 +197,42 @@ class SimpleVectorTypedTest : public SimpleVectorTest {
         1001 /*seed*/);
   }
 };
+
+// StringView Ascii Tests
+TEST_F(SimpleVectorNonParameterizedTest, computeAsciiTest) {
+  for (auto t : kAsciiTestTypes) {
+    LOG(INFO) << "Running:" << t;
+
+    auto vector = maker_.encodedVector(t, stringData_);
+    SelectivityVector all(stringData_.size());
+    vector->computeAndSetIsAscii(all);
+
+    ASSERT_TRUE(vector->isAscii(all));
+    ASSERT_FALSE(vector->isAscii(all).value());
+
+    auto asciiVec(stringData_);
+    asciiVec.erase(asciiVec.begin());
+    SelectivityVector asciiAll(asciiVec.size());
+    vector = maker_.encodedVector(t, asciiVec);
+    vector->computeAndSetIsAscii(asciiAll);
+
+    ASSERT_TRUE(vector->isAscii(asciiAll));
+    ASSERT_TRUE(vector->isAscii(asciiAll).value());
+  }
+}
+
+TEST_F(SimpleVectorNonParameterizedTest, getAsciiTest) {
+  for (auto t : kAsciiTestTypes) {
+    LOG(INFO) << "Running:" << t;
+
+    auto vector = maker_.encodedVector(t, stringData_);
+    SelectivityVector all(stringData_.size());
+    vector->computeAndSetIsAscii(all);
+
+    bool ascii = vector->isAscii(all).value();
+    ASSERT_EQ(ascii, false);
+  }
+}
 
 VELOX_TYPED_TEST_SUITE(SimpleVectorTypedTest, SimpleTypes);
 

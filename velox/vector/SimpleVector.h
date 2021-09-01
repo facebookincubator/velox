@@ -215,36 +215,19 @@ class SimpleVector : public BaseVector {
     return max_;
   }
 
-  /// Enabled for string vectors, returns the string encoding mode
-  template <typename U = T>
-  typename std::enable_if<
-      std::is_same<U, StringView>::value,
-      folly::Optional<functions::stringCore::StringEncodingMode>>::type
-  getStringEncoding() const {
-    return encodingMode_;
-  }
+  void copy(
+      const BaseVector* source,
+      const SelectivityVector& rows,
+      const vector_size_t* toSourceRow) override {
+    BaseVector::copy(source, rows, toSourceRow);
 
-  /// Enabled for string vectors, sets the string encoding.
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  setStringEncoding(functions::stringCore::StringEncodingMode mode) {
-    encodingMode_ = mode;
-  }
-
-  /// Enabled for string vectors, sets the string encoding to match another
-  /// vector encoding
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  copyStringEncodingFrom(const BaseVector* vector) {
-    encodingMode_ =
-        vector->asUnchecked<SimpleVector<StringView>>()->getStringEncoding();
-  }
-
-  /// Invalidate string encoding
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  invalidateStringEncoding() {
-    encodingMode_ = folly::none;
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (auto vec = source->template as<SimpleVector<StringView>>()) {
+        if (auto ascii = vec->template isAscii(rows)) {
+          setIsAscii(ascii.value(), rows);
+        }
+      }
+    }
   }
 
   void resize(vector_size_t size) override {
@@ -273,7 +256,74 @@ class SimpleVector : public BaseVector {
     return out.str();
   }
 
+  /// Returns true if all specified rows are known to be ascii else
+  /// returns std::nullopt;
+  template <typename U = T>
+  typename std::
+      enable_if<std::is_same<U, StringView>::value, std::optional<bool>>::type
+      isAscii(const SelectivityVector& rows) const {
+    if (rows.isSubset(asciiSetRows_)) {
+      return (isAllAscii_ && isAllAscii_.value());
+    }
+    return std::nullopt;
+  }
+
+  /// Computes and saves is-ascii flag for a given set of rows if not already
+  /// present.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  computeAndSetIsAscii(const SelectivityVector& rows) {
+    if (rows.isSubset(asciiSetRows_)) {
+      return;
+    }
+    resizeIsAscii(rows.end());
+    bool isAllAscii = true;
+    rows.template applyToSelected([&](auto row) {
+      if (!isNullAt(row)) {
+        auto string = valueAt(row);
+        isAllAscii &=
+            functions::stringCore::isAscii(string.data(), string.size());
+      }
+    });
+
+    // Set isAllAscii flag, it will unset if we encounter any utf.
+    if (!isAllAscii_) {
+      isAllAscii_ = isAllAscii;
+    } else {
+      if (isAllAscii_.value()) {
+        isAllAscii_ = isAllAscii;
+      }
+    }
+
+    asciiSetRows_.select(rows);
+  }
+
+  /// Clears asciiness state.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  invalidateIsAscii() {
+    asciiSetRows_.clearAll();
+    isAllAscii_ = std::nullopt;
+  }
+
+  /// Explicitly set asciness.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setIsAscii(bool ascii, const SelectivityVector& rows) {
+    resizeIsAscii(rows.end());
+    isAllAscii_ = ascii;
+    asciiSetRows_.select(rows);
+  }
+
  protected:
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  resizeIsAscii(vector_size_t size) {
+    if (asciiSetRows_.size() < size) {
+      asciiSetRows_.resize(size, false);
+    }
+  }
+
   /**
    * @return the value of the specified key from the given map, if present
    */
@@ -320,9 +370,12 @@ class SimpleVector : public BaseVector {
   // FlatVector<StringView> makes buffer overruns.
   const uint8_t elementSize_;
 
-  // If T is velox::StringView, specifies the string encoding mode
-  folly::Optional<functions::stringCore::StringEncodingMode> encodingMode_ =
-      folly::none;
+  // Flag to store if all Strings are ascii
+  std::optional<bool> isAllAscii_ = std::nullopt;
+
+  // If T is StringView, store set of rows
+  // where we have computed asciiness. A set bit means the row was processed.
+  SelectivityVector asciiSetRows_;
 }; // namespace velox
 
 template <>

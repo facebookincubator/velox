@@ -999,6 +999,18 @@ TEST_F(VectorTest, resizeAtConstruction) {
   EXPECT_EQ(oldByteSize, flat->values()->size());
 }
 
+TEST_F(VectorTest, resizeStringAsciiness) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+  std::vector<std::string> stringInput = {"hellow", "how", "are"};
+  auto flatVector = vectorMaker->flatVector(stringInput);
+  auto stringVector = flatVector->as<SimpleVector<StringView>>();
+  SelectivityVector rows(stringInput.size());
+  stringVector->computeAndSetIsAscii(rows);
+  ASSERT_TRUE(stringVector->isAscii(rows).value());
+  stringVector->resize(2);
+  ASSERT_FALSE(stringVector->isAscii(rows));
+}
+
 TEST_F(VectorTest, compareNan) {
   auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
 

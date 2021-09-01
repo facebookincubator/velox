@@ -335,11 +335,11 @@ class ConstantVector : public SimpleVector<T> {
       }
       valueVector_ = nullptr;
 
-      // Preserve string encoding
       if constexpr (std::is_same_v<T, StringView>) {
-        if (simple->getStringEncoding().has_value()) {
-          SimpleVector<T>::setStringEncoding(
-              simple->getStringEncoding().value());
+        SelectivityVector rows(simple->size());
+        auto vec = simple->template as<SimpleVector<StringView>>();
+        if (vec->isAscii(rows)) {
+          SimpleVector<T>::setIsAscii(vec->isAscii(rows).value(), rows);
         }
       }
     }
