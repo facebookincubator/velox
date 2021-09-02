@@ -459,13 +459,16 @@ class VectorHasher {
   uint32_t rangeSize_ = 0;
 
   // Multiply int mapping by this before adding it to array index/normalized ey.
-  uint64_t multiplier_;
+  uint64_t multiplier_ = 1;
 
   // true if the mapping is simply value - min_.
   bool isRange_ = false;
 
   // True if 'min_' and 'max_' are initialized.
   bool hasRange_ = false;
+
+  // Maximum character size of a string that can fit the range.
+  uint32_t rangeMaxChars_ = 0;
 
   // True when range or distinct mapping is not possible or practical.
   bool rangeOverflow_ = false;
@@ -496,12 +499,10 @@ template <>
 void VectorHasher::analyzeValue(StringView value);
 
 template <>
-inline bool VectorHasher::tryMapToRange(
+bool VectorHasher::tryMapToRange(
     const StringView* /*values*/,
     const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/) {
-  return false;
-}
+    uint64_t* /*result*/);
 
 template <>
 inline uint64_t VectorHasher::valueId(StringView value) {
