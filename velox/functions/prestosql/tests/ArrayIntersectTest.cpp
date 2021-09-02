@@ -24,6 +24,24 @@ namespace {
 
 class ArrayIntersectTest : public FunctionBaseTest {
  protected:
+  static VectorPtr
+  wrapInDictionary(BufferPtr indices, vector_size_t size, VectorPtr vector) {
+    return BaseVector::wrapInDictionary(
+        BufferPtr(nullptr), std::move(indices), size, std::move(vector));
+  }
+
+  BufferPtr makeIndices(
+      vector_size_t size,
+      const std::function<vector_size_t(vector_size_t)>& indexAt) {
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (int i = 0; i < size; i++) {
+      rawIndices[i] = indexAt(i);
+    }
+    return indices;
+  }
+
   void testExpr(
       const VectorPtr& expected,
       const std::string& expression,
@@ -70,7 +88,11 @@ class ArrayIntersectTest : public FunctionBaseTest {
         {},
         {1, -2, 4},
     });
-    testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
+
+    auto dict1 = wrapInDictionary(makeIndices(8, [] (auto row) { return row / 2;}), 8, array1);
+    auto dict2 = wrapInDictionary(makeIndices(8, [] (auto row) { return row % 4;}), 8, array2);
+
+    testExpr(expected, "array_intersect(C0, C1)", {dict1, dict2});
     testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
 
     // Change C1.
