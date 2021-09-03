@@ -22,150 +22,348 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
+template <typename Type>
 class ArrayMaxTest : public FunctionBaseTest {
- protected:
-  template <typename T, typename TExpected = T>
-  void testExpr(
-      const VectorPtr& expected,
-      const std::string& expression,
-      const std::vector<VectorPtr>& input) {
+ public:
+  using T = typename Type::NativeType::NativeType;
+
+  void testMaxExpr(VectorPtr input, VectorPtr expected) {
     auto result =
-        evaluate<SimpleVector<TExpected>>(expression, makeRowVector(input));
+        evaluate<SimpleVector<T>>("array_max(C0)", makeRowVector({input}));
     assertEqualVectors(expected, result);
   }
-
-  void testDocExample() {
-    auto arrayVector = makeNullableArrayVector<int64_t>(
-        {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
-    auto expected =
-        makeNullableFlatVector<int64_t>({3, -1, std::nullopt, std::nullopt});
-    testExpr<int64_t>(expected, "array_max(C0)", {arrayVector});
+  void testMaxNullableExpr() {
+    ASSERT_FALSE(true) << "No test added for this type";
   }
-
-  template <typename T>
-  void testIntNullable() {
-    auto arrayVector = makeNullableArrayVector<T>(
-        {{-1, 0, 1, 2, 3, 4},
-         {4, 3, 2, 1, 0, -1, -2},
-         {-5, -4, -3, -2, -1},
-         {101, 102, 103, 104, std::nullopt},
-         {std::nullopt, -1, -2, -3, -4},
-         {},
-         {std::nullopt}});
-    auto expected = makeNullableFlatVector<T>(
-        {4, 4, -1, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
-    testExpr<T>(expected, "array_max(C0)", {arrayVector});
-  }
-
-  template <typename T>
-  void testInt() {
-    auto arrayVector = makeArrayVector<T>(
-        {{-1, 0, 1, 2, 3, 4},
-         {4, 3, 2, 1, 0, -1, -2},
-         {-5, -4, -3, -2, -1},
-         {101, 102, 103, 104, 105},
-         {}});
-    auto expected = makeNullableFlatVector<T>({4, 4, -1, 105, std::nullopt});
-    testExpr<T>(expected, "array_max(C0)", {arrayVector});
-  }
-
-  void testInLineVarcharNullable() {
-    using S = StringView;
-
-    auto arrayVector = makeNullableArrayVector<StringView>({
-        {S("red"), S("blue")},
-        {std::nullopt, S("blue"), S("yellow"), S("orange")},
-        {},
-        {S("red"), S("purple"), S("green")},
-    });
-    auto expected = makeNullableFlatVector<StringView>(
-        {S("red"), std::nullopt, std::nullopt, S("red")});
-    testExpr<StringView>(expected, "array_max(C0)", {arrayVector});
-  }
-
-  void testVarcharNullable() {
-    using S = StringView;
-    // use > 12 length string to avoid inlining
-    auto arrayVector = makeNullableArrayVector<StringView>({
-        {S("red shiny car ahead"), S("blue clear sky above")},
-        {std::nullopt,
-         S("blue clear sky above"),
-         S("yellow rose flowers"),
-         S("orange beautiful sunset")},
-        {},
-        {S("red shiny car ahead"),
-         S("purple is an elegant color"),
-         S("green plants make us happy")},
-    });
-    auto expected = makeNullableFlatVector<StringView>(
-        {S("red shiny car ahead"),
-         std::nullopt,
-         std::nullopt,
-         S("red shiny car ahead")});
-    testExpr<StringView>(expected, "array_max(C0)", {arrayVector});
-  }
-
-  void testBoolNullable() {
-    auto arrayVector = makeNullableArrayVector<bool>(
-        {{true, false},
-         {true},
-         {false},
-         {},
-         {true, false, true, std::nullopt},
-         {std::nullopt, true, false, true},
-         {false, false, false},
-         {true, true, true}});
-
-    auto expected = makeNullableFlatVector<bool>(
-        {true,
-         true,
-         false,
-         std::nullopt,
-         std::nullopt,
-         std::nullopt,
-         false,
-         true});
-    testExpr<bool>(expected, "array_max(C0)", {arrayVector});
-  }
-
-  void testBool() {
-    auto arrayVector = makeArrayVector<bool>(
-        {{true, false},
-         {true},
-         {false},
-         {},
-         {false, false, false},
-         {true, true, true}});
-
-    auto expected = makeNullableFlatVector<bool>(
-        {true, true, false, std::nullopt, false, true});
-    testExpr<bool>(expected, "array_max(C0)", {arrayVector});
+  void testMaxExpr() {
+    ASSERT_FALSE(true) << "No test added for this type";
   }
 };
 
+template <typename T>
+void getTypedNullableIntegerInputExpectedArrays(
+    FunctionBaseTest* test,
+    VectorPtr& input,
+    VectorPtr& expected) {
+  input = test->makeNullableArrayVector<T>(
+      {{std::numeric_limits<T>::min(),
+        0,
+        1,
+        2,
+        3,
+        std::numeric_limits<T>::max()},
+       {std::numeric_limits<T>::max(),
+        3,
+        2,
+        1,
+        0,
+        -1,
+        std::numeric_limits<T>::min()},
+       {101, 102, 103, std::numeric_limits<T>::max(), std::nullopt},
+       {std::nullopt, -1, -2, -3, std::numeric_limits<T>::min()},
+       {},
+       {std::nullopt}});
+  expected = test->makeNullableFlatVector<T>(
+      {std::numeric_limits<T>::max(),
+       std::numeric_limits<T>::max(),
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+}
+
+template <typename T>
+void getTypedIntegerInputExpectedArrays(
+    FunctionBaseTest* test,
+    VectorPtr& input,
+    VectorPtr& expected) {
+  input = test->makeArrayVector<T>(
+      {{std::numeric_limits<T>::min(), 0, 1, 2, 3, 4},
+       {std::numeric_limits<T>::max(), 3, 2, 1, 0, -1, -2},
+       {std::numeric_limits<T>::max(),
+        101,
+        102,
+        103,
+        104,
+        105,
+        std::numeric_limits<T>::max()},
+       {}});
+  expected = test->makeNullableFlatVector<T>(
+      {4,
+       std::numeric_limits<T>::max(),
+       std::numeric_limits<T>::max(),
+       std::nullopt});
+}
+template <>
+void ArrayMaxTest<SmallintType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<SmallintType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<TinyintType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<TinyintType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<IntegerType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<IntegerType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<BigintType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<BigintType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedIntegerInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<BooleanType>::testMaxNullableExpr() {
+  auto input = makeNullableArrayVector<T>(
+      {{true, false},
+       {true},
+       {false},
+       {},
+       {true, false, true, std::nullopt},
+       {std::nullopt, true, false, true},
+       {false, false, false},
+       {true, true, true}});
+  auto expected = makeNullableFlatVector<T>(
+      {true,
+       true,
+       false,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       false,
+       true});
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<BooleanType>::testMaxExpr() {
+  auto input = makeNullableArrayVector<T>(
+      {{true, false},
+       {true},
+       {false},
+       {},
+       {false, false, false},
+       {true, true, true}});
+  auto expected =
+      makeNullableFlatVector<T>({true, true, false, std::nullopt, false, true});
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<VarcharType>::testMaxNullableExpr() {
+  using S = StringView;
+  auto input = makeNullableArrayVector<S>({
+      {S("red"), S("blue")},
+      {std::nullopt, S("blue"), S("yellow"), S("orange")},
+      {},
+      {S("red"), S("purple"), S("green")},
+  });
+  auto expected = makeNullableFlatVector<StringView>(
+      {S("red"), std::nullopt, std::nullopt, S("red")});
+}
+
+template <>
+void ArrayMaxTest<VarcharType>::testMaxExpr() {
+  using S = StringView;
+  auto input = makeArrayVector<S>({
+      {S("red"), S("blue")},
+      {S("blue"), S("yellow"), S("orange")},
+      {},
+      {S("red"), S("purple"), S("green")},
+  });
+  auto expected = makeNullableFlatVector<StringView>(
+      {S("red"), S("yellow"), std::nullopt, S("red")});
+  testMaxExpr(input, expected);
+}
+
+template <typename T>
+void getTypedNullableFloatingInputExpectedArrays(
+    FunctionBaseTest* test,
+    VectorPtr& input,
+    VectorPtr& expected) {
+  input = test->makeNullableArrayVector<T>(
+      {{0.0000, 0.00001},
+       {std::nullopt, 1.1, 1.11, -2.2, -1.0, std::numeric_limits<T>::min()},
+       {std::numeric_limits<T>::min(),
+        -0.0001,
+        -0.0002,
+        -0.0003,
+        std::numeric_limits<T>::max()},
+       {},
+       {std::numeric_limits<T>::min(), 1.1, 1.22222, 1.33, std::nullopt},
+       {-0.00001, -0.0002, 0.0001}});
+  expected = test->makeNullableFlatVector<T>(
+      {0.00001,
+       std::nullopt,
+       std::numeric_limits<T>::max(),
+       std::nullopt,
+       std::nullopt,
+       0.0001});
+}
+
+template <typename T>
+void getTypedFloatingInputExpectedArrays(
+    FunctionBaseTest* test,
+    VectorPtr& input,
+    VectorPtr& expected) {
+  input = test->makeArrayVector<T>(
+      {{0.0000, 0.00001},
+       {std::numeric_limits<T>::max(),
+        1.1,
+        1.11,
+        -2.2,
+        -1.0,
+        std::numeric_limits<T>::min()},
+       {std::numeric_limits<T>::min(),
+        -0.0001,
+        -0.0002,
+        -0.0003,
+        std::numeric_limits<T>::max()},
+       {},
+       {1.1, 1.22222, 1.33},
+       {-0.00001, -0.0002, 0.0001}});
+  expected = test->makeNullableFlatVector<T>(
+      {0.00001,
+       std::numeric_limits<T>::max(),
+       std::numeric_limits<T>::max(),
+       std::nullopt,
+       1.33,
+       0.0001});
+}
+
+template <>
+void ArrayMaxTest<RealType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableFloatingInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<RealType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedFloatingInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<DoubleType>::testMaxNullableExpr() {
+  VectorPtr input, expected;
+  getTypedNullableFloatingInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
+template <>
+void ArrayMaxTest<DoubleType>::testMaxExpr() {
+  VectorPtr input, expected;
+  getTypedFloatingInputExpectedArrays<T>(this, input, expected);
+  testMaxExpr(input, expected);
+}
+
 } // namespace
 
-TEST_F(ArrayMaxTest, docArrays) {
-  testDocExample();
+TYPED_TEST_SUITE(
+    ArrayMaxTest,
+    FunctionBaseTest::ScalarTypes,
+    FunctionBaseTest::TypeNames);
+
+TYPED_TEST(ArrayMaxTest, arrayMaxNullable) {
+  this->testMaxNullableExpr();
 }
 
-TEST_F(ArrayMaxTest, intArrays) {
-  testIntNullable<int8_t>();
-  testIntNullable<int16_t>();
-  testIntNullable<int32_t>();
-  testIntNullable<int64_t>();
-  testInt<int8_t>();
-  testInt<int16_t>();
-  testInt<int32_t>();
-  testInt<int64_t>();
+TYPED_TEST(ArrayMaxTest, arrayMax) {
+  this->testMaxExpr();
 }
 
-TEST_F(ArrayMaxTest, varcharArrays) {
-  testInLineVarcharNullable();
-  testVarcharNullable();
+// Test non-inlined (> 12 length) nullable strings.
+using LongVarcharTest = ArrayMaxTest<VarcharType>;
+TEST_F(LongVarcharTest, arrayMaxNullableLongVarchar) {
+  using S = StringView;
+  auto input = makeNullableArrayVector<S>({
+      {S("red shiny car ahead"), S("blue clear sky above")},
+      {std::nullopt,
+       S("blue clear sky above"),
+       S("yellow rose flowers"),
+       S("orange beautiful sunset")},
+      {},
+      {S("red shiny car ahead"),
+       S("purple is an elegant color"),
+       S("green plants make us happy")},
+  });
+  auto expected = makeNullableFlatVector<S>(
+      {S("red shiny car ahead"),
+       std::nullopt,
+       std::nullopt,
+       S("red shiny car ahead")});
+
+  this->testMaxExpr(input, expected);
 }
 
-TEST_F(ArrayMaxTest, boolArrays) {
-  testBoolNullable();
-  testBool();
+// Test non-inlined (> 12 length) strings.
+TEST_F(LongVarcharTest, arrayMaxLongVarchar) {
+  using S = StringView;
+  auto input = makeNullableArrayVector<S>({
+      {S("red shiny car ahead"), S("blue clear sky above")},
+      {S("blue clear sky above"),
+       S("yellow rose flowers"),
+       S("orange beautiful sunset")},
+      {},
+      {S("red shiny car ahead"),
+       S("purple is an elegant color"),
+       S("green plants make us happy")},
+  });
+  ;
+  auto expected = makeNullableFlatVector<S>(
+      {S("red shiny car ahead"),
+       S("yellow rose flowers"),
+       std::nullopt,
+       S("red shiny car ahead")});
+  this->testMaxExpr(input, expected);
+}
+
+// Test documented example.
+using DocExample = ArrayMaxTest<IntegerType>;
+TEST_F(DocExample, arrayMaxDocExample) {
+  auto input = makeNullableArrayVector<T>(
+      {{1, 2, 3}, {-1, -2, -2}, {-1, -2, std::nullopt}, {}});
+  auto expected =
+      makeNullableFlatVector<T>({3, -1, std::nullopt, std::nullopt});
+  this->testMaxExpr(input, expected);
 }

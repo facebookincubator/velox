@@ -25,7 +25,29 @@
 namespace facebook::velox::functions::test {
 
 class FunctionBaseTest : public testing::Test {
- protected:
+ public:
+  // This class generates test name suffixes based on the type.
+  // We use the type's toString() return value as the test name.
+  // Used as the third argument for GTest TYPED_TEST_SUITE.
+  class TypeNames {
+   public:
+    template <typename T>
+    static std::string GetName(int) {
+      T type;
+      return type.toString();
+    }
+  };
+
+  using ScalarTypes = ::testing::Types<
+      TinyintType,
+      SmallintType,
+      IntegerType,
+      BigintType,
+      VarcharType,
+      BooleanType,
+      DoubleType,
+      RealType>;
+
   static void SetUpTestCase();
 
   template <typename T>
