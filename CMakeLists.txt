@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 cmake_minimum_required(VERSION 3.10)
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
-
 # set the project name
 project(velox)
+
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
+
+# Add all options below
+option(VELOX_ENABLE_S3 "Build S3 Connector" ON)
+
+# Set third-party dependency versions below
+set(AWS_SDK_VERSION "1.9.96")
+
+include(ThirdpartyDependencies)
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler
