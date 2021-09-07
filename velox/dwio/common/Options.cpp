@@ -34,7 +34,7 @@ FileFormat toFileFormat(std::string s) {
   } else if (s == "json") {
     return FileFormat::JSON;
   } else if (s == "parquet") {
-    return FileFormat::JSON;
+    return FileFormat::PARQUET;
   }
   return FileFormat::UNKNOWN;
 }
