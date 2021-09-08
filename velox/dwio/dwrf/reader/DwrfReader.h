@@ -65,6 +65,8 @@ class DwrfRowReader : public DwrfRowReaderShared {
     return columnReader_.get();
   }
 
+  void resetFilterCaches() override;
+
  private:
   void checkSkipStrides(const StatsContext& context, uint64_t strideSize);
 

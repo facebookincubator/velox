@@ -31,6 +31,8 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   uint64_t next(uint64_t size, velox::VectorPtr& result) override;
 
+  void resetFilterCaches() override;
+
   size_t estimatedRowSize() const override;
 
  private:

@@ -135,10 +135,14 @@ uint64_t ParquetRowReader::next(uint64_t size, velox::VectorPtr& result) {
         BufferPtr(nullptr),
         columns[0]->size(),
         columns,
-        folly::none);
+        std::nullopt);
   }
 
   return output.size();
+}
+
+void ParquetRowReader::resetFilterCaches() {
+  VELOX_FAIL("ParquetRowReader::resetFilterCaches is NYI");
 }
 
 size_t ParquetRowReader::estimatedRowSize() const {

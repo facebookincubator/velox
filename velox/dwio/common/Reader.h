@@ -36,6 +36,8 @@ class RowReader {
 
   virtual uint64_t next(uint64_t size, velox::VectorPtr& result) = 0;
 
+  virtual void resetFilterCaches() = 0;
+
   virtual size_t estimatedRowSize() const = 0;
 };
 

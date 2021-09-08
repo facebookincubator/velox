@@ -31,7 +31,7 @@ bool registerReaderFactory(std::shared_ptr<ReaderFactory> factory) {
   VELOX_CHECK(
       ok,
       "ReaderFactory for format {} is already registered",
-      ToString(factory->getFormat()));
+      toString(factory->getFormat()));
   return true;
 }
 
@@ -40,7 +40,7 @@ std::shared_ptr<ReaderFactory> getReaderFactory(FileFormat format) {
   VELOX_CHECK(
       it != readerFactories().end(),
       "ReaderFactory for format {} is not registered",
-      ToString(format));
+      toString(format));
   return it->second;
 }
 

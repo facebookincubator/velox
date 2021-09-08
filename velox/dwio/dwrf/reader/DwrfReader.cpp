@@ -16,6 +16,7 @@
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -119,6 +120,10 @@ uint64_t DwrfRowReader::next(uint64_t size, VectorPtr& result) {
       return rowsToRead;
     }
   }
+}
+
+void DwrfRowReader::resetFilterCaches() {
+  dynamic_cast<SelectiveColumnReader*>(columnReader())->resetFilterCaches();
 }
 
 std::unique_ptr<DwrfReader> DwrfReader::create(

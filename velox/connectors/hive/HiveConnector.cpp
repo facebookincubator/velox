@@ -246,9 +246,7 @@ void HiveDataSource::addDynamicFilter(
   }
   scanSpec_->resetCachedValues();
 
-  auto columnReader =
-      dynamic_cast<SelectiveColumnReader*>(rowReader_->columnReader());
-  columnReader->resetFilterCaches();
+  rowReader_->resetFilterCaches();
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -271,8 +269,8 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     VELOX_CHECK(
         readerOpts_.getFileFormat() == split_->inputFormat,
         "Splits of different formats ({} and {}) are fed to HiveDataSource",
-        ToString(readerOpts_.getFileFormat()),
-        ToString(split_->inputFormat));
+        toString(readerOpts_.getFileFormat()),
+        toString(split_->inputFormat));
   } else {
     readerOpts_.setFileFormat(split_->inputFormat);
   }
