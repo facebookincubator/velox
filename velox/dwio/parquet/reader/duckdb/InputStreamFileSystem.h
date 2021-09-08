@@ -34,28 +34,28 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
           ::duckdb::FileCompressionType::UNCOMPRESSED) override {
     int streamId = std::stoi(path);
 
-    std::lock_guard<std::mutex> streamsLock(streamsMutex);
-    auto it = streams.find(streamId);
-    VELOX_CHECK(it != streams.end(), "Unknown stream with ID {}", streamId);
+    std::lock_guard<std::mutex> streamsLock(streamsMutex_);
+    auto it = streams_.find(streamId);
+    VELOX_CHECK(it != streams_.end(), "Unknown stream with ID {}", streamId);
     ++it->second.first;
     return std::make_unique<InputStreamFileHandle>(*this, streamId);
   }
 
   std::unique_ptr<::duckdb::FileHandle> OpenStream(
       std::unique_ptr<dwio::common::InputStream> stream) {
-    std::lock_guard<std::mutex> lock(streamsMutex);
-    auto streamId = nextStreamId++;
-    streams.emplace(
+    std::lock_guard<std::mutex> lock(streamsMutex_);
+    auto streamId = nextStreamId_++;
+    streams_.emplace(
         std::make_pair(streamId, std::make_pair(1, std::move(stream))));
     return std::make_unique<InputStreamFileHandle>(*this, streamId);
   }
 
   void CloseStream(int streamId) {
-    std::lock_guard<std::mutex> lock(streamsMutex);
-    auto it = streams.find(streamId);
-    VELOX_CHECK(it != streams.end(), "Unknown stream with ID {}", streamId);
+    std::lock_guard<std::mutex> lock(streamsMutex_);
+    auto it = streams_.find(streamId);
+    VELOX_CHECK(it != streams_.end(), "Unknown stream with ID {}", streamId);
     if (it->second.first == 1) {
-      streams.erase(it);
+      streams_.erase(it);
     } else {
       --it->second.first;
     }
@@ -67,9 +67,9 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
       int64_t nr_bytes,
       uint64_t location) {
     auto& streamHandle = dynamic_cast<InputStreamFileHandle&>(handle);
-    auto it = streams.find(streamHandle.getStreamId());
+    auto it = streams_.find(streamHandle.getStreamId());
     VELOX_CHECK(
-        it != streams.end(),
+        it != streams_.end(),
         "Unknown stream with ID {}",
         streamHandle.getStreamId());
     it->second.second->read(
@@ -82,126 +82,115 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
       void* buffer,
       int64_t nr_bytes,
       uint64_t location) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::Write");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::Write");
   }
 
   int64_t Read(::duckdb::FileHandle& handle, void* buffer, int64_t nr_bytes)
       override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::Read");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::Read");
   }
 
   int64_t Write(::duckdb::FileHandle& handle, void* buffer, int64_t nr_bytes)
       override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::Write");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::Write");
   }
 
   int64_t GetFileSize(::duckdb::FileHandle& handle) override {
     auto& streamHandle = dynamic_cast<InputStreamFileHandle&>(handle);
-    auto it = streams.find(streamHandle.getStreamId());
+    auto it = streams_.find(streamHandle.getStreamId());
     VELOX_CHECK(
-        it != streams.end(),
+        it != streams_.end(),
         "Unknown stream with ID {}",
         streamHandle.getStreamId());
     return it->second.second->getLength();
   }
 
   time_t GetLastModifiedTime(::duckdb::FileHandle& handle) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::GetLastModifiedTime");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::GetLastModifiedTime");
   }
 
   void Truncate(::duckdb::FileHandle& handle, int64_t new_size) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::Truncate");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::Truncate");
   }
 
   bool DirectoryExists(const std::string& directory) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::DirectoryExists");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::DirectoryExists");
   }
 
   void CreateDirectory(const std::string& directory) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::CreateDirectory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::CreateDirectory");
   }
 
   void RemoveDirectory(const std::string& directory) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::RemoveDirectory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::RemoveDirectory");
   }
 
   bool ListFiles(
       const std::string& directory,
       const std::function<void(std::string, bool)>& callback) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::ListFiles");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::ListFiles");
   }
 
   void MoveFile(const std::string& source, const std::string& target) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::MoveFile");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::MoveFile");
   }
 
   bool FileExists(const std::string& filename) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::FileExists");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::FileExists");
   }
 
   void RemoveFile(const std::string& filename) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::RemoveFile");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::RemoveFile");
   }
 
   std::string PathSeparator() override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::PathSeparator");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::PathSeparator");
   }
 
   std::string JoinPath(const std::string& a, const std::string& path) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::JoinPath");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::JoinPath");
   }
 
   std::string ConvertSeparators(const std::string& path) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::ConvertSeparators");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::ConvertSeparators");
   }
 
   std::string ExtractBaseName(const std::string& path) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::ExtractBaseName");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::ExtractBaseName");
   }
 
   void FileSync(::duckdb::FileHandle& handle) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::FileSync");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::FileSync");
   }
 
   void SetWorkingDirectory(const std::string& path) override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::SetWorkingDirectory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::SetWorkingDirectory");
   }
 
   std::string GetWorkingDirectory() override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::GetWorkingDirectory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::GetWorkingDirectory");
   }
 
   std::string GetHomeDirectory() override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::GetHomeDirectory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::GetHomeDirectory");
   }
 
   std::vector<std::string> Glob(const std::string& path) override {
-    VELOX_CHECK(false, "Unexpected call to InputStreamFileSystem::Glob");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::Glob");
   }
 
   uint64_t GetAvailableMemory() override {
-    VELOX_CHECK(
-        false, "Unexpected call to InputStreamFileSystem::GetAvailableMemory");
+    VELOX_FAIL("Unexpected call to InputStreamFileSystem::GetAvailableMemory");
   }
 
  private:
-  int nextStreamId = 1;
+  int nextStreamId_ = 1;
   // Maps stream ID to file handle counter and input stream
   std::unordered_map<
       int,
       std::pair<int, std::unique_ptr<dwio::common::InputStream>>>
-      streams;
-  std::mutex streamsMutex;
+      streams_;
+  std::mutex streamsMutex_;
 };
 
 } // namespace facebook::velox::duckdb

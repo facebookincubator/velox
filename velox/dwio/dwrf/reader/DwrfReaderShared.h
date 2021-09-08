@@ -113,7 +113,7 @@ class DwrfRowReaderShared : public StrideIndexProvider,
     return previousRow;
   }
 
-  uint64_t seekToRow(uint64_t rowNumber) override;
+  uint64_t seekToRow(uint64_t rowNumber);
 
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 

@@ -28,27 +28,31 @@
 
 namespace facebook::dwio::common {
 
+// Abstract row reader interface. Used to parse a single data split
+// into vectors.
 class RowReader {
  public:
   virtual ~RowReader() = default;
-
-  virtual uint64_t seekToRow(uint64_t rowNumber) = 0;
 
   virtual uint64_t next(uint64_t size, velox::VectorPtr& result) = 0;
 
   virtual size_t estimatedRowSize() const = 0;
 };
 
+// Abstract reader interface used to parse data files.
+// Provides basic file information and creates RowReader
+// objects to access file data.
 class Reader {
  public:
   virtual ~Reader() = default;
 
+  // Get total number of rows in a file.
   virtual std::optional<uint64_t> getNumberOfRows() const = 0;
 
   virtual std::unique_ptr<velox::dwrf::ColumnStatistics> getColumnStatistics(
       uint32_t index) const = 0;
 
-  virtual const std::shared_ptr<const velox::RowType>& getType() const = 0;
+  virtual const velox::RowTypePtr& getType() const = 0;
 
   virtual const std::shared_ptr<const TypeWithId>& getTypeWithId() const = 0;
 

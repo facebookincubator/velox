@@ -105,6 +105,7 @@ class DwrfReader : public DwrfReaderShared {
 
   friend class E2EEncryptionTest;
 };
+
 class DwrfReaderFactory : public dwio::common::ReaderFactory {
  public:
   DwrfReaderFactory() : ReaderFactory(dwio::common::FileFormat::ORC) {}

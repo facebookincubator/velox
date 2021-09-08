@@ -24,24 +24,22 @@ namespace facebook::velox::parquet {
 class ParquetRowReader : public dwio::common::RowReader {
  public:
   ParquetRowReader(
-      std::shared_ptr<::duckdb::ParquetReader> _reader,
+      std::shared_ptr<::duckdb::ParquetReader> reader,
       const dwio::common::RowReaderOptions& options,
-      memory::MemoryPool& _pool);
+      memory::MemoryPool& pool);
   ~ParquetRowReader() override = default;
-
-  uint64_t seekToRow(uint64_t rowNumber) override;
 
   uint64_t next(uint64_t size, velox::VectorPtr& result) override;
 
   size_t estimatedRowSize() const override;
 
  private:
-  ::duckdb::TableFilterSet filters;
-  std::shared_ptr<::duckdb::ParquetReader> reader;
-  ::duckdb::ParquetReaderScanState state;
-  memory::MemoryPool& pool;
-  std::shared_ptr<const velox::RowType> rowType;
-  std::vector<::duckdb::LogicalType> duckdbRowType;
+  ::duckdb::TableFilterSet filters_;
+  std::shared_ptr<::duckdb::ParquetReader> reader_;
+  ::duckdb::ParquetReaderScanState state_;
+  memory::MemoryPool& pool_;
+  std::shared_ptr<const velox::RowType> rowType_;
+  std::vector<::duckdb::LogicalType> duckdbRowType_;
 };
 
 class ParquetReader : public dwio::common::Reader {
@@ -56,7 +54,7 @@ class ParquetReader : public dwio::common::Reader {
   std::unique_ptr<velox::dwrf::ColumnStatistics> getColumnStatistics(
       uint32_t index) const override;
 
-  const std::shared_ptr<const velox::RowType>& getType() const override;
+  const velox::RowTypePtr& getType() const override;
 
   const std::shared_ptr<const dwio::common::TypeWithId>& getTypeWithId() const;
 
@@ -64,14 +62,14 @@ class ParquetReader : public dwio::common::Reader {
       const dwio::common::RowReaderOptions& options = {}) const override;
 
  private:
-  static duckdb::InputStreamFileSystem fileSystem;
+  static duckdb::InputStreamFileSystem fileSystem_;
 
-  ::duckdb::Allocator allocator;
-  std::shared_ptr<::duckdb::ParquetReader> reader;
-  memory::MemoryPool& pool;
+  ::duckdb::Allocator allocator_;
+  std::shared_ptr<::duckdb::ParquetReader> reader_;
+  memory::MemoryPool& pool_;
 
-  std::shared_ptr<const velox::RowType> type;
-  mutable std::shared_ptr<const dwio::common::TypeWithId> typeWithId;
+  std::shared_ptr<const velox::RowType> type_;
+  mutable std::shared_ptr<const dwio::common::TypeWithId> typeWithId_;
 };
 
 class ParquetReaderFactory : public dwio::common::ReaderFactory {

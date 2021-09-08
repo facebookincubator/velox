@@ -19,6 +19,8 @@
 
 namespace facebook::velox::parquet {
 
+namespace {
+
 void toDuckDbFilter(
     uint64_t colIdx,
     common::Filter* filter,
@@ -56,34 +58,34 @@ void toDuckDbFilter(
     case common::FilterKind::kBigintMultiRange:
     case common::FilterKind::kMultiRange:
     default:
-      VELOX_CHECK(
-          false,
-          "Unsupported filter in parquet reader: {}",
-          filter->toString());
+      VELOX_UNSUPPORTED(
+          "Unsupported filter in parquet reader: {}", filter->toString());
   }
 }
 
-ParquetRowReader::ParquetRowReader(
-    std::shared_ptr<::duckdb::ParquetReader> _reader,
-    const dwio::common::RowReaderOptions& options,
-    memory::MemoryPool& _pool)
-    : reader(std::move(_reader)), pool(_pool) {
-  auto& selector = *options.getSelector();
-  rowType = selector.buildSelectedReordered();
+} // anonymous namespace
 
-  std::vector<::duckdb::column_t> columnIds(rowType->size());
-  duckdbRowType.resize(rowType->size());
-  for (size_t i = 0; i < reader->names.size(); i++) {
+ParquetRowReader::ParquetRowReader(
+    std::shared_ptr<::duckdb::ParquetReader> reader,
+    const dwio::common::RowReaderOptions& options,
+    memory::MemoryPool& pool)
+    : reader_(std::move(reader)), pool_(pool) {
+  auto& selector = *options.getSelector();
+  rowType_ = selector.buildSelectedReordered();
+
+  std::vector<::duckdb::column_t> columnIds(rowType_->size());
+  duckdbRowType_.resize(rowType_->size());
+  for (size_t i = 0; i < reader_->names.size(); i++) {
     auto& filter = *selector.findColumn(i);
     if (filter.shouldRead()) {
       columnIds[filter.getProjectOrder()] = i;
-      duckdbRowType[filter.getProjectOrder()] = reader->return_types[i];
+      duckdbRowType_[filter.getProjectOrder()] = reader_->return_types[i];
     }
   }
 
   std::vector<idx_t> groups;
-  for (idx_t i = 0; i < reader->NumRowGroups(); i++) {
-    auto groupOffset = reader->GetFileMetadata()->row_groups[i].file_offset;
+  for (idx_t i = 0; i < reader_->NumRowGroups(); i++) {
+    auto groupOffset = reader_->GetFileMetadata()->row_groups[i].file_offset;
     if (groupOffset >= options.getOffset() &&
         groupOffset < (options.getLength() + options.getOffset())) {
       groups.push_back(i);
@@ -97,44 +99,39 @@ ParquetRowReader::ParquetRowReader(
     if (colSpec->filter()) {
       // TODO: remove linear search
       uint64_t colIdx = std::find(
-                            reader->names.begin(),
-                            reader->names.end(),
+                            reader_->names.begin(),
+                            reader_->names.end(),
                             colSpec->fieldName()) -
-          reader->names.begin();
+          reader_->names.begin();
       VELOX_CHECK(
-          colIdx < reader->names.size(),
+          colIdx < reader_->names.size(),
           "Unexpected columns name: {}",
           colSpec->fieldName());
-      toDuckDbFilter(colIdx, colSpec->filter(), filters);
+      toDuckDbFilter(colIdx, colSpec->filter(), filters_);
     }
   }
 
-  reader->InitializeScan(
-      state, std::move(columnIds), std::move(groups), &filters);
-}
-
-uint64_t ParquetRowReader::seekToRow(uint64_t rowNumber) {
-  VELOX_CHECK(false, "ParquetRowReader::seekToRow is NYI");
-  return 0;
+  reader_->InitializeScan(
+      state_, std::move(columnIds), std::move(groups), &filters_);
 }
 
 uint64_t ParquetRowReader::next(uint64_t size, velox::VectorPtr& result) {
   ::duckdb::DataChunk output;
-  output.Initialize(duckdbRowType);
+  output.Initialize(duckdbRowType_);
 
-  reader->Scan(state, output);
+  reader_->Scan(state_, output);
 
   if (output.size() > 0) {
     std::vector<VectorPtr> columns;
     columns.reserve(output.data.size());
     for (int i = 0; i < output.data.size(); i++) {
       columns.emplace_back(duckdb::toVeloxVector(
-          output.size(), output.data[i], rowType->childAt(i), &pool));
+          output.size(), output.data[i], rowType_->childAt(i), &pool_));
     }
 
     result = std::make_shared<RowVector>(
-        &pool,
-        rowType,
+        &pool_,
+        rowType_,
         BufferPtr(nullptr),
         columns[0]->size(),
         columns,
@@ -145,28 +142,28 @@ uint64_t ParquetRowReader::next(uint64_t size, velox::VectorPtr& result) {
 }
 
 size_t ParquetRowReader::estimatedRowSize() const {
-  VELOX_CHECK(false, "ParquetRowReader::estimatedRowSize is NYI");
+  VELOX_FAIL("ParquetRowReader::estimatedRowSize is NYI");
   return 0;
 }
 
 ParquetReader::ParquetReader(
     std::unique_ptr<dwio::common::InputStream> stream,
     const dwio::common::ReaderOptions& options)
-    : reader(std::make_shared<::duckdb::ParquetReader>(
-          allocator,
-          fileSystem.OpenStream(std::move(stream)))),
-      pool(options.getMemoryPool()) {
-  auto names = reader->names;
+    : reader_(std::make_shared<::duckdb::ParquetReader>(
+          allocator_,
+          fileSystem_.OpenStream(std::move(stream)))),
+      pool_(options.getMemoryPool()) {
+  auto names = reader_->names;
   std::vector<TypePtr> types;
-  types.reserve(reader->return_types.size());
-  for (auto& t : reader->return_types) {
+  types.reserve(reader_->return_types.size());
+  for (auto& t : reader_->return_types) {
     types.emplace_back(duckdb::toVeloxType(t));
   }
-  type = ROW(std::move(names), std::move(types));
+  type_ = ROW(std::move(names), std::move(types));
 }
 
 std::optional<uint64_t> ParquetReader::getNumberOfRows() const {
-  return const_cast<::duckdb::ParquetReader*>(reader.get())->NumRows();
+  return const_cast<::duckdb::ParquetReader*>(reader_.get())->NumRows();
 }
 
 std::unique_ptr<velox::dwrf::ColumnStatistics>
@@ -176,23 +173,23 @@ ParquetReader::getColumnStatistics(uint32_t index) const {
 }
 
 const std::shared_ptr<const velox::RowType>& ParquetReader::getType() const {
-  return type;
+  return type_;
 }
 
 const std::shared_ptr<const dwio::common::TypeWithId>&
 ParquetReader::getTypeWithId() const {
-  if (!typeWithId) {
-    typeWithId = dwio::common::TypeWithId::create(type);
+  if (!typeWithId_) {
+    typeWithId_ = dwio::common::TypeWithId::create(type_);
   }
-  return typeWithId;
+  return typeWithId_;
 }
 
 std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
-  return std::make_unique<ParquetRowReader>(reader, options, pool);
+  return std::make_unique<ParquetRowReader>(reader_, options, pool_);
 }
 
-duckdb::InputStreamFileSystem ParquetReader::fileSystem;
+duckdb::InputStreamFileSystem ParquetReader::fileSystem_;
 
 VELOX_REGISTER_READER_FACTORY(std::make_shared<ParquetReaderFactory>())
 
