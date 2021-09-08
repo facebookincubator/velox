@@ -12,7 +12,6 @@
 
 add_library(
   velox_dwio_parquet_reader_duckdb
-  InputStreamFileHandle.cpp
-  InputStreamFileSystem.cpp)
+  InputStreamFileHandle.cpp)
 
 target_link_libraries(velox_dwio_parquet_reader_duckdb velox_dwio_common duckdb ${FMT})
