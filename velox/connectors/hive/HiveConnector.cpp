@@ -422,7 +422,8 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
         pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
-  skippedStrides_ += rowReader_->skippedStrides();
+  // TODO: switch to format agnostic stats.
+  // skippedStrides_ += rowReader_->skippedStrides();
 
   split_.reset();
   reader_.reset();
