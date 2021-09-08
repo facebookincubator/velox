@@ -58,7 +58,7 @@ FOLLY_ALWAYS_INLINE bool upper(TOutString& output, const TInString& input) {
   return true;
 }
 
-/// Perform lower for a UTF8 string
+/// Perfrom lower for a UTF8 string
 template <bool ascii, typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool lower(TOutString& output, const TInString& input) {
   if constexpr (ascii) {
