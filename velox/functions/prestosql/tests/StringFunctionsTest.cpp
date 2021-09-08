@@ -1572,7 +1572,7 @@ TEST_F(StringFunctionsTest, asciiPropogationOnInputModification) {
 namespace {
 class AsciiPropagationCheckFn : public MultiStringFunction {
  public:
-  folly::Optional<std::vector<size_t>> propagateStringEncodingFrom()
+  std::optional<std::vector<size_t>> propagateStringEncodingFrom()
       const override {
     return {{0, 1}};
   }
@@ -1608,7 +1608,7 @@ TEST_F(StringFunctionsTest, asciiPropagationForSpecificInput) {
 namespace {
 class AsciiPropagationTestFn : public MultiStringFunction {
  public:
-  folly::Optional<std::vector<size_t>> propagateStringEncodingFrom()
+  std::optional<std::vector<size_t>> propagateStringEncodingFrom()
       const override {
     return {{0, 1}};
   }
