@@ -18,6 +18,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_aggregates
   velox_hive_connector
+  velox_dwio_dwrf_reader
   velox_functions_prestosql
   velox_functions_lib
   velox_exec_test_util
