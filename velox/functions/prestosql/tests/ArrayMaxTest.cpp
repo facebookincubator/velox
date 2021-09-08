@@ -285,12 +285,9 @@ class ArrayMaxFloatingPointTest : public FunctionBaseTest {
 
 } // namespace
 
-using IntegralTypes =
-    ::testing::Types<TinyintType, SmallintType, IntegerType, BigintType>;
-
 TYPED_TEST_SUITE(
     ArrayMaxIntegralTest,
-    IntegralTypes,
+    FunctionBaseTest::IntegralTypes,
     FunctionBaseTest::TypeNames);
 
 TYPED_TEST(ArrayMaxIntegralTest, arrayMaxNullable) {
@@ -301,11 +298,9 @@ TYPED_TEST(ArrayMaxIntegralTest, arrayMax) {
   this->testNoNulls();
 }
 
-using FloatingPointTypes = ::testing::Types<RealType, DoubleType>;
-
 TYPED_TEST_SUITE(
     ArrayMaxFloatingPointTest,
-    FloatingPointTypes,
+    FunctionBaseTest::FloatingPointTypes,
     FunctionBaseTest::TypeNames);
 
 TYPED_TEST(ArrayMaxFloatingPointTest, arrayMaxNullable) {

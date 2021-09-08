@@ -38,16 +38,12 @@ class FunctionBaseTest : public testing::Test {
     }
   };
 
-  using ScalarTypes = ::testing::Types<
-      TinyintType,
-      SmallintType,
-      IntegerType,
-      BigintType,
-      VarcharType,
-      BooleanType,
-      DoubleType,
-      RealType>;
+  using IntegralTypes =
+      ::testing::Types<TinyintType, SmallintType, IntegerType, BigintType>;
 
+  using FloatingTypes = ::testing::Types<DoubleType, RealType>;
+
+ protected:
   static void SetUpTestCase();
 
   template <typename T>
