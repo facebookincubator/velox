@@ -41,7 +41,7 @@ class FunctionBaseTest : public testing::Test {
   using IntegralTypes =
       ::testing::Types<TinyintType, SmallintType, IntegerType, BigintType>;
 
-  using FloatingTypes = ::testing::Types<DoubleType, RealType>;
+  using FloatingPointTypes = ::testing::Types<DoubleType, RealType>;
 
  protected:
   static void SetUpTestCase();
