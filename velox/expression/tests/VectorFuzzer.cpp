@@ -69,13 +69,48 @@ Timestamp rand(folly::Random::DefaultGenerator& rng) {
   return Timestamp(folly::Random::rand32(rng), folly::Random::rand32(rng));
 }
 
-constexpr folly::StringPiece kAsciiChars{
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"};
+/// Unicode character ranges.
+/// Source: https://jrgraphix.net/research/unicode_blocks.php
+const std::map<UTF8CharList, std::vector<std::pair<char, char>>> kUTFChatSetMap{
+    {UTF8CharList::ASCII,
+     {
+         /*Numbers*/ {'0', '9'},
+         /*Upper*/ {'A', 'Z'},
+         /*Lower*/ {'a', 'z'},
+     }},
+    {UTF8CharList::UNICODE_CASE_SENSITIVE,
+     {
+         /*Basic Latin*/ {u'\u0020', u'\u007F'},
+         /*Cyrillic*/ {u'\u0400', u'\u04FF'},
+     }},
+    {UTF8CharList::EXTENDED_UNICODE,
+     {
+         /*Greek*/ {u'\u03F0', u'\u03FF'},
+         /*Latin Extended A*/ {u'\u0100', u'\u017F'},
+         /*Arabic*/ {u'\u0600', u'\u06FF'},
+         /*Devanagari*/ {u'\u0900', u'\u097F'},
+         /*Hebrew*/ {u'\u0600', u'\u06FF'},
+         /*Hiragana*/ {u'\u3040', u'\u309F'},
+         /*Punctuation*/ {u'\u2000', u'\u206F'},
+         /*Sub/Super Script*/ {u'\u2070', u'\u209F'},
+         /*Currency*/ {u'\u20A0', u'\u20CF'},
+     }},
+    {UTF8CharList::MATHEMATICAL_SYMBOLS,
+     {
+         /*Math Operators*/ {u'\u2200', u'\u22FF'},
+         /*Number Forms*/ {u'\u2150', u'\u218F'},
+         /*Geometric Shapes*/ {u'\u25A0', u'\u25FF'},
+         /*Math Sympols-A*/ {u'\u27C0', u'\u27EF'},
+         /*Supplemental*/ {u'\u2A00', u'\u2AFF'},
+     }}};
 
-// TODO: Improve the random utf8 char generation.
-constexpr folly::StringPiece kUtf8Chars{
-    u8"0123456789\u0041\u0042\u0043\u0044\u0045\u0046\u0047\u0048"
-    "\u0049\u0050\u0051\u0052\u0053\u0054\u0056\u0057"};
+FOLLY_ALWAYS_INLINE char getRandomChar(
+    folly::Random::DefaultGenerator& rng,
+    const std::vector<std::pair<char, char>>& charSet) {
+  auto chars = charSet[rand<int32_t>(rng) % charSet.size()];
+  auto size = chars.second - chars.first;
+  return chars.first + (rand<int32_t>(rng) % size);
+}
 
 /// Generates a random string (string size and encoding are passed through
 /// Options). Returns a StringView which uses `buf` as the underlying buffer.
@@ -87,10 +122,11 @@ StringView randString(
       ? folly::Random::rand32(rng) % opts.stringLength
       : opts.stringLength;
   buf.resize(stringLength);
-  auto chars = opts.stringUtf8 ? kUtf8Chars : kAsciiChars;
 
   for (size_t i = 0; i < stringLength; ++i) {
-    buf[i] = chars[folly::Random::rand32(rng) % chars.size()];
+    auto encoding =
+        opts.charEncodings[rand<int32_t>(rng) % opts.charEncodings.size()];
+    buf[i] = getRandomChar(rng, kUTFChatSetMap.at(encoding));
   }
   return StringView(buf);
 }

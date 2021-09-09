@@ -42,8 +42,8 @@ For functions dealing with string inputs and outputs, please use the mechanisms 
 Unicode cases. For example here's how upper function is implemented `functions/lib/string/StringImpl.h`
 
 By passing asciiness via the template variable we know the string is ascii and so run the extremely simpler version of the
-function compared to unicode (utf8) implementation using `utf8proc` library. Note that the template variabe `ascii` having 
-value `true` indicates that the vector has no unicode character in it. 
+function compared to unicode (utf8) implementation using `utf8proc` library. Note that the template variabe `ascii` having
+value `true` indicates that the vector has no unicode character in it.
 
 ```c++
 /// Perform upper for a UTF8 string

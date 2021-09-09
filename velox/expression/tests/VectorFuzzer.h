@@ -25,6 +25,14 @@ namespace facebook::velox {
 
 // Helper class to generate randomized vectors with random (and potentially
 // nested) encodings. Use the constructor seed to make it deterministic.
+
+enum UTF8CharList {
+  ASCII, /* Ascii character set.*/
+  UNICODE_CASE_SENSITIVE, /* Unicode scripts that support case.*/
+  EXTENDED_UNICODE, /* Extended Unicode: Arabic, Devanagiri etc*/
+  MATHEMATICAL_SYMBOLS /* Mathematical Symbols.*/
+};
+
 class VectorFuzzer {
  public:
   struct Options {
@@ -38,8 +46,9 @@ class VectorFuzzer {
     // semantic of this option becomes "string maximum length".
     size_t stringLength{50};
 
-    // Whether generated strings should include UTF8 characters.
-    bool stringUtf8{false};
+    // Vector of String charsets to choose from; bias a charset by including it
+    // multiple times.
+    std::vector<UTF8CharList> charEncodings{ASCII};
 
     // If true, the length of strings are randomly generated and `stringLength`
     // is treated as maximum length.
