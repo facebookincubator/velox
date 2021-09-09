@@ -14,4 +14,4 @@
 add_executable(velox_exec_vector_hasher_benchmark VectorHasherBenchmark.cpp)
 
 target_link_libraries(velox_exec_vector_hasher_benchmark velox_exec
-                      velox_vector_test_lib ${FOLLY_BENCHMARK})
+                      velox_vector_test_lib Folly::follybenchmark)

@@ -14,6 +14,6 @@
 
 add_library(velox_buffer StringViewBufferHolder.cpp)
 
-target_link_libraries(velox_buffer ${FOLLY_WITH_DEPENDENCIES})
+target_link_libraries(velox_buffer Folly::folly)
 
 add_subdirectory(tests)

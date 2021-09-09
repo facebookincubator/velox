@@ -22,8 +22,7 @@ target_link_libraries(
   velox_exec_test_lib
   velox_codegen_utils_resource_path
   velox_codegen_code_generator
-  ${FOLLY_BENCHMARK}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::follybenchmark
   ${Boost_FILESYSTEM_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
@@ -82,8 +81,7 @@ target_link_libraries(
   velox_codegen_benchmark
   velox_exec_test_lib
   velox_codegen_code_generator
-  ${FOLLY_BENCHMARK}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::follybenchmark
   ${Boost_FILESYSTEM_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}

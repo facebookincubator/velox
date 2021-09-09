@@ -14,10 +14,10 @@
 add_subdirectory(tests)
 
 add_library(velox_config Context.cpp)
-target_link_libraries(velox_config ${FOLLY_WITH_DEPENDENCIES})
+target_link_libraries(velox_config Folly::folly)
 
 add_library(velox_core FunctionRegistry.cpp PlanNode.cpp ScalarFunction.cpp
                        CancelPool.cpp)
 
 target_link_libraries(velox_core velox_config velox_type velox_serialization
-                      velox_vector ${FOLLY_WITH_DEPENDENCIES})
+                      velox_vector Folly::folly)

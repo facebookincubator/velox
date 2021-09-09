@@ -14,6 +14,6 @@
 add_library(velox_functions_json JsonExtractor.cpp JsonPathTokenizer.cpp)
 
 target_link_libraries(velox_functions_json velox_exception
-                      ${FOLLY_WITH_DEPENDENCIES})
+                      Folly::folly)
 
 add_subdirectory(tests)

@@ -13,4 +13,4 @@ add_library(md5 md5.cpp)
 
 target_link_libraries(
         md5
-        ${FOLLY_WITH_DEPENDENCIES})
+        Folly::folly)

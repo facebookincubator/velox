@@ -20,7 +20,6 @@ add_dependencies(velox_codegen_external_process_test
 target_link_libraries(
   velox_codegen_external_process_test
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
   ${Boost_FILESYSTEM_LIBRARIES}
   ${DOUBLE_CONVERSION}
   ${GFLAGS_LIBRARIES}

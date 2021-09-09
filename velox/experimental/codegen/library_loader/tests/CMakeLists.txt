@@ -34,7 +34,7 @@ add_dependencies(
 target_link_libraries(
   velox_codegen_native_loader_test
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${DOUBLE_CONVERSION}
   ${GFLAGS_LIBRARIES}
   ${GLOG}

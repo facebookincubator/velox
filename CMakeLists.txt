@@ -148,20 +148,6 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
 endif()
 
 find_package(folly CONFIG REQUIRED)
-set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION_LIBRARIES}
-    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS})
-
-set(FOLLY ${FOLLY_LIBRARIES})
-set(FOLLY_BENCHMARK Folly::follybenchmark)
-
-find_package(BZip2 MODULE)
-if(BZIP2_FOUND)
-  list(APPEND FOLLY_WITH_DEPENDENCIES ${BZIP2_LIBRARIES})
-endif()
-
-include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
-
 find_package(Protobuf REQUIRED)
 
 # GCC needs to link a library to enable std::filesystem.

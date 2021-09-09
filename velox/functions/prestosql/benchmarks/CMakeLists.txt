@@ -20,8 +20,8 @@ set(BENCHMARK_DEPENDENCIES
     velox_vector_fuzzer
     ${GTEST_BOTH_LIBRARIES}
     ${gflags_LIBRARIES}
-    ${FOLLY_WITH_DEPENDENCIES}
-    ${FOLLY_BENCHMARK})
+    Folly::folly
+    Folly::follybenchmark)
 
 add_executable(velox_functions_benchmarks_array_contains
                ArrayContainsBenchmark.cpp)

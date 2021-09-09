@@ -37,4 +37,4 @@ target_link_libraries(
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 
 target_link_libraries(velox_dwio_common_data_buffer_benchmark velox_memory
-                      velox_dwio_common_exception ${FOLLY} ${FOLLY_BENCHMARK})
+                      velox_dwio_common_exception ${FOLLY} Folly::follybenchmark)

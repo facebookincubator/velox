@@ -38,7 +38,7 @@ target_link_libraries(
   ${Boost_THREAD_LIBRARIES}
   ${Boost_SYSTEM_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${DOUBLE_CONVERSION}
   ${gflags_LIBRARIES}
   ${GLOG}
@@ -56,7 +56,7 @@ target_link_libraries(
   velox_type
   velox_vector_test_lib
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${gflags_LIBRARIES}
   ${GLOG}
   ${FMT})
@@ -70,7 +70,7 @@ target_link_libraries(
   velox_vector
   Boost::filesystem
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${gflags_LIBRARIES}
   ${GLOG}
   ${FMT})

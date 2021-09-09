@@ -15,6 +15,6 @@
 add_library(velox_caching DataCache.cpp FileIds.cpp StringIdMap.cpp
                           AsyncDataCache.cpp ScanTracker.cpp)
 target_link_libraries(velox_caching velox_memory velox_exception ${GLOG}
-                      ${FOLLY_WITH_DEPENDENCIES})
+                      Folly::folly)
 
 add_subdirectory(tests)

@@ -31,7 +31,7 @@ target_link_libraries(
   velox_exception
   ${Boost_FILESYSTEM_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${DOUBLE_CONVERSION}
   ${GFLAGS_LIBRARIES}
   ${GLOG}

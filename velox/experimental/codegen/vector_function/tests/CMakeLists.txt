@@ -52,7 +52,7 @@ target_link_libraries(
   ${Boost_SYSTEM_LIBRARIES}
   ${gflags_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${DOUBLE_CONVERSION}
   ${GFLAGS_LIBRARIES}
   ${GLOG}

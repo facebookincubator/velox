@@ -15,7 +15,7 @@
 add_executable(simple_lru_cache_test SimpleLRUCacheTest.cpp)
 add_test(simple_lru_cache_test simple_lru_cache_test)
 target_link_libraries(simple_lru_cache_test ${GTEST_BOTH_LIBRARIES} ${GLOG}
-                      ${gflags_LIBRARIES} ${FOLLY_WITH_DEPENDENCIES})
+                      ${gflags_LIBRARIES} Folly::folly)
 
 add_executable(velox_cache_test StringIdMapTest.cpp AsyncDataCacheTest.cpp)
 add_test(velox_cache_test velox_cache_test)
@@ -27,14 +27,14 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GLOG}
   ${gflags_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES})
+  Folly::folly)
 
 add_executable(cached_factory_test CachedFactoryTest.cpp)
 add_test(cached_factory_test cached_factory_test)
 target_link_libraries(cached_factory_test ${GTEST_BOTH_LIBRARIES} ${GLOG}
-                      ${gflags_LIBRARIES} ${FOLLY_WITH_DEPENDENCIES})
+                      ${gflags_LIBRARIES} Folly::folly)
 
 add_executable(data_cache_test DataCacheTest.cpp)
 add_test(data_cache_test data_cache_test)
 target_link_libraries(data_cache_test velox_caching ${GTEST_BOTH_LIBRARIES}
-                      ${GLOG} ${gflags_LIBRARIES} ${FOLLY_WITH_DEPENDENCIES})
+                      ${GLOG} ${gflags_LIBRARIES} Folly::folly)

@@ -14,7 +14,7 @@
 
 add_library(velox_exception Exceptions.cpp VeloxException.cpp Exceptions.h)
 target_link_libraries(velox_exception velox_flag_definitions velox_process
-                      ${FOLLY_WITH_DEPENDENCIES} ${FMT} ${GFLAGS_LIBRARIES})
+                      Folly::folly ${FMT} ${GFLAGS_LIBRARIES})
 
 add_library(velox_common_base BitUtil.cpp RawVector.cpp SimdUtil.cpp)
 

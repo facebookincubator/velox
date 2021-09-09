@@ -17,5 +17,5 @@ add_executable(velox_functions_json_test JsonExtractorTest.cpp
 add_test(velox_functions_json_test velox_functions_json_test)
 
 target_link_libraries(
-  velox_functions_json_test velox_functions_json ${FOLLY_WITH_DEPENDENCIES}
+  velox_functions_json_test velox_functions_json Folly::folly
   ${GTEST_BOTH_LIBRARIES} ${gflags_LIBRARIES} ${GLOG})

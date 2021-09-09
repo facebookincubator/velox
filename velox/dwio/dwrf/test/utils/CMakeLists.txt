@@ -17,7 +17,7 @@ add_library(velox_dwrf_test_utils BatchMaker.cpp DataFiles.cpp
 
 target_link_libraries(
   velox_dwrf_test_utils
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   velox_dwio_common
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer

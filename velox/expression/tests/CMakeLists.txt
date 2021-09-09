@@ -40,7 +40,7 @@ target_link_libraries(
   velox_vector_test_lib
   velox_vector_fuzzer
   ${GTEST_BOTH_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${gflags_LIBRARIES}
   ${GLOG}
   ${FMT})

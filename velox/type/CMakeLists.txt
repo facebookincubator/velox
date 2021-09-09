@@ -33,5 +33,5 @@ target_link_libraries(
   velox_serialization
   velox_external_date
   ${Boost_REGEX_LIBRARIES}
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${fmt})

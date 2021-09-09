@@ -24,7 +24,7 @@ target_link_libraries(
   velox_exec_test_util
   velox_functions_lib
   velox_functions_prestosql
-  ${FOLLY_WITH_DEPENDENCIES}
+  Folly::folly
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
