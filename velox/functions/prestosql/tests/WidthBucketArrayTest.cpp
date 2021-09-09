@@ -56,6 +56,12 @@ class WidthBucketArrayTest : public FunctionBaseTest {
 TEST_F(WidthBucketArrayTest, success) {
   auto binsVector = makeArrayVector<double>({{0.0, 2.0, 4.0}, {0.0}});
 
+  // Also encode the Array in a dictionary, and test using it as input.
+  auto binsVectorNewSize = binsVector->size() * 2;
+  auto binsIndices = makeIndices(
+      binsVectorNewSize, [](auto row) { return row / 2; }, execCtx_.pool());
+  auto binsDict = wrapInDictionary(binsIndices, binsVectorNewSize, binsVector);
+
   auto testWidthBucketArray = [&](const double operand,
                                   const std::vector<int64_t>& expected) {
     auto result = evaluate<SimpleVector<int64_t>>(
@@ -66,6 +72,16 @@ TEST_F(WidthBucketArrayTest, success) {
         }));
 
     assertEqualVectors(makeFlatVector<int64_t>(expected), result);
+
+    auto dictResult = evaluate<SimpleVector<int64_t>>(
+        "width_bucket(c0, c1)",
+        makeRowVector({
+            makeConstant(operand, binsVectorNewSize),
+            binsDict,
+        }));
+    auto dictExpected = wrapInDictionary(
+        binsIndices, binsVectorNewSize, makeFlatVector<int64_t>(expected));
+    assertEqualVectors(dictExpected, dictResult);
   };
 
   testWidthBucketArray(3.14, {2, 1});

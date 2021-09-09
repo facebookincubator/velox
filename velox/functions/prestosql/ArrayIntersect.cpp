@@ -65,33 +65,6 @@ void generateSet(
   }
 }
 
-// Returns SelectivityVector for the array elements vector with all rows
-// corresponding to specified top-level rows selected. Also determines the full
-// elements size of the top-level rows.
-std::pair<SelectivityVector, vector_size_t> toArrayElementRows(
-    const SelectivityVector& topLevelRows,
-    const DecodedVector* topLevelVector) {
-  auto topLevelArray = topLevelVector->base()->as<ArrayVector>();
-  auto rawNulls = topLevelArray->rawNulls();
-  auto rawSizes = topLevelArray->rawSizes();
-  auto rawOffsets = topLevelArray->rawOffsets();
-
-  SelectivityVector elementRows(topLevelArray->elements()->size(), false);
-  vector_size_t topVectorSize = 0;
-  topLevelRows.applyToSelected([&](vector_size_t row) {
-    auto idx = topLevelVector->index(row);
-    if (rawNulls && bits::isBitNull(rawNulls, idx)) {
-      return;
-    }
-    auto size = rawSizes[idx];
-    auto offset = rawOffsets[idx];
-    topVectorSize += size;
-    elementRows.setValidRange(offset, offset + size, true);
-  });
-  elementRows.updateBounds();
-  return std::make_pair(elementRows, topVectorSize);
-}
-
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 template <typename T>
 class ArrayIntersectFunction : public exec::VectorFunction {
@@ -153,12 +126,17 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
     // Decode and acquire array elements vector.
     auto leftElementsVector = baseLeftArray->elements();
-    auto [leftElementsRows, leftElementsCount] =
-        toArrayElementRows(rows, decodedLeftArray);
+    auto leftElementsRows = toElementRows(
+        leftElementsVector->size(),
+        rows,
+        baseLeftArray,
+        decodedLeftArray->indices());
     exec::LocalDecodedVector leftElementsHolder(
         context, *leftElementsVector, leftElementsRows);
     auto decodedLeftElements = leftElementsHolder.get();
 
+    auto leftElementsCount =
+        countElements<ArrayVector>(rows, *decodedLeftArray);
     vector_size_t rowCount = left->size();
 
     // Allocate new vectors for indices, nulls, length and offsets.
@@ -235,7 +213,11 @@ class ArrayIntersectFunction : public exec::VectorFunction {
 
       // Decode and acquire array elements vector.
       auto rightElementsVector = baseRightArray->elements();
-      auto [rightElementsRows, _] = toArrayElementRows(rows, decodedRightArray);
+      auto rightElementsRows = toElementRows(
+          rightElementsVector->size(),
+          rows,
+          baseRightArray,
+          decodedRightArray->indices());
       exec::LocalDecodedVector rightElementsHolder(
           context, *rightElementsVector, rightElementsRows);
       auto decodedRightElements = rightElementsHolder.get();
