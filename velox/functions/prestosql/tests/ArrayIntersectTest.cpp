@@ -24,6 +24,24 @@ namespace {
 
 class ArrayIntersectTest : public FunctionBaseTest {
  protected:
+  static VectorPtr
+  wrapInDictionary(BufferPtr indices, vector_size_t size, VectorPtr vector) {
+    return BaseVector::wrapInDictionary(
+        BufferPtr(nullptr), std::move(indices), size, std::move(vector));
+  }
+
+  BufferPtr makeIndices(
+      vector_size_t size,
+      const std::function<vector_size_t(vector_size_t)>& indexAt) {
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(size, execCtx_.pool());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    for (int i = 0; i < size; i++) {
+      rawIndices[i] = indexAt(i);
+    }
+    return indices;
+  }
+
   void testExpr(
       const VectorPtr& expected,
       const std::string& expression,
@@ -79,6 +97,37 @@ TEST_F(ArrayIntersectTest, intArrays) {
   testInt<int16_t>();
   testInt<int32_t>();
   testInt<int64_t>();
+}
+
+TEST_F(ArrayIntersectTest, arrayInDict) {
+  auto array1 = makeNullableArrayVector<int32_t>({
+      {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
+      {1, 2, -2, 1},
+      {3, 8, std::nullopt},
+      {1, 1, -2, -2, -2, 4, 8},
+  });
+  auto array2 = makeNullableArrayVector<int32_t>({
+      {1, -2, 4},
+      {1, -2, 4},
+      {1, -2, 4},
+      {1, -2, 4},
+  });
+  auto expected = makeNullableArrayVector<int32_t>({
+      {1, -2, 4},
+      {1, -2, 4},
+      {1, -2},
+      {1, -2},
+      {},
+      {},
+      {1, -2, 4},
+      {1, -2, 4},
+  });
+  auto dict1 = wrapInDictionary(
+      makeIndices(8, [](auto row) { return row / 2; }), 8, array1);
+  auto dict2 = wrapInDictionary(
+      makeIndices(8, [](auto row) { return row % 4; }), 8, array2);
+  testExpr(expected, "array_intersect(C0, C1)", {dict1, dict2});
+  testExpr(expected, "array_intersect(C1, C0)", {dict1, dict2});
 }
 
 TEST_F(ArrayIntersectTest, boolArrays) {
