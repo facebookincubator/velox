@@ -139,14 +139,6 @@ find_library(RE2 re2 REQUIRED)
 find_library(ZSTD zstd)
 find_package(ZLIB)
 find_library(SNAPPY snappy)
-
-if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
-  find_package(ICU REQUIRED)
-  include_directories(${ICU_INCLUDE_DIRS})
-  link_directories("${ICU_INCLUDE_DIRS}/../lib")
-endif()
-
 find_package(folly CONFIG REQUIRED)
 find_package(Protobuf REQUIRED)
 
