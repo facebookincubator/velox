@@ -26,7 +26,7 @@ target_link_libraries(
   ${Boost_FILESYSTEM_LIBRARIES}
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_exec_test_util
   velox_functions_lib
@@ -86,7 +86,7 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_codegen_utils_resource_path
   velox_exec_test_util

@@ -14,7 +14,7 @@
 add_executable(velox_vector_hash_all_benchmark SimpleVectorHashAllBenchmark.cpp)
 
 target_link_libraries(velox_vector_hash_all_benchmark velox_vector
-                      Folly::folly Folly::follybenchmark ${FMT})
+                      Folly::folly Folly::follybenchmark fmt::fmt)
 
 add_executable(velox_vector_selectivity_vector_benchmark
                SelectivityVectorBenchmark.cpp)

@@ -30,6 +30,6 @@ target_link_libraries(
   velox_functions_test_lib
   velox_functions_lib
   velox_functions_prestosql
-  ${FMT}
+  fmt::fmt
   ${GTEST_BOTH_LIBRARIES}
   ${gflags_LIBRARIES})

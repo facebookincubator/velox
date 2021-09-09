@@ -16,7 +16,7 @@
 include_directories(.)
 add_library(file File.cpp)
 target_link_libraries(file velox_exception ${GTEST_BOTH_LIBRARIES} ${GLOG}
-                      Folly::folly ${FMT})
+                      Folly::folly fmt::fmt)
 
 add_executable(file_test FileTest.cpp)
 add_test(file_test file_test)

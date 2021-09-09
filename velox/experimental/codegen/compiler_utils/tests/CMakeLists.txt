@@ -35,4 +35,4 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
-  ${FMT})
+  fmt::fmt)

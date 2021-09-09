@@ -43,7 +43,7 @@ target_link_libraries(
   Folly::folly
   ${gflags_LIBRARIES}
   ${GLOG}
-  ${FMT})
+  fmt::fmt)
 
 add_library(velox_vector_fuzzer VectorFuzzer.cpp)
 

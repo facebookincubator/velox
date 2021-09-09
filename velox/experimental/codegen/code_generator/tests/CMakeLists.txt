@@ -28,7 +28,7 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
-  ${FMT})
+  fmt::fmt)
 
 set(CODEGEN_LINK_PATH "$<TARGET_FILE:velox_all_link>")
 get_directory_property(DEFINED_VARIABLE VARIABLES)
@@ -52,7 +52,7 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_parse_parser
   velox_exec_test_util
@@ -70,7 +70,7 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GFLAGS_LIBRARIES}
   ${GLOG}
-  ${FMT}
+  fmt::fmt
   velox_core
   velox_parse_parser
   velox_exec_test_util

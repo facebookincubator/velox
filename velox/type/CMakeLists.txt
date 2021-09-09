@@ -34,4 +34,4 @@ target_link_libraries(
   velox_external_date
   ${Boost_REGEX_LIBRARIES}
   Folly::folly
-  ${fmt})
+  fmt::fmt)

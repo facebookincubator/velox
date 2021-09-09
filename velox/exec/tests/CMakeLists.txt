@@ -99,5 +99,5 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   ${gflags_LIBRARIES}
   ${GLOG}
-  ${FMT}
+  fmt::fmt
   ${FILESYSTEM})

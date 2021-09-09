@@ -32,7 +32,7 @@ target_link_libraries(
   ${GTEST_BOTH_LIBRARIES}
   ${GMock}
   ${GLOG}
-  ${FMT})
+  fmt::fmt)
 
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 

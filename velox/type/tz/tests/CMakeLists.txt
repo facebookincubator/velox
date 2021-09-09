@@ -14,4 +14,4 @@
 
 add_library(velox_type_tz_test TimeZoneMapTest.cpp)
 
-target_link_libraries(velox_type_tz_test ${Boost_REGEX_LIBRARIES} ${fmt})
+target_link_libraries(velox_type_tz_test ${Boost_REGEX_LIBRARIES} fmt::fmt)

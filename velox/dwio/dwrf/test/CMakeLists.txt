@@ -91,7 +91,7 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -108,7 +108,7 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -287,7 +287,7 @@ add_executable(velox_dwio_dwrf_byte_rle_test TestByteRle.cpp)
 add_test(velox_dwio_dwrf_byte_rle_test velox_dwio_dwrf_byte_rle_test)
 
 target_link_libraries(
-  velox_dwio_dwrf_byte_rle_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION} ${FMT}
+  velox_dwio_dwrf_byte_rle_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION} fmt::fmt
   Folly::folly ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_byte_rle_encoder_test TestByteRLEEncoder.cpp)
@@ -296,7 +296,7 @@ add_test(velox_dwio_dwrf_byte_rle_encoder_test
 
 target_link_libraries(
   velox_dwio_dwrf_byte_rle_encoder_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FMT} Folly::folly ${TEST_LINK_LIBS})
+  fmt::fmt Folly::folly ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_int_encoder_test TestIntEncoder.cpp)
 add_test(velox_dwio_dwrf_int_encoder_test velox_dwio_dwrf_int_encoder_test)
@@ -315,7 +315,7 @@ add_test(velox_dwio_dwrf_int_direct_test velox_dwio_dwrf_int_direct_test)
 
 target_link_libraries(
   velox_dwio_dwrf_int_direct_test ${VELOX_LINK_LIBS} ${DOUBLE_CONVERSION}
-  ${FMT} Folly::folly ${TEST_LINK_LIBS})
+  fmt::fmt Folly::folly ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_rlev1_encoder_test TestRLEv1Encoder.cpp)
 add_test(velox_dwio_dwrf_rlev1_encoder_test velox_dwio_dwrf_rlev1_encoder_test)
@@ -328,7 +328,7 @@ add_executable(velox_dwio_dwrf_column_reader_test TestColumnReader.cpp)
 add_test(velox_dwio_dwrf_column_reader_test velox_dwio_dwrf_column_reader_test)
 
 target_link_libraries(velox_dwio_dwrf_column_reader_test ${VELOX_LINK_LIBS}
-                      Folly::folly ${FMT} ${TEST_LINK_LIBS})
+                      Folly::folly fmt::fmt ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_reader_test TestReader.cpp)
 add_test(
@@ -340,7 +340,7 @@ target_link_libraries(
   velox_dwio_dwrf_reader_test
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -354,7 +354,7 @@ target_link_libraries(
   velox_dwrf_e2e_filter_test
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -379,7 +379,7 @@ target_link_libraries(
   velox_dwrf_test_utils
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -395,7 +395,7 @@ target_link_libraries(
   ${VELOX_LINK_LIBS}
   velox_dwrf_test_utils
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -410,7 +410,7 @@ target_link_libraries(
   velox_dwrf_test_utils
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -425,7 +425,7 @@ target_link_libraries(
   velox_dwrf_test_utils
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -439,7 +439,7 @@ target_link_libraries(
   velox_dwrf_test_utils
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -455,7 +455,7 @@ target_link_libraries(
   velox_dwrf_test_utils
   ${VELOX_LINK_LIBS}
   Folly::folly
-  ${FMT}
+  fmt::fmt
   ${LZ4}
   ${LZO}
   ${ZSTD}
@@ -475,4 +475,4 @@ target_link_libraries(
 add_executable(velox_dwrf_float_column_writer_benchmark
                FloatColumnWriterBenchmark.cpp)
 target_link_libraries(velox_dwrf_float_column_writer_benchmark velox_vector
-                      velox_dwio_dwrf_writer ${FOLLY} Folly::follybenchmark ${FMT})
+                      velox_dwio_dwrf_writer ${FOLLY} Folly::follybenchmark fmt::fmt)
