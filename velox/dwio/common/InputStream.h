@@ -29,6 +29,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <hdfs/hdfs.h>
 
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/IoStatistics.h"
@@ -248,6 +249,29 @@ class ReferenceableInputStream : public InputStream {
       LogType) = 0;
   virtual const void* FOLLY_NULLABLE
   readReferenceOnly(uint64_t length, uint64_t offset, LogType) = 0;
+};
+
+class HdfsInputStream : public InputStream {
+
+ private:
+  hdfsFS fs;
+  hdfsFile file;
+
+ public:
+  explicit HdfsInputStream(
+      const std::string& filename,
+      const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
+      common::IoStatistics* FOLLY_NULLABLE stats = nullptr);
+
+  ~HdfsInputStream() override;
+
+  uint64_t getLength() const override;
+
+  uint64_t getNaturalReadSize() const override;
+
+  void read(void* FOLLY_NONNULL, uint64_t, uint64_t, LogType) override;
+
+  virtual void logRead(uint64_t offset, uint64_t length, LogType purpose);
 };
 } // namespace common
 } // namespace dwio

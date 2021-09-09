@@ -141,6 +141,13 @@ function install_velox_deps {
   run_and_time install_fmt
   run_and_time install_folly
   run_and_time install_re2
+  run_and_time install_libhdfs3
+}
+
+function install_libhdfs3 {
+  github_checkout apache/hawq master
+  cd depends/libhdfs3
+  cmake_install
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

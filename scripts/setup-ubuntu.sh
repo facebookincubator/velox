@@ -78,4 +78,31 @@ function install_folly {
 
 install_folly
 
+function install_libhdfs3 {
+  local NAME="libhdfs3"
+
+  if [ -d "${NAME}" ]; then
+    read -p "Do you want to rebuild '${NAME}'? (y/N) " confirm
+    if [[ "${confirm}" =~ ^[Yy]$ ]]; then
+      rm -rf "${NAME}"
+    else
+      return 0
+    fi
+  fi
+
+  git clone https://github.com/apache/hawq.git "${NAME}"
+  cd "${NAME}/depends/libhdfs3"
+  cmake \
+    -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -GNinja \
+    -DFOLLY_HAVE_INT128_T=1 \
+    .
+  ninja
+  sudo checkinstall -y ninja install
+}
+
+install_libhdfs3
+
 echo "All deps for Velox installed! Now try \"make\""

@@ -63,6 +63,7 @@ wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/google/googletest/archive/release-1.10.0.tar.gz googletest &
 wget_and_untar https://github.com/facebook/folly/archive/v2021.05.10.00.tar.gz folly &
+wget_and_untar https://dlcdn.apache.org/hawq/3.0.0.0/apache-hawq-rpm-3.0.0.0.tar.gz hawq&
 #  wget_and_untar https://github.com/ericniebler/range-v3/archive/0.11.0.tar.gz ranges-v3 &
 
 wait  # For cmake and source downloads to complete.
@@ -88,6 +89,7 @@ cmake_install googletest -DBUILD_SHARED_LIBS=ON
 # Folly fails to build in release-mode due
 # AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
 cmake_install folly -DCMAKE_BUILD_TYPE=Debug
+cmake_install hawq/depends/libhdfs3
 # cmake_install ranges-v3
 
 dnf clean all
