@@ -163,7 +163,6 @@ endif()
 include_directories(SYSTEM ${FOLLY_INCLUDE_DIRS})
 
 find_package(Protobuf REQUIRED)
-include_directories(SYSTEM ${Protobuf_INCLUDE_DIRS})
 
 # GCC needs to link a library to enable std::filesystem.
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")

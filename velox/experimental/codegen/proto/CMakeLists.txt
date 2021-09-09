@@ -18,4 +18,4 @@ add_custom_command(
           --cpp_out="${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_library(velox_codegen_proto codegen_proto.pb.cc)
-target_link_libraries(velox_codegen_proto ${Protobuf_LIBRARIES})
+target_link_libraries(velox_codegen_proto protobuf::libprotobuf)
