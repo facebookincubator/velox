@@ -110,6 +110,7 @@ BENCHMARK(utfUpper) {
 BENCHMARK_RELATIVE(asciiUpper) {
   StringAsciiUTFFunctionBenchmark benchmark;
   benchmark.runUpperLower("upper", false);
+  benchmark.runUpperLower("upper", false);
 }
 
 BENCHMARK(utfSubStr) {

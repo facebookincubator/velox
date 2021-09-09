@@ -1113,8 +1113,6 @@ TEST_F(StringFunctionsTest, replace) {
   }
 }
 
-
-
 TEST_F(StringFunctionsTest, controlExprEncodingPropagation) {
   std::vector<std::string> dataASCII({"ali", "ali", "ali"});
   std::vector<std::string> dataUTF8({"àáâãäåæçè", "àáâãäåæçè", "àáâãäå"});
