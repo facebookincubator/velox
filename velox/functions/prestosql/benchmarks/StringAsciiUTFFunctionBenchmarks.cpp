@@ -36,7 +36,9 @@ class StringAsciiUTFFunctionBenchmark
     folly::BenchmarkSuspender suspender;
 
     VectorFuzzer::Options opts;
-    opts.vectorSize = 10'000;
+    opts.stringUtf8 = utf;
+    opts.stringLength = 100;
+    opts.vectorSize = 100'000;
     VectorFuzzer fuzzer(opts, execCtx_.pool());
     auto vector = fuzzer.fuzzFlat(VARCHAR());
 

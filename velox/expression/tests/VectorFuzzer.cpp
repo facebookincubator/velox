@@ -75,7 +75,7 @@ constexpr folly::StringPiece kAsciiChars{
 // TODO: Improve the random utf8 char generation.
 constexpr folly::StringPiece kUtf8Chars{
     u8"0123456789\u0041\u0042\u0043\u0044\u0045\u0046\u0047\u0048"
-    "\u0049\u0050\u0051\u0052\u0053\u0054\u0056\u0057"};
+    "\u0049\u0050\u0051\u0052\u0053\u0054\u0056\u0057\u062c\u1D6F4"};
 
 /// Generates a random string (string size and encoding are passed through
 /// Options). Returns a StringView which uses `buf` as the underlying buffer.
