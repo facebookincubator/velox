@@ -42,8 +42,7 @@ class ArrayIntersectTest : public FunctionBaseTest {
       auto indices = makeIndices(
           newSize, [](auto row) { return row / 2; }, execCtx_.pool());
       auto firstDict = wrapInDictionary(indices, newSize, input[0]);
-      auto secondFlat = wrapInDictionary(indices, newSize, input[1]);
-      BaseVector::flattenVector(&secondFlat, newSize);
+      auto secondFlat = flatten(wrapInDictionary(indices, newSize, input[1]));
 
       auto dictResult = evaluate<ArrayVector>(
           expression, makeRowVector({firstDict, secondFlat}));
