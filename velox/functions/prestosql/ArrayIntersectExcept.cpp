@@ -65,105 +65,6 @@ void generateSet(
   }
 }
 
-// Generates an ArrayVector that replicates constantVector rowCount number of
-// times. This array is used for the result Vector for an array_except function
-// which has a constantVector on the lhs. array_intersect doesn't require such a
-// construction since it is a symmetric operation and can use its non-constant
-// rhs for the result vector if the lhs is constant.
-template <typename T>
-ArrayVectorPtr generateArrayVectorForConstantLHS(
-    BaseVector* constantVector,
-    vector_size_t rowCount,
-    memory::MemoryPool* pool) {
-  auto constantArray = constantVector->as<ConstantVector<velox::ComplexType>>();
-  auto constantArrayVector = constantArray->valueVector()->as<ArrayVector>();
-  auto flatVectorElements =
-      constantArrayVector->elements()->as<FlatVector<T>>();
-
-  // Create the vector of elements.
-  auto elementTypePtr = CppToType<T>::create();
-  vector_size_t arrayElementsCount = flatVectorElements->size() * rowCount;
-
-  // Allocate new vectors for indices, nulls, length and offsets.
-  BufferPtr newIndices =
-      AlignedBuffer::allocate<vector_size_t>(arrayElementsCount, pool);
-  BufferPtr newElementNulls =
-      AlignedBuffer::allocate<bool>(arrayElementsCount, pool, bits::kNotNull);
-  BufferPtr newLengths = AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
-  BufferPtr newOffsets = AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
-
-  // Pointers and cursors to the raw data.
-  auto rawNewIndices = newIndices->asMutable<vector_size_t>();
-  auto rawNewElementNulls = newElementNulls->asMutable<uint64_t>();
-  auto rawNewLengths = newLengths->asMutable<vector_size_t>();
-  auto rawNewOffsets = newOffsets->asMutable<vector_size_t>();
-
-  // Sets the elements of the new vector corresponding to rowCount number of
-  // repetitions of the constantVector.
-  vector_size_t indicesCursor = 0;
-  auto idx = constantArray->index();
-  auto size = constantArrayVector->sizeAt(idx);
-  auto offset = constantArrayVector->offsetAt(idx);
-  for (vector_size_t i = 0; i < rowCount; ++i) {
-    *rawNewOffsets = indicesCursor;
-    for (vector_size_t j = offset; j < (offset + size); ++j) {
-      if (flatVectorElements->isNullAt(j)) {
-        bits::setNull(rawNewElementNulls, indicesCursor++, true);
-      } else {
-        rawNewIndices[indicesCursor] = j;
-        indicesCursor++;
-      }
-    }
-
-    *rawNewLengths = indicesCursor - *rawNewOffsets;
-    ++rawNewLengths;
-    ++rawNewOffsets;
-  }
-
-  auto elementsDict = BaseVector::wrapInDictionary(
-      newElementNulls,
-      newIndices,
-      indicesCursor,
-      constantArrayVector->elements());
-  auto elementsArray = std::make_shared<ArrayVector>(
-      pool,
-      ARRAY(elementTypePtr),
-      BufferPtr(nullptr),
-      rowCount,
-      newOffsets,
-      newLengths,
-      elementsDict,
-      0);
-  return elementsArray;
-}
-
-// Returns SelectivityVector for the array elements vector with all rows
-// corresponding to specified top-level rows selected. Also determines the full
-// elements size of the top-level rows.
-std::pair<SelectivityVector, vector_size_t> toArrayElementRows(
-        const SelectivityVector& topLevelRows,
-        const DecodedVector* topLevelVector) {
-    auto topLevelArray = topLevelVector->base()->as<ArrayVector>();
-    auto rawNulls = topLevelArray->rawNulls();
-    auto rawSizes = topLevelArray->rawSizes();
-    auto rawOffsets = topLevelArray->rawOffsets();
-
-    SelectivityVector elementRows(topLevelArray->elements()->size(), false);
-    vector_size_t topVectorSize = 0;
-    topLevelRows.applyToSelected([&](vector_size_t row) {
-        auto idx = topLevelVector->index(row);
-        if (rawNulls && bits::isBitNull(rawNulls, idx)) {
-            return;
-        }
-        auto size = rawSizes[idx];
-        auto offset = rawOffsets[idx];
-        topVectorSize += size;
-        elementRows.setValidRange(offset, offset + size, true);
-    });
-    elementRows.updateBounds();
-    return std::make_pair(elementRows, topVectorSize);
-}
-
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 template <bool isIntersect, typename T>
 class ArrayIntersectExceptFunction : public exec::VectorFunction {
@@ -199,9 +100,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   /// literals) we create a set before instantiating the object and pass as a
   /// constructor parameter (constantSet).
   /// The same optimization applies for array_except() with a constant (array
-  /// literals on the rhs. If array_except() has an lhs constant, then the
-  /// output vector which duplicates the constant array literal over the number
-  /// of rows on the rhs needs to be constructed.
+  /// literals) on the rhs only.
 
   ArrayIntersectExceptFunction() {}
 
@@ -222,20 +121,13 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     // Optimizations for constant vector.
     // For array_intersect, if there's a constant input, then require it is on
-    // the right side. For array_except, if the constant is on the lhs then
-    // construct the output array with the constant repeated for all rows.
-    // If the constant is on the rhs then the
-    // constant optimization applies to array_except also.
+    // the right side. For array_except, the constant optimization only applies
+    // if the constant is on the rhs, so a swap is not applicable.
     ArrayVectorPtr leftArray;
-    if (constantSet_.has_value() && isLeftConstant_) {
-      if constexpr (isIntersect) {
+    if constexpr (isIntersect) {
+      if (constantSet_.has_value() && isLeftConstant_) {
         std::swap(left, right);
       }
-      /*else {
-        leftArray =
-            generateArrayVectorForConstantLHS<T>(left, right->size(), pool);
-        left = leftArray.get();
-      } */
     }
 
     exec::LocalDecodedVector leftHolder(context, *left, rows);
@@ -332,9 +224,8 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     SetWithNull<T> outputSet;
 
-    // Optimized case when the right-hand side array is constant set : applies
-    // for both constant lhs and rhs for array_intersect and only rhs for
-    // array_except.
+    // Optimized case for constant arrays: applies for both constant lhs
+    // and rhs for array_intersect, and only rhs for array_except.
     bool isConstantOptimized = false;
     if constexpr (isIntersect) {
       if (constantSet_.has_value()) {
