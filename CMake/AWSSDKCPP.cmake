@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Set AWS_SDK_CPP_INSTALL_DIR if you have an installation of AWS SDK CPP
+# This file either finds an exisiting installation of AWS SDK CPP or builds one.
+# Set AWS_SDK_CPP_INSTALL_DIR if you have a custom install location of AWS SDK CPP.
 
 macro(build_awssdk)
     message("Configured to download and build AWS-SDK-CPP version " ${AWS_SDK_VERSION})
