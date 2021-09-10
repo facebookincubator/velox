@@ -122,8 +122,6 @@ include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 find_package(GTest REQUIRED)
 find_package(gflags COMPONENTS shared)
 
-find_library(GMock gmock)
-
 find_library(GLOG glog)
 include_directories(SYSTEM ${GTEST_INCLUDE_DIRS})
 
