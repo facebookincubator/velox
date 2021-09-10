@@ -21,7 +21,7 @@ if (NOT DEFINED VELOX_DEPENDENCY_INSTALL_DIR)
 endif()
 
 # Add all options below
-option(VELOX_ENABLE_S3 "Build S3 Connector" ON)
+option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 
 # Set third-party dependency versions below
 set(AWS_SDK_VERSION "1.9.96")
