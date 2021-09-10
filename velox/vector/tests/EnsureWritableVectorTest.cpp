@@ -389,13 +389,12 @@ TEST_F(EnsureWritableVectorTest, constant) {
     EXPECT_EQ(size, constant->size());
   }
 
-  // If constant has max size, check that we follow the selectivity vector size.
+  // If constant has smaller size, check that we follow the selectivity vector
+  // size.
   {
     const vector_size_t selectivityVectorSize = 100;
     auto constant = BaseVector::createConstant(
-        variant::create<TypeKind::BIGINT>(123),
-        BaseVector::kMaxElements,
-        pool_.get());
+        variant::create<TypeKind::BIGINT>(123), 1, pool_.get());
     BaseVector::ensureWritable(
         SelectivityVector::empty(selectivityVectorSize),
         BIGINT(),
@@ -405,16 +404,22 @@ TEST_F(EnsureWritableVectorTest, constant) {
     EXPECT_EQ(selectivityVectorSize, constant->size());
   }
 
-  // Otherwise, return with size 0.
+  // If constant has larger size, check that we follow the constant vector
+  // size.
   {
+    const vector_size_t selectivityVectorSize = 100;
+    const vector_size_t constantVectorSize = 200;
     auto constant = BaseVector::createConstant(
         variant::create<TypeKind::BIGINT>(123),
-        BaseVector::kMaxElements,
+        constantVectorSize,
         pool_.get());
     BaseVector::ensureWritable(
-        SelectivityVector::empty(), BIGINT(), pool_.get(), &constant);
+        SelectivityVector::empty(selectivityVectorSize),
+        BIGINT(),
+        pool_.get(),
+        &constant);
     EXPECT_EQ(VectorEncoding::Simple::FLAT, constant->encoding());
-    EXPECT_EQ(0, constant->size());
+    EXPECT_EQ(constantVectorSize, constant->size());
   }
 }
 

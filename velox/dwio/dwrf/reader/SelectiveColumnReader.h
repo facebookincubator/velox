@@ -24,6 +24,10 @@
 #include "velox/dwio/dwrf/reader/ScanSpec.h"
 #include "velox/type/Filter.h"
 
+extern bool enableDense;
+
+extern bool enableDense;
+
 namespace facebook::velox::dwrf {
 
 class SelectiveColumnReader : public ColumnReader {
@@ -46,7 +50,7 @@ class SelectiveColumnReader : public ColumnReader {
       uint64_t /*numValues*/,
       VectorPtr& /*result*/,
       const uint64_t* /*incomingNulls*/) override {
-    VELOX_CHECK(false, "next() is only defined in SelectiveStructColumnReader");
+    VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
   }
 
   // Creates a reader for the given stripe.
@@ -56,6 +60,12 @@ class SelectiveColumnReader : public ColumnReader {
       StripeStreams& stripe,
       common::ScanSpec* scanSpec,
       uint32_t sequence = 0);
+
+  // Called when filters in ScanSpec change, e.g. a new filter is pushed down
+  // from a downstream operator.
+  virtual void resetFilterCaches() {
+    // Most readers don't have filter caches.
+  }
 
   // Seeks to offset and reads the rows in 'rows' and applies
   // filters and value processing as given by 'scanSpec supplied at
@@ -214,7 +224,7 @@ class SelectiveColumnReader : public ColumnReader {
 
   // true if 'this' has a fast path.
   virtual bool hasBulkPath() const {
-    return false;
+    return true;
   }
 
  protected:

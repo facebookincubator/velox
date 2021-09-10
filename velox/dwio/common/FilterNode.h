@@ -116,13 +116,10 @@ struct FilterNode {
   // so that current node can have partial info to match any of list item
   std::vector<FilterNode>::const_iterator in(
       const std::vector<FilterNode>& list) const {
-    for (auto itr = list.cbegin(); itr != list.cend(); ++itr) {
-      if (itr->match(*this)) {
-        return itr;
-      }
-    }
-
-    return list.cend();
+    return std::find_if(
+        list.cbegin(), list.cend(), [this](const FilterNode& node) {
+          return node.match(*this);
+        });
   }
 
   std::size_t hash() const {
@@ -142,24 +139,10 @@ struct FilterNode {
         expression,
         partitionKey);
   }
-
-  template <typename T>
-  static std::vector<FilterNode> fromColumns(const std::vector<T>& cols);
 };
 
 // Define two aliases to capture column filter types
 using ColumnFilter = std::vector<FilterNode>;
-
-template <typename T>
-std::vector<FilterNode> FilterNode::fromColumns(const std::vector<T>& cols) {
-  std::vector<FilterNode> nodes;
-  nodes.reserve(cols.size());
-  for (auto& col : cols) {
-    nodes.push_back(col);
-  }
-
-  return nodes;
-}
 
 /**
  * This class is exact physical schema of data (file)
@@ -180,8 +163,6 @@ class FilterType {
   bool read_;
   // a flag to indicate if current node is in content
   bool inContent_;
-  // this saves the project order of current filter node
-  uint64_t projectOrder_;
   // request type in the filter tree node
   std::shared_ptr<const velox::Type> requestType_;
   // data type in the filter tree node
@@ -209,7 +190,6 @@ class FilterType {
         children_{std::move(children)},
         read_{node.node == 0},
         inContent_{inContent},
-        projectOrder_{0},
         requestType_{std::move(type)},
         dataType_{std::move(contentType)},
         seqFilter_{std::make_shared<std::unordered_set<size_t>>()} {}
@@ -249,14 +229,6 @@ class FilterType {
 
   inline void setInContent(bool inContent) {
     inContent_ = inContent;
-  }
-
-  inline uint64_t getProjectOrder() const {
-    return projectOrder_;
-  }
-
-  inline void setProjectOrder(uint64_t order) {
-    projectOrder_ = order;
   }
 
   inline const std::shared_ptr<const velox::Type>& getRequestType() const {

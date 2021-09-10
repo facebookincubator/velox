@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <folly/Optional.h>
 #include <vector>
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/FunctionSignature.h"
@@ -114,9 +113,9 @@ class VectorFunction {
   // the specified inputs string encodings if presented.
   // If one of the specififed inputs have its encoding not determined, the
   // encoding of the result is not determined.
-  virtual folly::Optional<std::vector<size_t>> propagateStringEncodingFrom()
+  virtual std::optional<std::vector<size_t>> propagateStringEncodingFrom()
       const {
-    return folly::none;
+    return std::nullopt;
   }
 };
 

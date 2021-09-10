@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-#include <folly/Optional.h>
-
-#include "velox/core/Expressions.h"
 #include "velox/expression/ControlExpr.h"
+#include "velox/core/Expressions.h"
 #include "velox/expression/VarSetter.h"
 #include "velox/functions/lib/string/StringCore.h"
 
@@ -31,29 +29,20 @@ void ConstantExpr::evalSpecialForm(
     EvalCtx* context,
     VectorPtr* result) {
   if (!sharedSubexprValues_) {
-    sharedSubexprValues_ = BaseVector::createConstant(
-        value_, BaseVector::kMaxElements, context->execCtx()->pool());
+    sharedSubexprValues_ =
+        BaseVector::createConstant(value_, 1, context->execCtx()->pool());
   }
 
   if (isString()) {
     auto* vector =
         sharedSubexprValues_->asUnchecked<SimpleVector<StringView>>();
-    determineStringEncoding(context, vector, rows);
+    vector->computeAndSetIsAscii(rows);
   }
 
-  if (result->get()) {
-    VELOX_CHECK_EQ((*result)->typeKind(), sharedSubexprValues_->typeKind());
-    BaseVector::ensureWritable(
-        rows, (*result)->type(), context->execCtx()->pool(), result);
-    (*result)->copy(sharedSubexprValues_.get(), rows, nullptr);
-    if (isString()) {
-      (*result)
-          ->asUnchecked<SimpleVector<StringView>>()
-          ->copyStringEncodingFrom(sharedSubexprValues_.get());
-    }
-    return;
-  }
-  *result = sharedSubexprValues_;
+  context->moveOrCopyResult(
+      BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_),
+      rows,
+      result);
 }
 
 void ConstantExpr::evalSpecialFormSimplified(
@@ -67,7 +56,7 @@ void ConstantExpr::evalSpecialFormSimplified(
   if (sharedSubexprValues_ == nullptr) {
     *result = BaseVector::createConstant(value_, rows.end(), context->pool());
   } else {
-    *result = value();
+    *result = BaseVector::wrapInConstant(rows.end(), 0, sharedSubexprValues_);
   }
 }
 
@@ -117,12 +106,6 @@ void FieldReference::evalSpecialForm(
   if (result->get()) {
     auto indices = useDecode ? decoded.indices() : nullptr;
     (*result)->copy(child.get(), rows, indices);
-
-    if (isString()) {
-      (*result)->as<SimpleVector<StringView>>()->copyStringEncodingFrom(
-          child.get());
-    }
-
   } else {
     if (child->encoding() == VectorEncoding::Simple::LAZY) {
       child = BaseVector::loadedVectorShared(child);
@@ -140,39 +123,6 @@ void FieldReference::evalSpecialFormSimplified(
   *result = row->childAt(index(context));
   BaseVector::flattenVector(result, rows.end());
 }
-
-namespace {
-
-/// Calculates the string encoding of the result of a switch expression by
-/// combining string encodings of the results of individual "then" clauses and
-/// an optional "else" clause.
-class StringEncodingTracker {
- public:
-  /// Accepts the result of a "then" or "else" clause.
-  void addEncoding(const VectorPtr& source) {
-    if (encoding_.has_value()) {
-      auto encoding =
-          source->asUnchecked<SimpleVector<StringView>>()->getStringEncoding();
-      if (encoding.has_value()) {
-        encoding_ = maxEncoding(encoding_.value(), encoding.value());
-      } else {
-        encoding_.reset();
-      }
-    }
-  }
-
-  /// Updates input vector with the final encoding of the "switch" expression.
-  void setEncoding(const VectorPtr& vector) const {
-    if (encoding_.has_value()) {
-      vector->asUnchecked<SimpleVector<StringView>>()->setStringEncoding(
-          encoding_.value());
-    }
-  }
-
- private:
-  folly::Optional<StringEncodingMode> encoding_{StringEncodingMode::ASCII};
-};
-} // namespace
 
 void SwitchExpr::evalSpecialForm(
     const SelectivityVector& rows,
@@ -192,7 +142,6 @@ void SwitchExpr::evalSpecialForm(
   VarSetter isFinalSelection(context->mutableIsFinalSelection(), false);
 
   const bool isString = type()->kind() == TypeKind::VARCHAR;
-  StringEncodingTracker stringEncodingTracker;
 
   for (auto i = 0; i < numCases_; i++) {
     if (!remainingRows.get()->hasSelections()) {
@@ -214,10 +163,6 @@ void SwitchExpr::evalSpecialForm(
     switch (booleanMix) {
       case BooleanMix::kAllTrue:
         inputs_[2 * i + 1]->eval(*remainingRows.get(), context, result);
-        if (isString) {
-          stringEncodingTracker.addEncoding(*result);
-          stringEncodingTracker.setEncoding(*result);
-        }
         return;
       case BooleanMix::kAllNull:
       case BooleanMix::kAllFalse:
@@ -239,10 +184,6 @@ void SwitchExpr::evalSpecialForm(
 
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
           remainingRows.get()->deselect(*thenRows.get());
-
-          if (isString) {
-            stringEncodingTracker.addEncoding(*result);
-          }
         }
       }
     }
@@ -258,18 +199,11 @@ void SwitchExpr::evalSpecialForm(
     if (hasElseClause_) {
       inputs_.back()->eval(*remainingRows.get(), context, result);
 
-      if (isString) {
-        stringEncodingTracker.addEncoding(*result);
-      }
     } else {
       // fill in nulls for remainingRows
       remainingRows.get()->applyToSelected(
           [&](auto row) { (*result)->setNull(row, true); });
     }
-  }
-
-  if (isString) {
-    stringEncodingTracker.setEncoding(*result);
   }
 }
 
@@ -318,7 +252,7 @@ uint64_t* rowsWithError(
     const SelectivityVector& rows,
     const SelectivityVector& activeRows,
     EvalCtx* context,
-    FlatVectorPtr<StringView>* previousErrors,
+    EvalCtx::ErrorVectorPtr* previousErrors,
     LocalSelectivityVector& errorRowsHolder) {
   auto errors = context->errors();
   if (!errors) {
@@ -345,7 +279,11 @@ uint64_t* rowsWithError(
     // Add the new errors to the previous ones and free the new errors.
     bits::forEachSetBit(
         errors->rawNulls(), rows.begin(), errors->size(), [&](int32_t row) {
-          context->addError(row, errors->valueAt(row), previousErrors);
+          context->addError(
+              row,
+              *std::static_pointer_cast<std::exception_ptr>(
+                  errors->valueAt(row)),
+              previousErrors);
         });
     context->swapErrors(previousErrors);
     *previousErrors = nullptr;
@@ -371,7 +309,9 @@ void finalizeErrors(
     if (throwOnError && errorNulls[i]) {
       int32_t errorIndex = i * 64 + __builtin_ctzll(errorNulls[i]);
       if (errorIndex < errors->size() && errorIndex < rows.end()) {
-        throw std::runtime_error(std::string(errors->valueAt(errorIndex)));
+        auto exceptionPtr = std::static_pointer_cast<std::exception_ptr>(
+            errors->valueAt(errorIndex));
+        std::rethrow_exception(*exceptionPtr);
       }
     }
   }
@@ -417,7 +357,7 @@ void ConjunctExpr::evalSpecialForm(
   int32_t numActive = activeRows->countSelected();
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
-    FlatVectorPtr<StringView> errors;
+    EvalCtx::ErrorVectorPtr errors;
     if (handleErrors) {
       context->swapErrors(&errors);
     }
@@ -713,8 +653,7 @@ class ExprCallable : public Callable {
         capture_->type(),
         BufferPtr(nullptr),
         rows.end(),
-        std::move(allVectors),
-        folly::none);
+        std::move(allVectors));
     EvalCtx lambdaCtx(context->execCtx(), context->exprSet(), row.get());
     body_->eval(rows, &lambdaCtx, result);
   }

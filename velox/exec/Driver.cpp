@@ -73,7 +73,13 @@ DriverCtx::DriverCtx(
           std::make_unique<SimpleExpressionEvaluator>(execCtx.get())),
       driverId(_driverId),
       pipelineId(_pipelineId),
-      numDrivers(_numDrivers) {}
+      numDrivers(_numDrivers) {
+  auto parentTracker = task->pool()->getMemoryUsageTracker();
+  if (parentTracker) {
+    execCtx->pool()->setMemoryUsageTracker(
+        std::move(parentTracker->addChild()));
+  }
+}
 
 std::unique_ptr<connector::ConnectorQueryCtx>
 DriverCtx::createConnectorQueryCtx(const std::string& connectorId) const {
@@ -95,18 +101,33 @@ BlockingState::BlockingState(
       sinceMicros_(
           std::chrono::duration_cast<std::chrono::microseconds>(
               std::chrono::high_resolution_clock::now().time_since_epoch())
-              .count()) {}
+              .count()) {
+  // Set before leaving the thread.
+  driver_->state().hasBlockingFuture = true;
+}
 
 // static
 void BlockingState::setResume(
     std::shared_ptr<BlockingState> state,
     folly::Executor* executor) {
+  VELOX_CHECK(!state->driver_->isOnThread());
   auto& exec = folly::QueuedImmediateExecutor::instance();
   std::move(state->future_)
       .via(&exec)
       .thenValue([state, executor](bool /* unused */) {
         state->operator_->recordBlockingTime(state->sinceMicros_);
-        Driver::enqueue(state->driver_, executor);
+        auto driver = state->driver_;
+        {
+          std::lock_guard<std::mutex> l(*driver->cancelPool()->mutex());
+          VELOX_CHECK(!driver->state().isSuspended);
+          VELOX_CHECK(driver->state().hasBlockingFuture);
+          driver->state().hasBlockingFuture = false;
+          if (driver->cancelPool()->pauseRequested()) {
+            // The thread will be enqueued at resume.
+            return;
+          }
+        }
+        Driver::enqueue(state->driver_);
       })
       .thenError(
           folly::tag_t<std::exception>{}, [state](std::exception const& e) {
@@ -124,13 +145,9 @@ class CancelPoolGuard {
  public:
   CancelPoolGuard(
       core::CancelPool* cancelPool,
-      bool* isOnThread,
-      bool* isTerminated,
+      core::ThreadState* state,
       std::function<void(core::StopReason)> onTerminate)
-      : cancelPool_(cancelPool),
-        isOnThread_(isOnThread),
-        isTerminated_(isTerminated),
-        onTerminate_(onTerminate) {}
+      : cancelPool_(cancelPool), state_(state), onTerminate_(onTerminate) {}
 
   void notThrown() {
     isThrow_ = false;
@@ -140,11 +157,11 @@ class CancelPoolGuard {
     bool onTerminateCalled = false;
     if (isThrow_) {
       // Runtime error. Driver is on thread, hence safe.
-      *isTerminated_ = true;
+      state_->isTerminated = true;
       onTerminate_(core::StopReason::kNone);
       onTerminateCalled = true;
     }
-    auto reason = cancelPool_->leave(isOnThread_, isTerminated_);
+    auto reason = cancelPool_->leave(*state_);
     if (reason == core::StopReason::kTerminate) {
       // Terminate requested via cancelPool. The Driver is not on
       // thread but 'terminated_' is set, hence no other threads will
@@ -158,8 +175,7 @@ class CancelPoolGuard {
 
  private:
   core::CancelPool* cancelPool_;
-  bool* isOnThread_;
-  bool* isTerminated_;
+  core::ThreadState* state_;
   std::function<void(core::StopReason reason)> onTerminate_;
   bool isThrow_ = true;
 };
@@ -200,6 +216,9 @@ void Driver::testingJoinAndReinitializeExecutor(int32_t threads) {
 void Driver::enqueue(
     std::shared_ptr<Driver> driver,
     folly::Executor* executor) {
+  // This is expected to be called inside the Driver's CancelPool mutex.
+  VELOX_CHECK(!driver->state().isEnqueued);
+  driver->state().isEnqueued = true;
   auto currentExecutor = (executor ? executor : Driver::executor());
   currentExecutor->add(
       [driver, currentExecutor]() { Driver::run(driver, currentExecutor); });
@@ -216,10 +235,72 @@ Driver::Driver(
   ctx_->driver = this;
 }
 
+namespace {
+/// Checks if output channel is produced using identity projection and returns
+/// input channel if so.
+std::optional<ChannelIndex> getIdentityProjection(
+    const std::vector<IdentityProjection>& projections,
+    ChannelIndex outputChannel) {
+  for (const auto& projection : projections) {
+    if (projection.outputChannel == outputChannel) {
+      return projection.inputChannel;
+    }
+  }
+  return std::nullopt;
+}
+} // namespace
+
+void Driver::pushdownFilters(int operatorIndex) {
+  auto op = operators_[operatorIndex].get();
+  const auto& filters = op->getDynamicFilters();
+  if (filters.empty()) {
+    return;
+  }
+
+  op->stats().addRuntimeStat("dynamicFiltersProduced", filters.size());
+
+  // Walk operator list upstream and find a place to install the filters.
+  for (const auto& entry : filters) {
+    auto channel = entry.first;
+    for (auto i = operatorIndex - 1; i >= 0; --i) {
+      auto prevOp = operators_[i].get();
+
+      if (i == 0) {
+        // Source operator.
+        VELOX_CHECK(
+            prevOp->canAddDynamicFilter(),
+            "Cannot push down dynamic filters produced by {}",
+            op->toString());
+        prevOp->addDynamicFilter(channel, entry.second);
+        prevOp->stats().addRuntimeStat("dynamicFiltersAccepted", 1);
+        break;
+      }
+
+      const auto& identityProjections = prevOp->identityProjections();
+      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      if (!inputChannel.has_value()) {
+        // Filter channel is not an identity projection.
+        VELOX_CHECK(
+            prevOp->canAddDynamicFilter(),
+            "Cannot push down dynamic filters produced by {}",
+            op->toString());
+        prevOp->addDynamicFilter(channel, entry.second);
+        prevOp->stats().addRuntimeStat("dynamicFiltersAccepted", 1);
+        break;
+      }
+
+      // Continue walking upstream.
+      channel = inputChannel.value();
+    }
+  }
+
+  op->clearDynamicFilters();
+}
+
 core::StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>* blockingState) {
-  auto stop = cancelPool_->enter(&isOnThread_, &isTerminated_);
+  auto stop = cancelPool_->enter(state_);
   if (stop != core::StopReason::kNone) {
     if (stop == core::StopReason::kTerminate) {
       task_->setError(std::make_exception_ptr(VeloxRuntimeError(
@@ -236,10 +317,7 @@ core::StopReason Driver::runInternal(
     return stop;
   }
   CancelPoolGuard guard(
-      cancelPool_.get(),
-      &isOnThread_,
-      &isTerminated_,
-      [this](core::StopReason reason) {
+      cancelPool_.get(), &state_, [this](core::StopReason reason) {
         auto task = task_.get();
         if (task && reason == core::StopReason::kTerminate) {
           task_->setError(std::make_exception_ptr(VeloxRuntimeError(
@@ -296,6 +374,7 @@ core::StopReason Driver::runInternal(
                 op->stats().outputBytes += resultBytes;
               }
             }
+            pushdownFilters(i);
             if (result) {
               OperationTimer timer(nextOp->stats().addInputTiming);
               nextOp->stats().inputPositions += result->size();
@@ -338,8 +417,11 @@ core::StopReason Driver::runInternal(
           // control here so it can advance. If it is again blocked,
           // this will be detected when trying to add input and we
           // will come back here after this is again on thread.
-          OperationTimer timer(op->stats().getOutputTiming);
-          op->getOutput();
+          {
+            OperationTimer timer(op->stats().getOutputTiming);
+            op->getOutput();
+          }
+          pushdownFilters(i);
           continue;
         }
         if (i == 0) {
@@ -429,7 +511,7 @@ void Driver::close() {
 }
 
 bool Driver::terminate() {
-  auto stop = cancelPool_->enterForTerminate(&isOnThread_, &isTerminated_);
+  auto stop = cancelPool_->enterForTerminate(state_);
   if (stop == core::StopReason::kTerminate) {
     close();
     return true;
@@ -437,7 +519,7 @@ bool Driver::terminate() {
   return false;
 }
 
-bool Driver::mayPushdownAggregation(Operator* aggregation) {
+bool Driver::mayPushdownAggregation(Operator* aggregation) const {
   for (auto i = 1; i < operators_.size(); ++i) {
     auto op = operators_[i].get();
     if (aggregation == op) {
@@ -447,8 +529,58 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) {
       return false;
     }
   }
-  VELOX_CHECK(false, "{} not found in its Driver", aggregation->toString());
-  return false;
+  VELOX_FAIL(
+      "Aggregation operator not found in its Driver: {}",
+      aggregation->toString());
+}
+
+std::unordered_set<ChannelIndex> Driver::canPushdownFilters(
+    Operator* FOLLY_NONNULL filterSource,
+    const std::vector<ChannelIndex>& channels) const {
+  int filterSourceIndex = -1;
+  for (auto i = 0; i < operators_.size(); ++i) {
+    auto op = operators_[i].get();
+    if (filterSource == op) {
+      filterSourceIndex = i;
+      break;
+    }
+  }
+  VELOX_CHECK_GE(
+      filterSourceIndex,
+      0,
+      "Operator not found in its Driver: {}",
+      filterSource->toString());
+
+  std::unordered_set<ChannelIndex> supportedChannels;
+  for (auto i = 0; i < channels.size(); ++i) {
+    auto channel = channels[i];
+    for (auto j = filterSourceIndex - 1; j >= 0; --j) {
+      auto prevOp = operators_[j].get();
+
+      if (j == 0) {
+        // Source operator.
+        if (prevOp->canAddDynamicFilter()) {
+          supportedChannels.emplace(channels[i]);
+        }
+        break;
+      }
+
+      const auto& identityProjections = prevOp->identityProjections();
+      auto inputChannel = getIdentityProjection(identityProjections, channel);
+      if (!inputChannel.has_value()) {
+        // Filter channel is not an identity projection.
+        if (prevOp->canAddDynamicFilter()) {
+          supportedChannels.emplace(channels[i]);
+        }
+        break;
+      }
+
+      // Continue walking upstream.
+      channel = inputChannel.value();
+    }
+  }
+
+  return supportedChannels;
 }
 
 Operator* FOLLY_NULLABLE
@@ -468,7 +600,7 @@ void Driver::setError(std::exception_ptr exception) {
 std::string Driver::toString() {
   std::stringstream out;
   out << "{Driver: ";
-  if (isOnThread_) {
+  if (state_.isOnThread()) {
     out << "running ";
   } else {
     out << "blocked " << static_cast<int>(blockingReason_) << " ";
@@ -478,6 +610,24 @@ std::string Driver::toString() {
   }
   out << "}";
   return out.str();
+}
+SuspendedSection::SuspendedSection(Driver* FOLLY_NONNULL driver)
+    : driver_(driver) {
+  if (driver->cancelPool()->enterSuspended(driver->state()) !=
+      core::StopReason::kNone) {
+    VELOX_FAIL("Terminate detected when entering suspended section");
+  }
+}
+
+SuspendedSection::~SuspendedSection() {
+  if (driver_->cancelPool()->leaveSuspended(driver_->state()) !=
+      core::StopReason::kNone) {
+    VELOX_FAIL("Terminate detected when leaving suspended section");
+  }
+}
+
+std::string Driver::label() const {
+  return fmt::format("<Driver {}:{}>", ctx_->task->taskId(), ctx_->driverId);
 }
 
 } // namespace facebook::velox::exec

@@ -86,11 +86,11 @@ class SimpleVector : public BaseVector {
       BufferPtr nulls,
       size_t length,
       const folly::F14FastMap<std::string, std::string>& metaData,
-      folly::Optional<vector_size_t> distinctValueCount,
-      folly::Optional<vector_size_t> nullCount,
-      folly::Optional<bool> isSorted,
-      folly::Optional<ByteCount> representedByteCount,
-      folly::Optional<ByteCount> storageByteCount = folly::none)
+      std::optional<vector_size_t> distinctValueCount,
+      std::optional<vector_size_t> nullCount,
+      std::optional<bool> isSorted,
+      std::optional<ByteCount> representedByteCount,
+      std::optional<ByteCount> storageByteCount = std::nullopt)
       : BaseVector(
             pool,
             std::move(type),
@@ -111,11 +111,11 @@ class SimpleVector : public BaseVector {
       BufferPtr nulls,
       size_t length,
       const folly::F14FastMap<std::string, std::string>& metaData,
-      folly::Optional<vector_size_t> distinctValueCount,
-      folly::Optional<vector_size_t> nullCount,
-      folly::Optional<bool> isSorted,
-      folly::Optional<ByteCount> representedByteCount,
-      folly::Optional<ByteCount> storageByteCount = folly::none)
+      std::optional<vector_size_t> distinctValueCount,
+      std::optional<vector_size_t> nullCount,
+      std::optional<bool> isSorted,
+      std::optional<ByteCount> representedByteCount,
+      std::optional<ByteCount> storageByteCount = std::nullopt)
       : SimpleVector(
             pool,
             CppToType<T>::create(),
@@ -203,48 +203,16 @@ class SimpleVector : public BaseVector {
                            : folly::hasher<T>{}(valueAt(index));
   }
 
-  folly::Optional<bool> isSorted() const {
+  std::optional<bool> isSorted() const {
     return isSorted_;
   }
 
-  const folly::Optional<T>& getMin() const {
+  const std::optional<T>& getMin() const {
     return min_;
   }
 
-  const folly::Optional<T>& getMax() const {
+  const std::optional<T>& getMax() const {
     return max_;
-  }
-
-  /// Enabled for string vectors, returns the string encoding mode
-  template <typename U = T>
-  typename std::enable_if<
-      std::is_same<U, StringView>::value,
-      folly::Optional<functions::stringCore::StringEncodingMode>>::type
-  getStringEncoding() const {
-    return encodingMode_;
-  }
-
-  /// Enabled for string vectors, sets the string encoding.
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  setStringEncoding(functions::stringCore::StringEncodingMode mode) {
-    encodingMode_ = mode;
-  }
-
-  /// Enabled for string vectors, sets the string encoding to match another
-  /// vector encoding
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  copyStringEncodingFrom(const BaseVector* vector) {
-    encodingMode_ =
-        vector->asUnchecked<SimpleVector<StringView>>()->getStringEncoding();
-  }
-
-  /// Invalidate string encoding
-  template <typename U = T>
-  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
-  invalidateStringEncoding() {
-    encodingMode_ = folly::none;
   }
 
   void resize(vector_size_t size) override {
@@ -273,18 +241,128 @@ class SimpleVector : public BaseVector {
     return out.str();
   }
 
+  /// This function takes a SelectivityVector and a mapping from the index's in
+  /// the SelectivityVector to corresponding indexes in this vector. Then we
+  /// return:
+  /// 1. True if all specified rows after the translation are known to be ASCII.
+  /// 2. False if all specified rows after translation contain atleast one non
+  ///    ASCII character.
+  /// 3. std::nullopt if ASCII-ness is not known for even one of the translated
+  /// rows. If rowMappings is null then we revert to indexes in the
+  /// SelectivityVector.
+  template <typename U = T>
+  typename std::
+      enable_if<std::is_same<U, StringView>::value, std::optional<bool>>::type
+      isAscii(
+          const SelectivityVector& rows,
+          const vector_size_t* rowMappings = nullptr) const {
+    VELOX_CHECK(rows.hasSelections())
+    if (asciiSetRows_.hasSelections()) {
+      if (rowMappings) {
+        bool isSubset = rows.template testSelected(
+            [&](auto row) { return asciiSetRows_.isValid(rowMappings[row]); });
+        return isSubset ? std::optional(isAllAscii_) : std::nullopt;
+      }
+      if (rows.isSubset(asciiSetRows_)) {
+        return isAllAscii_;
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// This function takes an index and returns:
+  /// 1. True if the string at that index is ASCII
+  /// 2. False if the string at that index is not ASCII
+  /// 3. std::nullopt if we havent computed ASCII'ness at that index.
+  template <typename U = T>
+  typename std::
+      enable_if<std::is_same<U, StringView>::value, std::optional<bool>>::type
+      isAscii(vector_size_t index) const {
+    VELOX_CHECK_GE(index, 0)
+    if (asciiSetRows_.size() > index && asciiSetRows_.isValid(index)) {
+      return isAllAscii_;
+    }
+    return std::nullopt;
+  }
+
+  /// Computes and saves is-ascii flag for a given set of rows if not already
+  /// present.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  computeAndSetIsAscii(const SelectivityVector& rows) {
+    if (rows.isSubset(asciiSetRows_)) {
+      return;
+    }
+    ensureIsAsciiCapacity(rows.end());
+    bool isAllAscii = true;
+    rows.template applyToSelected([&](auto row) {
+      if (!isNullAt(row)) {
+        auto string = valueAt(row);
+        isAllAscii &=
+            functions::stringCore::isAscii(string.data(), string.size());
+      }
+    });
+
+    // Set isAllAscii flag, it will unset if we encounter any utf.
+    if (!asciiSetRows_.hasSelections()) {
+      isAllAscii_ = isAllAscii;
+    } else {
+      isAllAscii_ &= isAllAscii;
+    }
+
+    asciiSetRows_.select(rows);
+  }
+
+  /// Clears asciiness state.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  invalidateIsAscii() {
+    asciiSetRows_.clearAll();
+    isAllAscii_ = false;
+  }
+
+  /// Explicitly set asciness.
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setIsAscii(bool ascii, const SelectivityVector& rows) {
+    ensureIsAsciiCapacity(rows.end());
+    if (asciiSetRows_.hasSelections() && !asciiSetRows_.isSubset(rows)) {
+      isAllAscii_ &= ascii;
+    } else {
+      isAllAscii_ = ascii;
+    }
+
+    asciiSetRows_.select(rows);
+  }
+
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setAllIsAscii(bool ascii) {
+    ensureIsAsciiCapacity(length_);
+    isAllAscii_ = ascii;
+    asciiSetRows_.setAll();
+  }
+
  protected:
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  ensureIsAsciiCapacity(vector_size_t size) {
+    if (asciiSetRows_.size() < size) {
+      asciiSetRows_.resize(size, false);
+    }
+  }
+
   /**
    * @return the value of the specified key from the given map, if present
    */
   template <typename V>
-  folly::Optional<V> getMetaDataValue(
+  std::optional<V> getMetaDataValue(
       const folly::F14FastMap<std::string, std::string>& metaData,
       const std::string& key) {
     const auto& value = metaData.find(key);
     return value == metaData.end()
-        ? folly::none
-        : folly::Optional<V>(velox::to<V>(value->second));
+        ? std::nullopt
+        : std::optional<V>(velox::to<V>(value->second));
   }
 
   // Throws if the elementSize_ does not match sizeof(T) or if T is ComplexType.
@@ -300,8 +378,8 @@ class SimpleVector : public BaseVector {
         sizeof(T));
   }
 
-  folly::Optional<T> min_;
-  folly::Optional<T> max_;
+  std::optional<T> min_;
+  std::optional<T> max_;
   // Holds the data for StringView min/max.
   std::string minString_;
   std::string maxString_;
@@ -313,16 +391,19 @@ class SimpleVector : public BaseVector {
   }
 
  protected:
-  folly::Optional<bool> isSorted_ = folly::none;
+  std::optional<bool> isSorted_ = std::nullopt;
 
   // Allows checking that access is with the same width of T as
   // construction. For example, casting FlatVector<uint8_t> to
   // FlatVector<StringView> makes buffer overruns.
   const uint8_t elementSize_;
 
-  // If T is velox::StringView, specifies the string encoding mode
-  folly::Optional<functions::stringCore::StringEncodingMode> encodingMode_ =
-      folly::none;
+  // True is all strings in asciiSetRows_ are ASCII.
+  bool isAllAscii_{false};
+
+  // If T is StringView, store set of rows
+  // where we have computed asciiness. A set bit means the row was processed.
+  SelectivityVector asciiSetRows_;
 }; // namespace velox
 
 template <>

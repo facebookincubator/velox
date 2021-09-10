@@ -25,6 +25,24 @@
 namespace facebook::velox::functions::test {
 
 class FunctionBaseTest : public testing::Test {
+ public:
+  // This class generates test name suffixes based on the type.
+  // We use the type's toString() return value as the test name.
+  // Used as the third argument for GTest TYPED_TEST_SUITE.
+  class TypeNames {
+   public:
+    template <typename T>
+    static std::string GetName(int) {
+      T type;
+      return type.toString();
+    }
+  };
+
+  using IntegralTypes =
+      ::testing::Types<TinyintType, SmallintType, IntegerType, BigintType>;
+
+  using FloatingPointTypes = ::testing::Types<DoubleType, RealType>;
+
  protected:
   static void SetUpTestCase();
 
@@ -387,16 +405,10 @@ class FunctionBaseTest : public testing::Test {
   void assertEqualVectors(
       const VectorPtr& expected,
       const VectorPtr& actual,
-      std::optional<size_t> vectorSize = std::nullopt,
       const std::string& additionalContext = "") {
-    // TODO: Remove vectorSize when ConstantVectors carry their proper size (as
-    // opposed to kMaxElements).
-    if (vectorSize == std::nullopt) {
-      vectorSize = expected->size();
-      ASSERT_EQ(expected->size(), actual->size());
-    }
+    ASSERT_EQ(expected->size(), actual->size());
 
-    for (auto i = 0; i < *vectorSize; i++) {
+    for (auto i = 0; i < expected->size(); i++) {
       ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
           << "at " << i << ": " << expected->toString(i) << " vs. "
           << actual->toString(i) << additionalContext;

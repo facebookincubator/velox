@@ -198,14 +198,19 @@ class SubstrFunction : public exec::VectorFunction {
     BaseVector* stringsVector = args[0].get();
     BaseVector* startsVector = args[1].get();
     BaseVector* lengthsVector = noLengthVector ? nullptr : args[2].get();
-    auto stringArgStringEncoding = getStringEncodingOrUTF8(stringsVector);
+    auto stringArgStringEncoding = getStringEncodingOrUTF8(stringsVector, rows);
 
     auto stringArgVectorEncoding = stringsVector->encoding();
     auto startArgVectorEncoding = startsVector->encoding();
     auto lengthArgVectorEncoding =
         noLengthVector ? startArgVectorEncoding : lengthsVector->encoding();
 
-    prepareFlatResultsVector(result, rows, context, args[0]);
+    prepareFlatResultsVector(
+        result,
+        rows,
+        context,
+        args[0]->encoding() == VectorEncoding::Simple::FLAT ? args[0]
+                                                            : emptyVectorPtr);
 
     BufferPtr resultValues =
         (*result)->as<FlatVector<StringView>>()->mutableValues(rows.end());
@@ -390,7 +395,7 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
     exec::LocalDecodedVector inputHolder(context, *inputStringsVector, rows);
     auto decodedInput = inputHolder.get();
 
-    auto stringEncoding = getStringEncodingOrUTF8(inputStringsVector);
+    auto stringEncoding = getStringEncodingOrUTF8(inputStringsVector, rows);
 
     bool inPlace = (stringEncoding == StringEncodingMode::ASCII) &&
         (inputStringsVector->encoding() == VectorEncoding::Simple::FLAT) &&
@@ -539,7 +544,7 @@ class StringPosition : public exec::VectorFunction {
     exec::LocalDecodedVector decodedInstanceHolder(context);
     auto decodedInstanceInput = decodedInstanceHolder.get();
 
-    folly::Optional<int64_t> instanceArgValue;
+    std::optional<int64_t> instanceArgValue;
     if (args.size() <= 2) {
       instanceArgValue = 1;
     } else {
@@ -549,7 +554,8 @@ class StringPosition : public exec::VectorFunction {
       }
     }
 
-    auto stringArgStringEncoding = getStringEncodingOrUTF8(args.at(0).get());
+    auto stringArgStringEncoding =
+        getStringEncodingOrUTF8(args.at(0).get(), rows);
     BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
 
     auto* resultFlatVector = (*result)->as<FlatVector<int64_t>>();
@@ -671,7 +677,7 @@ class Replace : public exec::VectorFunction {
     exec::LocalDecodedVector decodedSearchHolder(context, *args[1], rows);
     auto decodedSearchInput = decodedSearchHolder.get();
 
-    folly::Optional<StringView> searchArgValue;
+    std::optional<StringView> searchArgValue;
     if (decodedSearchInput->isConstantMapping()) {
       searchArgValue = decodedSearchInput->valueAt<StringView>(0);
     }
@@ -679,7 +685,7 @@ class Replace : public exec::VectorFunction {
     // Read replace argument
     exec::LocalDecodedVector decodedReplaceHolder(context);
     auto decodedReplaceInput = decodedReplaceHolder.get();
-    folly::Optional<StringView> replaceArgValue;
+    std::optional<StringView> replaceArgValue;
 
     if (args.size() <= 2) {
       replaceArgValue = StringView("");
@@ -758,11 +764,11 @@ class Replace : public exec::VectorFunction {
     };
   }
 
-  // Only the original string and the replacement are relevent to the result
+  // Only the original string and the replacement are relevant to the result
   // encoding.
   // TODO: The propagation is a safe approximation here, it might be better
   // for some cases to keep it unset and then rescan.
-  folly::Optional<std::vector<size_t>> propagateStringEncodingFrom()
+  std::optional<std::vector<size_t>> propagateStringEncodingFrom()
       const override {
     return {{0, 2}};
   }

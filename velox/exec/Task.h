@@ -70,7 +70,7 @@ class Task {
       const std::string& taskId,
       std::shared_ptr<const core::PlanNode> planNode,
       int destination,
-      std::shared_ptr<core::QueryCtx>&& queryCtx,
+      std::shared_ptr<core::QueryCtx> queryCtx,
       Consumer consumer = nullptr,
       std::function<void(std::exception_ptr)> onError = nullptr)
       : Task{
@@ -86,12 +86,9 @@ class Task {
       const std::string& taskId,
       std::shared_ptr<const core::PlanNode> planNode,
       int destination,
-      std::shared_ptr<core::QueryCtx>&& queryCtx,
+      std::shared_ptr<core::QueryCtx> queryCtx,
       ConsumerSupplier consumerSupplier,
       std::function<void(std::exception_ptr)> onError = nullptr);
-
-  Task(const std::string& id, std::shared_ptr<core::QueryCtx> ctx)
-      : taskId_(id), destination_(0), queryCtx_(ctx) {}
 
   ~Task();
 
@@ -109,7 +106,9 @@ class Task {
   // alive by 'self'. 'self' going out of scope may cause the Task to
   // be freed. This happens if a cancelled task is decoupled from the
   // task manager and threads are left to finish themselves.
-  static void removeDriver(std::shared_ptr<Task> self, Driver* instance);
+  static void removeDriver(
+      std::shared_ptr<Task> self,
+      Driver* FOLLY_NONNULL instance);
 
   // Sets the (so far) max split sequence id, so all splits with sequence id
   // equal or below that, will be ignored in the 'addSplitWithSequence' call.
@@ -162,7 +161,7 @@ class Task {
   void createLocalMergeSources(
       unsigned numSources,
       const std::shared_ptr<const RowType>& rowType,
-      memory::MappedMemory* mappedMemory);
+      memory::MappedMemory* FOLLY_NONNULL mappedMemory);
 
   std::shared_ptr<MergeSource> getLocalMergeSource(int sourceId) {
     VELOX_CHECK_LT(sourceId, localMergeSources_.size(), "Incorrect source id ");
@@ -229,8 +228,6 @@ class Task {
     return message;
   }
 
-  void driverClosed(Driver* instance);
-
   std::shared_ptr<core::QueryCtx> queryCtx() const {
     return queryCtx_;
   }
@@ -255,8 +252,8 @@ class Task {
   // if 'this' is in an error state.
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
-      Driver* caller,
-      ContinueFuture* future,
+      Driver* FOLLY_NONNULL caller,
+      ContinueFuture* FOLLY_NONNULL future,
       std::vector<VeloxPromise<bool>>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
 
@@ -307,6 +304,7 @@ class Task {
   std::string toString();
 
   TaskState state() const {
+    std::lock_guard<std::mutex> l(mutex_);
     return state_;
   }
 
@@ -321,13 +319,17 @@ class Task {
     return numDrivers_;
   }
 
-  velox::memory::MemoryPool* pool() const {
+  velox::memory::MemoryPool* FOLLY_NONNULL pool() const {
     return pool_.get();
   }
 
   const core::CancelPoolPtr& cancelPool() const {
     return cancelPool_;
   }
+
+  // Returns the Driver running on the current thread or nullptr if the current
+  // thread is not running a Driver of 'this'.
+  Driver* FOLLY_NULLABLE thisDriver() const;
 
  private:
   struct BarrierState {
@@ -365,7 +367,8 @@ class Task {
     SplitsState& operator=(SplitsState const&) = delete;
   };
 
- private:
+  void driverClosed();
+
   std::shared_ptr<ExchangeClient> addExchangeClient();
 
   void stateChangedLocked();
@@ -437,4 +440,5 @@ class Task {
   core::CancelPoolPtr cancelPool_{std::make_shared<core::CancelPool>()};
   std::weak_ptr<PartitionedOutputBufferManager> bufferManager_;
 };
+
 } // namespace facebook::velox::exec

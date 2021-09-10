@@ -238,6 +238,21 @@ TEST_F(CastExprTest, truncateVsRound) {
   });
   testCast<double, int>(
       "int", {1.888, 2.5, 3.6, 100.44, -100.101}, {2, 3, 4, 100, -100});
+
+  testCast<int8_t, int32_t>("int", {111, 2, 3, 10, -10}, {111, 2, 3, 10, -10});
+
+  queryCtx_->setConfigOverridesUnsafe({
+      {core::QueryCtx::kCastIntByTruncate, "true"},
+  });
+  testCast<int32_t, int8_t>(
+      "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5});
+  queryCtx_->setConfigOverridesUnsafe({
+      {core::QueryCtx::kCastIntByTruncate, "false"},
+  });
+  EXPECT_THROW(
+      (testCast<int32_t, int8_t>(
+          "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5})),
+      std::exception);
 }
 
 TEST_F(CastExprTest, nullInputs) {
@@ -457,4 +472,23 @@ TEST_F(CastExprTest, nulls) {
   auto expectedResult = makeFlatVector<int16_t>(
       kVectorSize, [](auto row) { return row; }, nullEvery(2));
   assertEqualVectors(expectedResult, result);
+}
+
+TEST_F(CastExprTest, testNullOnFailure) {
+  auto input =
+      makeNullableFlatVector<std::string>({"1", "2", "", "3.4", std::nullopt});
+  auto expected = makeNullableFlatVector<int32_t>(
+      {1, 2, std::nullopt, std::nullopt, std::nullopt});
+  auto rowVector = makeRowVector({input});
+  auto result = evaluateComplexCast<FlatVector<int32_t>>(
+      "c0", rowVector, INTEGER(), true);
+
+  // nullOnFailure is true, so we should return null instead of throwing
+  assertEqualVectors(expected, result);
+
+  // nullOnFailure is false, so we should throw
+  EXPECT_THROW(
+      evaluateComplexCast<FlatVector<int32_t>>(
+          "c0", rowVector, INTEGER(), false),
+      std::exception);
 }

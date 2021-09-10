@@ -33,22 +33,21 @@ using functions::test::FunctionBaseTest;
 class EvalSimplifiedTest : public FunctionBaseTest {
  protected:
   void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {
-    size_t vectorSize = expected->size();
-
-    // If one of the vectors is constant, they will report kMaxElements as
-    // size().
-    if (expected->isConstantEncoding() || actual->isConstantEncoding()) {
-      // If one is constant, use the size of the other; if both are, assume size
-      // is 1.
-      vectorSize = std::min(expected->size(), actual->size());
-      if (vectorSize == BaseVector::kMaxElements) {
-        vectorSize = 1;
-      }
-    } else {
-      ASSERT_EQ(expected->size(), actual->size());
-    }
+    ASSERT_EQ(expected->size(), actual->size());
     FunctionBaseTest::assertEqualVectors(
-        expected, actual, vectorSize, fmt::format(" (seed {}).", seed_));
+        expected, actual, fmt::format(" (seed {}).", seed_));
+  }
+
+  void assertExceptions(
+      std::exception_ptr commonPtr,
+      std::exception_ptr simplifiedPtr) {
+    if (!commonPtr) {
+      LOG(ERROR) << "Only simplified path threw exception:";
+      std::rethrow_exception(simplifiedPtr);
+    } else if (!simplifiedPtr) {
+      LOG(ERROR) << "Only common path threw exception:";
+      std::rethrow_exception(commonPtr);
+    }
   }
 
   // Generate random (but deterministic) input row vectors.
@@ -105,12 +104,28 @@ class EvalSimplifiedTest : public FunctionBaseTest {
       std::vector<VectorPtr> commonEvalResult{nullptr};
       std::vector<VectorPtr> simplifiedEvalResult{nullptr};
 
-      exprSetCommon.eval(rows, &evalCtxCommon, &commonEvalResult);
-      exprSetSimplified.eval(rows, &evalCtxSimplified, &simplifiedEvalResult);
+      std::exception_ptr exceptionCommonPtr;
+      std::exception_ptr exceptionSimplifiedPtr;
 
-      // Compare results.
-      assertEqualVectors(
-          commonEvalResult.front(), simplifiedEvalResult.front());
+      try {
+        exprSetCommon.eval(rows, &evalCtxCommon, &commonEvalResult);
+      } catch (const std::exception& e) {
+        exceptionCommonPtr = std::current_exception();
+      }
+
+      try {
+        exprSetSimplified.eval(rows, &evalCtxSimplified, &simplifiedEvalResult);
+      } catch (const std::exception& e) {
+        exceptionSimplifiedPtr = std::current_exception();
+      }
+
+      // Compare results or exceptions (if any). Fail is anything is different.
+      if (exceptionCommonPtr || exceptionSimplifiedPtr) {
+        assertExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
+      } else {
+        assertEqualVectors(
+            commonEvalResult.front(), simplifiedEvalResult.front());
+      }
 
       // Update the seed for the next iteration.
       seed_ = folly::Random::rand32(rng);
@@ -131,6 +146,9 @@ TEST_F(EvalSimplifiedTest, constantOnly) {
 
 TEST_F(EvalSimplifiedTest, constantAndInput) {
   runTest("1 + c0 - 2 + c0", ROW({"c0"}, {BIGINT()}));
+
+  // Let it trigger some overflow exceptions.
+  runTest("c0 + c1", ROW({"c0", "c1"}, {TINYINT(), TINYINT()}));
 }
 
 TEST_F(EvalSimplifiedTest, strings) {
@@ -139,4 +157,18 @@ TEST_F(EvalSimplifiedTest, strings) {
 
 TEST_F(EvalSimplifiedTest, doubles) {
   runTest("ceil(c1) * c0", ROW({"c0", "c1"}, {DOUBLE(), DOUBLE()}));
+}
+
+// Ensure that the right exprSet object is instantiated if `kExprEvalSimplified`
+// is specified.
+TEST_F(EvalSimplifiedTest, queryParameter) {
+  queryCtx_->setConfigOverridesUnsafe({
+      {core::QueryCtx::kExprEvalSimplified, "true"},
+  });
+
+  auto expr = makeTypedExpr("1 + 1", nullptr);
+  auto exprSet = exec::makeExprSetFromFlag({expr}, &execCtx_);
+
+  auto* ptr = dynamic_cast<exec::ExprSetSimplified*>(exprSet.get());
+  EXPECT_TRUE(ptr != nullptr) << "expected ExprSetSimplified derived object.";
 }

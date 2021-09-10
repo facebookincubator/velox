@@ -233,6 +233,17 @@ class ScanSpec {
   // result of runtime adaptation.
   bool hasFilter() const;
 
+  // Resets cached values after this or children were updated, e.g. a new filter
+  // was added or existing filter was modified.
+  void resetCachedValues() {
+    hasFilter_.reset();
+    for (auto& child : children_) {
+      child->resetCachedValues();
+    }
+
+    reorder();
+  }
+
   void setEnableFilterReorder(bool enableFilterReorder) {
     enableFilterReorder_ = enableFilterReorder;
   }
@@ -284,7 +295,7 @@ class ScanSpec {
   // true differentiates pruning from the case of extracting all children.
 
   std::vector<std::unique_ptr<ScanSpec>> children_;
-  mutable folly::Optional<bool> hasFilter_;
+  mutable std::optional<bool> hasFilter_;
   ValueHook* valueHook_ = nullptr;
 };
 

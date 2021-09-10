@@ -41,7 +41,8 @@ add_library(
   Transform.cpp
   ElementAt.cpp
   Subscript.cpp
-  VectorArithmetic.cpp)
+  VectorArithmetic.cpp
+  WidthBucketArray.cpp)
 
 target_link_libraries(velox_functions_prestosql velox_exec velox_functions_json
                       velox_functions_lib velox_expression md5)

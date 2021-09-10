@@ -97,7 +97,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
   }
 
   // overwrite the null hash values
-  if (!BaseVector::nullCount_.hasValue() ||
+  if (!BaseVector::nullCount_.has_value() ||
       BaseVector::nullCount_.value() > 0) {
     for (size_t i = 0; i < BaseVector::length_; ++i) {
       if (bits::isBitNull(BaseVector::rawNulls_, i)) {
@@ -112,7 +112,7 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       std::move(hashBuffer),
       std::vector<BufferPtr>() /*stringBuffers*/,
       folly::F14FastMap<std::string, std::string>(),
-      folly::none /*distinctValueCount*/,
+      std::nullopt /*distinctValueCount*/,
       0 /*nullCount*/,
       false /*sorted*/,
       sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
@@ -295,6 +295,10 @@ void FlatVector<T>::resize(vector_size_t size) {
   values_->setSize(minBytes);
 
   if (std::is_same<T, StringView>::value) {
+    if (size < previousSize) {
+      auto vector = this->template as<SimpleVector<StringView>>();
+      vector->invalidateIsAscii();
+    }
     if (size == 0) {
       stringBuffers_.clear();
     }

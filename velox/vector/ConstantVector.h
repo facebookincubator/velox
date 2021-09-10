@@ -47,8 +47,8 @@ class ConstantVector : public SimpleVector<T> {
       T&& val,
       const folly::F14FastMap<std::string, std::string>& metaData =
           cdvi::EMPTY_METADATA,
-      folly::Optional<ByteCount> representedBytes = folly::none,
-      folly::Optional<ByteCount> storageByteCount = folly::none)
+      std::optional<ByteCount> representedBytes = std::nullopt,
+      std::optional<ByteCount> storageByteCount = std::nullopt)
       : ConstantVector(
             pool,
             length,
@@ -67,8 +67,8 @@ class ConstantVector : public SimpleVector<T> {
       T&& val,
       const folly::F14FastMap<std::string, std::string>& metaData =
           cdvi::EMPTY_METADATA,
-      folly::Optional<ByteCount> representedBytes = folly::none,
-      folly::Optional<ByteCount> storageByteCount = folly::none)
+      std::optional<ByteCount> representedBytes = std::nullopt,
+      std::optional<ByteCount> storageByteCount = std::nullopt)
       : SimpleVector<T>(
             pool,
             std::move(type),
@@ -115,14 +115,14 @@ class ConstantVector : public SimpleVector<T> {
             BufferPtr(nullptr),
             length,
             metaData,
-            folly::none,
-            folly::none,
+            std::nullopt,
+            std::nullopt,
             true /*isSorted*/,
             base->representedBytes().has_value()
-                ? folly::Optional<ByteCount>(
+                ? std::optional<ByteCount>(
                       (base->representedBytes().value() / base->size()) *
                       length)
-                : folly::none /* representedBytes */),
+                : std::nullopt /* representedBytes */),
         valueVector_(base),
         index_(index) {
     VELOX_CHECK_NE(
@@ -293,14 +293,7 @@ class ConstantVector : public SimpleVector<T> {
   std::string toString() const override {
     std::stringstream out;
     out << "[" << encoding() << " " << this->type()->toString() << ": "
-        << toString(index_) << " value, ";
-
-    if (this->size() == this->kMaxElements) {
-      out << "kMaxElements";
-    } else {
-      out << this->size();
-    }
-    out << " size]";
+        << toString(index_) << " value, " << this->size() << " size]";
     return out.str();
   }
 
@@ -327,21 +320,18 @@ class ConstantVector : public SimpleVector<T> {
       isNull_ = simple->isNullAt(index_);
       if (!isNull_) {
         value_ = simple->valueAt(index_);
-        if (std::is_same<T, StringView>::value) {
+        if constexpr (std::is_same<T, StringView>::value) {
           // Copy string value.
           StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
           setValue(std::string(valuePtr->data(), valuePtr->size()));
+
+          auto stringVector = simple->template as<SimpleVector<StringView>>();
+          if (auto ascii = stringVector->isAscii(index_)) {
+            SimpleVector<T>::setAllIsAscii(ascii.value());
+          }
         }
       }
       valueVector_ = nullptr;
-
-      // Preserve string encoding
-      if constexpr (std::is_same_v<T, StringView>) {
-        if (simple->getStringEncoding().has_value()) {
-          SimpleVector<T>::setStringEncoding(
-              simple->getStringEncoding().value());
-        }
-      }
     }
     makeNullsBuffer();
     initialized_ = true;

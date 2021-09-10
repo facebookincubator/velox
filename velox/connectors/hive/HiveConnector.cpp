@@ -236,6 +236,23 @@ bool testFilters(
 }
 } // namespace
 
+void HiveDataSource::addDynamicFilter(
+    ChannelIndex outputChannel,
+    const std::shared_ptr<common::Filter>& filter) {
+  common::Subfield subfield{outputType_->nameOf(outputChannel)};
+  auto fieldSpec = scanSpec_->getOrCreateChild(subfield);
+  if (fieldSpec->filter()) {
+    fieldSpec->filter()->mergeWith(filter.get());
+  } else {
+    fieldSpec->setFilter(filter->clone());
+  }
+  scanSpec_->resetCachedValues();
+
+  auto columnReader =
+      dynamic_cast<SelectiveColumnReader*>(rowReader_->columnReader());
+  columnReader->resetFilterCaches();
+}
+
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK(
       split_ == nullptr,
@@ -395,12 +412,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
     }
 
     return std::make_shared<RowVector>(
-        pool_,
-        outputType_,
-        BufferPtr(nullptr),
-        rowsRemaining,
-        outputColumns,
-        folly::none);
+        pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
   skippedStrides_ += rowReader_->skippedStrides();
@@ -423,15 +435,13 @@ vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 void HiveDataSource::setConstantValue(
     common::ScanSpec* spec,
     const velox::variant& value) const {
-  spec->setConstantValue(
-      BaseVector::createConstant(value, BaseVector::kMaxElements, pool_));
+  spec->setConstantValue(BaseVector::createConstant(value, 1, pool_));
 }
 
 void HiveDataSource::setNullConstantValue(
     common::ScanSpec* spec,
     const TypePtr& type) const {
-  spec->setConstantValue(
-      BaseVector::createNullConstant(type, BaseVector::kMaxElements, pool_));
+  spec->setConstantValue(BaseVector::createNullConstant(type, 1, pool_));
 }
 
 HiveConnector::HiveConnector(
