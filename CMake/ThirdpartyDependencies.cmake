@@ -17,5 +17,3 @@ include(ExternalProject)
 if (VELOX_ENABLE_S3)
     include(AWSSDKCPP)
 endif()
-
-
