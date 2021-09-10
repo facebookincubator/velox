@@ -123,7 +123,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     // For array_intersect, if there's a constant input, then require it is on
     // the right side. For array_except, the constant optimization only applies
     // if the constant is on the rhs, so a swap is not applicable.
-    ArrayVectorPtr leftArray;
     if constexpr (isIntersect) {
       if (constantSet_.has_value() && isLeftConstant_) {
         std::swap(left, right);
