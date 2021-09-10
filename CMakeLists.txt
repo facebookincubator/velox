@@ -16,6 +16,9 @@ cmake_minimum_required(VERSION 3.10)
 project(velox)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
+if (NOT DEFINED VELOX_DEPENDENCY_INSTALL_DIR)
+  set(VELOX_DEPENDENCY_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/install)
+endif()
 
 # Add all options below
 option(VELOX_ENABLE_S3 "Build S3 Connector" ON)
