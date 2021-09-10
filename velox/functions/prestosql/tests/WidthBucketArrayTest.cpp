@@ -74,11 +74,8 @@ TEST_F(WidthBucketArrayTest, success) {
 
     assertEqualVectors(makeFlatVector<int64_t>(expected), result);
 
-    // Flatten the constant operand so avoid peeling of encodings.
-    auto operandFlat = flatten(wrapInDictionary(
-        binsIndices,
-        binsVectorNewSize,
-        makeConstant(operand, binsVectorNewSize)));
+    // Flatten the constant operand to avoid peeling of encodings.
+    auto operandFlat = flatten(makeConstant(operand, binsVectorNewSize));
     auto dictResult = evaluate<SimpleVector<int64_t>>(
         "width_bucket(c0, c1)",
         makeRowVector({
