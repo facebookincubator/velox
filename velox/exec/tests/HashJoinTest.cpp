@@ -484,25 +484,48 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
-  auto rowType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
-  ColumnHandleMap assignments;
-  assignments["a"] = regularColumn("c0");
-  assignments["b"] = regularColumn("c1");
-
   // Basic push-down.
   {
     auto op = PlanBuilder(10)
-                  .tableScan(rowType,
-                             makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
-                             assignments)
+                  .tableScan(probeType)
                   .hashJoin(
                       {0},
                       {0},
                       PlanBuilder(0).values(rightVectors).planNode(),
                       "",
                       {1})
-                  .project({"b + 1"})
+                  .project({"c1 + 1"})
                   .planNode();
+
+    auto task = assertQuery(
+        op, {{10, leftFiles}}, "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0");
+    EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
+    EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
+    EXPECT_LT(getInputPositions(task, 1), 1024 * 20);
+  }
+
+  // Basic push-down with column names projected out of the table scan having
+  // different names than column names in the files.
+  {
+    auto scanOutputType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
+    ColumnHandleMap assignments;
+    assignments["a"] = regularColumn("c0");
+    assignments["b"] = regularColumn("c1");
+
+    auto op =
+        PlanBuilder(10)
+            .tableScan(
+                scanOutputType,
+                makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
+                assignments)
+            .hashJoin(
+                {0},
+                {0},
+                PlanBuilder(0).values(rightVectors).planNode(),
+                "",
+                {1})
+            .project({"b + 1"})
+            .planNode();
 
     auto task = assertQuery(
         op, {{10, leftFiles}}, "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0");
