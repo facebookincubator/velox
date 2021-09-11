@@ -484,17 +484,24 @@ TEST_F(HashJoinTest, dynamicFilters) {
 
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
+  auto rowType = ROW({"a", "b"}, {INTEGER(), BIGINT()});
+  ColumnHandleMap assignments;
+  assignments["a"] = regularColumn("c0");
+  assignments["b"] = regularColumn("c1");
+
   // Basic push-down.
   {
     auto op = PlanBuilder(10)
-                  .tableScan(probeType)
+                  .tableScan(rowType,
+                             makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
+                             assignments)
                   .hashJoin(
                       {0},
                       {0},
                       PlanBuilder(0).values(rightVectors).planNode(),
                       "",
                       {1})
-                  .project({"c1 + 1"})
+                  .project({"b + 1"})
                   .planNode();
 
     auto task = assertQuery(
