@@ -41,7 +41,7 @@ std::once_flag lazyRegistrationFlag;
 
 using RegisteredReadFiles = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::unique_ptr<ReadFile>(std::string_view)>>>;
+    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>>>;
 
 RegisteredReadFiles& registeredReadFiles() {
   // Meyers singleton.
@@ -51,7 +51,7 @@ RegisteredReadFiles& registeredReadFiles() {
 
 using RegisteredWriteFiles = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::unique_ptr<WriteFile>(std::string_view)>>>;
+    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>>>;
 
 RegisteredWriteFiles& registeredWriteFiles() {
   // Meyers singleton.
@@ -67,14 +67,17 @@ void lazyRegisterFileClass(std::function<void()> lazy_registration) {
 
 void registerFileClass(
     std::function<bool(std::string_view)> filenameMatcher,
-    std::function<std::unique_ptr<ReadFile>(std::string_view)> readGenerator,
-    std::function<std::unique_ptr<WriteFile>(std::string_view)>
+    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
+        readGenerator,
+    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
         writeGenerator) {
   registeredReadFiles().emplace_back(filenameMatcher, readGenerator);
   registeredWriteFiles().emplace_back(filenameMatcher, writeGenerator);
 }
 
-std::unique_ptr<ReadFile> generateReadFile(std::string_view filename) {
+std::unique_ptr<ReadFile> generateReadFile(
+    std::string_view filename,
+    Config* properties) {
   std::call_once(lazyRegistrationFlag, []() {
     for (auto registration : lazyRegistrations()) {
       registration();
@@ -83,14 +86,16 @@ std::unique_ptr<ReadFile> generateReadFile(std::string_view filename) {
   const auto& files = registeredReadFiles();
   for (const auto& p : files) {
     if (p.first(filename)) {
-      return p.second(filename);
+      return p.second(filename, properties);
     }
   }
   throw std::runtime_error(fmt::format(
       "No registered read file matched with filename '{}'", filename));
 }
 
-std::unique_ptr<WriteFile> generateWriteFile(std::string_view filename) {
+std::unique_ptr<WriteFile> generateWriteFile(
+    std::string_view filename,
+    Config* properties) {
   std::call_once(lazyRegistrationFlag, []() {
     for (auto registration : lazyRegistrations()) {
       registration();
@@ -99,7 +104,7 @@ std::unique_ptr<WriteFile> generateWriteFile(std::string_view filename) {
   const auto& files = registeredWriteFiles();
   for (const auto& p : files) {
     if (p.first(filename)) {
-      return p.second(filename);
+      return p.second(filename, properties);
     }
   }
   throw std::runtime_error(fmt::format(
@@ -293,20 +298,24 @@ struct LocalFileRegistrar {
         [](std::string_view filename) {
           return filename.find("/") == 0 || filename.find("file:") == 0;
         };
-    std::function<std::unique_ptr<ReadFile>(std::string_view)> read_generator =
-        [](std::string_view filename) {
+    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
+        read_generator = [](std::string_view filename, Config* properties) {
           if (filename.find("file:") == 0) {
-            return std::make_unique<LocalReadFile>(filename.substr(5));
+            // TODO: Cache the FileSystems
+            return LocalFileSystem().openReadFile(
+                filename.substr(5), properties);
           } else {
-            return std::make_unique<LocalReadFile>(filename);
+            return LocalFileSystem().openReadFile(filename, properties);
           }
         };
-    std::function<std::unique_ptr<WriteFile>(std::string_view)>
-        write_generator = [](std::string_view filename) {
+    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
+        write_generator = [](std::string_view filename, Config* properties) {
+          // TODO: Cache the FileSystems
           if (filename.find("file:") == 0) {
-            return std::make_unique<LocalWriteFile>(filename.substr(5));
+            return LocalFileSystem().openWriteFile(
+                filename.substr(5), properties);
           } else {
-            return std::make_unique<LocalWriteFile>(filename);
+            return LocalFileSystem().openWriteFile(filename, properties);
           }
         };
     registerFileClass(filename_matcher, read_generator, write_generator);
@@ -314,6 +323,32 @@ struct LocalFileRegistrar {
 };
 
 const LocalFileRegistrar localFileRegistrar;
+
+struct S3FileRegistrar {
+  S3FileRegistrar() {
+    lazyRegisterFileClass([this]() { this->ActuallyRegister(); });
+  }
+
+  void ActuallyRegister() {
+    // Note: presto behavior is to prefix local paths with 'file:'.
+    // Check for that prefix and prune to absolute regular paths as needed.
+    std::function<bool(std::string_view)> filename_matcher =
+        [](std::string_view filename) { return isS3File(filename); };
+    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
+        read_generator = [](std::string_view filename, Config* properties) {
+          // TODO: Cache the FileSystem
+          return S3FileSystem().openReadFile(filename, properties);
+        };
+    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
+        write_generator = [](std::string_view filename, Config* properties) {
+          // TODO: Cache the FileSystem
+          return S3FileSystem().openWriteFile(filename, properties);
+        };
+    registerFileClass(filename_matcher, read_generator, write_generator);
+  }
+};
+
+const S3FileRegistrar s3FileRegistrar;
 
 } // namespace
 

@@ -42,8 +42,13 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
+#include "velox/core/Context.h"
 
 namespace facebook::velox {
+
+bool inline isS3File(const std::string_view filename) {
+  return (filename.substr(0, 2) == "s3" || filename.substr(0, 3) == "s3a");
+}
 
 // A read-only file.
 class ReadFile {
@@ -157,8 +162,12 @@ void registerFileClass(
     std::function<std::unique_ptr<WriteFile>(std::string_view)> writeGenerator);
 
 // Returns a read/write file of type appropriate for filename.
-std::unique_ptr<ReadFile> generateReadFile(std::string_view filename);
-std::unique_ptr<WriteFile> generateWriteFile(std::string_view filename);
+std::unique_ptr<ReadFile> generateReadFile(
+    std::string_view filename,
+    const Config* properties = nullptr);
+std::unique_ptr<WriteFile> generateWriteFile(
+    std::string_view filename,
+    const Config* properties = nullptr);
 
 // We currently do a simple implementation for the in-memory files
 // that simply resizes a string as needed. If there ever gets used in
@@ -245,6 +254,27 @@ class LocalReadFile final : public ReadFile {
   mutable long size_ = -1;
 };
 
+class S3ReadFile final : public ReadFile {
+ public:
+  explicit S3ReadFile(std::string_view path);
+
+  std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
+      const final;
+  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+      const final;
+  std::string pread(uint64_t offset, uint64_t length) const final;
+  uint64_t size() const final;
+  uint64_t preadv(
+      uint64_t offset,
+      const std::vector<folly::Range<char*>>& buffers) final;
+  uint64_t memoryUsage() const final;
+
+ private:
+  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
+
+  mutable long size_ = -1;
+};
+
 class LocalWriteFile final : public WriteFile {
  public:
   // An error is thrown is a file already exists at |path|.
@@ -258,6 +288,56 @@ class LocalWriteFile final : public WriteFile {
  private:
   FILE* file_;
   mutable long size_;
+};
+
+// An abstract FileSystem
+class FileSystem : public std::enable_shared_from_this<FileSystem> {
+ public:
+  virtual ~FileSystem();
+  virtual std::string name() const = 0;
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path,
+      Config* config) = 0;
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path,
+      Config* config) = 0;
+};
+
+class LocalFileSystem : public FileSystem {
+ public:
+  virtual ~LocalFileSystem();
+  virtual std::string name() const override {
+    return "Local FS";
+  }
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path,
+      Config* config) override {
+    return std::make_unique<LocalReadFile>(path);
+  }
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path,
+      Config* config) override {
+    return std::make_unique<LocalWriteFile>(path);
+  }
+};
+
+class S3FileSystem : public FileSystem {
+ public:
+  ~S3FileSystem() {}
+  virtual std::string name() const override {
+    return "S3";
+  }
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path,
+      Config* config) override {
+    return std::make_unique<S3ReadFile>(path);
+  }
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path,
+      Config* config) override {
+    // Not yet implemented
+    return nullptr;
+  }
 };
 
 } // namespace facebook::velox
