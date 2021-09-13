@@ -43,7 +43,8 @@ class VectorFuzzer {
     size_t nullChance{0};
 
     // Size of the generated strings. If `stringVariableLength` is true, the
-    // semantic of this option becomes "string maximum length".
+    // semantic of this option becomes "string maximum length". Here this
+    // represents number of characters and not bytes.
     size_t stringLength{50};
 
     // Vector of String charsets to choose from; bias a charset by including it
