@@ -14,6 +14,9 @@
 
 include(ExternalProject)
 
+# Set third-party dependency versions below
+set(AWS_SDK_VERSION "1.9.96")
+
 if (VELOX_ENABLE_S3)
     include(AWSSDKCPP)
 endif()

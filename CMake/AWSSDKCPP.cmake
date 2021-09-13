@@ -17,7 +17,7 @@
 
 macro(build_awssdk)
     message("Configured to download and build AWS-SDK-CPP version " ${AWS_SDK_VERSION})
-    externalproject_add(aws-sdk
+    ExternalProject_Add(aws-sdk
             PREFIX aws-sdk-cpp
             GIT_REPOSITORY "https://github.com/aws/aws-sdk-cpp.git"
             GIT_TAG ${AWS_SDK_VERSION}
@@ -39,7 +39,7 @@ macro(build_awssdk)
             ${INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-core${CMAKE_STATIC_LIBRARY_SUFFIX})
     set_target_properties(aws-sdk-s3   PROPERTIES IMPORTED_LOCATION
             ${INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-s3${CMAKE_STATIC_LIBRARY_SUFFIX})
-    target_include_directories(aws-sdk-s3 PRIVATE ${AWS_INCLUDE_DIRS})
+    target_include_directories(aws-sdk-s3 PUBLIC ${AWS_INCLUDE_DIRS})
 endmacro()
 
 # S3 Reference  https://aws.amazon.com/blogs/developer/developer-experience-of-the-aws-sdk-for-c-now-simplified-by-cmake/

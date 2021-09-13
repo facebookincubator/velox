@@ -23,9 +23,6 @@ endif()
 # Add all options below
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 
-# Set third-party dependency versions below
-set(AWS_SDK_VERSION "1.9.96")
-
 include(ThirdpartyDependencies)
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
