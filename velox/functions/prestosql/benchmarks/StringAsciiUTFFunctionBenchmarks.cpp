@@ -123,6 +123,16 @@ BENCHMARK_RELATIVE(asciiSubStr) {
   benchmark.runSubStr(false);
 }
 
+BENCHMARK(utfSubStr) {
+  StringAsciiUTFFunctionBenchmark benchmark;
+  benchmark.runSubStr(true);
+}
+
+BENCHMARK_RELATIVE(asciiSubStr) {
+  StringAsciiUTFFunctionBenchmark benchmark;
+  benchmark.runSubStr(false);
+}
+
 } // namespace
 
 // Preliminary release run, before ascii optimization.
