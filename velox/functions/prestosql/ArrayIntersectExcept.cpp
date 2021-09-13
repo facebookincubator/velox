@@ -69,12 +69,11 @@ void generateSet(
 template <bool isIntersect, typename T>
 class ArrayIntersectExceptFunction : public exec::VectorFunction {
  public:
-  /// This class is used for both Array intersection and Array except functions.
-  /// (behavior controlled at compile time by the isIntersect template variable)
-  /// Both these functions takes two ArrayVectors as inputs (left and right) and
-  /// leverages two sets to calculate the intersection (or except):
+  /// This class is used for both array_intersect and array_except functions
+  /// (behavior controlled at compile time by the isIntersect template variable).
+  /// Both these functions take two ArrayVectors as inputs (left and right) and
+  /// leverage two sets to calculate the intersection (or except):
   ///
-  /// For each row processing the following are maintained:
   /// - rightSet: a set that contains all (distinct) elements from the
   ///   right-hand side array.
   /// - outputSet: a set that contains the elements that were already added to
@@ -96,11 +95,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   ///
   /// Constant optimization:
   ///
-  /// If any of the values passed to array_intersect() are constant (array
-  /// literals) we create a set before instantiating the object and pass as a
-  /// constructor parameter (constantSet).
-  /// The same optimization applies for array_except() with a constant (array
-  /// literals) on the rhs only.
+  /// If any of the values passed to array_intersect() or array_except are
+  /// constant (array literals) we create a set before instantiating the
+  /// object and pass as a constructor parameter (constantSet).
 
   ArrayIntersectExceptFunction() {}
 
@@ -141,7 +138,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         baseLeftArray,
         decodedLeftArray->indices());
     exec::LocalDecodedVector leftElementsHolder(
-            context, *leftElementsVector, leftElementsRows);
+        context, *leftElementsVector, leftElementsRows);
     auto decodedLeftElements = leftElementsHolder.get();
 
     auto leftElementsCount =
@@ -150,13 +147,13 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     // Allocate new vectors for indices, nulls, length and offsets.
     BufferPtr newIndices =
-            AlignedBuffer::allocate<vector_size_t>(leftElementsCount, pool);
+        AlignedBuffer::allocate<vector_size_t>(leftElementsCount, pool);
     BufferPtr newElementNulls =
-            AlignedBuffer::allocate<bool>(leftElementsCount, pool, bits::kNotNull);
+        AlignedBuffer::allocate<bool>(leftElementsCount, pool, bits::kNotNull);
     BufferPtr newLengths =
-            AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
     BufferPtr newOffsets =
-            AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
 
     // Pointers and cursors to the raw data.
     auto rawNewIndices = newIndices->asMutable<vector_size_t>();
@@ -182,11 +179,11 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       // Scans the array elements on the left-hand side.
       for (vector_size_t i = offset; i < (offset + size); ++i) {
         if (decodedLeftElements->isNullAt(i)) {
-          bool setNull = false;
           // For a NULL value not added to the output row yet, insert in
           // array_intersect if it was found on the rhs (and not found in the
           // case of array_except).
           if (!outputSet.hasNull) {
+            bool setNull = false;
             if constexpr (isIntersect) {
               setNull = rightSet.hasNull;
             } else {
@@ -199,10 +196,10 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           }
         } else {
           auto val = decodedLeftElements->valueAt<T>(i);
-          bool addValue = false;
-          // For array_intersect, add the element if it exists (not exists for
-          // array_except) in the right-hand side, and wasn't added already
+          // For array_intersect, add the element if it is found (not found
+          // for array_except) in the right-hand side, and wasn't added already
           // (check outputSet).
+          bool addValue = false;
           if constexpr (isIntersect) {
             addValue = rightSet.set.count(val) > 0;
           } else {
