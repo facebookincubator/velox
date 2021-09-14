@@ -225,9 +225,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
         processRow(row, *constantSet_, outputSet);
       });
     }
+    // General case when no arrays are constant and both sets need to be
+    // computed for each row.
     else {
-      // General case when no arrays are constant and both sets need to be
-      // computed for each row.
       exec::LocalDecodedVector rightHolder(context, *right, rows);
       auto decodedRightArray = rightHolder.get();
       auto baseRightArray = decodedRightArray->base()->as<ArrayVector>();
