@@ -124,7 +124,7 @@ MappedMemoryImpl::MappedMemoryImpl() : numAllocated_(0), numMapped_(0) {
 
 bool MappedMemoryImpl::allocate(
     MachinePageCount numPages,
-    int32_t owner,
+    int32_t /*owner*/,
     Allocation& out,
     std::function<void(int64_t)> beforeAllocCB,
     MachinePageCount minSizeClass) {

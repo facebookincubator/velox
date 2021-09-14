@@ -26,7 +26,7 @@ namespace facebook::velox::util {
 template <TypeKind KIND, typename = void, bool TRUNCATE = false>
 struct Converter {
   template <typename T>
-  static typename TypeTraits<KIND>::NativeType cast(T val) {
+  static typename TypeTraits<KIND>::NativeType cast(T /*val*/) {
     VELOX_NYI();
   }
 };
@@ -36,7 +36,7 @@ struct Converter<TypeKind::BOOLEAN> {
   using T = bool;
 
   template <typename From>
-  static T cast(const From& v) {
+  static T cast(const From& /*v*/) {
     VELOX_NYI();
   }
 
@@ -65,7 +65,7 @@ struct Converter<
   using T = typename TypeTraits<KIND>::NativeType;
 
   template <typename From>
-  static T cast(const From& v) {
+  static T cast(const From& /*v*/) {
     VELOX_NYI();
   }
 

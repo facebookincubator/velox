@@ -113,7 +113,7 @@ class CachedPtr {
 
 template <typename Value>
 struct DefaultSizer {
-  int64_t operator()(const Value& value) const {
+  int64_t operator()(const Value& /*value*/) const {
     return 1;
   }
 };

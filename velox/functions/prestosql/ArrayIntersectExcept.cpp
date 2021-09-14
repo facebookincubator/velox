@@ -336,7 +336,7 @@ std::shared_ptr<exec::VectorFunction> createTyped(
 }
 
 std::shared_ptr<exec::VectorFunction> createArrayIntersect(
-    const std::string& name,
+    const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);
@@ -349,7 +349,7 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
 }
 
 std::shared_ptr<exec::VectorFunction> createArrayExcept(
-    const std::string& name,
+    const std::string& /*name*/,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   validateType(inputArgs);
   auto elementType = inputArgs.front().type->childAt(0);

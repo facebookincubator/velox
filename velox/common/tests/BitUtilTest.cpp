@@ -267,7 +267,7 @@ TEST_F(BitUtilTest, testBits) {
   auto totalBits = sizeof(data) * 8;
 
   // no bits are set
-  auto neverCalled = [](int32_t idx) {
+  auto neverCalled = [](int32_t /*idx*/) {
     EXPECT_TRUE(false) << "Didn't expect this call";
     return true;
   };
@@ -359,7 +359,7 @@ TEST_F(BitUtilTest, forEachBit) {
   auto totalBits = sizeof(data) * 8;
 
   // no bits are set
-  auto neverCalled = [](int32_t idx) {
+  auto neverCalled = [](int32_t /*idx*/) {
     EXPECT_TRUE(false) << "Didn't expect this call";
   };
   forEachSetBit(data, 0, totalBits, neverCalled);

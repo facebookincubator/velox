@@ -74,7 +74,7 @@ template <
     typename Tuple,
     typename Func,
     std::enable_if_t<Idx >= std::tuple_size<Tuple>::value, int32_t> = 0>
-void forEachWithIndex(Func&& func, Tuple&& tup) {}
+void forEachWithIndex(Func&& /*func*/, Tuple&& /*tup*/) {}
 
 template <
     size_t Idx,

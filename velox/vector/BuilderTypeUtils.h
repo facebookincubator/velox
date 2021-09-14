@@ -76,7 +76,7 @@ constexpr bool allowsMapKey() {
  * is small enough to use bias for the given type
  */
 template <typename T>
-inline bool deltaAllowsBias(uint64_t delta) {
+inline bool deltaAllowsBias(uint64_t /*delta*/) {
   return false;
 }
 

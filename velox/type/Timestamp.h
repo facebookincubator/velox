@@ -130,7 +130,7 @@ struct Timestamp {
 void parseTo(folly::StringPiece in, ::facebook::velox::Timestamp& out);
 
 template <typename T>
-void toAppend(const ::facebook::velox::Timestamp& value, T* result) {
+void toAppend(const ::facebook::velox::Timestamp& /*value*/, T* /*result*/) {
   // TODO Implement
 }
 

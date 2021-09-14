@@ -1408,7 +1408,7 @@ static inline T to(U value) {
 }
 
 template <>
-inline Timestamp to(std::string value) {
+inline Timestamp to(std::string /*value*/) {
   return Timestamp(0, 0);
 }
 
@@ -1428,12 +1428,12 @@ inline std::string to(velox::StringView value) {
 }
 
 template <>
-inline std::string to(ComplexType value) {
+inline std::string to(ComplexType /*value*/) {
   return std::string("ComplexType");
 }
 
 template <>
-inline ComplexType to(std::string value) {
+inline ComplexType to(std::string /*value*/) {
   return ComplexType();
 }
 

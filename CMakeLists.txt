@@ -91,7 +91,6 @@ if("${ENABLE_ALL_WARNINGS}")
 
   set(KNOWN_WARNINGS
       "-Wno-unused \
-       -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")

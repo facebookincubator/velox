@@ -99,7 +99,7 @@ class BaseVector {
   // the vector, with valid values at least for the rows selected in
   // 'rows'. Dictionaries, sequences and constants may calculate this on
   // demand.
-  virtual const uint64_t* flatRawNulls(const SelectivityVector& rows) {
+  virtual const uint64_t* flatRawNulls(const SelectivityVector& /*rows*/) {
     return rawNulls_;
   }
 
@@ -274,7 +274,7 @@ class BaseVector {
   virtual std::unique_ptr<SimpleVector<uint64_t>> hashAll() const = 0;
 
   // Returns true if all values in the specified rows are the same.
-  virtual bool isConstant(const SelectivityVector& rows) const {
+  virtual bool isConstant(const SelectivityVector& /*rows*/) const {
     return false;
   }
 
@@ -367,10 +367,10 @@ class BaseVector {
   }
 
   virtual void copy(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) {
+      const BaseVector* /*source*/,
+      vector_size_t /*targetIndex*/,
+      vector_size_t /*sourceIndex*/,
+      vector_size_t /*count*/) {
     VELOX_NYI();
   }
 
