@@ -92,22 +92,25 @@ ParquetRowReader::ParquetRowReader(
     }
   }
 
-  auto& scanSpec = *options.getScanSpec();
-  for (auto& colSpec : scanSpec.children()) {
-    VELOX_CHECK(
-        !colSpec->extractValues(), "Subfield access is NYI in parquet reader");
-    if (colSpec->filter()) {
-      // TODO: remove linear search
-      uint64_t colIdx = std::find(
-                            reader_->names.begin(),
-                            reader_->names.end(),
-                            colSpec->fieldName()) -
-          reader_->names.begin();
+  if (options.getScanSpec()) {
+    auto& scanSpec = *options.getScanSpec();
+    for (auto& colSpec : scanSpec.children()) {
       VELOX_CHECK(
-          colIdx < reader_->names.size(),
-          "Unexpected columns name: {}",
-          colSpec->fieldName());
-      toDuckDbFilter(colIdx, colSpec->filter(), filters_);
+          !colSpec->extractValues(),
+          "Subfield access is NYI in parquet reader");
+      if (colSpec->filter()) {
+        // TODO: remove linear search
+        uint64_t colIdx = std::find(
+                              reader_->names.begin(),
+                              reader_->names.end(),
+                              colSpec->fieldName()) -
+            reader_->names.begin();
+        VELOX_CHECK(
+            colIdx < reader_->names.size(),
+            "Unexpected columns name: {}",
+            colSpec->fieldName());
+        toDuckDbFilter(colIdx, colSpec->filter(), filters_);
+      }
     }
   }
 
