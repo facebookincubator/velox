@@ -46,10 +46,6 @@
 
 namespace facebook::velox {
 
-bool inline isS3File(const std::string_view filename) {
-  return (filename.substr(0, 2) == "s3" || filename.substr(0, 3) == "s3a");
-}
-
 // A read-only file.
 class ReadFile {
  public:
@@ -254,27 +250,6 @@ class LocalReadFile final : public ReadFile {
   mutable long size_ = -1;
 };
 
-class S3ReadFile final : public ReadFile {
- public:
-  explicit S3ReadFile(std::string_view path);
-
-  std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
-      const final;
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
-      const final;
-  std::string pread(uint64_t offset, uint64_t length) const final;
-  uint64_t size() const final;
-  uint64_t preadv(
-      uint64_t offset,
-      const std::vector<folly::Range<char*>>& buffers) final;
-  uint64_t memoryUsage() const final;
-
- private:
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
-
-  mutable long size_ = -1;
-};
-
 class LocalWriteFile final : public WriteFile {
  public:
   // An error is thrown is a file already exists at |path|.
@@ -318,25 +293,6 @@ class LocalFileSystem : public FileSystem {
       std::string_view path,
       Config* config) override {
     return std::make_unique<LocalWriteFile>(path);
-  }
-};
-
-class S3FileSystem : public FileSystem {
- public:
-  ~S3FileSystem() {}
-  virtual std::string name() const override {
-    return "S3";
-  }
-  virtual std::unique_ptr<ReadFile> openReadFile(
-      std::string_view path,
-      Config* config) override {
-    return std::make_unique<S3ReadFile>(path);
-  }
-  virtual std::unique_ptr<WriteFile> openWriteFile(
-      std::string_view path,
-      Config* config) override {
-    // Not yet implemented
-    return nullptr;
   }
 };
 

@@ -15,7 +15,9 @@
  */
 
 #include "velox/common/file/File.h"
-
+#ifdef VELOX_ENABLE_S3
+#include "velox/common/file/S3File.h"
+#endif
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include <memory>
