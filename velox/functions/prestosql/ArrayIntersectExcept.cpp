@@ -95,8 +95,8 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   ///
   /// Constant optimization:
   ///
-  /// If any of the values passed to array_intersect() or array_except are
-  /// constant (array literals) we create a set before instantiating the
+  /// If any of the values passed to array_intersect() or rhs for array_except()
+  /// are constant (array literals) we create a set before instantiating the
   /// object and pass as a constructor parameter (constantSet).
 
   ArrayIntersectExceptFunction() {}
@@ -116,10 +116,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
 
-    // Optimizations for constant vector.
     // For array_intersect, if there's a constant input, then require it is on
     // the right side. For array_except, the constant optimization only applies
-    // if the constant is on the rhs, so a swap is not applicable.
+    // if the constant is on the rhs, so this swap is not applicable.
     if constexpr (isIntersect) {
       if (constantSet_.has_value() && isLeftConstant_) {
         std::swap(left, right);
@@ -220,25 +219,13 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     SetWithNull<T> outputSet;
 
-    // Optimized case for constant arrays: applies for both constant lhs
-    // and rhs for array_intersect, and only rhs for array_except.
-    bool isConstantOptimized = false;
-    if constexpr (isIntersect) {
-      if (constantSet_.has_value()) {
-        rows.applyToSelected([&](vector_size_t row) {
-          processRow(row, *constantSet_, outputSet);
-        });
-        isConstantOptimized = true;
-      }
-    } else {
-      if (constantSet_.has_value() && !isLeftConstant_) {
-        rows.applyToSelected([&](vector_size_t row) {
-          processRow(row, *constantSet_, outputSet);
-        });
-        isConstantOptimized = true;
-      }
+    // Optimized case when the right-hand side array is constant.
+    if (constantSet_.has_value()) {
+      rows.applyToSelected([&](vector_size_t row) {
+        processRow(row, *constantSet_, outputSet);
+      });
     }
-    if (!isConstantOptimized) {
+    else {
       // General case when no arrays are constant and both sets need to be
       // computed for each row.
       exec::LocalDecodedVector rightHolder(context, *right, rows);
@@ -318,9 +305,16 @@ std::shared_ptr<exec::VectorFunction> createTyped(
     return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>();
   }
 
+  // Constant optimization is not supported for constant lhs for array_except
+  const bool isLeftConstant = (left != nullptr);
+  if (isLeftConstant) {
+    if constexpr (!isIntersect){
+      return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>();
+    }
+  }
+
   // From now on either left or right is constant; generate a set based on its
   // elements.
-  const bool isLeftConstant = (left != nullptr);
   BaseVector* constantVector = isLeftConstant ? left : right;
 
   auto constantArray = constantVector->as<ConstantVector<velox::ComplexType>>();
