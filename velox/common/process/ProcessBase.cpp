@@ -118,6 +118,36 @@ bool hasBmi2() {
   return bmi2CpuFlag && FLAGS_bmi2;
 }
 
+std::mutex Context::mutex_;
+std::unordered_map<std::string, TraceData> Context::counts_;
+  Context::Context(const std::string& label) : label_(label), enterTime_(std::chrono::steady_clock::now()) {
+  std::lock_guard<std::mutex> l(mutex);
+  auto& data = counts_[label_];
+  ++data.numThreads;
+  ++data.numEnters;
+}
+
+Context::~Context() {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto& data = counts_[label_];
+  --data.numThreads;
+ auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - enterTime_).count();
+ data.totalMs += ms;
+ data.maxMs = std::max<uint64_t>(data.maxMs, ms);
+}
+
+// static
+std::string Context::statusLine() {
+  std::stringstream out;
+  std::lock_guard<std::mutex> l(mutex_);
+  for (auto& pair : counts_) {
+    if (pair.second.numThreads) {
+      out << pair.first << "=" << pair.second.numThreads << " entered " << pair.second.numEnters << " avg ms " << (pair.second.totalMs / (1 + pair.second.numEnters)) << " max ms " << pair.second.maxMs << " ";
+    }
+  }
+  return out.str();
+}
+
 } // namespace process
 } // namespace velox
 } // namespace facebook

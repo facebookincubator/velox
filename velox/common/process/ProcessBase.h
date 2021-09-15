@@ -16,6 +16,10 @@
 
 #pragma once
 
+#include <mutex>
+#include <string>
+#include <unordered_map>
+
 #include <pthread.h>
 #include <sys/types.h>
 #include <string>
@@ -62,6 +66,29 @@ bool hasAvx2();
 // True if the machine has Intel BMI2 instructions and these are not disabled by
 // flag.
 bool hasBmi2();
+
+struct TraceData {
+  int32_t numThreads{0};
+  int32_t numEnters{0};
+  uint64_t totalMs{0};
+  uint64_t maxMs{0};
+};
+  
+class Context {
+public:
+  Context(const std::string& label);
+
+  ~Context();
+
+  static std::string statusLine();
+
+ private:
+  std::string label_;
+  std::chrono::steady_clock::time_point enterTime_;
+  
+  static std::mutex mutex_;
+  static std::unordered_map<std::string, TraceData> counts_;
+};
 
 } // namespace process
 } // namespace velox
