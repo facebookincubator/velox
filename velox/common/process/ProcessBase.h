@@ -73,9 +73,9 @@ struct TraceData {
   uint64_t totalMs{0};
   uint64_t maxMs{0};
 };
-  
+
 class Context {
-public:
+ public:
   Context(const std::string& label);
 
   ~Context();
@@ -85,7 +85,7 @@ public:
  private:
   std::string label_;
   std::chrono::steady_clock::time_point enterTime_;
-  
+
   static std::mutex mutex_;
   static std::unordered_map<std::string, TraceData> counts_;
 };
