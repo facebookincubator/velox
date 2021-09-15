@@ -24,8 +24,8 @@
 
 #include <fcntl.h>
 #include <folly/portability/SysUio.h>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <hdfs/FileStatus.h>
+#include <hdfs/hdfs.h>
 
 namespace facebook::velox {
 
@@ -269,6 +269,79 @@ void LocalWriteFile::append(std::string_view data) {
 
 uint64_t LocalWriteFile::size() const {
   return ftell(file_);
+}
+
+void HdfsReadFile::initHDFS() {
+  // TODO: pass namenode's IP and port from config file.
+  std::string host ("127.0.0.1");
+  int port = 65212;
+  struct hdfsBuilder *builder = hdfsNewBuilder();
+  hdfsBuilderConfSetStr(builder, "input.read.timeout", "60000");
+  hdfsBuilderConfSetStr(builder, "input.connect.timeout", "60000");
+  hdfsBuilderSetNameNode(builder, host.c_str());
+  hdfsBuilderSetNameNodePort(builder, port);
+  hdfs = hdfsBuilderConnect(builder);
+  VELOX_CHECK(hdfs != nullptr, "Unable to connect to HDFS, get error:{}.",
+              hdfsGetLastError())
+}
+
+HdfsReadFile::HdfsReadFile(std::string_view path) {
+  path_ = std::string(path).c_str();
+  if(hdfs == nullptr) {
+    std::call_once(HdfsInitiationFlag, &HdfsReadFile::initHDFS);
+  }
+  file_= hdfsOpenFile(hdfs, path_, O_RDONLY, 0, 0, 0);
+  VELOX_CHECK(file_ != nullptr, "Unable to open file {}. get error: {}",
+              path_, hdfsGetLastError())
+}
+
+void HdfsReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
+const {
+  if(offset > 0) {
+    hdfsSeek(hdfs, file_, offset);
+  }
+  uint64_t totalBytesRead = 0;
+  while (totalBytesRead < length) {
+    auto bytesRead = hdfsRead(hdfs, file_, pos, length - totalBytesRead);
+    VELOX_CHECK(bytesRead > 0, "Read failure in HDFSReadFile::preadInternal.")
+    totalBytesRead += bytesRead;
+    pos += bytesRead;
+  }
+}
+
+std::string_view
+HdfsReadFile::pread(uint64_t offset, uint64_t length, Arena* arena) const {
+  char* pos = arena->reserve(length);
+  preadInternal(offset, length, pos);
+  return {pos, length};
+}
+
+std::string_view
+HdfsReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
+  preadInternal(offset, length, static_cast<char*>(buf));
+  return {static_cast<char*>(buf), length};
+}
+
+std::string HdfsReadFile::pread(uint64_t offset, uint64_t length) const {
+  // TODO: use allocator that doesn't initialize memory?
+  std::string result(length, 0);
+  char* pos = result.data();
+  preadInternal(offset, length, pos);
+  return result;
+}
+
+uint64_t HdfsReadFile::size() const {
+  if (fileInfo_ == nullptr) {
+    fileInfo_ = hdfsGetPathInfo(hdfs, path_);
+  }
+  return fileInfo_->mSize;
+}
+
+uint64_t HdfsReadFile::memoryUsage() const {
+  if (fileInfo_ == nullptr) {
+    fileInfo_ = hdfsGetPathInfo(hdfs, path_);
+  }
+  return fileInfo_->mBlockSize;
 }
 
 // Register the local Files.

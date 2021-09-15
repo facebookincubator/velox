@@ -22,7 +22,6 @@ add_library(
   DataSink.cpp
   DwioMetricsLog.cpp
   InputStream.cpp
-  HdfsInputStream.cpp
   IoStatistics.cpp
   MemoryInputStream.cpp
   Options.cpp

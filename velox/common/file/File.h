@@ -39,6 +39,7 @@
 
 #include <folly/Range.h>
 #include <folly/futures/Future.h>
+#include <hdfs/hdfs.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
@@ -234,4 +235,26 @@ class LocalWriteFile final : public WriteFile {
   mutable long size_;
 };
 
+class HdfsReadFile final : public ReadFile {
+ public:
+  explicit HdfsReadFile(std::string_view path);
+
+  std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
+  const final;
+  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+  const final;
+  std::string pread(uint64_t offset, uint64_t length) const final;
+  uint64_t size() const final;
+  uint64_t memoryUsage() const final;
+
+ private:
+  static hdfsFS hdfs;
+  static std::once_flag HdfsInitiationFlag;
+  static void initHDFS();
+  hdfsFile file_;
+  const char * path_;
+  mutable hdfsFileInfo * fileInfo_;
+
+  void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
+};
 } // namespace facebook::velox
