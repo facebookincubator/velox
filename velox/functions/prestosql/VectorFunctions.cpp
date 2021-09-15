@@ -31,6 +31,7 @@ void registerVectorFunctions() {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max, "array_max");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min, "array_min");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_cardinality, "cardinality");
@@ -60,6 +61,8 @@ void registerVectorFunctions() {
       "regexp_extract", re2ExtractSignatures(), makeRe2Extract);
   exec::registerStatefulVectorFunction(
       "regexp_like", re2SearchSignatures(), makeRe2Search);
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, "to_utf8");
 
   // TODO Fix Koski parser and clean this up.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "ROW");

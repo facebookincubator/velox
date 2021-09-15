@@ -15,12 +15,6 @@
  */
 #pragma once
 
-// The cpp library for xxhash requires one of the few macros to be set in
-// order to get the library to even work (there's no default mode set).
-// This macro forces the hash function to be inlined and is not set by default.
-// We do not want to change the external library to set this default behavior.
-#define XXH_INLINE_ALL
-
 #include <assert.h>
 #include <fmt/format.h>
 #include <stdio.h>
@@ -33,14 +27,11 @@
 #include <vector>
 #include "folly/CPortability.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
-#include "velox/external/xxhash.h"
 #include "velox/functions/lib/string/StringCore.h"
 
-namespace facebook {
-namespace velox {
-namespace functions {
-namespace stringImpl {
+namespace facebook::velox::functions::stringImpl {
 using namespace stringCore;
 
 /// Perform upper for a UTF8 string
@@ -242,34 +233,6 @@ FOLLY_ALWAYS_INLINE void replaceInPlace(
   string.resize(outputSize);
 }
 
-/// Extract the hash for a given string
-/// Following the implementation in HIVE UDF
-/// fbcode/fbjava/hive-udfs/core-udfs/src/main/java/com/facebook/hive/udf/UDFXxhash64.java
-template <typename TInString>
-FOLLY_ALWAYS_INLINE bool
-xxhash64int(int64_t& result, const TInString& input, const int64_t seed = 0) {
-  // Following the implementation in Hive
-  // They use utf8Slice constructor which is not necessary for correctness
-  result = XXH64(input.data(), input.size(), seed);
-  return true;
-}
-
-/// Extract the hash for a given string as string
-/// Following the implementation in Presto
-/// presto/presto-main/src/main/java/com/facebook/presto/operator/scalar/VarbinaryFunctions.java
-template <typename TOutString, typename TInString>
-FOLLY_ALWAYS_INLINE bool xxhash64(TOutString& output, const TInString& input) {
-  // Following the implementation in Presto (seed is set to 0)
-  int64_t hash;
-  xxhash64int(hash, input, 0);
-  static const auto kLen = sizeof(int64_t);
-
-  // Resizing output and copy
-  output.resize(kLen);
-  std::memcpy(output.data(), &hash, kLen);
-  return true;
-}
-
 /// Compute the MD5 Hash.
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool md5(TOutString& output, const TInString& input) {
@@ -325,7 +288,8 @@ FOLLY_ALWAYS_INLINE bool toHex(TOutString& output, const TInString& input) {
   const auto inputSize = input.size();
   output.resize(inputSize * 2);
 
-  const char* inputBuffer = input.data();
+  const unsigned char* inputBuffer =
+      reinterpret_cast<const unsigned char*>(input.data());
   char* resultBuffer = output.data();
 
   for (auto i = 0; i < inputSize; ++i) {
@@ -352,6 +316,10 @@ FOLLY_ALWAYS_INLINE static uint8_t fromHex(char c) {
   VELOX_USER_FAIL("Invalid hex character: {}", c);
 }
 
+FOLLY_ALWAYS_INLINE unsigned char toHex(unsigned char c) {
+  return c < 10 ? (c + '0') : (c + 'A' - 10);
+}
+
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool fromHex(TOutString& output, const TInString& input) {
   VELOX_USER_CHECK_EQ(
@@ -373,7 +341,107 @@ FOLLY_ALWAYS_INLINE bool fromHex(TOutString& output, const TInString& input) {
 
   return true;
 }
-} // namespace stringImpl
-} // namespace functions
-} // namespace velox
-} // namespace facebook
+
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool toBase64(TOutString& output, const TInString& input) {
+  output.resize(encoding::Base64::calculateEncodedSize(input.size()));
+  encoding::Base64::encode(input.data(), input.size(), output.data());
+  return true;
+}
+
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool fromBase64(
+    TOutString& output,
+    const TInString& input) {
+  try {
+    auto inputSize = input.size();
+    output.resize(
+        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
+    encoding::Base64::decode(input.data(), input.size(), output.data());
+  } catch (const encoding::Base64Exception& e) {
+    VELOX_USER_FAIL(e.what());
+  }
+  return true;
+}
+
+FOLLY_ALWAYS_INLINE void charEscape(unsigned char c, char* output) {
+  output[0] = '%';
+  output[1] = toHex(c / 16);
+  output[2] = toHex(c % 16);
+}
+
+/// Escapes ``input`` by encoding it so that it can be safely included in
+/// URL query parameter names and values:
+///
+///  * Alphanumeric characters are not encoded.
+///  * The characters ``.``, ``-``, ``*`` and ``_`` are not encoded.
+///  * The ASCII space character is encoded as ``+``.
+///  * All other characters are converted to UTF-8 and the bytes are encoded
+///    as the string ``%XX`` where ``XX`` is the uppercase hexadecimal
+///    value of the UTF-8 byte.
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool urlEscape(TOutString& output, const TInString& input) {
+  auto inputSize = input.size();
+  output.reserve(inputSize * 3);
+
+  auto inputBuffer = input.data();
+  auto outputBuffer = output.data();
+
+  size_t outIndex = 0;
+  for (auto i = 0; i < inputSize; ++i) {
+    unsigned char p = inputBuffer[i];
+
+    if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') ||
+        (p >= '0' && p <= '9') || p == '-' || p == '_' || p == '.' ||
+        p == '*') {
+      outputBuffer[outIndex++] = p;
+    } else if (p == ' ') {
+      outputBuffer[outIndex++] = '+';
+    } else {
+      charEscape(p, outputBuffer + outIndex);
+      outIndex += 3;
+    }
+  }
+  output.resize(outIndex);
+  return true;
+}
+
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool urlUnescape(
+    TOutString& output,
+    const TInString& input) {
+  auto inputSize = input.size();
+  output.reserve(inputSize);
+
+  auto outputBuffer = output.data();
+  const char* p = input.data();
+  const char* end = p + inputSize;
+  char buf[3];
+  buf[2] = '\0';
+  char* endptr;
+  for (; p < end; ++p) {
+    if (*p == '+') {
+      *outputBuffer++ = ' ';
+    } else if (*p == '%') {
+      if (p + 2 < end) {
+        buf[0] = p[1];
+        buf[1] = p[2];
+        int val = strtol(buf, &endptr, 16);
+        if (endptr == buf + 2) {
+          *outputBuffer++ = (char)val;
+          p += 2;
+        } else {
+          VELOX_USER_FAIL(
+              "Illegal hex characters in escape (%) pattern: {}", buf);
+        }
+      } else {
+        VELOX_USER_FAIL("Incomplete trailing escape (%) pattern");
+      }
+    } else {
+      *outputBuffer++ = *p;
+    }
+  }
+  output.resize(outputBuffer - output.data());
+  return true;
+}
+} // namespace facebook::velox::functions::stringImpl

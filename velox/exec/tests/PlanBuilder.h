@@ -93,13 +93,15 @@ class PlanBuilder {
 
   PlanBuilder& intermediateAggregation(
       const std::vector<ChannelIndex>& groupingKeys,
-      const std::vector<std::string>& aggregates) {
+      const std::vector<std::string>& aggregates,
+      const std::vector<TypePtr>& resultTypes = {}) {
     return aggregation(
         groupingKeys,
         aggregates,
         {},
         core::AggregationNode::Step::kIntermediate,
-        false);
+        false,
+        resultTypes);
   }
 
   PlanBuilder& singleAggregation(
@@ -190,8 +192,9 @@ class PlanBuilder {
   // Adds a user defined PlanNode as the root of the plan. 'func' takes
   // the current root of the plan and returns the new root.
   PlanBuilder& addNode(std::function<std::shared_ptr<core::PlanNode>(
+                           std::string nodeId,
                            std::shared_ptr<const core::PlanNode>)> func) {
-    planNode_ = func(planNode_);
+    planNode_ = func(nextPlanNodeId(), planNode_);
     return *this;
   }
 

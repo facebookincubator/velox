@@ -35,9 +35,10 @@ add_library(
   Not.cpp
   ArrayConstructor.cpp
   ArrayContains.cpp
-  ArrayIntersect.cpp
+  ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   FilterFunctions.cpp
+  ToUtf8.cpp
   Transform.cpp
   ElementAt.cpp
   Subscript.cpp
