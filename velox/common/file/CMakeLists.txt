@@ -16,7 +16,7 @@
 include_directories(.)
 add_library(file File.cpp)
 target_link_libraries(file velox_exception ${GTEST_BOTH_LIBRARIES} ${GLOG}
-                      ${FOLLY_WITH_DEPENDENCIES} ${FMT})
+                      ${FOLLY_WITH_DEPENDENCIES} ${FMT} libhdfs3)
 
 add_executable(file_test FileTest.cpp)
 add_test(file_test file_test)
