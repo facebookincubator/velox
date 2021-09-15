@@ -21,8 +21,6 @@
 
 #pragma once
 
-#include "velox/common/file/File.h"
-
 #include <aws/core/Aws.h>
 #include <aws/core/Region.h>
 #include <aws/core/auth/AWSCredentials.h>
@@ -43,8 +41,10 @@ bool inline isS3File(const std::string_view filename) {
 
 class S3ReadFile final : public ReadFile {
  public:
-  explicit S3ReadFile(std::string_view path);
-
+  explicit S3ReadFile(std::string_view path) : path_(path) {}
+  void init(std::shared_ptr<Aws::S3::S3Client> client) {
+    client_ = client;
+  }
   std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
       const final;
   std::string_view pread(uint64_t offset, uint64_t length, void* buf)
@@ -59,14 +59,30 @@ class S3ReadFile final : public ReadFile {
  private:
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
   std::shared_ptr<Aws::S3::S3Client> client_;
-  std::string_view path_;
+  std::string path_;
   bool closed_ = false;
   int64_t pos_ = 0;
   int64_t content_length_ = 0;
 };
 
-class S3Properties {
+// Implementation of S3 FileSystem
+class S3FileSystem : public FileSystem {
  public:
+  S3FileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
+  ~S3FileSystem() {}
+  void init();
+  virtual std::string name() const override {
+    return "S3";
+  }
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path) override {
+    return std::make_unique<S3ReadFile>(path);
+  }
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path) override {
+    // Not yet implemented
+    return nullptr;
+  }
   // Configure default AWS credentials provider chain.
   void configureDefaultCredentialChain();
   // Configure with access and secret keys. Used for on-prem.
@@ -78,39 +94,20 @@ class S3Properties {
   std::string getAccessKey() const;
   std::string getSecretKey() const;
   std::string getSessionToken() const;
-  std::string getEndPoint() const;
-  std::string getScheme() const;
-  std::string getRegion() const;
+  std::string getEndPoint() const {
+    return endpoint_;
+  }
+  std::string getScheme() const {
+    return scheme_;
+  }
+  std::string getRegion() const {
+    return region_;
+  }
 
  private:
   std::string scheme_ = "https";
   std::string endpoint_;
   std::string region_;
-  // credentials provider
-  std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider;
-};
-
-// Implementation of S3 FileSystem
-class S3FileSystem : public FileSystem {
- public:
-  ~S3FileSystem() {}
-  virtual std::string name() const override {
-    return "S3";
-  }
-  virtual std::unique_ptr<ReadFile> openReadFile(
-      std::string_view path,
-      Config* config) override {
-    return std::make_unique<S3ReadFile>(path);
-  }
-  virtual std::unique_ptr<WriteFile> openWriteFile(
-      std::string_view path,
-      Config* config) override {
-    // Not yet implemented
-    return nullptr;
-  }
-
- private:
-  S3Properties config_;
   Aws::Client::ClientConfiguration client_config_;
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
   std::shared_ptr<Aws::S3::S3Client> client_;

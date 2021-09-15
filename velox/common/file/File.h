@@ -160,10 +160,10 @@ void registerFileClass(
 // Returns a read/write file of type appropriate for filename.
 std::unique_ptr<ReadFile> generateReadFile(
     std::string_view filename,
-    const Config* properties = nullptr);
+    std::shared_ptr<const Config> properties = nullptr);
 std::unique_ptr<WriteFile> generateWriteFile(
     std::string_view filename,
-    const Config* properties = nullptr);
+    std::shared_ptr<const Config> properties = nullptr);
 
 // We currently do a simple implementation for the in-memory files
 // that simply resizes a string as needed. If there ever gets used in
@@ -268,30 +268,29 @@ class LocalWriteFile final : public WriteFile {
 // An abstract FileSystem
 class FileSystem : public std::enable_shared_from_this<FileSystem> {
  public:
+  FileSystem(std::shared_ptr<const Config> config) : config_(config) {}
   virtual ~FileSystem();
   virtual std::string name() const = 0;
-  virtual std::unique_ptr<ReadFile> openReadFile(
-      std::string_view path,
-      Config* config) = 0;
-  virtual std::unique_ptr<WriteFile> openWriteFile(
-      std::string_view path,
-      Config* config) = 0;
+  virtual std::unique_ptr<ReadFile> openReadFile(std::string_view path) = 0;
+  virtual std::unique_ptr<WriteFile> openWriteFile(std::string_view path) = 0;
+
+ private:
+  std::shared_ptr<const Config> config_;
 };
 
 class LocalFileSystem : public FileSystem {
  public:
+  LocalFileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
   virtual ~LocalFileSystem();
   virtual std::string name() const override {
     return "Local FS";
   }
   virtual std::unique_ptr<ReadFile> openReadFile(
-      std::string_view path,
-      Config* config) override {
+      std::string_view path) override {
     return std::make_unique<LocalReadFile>(path);
   }
   virtual std::unique_ptr<WriteFile> openWriteFile(
-      std::string_view path,
-      Config* config) override {
+      std::string_view path) override {
     return std::make_unique<LocalWriteFile>(path);
   }
 };

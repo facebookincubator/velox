@@ -29,7 +29,7 @@ uint64_t FileHandleSizer::operator()(const FileHandle& fileHandle) {
 std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename) {
   auto fileHandle = std::make_unique<FileHandle>();
-  fileHandle->file = generateReadFile(filename, properties_.get());
+  fileHandle->file = generateReadFile(filename, properties_);
   fileHandle->uuid = StringIdLease(fileIds(), filename);
   VLOG(1) << "Generating file handle for: " << filename
           << " uuid: " << fileHandle->uuid.id();

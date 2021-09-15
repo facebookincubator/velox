@@ -43,7 +43,8 @@ std::once_flag lazyRegistrationFlag;
 
 using RegisteredReadFiles = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>>>;
+    std::function<std::unique_ptr<
+        ReadFile>(std::string_view, std::shared_ptr<const Config>)>>>;
 
 RegisteredReadFiles& registeredReadFiles() {
   // Meyers singleton.
@@ -53,7 +54,8 @@ RegisteredReadFiles& registeredReadFiles() {
 
 using RegisteredWriteFiles = std::vector<std::pair<
     std::function<bool(std::string_view)>,
-    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>>>;
+    std::function<std::unique_ptr<
+        WriteFile>(std::string_view, std::shared_ptr<const Config>)>>>;
 
 RegisteredWriteFiles& registeredWriteFiles() {
   // Meyers singleton.
@@ -69,17 +71,19 @@ void lazyRegisterFileClass(std::function<void()> lazy_registration) {
 
 void registerFileClass(
     std::function<bool(std::string_view)> filenameMatcher,
-    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
-        readGenerator,
-    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
-        writeGenerator) {
+    std::function<std::unique_ptr<ReadFile>(
+        std::string_view,
+        std::shared_ptr<const Config>)> readGenerator,
+    std::function<std::unique_ptr<WriteFile>(
+        std::string_view,
+        std::shared_ptr<const Config>)> writeGenerator) {
   registeredReadFiles().emplace_back(filenameMatcher, readGenerator);
   registeredWriteFiles().emplace_back(filenameMatcher, writeGenerator);
 }
 
 std::unique_ptr<ReadFile> generateReadFile(
     std::string_view filename,
-    Config* properties) {
+    std::shared_ptr<const Config> properties) {
   std::call_once(lazyRegistrationFlag, []() {
     for (auto registration : lazyRegistrations()) {
       registration();
@@ -97,7 +101,7 @@ std::unique_ptr<ReadFile> generateReadFile(
 
 std::unique_ptr<WriteFile> generateWriteFile(
     std::string_view filename,
-    Config* properties) {
+    std::shared_ptr<const Config> properties) {
   std::call_once(lazyRegistrationFlag, []() {
     for (auto registration : lazyRegistrations()) {
       registration();
@@ -285,7 +289,126 @@ uint64_t LocalWriteFile::size() const {
   return ftell(file_);
 }
 
-// Register the local Files.
+// S3 support implementation.
+inline Aws::String getAwsString(const std::string& s) {
+  return Aws::String(s.begin(), s.end());
+}
+
+inline std::string_view fromAwsString(const Aws::String& s) {
+  return {s.data(), s.length()};
+}
+
+void S3FileSystem::configureDefaultCredentialChain() {
+  credentials_provider_ =
+      std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
+}
+void S3FileSystem::configureAccessKey(
+    const std::string& access_key,
+    const std::string& secret_key,
+    const std::string& session_token) {
+  credentials_provider_ =
+      std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
+          getAwsString(access_key),
+          getAwsString(secret_key),
+          getAwsString(session_token));
+}
+
+std::string S3FileSystem::getAccessKey() const {
+  auto credentials = credentials_provider_->GetAWSCredentials();
+  return std::string(fromAwsString(credentials.GetAWSAccessKeyId()));
+}
+
+std::string S3FileSystem::getSecretKey() const {
+  auto credentials = credentials_provider_->GetAWSCredentials();
+  return std::string(fromAwsString(credentials.GetAWSSecretKey()));
+}
+
+std::string S3FileSystem::getSessionToken() const {
+  auto credentials = credentials_provider_->GetAWSCredentials();
+  return std::string(fromAwsString(credentials.GetSessionToken()));
+}
+
+void S3FileSystem::init() {
+  if (!getRegion().empty()) {
+    client_config_.region = getAwsString(getRegion());
+  }
+  if (getScheme() == "http") {
+    client_config_.scheme = Aws::Http::Scheme::HTTP;
+  } else if (getScheme() == "https") {
+    client_config_.scheme = Aws::Http::Scheme::HTTPS;
+  } else {
+    throw std::runtime_error(
+        fmt::format("Invalid S3 connection scheme '", getScheme(), "'"));
+  }
+
+  // use virtual addressing for S3 on AWS (end point is empty)
+  const bool use_virtual_addressing = getEndPoint().empty();
+  configureAccessKey("admin", "password", "");
+  client_ = std::make_shared<Aws::S3::S3Client>(
+      credentials_provider_,
+      client_config_,
+      Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+      use_virtual_addressing);
+}
+
+void S3ReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
+    const {
+  // Read the desired range of bytes
+  Aws::S3::Model::GetObjectRequest req;
+  Aws::S3::Model::GetObjectResult result;
+  req.SetBucket(getAwsString(path_));
+  req.SetKey(getAwsString(path_));
+  std::stringstream ss;
+  ss << "bytes=" << offset << "-" << offset + length - 1;
+  req.SetRange(getAwsString(ss.str()));
+  // TODO: Avoid copy below by using  req.SetResponseStreamFactory();
+  // Reference: ARROW-8692
+  auto outcome = client_->GetObject(req);
+  if (!outcome.IsSuccess()) {
+    throw std::runtime_error("failure in S3ReadFile::size preadInternal.");
+  }
+  result = std::move(outcome).GetResultWithOwnership();
+  auto& stream = result.GetBody();
+  stream.read(reinterpret_cast<char*>(pos), length);
+}
+
+std::string_view
+S3ReadFile::pread(uint64_t offset, uint64_t length, Arena* arena) const {
+  char* pos = arena->reserve(length);
+  preadInternal(offset, length, pos);
+  return {pos, length};
+}
+
+std::string_view S3ReadFile::pread(uint64_t offset, uint64_t length, void* buf)
+    const {
+  preadInternal(offset, length, static_cast<char*>(buf));
+  return {static_cast<char*>(buf), length};
+}
+
+std::string S3ReadFile::pread(uint64_t offset, uint64_t length) const {
+  // TODO: use allocator that doesn't initialize memory?
+  std::string result(length, 0);
+  char* pos = result.data();
+  preadInternal(offset, length, pos);
+  return result;
+}
+
+uint64_t S3ReadFile::preadv(
+    uint64_t offset,
+    const std::vector<folly::Range<char*>>& buffers) {
+  throw std::runtime_error("failure in S3ReadFile::preadv.");
+  return -1;
+}
+
+uint64_t S3ReadFile::size() const {
+  throw std::runtime_error("failure in S3ReadFile::size.");
+}
+
+uint64_t S3ReadFile::memoryUsage() const {
+  throw std::runtime_error("failure in S3ReadFile::memoryUsage.");
+  return 0;
+}
+// Register the local and S3 Files.
 namespace {
 
 struct LocalFileRegistrar {
@@ -300,24 +423,27 @@ struct LocalFileRegistrar {
         [](std::string_view filename) {
           return filename.find("/") == 0 || filename.find("file:") == 0;
         };
-    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
-        read_generator = [](std::string_view filename, Config* properties) {
+    std::function<std::unique_ptr<ReadFile>(
+        std::string_view, std::shared_ptr<const Config>)>
+        read_generator = [](std::string_view filename,
+                            std::shared_ptr<const Config> properties) {
           if (filename.find("file:") == 0) {
             // TODO: Cache the FileSystems
-            return LocalFileSystem().openReadFile(
-                filename.substr(5), properties);
+            return LocalFileSystem(properties).openReadFile(filename.substr(5));
           } else {
-            return LocalFileSystem().openReadFile(filename, properties);
+            return LocalFileSystem(properties).openReadFile(filename);
           }
         };
-    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
-        write_generator = [](std::string_view filename, Config* properties) {
+    std::function<std::unique_ptr<WriteFile>(
+        std::string_view, std::shared_ptr<const Config>)>
+        write_generator = [](std::string_view filename,
+                             std::shared_ptr<const Config> properties) {
           // TODO: Cache the FileSystems
           if (filename.find("file:") == 0) {
-            return LocalFileSystem().openWriteFile(
-                filename.substr(5), properties);
+            return LocalFileSystem(properties)
+                .openWriteFile(filename.substr(5));
           } else {
-            return LocalFileSystem().openWriteFile(filename, properties);
+            return LocalFileSystem(properties).openWriteFile(filename);
           }
         };
     registerFileClass(filename_matcher, read_generator, write_generator);
@@ -336,15 +462,21 @@ struct S3FileRegistrar {
     // Check for that prefix and prune to absolute regular paths as needed.
     std::function<bool(std::string_view)> filename_matcher =
         [](std::string_view filename) { return isS3File(filename); };
-    std::function<std::unique_ptr<ReadFile>(std::string_view, Config*)>
-        read_generator = [](std::string_view filename, Config* properties) {
+    std::function<std::unique_ptr<ReadFile>(
+        std::string_view, std::shared_ptr<const Config>)>
+        read_generator = [](std::string_view filename,
+                            std::shared_ptr<const Config> properties) {
           // TODO: Cache the FileSystem
-          return S3FileSystem().openReadFile(filename, properties);
+          auto s3fs = S3FileSystem(properties);
+          s3fs.init();
+          return s3fs.openReadFile(filename);
         };
-    std::function<std::unique_ptr<WriteFile>(std::string_view, Config*)>
-        write_generator = [](std::string_view filename, Config* properties) {
+    std::function<std::unique_ptr<WriteFile>(
+        std::string_view, std::shared_ptr<const Config>)>
+        write_generator = [](std::string_view filename,
+                             std::shared_ptr<const Config> properties) {
           // TODO: Cache the FileSystem
-          return S3FileSystem().openWriteFile(filename, properties);
+          return S3FileSystem(properties).openWriteFile(filename);
         };
     registerFileClass(filename_matcher, read_generator, write_generator);
   }
