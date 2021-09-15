@@ -271,6 +271,9 @@ uint64_t LocalWriteFile::size() const {
   return ftell(file_);
 }
 
+hdfsFS HdfsReadFile::hdfs;
+std::once_flag HdfsReadFile::hdfsInitiationFlag;
+
 void HdfsReadFile::initHDFS() {
   // TODO: pass namenode's IP and port from config file.
   std::string host ("127.0.0.1");
@@ -286,7 +289,7 @@ void HdfsReadFile::initHDFS() {
 }
 
 HdfsReadFile::HdfsReadFile(std::string_view path) {
-  path_ = std::string(path).c_str();
+  strcpy(path_, path.data());
   if(hdfs == nullptr) {
     std::call_once(HdfsInitiationFlag, &HdfsReadFile::initHDFS);
   }

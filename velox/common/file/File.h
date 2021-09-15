@@ -252,8 +252,8 @@ class HdfsReadFile final : public ReadFile {
   static std::once_flag HdfsInitiationFlag;
   static void initHDFS();
   hdfsFile file_;
-  const char * path_;
-  mutable hdfsFileInfo * fileInfo_;
+  char * path_;
+  hdfsFileInfo * fileInfo_;
 
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const;
 };
