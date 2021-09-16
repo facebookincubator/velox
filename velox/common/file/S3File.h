@@ -69,6 +69,8 @@ class S3ReadFile final : public ReadFile {
   int64_t content_length_ = 0;
 };
 
+void InitializeS3();
+
 // Implementation of S3 FileSystem
 class S3FileSystem : public FileSystem {
  public:

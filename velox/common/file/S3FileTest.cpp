@@ -64,6 +64,7 @@ TEST(S3File, WriteAndRead) {
       {"hive.s3.endpoint", "http://192.168.13.47:9000"}};
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
+  InitializeS3();
   S3FileSystem s3fs(config);
   s3fs.init();
   auto readFile = s3fs.openReadFile(s3File);

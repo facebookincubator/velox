@@ -290,6 +290,7 @@ uint64_t LocalWriteFile::size() const {
 }
 
 // S3 support implementation.
+
 inline Aws::String getAwsString(const std::string& s) {
   return Aws::String(s.begin(), s.end());
 }
@@ -326,6 +327,19 @@ std::string S3FileSystem::getSecretKey() const {
 std::string S3FileSystem::getSessionToken() const {
   auto credentials = credentials_provider_->GetAWSCredentials();
   return std::string(fromAwsString(credentials.GetSessionToken()));
+}
+
+std::mutex aws_init_lock;
+Aws::SDKOptions aws_options;
+std::atomic<bool> aws_initialized(false);
+
+void InitializeS3() {
+  std::lock_guard<std::mutex> lock(aws_init_lock);
+  if (!aws_initialized.load()) {
+    aws_options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
+    Aws::InitAPI(aws_options);
+    aws_initialized.store(true);
+  }
 }
 
 void S3FileSystem::init() {
