@@ -16,14 +16,18 @@ cmake_minimum_required(VERSION 3.10)
 project(velox)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
-if(NOT DEFINED VELOX_DEPENDENCY_INSTALL_DIR)
-  set(VELOX_DEPENDENCY_INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/install)
-endif()
 
 # Add all options below
-option(VELOX_ENABLE_S3 "Build S3 Connector" ON)
+option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 
-include(ThirdpartyDependencies)
+if (VELOX_ENABLE_S3)
+  # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
+  if(AWSSDK_ROOT_DIR)
+    set(CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
+  endif()
+  find_package(AWSSDK REQUIRED COMPONENTS s3)
+  add_definitions(-DVELOX_ENABLE_S3)
+endif()
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler
