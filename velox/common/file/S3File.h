@@ -95,39 +95,26 @@ class S3FileSystem : public FileSystem {
   // Configure default AWS credentials provider chain.
   void configureDefaultCredentialChain();
   // Configure with access and secret keys. Used for on-prem.
-  void configureAccessKey(
-      const std::string& access_key,
-      const std::string& secret_key,
-      const std::string& session_token = "");
+  void configureAccessKey();
   // get API
   std::string getAccessKey() const;
   std::string getSecretKey() const;
   std::string getSessionToken() const;
 
-  void setEndPoint(const std::string& endpoint) {
-    endpoint_ = endpoint;
-  }
   std::string getEndPoint() const {
-    return endpoint_;
+    return (config_->get("hive.s3.endpoint")).value();
   }
 
-  void setScheme(const std::string& scheme) {
-    scheme_ = scheme;
-  }
   std::string getScheme() const {
     return scheme_;
   }
 
-  void setRegion(const std::string& region) {
-    region_ = region;
-  }
   std::string getRegion() const {
     return region_;
   }
 
  private:
-  std::string scheme_ = "https";
-  std::string endpoint_ = "";
+  std::string scheme_ = "http";
   std::string region_ = "";
   Aws::Client::ClientConfiguration client_config_;
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;

@@ -59,9 +59,9 @@ TEST(S3File, WriteAndRead) {
     writeData(&writeFile);
   }
   std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
-      {"hive.ive.s3.aws-access-key", "admin"},
+      {"hive.s3.aws-access-key", "admin"},
       {"hive.s3.aws-secret-key", "password"},
-      {"hive.s3.endpoint", "http://192.168.13.47:9000"}};
+      {"hive.s3.endpoint", "127.0.0.1:9000"}};
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   InitializeS3();

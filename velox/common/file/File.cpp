@@ -303,15 +303,12 @@ void S3FileSystem::configureDefaultCredentialChain() {
   credentials_provider_ =
       std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
 }
-void S3FileSystem::configureAccessKey(
-    const std::string& access_key,
-    const std::string& secret_key,
-    const std::string& session_token) {
+void S3FileSystem::configureAccessKey() {
   credentials_provider_ =
       std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
-          getAwsString(access_key),
-          getAwsString(secret_key),
-          getAwsString(session_token));
+          getAwsString((config_->get("hive.s3.aws-access-key")).value()),
+          getAwsString((config_->get("hive.s3.aws-secret-key")).value()),
+          getAwsString(""));
 }
 
 std::string S3FileSystem::getAccessKey() const {
@@ -343,7 +340,6 @@ void InitializeS3() {
 }
 
 void S3FileSystem::init() {
-  setEndPoint("http://192.168.1.248:9000");
   if (!getRegion().empty()) {
     client_config_.region = getAwsString(getRegion());
   }
@@ -359,7 +355,7 @@ void S3FileSystem::init() {
 
   // use virtual addressing for S3 on AWS (end point is empty)
   const bool use_virtual_addressing = getEndPoint().empty();
-  configureAccessKey("admin", "password");
+  configureAccessKey();
   client_ = std::make_shared<Aws::S3::S3Client>(
       credentials_provider_,
       client_config_,
