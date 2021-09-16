@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # This file either finds an exisiting installation of AWS SDK CPP or builds one.
-# Set AWS_SDK_CPP_INSTALL_DIR if you have a custom install location of AWS SDK CPP.
+# Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
 
 macro(build_awssdk)
     message("Configured to download and build AWS-SDK-CPP version " ${AWS_SDK_VERSION})
@@ -33,32 +33,25 @@ macro(build_awssdk)
             TEST_COMMAND      ""
             )
     ExternalProject_Get_Property(aws-sdk INSTALL_DIR)
-    add_library(aws-sdk-core STATIC IMPORTED)
-    add_library(aws-sdk-s3 STATIC IMPORTED)
-    set_target_properties(aws-sdk-core PROPERTIES IMPORTED_LOCATION
-            ${INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-core${CMAKE_STATIC_LIBRARY_SUFFIX})
-    set_target_properties(aws-sdk-s3   PROPERTIES IMPORTED_LOCATION
-            ${INSTALL_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-s3${CMAKE_STATIC_LIBRARY_SUFFIX})
-    target_include_directories(aws-sdk-s3 PUBLIC ${AWS_INCLUDE_DIRS})
+    set(AWSSDK_ROOT_DIR ${INSTALL_DIR})
 endmacro()
 
 # S3 Reference  https://aws.amazon.com/blogs/developer/developer-experience-of-the-aws-sdk-for-c-now-simplified-by-cmake/
 # AWS S3 SDK provides the needed AWSSDKConfig.cmake file
 # If the user did not provide an installation path, default to Velox dependency build directory
-if (NOT DEFINED AWS_SDK_CPP_INSTALL_DIR AND EXISTS ${VELOX_DEPENDENCY_INSTALL_DIR})
-    set(AWS_SDK_CPP_INSTALL_DIR ${VELOX_DEPENDENCY_INSTALL_DIR})
+if (NOT DEFINED AWSSDK_ROOT_DIR AND EXISTS ${VELOX_DEPENDENCY_INSTALL_DIR})
+    set(AWSSDK_ROOT_DIR ${VELOX_DEPENDENCY_INSTALL_DIR})
 endif ()
-
-if (DEFINED AWS_SDK_CPP_INSTALL_DIR)
-    set(CMAKE_PREFIX_PATH "${AWS_SDK_CPP_INSTALL_DIR}/lib/cmake/AWSSDK" ${CMAKE_PREFIX_PATH})
-    set(CMAKE_PREFIX_PATH "${AWS_SDK_CPP_INSTALL_DIR}/lib/cmake" ${CMAKE_PREFIX_PATH})
-    set(CMAKE_PREFIX_PATH "${AWS_SDK_CPP_INSTALL_DIR}" ${CMAKE_PREFIX_PATH})
-endif ()
+set(CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
 # Quietly check if AWS SDK is already installed
 find_package(AWSSDK QUIET COMPONENTS s3)
-if (AWSSDK_FOUND)
-    include_directories(${AWSSDK_INCLUDE_DIRS})
-    link_directories(${AWSSDK_LIBRARIES})
-else()
+if (NOT AWSSDK_FOUND)
     build_awssdk()
 endif ()
+add_library(aws-sdk-core STATIC IMPORTED)
+add_library(aws-sdk-s3 STATIC IMPORTED)
+set_target_properties(aws-sdk-core PROPERTIES IMPORTED_LOCATION
+        ${AWSSDK_ROOT_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-core${CMAKE_STATIC_LIBRARY_SUFFIX})
+set_target_properties(aws-sdk-s3   PROPERTIES IMPORTED_LOCATION
+        ${AWSSDK_ROOT_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}aws-cpp-sdk-s3${CMAKE_STATIC_LIBRARY_SUFFIX})
+target_link_libraries(aws-sdk-s3 INTERFACE ${AWSSDK_LINK_LIBRARIES} ${AWSSDK_PLATFORM_DEPS})

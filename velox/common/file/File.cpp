@@ -329,9 +329,11 @@ std::string S3FileSystem::getSessionToken() const {
 }
 
 void S3FileSystem::init() {
+  setEndPoint("http://192.168.1.248:9000");
   if (!getRegion().empty()) {
     client_config_.region = getAwsString(getRegion());
   }
+  client_config_.endpointOverride = getEndPoint();
   if (getScheme() == "http") {
     client_config_.scheme = Aws::Http::Scheme::HTTP;
   } else if (getScheme() == "https") {
@@ -343,7 +345,7 @@ void S3FileSystem::init() {
 
   // use virtual addressing for S3 on AWS (end point is empty)
   const bool use_virtual_addressing = getEndPoint().empty();
-  configureAccessKey("admin", "password", "");
+  configureAccessKey("admin", "password");
   client_ = std::make_shared<Aws::S3::S3Client>(
       credentials_provider_,
       client_config_,
@@ -356,8 +358,9 @@ void S3ReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
   // Read the desired range of bytes
   Aws::S3::Model::GetObjectRequest req;
   Aws::S3::Model::GetObjectResult result;
-  req.SetBucket(getAwsString(path_));
-  req.SetKey(getAwsString(path_));
+  auto first_sep = path_.find_first_of(kSep);
+  req.SetBucket(getAwsString(path_.substr(0, first_sep)));
+  req.SetKey(getAwsString(path_.substr(first_sep + 1)));
   std::stringstream ss;
   ss << "bytes=" << offset << "-" << offset + length - 1;
   req.SetRange(getAwsString(ss.str()));

@@ -42,9 +42,10 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
-#include "velox/core/Context.h"
 
 namespace facebook::velox {
+
+class Config;
 
 // A read-only file.
 class ReadFile {
@@ -269,7 +270,7 @@ class LocalWriteFile final : public WriteFile {
 class FileSystem : public std::enable_shared_from_this<FileSystem> {
  public:
   FileSystem(std::shared_ptr<const Config> config) : config_(config) {}
-  virtual ~FileSystem();
+  virtual ~FileSystem() {}
   virtual std::string name() const = 0;
   virtual std::unique_ptr<ReadFile> openReadFile(std::string_view path) = 0;
   virtual std::unique_ptr<WriteFile> openWriteFile(std::string_view path) = 0;
@@ -281,7 +282,7 @@ class FileSystem : public std::enable_shared_from_this<FileSystem> {
 class LocalFileSystem : public FileSystem {
  public:
   LocalFileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
-  virtual ~LocalFileSystem();
+  virtual ~LocalFileSystem() {}
   virtual std::string name() const override {
     return "Local FS";
   }

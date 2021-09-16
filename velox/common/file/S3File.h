@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "velox/common/file/File.h"
+
 #include <aws/core/Aws.h>
 #include <aws/core/Region.h>
 #include <aws/core/auth/AWSCredentials.h>
@@ -34,6 +36,8 @@
 #include <aws/s3/model/GetObjectRequest.h>
 
 namespace facebook::velox {
+
+static const char kSep = '/';
 
 bool inline isS3File(const std::string_view filename) {
   return (filename.substr(0, 2) == "s3" || filename.substr(0, 3) == "s3a");
@@ -69,14 +73,17 @@ class S3ReadFile final : public ReadFile {
 class S3FileSystem : public FileSystem {
  public:
   S3FileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
-  ~S3FileSystem() {}
+  ~S3FileSystem() { /*TODO*/
+  }
   void init();
   virtual std::string name() const override {
     return "S3";
   }
   virtual std::unique_ptr<ReadFile> openReadFile(
       std::string_view path) override {
-    return std::make_unique<S3ReadFile>(path);
+    auto readFile = std::make_unique<S3ReadFile>(path);
+    readFile->init(client_);
+    return readFile;
   }
   virtual std::unique_ptr<WriteFile> openWriteFile(
       std::string_view path) override {
@@ -94,11 +101,23 @@ class S3FileSystem : public FileSystem {
   std::string getAccessKey() const;
   std::string getSecretKey() const;
   std::string getSessionToken() const;
+
+  void setEndPoint(const std::string& endpoint) {
+    endpoint_ = endpoint;
+  }
   std::string getEndPoint() const {
     return endpoint_;
   }
+
+  void setScheme(const std::string& scheme) {
+    scheme_ = scheme;
+  }
   std::string getScheme() const {
     return scheme_;
+  }
+
+  void setRegion(const std::string& region) {
+    region_ = region;
   }
   std::string getRegion() const {
     return region_;
@@ -106,8 +125,8 @@ class S3FileSystem : public FileSystem {
 
  private:
   std::string scheme_ = "https";
-  std::string endpoint_;
-  std::string region_;
+  std::string endpoint_ = "";
+  std::string region_ = "";
   Aws::Client::ClientConfiguration client_config_;
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
   std::shared_ptr<Aws::S3::S3Client> client_;
