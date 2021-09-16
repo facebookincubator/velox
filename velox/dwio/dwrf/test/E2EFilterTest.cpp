@@ -18,7 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/dwrf/reader/ScanSpec.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/FlatVector.h"

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/ScanSpec.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::common {

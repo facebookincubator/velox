@@ -95,7 +95,7 @@ class CacheTest : public testing::Test {
   void SetUp() override {
     executor_ = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
     rng_.seed(1);
-    ioStats_ = std::make_shared<common::IoStatistics>();
+    ioStats_ = std::make_shared<facebook::dwio::common::IoStatistics>();
   }
 
   void TearDown() override {
@@ -293,7 +293,7 @@ class CacheTest : public testing::Test {
       pathToInput_;
   common::DataCacheConfig config_;
   std::unique_ptr<AsyncDataCache> cache_;
-  std::shared_ptr<common::IoStatistics> ioStats_;
+  std::shared_ptr<facebook::dwio::common::IoStatistics> ioStats_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::unique_ptr<memory::MemoryPool> pool_{
       memory::getDefaultScopedMemoryPool()};
