@@ -37,10 +37,11 @@
 
 namespace facebook::velox {
 
-static const char kSep = '/';
+constexpr char kSep = '/';
+constexpr std::string_view S3_SCHEME = "s3:";
 
 bool inline isS3File(const std::string_view filename) {
-  return (filename.substr(0, 2) == "s3" || filename.substr(0, 3) == "s3a");
+  return (filename.substr(0, 3) == S3_SCHEME);
 }
 
 class S3ReadFile final : public ReadFile {
@@ -83,7 +84,9 @@ class S3FileSystem : public FileSystem {
   }
   virtual std::unique_ptr<ReadFile> openReadFile(
       std::string_view path) override {
-    auto readFile = std::make_unique<S3ReadFile>(path);
+    // Remove the S3://
+    auto readFile = std::make_unique<S3ReadFile>(
+        path.substr(S3_SCHEME.length() + 2 * strlen(&kSep)));
     readFile->init(client_);
     return readFile;
   }

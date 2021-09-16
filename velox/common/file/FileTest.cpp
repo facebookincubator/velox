@@ -90,11 +90,12 @@ TEST(LocalFile, WriteAndRead) {
 TEST(LocalFile, ViaRegistry) {
   const char filename[] = "/tmp/test";
   remove(filename);
+  auto lfs = FileSystem::getFileSystem(filename, nullptr);
   {
-    auto writeFile = generateWriteFile(filename);
+    auto writeFile = lfs->openWriteFile(filename);
     writeFile->append("snarf");
   }
-  auto readFile = generateReadFile(filename);
+  auto readFile = lfs->openReadFile(filename);
   ASSERT_EQ(readFile->size(), 5);
   Arena arena;
   ASSERT_EQ(readFile->pread(0, 5, &arena), "snarf");

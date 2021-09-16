@@ -15,7 +15,6 @@
  */
 
 #include "velox/common/file/S3File.h"
-#include "velox/common/file/File.h"
 #include "velox/core/Context.h"
 
 #include "gtest/gtest.h"
@@ -52,7 +51,7 @@ void readData(ReadFile* readFile) {
 
 TEST(S3File, WriteAndRead) {
   const char* filename = "/Users/deepak/workspace/minio/tmp/test.txt";
-  const char* s3File = "tmp/test.txt";
+  const char* s3File = "s3://tmp/test.txt";
   remove(filename);
   {
     LocalWriteFile writeFile(filename);
@@ -68,5 +67,24 @@ TEST(S3File, WriteAndRead) {
   S3FileSystem s3fs(config);
   s3fs.init();
   auto readFile = s3fs.openReadFile(s3File);
+  readData(readFile.get());
+}
+
+TEST(S3File, ViaRegistry) {
+  const char* filename = "/Users/deepak/workspace/minio/tmp/test.txt";
+  const char* s3File = "s3://tmp/test.txt";
+  remove(filename);
+  {
+    LocalWriteFile writeFile(filename);
+    writeData(&writeFile);
+  }
+  std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
+      {"hive.s3.aws-access-key", "admin"},
+      {"hive.s3.aws-secret-key", "password"},
+      {"hive.s3.endpoint", "127.0.0.1:9000"}};
+  std::shared_ptr<const Config> config =
+      std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
+  auto s3fs = FileSystem::getFileSystem(s3File, config);
+  auto readFile = s3fs->openReadFile(s3File);
   readData(readFile.get());
 }

@@ -22,11 +22,33 @@
 #include <mutex>
 #include <stdexcept>
 
-#include <fcntl.h>
-#include <folly/portability/SysUio.h>
-#include <sys/types.h>
-
 namespace facebook::velox {
+
+// Register S3 FileSystem.
+namespace {
+std::once_flag s3InitializeFlag;
+struct S3FileSystemRegistrar {
+  S3FileSystemRegistrar() {
+    lazyRegisterFileSystemClass([this]() { this->ActuallyRegister(); });
+  }
+  void ActuallyRegister() {
+    // Note: presto behavior is to prefix local paths with 'file:'.
+    // Check for that prefix and prune to absolute regular paths as needed.
+    std::function<bool(std::string_view)> scheme_matcher =
+        [](std::string_view filename) { return isS3File(filename); };
+    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+        filesystem_generator = [](std::shared_ptr<const Config> properties) {
+          std::call_once(s3InitializeFlag, []() { InitializeS3(); });
+          // TODO: Cache the FileSystem
+          auto s3fs = std::make_shared<S3FileSystem>(properties);
+          s3fs->init();
+          return s3fs;
+        };
+    registerFileSystemClass(scheme_matcher, filesystem_generator);
+  }
+};
+const S3FileSystemRegistrar s3FileSystem;
+} // namespace
 
 inline Aws::String getAwsString(const std::string& s) {
   return Aws::String(s.begin(), s.end());
@@ -63,17 +85,10 @@ std::string S3FileSystem::getSessionToken() const {
   return std::string(fromAwsString(credentials.GetSessionToken()));
 }
 
-std::mutex aws_init_lock;
-Aws::SDKOptions aws_options;
-std::atomic<bool> aws_initialized(false);
-
 void InitializeS3() {
-  std::lock_guard<std::mutex> lock(aws_init_lock);
-  if (!aws_initialized.load()) {
-    aws_options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
-    Aws::InitAPI(aws_options);
-    aws_initialized.store(true);
-  }
+  Aws::SDKOptions aws_options;
+  aws_options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
+  Aws::InitAPI(aws_options);
 }
 
 void S3FileSystem::init() {
@@ -158,41 +173,5 @@ uint64_t S3ReadFile::memoryUsage() const {
   throw std::runtime_error("failure in S3ReadFile::memoryUsage.");
   return 0;
 }
-// Register S3 Files.
-namespace {
-
-struct S3FileRegistrar {
-  S3FileRegistrar() {
-    lazyRegisterFileClass([this]() { this->ActuallyRegister(); });
-  }
-
-  void ActuallyRegister() {
-    // Note: presto behavior is to prefix local paths with 'file:'.
-    // Check for that prefix and prune to absolute regular paths as needed.
-    std::function<bool(std::string_view)> filename_matcher =
-        [](std::string_view filename) { return isS3File(filename); };
-    std::function<std::unique_ptr<ReadFile>(
-        std::string_view, std::shared_ptr<const Config>)>
-        read_generator = [](std::string_view filename,
-                            std::shared_ptr<const Config> properties) {
-          // TODO: Cache the FileSystem
-          auto s3fs = S3FileSystem(properties);
-          s3fs.init();
-          return s3fs.openReadFile(filename);
-        };
-    std::function<std::unique_ptr<WriteFile>(
-        std::string_view, std::shared_ptr<const Config>)>
-        write_generator = [](std::string_view filename,
-                             std::shared_ptr<const Config> properties) {
-          // TODO: Cache the FileSystem
-          return S3FileSystem(properties).openWriteFile(filename);
-        };
-    registerFileClass(filename_matcher, read_generator, write_generator);
-  }
-};
-
-const S3FileRegistrar s3FileRegistrar;
-
-} // namespace
 
 } // namespace facebook::velox
