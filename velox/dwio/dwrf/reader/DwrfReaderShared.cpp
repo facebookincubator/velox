@@ -413,7 +413,7 @@ size_t DwrfRowReaderShared::estimatedReaderMemory() const {
 
 size_t DwrfRowReaderShared::estimatedRowSizeHelper(
     const proto::Footer& footer,
-    const Statistics& stats,
+    const dwio::common::Statistics& stats,
     uint32_t nodeId) const {
   DWIO_ENSURE_LT(nodeId, footer.types_size(), "Types missing in footer");
 
@@ -449,7 +449,8 @@ size_t DwrfRowReaderShared::estimatedRowSizeHelper(
       return valueCount * sizeof(double);
     }
     case proto::Type_Kind_STRING: {
-      auto stringStats = dynamic_cast<const StringColumnStatistics*>(&s);
+      auto stringStats =
+          dynamic_cast<const dwio::common::StringColumnStatistics*>(&s);
       if (!stringStats) {
         throw StatsError("stringstatistics unavailable");
       }
@@ -460,7 +461,8 @@ size_t DwrfRowReaderShared::estimatedRowSizeHelper(
       return length.value();
     }
     case proto::Type_Kind_BINARY: {
-      auto binaryStats = dynamic_cast<const BinaryColumnStatistics*>(&s);
+      auto binaryStats =
+          dynamic_cast<const dwio::common::BinaryColumnStatistics*>(&s);
       if (!binaryStats) {
         throw StatsError("binarystatistics unavailable");
       }

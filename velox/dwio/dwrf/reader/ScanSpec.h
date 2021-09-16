@@ -26,10 +26,10 @@
 #include <vector>
 
 namespace facebook {
-namespace velox {
-namespace dwrf {
+namespace dwio::common {
 class ColumnStatistics;
 }
+namespace velox {
 namespace common {
 
 // Describes the filtering and value extraction for a
@@ -306,7 +306,7 @@ class ScanSpec {
 // filter. True, otherwise.
 bool testFilter(
     common::Filter* filter,
-    dwrf::ColumnStatistics* stats,
+    dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
     const TypePtr& type);
 
