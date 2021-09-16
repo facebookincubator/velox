@@ -171,13 +171,12 @@ class HiveDataSource : public DataSource {
   std::vector<std::string> regularColumns_;
   std::shared_ptr<dwio::common::IoStatistics> ioStats_;
   std::unique_ptr<dwrf::BufferedInputFactory> bufferedInputFactory_;
-  std::unique_ptr<dwrf::ColumnReaderFactory> columnReaderFactory_;
   std::unique_ptr<common::ScanSpec> scanSpec_;
   std::shared_ptr<HiveConnectorSplit> split_;
   dwio::common::ReaderOptions readerOpts_;
   dwio::common::RowReaderOptions rowReaderOpts_;
-  std::unique_ptr<dwrf::DwrfReader> reader_;
-  std::unique_ptr<dwrf::DwrfRowReader> rowReader_;
+  std::unique_ptr<dwio::common::Reader> reader_;
+  std::unique_ptr<dwio::common::RowReader> rowReader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;
   bool emptySplit_;

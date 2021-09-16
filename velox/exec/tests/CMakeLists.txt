@@ -27,6 +27,7 @@ target_link_libraries(
   velox_duckdb_conversion
   velox_dwio_common
   velox_dwio_type_fbhive
+  velox_dwio_dwrf_reader
   velox_dwrf_test_utils
   velox_presto_serializer
   ${GTEST_BOTH_LIBRARIES})
@@ -71,7 +72,6 @@ target_link_libraries(
   velox_exec_test_lib
   velox_functions_test_lib
   velox_exec
-  velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
   velox_dwio_common
   velox_aggregates
