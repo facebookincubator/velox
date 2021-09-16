@@ -548,9 +548,9 @@ class E2EFilterTest : public testing::Test {
   void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches) {
-    auto config = std::make_shared<dwrf::Config>();
-    config->set(dwrf::Config::COMPRESSION, dwrf::CompressionKind_NONE);
-    config->set(dwrf::Config::USE_VINTS, useVInts_);
+    auto config = std::make_shared<facebook::velox::dwrf::Config>();
+    config->set(facebook::velox::dwrf::Config::COMPRESSION, dwrf::CompressionKind_NONE);
+    config->set(facebook::velox::dwrf::Config::USE_VINTS, useVInts_);
     WriterOptions options;
     options.config = config;
     options.schema = type;
