@@ -198,12 +198,11 @@ namespace {
 
 bool testFilters(
     common::ScanSpec* scanSpec,
-    dwrf::DwrfReader* reader,
+    dwio::common::Reader* reader,
     const std::string& filePath) {
-  auto stats = reader->getStatistics();
-  auto totalRows = reader->getFooter().numberofrows();
-  const auto& fileTypeWithId = reader->getTypeWithId();
-  const auto& rowType = reader->getType();
+  auto totalRows = reader->numberOfRows();
+  const auto& fileTypeWithId = reader->typeWithId();
+  const auto& rowType = reader->rowType();
   for (const auto& child : scanSpec->children()) {
     if (child->filter()) {
       const auto& name = child->fieldName();
@@ -215,11 +214,11 @@ bool testFilters(
         }
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);
-        auto columnStats = reader->getColumnStatistics(typeWithId->id);
+        auto columnStats = reader->columnStatistics(typeWithId->id);
         if (!testFilter(
                 child->filter(),
                 columnStats.get(),
-                totalRows,
+                totalRows.value(),
                 typeWithId->type)) {
           VLOG(1) << "Skipping " << filePath
                   << " based on stats and filter for column "
@@ -245,10 +244,7 @@ void HiveDataSource::addDynamicFilter(
   }
   scanSpec_->resetCachedValues();
 
-  auto columnReader =
-      dynamic_cast<SelectiveColumnReader*>(rowReader_->columnReader());
-  assert(columnReader);
-  columnReader->resetFilterCaches();
+  rowReader_->resetFilterCaches();
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -267,17 +263,26 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     dataCacheConfig->filenum = fileHandle_->uuid.id();
     readerOpts_.setDataCacheConfig(std::move(dataCacheConfig));
   }
+  if (readerOpts_.getFileFormat() != dwio::common::FileFormat::UNKNOWN) {
+    VELOX_CHECK(
+        readerOpts_.getFileFormat() == split_->fileFormat,
+        "Splits of different formats ({} and {}) are fed to HiveDataSource",
+        toString(readerOpts_.getFileFormat()),
+        toString(split_->fileFormat));
+  } else {
+    readerOpts_.setFileFormat(split_->fileFormat);
+  }
 
-  reader_ = dwrf::DwrfReader::create(
-      std::make_unique<dwio::common::ReadFileInputStream>(
-          fileHandle_->file.get(),
-          dwio::common::MetricsLog::voidLog(),
-          ioStats_.get()),
-      readerOpts_);
+  reader_ = dwio::common::getReaderFactory(readerOpts_.getFileFormat())
+                ->createReader(
+                    std::make_unique<dwio::common::ReadFileInputStream>(
+                        fileHandle_->file.get(),
+                        dwio::common::MetricsLog::voidLog(),
+                        ioStats_.get()),
+                    readerOpts_);
 
   emptySplit_ = false;
-  if (reader_->getFooter().has_numberofrows() &&
-      reader_->getFooter().numberofrows() == 0) {
+  if (reader_->numberOfRows() == 0) {
     emptySplit_ = true;
     return;
   }
@@ -290,7 +295,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
-  auto fileType = reader_->getType();
+  auto fileType = reader_->rowType();
 
   for (int i = 0; i < readerOutputType_->size(); i++) {
     auto fieldName = readerOutputType_->nameOf(i);
@@ -413,7 +418,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
         pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
-  runtimeStats_.skippedStrides += rowReader_->skippedStrides();
+  rowReader_->updateRuntimeStats(runtimeStats_);
 
   split_.reset();
   reader_.reset();
