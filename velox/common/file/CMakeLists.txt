@@ -14,7 +14,7 @@
 
 # for generated headers
 include_directories(.)
-add_library(file File.cpp File.h S3File.h)
+add_library(file File.cpp)
 target_link_libraries(file velox_exception ${GTEST_BOTH_LIBRARIES} ${GLOG}
                       ${FOLLY_WITH_DEPENDENCIES} ${FMT})
 
@@ -22,11 +22,11 @@ add_executable(file_test FileTest.cpp)
 add_test(file_test file_test)
 target_link_libraries(file_test file)
 if (VELOX_ENABLE_S3)
+    target_sources(file PRIVATE S3File.cpp)
     target_include_directories(file PRIVATE ${AWSSDK_INCLUDE_DIRS})
     add_dependencies(file aws-sdk)
     target_link_libraries(file ${AWSSDK_LIBRARIES})
     add_executable(s3file_test S3FileTest.cpp)
     add_test(s3file_test s3file_test)
     target_link_libraries(s3file_test file velox_core)
-    target_include_directories(s3file_test PRIVATE ${AWSSDK_INCLUDE_DIRS})
 endif()

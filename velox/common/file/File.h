@@ -154,8 +154,12 @@ class WriteFile {
 void lazyRegisterFileClass(std::function<void()> lazy_registration);
 void registerFileClass(
     std::function<bool(std::string_view)> filenameMatcher,
-    std::function<std::unique_ptr<ReadFile>(std::string_view)> readGenerator,
-    std::function<std::unique_ptr<WriteFile>(std::string_view)> writeGenerator);
+    std::function<std::unique_ptr<ReadFile>(
+        std::string_view,
+        std::shared_ptr<const Config>)> readGenerator,
+    std::function<std::unique_ptr<WriteFile>(
+        std::string_view,
+        std::shared_ptr<const Config>)> writeGenerator);
 
 // Returns a read/write file of type appropriate for filename.
 std::unique_ptr<ReadFile> generateReadFile(
