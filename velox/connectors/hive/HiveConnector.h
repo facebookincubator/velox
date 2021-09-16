@@ -143,10 +143,7 @@ class HiveDataSource : public DataSource {
   }
 
   std::unordered_map<std::string, int64_t> runtimeStats() override {
-    return {
-        {"skippedSplits", skippedSplits_},
-        {"skippedSplitBytes", skippedSplitBytes_},
-        {"skippedStrides", skippedStrides_}};
+    return runtimeStats_.toMap();
   }
 
  private:
@@ -177,14 +174,7 @@ class HiveDataSource : public DataSource {
   std::shared_ptr<const RowType> readerOutputType_;
   bool emptySplit_;
 
-  // Number of splits skipped based on statistics.
-  int64_t skippedSplits_{0};
-
-  // Total bytes in splits skipped based on statistics.
-  int64_t skippedSplitBytes_{0};
-
-  // Number of strides (row groups) skipped based on statistics.
-  int64_t skippedStrides_{0};
+  dwio::common::RuntimeStatistics runtimeStats_;
 
   VectorPtr output_;
   FileHandleCachedPtr fileHandle_;
