@@ -409,4 +409,22 @@ class Statistics {
   virtual uint32_t getNumberOfColumns() const = 0;
 };
 
+struct RuntimeStatistics {
+  // Number of splits skipped based on statistics.
+  int64_t skippedSplits{0};
+
+  // Total bytes in splits skipped based on statistics.
+  int64_t skippedSplitBytes{0};
+
+  // Number of strides (row groups) skipped based on statistics.
+  int64_t skippedStrides{0};
+
+  std::unordered_map<std::string, int64_t> toMap() {
+    return {
+        {"skippedSplits", skippedSplits},
+        {"skippedSplitBytes", skippedSplitBytes},
+        {"skippedStrides", skippedStrides}};
+  }
+};
+
 } // namespace facebook::dwio::common

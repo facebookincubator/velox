@@ -345,8 +345,8 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Check filters and see if the whole split can be skipped
   if (!testFilters(scanSpec_.get(), reader_.get(), split_->filePath)) {
     emptySplit_ = true;
-    ++skippedSplits_;
-    skippedSplitBytes_ += split_->length;
+    ++runtimeStats_.skippedSplits;
+    runtimeStats_.skippedSplitBytes += split_->length;
     return;
   }
 
@@ -479,7 +479,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
         pool_, outputType_, BufferPtr(nullptr), rowsRemaining, outputColumns);
   }
 
-  skippedStrides_ += rowReader_->skippedStrides();
+  runtimeStats_.skippedStrides += rowReader_->skippedStrides();
 
   split_.reset();
   reader_.reset();
@@ -509,18 +509,17 @@ void HiveDataSource::setNullConstantValue(
 }
 
 std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {
-  return {
-      {"skippedSplits", skippedSplits_},
-      {"skippedSplitBytes", skippedSplitBytes_},
-      {"skippedStrides", skippedStrides_},
-      {"numPrefetch", ioStats_->prefetch().count()},
-      {"prefetchBytes", ioStats_->prefetch().bytes()},
-      {"numStorageRead", ioStats_->read().count()},
-      {"storageReadBytes", ioStats_->read().bytes()},
-      {"numLocalRead", ioStats_->ssdRead().count()},
-      {"localReadBytes", ioStats_->ssdRead().bytes()},
-      {"numRamRead", ioStats_->ramHit().count()},
-      {"ramReadBytes", ioStats_->ramHit().bytes()}};
+  auto res = runtimeStats_.toMap();
+  res.insert(
+      {{"numPrefetch", ioStats_->prefetch().count()},
+       {"prefetchBytes", ioStats_->prefetch().bytes()},
+       {"numStorageRead", ioStats_->read().count()},
+       {"storageReadBytes", ioStats_->read().bytes()},
+       {"numLocalRead", ioStats_->ssdRead().count()},
+       {"localReadBytes", ioStats_->ssdRead().bytes()},
+       {"numRamRead", ioStats_->ramHit().count()},
+       {"ramReadBytes", ioStats_->ramHit().bytes()}});
+  return res;
 }
 
 HiveConnector::HiveConnector(
