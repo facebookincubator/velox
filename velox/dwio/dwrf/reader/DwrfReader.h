@@ -28,13 +28,12 @@ class DwrfRowReader : public DwrfRowReaderShared {
   }
 
   void createColumnReaderImpl(StripeStreams& stripeStreams) override {
-    columnReader_ =
-        (options_.getColumnReaderFactory() ? options_.getColumnReaderFactory()
-                                           : ColumnReaderFactory::baseFactory())
-            ->build(
-                getColumnSelector().getSchemaWithId(),
-                getReader().getSchemaWithId(),
-                stripeStreams);
+    columnReader_ = (columnReaderFactory_ ? columnReaderFactory_.get()
+                                          : ColumnReaderFactory::baseFactory())
+                        ->build(
+                            getColumnSelector().getSchemaWithId(),
+                            getReader().getSchemaWithId(),
+                            stripeStreams);
   }
 
   void seekImpl() override {

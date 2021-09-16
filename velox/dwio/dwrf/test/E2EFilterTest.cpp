@@ -576,9 +576,8 @@ class E2EFilterTest : public testing::Test {
     dwio::common::ReaderOptions readerOpts;
     dwio::common::RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
-    auto factory = std::make_unique<SelectiveColumnReaderFactory>(spec);
-    // The factory and spec must stay live over the lifetime of the reader.
-    rowReaderOpts.setColumnReaderFactory(factory.get());
+    // The spec must stay live over the lifetime of the reader.
+    rowReaderOpts.setScanSpec(spec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     auto batchIndex = 0;
@@ -625,8 +624,8 @@ class E2EFilterTest : public testing::Test {
     dwio::common::RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
     auto factory = std::make_unique<SelectiveColumnReaderFactory>(spec);
-    // The factory and spec must stay live over the lifetime of the reader.
-    rowReaderOpts.setColumnReaderFactory(factory.get());
+    // The  spec must stay live over the lifetime of the reader.
+    rowReaderOpts.setScanSpec(spec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     auto rowIndex = 0;

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 
@@ -40,6 +41,7 @@ class DwrfRowReaderShared : public StrideIndexProvider,
   uint64_t strideIndex_;
   std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
   dwio::common::RowReaderOptions options_;
+  std::unique_ptr<ColumnReaderFactory> columnReaderFactory_;
 
   // column selector
   std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
