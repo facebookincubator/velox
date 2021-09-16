@@ -49,7 +49,7 @@ class DwrfRowReaderShared : public StrideIndexProvider,
 
   size_t estimatedRowSizeHelper(
       const proto::Footer& footer,
-      const Statistics& stats,
+      const dwio::common::Statistics& stats,
       uint32_t nodeId) const;
 
   std::shared_ptr<const RowType> getType() const {
@@ -175,11 +175,12 @@ class DwrfReaderShared {
     return readerBase_->getFileLength();
   }
 
-  std::unique_ptr<Statistics> getStatistics() const {
+  std::unique_ptr<dwio::common::Statistics> getStatistics() const {
     return readerBase_->getStatistics();
   }
 
-  std::unique_ptr<ColumnStatistics> getColumnStatistics(uint32_t nodeId) const {
+  std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
+      uint32_t nodeId) const {
     return readerBase_->getColumnStatistics(nodeId);
   }
 
