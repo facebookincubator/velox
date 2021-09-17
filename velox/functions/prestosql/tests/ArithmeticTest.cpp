@@ -174,6 +174,20 @@ TEST_F(ArithmeticTest, ln) {
   EXPECT_EQ(std::nullopt, ln(std::nullopt));
 }
 
+TEST_F(ArithmeticTest, log2) {
+  const auto log2 = [&](std::optional<double> a) {
+    return evaluateOnce<double>("log2(c0)", a);
+  };
+
+  EXPECT_EQ(0, log2(1));
+  EXPECT_EQ(1, log2(2));
+  EXPECT_EQ(-kInf, log2(0));
+  EXPECT_TRUE(std::isnan(log2(-1).value_or(-1)));
+  EXPECT_TRUE(std::isnan(log2(kNan).value_or(-1)));
+  EXPECT_EQ(kInf, log2(kInf));
+  EXPECT_EQ(std::nullopt, log2(std::nullopt));
+}
+
 TEST_F(ArithmeticTest, sqrt) {
   constexpr double kDoubleMax = std::numeric_limits<double>::max();
 
