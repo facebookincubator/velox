@@ -1042,4 +1042,30 @@ class UnnestNode : public PlanNode {
   RowTypePtr outputType_;
 };
 
+/// Checks that input contains at most one row. Return that row as is. If input
+/// is empty, returns a single row with all values set to null. If input
+/// contains more than one row raises an exception.
+class EnforceSingleRowNode : public PlanNode {
+ public:
+  EnforceSingleRowNode(
+      const PlanNodeId& id,
+      std::shared_ptr<const PlanNode> source)
+      : PlanNode(id), sources_{std::move(source)} {}
+
+  const RowTypePtr& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "enforce single row";
+  }
+
+ private:
+  const std::vector<std::shared_ptr<const PlanNode>> sources_;
+};
+
 } // namespace facebook::velox::core
