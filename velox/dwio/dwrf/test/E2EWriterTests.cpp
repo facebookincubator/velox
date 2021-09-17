@@ -70,7 +70,8 @@ TEST(E2EWriterTests, DISABLED_TestFileCreation) {
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
   config->set(facebook::velox::dwrf::Config::FLATTEN_MAP, true);
   config->set(
-      facebook::velox::dwrf::Config::MAP_FLAT_COLS, {12, 13}); /* this is the second and third map */
+      facebook::velox::dwrf::Config::MAP_FLAT_COLS,
+      {12, 13}); /* this is the second and third map */
 
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   auto& pool = *scopedPool;
@@ -127,10 +128,13 @@ TEST(E2EWriterTests, E2E) {
       ">");
 
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
-  config->set(facebook::velox::dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
+  config->set(
+      facebook::velox::dwrf::Config::ROW_INDEX_STRIDE,
+      static_cast<uint32_t>(1000));
   config->set(facebook::velox::dwrf::Config::FLATTEN_MAP, true);
   config->set(
-      facebook::velox::dwrf::Config::MAP_FLAT_COLS, {12, 13}); /* this is the second and third map */
+      facebook::velox::dwrf::Config::MAP_FLAT_COLS,
+      {12, 13}); /* this is the second and third map */
 
   std::vector<VectorPtr> batches;
   for (size_t i = 0; i < batchCount; ++i) {
@@ -339,8 +343,10 @@ void testFlatMapWithNulls(bool firstRowNotNull, bool shareDictionary = false) {
   config->set(facebook::velox::dwrf::Config::FLATTEN_MAP, true);
   config->set(facebook::velox::dwrf::Config::MAP_FLAT_COLS, {0});
   config->set(facebook::velox::dwrf::Config::ROW_INDEX_STRIDE, strideSize);
-  config->set(facebook::velox::dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
-  config->set(facebook::velox::dwrf::Config::MAP_FLAT_DICT_SHARE, shareDictionary);
+  config->set(
+      facebook::velox::dwrf::Config::MAP_FLAT_DISABLE_DICT_ENCODING, false);
+  config->set(
+      facebook::velox::dwrf::Config::MAP_FLAT_DICT_SHARE, shareDictionary);
 
   E2EWriterTestUtil::testWriter(
       pool,
@@ -418,7 +424,8 @@ void testFlatMapConfig(
   // write file to memory
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
   config->set(facebook::velox::dwrf::Config::FLATTEN_MAP, true);
-  config->set<const std::vector<uint32_t>>(facebook::velox::dwrf::Config::MAP_FLAT_COLS, mapColumnIds);
+  config->set<const std::vector<uint32_t>>(
+      facebook::velox::dwrf::Config::MAP_FLAT_COLS, mapColumnIds);
 
   auto sink = std::make_unique<MemorySink>(pool, 200 * 1024 * 1024);
   auto sinkPtr = sink.get();
@@ -593,8 +600,11 @@ class E2EEncryptionTest : public Test {
     // write file to memory
     auto config = std::make_shared<facebook::velox::dwrf::Config>();
     // make sure we always write dictionary to test stride index
-    config->set(facebook::velox::dwrf::Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD, 1.0f);
-    config->set(facebook::velox::dwrf::Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
+    config->set(
+        facebook::velox::dwrf::Config::DICTIONARY_STRING_KEY_SIZE_THRESHOLD,
+        1.0f);
+    config->set(
+        facebook::velox::dwrf::Config::ENTROPY_KEY_STRING_SIZE_THRESHOLD, 0.0f);
     auto sink = std::make_unique<MemorySink>(pool, 16 * 1024 * 1024);
     sink_ = sink.get();
     WriterOptions options;

@@ -20,7 +20,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # Add all options below
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 
-if (VELOX_ENABLE_S3)
+if(VELOX_ENABLE_S3)
   # Set AWS_ROOT_DIR if you have a custom install location of AWS SDK CPP.
   if(AWSSDK_ROOT_DIR)
     set(CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
