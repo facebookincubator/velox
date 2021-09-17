@@ -754,6 +754,29 @@ void testMergeWithFloat(Filter* left, Filter* right) {
     ASSERT_EQ(merged->testFloat(f), left->testFloat(f) && right->testFloat(f));
   }
 }
+
+void testMergeWithBytes(Filter* left, Filter* right) {
+  auto merged = left->mergeWith(right);
+
+  ASSERT_EQ(merged->testNull(), left->testNull() && right->testNull())
+      << "left: " << left->toString() << ", right: " << right->toString()
+      << ", merged: " << merged->toString();
+
+  std::vector<std::string> testValues = {"a", "b", "c", "d", "e", "f", "g",
+                                         "h", "i", "j", "k", "l", "m", "n",
+                                         "o", "p", "q", "r", "s", "t", "u", "v",
+                                         "w", "x", "y", "z",
+                                         "abca", "abcb", "abcc", "abcd"};
+
+  for (const auto& test: testValues) {
+    ASSERT_EQ(
+        merged->testBytes(test.data(), test.size()),
+        left->testBytes(test.data(), test.size()) &&
+            right->testBytes(test.data(), test.size()))
+        << "left: " << left->toString() << ", right: " << right->toString()
+        << ", merged: " << merged->toString();
+  }
+}
 } // namespace
 
 TEST(FilterTest, mergeWithUntyped) {
@@ -895,6 +918,95 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
+    }
+  }
+}
+
+TEST(FilterTest, mergeWithBytesValues) {
+  std::vector<std::unique_ptr<Filter>> filters;
+
+  addUntypedFilters(filters);
+
+  filters.push_back(equal("a"));
+  filters.push_back(equal("ab"));
+  filters.push_back(equal("a", true));
+
+  filters.push_back(in({"e", "f", "g"}));
+  filters.push_back(in({"e", "f", "g", "h"}, true));
+
+  for (const auto& left : filters) {
+    for (const auto& right : filters) {
+      testMergeWithBytes(left.get(), right.get());
+    }
+  }
+}
+
+TEST(FilterTest, mergeWithBytesRange) {
+  std::vector<std::unique_ptr<Filter>> filters;
+
+  addUntypedFilters(filters);
+
+  filters.push_back(between("abca", "abcc"));
+  filters.push_back(between("abca", "abcc", true));
+
+  filters.push_back(between("b", "f"));
+  filters.push_back(between("b", "f", true));
+  filters.push_back(between("p", "t"));
+  filters.push_back(between("p", "t", true));
+
+  filters.push_back(lessThanOrEqual("k"));
+  filters.push_back(lessThanOrEqual("k", true));
+  filters.push_back(lessThanOrEqual("p"));
+  filters.push_back(lessThanOrEqual("p", true));
+
+  filters.push_back(greaterThanOrEqual("b"));
+  filters.push_back(greaterThanOrEqual("b", true));
+  filters.push_back(greaterThanOrEqual("e"));
+  filters.push_back(greaterThanOrEqual("e", true));
+
+  for (const auto& left : filters) {
+    for (const auto& right : filters) {
+      testMergeWithBytes(left.get(), right.get());
+    }
+  }
+
+}
+
+TEST(FilterTest, mergeWithBytesMultiRange) {
+  std::vector<std::unique_ptr<Filter>> filters;
+  std::vector<std::unique_ptr<Filter>> filtersMultiRange;
+
+  // addUntypedFilters(filters);
+  filters.push_back(between("b", "f"));
+  filters.push_back(between("b", "f", true));
+  filters.push_back(between("p", "t"));
+  filters.push_back(between("p", "t", true));
+
+  filters.push_back(lessThanOrEqual("k"));
+  filters.push_back(lessThanOrEqual("k", true));
+  filters.push_back(lessThanOrEqual("p"));
+  filters.push_back(lessThanOrEqual("p", true));
+
+  filters.push_back(equal("a"));
+  filters.push_back(equal("ab"));
+  filters.push_back(equal("a", true));
+
+  filters.push_back(in({"e", "f", "g"}));
+  filters.push_back(in({"e", "f", "g", "h"}, true));
+
+  filtersMultiRange.push_back(orFilter(
+      between("b", "f"), greaterThanOrEqual("e")));
+  filtersMultiRange.push_back(orFilter(
+      between("b", "f"), lessThanOrEqual("e")));
+  filtersMultiRange.push_back(orFilter(
+      between("b", "f"), between("p", "t")));
+  filtersMultiRange.push_back(orFilter(
+      lessThanOrEqual("p"), greaterThanOrEqual("e")));
+
+
+  for (const auto& left : filters) {
+    for (const auto& right : filtersMultiRange) {
+      testMergeWithBytes(left.get(), right.get());
     }
   }
 }

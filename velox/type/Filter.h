@@ -964,6 +964,21 @@ class BytesRange final : public AbstractRange {
             !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
             !upperUnbounded_ && lower_ == upper_) {}
 
+  BytesRange(
+      const BytesRange& other,
+      bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            FilterKind::kBytesRange),
+          lower_(other.lower_),
+          upper_(other.upper_),
+          singleValue_(other.singleValue_) {}
+
+
   std::unique_ptr<Filter> clone() const final {
     return std::make_unique<BytesRange>(*this);
   }
@@ -982,6 +997,8 @@ class BytesRange final : public AbstractRange {
   bool testLength(int length) const final {
     return !singleValue_ || lower_.size() == length;
   }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   __m256si test8xLength(__m256si lengths) const final {
     using V32 = simd::Vectors<int32_t>;
@@ -1022,6 +1039,15 @@ class BytesValues final : public Filter {
     upper_ = *std::max_element(values_.begin(), values_.end());
   }
 
+  BytesValues(
+      const BytesValues& other,
+      bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBytesValues),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        values_(other.values_),
+        lengths_(other.lengths_) {}
+
   std::unique_ptr<Filter> clone() const final {
     return std::make_unique<BytesValues>(*this);
   }
@@ -1039,6 +1065,12 @@ class BytesValues final : public Filter {
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,
       bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const folly::F14FastSet<std::string>& values() const {
+    return values_;
+  }
 
  private:
   std::string lower_;
@@ -1091,6 +1123,14 @@ class MultiRange final : public Filter {
         nanAllowed_(nanAllowed) {}
 
   std::unique_ptr<Filter> clone() const final;
+
+  const std::vector<std::unique_ptr<Filter>>& filters() const {
+    return filters_;
+  }
+
+  const bool nanAllowed() const {
+    return nanAllowed_;
+  }
 
   bool testDouble(double value) const final;
 
