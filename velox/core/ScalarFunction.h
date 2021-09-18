@@ -36,6 +36,8 @@ class ArgumentsCtx {
   }
 
   bool operator==(const ArgumentsCtx& rhs) const {
+    if (types_.size() != rhs.types_.size())
+      return false;
     return std::equal(
         std::begin(types_),
         std::end(types_),

@@ -41,7 +41,8 @@ TableWriter::TableWriter(
   // partition
   const auto& connectorId = tableWriteNode->insertTableHandle()->connectorId();
   connector_ = connector::getConnector(connectorId);
-  connectorQueryCtx_ = driverCtx_->createConnectorQueryCtx(connectorId);
+  connectorQueryCtx_ =
+      driverCtx_->createConnectorQueryCtx(connectorId, "TableWriter");
 
   auto names = tableWriteNode->columnNames();
   auto types = tableWriteNode->columns()->children();

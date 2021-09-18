@@ -16,8 +16,11 @@
 #pragma once
 
 #include "velox/common/caching/DataCache.h"
+#include "velox/common/caching/ScanTracker.h"
 #include "velox/core/Context.h"
 #include "velox/vector/ComplexVector.h"
+
+#include <folly/Synchronized.h>
 
 namespace facebook::velox::common {
 class Filter;
@@ -34,6 +37,10 @@ namespace facebook::velox::connector {
 // as a RowVectorPtr, potentially after processing pushdowns.
 struct ConnectorSplit {
   const std::string connectorId;
+
+  // true if the Task processing this has aborted. Allows aborting
+  // async prefetch for the split.
+  bool cancelled{};
 
   explicit ConnectorSplit(const std::string& _connectorId)
       : connectorId(_connectorId) {}
@@ -133,10 +140,14 @@ class ConnectorQueryCtx {
   ConnectorQueryCtx(
       memory::MemoryPool* pool,
       Config* config,
-      ExpressionEvaluator* expressionEvaluator)
+      ExpressionEvaluator* expressionEvaluator,
+      memory::MappedMemory* mappedMemory,
+      std::optional<std::string> scanId = std::nullopt)
       : pool_(pool),
         config_(config),
-        expressionEvaluator_(expressionEvaluator) {}
+        expressionEvaluator_(expressionEvaluator),
+        mappedMemory_(mappedMemory),
+        scanId_(scanId) {}
 
   memory::MemoryPool* memoryPool() const {
     return pool_;
@@ -150,10 +161,25 @@ class ConnectorQueryCtx {
     return expressionEvaluator_;
   }
 
+  memory::MappedMemory* mappedMemory() const {
+    return mappedMemory_;
+  }
+
+  // Returns an id that allows sharing state between different threads
+  // of the same scan. This is typically a query id plus the scan's
+  // PlanNodeId. This is used for locating a scanTracker, which tracks
+  // the read density of columns for prefetch and other memory
+  // hierarchy purposes.
+  const std::optional<std::string>& scanId() const {
+    return scanId_;
+  }
+
  private:
   memory::MemoryPool* pool_;
   Config* config_;
   ExpressionEvaluator* expressionEvaluator_;
+  memory::MappedMemory* mappedMemory_;
+  std::optional<std::string> scanId_;
 };
 
 class Connector {
@@ -179,13 +205,35 @@ class Connector {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
+  // Schedules 'split' for async prefetching. The default is
+  // no-op. Supporting connectors may prime caches and pre-build a
+  // DataSource. Supporting connectors must synchronize the processing
+  // with a possible prefetch.
+  virtual void prefetchSplit(
+      const std::shared_ptr<const RowType>& outputType,
+      const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle,
+      const std::unordered_map<
+          std::string,
+          std::shared_ptr<connector::ColumnHandle>>& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<ConnectorSplit> split) {}
+
   virtual std::shared_ptr<DataSink> createDataSink(
       std::shared_ptr<const RowType> inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
+  static std::shared_ptr<cache::ScanTracker> getTracker(
+      const std::string& scanId);
+
  private:
+  static void unregisterTracker(cache::ScanTracker* tracker);
+
   const std::string id_;
+
+  static folly::Synchronized<
+      std::unordered_map<std::string_view, std::weak_ptr<cache::ScanTracker>>>
+      trackers_;
 };
 
 class ConnectorFactory {
@@ -200,7 +248,8 @@ class ConnectorFactory {
 
   virtual std::shared_ptr<Connector> newConnector(
       const std::string& id,
-      std::unique_ptr<DataCache> dataCache = nullptr) = 0;
+      std::unique_ptr<DataCache> dataCache = nullptr,
+      folly::Executor* executor = nullptr) = 0;
 
  private:
   const std::string name_;
