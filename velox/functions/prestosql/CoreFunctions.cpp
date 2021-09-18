@@ -38,6 +38,7 @@ void registerFunctions() {
   // Register string functions.
   registerFunction<udf_chr, Varchar, int64_t>();
   registerFunction<udf_codepoint, int32_t, Varchar>();
+  registerFunction<udf_ltrim, Varchar, Varchar>();
 
   // Register hash functions
   registerFunction<udf_xxhash64, Varbinary, Varbinary>({"xxhash64"});

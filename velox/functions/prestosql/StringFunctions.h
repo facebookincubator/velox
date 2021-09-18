@@ -118,4 +118,12 @@ FOLLY_ALWAYS_INLINE bool call(
 }
 VELOX_UDF_END();
 
+VELOX_UDF_BEGIN(ltrim)
+FOLLY_ALWAYS_INLINE bool call(
+    out_type<Varchar>& result,
+    const arg_type<Varbinary>& input) {
+  return stringImpl::ltrim(result, input);
+}
+VELOX_UDF_END();
+
 } // namespace facebook::velox::functions

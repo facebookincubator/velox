@@ -41,6 +41,10 @@ String Functions
 
     Converts ``string`` to lowercase.
 
+.. function:: ltrim(string) -> varchar
+
+    Removes leading whitespace from string.
+
 .. function:: replace(string, search) -> varchar
 
     Removes all instances of ``search`` from ``string``.

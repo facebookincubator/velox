@@ -26,6 +26,7 @@
 #include <string_view>
 #include <vector>
 #include "folly/CPortability.h"
+#include "folly/String.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
@@ -442,6 +443,19 @@ FOLLY_ALWAYS_INLINE bool urlUnescape(
     }
   }
   output.resize(outputBuffer - output.data());
+  return true;
+}
+
+// For proper UTF-8 input, it willnever contain multi-byte chars that is made up
+// of bytes start with 0xxxxxxx, and all the white speces are within 0 to
+// 01000000, so it's safe to trim the input directly.
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool ltrim(TOutString& output, const TInString& input) {
+  auto trimmed = folly::ltrimWhitespace(input);
+  if (!trimmed.empty()) {
+    output.resize(trimmed.size());
+    std::memcpy(output.data(), trimmed.data(), trimmed.size());
+  }
   return true;
 }
 } // namespace facebook::velox::functions::stringImpl

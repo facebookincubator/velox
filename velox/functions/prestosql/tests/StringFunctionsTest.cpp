@@ -28,6 +28,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::test;
+using namespace std::string_literals;
 
 namespace {
 /// Generate an ascii random string of size length
@@ -1550,4 +1551,18 @@ TEST_F(StringFunctionsTest, asciiPropagationWithDisparateInput) {
   testAsciiPropagation(c1, c2, c3, all, false, "ascii_propagation_check", {});
 
   testAsciiPropagation(c1, c3, c2, all, true, "ascii_propagation_check", {});
+}
+
+TEST_F(StringFunctionsTest, ltrim) {
+  const auto ltrim = [&](std::optional<std::string> arg) {
+    return evaluateOnce<std::string>("ltrim(c0)", arg);
+  };
+
+  EXPECT_EQ(std::nullopt, ltrim(std::nullopt));
+  EXPECT_EQ("facebook"s, ltrim("facebook"s));
+  EXPECT_EQ("facebook  "s, ltrim("  facebook  "s));
+  EXPECT_EQ("facebook \n "s, ltrim("\n\nfacebook \n "s));
+  EXPECT_EQ("", ltrim(" \n"s));
+  EXPECT_EQ(u8"\u4F60\u597D", ltrim(u8" \u4F60\u597D"));
+  EXPECT_EQ(u8"\u4F60\u597D ", ltrim(u8" \u4F60\u597D "));
 }
