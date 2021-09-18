@@ -1230,6 +1230,17 @@ TEST_F(StringFunctionsTest, urlEncode) {
   EXPECT_EQ("test", urlEncode("test"));
 }
 
+TEST_F(StringFunctionsTest, trim) {
+  const auto trim = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("trim(c0)", value);
+  };
+
+  EXPECT_EQ("facebook", trim("  facebook  "));
+  EXPECT_EQ("facebook", trim("\n\nfacebook \n "));
+  EXPECT_EQ("", trim(" \n"));
+  EXPECT_EQ(std::nullopt, trim(std::nullopt));
+}
+
 TEST_F(StringFunctionsTest, urlDecode) {
   const auto urlDecode = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("url_decode(c0)", value);

@@ -50,6 +50,7 @@ void registerFunctions() {
   registerFunction<udf_from_base64, Varbinary, Varchar>();
   registerFunction<udf_url_encode, Varchar, Varchar>();
   registerFunction<udf_url_decode, Varchar, Varchar>();
+  registerFunction<udf_trim, Varchar, Varchar>();
 
   registerFunction<udf_to_unixtime, double, Timestamp>(
       {"to_unixtime", "to_unix_timestamp"});

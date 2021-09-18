@@ -16,7 +16,6 @@
 #pragma once
 
 #define XXH_INLINE_ALL
-
 #include "velox/external/xxhash.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -115,6 +114,19 @@ FOLLY_ALWAYS_INLINE bool call(
     out_type<Varchar>& result,
     const arg_type<Varbinary>& input) {
   return stringImpl::urlUnescape(result, input);
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(trim)
+FOLLY_ALWAYS_INLINE bool call(
+    out_type<Varchar>& result,
+    const arg_type<Varchar>& input) {
+  auto output = folly::trimWhitespace(input.getString()).toString();
+  if (output.size() != 0) {
+    result.resize(output.size());
+    std::memcpy(result.data(), output.data(), output.size());
+  }
+  return true;
 }
 VELOX_UDF_END();
 
