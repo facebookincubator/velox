@@ -127,6 +127,10 @@ class RowContainer {
   // Allocates a new row and initializes possible aggregates to null.
   char* newRow();
 
+  // Adds 'rows' to the free rows list and frees any associated
+  // variable length data.
+  void eraseRows(folly::Range<char**> rows);
+
   // Initialize row. 'reuse' specifies whether the 'row' is reused or
   // not. If it is reused, it will free memory associated with the row
   // elsewhere (such as in HashStringAllocator).
@@ -284,7 +288,12 @@ class RowContainer {
     }
   }
 
+  void checkConsistency();
+
  private:
+  // Offset of the pointer to the next free row on a free row.
+  static constexpr int32_t kNextFreeOffset = 0;
+
   static inline bool
   isNullAt(const char* row, int32_t nullByte, uint8_t nullMask) {
     return (row[nullByte] & nullMask) != 0;
@@ -321,6 +330,10 @@ class RowContainer {
       extractValuesWithNulls<T>(
           rows, numRows, offset, column.nullByte(), nullMask, flatResult);
     }
+  }
+
+  char*& nextFree(char* row) {
+    return *reinterpret_cast<char**>(row + kNextFreeOffset);
   }
 
   template <TypeKind Kind>
@@ -583,6 +596,8 @@ class RowContainer {
   std::vector<RowColumn> rowColumns_;
   // Bit position of probed flag, 0 if none.
   int32_t probedFlagOffset_ = 0;
+  // Bit position of free bit.
+  int32_t freeFlagOffset_{0};
   int32_t fixedRowSize_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
@@ -596,6 +611,10 @@ class RowContainer {
   // not null, aggregates are null.
   std::vector<uint8_t> initialNulls_;
   int64_t numRows_ = 0;
+  // Head of linked list of free rows.
+  char* firstFreeRow_ = nullptr;
+  uint64_t numFreeRows_ = 0;
+
   AllocationPool rows_;
   HashStringAllocator stringAllocator_;
   const RowSerde& serde_;

@@ -220,7 +220,7 @@ TEST_F(RowContainerTest, types) {
   EXPECT_EQ(kNumRows, data->numRows());
   std::vector<char*> rows(kNumRows);
   RowContainerIterator iter;
-  EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), kNumRows);
+  EXPECT_EQ(kNumRows, data->listRows(&iter, kNumRows, rows.data()));
   EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), 0);
 
   SelectivityVector allRows(kNumRows);
@@ -280,4 +280,57 @@ TEST_F(RowContainerTest, types) {
       }
     }
   }
+}
+
+TEST_F(RowContainerTest, erase) {
+  constexpr int32_t kNumRows = 100;
+  std::vector<TypePtr> keys = {SMALLINT()};
+  std::vector<TypePtr> dependents = {SMALLINT()};
+  std::vector<std::unique_ptr<Aggregate>> emptyAggregates;
+  auto data = std::make_unique<RowContainer>(
+      keys,
+      true,
+      emptyAggregates,
+      dependents,
+      false,
+      false,
+      false,
+      true,
+      mappedMemory_,
+      ContainerRowSerde::instance());
+
+  EXPECT_EQ(data->nextOffset(), 0);
+  EXPECT_EQ(data->probedFlagOffset(), 0);
+  std::unordered_set<char*> rowSet;
+  std::vector<char*> rows;
+  for (int i = 0; i < kNumRows; ++i) {
+    rows.push_back(data->newRow());
+    rowSet.insert(rows.back());
+  }
+  EXPECT_EQ(kNumRows, data->numRows());
+  std::vector<char*> rowsFromContainer(kNumRows);
+  RowContainerIterator iter;
+  EXPECT_EQ(
+      data->listRows(&iter, kNumRows, rowsFromContainer.data()), kNumRows);
+  EXPECT_EQ(0, data->listRows(&iter, kNumRows, rows.data()));
+  EXPECT_EQ(rows, rowsFromContainer);
+
+  std::vector<char*> deleted;
+  for (auto i = 0; i < rows.size(); i += 2) {
+    deleted.push_back(rows[i]);
+  }
+  data->eraseRows(folly::Range<char**>(deleted.data(), deleted.size()));
+  std::vector<char*> remaining(data->numRows());
+  iter.reset();
+  EXPECT_EQ(
+      remaining.size(),
+      data->listRows(&iter, data->numRows(), remaining.data()));
+  // We check that the next new rows reuse the erased rows.
+  for (auto i = 0; i < deleted.size(); ++i) {
+    auto reused = data->newRow();
+    EXPECT_NE(rowSet.end(), rowSet.find(reused));
+  }
+  // The next row will be a new one.
+  auto newRow = data->newRow();
+  EXPECT_EQ(rowSet.end(), rowSet.find(newRow));
 }
