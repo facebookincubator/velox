@@ -161,7 +161,7 @@ class Connector {
   explicit Connector(
       const std::string& id,
       std::shared_ptr<const Config> properties)
-      : id_(id), properties_(properties) {}
+      : id_(id), properties_(std::move(properties)) {}
 
   virtual ~Connector() = default;
 
@@ -169,7 +169,7 @@ class Connector {
     return id_;
   }
 
-  std::shared_ptr<const Config> connectorProperties() const {
+  const std::shared_ptr<const Config>& connectorProperties() const {
     return properties_;
   }
 
@@ -193,7 +193,7 @@ class Connector {
 
  private:
   const std::string id_;
-  std::shared_ptr<const Config> properties_;
+  const std::shared_ptr<const Config> properties_;
 };
 
 class ConnectorFactory {

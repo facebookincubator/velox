@@ -64,11 +64,11 @@ class FileHandleGenerator {
  public:
   FileHandleGenerator() {}
   FileHandleGenerator(std::shared_ptr<const Config> properties)
-      : properties_(properties) {}
+      : properties_(std::move(properties)) {}
   std::unique_ptr<FileHandle> operator()(const std::string& filename);
 
  private:
-  std::shared_ptr<const Config> properties_;
+  const std::shared_ptr<const Config> properties_;
 };
 
 using FileHandleFactory = CachedFactory<
