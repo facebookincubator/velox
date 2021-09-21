@@ -1,0 +1,71 @@
+========
+Overview
+========
+
+Here is a list of all scalar and aggregate Presto functions available in Velox.
+Function names link to function descriptions.
+
+.. raw:: html
+
+    <style>
+
+    table.rows th {
+        background-color: lightblue;
+        border-style: solid solid solid solid;
+        border-width: 1px 1px 1px 1px;
+        border-color: #AAAAAA;
+        text-align: center;
+    }
+
+    table.rows td {
+        border-style: solid solid solid solid;
+        border-width: 1px 1px 1px 1px;
+        border-color: #AAAAAA;
+    }
+
+    table.rows tr {
+        border-style: solid solid solid solid;
+        border-width: 0px 0px 0px 0px;
+        border-color: #AAAAAA;
+    }
+
+    table.rows td:nth-child(4) {
+        background-color: lightblue;
+    }
+    </style>
+
+.. table::
+    :widths: auto
+    :class: rows
+
+    ===========================  ===========================  ===========================  ==  ===========================
+    Scalar Functions                                                                           Aggregate Functions
+    =====================================================================================  ==  ===========================
+    :func:`abs`                  :func:`element_at`           multiply                         :func:`approx_distinct`
+    :func:`array_constructor`    eq                           negate                           :func:`approx_percentile`
+    :func:`array_except`         :func:`exp`                  neq                              :func:`arbitrary`
+    :func:`array_intersect`      :func:`filter`               not                              :func:`array_agg`
+    :func:`array_max`            :func:`floor`                plus                             :func:`avg`
+    :func:`array_min`            :func:`from_base64`          :func:`power`                    :func:`bitwise_and_agg`
+    :func:`between`              :func:`from_hex`             :func:`rand`                     :func:`bitwise_or_agg`
+    :func:`bitwise_and`          :func:`from_unixtime`        :func:`reduce`                   :func:`bool_and`
+    :func:`bitwise_not`          gt                           :func:`regexp_extract`           :func:`bool_or`
+    :func:`bitwise_or`           gte                          :func:`regexp_like`              :func:`count`
+    :func:`bitwise_xor`          :func:`in`                   :func:`replace`                  :func:`count_if`
+    :func:`cardinality`          :func:`is_null`              :func:`round`                    :func:`map_agg`
+    :func:`cbrt`                 :func:`json_extract_scalar`  :func:`sqrt`                     :func:`max`
+    :func:`ceil`                 :func:`length`               :func:`strpos`                   :func:`max_by`
+    checked_divide               :func:`ln`                   :func:`subscript`                :func:`min`
+    checked_minus                :func:`lower`                :func:`substr`                   :func:`min_by`
+    checked_modulus              lt                           :func:`to_base64`                :func:`sum`
+    checked_multiply             lte                          :func:`to_hex`                   
+    checked_negate               :func:`map`                  :func:`to_unixtime`              
+    checked_plus                 :func:`map_concat`           :func:`to_utf8`                  
+    :func:`chr`                  :func:`map_entries`          :func:`transform`                
+    :func:`clamp`                :func:`map_filter`           :func:`upper`                    
+    :func:`coalesce`             :func:`map_keys`             :func:`url_decode`               
+    :func:`codepoint`            :func:`map_values`           :func:`url_encode`               
+    :func:`concat`               :func:`md5`                  :func:`width_bucket`             
+    :func:`contains`             minus                        :func:`xxhash64`                 
+    divide                       modulus                                               
+    ===========================  ===========================  ===========================  ==  ===========================

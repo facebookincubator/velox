@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>String Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Date and Time Functions" href="datetime.html" />
+    <link rel="prev" title="Bitwise Functions" href="bitwise.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="datetime.html" title="Date and Time Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="bitwise.html" title="Bitwise Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">String Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="string-functions">
+<h1>String Functions<a class="headerlink" href="#string-functions" title="Permalink to this headline">¶</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>These functions assume that the input strings contain valid UTF-8 encoded
+Unicode code points. There are no explicit checks for valid UTF-8 and
+the functions may return incorrect results on invalid UTF-8.</p>
+<p>Additionally, the functions operate on Unicode code points and not user
+visible <em>characters</em> (or <em>grapheme clusters</em>).  Some languages combine
+multiple code points into a single user-perceived <em>character</em>, the basic
+unit of a writing system for a language, but the functions will treat each
+code point as a separate unit.</p>
+<p>The <a class="reference internal" href="#lower" title="lower"><code class="xref py py-func docutils literal notranslate"><span class="pre">lower()</span></code></a> and <a class="reference internal" href="#upper" title="upper"><code class="xref py py-func docutils literal notranslate"><span class="pre">upper()</span></code></a> functions do not perform
+locale-sensitive, context-sensitive, or one-to-many mappings required for
+some languages. Specifically, this will return incorrect results for
+Lithuanian, Turkish and Azeri.</p>
+</div>
+<dl class="py function">
+<dt class="sig sig-object py" id="chr">
+<span class="sig-name descname"><span class="pre">chr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#chr" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the Unicode code point <code class="docutils literal notranslate"><span class="pre">n</span></code> as a single character string.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="codepoint">
+<span class="sig-name descname"><span class="pre">codepoint</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">integer</span><a class="headerlink" href="#codepoint" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the Unicode code point of the only character of <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="concat">
+<span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">string1</span></em>, <em class="sig-param"><span class="pre">...</span></em>, <em class="sig-param"><span class="pre">stringN</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#concat" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the concatenation of <code class="docutils literal notranslate"><span class="pre">string1</span></code>, <code class="docutils literal notranslate"><span class="pre">string2</span></code>, <code class="docutils literal notranslate"><span class="pre">...</span></code>, <code class="docutils literal notranslate"><span class="pre">stringN</span></code>.
+This function provides the same functionality as the
+SQL-standard concatenation operator (<code class="docutils literal notranslate"><span class="pre">||</span></code>).</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="length">
+<span class="sig-name descname"><span class="pre">length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">bigint</span><a class="headerlink" href="#length" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the length of <code class="docutils literal notranslate"><span class="pre">string</span></code> in characters.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="lower">
+<span class="sig-name descname"><span class="pre">lower</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#lower" title="Permalink to this definition">¶</a></dt>
+<dd><p>Converts <code class="docutils literal notranslate"><span class="pre">string</span></code> to lowercase.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="replace">
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replace</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> with <code class="docutils literal notranslate"><span class="pre">replace</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">search</span></code> is an empty string, inserts <code class="docutils literal notranslate"><span class="pre">replace</span></code> in front of every
+character and at the end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="strpos">
+<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">bigint</span><a class="headerlink" href="#strpos" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
+<code class="docutils literal notranslate"><span class="pre">string</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">bigint</span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.
+<code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
+Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="substr">
+<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#substr" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the rest of <code class="docutils literal notranslate"><span class="pre">string</span></code> from the starting position <code class="docutils literal notranslate"><span class="pre">start</span></code>.
+Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting position is interpreted
+as being relative to the end of the string.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
+position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
+position is interpreted as being relative to the end of the string.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="upper">
+<span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#upper" title="Permalink to this definition">¶</a></dt>
+<dd><p>Converts <code class="docutils literal notranslate"><span class="pre">string</span></code> to uppercase.</p>
+</dd></dl>
+
+<section id="unicode-functions">
+<h2>Unicode Functions<a class="headerlink" href="#unicode-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="to_utf8">
+<span class="sig-name descname"><span class="pre">to_utf8</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varbinary</span><a class="headerlink" href="#to_utf8" title="Permalink to this definition">¶</a></dt>
+<dd><p>Encodes <code class="docutils literal notranslate"><span class="pre">string</span></code> into a UTF-8 varbinary representation.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">String Functions</a><ul>
+<li><a class="reference internal" href="#unicode-functions">Unicode Functions</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="bitwise.html"
+                        title="previous chapter">Bitwise Functions</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="datetime.html"
+                        title="next chapter">Date and Time Functions</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/functions/string.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="datetime.html" title="Date and Time Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="bitwise.html" title="Bitwise Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">String Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+    </div>
+  </body>
+</html>

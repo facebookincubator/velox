@@ -1,0 +1,227 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Array Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Map Functions" href="map.html" />
+    <link rel="prev" title="Date and Time Functions" href="datetime.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="map.html" title="Map Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="datetime.html" title="Date and Time Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Array Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="array-functions">
+<h1>Array Functions<a class="headerlink" href="#array-functions" title="Permalink to this headline">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="array_intersect">
+<span class="sig-name descname"><span class="pre">array_intersect</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span> <span class="pre">x</span></em>, <em class="sig-param"><span class="pre">array(E)</span> <span class="pre">y)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_intersect" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array of the elements in the intersection of array <code class="docutils literal notranslate"><span class="pre">x</span></code> and array <code class="docutils literal notranslate"><span class="pre">y</span></code>, without duplicates.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_intersect</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="n">array_intersect</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_intersect</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_except">
+<span class="sig-name descname"><span class="pre">array_except</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span> <span class="pre">x</span></em>, <em class="sig-param"><span class="pre">array(E)</span> <span class="pre">y)</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_except" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array of the elements in array <code class="docutils literal notranslate"><span class="pre">x</span></code> but not in array <code class="docutils literal notranslate"><span class="pre">y</span></code>, without duplicates.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_except</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_except</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_except</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="n">array_except</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_except</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">],</span> <span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_max">
+<span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">E</span><a class="headerlink" href="#array_max" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the maximum value of input array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">3</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_max</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_min">
+<span class="sig-name descname"><span class="pre">array_min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">E</span><a class="headerlink" href="#array_min" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the minimum value of input array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="mi">1</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">]);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">array_min</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[]);</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="cardinality">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">bigint</span><a class="headerlink" href="#cardinality" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the cardinality (size) of the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="contains">
+<span class="sig-name descname"><span class="pre">contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">element</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">boolean</span><a class="headerlink" href="#contains" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if the array <code class="docutils literal notranslate"><span class="pre">x</span></code> contains the <code class="docutils literal notranslate"><span class="pre">element</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="element_at">
+<span class="sig-name descname"><span class="pre">element_at</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span></em>, <em class="sig-param"><span class="pre">index</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">E</span><a class="headerlink" href="#element_at" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns element of <code class="docutils literal notranslate"><span class="pre">array</span></code> at given <code class="docutils literal notranslate"><span class="pre">index</span></code>.
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &gt; 0, this function provides the same functionality as the SQL-standard subscript operator (<code class="docutils literal notranslate"><span class="pre">[]</span></code>).
+If <code class="docutils literal notranslate"><span class="pre">index</span></code> &lt; 0, <code class="docutils literal notranslate"><span class="pre">element_at</span></code> accesses elements from the last to the first.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="filter">
+<span class="sig-name descname"><span class="pre">filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(T)</span></em>, <em class="sig-param"><span class="pre">function(T</span></em>, <em class="sig-param"><span class="pre">boolean))</span> <span class="pre">-&gt;</span> <span class="pre">array(T</span></em><span class="sig-paren">)</span><a class="headerlink" href="#filter" title="Permalink to this definition">¶</a></dt>
+<dd><p>Constructs an array from those elements of <code class="docutils literal notranslate"><span class="pre">array</span></code> for which <code class="docutils literal notranslate"><span class="pre">function</span></code> returns true:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">filter</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">true</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="nb">filter</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="o">-</span><span class="mi">6</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="nb">filter</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="n">NULL</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="n">IS</span> <span class="n">NOT</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="reduce">
+<span class="sig-name descname"><span class="pre">reduce</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(T)</span></em>, <em class="sig-param"><span class="pre">initialState</span> <span class="pre">S</span></em>, <em class="sig-param"><span class="pre">inputFunction(S</span></em>, <em class="sig-param"><span class="pre">T</span></em>, <em class="sig-param"><span class="pre">S)</span></em>, <em class="sig-param"><span class="pre">outputFunction(S</span></em>, <em class="sig-param"><span class="pre">R)</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">R</span><a class="headerlink" href="#reduce" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a single value reduced from <code class="docutils literal notranslate"><span class="pre">array</span></code>. <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> will
+be invoked for each element in <code class="docutils literal notranslate"><span class="pre">array</span></code> in order. In addition to taking
+the element, <code class="docutils literal notranslate"><span class="pre">inputFunction</span></code> takes the current state, initially
+<code class="docutils literal notranslate"><span class="pre">initialState</span></code>, and returns the new state. <code class="docutils literal notranslate"><span class="pre">outputFunction</span></code> will be
+invoked to turn the final state into the result value. It may be the
+identity function (<code class="docutils literal notranslate"><span class="pre">i</span> <span class="pre">-&gt;</span> <span class="pre">i</span></code>).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[],</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">s</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">50</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">s</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="mi">75</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">50</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">s</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">50</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">s</span> <span class="o">+</span> <span class="n">COALESCE</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="mi">75</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">50</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">IF</span><span class="p">(</span><span class="n">x</span> <span class="n">IS</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">s</span> <span class="o">+</span> <span class="n">x</span><span class="p">),</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="mi">75</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">2147483647</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">CAST</span> <span class="p">(</span><span class="mi">0</span> <span class="n">AS</span> <span class="n">BIGINT</span><span class="p">),</span> <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">s</span> <span class="o">+</span> <span class="n">x</span><span class="p">,</span> <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">s</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2147483648</span>
+<span class="n">SELECT</span> <span class="n">reduce</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">],</span> <span class="o">--</span> <span class="n">calculates</span> <span class="n">arithmetic</span> <span class="n">average</span><span class="p">:</span> <span class="mf">10.25</span>
+              <span class="n">CAST</span><span class="p">(</span><span class="n">ROW</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="n">AS</span> <span class="n">ROW</span><span class="p">(</span><span class="nb">sum</span> <span class="n">DOUBLE</span><span class="p">,</span> <span class="n">count</span> <span class="n">INTEGER</span><span class="p">)),</span>
+              <span class="p">(</span><span class="n">s</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CAST</span><span class="p">(</span><span class="n">ROW</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">s</span><span class="o">.</span><span class="n">sum</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="n">AS</span> <span class="n">ROW</span><span class="p">(</span><span class="nb">sum</span> <span class="n">DOUBLE</span><span class="p">,</span> <span class="n">count</span> <span class="n">INTEGER</span><span class="p">)),</span>
+              <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">IF</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">sum</span> <span class="o">/</span> <span class="n">s</span><span class="o">.</span><span class="n">count</span><span class="p">));</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="subscript">
+<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span></em>, <em class="sig-param"><span class="pre">index</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">E</span><a class="headerlink" href="#subscript" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns element of <code class="docutils literal notranslate"><span class="pre">array</span></code> at given <code class="docutils literal notranslate"><span class="pre">index</span></code>. The index starts from one.
+Throws if the element is not present in the array. Corresponds to SQL subscript operator [].</p>
+<p>SELECT my_array[1] AS first_element</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="transform">
+<span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(T)</span></em>, <em class="sig-param"><span class="pre">function(T</span></em>, <em class="sig-param"><span class="pre">U))</span> <span class="pre">-&gt;</span> <span class="pre">array(U</span></em><span class="sig-paren">)</span><a class="headerlink" href="#transform" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array that is the result of applying <code class="docutils literal notranslate"><span class="pre">function</span></code> to each element of <code class="docutils literal notranslate"><span class="pre">array</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[]</span>
+<span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">6</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">COALESCE</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">6</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="s1">&#39;abc&#39;</span><span class="p">,</span> <span class="s1">&#39;z&#39;</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">||</span> <span class="s1">&#39;0&#39;</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;x0&#39;</span><span class="p">,</span> <span class="s1">&#39;abc0&#39;</span><span class="p">,</span> <span class="s1">&#39;z0&#39;</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">transform</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]],</span> <span class="n">a</span> <span class="o">-&gt;</span> <span class="nb">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="n">IS</span> <span class="n">NOT</span> <span class="n">NULL</span><span class="p">));</span> <span class="o">--</span> <span class="p">[[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">]]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="datetime.html"
+                        title="previous chapter">Date and Time Functions</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="map.html"
+                        title="next chapter">Map Functions</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/functions/array.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="map.html" title="Map Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="datetime.html" title="Date and Time Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Array Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+    </div>
+  </body>
+</html>

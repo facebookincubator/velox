@@ -1,0 +1,273 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Joins &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="Arena Allocation" href="arena.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Joins</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="joins">
+<h1>Joins<a class="headerlink" href="#joins" title="Permalink to this headline">¶</a></h1>
+<p>Velox supports inner, semi and anti hash joins using either partitioned or
+broadcast distribution strategies. Cross and left outer joins are coming soon.
+Right and full outer joins will follow.</p>
+<section id="join-implementation">
+<h2>Join Implementation<a class="headerlink" href="#join-implementation" title="Permalink to this headline">¶</a></h2>
+<p>Use HashJoinNode plan node to insert a join into a query plan. Specify the join
+type, an equi-clause, e.g. pairs of columns on the left and right side whose
+values need to match, and an optional filter to apply to join results.</p>
+<a class="reference internal image-reference" href="../_images/hash-join-node.png"><img alt="../_images/hash-join-node.png" class="align-center" src="../_images/hash-join-node.png" style="width: 400px;" /></a>
+<p>The join type can be one of kInner, kLeft, kRight, kFull, kSemi, or kAnti.
+kLeft, kRight and kFull join types are not supported yet.</p>
+<p>Filter is optional. If specified it can be any expression over the results of
+the join. This expression will be evaluated using the same expression
+evaluation engine as used by the FilterProject operator and HiveConnector.</p>
+<p>To execute a plan with a join, Velox creates two separate pipelines. One
+pipeline processes the build side data and creates a hash table. The other
+pipeline processes the data on the probe side, joins it with the build side
+data by probing the hash table and continues execution as specified by
+downstream plan nodes. HashJoinNode is translated into two separate operators:
+HashProbe and HashBuild. HashProbe operator becomes part of the probe-side
+pipeline. HashBuild operator is installed as the last operator of the
+build-side pipeline. The output of the HashBuild operator is a hash table which
+HashProbe operator gets access to via a special mechanism: JoinBridge.</p>
+<a class="reference internal image-reference" href="../_images/join-pipelines.png"><img alt="../_images/join-pipelines.png" class="align-center" src="../_images/join-pipelines.png" style="width: 400px;" /></a>
+<p>Both HashBuild and HashAggregation operators use the same data structure for the
+hash table: velox::exec::HashTable. The payload, the non-join key columns
+referred to as dependent columns, are stored row-wise in the RowContainer.</p>
+<p>Using the hash table in join and aggregation allows for a future optimization
+where the hash table can be reused if the aggregation is followed by the join
+and aggregation and join keys are the same. We expect to implement this
+optimization in the near future, but it is currently not implemented.</p>
+<p>While processing input and building a hash table HashBuild operator analyzes the
+values of the join keys to determine whether these keys can be normalized
+(e.g. multiple keys can be merged into a single 64-bit integer key) or mapped
+to a small integer domain to allow for array-based lookup. This mechanism is
+implemented in the velox::exec::VectorHasher and is shared between aggregations
+and joins.</p>
+<p>Build and probe side pipelines can run multi-threaded and their parallelism can
+be specified independently. HashBuild operator has extra logic to support
+parallel building of the hash table where the operator that finishes building
+its table last is responsible for merging it with all the other hash tables
+before making the hash table available over the JoinBridge.</p>
+</section>
+<section id="dynamic-filter-pushdown">
+<h2>Dynamic Filter Pushdown<a class="headerlink" href="#dynamic-filter-pushdown" title="Permalink to this headline">¶</a></h2>
+<p>In some queries the join runs in the same stage as the probe-side table scan.
+This happens if the join build side is broadcasted (when it is small enough) to
+all join nodes or if the query is using bucket-by-bucket execution mode. In
+these scenarios, it is often the case that only a small fraction of the join
+keys on the probe side match the build side and it is beneficial to filter out
+probe rows during table scan. This optimization is referred to as dynamic
+filtering or dynamic filter pushdown.</p>
+<a class="reference internal image-reference" href="../_images/join-plan-translation.png"><img alt="../_images/join-plan-translation.png" class="align-center" src="../_images/join-plan-translation.png" style="width: 800px;" /></a>
+<p>Velox implements this optimization by leveraging VectorHashers that contain full
+knowledge about the join key values on the build side. HashProbe operator
+tracks the selectivity of each join key independently. For each key that drops
+at least a third of the rows, an in-list filter is constructed using the set of
+distinct values stored in the corresponding VectorHasher. These filters are
+then pushed down into the TableScan operator and make their way into the
+HiveConnector which uses them to (1) prune files and row groups based on
+statistics and (2) filter out rows when reading the data.</p>
+<p>It is worth noting that the biggest wins come from using the dynamic filters to
+prune whole file and row groups during table scan.</p>
+<a class="reference internal image-reference" href="../_images/join-dynamic-filters.png"><img alt="../_images/join-dynamic-filters.png" class="align-center" src="../_images/join-dynamic-filters.png" style="width: 400px;" /></a>
+<p>Dynamic filter pushdown is possible only if the join key column comes from a
+collocated TableScan operator unmodified. HashProbe asks the Driver which
+columns support filter pushdown (e.g. which columns come unmodified from an
+operator which accepts dynamic filters) and generates filters only for such
+columns.</p>
+<p>In cases when the join has a single join key and no dependent columns and all
+join key values on the build side are unique it is possible to replace the join
+completely with the pushed down filter. Velox detects such opportunities and
+turns the join into a no-op after pushing the filter down.</p>
+<p>Dynamic filter pushdown optimization is enabled for inner and semi joins.</p>
+</section>
+<section id="broadcast-join">
+<h2>Broadcast Join<a class="headerlink" href="#broadcast-join" title="Permalink to this headline">¶</a></h2>
+<p>Broadcast join refers to a specific distributed execution strategy where the
+build side is small enough that it can be copied (broadcasted) to all the join
+nodes and that allows to avoid re-shuffling the probe and build sides to
+arrange for all rows with the same keys to appear on the same machine. Whether
+the join is executed using broadcast or partitioned strategy has no effect on
+the join execution itself. The only difference is that broadcast execution
+allows for dynamic filter pushdown while partitioned execution does not.</p>
+<p>PartitionedOutput operator and PartitionedOutputBufferManager support
+broadcasting the results of the plan evaluation. This functionality is enabled
+by setting boolean flag “broadcast” in the PartitionedOutputNode to true.</p>
+</section>
+<section id="anti-joins">
+<h2>Anti Joins<a class="headerlink" href="#anti-joins" title="Permalink to this headline">¶</a></h2>
+<p>Anti join is used for queries like this:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">WHERE</span> <span class="n">t</span><span class="p">.</span><span class="k">key</span> <span class="k">NOT</span> <span class="k">IN</span> <span class="p">(</span><span class="k">SELECT</span> <span class="k">key</span> <span class="k">FROM</span> <span class="n">u</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Anti join returns probe-side rows which have no match in the build side. The
+exact semantics of the anti join is tricky:</p>
+<ol class="arabic simple">
+<li><p>when the build side contains an entry with a null in any of the join keys, the join returns no rows;</p></li>
+<li><p>when the build side is empty, the join returns all rows, including rows with null join keys;</p></li>
+<li><p>when the build side is not empty, the join returns only rows with non-null join keys and no match in the build side.</p></li>
+</ol>
+<p>The cases (1) and (2) cannot be identified locally (unless the join runs in
+broadcast mode) as they require knowledge about the whole build side. It is
+necessar to know whether the combined build side across all nodes is empty and
+if not if it contains a null key. To provide this information locally,
+PartitionedOutput operator supports a mode where it replicates all rows with
+nulls in the partitioning keys to all destinations and in case there are no
+rows with null keys replicates one arbitrary chosen row to all destinations.
+This mode is enabled by setting the “replicateNullsAndAny” flag to true in the
+PartitionedOutputNode plan node.</p>
+<p>Replicate-nulls-and-any function of the PartitionedOutput operator ensures that
+all nodes receive rows with nulls in join keys and therefore can implement the
+semantics described in (1). It also ensures that local build sides are empty
+only if the whole build side is empty, allowing to implement semantic
+(2). Sending one row with a non-null key to multiple “wrong” destinations is
+safe because that row cannot possibly match anything on these destinations.</p>
+</section>
+<section id="empty-build-side">
+<h2>Empty Build Side<a class="headerlink" href="#empty-build-side" title="Permalink to this headline">¶</a></h2>
+<p>For inner and semi joins, when the build side is empty, Velox implements an
+optimization to finish the join early and return an empty set of results
+without waiting to receive all the probe side input. In this case all upstream
+operators are canceled to avoid unnecessary computation.</p>
+</section>
+<section id="skipping-duplicate-keys">
+<h2>Skipping Duplicate Keys<a class="headerlink" href="#skipping-duplicate-keys" title="Permalink to this headline">¶</a></h2>
+<p>When building a hash table for semi or anti join HashBuild operator skips
+entries with duplicate keys as these are not needed. This is achieved by
+configuring exec::HashTable to set the “allowDuplicates” flag to false. This
+optimization reduces memory usage of the hash table in case the build side
+contains duplicate join keys.</p>
+</section>
+<section id="execution-statistics">
+<h2>Execution Statistics<a class="headerlink" href="#execution-statistics" title="Permalink to this headline">¶</a></h2>
+<p>HashBuild operator reports the range and number of distinct values for each join
+key if these are not too large and allow for array-based join or use of
+normalized keys.</p>
+<ul class="simple">
+<li><p>rangeKey&lt;N&gt; - the range of values for the join key #N</p></li>
+<li><p>distinctKey&lt;N&gt; - the number of distinct values for the join key #N</p></li>
+</ul>
+<p>HashProbe operator reports whether it replaced itself with the pushed down
+filter entirely and became a no-op.</p>
+<ul class="simple">
+<li><p>replacedWithDynamicFilterRows - the number of rows which were passed through
+without any processing after filter was pushed down</p></li>
+</ul>
+<p>HashProbe also reports the number of dynamic filters it generated for push
+down.</p>
+<ul class="simple">
+<li><p>dynamicFiltersProduced - number of dynamic filters generated (at most one per
+join key)</p></li>
+</ul>
+<p>TableScan operator reports the number of dynamic filters it received and passed
+to HiveConnector.</p>
+<ul class="simple">
+<li><p>dynamicFiltersAccepted - number of dynamic filters received</p></li>
+</ul>
+</section>
+<section id="usage-examples">
+<h2>Usage Examples<a class="headerlink" href="#usage-examples" title="Permalink to this headline">¶</a></h2>
+<p>Check out velox/exec/tests/HashJoinTest.cpp for examples of how to build and
+execute a plan with a join.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Joins</a><ul>
+<li><a class="reference internal" href="#join-implementation">Join Implementation</a></li>
+<li><a class="reference internal" href="#dynamic-filter-pushdown">Dynamic Filter Pushdown</a></li>
+<li><a class="reference internal" href="#broadcast-join">Broadcast Join</a></li>
+<li><a class="reference internal" href="#anti-joins">Anti Joins</a></li>
+<li><a class="reference internal" href="#empty-build-side">Empty Build Side</a></li>
+<li><a class="reference internal" href="#skipping-duplicate-keys">Skipping Duplicate Keys</a></li>
+<li><a class="reference internal" href="#execution-statistics">Execution Statistics</a></li>
+<li><a class="reference internal" href="#usage-examples">Usage Examples</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="arena.html"
+                        title="previous chapter">Arena Allocation</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/joins.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Joins</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+    </div>
+  </body>
+</html>
