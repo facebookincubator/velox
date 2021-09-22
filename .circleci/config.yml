@@ -87,7 +87,7 @@ jobs:
       - checkout
       - run:
           name: "Test Run"
-          commannd: |
+          command: |
             git status
             git checkout gh-pages
             git status
