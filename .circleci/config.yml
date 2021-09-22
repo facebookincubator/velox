@@ -90,12 +90,12 @@ jobs:
           command: |
             git status
             git checkout gh-pages
+            git config user.email "velox@fb.com"
+            git config user.name "Velox"
             git status
             echo "# Test" >> ./CMakeLists.txt
             git add --all
             git commit -m "some update"
-            git config user.email "velox@fb.com"
-            git config user.name "Velox"
             git push
       - run:
           name: "Calculate merge-base date for CCache"
