@@ -45,19 +45,19 @@
 <h1>Map Functions<a class="headerlink" href="#map-functions" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">bigint</span></dt>
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
 <dd><p>Returns the cardinality (size) of the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">element_at</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">V</span></dt>
+<span class="sig-name descname"><span class="pre">element_at</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span></dt>
 <dd><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if the key is not contained in the map.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="map">
-<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> &#x2192; <span class="pre">map&lt;unknown,</span> <span class="pre">unknown&gt;</span><a class="headerlink" href="#map" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;unknown,</span> <span class="pre">unknown&gt;</span></span></span><a class="headerlink" href="#map" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns an empty map.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">();</span> <span class="o">--</span> <span class="p">{}</span>
 </pre></div>
@@ -115,7 +115,7 @@ that key’s value in the resulting map comes from the last one of those maps.</
 
 <dl class="py function">
 <dt class="sig sig-object py" id="subscript">
-<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">V</span><a class="headerlink" href="#subscript" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span><a class="headerlink" href="#subscript" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>. Throws if the key is not contained in the map.
 Corresponds to SQL subscript operator [].</p>
 <p>SELECT name_to_age_map[‘Bob’] AS bob_age;</p>
@@ -147,7 +147,7 @@ Corresponds to SQL subscript operator [].</p>
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
-      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
       <input type="submit" value="Go" />
     </form>
     </div>
@@ -176,7 +176,7 @@ Corresponds to SQL subscript operator [].</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
     </div>
   </body>
 </html>

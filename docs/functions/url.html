@@ -47,7 +47,7 @@
 <h2>Encoding Functions<a class="headerlink" href="#encoding-functions" title="Permalink to this headline">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="url_encode">
-<span class="sig-name descname"><span class="pre">url_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#url_encode" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_encode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_encode" title="Permalink to this definition">¶</a></dt>
 <dd><p>Escapes <code class="docutils literal notranslate"><span class="pre">value</span></code> by encoding it so that it can be safely included in
 URL query parameter names and values:</p>
 <ul class="simple">
@@ -62,7 +62,7 @@ value of the UTF-8 byte.</p></li>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="url_decode">
-<span class="sig-name descname"><span class="pre">url_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> &#x2192; <span class="pre">varchar</span><a class="headerlink" href="#url_decode" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">url_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#url_decode" title="Permalink to this definition">¶</a></dt>
 <dd><p>Unescapes the URL encoded <code class="docutils literal notranslate"><span class="pre">value</span></code>.
 This function is the inverse of <a class="reference internal" href="#url_encode" title="url_encode"><code class="xref py py-func docutils literal notranslate"><span class="pre">url_encode()</span></code></a>.</p>
 </dd></dl>
@@ -102,7 +102,7 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
-      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
       <input type="submit" value="Go" />
     </form>
     </div>
@@ -131,7 +131,7 @@ This function is the inverse of <a class="reference internal" href="#url_encode"
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
     </div>
   </body>
 </html>

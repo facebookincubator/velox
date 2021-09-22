@@ -138,16 +138,16 @@ from the nulls buffers of the dictionary encodings and the base vector.</p>
 <p>For scalar types, valueAt(index) and isNullAt(index) methods provide access to
 individual null flags and values. Here is an example of decoding and accessing
 the values of a vector of type INTEGER:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span> <span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span> <span class="n">rows</span><span class="p">);</span>
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">(</span><span class="k">auto</span> <span class="n">row</span><span class="p">)</span> <span class="p">{</span>
-    <span class="k">if</span> <span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span> <span class="p">{</span>
-        <span class="c1">// process null</span>
-    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-        <span class="k">auto</span> <span class="n">value</span> <span class="o">=</span> <span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span>
-        <span class="c1">// process non-null value of type int32_t</span>
-    <span class="p">}</span>
-    <span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
-<span class="p">});</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process null</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process non-null value of type int32_t</span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
 </pre></div>
 </div>
 <p>DecodedVector takes a vector to decode and a SelectivityVector that
@@ -157,21 +157,21 @@ only for the necessary rows.</p>
 vector and row mapping into the base vector. isNullAt(index) method can still
 be used to check for top level nulls. Here is an example of decoding and
 accessing the values of a vector of type ARRAY(INTEGER).</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span> <span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span> <span class="n">rows</span><span class="p">);</span>
-<span class="k">auto</span> <span class="n">base</span> <span class="o">=</span> <span class="n">decoded</span><span class="p">.</span><span class="n">base</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">();</span>
-<span class="k">auto</span> <span class="n">elements</span> <span class="o">=</span> <span class="n">base</span><span class="o">-&gt;</span><span class="n">elements</span><span class="p">();</span>
-<span class="k">auto</span> <span class="n">indices</span> <span class="o">=</span> <span class="n">decoded</span><span class="p">.</span><span class="n">indices</span><span class="p">();</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">base</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">elements</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">indices</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">indices</span><span class="p">();</span><span class="w"></span>
 
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">(</span><span class="k">auto</span> <span class="n">row</span><span class="p">)</span> <span class="p">{</span>
-    <span class="k">if</span> <span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span> <span class="p">{</span>
-        <span class="c1">// process null array</span>
-    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-        <span class="k">auto</span> <span class="n">size</span> <span class="o">=</span> <span class="n">base</span><span class="o">-&gt;</span><span class="n">sizeAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span>
-        <span class="k">auto</span> <span class="n">offset</span> <span class="o">=</span> <span class="n">base</span><span class="o">-&gt;</span><span class="n">offsetAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span>
-        <span class="c1">// process array elements stored in [offset, offset + size) slots of the elements vector</span>
-    <span class="p">}</span>
-    <span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
-<span class="p">});</span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process null array</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">sizeAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">offsetAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process array elements stored in [offset, offset + size) slots of the elements vector</span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Node: DecodedVector applied to complex type vectors processes wrappings only
@@ -192,33 +192,33 @@ memory allocations.</p>
 fetches an instance of DecodedVector from a pool of reusable instances stored
 in EvalCtx. The instance is automatically returned to the pool when
 LocalDecodedVector goes out of scope.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LocalDecodedVector</span> <span class="nf">holder</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">vector</span><span class="p">,</span> <span class="n">rows</span><span class="p">);</span>
-<span class="k">auto</span> <span class="n">decoded</span> <span class="o">=</span> <span class="n">holder</span><span class="p">.</span><span class="n">get</span><span class="p">();</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LocalDecodedVector</span><span class="w"> </span><span class="nf">holder</span><span class="p">(</span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">decoded</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">holder</span><span class="p">.</span><span class="n">get</span><span class="p">();</span><span class="w"></span>
 </pre></div>
 </div>
 <p>When implementing an aggregate function, use a DecodedVector member variable
 for each input vector. There will be a few variables for raw input vectors and
 a few more for intermediate input vectors.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ApproxDistinctAggregate</span> <span class="o">:</span> <span class="k">public</span> <span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span> <span class="p">{</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ApproxDistinctAggregate</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 
-      <span class="c1">// partial aggregation</span>
-      <span class="kt">void</span> <span class="nf">decodeArguments</span><span class="p">(</span>
-          <span class="k">const</span> <span class="n">SelectivityVector</span><span class="o">&amp;</span> <span class="n">rows</span><span class="p">,</span>
-          <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span> <span class="n">args</span><span class="p">)</span> <span class="p">{</span>
-        <span class="n">decodedValue_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">rows</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
-        <span class="k">if</span> <span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
-          <span class="n">decodedMaxStandardError_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">rows</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
-          <span class="n">checkSetMaxStandardError</span><span class="p">();</span>
-        <span class="p">}</span>
-      <span class="p">}</span>
+<span class="w">      </span><span class="c1">// partial aggregation</span>
+<span class="w">      </span><span class="kt">void</span><span class="w"> </span><span class="nf">decodeArguments</span><span class="p">(</span><span class="w"></span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">decodedValue_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">          </span><span class="n">decodedMaxStandardError_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="w">          </span><span class="n">checkSetMaxStandardError</span><span class="p">();</span><span class="w"></span>
+<span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="w">      </span><span class="p">}</span><span class="w"></span>
 
-      <span class="c1">// final aggregation</span>
-      <span class="n">decodedHll_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">rows</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
+<span class="w">      </span><span class="c1">// final aggregation</span>
+<span class="w">      </span><span class="n">decodedHll_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
 
-  <span class="n">DecodedVector</span> <span class="n">decodedValue_</span><span class="p">;</span>
-  <span class="n">DecodedVector</span> <span class="n">decodedMaxStandardError_</span><span class="p">;</span>
-  <span class="n">DecodedVector</span> <span class="n">decodedHll_</span><span class="p">;</span>
-<span class="p">}</span>
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedValue_</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedMaxStandardError_</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedHll_</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -230,33 +230,33 @@ DecodedVector::isFlatMapping() to tell whether the vector is constant or flat
 and DecodedVector::mayHaveNulls() to tell whether the vector has any nulls in
 the rows of interest.</p>
 <p>For example, here is an optimized calculation of a sum of integer values.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int32_t</span> <span class="n">sum</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int32_t</span><span class="w"> </span><span class="n">sum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 
-<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNulls</span><span class="p">()</span> <span class="o">&amp;&amp;</span> <span class="n">decoded</span><span class="p">.</span><span class="n">isFlatMapping</span><span class="p">())</span> <span class="p">{</span>
-    <span class="k">auto</span> <span class="n">rawValues</span> <span class="o">=</span> <span class="n">decoded</span><span class="p">.</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNulls</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">isFlatMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
 
-    <span class="c1">// Compiler can autoSIMDize this loop</span>
-    <span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">(</span><span class="k">auto</span> <span class="n">row</span><span class="p">)</span> <span class="p">{</span>
-        <span class="n">sum</span> <span class="o">+=</span> <span class="n">rawValues</span><span class="p">[</span><span class="n">row</span><span class="p">];</span>
-        <span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
-    <span class="p">});</span>
-    <span class="k">return</span> <span class="n">sum</span><span class="p">;</span>
-<span class="p">}</span>
+<span class="w">    </span><span class="c1">// Compiler can autoSIMDize this loop</span>
+<span class="w">    </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="p">});</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
 
-<span class="k">if</span> <span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isConstantMapping</span><span class="p">())</span> <span class="p">{</span>
-  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span> <span class="p">{</span>
-    <span class="n">sum</span> <span class="o">+=</span> <span class="n">rows</span><span class="p">.</span><span class="n">countSelected</span><span class="p">()</span> <span class="o">*</span> <span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
-  <span class="p">}</span>
-  <span class="k">return</span> <span class="n">sum</span><span class="p">;</span>
-<span class="p">}</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isConstantMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">rows</span><span class="p">.</span><span class="n">countSelected</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
 
-<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span> <span class="p">(</span><span class="k">auto</span> <span class="n">row</span><span class="p">)</span> <span class="p">{</span>
-    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span> <span class="p">{</span>
-        <span class="n">sum</span> <span class="o">+=</span> <span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span>
-    <span class="p">}</span>
-    <span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
-<span class="p">});</span>
-<span class="k">return</span> <span class="n">sum</span><span class="p">;</span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+<span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -302,7 +302,7 @@ the rows of interest.</p>
   <h3 id="searchlabel">Quick search</h3>
     <div class="searchformwrapper">
     <form class="search" action="../search.html" method="get">
-      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
       <input type="submit" value="Go" />
     </form>
     </div>
@@ -331,7 +331,7 @@ the rows of interest.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.0.3.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
     </div>
   </body>
 </html>
