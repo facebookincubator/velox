@@ -91,7 +91,10 @@ jobs:
             git status
             git checkout gh-pages
             git status
-            ls
+            echo "# Test" >> ./CMakeLists.txt
+            git add --all
+            git commit -m "some update"
+            git push
       - run:
           name: "Calculate merge-base date for CCache"
           command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
