@@ -119,7 +119,14 @@ function install_fmt {
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="/usr/local/opt/openssl"
+  OPENSSL_DIR=$(brew --prefix openssl)
+
+  if [[ ! -d "$DIRECTORY" ]]
+  then
+    OPENSSL_DIR="/usr/local/opt/openssl"
+  fi
+
+  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="${OPENSSL_DIR}"
 }
 
 function install_ranges_v3 {
