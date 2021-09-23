@@ -542,6 +542,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   char escapeChar;
   if (numArgs == 3) {
+      // TODO(aditi) : Validate that escapeChar is a single char.
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
         "{} requires third argument of type VARCHAR, but got {}",
@@ -559,6 +560,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
+  // TODO(aditi) : Process null patterns and escape char to return null
   VELOX_USER_CHECK(
       constantPattern != nullptr && !constantPattern->isNullAt(0),
       "{} requires second argument to be a constant of type VARCHAR",
