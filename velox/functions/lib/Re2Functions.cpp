@@ -542,7 +542,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   char escapeChar;
   if (numArgs == 3) {
-      // TODO(aditi) : Validate that escapeChar is a single char.
+    // TODO(aditi) : Validate that escapeChar is a single char.
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
         "{} requires third argument of type VARCHAR, but got {}",
