@@ -36,6 +36,7 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
         "re2_search", re2SearchSignatures(), makeRe2Search);
     exec::registerStatefulVectorFunction(
         "re2_extract", re2ExtractSignatures(), makeRe2Extract);
+    exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
   }
 };
 
@@ -322,6 +323,46 @@ TEST_F(Re2FunctionsTest, regexExtractConstantPatternNoGroupId) {
 
   EXPECT_EQ(extract("a1 b2 c3", "\\d+"), "1");
   EXPECT_EQ(extract("a b245 c3", "\\d+"), "245");
+}
+
+TEST_F(Re2FunctionsTest, likePattern) {
+  auto like =
+      ([&](std::optional<std::string> str, std::optional<std::string> pattern) {
+        return evaluateOnce<std::string>("like(c0, '" + *pattern + "')", str);
+      });
+
+  EXPECT_EQ(like("abc", "%b%"), "abc");
+  EXPECT_EQ(like("bcd", "%b%"), "bcd");
+  EXPECT_EQ(like("cde", "%b%"), std::nullopt);
+
+  EXPECT_EQ(like("abc", "_b%"), "abc");
+  EXPECT_EQ(like("bcd", "_b%"), std::nullopt);
+  EXPECT_EQ(like("cde", "_b%"), std::nullopt);
+
+  EXPECT_EQ(like("abc", "b%"), std::nullopt);
+  EXPECT_EQ(like("bcd", "b%"), "bcd");
+  EXPECT_EQ(like("cde", "b%"), std::nullopt);
+
+  EXPECT_EQ(like("abc", "B%"), std::nullopt);
+  EXPECT_EQ(like("bcd", "B%"), std::nullopt);
+  EXPECT_EQ(like("cde", "B%"), std::nullopt);
+}
+
+TEST_F(Re2FunctionsTest, likePatternAndEscape) {
+  auto like = ([&](std::optional<std::string> str,
+                   std::optional<std::string> pattern,
+                   std::optional<char> escape) {
+    return evaluateOnce<std::string>(
+        "like(c0, '" + *pattern + "', '" + *escape + "')", str);
+  });
+
+  EXPECT_EQ(like("a_c", "%#_%", '#'), "a_c");
+  EXPECT_EQ(like("_cd", "%#_%", '#'), "_cd");
+  EXPECT_EQ(like("cde", "%#_%", '#'), std::nullopt);
+
+  EXPECT_EQ(like("a%c", "%#%%", '#'), "a%c");
+  EXPECT_EQ(like("%cd", "%#%%", '#'), "%cd");
+  EXPECT_EQ(like("cde", "%#%%", '#'), std::nullopt);
 }
 
 } // namespace
