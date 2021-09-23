@@ -121,7 +121,7 @@ function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
   OPENSSL_DIR=$(brew --prefix openssl)
 
-  if [[ ! -d "$DIRECTORY" ]]
+  if [[ ! -d "$OPENSSL_DIR" ]]
   then
     OPENSSL_DIR="/usr/local/opt/openssl"
   fi
