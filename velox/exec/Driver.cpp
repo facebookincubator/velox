@@ -506,6 +506,7 @@ void Driver::close() {
   for (auto& op : operators_) {
     op->close();
   }
+  operators_.clear();
   Task::removeDriver(task_, this);
   task_ = nullptr;
 }
