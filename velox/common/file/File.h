@@ -38,7 +38,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
-#include "velox/core/Context.h"
 
 namespace facebook::velox {
 

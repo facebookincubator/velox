@@ -30,6 +30,7 @@ uint64_t FileHandleSizer::operator()(const FileHandle& fileHandle) {
 std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename) {
   auto fileHandle = std::make_unique<FileHandle>();
+  // TODO: Cache the filesystem
   fileHandle->file =
       filesystems::getFileSystem(filename, properties_)->openReadFile(filename);
   fileHandle->uuid = StringIdLease(fileIds(), filename);

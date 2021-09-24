@@ -15,7 +15,6 @@
  */
 
 #include "velox/common/file/File.h"
-#include "velox/common/file/FileSystems.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
@@ -199,47 +198,3 @@ uint64_t LocalWriteFile::size() const {
   return ftell(file_);
 }
 } // namespace facebook::velox
-
-// Register Local FileSystem.
-namespace facebook::velox::filesystems {
-
-class LocalFileSystem : public FileSystem {
- public:
-  LocalFileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
-  virtual ~LocalFileSystem() {}
-  virtual std::string name() const override {
-    return "Local FS";
-  }
-  virtual std::unique_ptr<ReadFile> openReadFile(
-      std::string_view path) override {
-    if (path.find(kFileScheme) == 0) {
-      return std::make_unique<LocalReadFile>(path.substr(kFileScheme.length()));
-    }
-    return std::make_unique<LocalReadFile>(path);
-  }
-  virtual std::unique_ptr<WriteFile> openWriteFile(
-      std::string_view path) override {
-    if (path.find(kFileScheme) == 0) {
-      return std::make_unique<LocalWriteFile>(
-          path.substr(kFileScheme.length()));
-    }
-    return std::make_unique<LocalWriteFile>(path);
-  }
-};
-
-void registerFileSystem_Linux() {
-  // Note: presto behavior is to prefix local paths with 'file:'.
-  // Check for that prefix and prune to absolute regular paths as needed.
-  std::function<bool(std::string_view)> scheme_matcher =
-      [](std::string_view filename) {
-        return filename.find("/") == 0 || filename.find(kFileScheme) == 0;
-      };
-  std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-      filesystem_generator = [](std::shared_ptr<const Config> properties) {
-        // TODO: Cache the FileSystem
-        return std::make_shared<LocalFileSystem>(properties);
-      };
-  registerFileSystemClass(scheme_matcher, filesystem_generator);
-}
-
-} // namespace facebook::velox::filesystems

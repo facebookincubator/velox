@@ -56,9 +56,7 @@ std::shared_ptr<FileSystem> getFileSystem(
 // The registration function take two parameters: a
 // std::function<bool(std::string_view)> that says whether the registered
 // FileSystem subclass should be used for that filename, and a lambda that
-// generates the actual file system. Each registered file system is tried in the
-// order it was registered, so keep this in mind if multiple file systems could
-// match the same filename.
+// generates the actual file system.
 
 void registerFileSystemClass(
     std::function<bool(std::string_view)> schemeMatcher,
@@ -66,6 +64,9 @@ void registerFileSystemClass(
         fileSystemGenerator);
 
 // Register all filesystems.
+// Each registered file system is tried in the
+// order it was registered, so keep this in mind if multiple file systems could
+// match the same filename.
 void registerFileSystems();
 
 } // namespace facebook::velox::filesystems
