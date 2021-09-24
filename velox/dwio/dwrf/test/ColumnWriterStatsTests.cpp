@@ -45,11 +45,11 @@ std::unique_ptr<DwrfRowReader> writeAndGetReader(
   auto sink = std::make_unique<MemorySink>(pool, 200 * 1024 * 1024);
   auto sinkPtr = sink.get();
 
-  auto config = std::make_shared<facebook::velox::dwrf::Config>();
-  config->set(facebook::velox::dwrf::Config::ROW_INDEX_STRIDE, folly::to<uint32_t>(batch->size()));
+  auto config = std::make_shared<Config>();
+  config->set(Config::ROW_INDEX_STRIDE, folly::to<uint32_t>(batch->size()));
   if (flatMapColId >= 0) {
-    config->set(facebook::velox::dwrf::Config::FLATTEN_MAP, true);
-    config->set(facebook::velox::dwrf::Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
+    config->set(Config::FLATTEN_MAP, true);
+    config->set(Config::MAP_FLAT_COLS, {folly::to<uint32_t>(flatMapColId)});
   }
   WriterOptions options;
   options.config = config;
