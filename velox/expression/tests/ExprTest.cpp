@@ -114,10 +114,7 @@ class TestingVectorLoader : public VectorLoader {
 class ExprTest : public testing::Test {
  protected:
   void SetUp() override {
-    queryCtx_ = core::QueryCtx::create();
-    execCtx_ = std::make_unique<core::ExecCtx>(
-        memory::getDefaultScopedMemoryPool(), queryCtx_.get());
-    vectorMaker_ = std::make_unique<test::VectorMaker>(execCtx_->pool());
+    vectorMaker_ = std::make_unique<test::VectorMaker>(pool_.get());
 
     functions::registerFunctions();
     functions::registerVectorFunctions();
@@ -706,10 +703,11 @@ class ExprTest : public testing::Test {
     return indicesBuffer;
   }
 
-  std::shared_ptr<core::QueryCtx> queryCtx_;
-  // execCtx is declared first and destroyed last because it owns the MemoryPool
-  // from which the rest is allocated.
-  std::unique_ptr<core::ExecCtx> execCtx_;
+  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
+  std::unique_ptr<memory::MemoryPool> pool_{
+      memory::getDefaultScopedMemoryPool()};
+  std::unique_ptr<core::ExecCtx> execCtx_{
+      std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
   TestData testData_;
   std::shared_ptr<const RowType> testDataType_;
   std::unique_ptr<exec::ExprSet> exprs_;
