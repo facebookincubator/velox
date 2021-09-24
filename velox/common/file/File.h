@@ -23,10 +23,6 @@
 //
 // All functions are not threadsafe -- external locking is required, even
 // for const member functions.
-//
-// We provide a registration method for read and write files so the appropriate
-// type of file can be constructed based on a filename. See the
-// (register|generate)ReadFile and (register|generate)WriteFile functions.
 
 #pragma once
 
@@ -42,8 +38,11 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
+#include "velox/core/Context.h"
 
 namespace facebook::velox {
+
+constexpr std::string_view kFileScheme("file:");
 
 // A read-only file.
 class ReadFile {
@@ -135,30 +134,6 @@ class WriteFile {
   // Current file size, i.e. the sum of all previous Appends.
   virtual uint64_t size() const = 0;
 };
-
-// We expect that programs will perform these registrations lazily at static
-// link time, e.g. via the lazyRegisterFileClass function. This function takes
-// a std::function that will itself call the registerFileClass function. We do
-// it lazily to get around the fact that many libraries need folly::init to
-// have been called before they will work properly. Basically as a user you
-// shouldn't have to worry about these register functions -- all you will need
-// to use is the generate functions below.
-//
-// The registration function take three parameters: a
-// std::function<bool(std::string_view)> that says whether the registered
-// File subclass should be used for that filename, and lambdas that generate
-// the actual Read/Write file. Each registered type is tried in the order it was
-// registered, so keep this in mind if multiple types could match the same
-// filename.
-void lazyRegisterFileClass(std::function<void()> lazy_registration);
-void registerFileClass(
-    std::function<bool(std::string_view)> filenameMatcher,
-    std::function<std::unique_ptr<ReadFile>(std::string_view)> readGenerator,
-    std::function<std::unique_ptr<WriteFile>(std::string_view)> writeGenerator);
-
-// Returns a read/write file of type appropriate for filename.
-std::unique_ptr<ReadFile> generateReadFile(std::string_view filename);
-std::unique_ptr<WriteFile> generateWriteFile(std::string_view filename);
 
 // We currently do a simple implementation for the in-memory files
 // that simply resizes a string as needed. If there ever gets used in
@@ -258,6 +233,68 @@ class LocalWriteFile final : public WriteFile {
  private:
   FILE* file_;
   mutable long size_;
+};
+
+// An abstract FileSystem
+class FileSystem : public std::enable_shared_from_this<FileSystem> {
+ public:
+  FileSystem(std::shared_ptr<const Config> config) : config_(config) {}
+  virtual ~FileSystem() {}
+  virtual std::string name() const = 0;
+  virtual std::unique_ptr<ReadFile> openReadFile(std::string_view path) = 0;
+  virtual std::unique_ptr<WriteFile> openWriteFile(std::string_view path) = 0;
+
+  static std::shared_ptr<FileSystem> getFileSystem(
+      std::string_view filename,
+      std::shared_ptr<const Config> config);
+
+ protected:
+  std::shared_ptr<const Config> config_;
+};
+
+// We expect that programs will perform these registrations lazily at static
+// link time, e.g. via the lazyRegisterFileSystemClass function. This function
+// takes a std::function that will itself call the registerFileSystemClass
+// function. We do it lazily to get around the fact that many libraries need
+// folly::init to have been called before they will work properly.
+// Basically as a user you shouldn't have to worry about these register
+// functions -- all you will need to use is the generate functions below.
+//
+// The registration function take two parameters: a
+// std::function<bool(std::string_view)> that says whether the registered
+// FileSystem subclass should be used for that filename, and a lambda that
+// generates the actual file system. Each registered file system is tried in the
+// order it was registered, so keep this in mind if multiple file systems could
+// match the same filename.
+
+void lazyRegisterFileSystemClass(std::function<void()> lazy_registration);
+void registerFileSystemClass(
+    std::function<bool(std::string_view)> schemeMatcher,
+    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+        fileSystemGenerator);
+
+class LocalFileSystem : public FileSystem {
+ public:
+  LocalFileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
+  virtual ~LocalFileSystem() {}
+  virtual std::string name() const override {
+    return "Local FS";
+  }
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path) override {
+    if (path.find(kFileScheme) == 0) {
+      return std::make_unique<LocalReadFile>(path.substr(kFileScheme.length()));
+    }
+    return std::make_unique<LocalReadFile>(path);
+  }
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path) override {
+    if (path.find(kFileScheme) == 0) {
+      return std::make_unique<LocalWriteFile>(
+          path.substr(kFileScheme.length()));
+    }
+    return std::make_unique<LocalWriteFile>(path);
+  }
 };
 
 } // namespace facebook::velox
