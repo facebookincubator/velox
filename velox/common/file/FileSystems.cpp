@@ -93,13 +93,9 @@ class LocalFileSystem : public FileSystem {
   }
 };
 
-VELOX_DECLARE_FILESYSTEM(
-    Local,
-    LocalFileSystem::schemeMatcher(),
-    LocalFileSystem::fileSystemGenerator());
-
 void registerLocalFileSystem() {
-  VELOX_REGISTER_FILESYSTEM(Local);
+  registerFileSystem(
+      LocalFileSystem::schemeMatcher(), LocalFileSystem::fileSystemGenerator());
 }
 
 // Register FileSystems.

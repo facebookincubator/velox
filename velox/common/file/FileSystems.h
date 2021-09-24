@@ -19,22 +19,6 @@
 #include <memory>
 #include <string_view>
 
-// Private. Return the external filesystem name given a tag.
-#define _VELOX_REGISTER_FILESYSTEM(tag) registerFileSystem_##tag
-
-// Registers a filesystem associated with a given tag.
-#define VELOX_REGISTER_FILESYSTEM(tag)             \
-  {                                                \
-    extern void _VELOX_REGISTER_FILESYSTEM(tag)(); \
-    _VELOX_REGISTER_FILESYSTEM(tag)();             \
-  }
-
-// Declares a filesystem associated with a given tag.
-#define VELOX_DECLARE_FILESYSTEM(tag, schemaMatcher, filesystemGenerator) \
-  void _VELOX_REGISTER_FILESYSTEM(tag)() {                                \
-    registerFileSystem((schemaMatcher), (filesystemGenerator));           \
-  }
-
 namespace facebook::velox {
 class Config;
 class ReadFile;
