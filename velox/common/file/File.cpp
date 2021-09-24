@@ -15,68 +15,17 @@
  */
 
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 
 #include <fcntl.h>
 #include <folly/portability/SysUio.h>
 
 namespace facebook::velox {
-
-namespace {
-
-std::vector<std::function<void()>>& lazyRegistrations() {
-  // Meyers singleton.
-  static std::vector<std::function<void()>>* lazyRegs =
-      new std::vector<std::function<void()>>();
-  return *lazyRegs;
-}
-std::once_flag lazyRegistrationFlag;
-
-using RegisteredFileSystems = std::vector<std::pair<
-    std::function<bool(std::string_view)>,
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>>>;
-
-RegisteredFileSystems& registeredFileSystems() {
-  // Meyers singleton.
-  static RegisteredFileSystems* fss = new RegisteredFileSystems();
-  return *fss;
-}
-
-} // namespace
-
-void lazyRegisterFileSystemClass(std::function<void()> lazy_registration) {
-  lazyRegistrations().push_back(lazy_registration);
-}
-
-void registerFileSystemClass(
-    std::function<bool(std::string_view)> schemeMatcher,
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-        fileSystemGenerator) {
-  registeredFileSystems().emplace_back(schemeMatcher, fileSystemGenerator);
-}
-
-std::shared_ptr<FileSystem> FileSystem::getFileSystem(
-    std::string_view filename,
-    std::shared_ptr<const Config> properties) {
-  std::call_once(lazyRegistrationFlag, []() {
-    for (auto registration : lazyRegistrations()) {
-      registration();
-    }
-  });
-  const auto& filesystems = registeredFileSystems();
-  for (const auto& p : filesystems) {
-    if (p.first(filename)) {
-      return p.second(properties);
-    }
-  }
-  throw std::runtime_error(fmt::format(
-      "No registered file system matched with filename '{}'", filename));
-}
 
 std::string_view InMemoryReadFile::pread(
     uint64_t offset,
@@ -249,31 +198,48 @@ void LocalWriteFile::flush() {
 uint64_t LocalWriteFile::size() const {
   return ftell(file_);
 }
+} // namespace facebook::velox
 
 // Register Local FileSystem.
-namespace {
+namespace facebook::velox::filesystems {
 
-struct LocalFileSystemRegistrar {
-  LocalFileSystemRegistrar() {
-    lazyRegisterFileSystemClass([this]() { this->ActuallyRegister(); });
+class LocalFileSystem : public FileSystem {
+ public:
+  LocalFileSystem(std::shared_ptr<const Config> config) : FileSystem(config) {}
+  virtual ~LocalFileSystem() {}
+  virtual std::string name() const override {
+    return "Local FS";
   }
-  void ActuallyRegister() {
-    // Note: presto behavior is to prefix local paths with 'file:'.
-    // Check for that prefix and prune to absolute regular paths as needed.
-    std::function<bool(std::string_view)> scheme_matcher =
-        [](std::string_view filename) {
-          return filename.find("/") == 0 || filename.find("file:") == 0;
-        };
-    std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-        filesystem_generator = [](std::shared_ptr<const Config> properties) {
-          // TODO: Cache the FileSystem
-          return std::make_shared<LocalFileSystem>(properties);
-        };
-    registerFileSystemClass(scheme_matcher, filesystem_generator);
+  virtual std::unique_ptr<ReadFile> openReadFile(
+      std::string_view path) override {
+    if (path.find(kFileScheme) == 0) {
+      return std::make_unique<LocalReadFile>(path.substr(kFileScheme.length()));
+    }
+    return std::make_unique<LocalReadFile>(path);
+  }
+  virtual std::unique_ptr<WriteFile> openWriteFile(
+      std::string_view path) override {
+    if (path.find(kFileScheme) == 0) {
+      return std::make_unique<LocalWriteFile>(
+          path.substr(kFileScheme.length()));
+    }
+    return std::make_unique<LocalWriteFile>(path);
   }
 };
 
-const LocalFileSystemRegistrar localFileSystem;
+void registerFileSystem_Linux() {
+  // Note: presto behavior is to prefix local paths with 'file:'.
+  // Check for that prefix and prune to absolute regular paths as needed.
+  std::function<bool(std::string_view)> scheme_matcher =
+      [](std::string_view filename) {
+        return filename.find("/") == 0 || filename.find(kFileScheme) == 0;
+      };
+  std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+      filesystem_generator = [](std::shared_ptr<const Config> properties) {
+        // TODO: Cache the FileSystem
+        return std::make_shared<LocalFileSystem>(properties);
+      };
+  registerFileSystemClass(scheme_matcher, filesystem_generator);
+}
 
-} // namespace
-} // namespace facebook::velox
+} // namespace facebook::velox::filesystems

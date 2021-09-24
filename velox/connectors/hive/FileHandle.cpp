@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/common/file/FileSystems.h"
 
 #include <atomic>
 
@@ -30,7 +31,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename) {
   auto fileHandle = std::make_unique<FileHandle>();
   fileHandle->file =
-      FileSystem::getFileSystem(filename, properties_)->openReadFile(filename);
+      filesystems::getFileSystem(filename, properties_)->openReadFile(filename);
   fileHandle->uuid = StringIdLease(fileIds(), filename);
   VLOG(1) << "Generating file handle for: " << filename
           << " uuid: " << fileHandle->uuid.id();

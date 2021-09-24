@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
 
 #include "gtest/gtest.h"
 
@@ -88,9 +89,10 @@ TEST(LocalFile, WriteAndRead) {
 }
 
 TEST(LocalFile, ViaRegistry) {
+  filesystems::registerFileSystems();
   const char filename[] = "/tmp/test";
   remove(filename);
-  auto lfs = FileSystem::getFileSystem(filename, nullptr);
+  auto lfs = filesystems::getFileSystem(filename, nullptr);
   {
     auto writeFile = lfs->openWriteFile(filename);
     writeFile->append("snarf");
