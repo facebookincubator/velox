@@ -21,6 +21,8 @@
 
 namespace facebook::velox::filesystems {
 
+constexpr std::string_view kFileScheme("file:");
+
 using RegisteredFileSystems = std::vector<std::pair<
     std::function<bool(std::string_view)>,
     std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>>>;
@@ -31,7 +33,7 @@ RegisteredFileSystems& registeredFileSystems() {
   return *fss;
 }
 
-void registerFileSystemClass(
+void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
         fileSystemGenerator) {
@@ -47,8 +49,7 @@ std::shared_ptr<FileSystem> getFileSystem(
       return p.second(properties);
     }
   }
-  throw std::runtime_error(fmt::format(
-      "No registered file system matched with filename '{}'", filename));
+  VELOX_FAIL("No registered file system matched with filename '{}'", filename);
 }
 
 // Implement Local FileSystem.
@@ -74,26 +75,37 @@ class LocalFileSystem : public FileSystem {
     }
     return std::make_unique<LocalWriteFile>(path);
   }
+
+  static std::function<bool(std::string_view)> schemeMatcher() {
+    // Note: presto behavior is to prefix local paths with 'file:'.
+    // Check for that prefix and prune to absolute regular paths as needed.
+    return [](std::string_view filename) {
+      return filename.find("/") == 0 || filename.find(kFileScheme) == 0;
+    };
+  }
+
+  static std::function<
+      std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+  filesystemGenerator() {
+    return [](std::shared_ptr<const Config> properties) {
+      // TODO: Cache the FileSystem
+      return std::make_shared<LocalFileSystem>(properties);
+    };
+  }
 };
 
-// Register Local FileSystem.
-void registerFileSystem_Linux() {
-  // Note: presto behavior is to prefix local paths with 'file:'.
-  // Check for that prefix and prune to absolute regular paths as needed.
-  std::function<bool(std::string_view)> scheme_matcher =
-      [](std::string_view filename) {
-        return filename.find("/") == 0 || filename.find(kFileScheme) == 0;
-      };
-  std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-      filesystem_generator = [](std::shared_ptr<const Config> properties) {
-        // TODO: Cache the FileSystem
-        return std::make_shared<LocalFileSystem>(properties);
-      };
-  registerFileSystemClass(scheme_matcher, filesystem_generator);
+VELOX_DECLARE_FILESYSTEM(
+    Local,
+    LocalFileSystem::schemeMatcher(),
+    LocalFileSystem::filesystemGenerator());
+
+void registerLocalFileSystem() {
+  VELOX_REGISTER_FILESYSTEM(Local);
 }
 
-void registerFileSystems() {
-  VELOX_REGISTER_FILE_SYSTEM(Linux);
+// Register FileSystems.
+void registerAllFileSystems() {
+  registerLocalFileSystem();
 }
 
 } // namespace facebook::velox::filesystems

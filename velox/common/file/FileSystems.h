@@ -18,13 +18,20 @@
 #include <functional>
 #include <string_view>
 
-#define _VELOX_REGISTER_FILE_SYSTEM(tag) registerFileSystem_##tag
+// Private. Return the external filesystem name given a tag.
+#define _VELOX_REGISTER_FILESYSTEM(tag) registerFileSystem_##tag
 
 // Registers a filesystem associated with a given tag.
-#define VELOX_REGISTER_FILE_SYSTEM(tag)             \
-  {                                                 \
-    extern void _VELOX_REGISTER_FILE_SYSTEM(tag)(); \
-    _VELOX_REGISTER_FILE_SYSTEM(tag)();             \
+#define VELOX_REGISTER_FILESYSTEM(tag)             \
+  {                                                \
+    extern void _VELOX_REGISTER_FILESYSTEM(tag)(); \
+    _VELOX_REGISTER_FILESYSTEM(tag)();             \
+  }
+
+// Declares a filesystem associated with a given tag.
+#define VELOX_DECLARE_FILESYSTEM(tag, schemaMatcher, filesystemGenerator) \
+  void _VELOX_REGISTER_FILESYSTEM(tag)() {                                \
+    registerFileSystem((schemaMatcher), (filesystemGenerator));           \
   }
 
 namespace facebook::velox {
@@ -36,7 +43,7 @@ class WriteFile;
 namespace facebook::velox::filesystems {
 
 // An abstract FileSystem
-class FileSystem : public std::enable_shared_from_this<FileSystem> {
+class FileSystem {
  public:
   FileSystem(std::shared_ptr<const Config> config) : config_(config) {}
   virtual ~FileSystem() {}
@@ -52,21 +59,23 @@ std::shared_ptr<FileSystem> getFileSystem(
     std::string_view filename,
     std::shared_ptr<const Config> config);
 
-// FileSystems must be registered explicitly
-// The registration function take two parameters: a
-// std::function<bool(std::string_view)> that says whether the registered
-// FileSystem subclass should be used for that filename, and a lambda that
-// generates the actual file system.
-
-void registerFileSystemClass(
+// FileSystems must be registered explicitly.
+// The registration function takes two parameters:
+// a std::function<bool(std::string_view)> that says whether the registered
+// FileSystem subclass should be used for that filename,
+// and a lambda that generates the actual file system.
+void registerFileSystem(
     std::function<bool(std::string_view)> schemeMatcher,
     std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
         fileSystemGenerator);
+
+// Registers the local filesystem.
+void registerLocalFileSystem();
 
 // Register all filesystems.
 // Each registered file system is tried in the
 // order it was registered, so keep this in mind if multiple file systems could
 // match the same filename.
-void registerFileSystems();
+void registerAllFileSystems();
 
 } // namespace facebook::velox::filesystems

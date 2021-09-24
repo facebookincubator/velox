@@ -41,8 +41,6 @@
 
 namespace facebook::velox {
 
-constexpr std::string_view kFileScheme("file:");
-
 // A read-only file.
 class ReadFile {
  public:

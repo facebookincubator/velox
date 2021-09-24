@@ -89,7 +89,7 @@ TEST(LocalFile, WriteAndRead) {
 }
 
 TEST(LocalFile, ViaRegistry) {
-  filesystems::registerFileSystems();
+  filesystems::registerLocalFileSystem();
   const char filename[] = "/tmp/test";
   remove(filename);
   auto lfs = filesystems::getFileSystem(filename, nullptr);
