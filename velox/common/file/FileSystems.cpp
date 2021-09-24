@@ -60,14 +60,14 @@ class LocalFileSystem : public FileSystem {
   virtual std::string name() const override {
     return "Local FS";
   }
-  virtual std::unique_ptr<ReadFile> openReadFile(
+  virtual std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path) override {
     if (path.find(kFileScheme) == 0) {
       return std::make_unique<LocalReadFile>(path.substr(kFileScheme.length()));
     }
     return std::make_unique<LocalReadFile>(path);
   }
-  virtual std::unique_ptr<WriteFile> openWriteFile(
+  virtual std::unique_ptr<WriteFile> openFileForWrite(
       std::string_view path) override {
     if (path.find(kFileScheme) == 0) {
       return std::make_unique<LocalWriteFile>(
@@ -86,9 +86,8 @@ class LocalFileSystem : public FileSystem {
 
   static std::function<
       std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
-  filesystemGenerator() {
+  fileSystemGenerator() {
     return [](std::shared_ptr<const Config> properties) {
-      // TODO: Cache the FileSystem
       return std::make_shared<LocalFileSystem>(properties);
     };
   }
@@ -97,7 +96,7 @@ class LocalFileSystem : public FileSystem {
 VELOX_DECLARE_FILESYSTEM(
     Local,
     LocalFileSystem::schemeMatcher(),
-    LocalFileSystem::filesystemGenerator());
+    LocalFileSystem::fileSystemGenerator());
 
 void registerLocalFileSystem() {
   VELOX_REGISTER_FILESYSTEM(Local);

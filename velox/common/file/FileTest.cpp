@@ -94,10 +94,10 @@ TEST(LocalFile, ViaRegistry) {
   remove(filename);
   auto lfs = filesystems::getFileSystem(filename, nullptr);
   {
-    auto writeFile = lfs->openWriteFile(filename);
+    auto writeFile = lfs->openFileForWrite(filename);
     writeFile->append("snarf");
   }
-  auto readFile = lfs->openReadFile(filename);
+  auto readFile = lfs->openFileForRead(filename);
   ASSERT_EQ(readFile->size(), 5);
   Arena arena;
   ASSERT_EQ(readFile->pread(0, 5, &arena), "snarf");

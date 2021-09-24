@@ -31,8 +31,8 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
     const std::string& filename) {
   auto fileHandle = std::make_unique<FileHandle>();
   // TODO: Cache the filesystem
-  fileHandle->file =
-      filesystems::getFileSystem(filename, properties_)->openReadFile(filename);
+  fileHandle->file = filesystems::getFileSystem(filename, properties_)
+                         ->openFileForRead(filename);
   fileHandle->uuid = StringIdLease(fileIds(), filename);
   VLOG(1) << "Generating file handle for: " << filename
           << " uuid: " << fileHandle->uuid.id();

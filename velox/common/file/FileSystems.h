@@ -16,6 +16,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string_view>
 
 // Private. Return the external filesystem name given a tag.
@@ -45,11 +46,16 @@ namespace facebook::velox::filesystems {
 // An abstract FileSystem
 class FileSystem {
  public:
-  FileSystem(std::shared_ptr<const Config> config) : config_(config) {}
+  FileSystem(std::shared_ptr<const Config> config)
+      : config_(std::move(config)) {}
   virtual ~FileSystem() {}
+  // Returns the name of the File System
   virtual std::string name() const = 0;
-  virtual std::unique_ptr<ReadFile> openReadFile(std::string_view path) = 0;
-  virtual std::unique_ptr<WriteFile> openWriteFile(std::string_view path) = 0;
+  // Returns a ReadFile handle for a given file path
+  virtual std::unique_ptr<ReadFile> openFileForRead(std::string_view path) = 0;
+  // Returns a WriteFile handle for a given file path
+  virtual std::unique_ptr<WriteFile> openFileForWrite(
+      std::string_view path) = 0;
 
  protected:
   std::shared_ptr<const Config> config_;
@@ -69,7 +75,7 @@ void registerFileSystem(
     std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
         fileSystemGenerator);
 
-// Registers the local filesystem.
+// Register the local filesystem.
 void registerLocalFileSystem();
 
 // Register all filesystems.
