@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/HiveConnectorTestBase.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/QueryAssertions.h"
@@ -24,6 +25,7 @@ namespace facebook::velox::exec::test {
 
 void HiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
+  filesystems::registerLocalFileSystem();
   auto dummyDataCache = std::make_unique<DummyDataCache>();
   dataCache = dummyDataCache.get();
   auto hiveConnector =
