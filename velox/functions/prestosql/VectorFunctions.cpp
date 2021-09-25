@@ -15,11 +15,16 @@
  */
 #include "velox/functions/prestosql/VectorFunctions.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/prestosql/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
 
 namespace facebook::velox::functions {
 
 void registerVectorFunctions() {
+  registerType("timestamp with time zone", [](auto /*childTypes*/) {
+        return TIMESTAMP_WITH_TIME_ZONE();
+  });
+  
   VELOX_REGISTER_VECTOR_FUNCTION(udf_element_at, "element_at");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, "subscript");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, "transform");
@@ -49,6 +54,7 @@ void registerVectorFunctions() {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_substr, "substr");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, "lower");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_trim, "trim");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, "upper");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_strpos, "strpos");
@@ -65,6 +71,8 @@ void registerVectorFunctions() {
       "regexp_like", re2SearchSignatures(), makeRe2Search);
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, "to_utf8");
+
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, "from_unixtime");
 
   // TODO Fix Koski parser and clean this up.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "ROW");
