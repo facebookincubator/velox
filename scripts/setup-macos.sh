@@ -159,7 +159,8 @@ function install_velox_deps {
   else
     install_velox_deps
   fi
+)
 
 echo "All deps for Velox installed! Now try \"make\""
 echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
-echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH')
+echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'
