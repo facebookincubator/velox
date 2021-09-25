@@ -22,9 +22,9 @@ namespace facebook::velox::functions {
 
 void registerVectorFunctions() {
   registerType("timestamp with time zone", [](auto /*childTypes*/) {
-        return TIMESTAMP_WITH_TIME_ZONE();
+    return TIMESTAMP_WITH_TIME_ZONE();
   });
-  
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_element_at, "element_at");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, "subscript");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, "transform");
