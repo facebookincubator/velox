@@ -13,19 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/JoinBridge.h"
 
-#include "velox/common/caching/FileIds.h"
+namespace facebook::velox::exec {
 
-#include <gflags/gflags.h>
-
-namespace facebook::velox {
-StringIdMap& fileIds() {
-  return *fileIdsShared();
+void JoinBridge::cancel() {
+  std::lock_guard<std::mutex> l(mutex_);
+  cancelled_ = true;
+  notifyConsumersLocked();
 }
 
-const std::shared_ptr<StringIdMap>& fileIdsShared() {
-  static std::shared_ptr<StringIdMap> ids = std::make_shared<StringIdMap>();
-  return ids;
+void JoinBridge::notifyConsumersLocked() {
+  for (auto& promise : promises_) {
+    promise.setValue(true);
+  }
+  promises_.clear();
 }
 
-} // namespace facebook::velox
+} // namespace facebook::velox::exec

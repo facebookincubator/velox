@@ -13,19 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#include "velox/common/caching/FileIds.h"
+#include "velox/common/future/VeloxPromise.h"
 
-#include <gflags/gflags.h>
+namespace facebook::velox::exec {
 
-namespace facebook::velox {
-StringIdMap& fileIds() {
-  return *fileIdsShared();
-}
+class JoinBridge {
+ public:
+  virtual ~JoinBridge() = default;
 
-const std::shared_ptr<StringIdMap>& fileIdsShared() {
-  static std::shared_ptr<StringIdMap> ids = std::make_shared<StringIdMap>();
-  return ids;
-}
+  // Sets this to a cancelled state and unblocks any waiting activity. This may
+  // happen asynchronously before or after the result has been set.
+  void cancel();
 
-} // namespace facebook::velox
+ protected:
+  void notifyConsumersLocked();
+
+  std::mutex mutex_;
+  std::vector<VeloxPromise<bool>> promises_;
+  bool cancelled_{false};
+};
+} // namespace facebook::velox::exec

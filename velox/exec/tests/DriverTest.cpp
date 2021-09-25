@@ -201,6 +201,23 @@ class DriverTest : public OperatorTestBase {
     }
   }
 
+  // Checks that 'task' transits to finished state within a short
+  // time. The finish takes place on a different thread after all
+  // results are produced and the cursor is at end, so that we may
+  // sometimes arrive at the check before the state change.
+  void expectFinished(std::shared_ptr<Task> task) {
+    constexpr int32_t kMaxWait = 5;
+    TaskState state;
+    for (auto i = 0; i < kMaxWait; ++i) {
+      state = task->state();
+      if (state == kFinished) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(state, kFinished);
+  }
+
  public:
   // Sets 'future' to a future that will be realized within a random
   // delay of a few ms.
@@ -288,7 +305,7 @@ TEST_F(DriverTest, error) {
   Driver::testingJoinAndReinitializeExecutor(10);
   CursorParameters params;
   params.planNode = makeValuesFilterProject(rowType_, "m1 % 0", "", 100, 10);
-  params.numThreads = 20;
+  params.maxDrivers = 20;
   int32_t numRead = 0;
   try {
     readResults(params, ResultOperation::kRead, 1'000'000, &numRead);
@@ -313,7 +330,7 @@ TEST_F(DriverTest, cancel) {
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
       100,
       100'000);
-  params.numThreads = 10;
+  params.maxDrivers = 10;
   int32_t numRead = 0;
   try {
     readResults(params, ResultOperation::kCancel, 1'000'000, &numRead);
@@ -339,7 +356,7 @@ TEST_F(DriverTest, terminate) {
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
       100,
       100'000);
-  params.numThreads = 10;
+  params.maxDrivers = 10;
   int32_t numRead = 0;
   try {
     readResults(params, ResultOperation::kTerminate, 1'000'000, &numRead);
@@ -361,7 +378,7 @@ TEST_F(DriverTest, slow) {
       "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
       300,
       1'000);
-  params.numThreads = 10;
+  params.maxDrivers = 10;
   int32_t numRead = 0;
   readResults(params, ResultOperation::kReadSlow, 50'000, &numRead);
   EXPECT_GE(numRead, 50'000);
@@ -394,13 +411,13 @@ TEST_F(DriverTest, pause) {
       10'000,
       [](int64_t num) { return num % 10 > 0; },
       &hits);
-  params.numThreads = 10;
+  params.maxDrivers = 10;
   int32_t numRead = 0;
   readResults(params, ResultOperation::kPause, 370'000'000, &numRead);
   // Each thread will fully read the 1M rows in values.
   EXPECT_EQ(numRead, 10 * hits);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
-  EXPECT_EQ(tasks_[0]->state(), kFinished);
+  expectFinished(tasks_[0]);
   EXPECT_EQ(tasks_[0]->numDrivers(), 0);
   const auto taskStats = tasks_[0]->taskStats();
   ASSERT_EQ(taskStats.pipelineStats.size(), 1);
@@ -428,7 +445,7 @@ TEST_F(DriverTest, yield) {
         2'000,
         [](int64_t num) { return num % 10 > 0; },
         &hits);
-    params[i].numThreads = kThreadsPerTask;
+    params[i].maxDrivers = kThreadsPerTask;
   }
   std::vector<std::thread> threads;
   threads.reserve(kNumTasks);
@@ -599,7 +616,7 @@ TEST_F(DriverTest, pauserNode) {
         [](int64_t num) { return num % 10 > 0; },
         &hits,
         true);
-    params[i].numThreads = kThreadsPerTask;
+    params[i].maxDrivers = kThreadsPerTask;
   }
   std::vector<std::thread> threads;
   threads.reserve(kNumTasks);
