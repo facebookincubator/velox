@@ -32,7 +32,7 @@ FB_OS_VERSION=v2021.05.10.00
 NPROC=$(sysctl -n hw.physicalcpu)
 COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja cmake ccache protobuf icu4c boost double-conversion gflags glog libevent lz4 lzo snappy xz zstd"
+MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd"
 
 function run_and_time {
   time "$@"
@@ -117,16 +117,14 @@ function install_fmt {
   cmake_install -DFMT_TEST=OFF
 }
 
+function install_double_conversion {
+  github_checkout google/double-conversion v3.1.5
+  cmake_install -DBUILD_TESTING=OFF
+}
+
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  OPENSSL_DIR=$(brew --prefix openssl)
-
-  if [[ ! -d "$OPENSSL_DIR" ]]
-  then
-    OPENSSL_DIR="/usr/local/opt/openssl"
-  fi
-
-  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="${OPENSSL_DIR}"
+  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix openssl)"
 }
 
 function install_ranges_v3 {
@@ -146,6 +144,7 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_googletest
   run_and_time install_fmt
+  run_and_time install_double_conversion
   run_and_time install_folly
   run_and_time install_re2
 }
@@ -161,7 +160,3 @@ function install_velox_deps {
     install_velox_deps
   fi
 )
-
-echo "All deps for Velox installed! Now try \"make\""
-echo 'To add cmake-format bin to your $PATH, consider adding this to your ~/.profile:'
-echo 'export PATH=$HOME/bin:$HOME/Library/Python/3.7/bin:$PATH'
