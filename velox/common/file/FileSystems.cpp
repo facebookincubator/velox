@@ -55,8 +55,13 @@ std::shared_ptr<FileSystem> getFileSystem(
 }
 
 namespace {
+std::once_flag localFSRegistrationFlag;
 // Implement Local FileSystem.
 class LocalFileSystem : public FileSystem {
+ private:
+  // Used to track a single Local FileSystem instance
+  static std::shared_ptr<FileSystem> lfs;
+
  public:
   explicit LocalFileSystem(std::shared_ptr<const Config> config)
       : FileSystem(config) {}
@@ -94,10 +99,16 @@ class LocalFileSystem : public FileSystem {
       std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
   fileSystemGenerator() {
     return [](std::shared_ptr<const Config> properties) {
-      return std::make_shared<LocalFileSystem>(properties);
+      // One instance of Local FileSystem is sufficient.
+      // Initialize on first access and reuse after that.
+      std::call_once(localFSRegistrationFlag, [&properties]() {
+        lfs = std::make_shared<LocalFileSystem>(properties);
+      });
+      return lfs;
     };
   }
 };
+std::shared_ptr<FileSystem> LocalFileSystem::lfs = nullptr;
 } // namespace
 
 void registerLocalFileSystem() {
