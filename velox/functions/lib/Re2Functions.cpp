@@ -204,7 +204,7 @@ class Re2Match final : public VectorFunction {
         ensureWritableBool(rows, context->pool(), resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     exec::LocalDecodedVector pattern(context, *args[1], rows);
-    rows.applyToSelected([&](int row) {
+    rows.applyToSelected([&](vector_size_t row) {
       RE2 re(toStringPiece(pattern->valueAt<StringView>(row)), RE2::Quiet);
       checkForBadPattern(re);
       result.set(row, Fn(toSearch->valueAt<StringView>(row), re));
@@ -244,7 +244,7 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     // Common case: constant group id.
     if (args.size() == 2) {
       groups.resize(1);
-      rows.applyToSelected([&](int i) {
+      rows.applyToSelected([&](vector_size_t i) {
         mustRefSourceStrings |= re2Extract(result, i, re_, toSearch, groups, 0);
       });
       if (mustRefSourceStrings) {
@@ -256,7 +256,7 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     if (const auto groupId = getIfConstant<T>(*args[2])) {
       checkForBadGroupId(*groupId, re_);
       groups.resize(*groupId + 1);
-      rows.applyToSelected([&](int i) {
+      rows.applyToSelected([&](vector_size_t i) {
         mustRefSourceStrings |=
             re2Extract(result, i, re_, toSearch, groups, *groupId);
       });
@@ -270,14 +270,14 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
     // accommodate the largest group id referenced.
     exec::LocalDecodedVector groupIds(context, *args[2], rows);
     T maxGroupId = 0, minGroupId = 0;
-    rows.applyToSelected([&](int i) {
+    rows.applyToSelected([&](vector_size_t i) {
       maxGroupId = std::max(groupIds->valueAt<T>(i), maxGroupId);
       minGroupId = std::min(groupIds->valueAt<T>(i), minGroupId);
     });
     checkForBadGroupId(maxGroupId, re_);
     checkForBadGroupId(minGroupId, re_);
     groups.resize(maxGroupId + 1);
-    rows.applyToSelected([&](int i) {
+    rows.applyToSelected([&](vector_size_t i) {
       T group = groupIds->valueAt<T>(i);
       mustRefSourceStrings |=
           re2Extract(result, i, re_, toSearch, groups, group);
@@ -319,14 +319,14 @@ class Re2SearchAndExtract final : public VectorFunction {
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
     if (args.size() == 2) {
       groups.resize(1);
-      rows.applyToSelected([&](int i) {
+      rows.applyToSelected([&](vector_size_t i) {
         RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
         checkForBadPattern(re);
         mustRefSourceStrings |= re2Extract(result, i, re, toSearch, groups, 0);
       });
     } else {
       exec::LocalDecodedVector groupIds(context, *args[2], rows);
-      rows.applyToSelected([&](int i) {
+      rows.applyToSelected([&](vector_size_t i) {
         const auto groupId = groupIds->valueAt<T>(i);
         RE2 re(toStringPiece(pattern->valueAt<StringView>(i)), RE2::Quiet);
         checkForBadPattern(re);
@@ -367,7 +367,7 @@ class LikeConstantPattern final : public VectorFunction {
     // Use constant group id with re2Extract
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
     groups.resize(1);
-    rows.applyToSelected([&](int i) {
+    rows.applyToSelected([&](vector_size_t i) {
       mustRefSourceStrings |= re2Extract(result, i, re_, toSearch, groups, 0);
     });
     if (mustRefSourceStrings) {
@@ -549,20 +549,23 @@ std::shared_ptr<exec::VectorFunction> makeLike(
         name,
         inputArgs[2].type->toString());
 
-    BaseVector* constantEscape = inputArgs[2].constantValue.get();
+    BaseVector* escape = inputArgs[2].constantValue.get();
     VELOX_USER_CHECK(
-        constantEscape != nullptr && !constantEscape->isNullAt(0),
+        escape != nullptr,
         "{} requires third argument to be a constant of type VARCHAR",
         name,
         inputArgs[2].type->toString());
 
-    escapeChar = constantEscape->as<ConstantVector<char>>()->valueAt(0);
+    auto constantEscape = escape->as<ConstantVector<StringView>>();
+
+    // Escape char should be a single char value
+    VELOX_USER_CHECK_EQ(constantEscape->valueAt(0).size(), 1);
+    escapeChar = constantEscape->valueAt(0).data()[0];
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
-  // TODO(aditi) : Process null patterns and escape char to return null
   VELOX_USER_CHECK(
-      constantPattern != nullptr && !constantPattern->isNullAt(0),
+      constantPattern != nullptr,
       "{} requires second argument to be a constant of type VARCHAR",
       name,
       inputArgs[1].type->toString());
