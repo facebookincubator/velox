@@ -359,20 +359,17 @@ class LikeConstantPattern final : public VectorFunction {
     checkForBadPattern(re_);
 
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
-    // TODO: Potentially re-use the string vector, not just the buffer.
-    FlatVector<StringView>& result =
-        ensureWritableStringView(rows, context->pool(), resultRef);
+    FlatVector<bool>& result =
+        ensureWritableBool(rows, context->pool(), resultRef);
 
     bool mustRefSourceStrings = false;
     // Use constant group id with re2Extract
     FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
     groups.resize(1);
+
     rows.applyToSelected([&](vector_size_t i) {
-      mustRefSourceStrings |= re2Extract(result, i, re_, toSearch, groups, 0);
+      result.set(i, re2FullMatch(toSearch->valueAt<StringView>(i), re_));
     });
-    if (mustRefSourceStrings) {
-      result.acquireSharedStringBuffers(toSearch->base());
-    }
   }
 
  private:
@@ -574,16 +571,16 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {
-  // varchar, varchar -> varchar
-  // varchar, varchar, varchar -> varchar
+  // varchar, varchar -> boolean
+  // varchar, varchar, varchar -> boolean
   return {
       exec::FunctionSignatureBuilder()
-          .returnType("varchar")
+          .returnType("boolean")
           .argumentType("varchar")
           .argumentType("varchar")
           .build(),
       exec::FunctionSignatureBuilder()
-          .returnType("varchar")
+          .returnType("boolean")
           .argumentType("varchar")
           .argumentType("varchar")
           .argumentType("varchar")

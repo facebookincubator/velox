@@ -328,41 +328,41 @@ TEST_F(Re2FunctionsTest, regexExtractConstantPatternNoGroupId) {
 TEST_F(Re2FunctionsTest, likePattern) {
   auto like =
       ([&](std::optional<std::string> str, std::optional<std::string> pattern) {
-        return evaluateOnce<std::string>("like(c0, '" + *pattern + "')", str);
+        return evaluateOnce<bool>("like(c0, '" + *pattern + "')", str);
       });
 
-  EXPECT_EQ(like("abc", "%b%"), "abc");
-  EXPECT_EQ(like("bcd", "%b%"), "bcd");
-  EXPECT_EQ(like("cde", "%b%"), std::nullopt);
+  EXPECT_EQ(like("abc", "%b%"), true);
+  EXPECT_EQ(like("bcd", "%b%"), true);
+  EXPECT_EQ(like("cde", "%b%"), false);
 
-  EXPECT_EQ(like("abc", "_b%"), "abc");
-  EXPECT_EQ(like("bcd", "_b%"), std::nullopt);
-  EXPECT_EQ(like("cde", "_b%"), std::nullopt);
+  EXPECT_EQ(like("abc", "_b%"), true);
+  EXPECT_EQ(like("bcd", "_b%"), false);
+  EXPECT_EQ(like("cde", "_b%"), false);
 
-  EXPECT_EQ(like("abc", "b%"), std::nullopt);
-  EXPECT_EQ(like("bcd", "b%"), "bcd");
-  EXPECT_EQ(like("cde", "b%"), std::nullopt);
+  EXPECT_EQ(like("abc", "b%"), false);
+  EXPECT_EQ(like("bcd", "b%"), true);
+  EXPECT_EQ(like("cde", "b%"), false);
 
-  EXPECT_EQ(like("abc", "B%"), std::nullopt);
-  EXPECT_EQ(like("bcd", "B%"), std::nullopt);
-  EXPECT_EQ(like("cde", "B%"), std::nullopt);
+  EXPECT_EQ(like("abc", "B%"), false);
+  EXPECT_EQ(like("bcd", "B%"), false);
+  EXPECT_EQ(like("cde", "B%"), false);
 }
 
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {
   auto like = ([&](std::optional<std::string> str,
                    std::optional<std::string> pattern,
                    std::optional<char> escape) {
-    return evaluateOnce<std::string>(
+    return evaluateOnce<bool>(
         "like(c0, '" + *pattern + "', '" + *escape + "')", str);
   });
 
-  EXPECT_EQ(like("a_c", "%#_%", '#'), "a_c");
-  EXPECT_EQ(like("_cd", "%#_%", '#'), "_cd");
-  EXPECT_EQ(like("cde", "%#_%", '#'), std::nullopt);
+  EXPECT_EQ(like("a_c", "%#_%", '#'), true);
+  EXPECT_EQ(like("_cd", "%#_%", '#'), true);
+  EXPECT_EQ(like("cde", "%#_%", '#'), false);
 
-  EXPECT_EQ(like("a%c", "%#%%", '#'), "a%c");
-  EXPECT_EQ(like("%cd", "%#%%", '#'), "%cd");
-  EXPECT_EQ(like("cde", "%#%%", '#'), std::nullopt);
+  EXPECT_EQ(like("a%c", "%#%%", '#'), true);
+  EXPECT_EQ(like("%cd", "%#%%", '#'), true);
+  EXPECT_EQ(like("cde", "%#%%", '#'), false);
 }
 
 } // namespace
