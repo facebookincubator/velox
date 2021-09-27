@@ -117,22 +117,21 @@ bool re2Extract(
 }
 
 void checkEscape(bool condition) {
-  if (!condition) {
-    VELOX_USER_FAIL(
-        "Escape character must be followed by '%%', '_' or the escape character itself");
-  }
+  VELOX_CHECK(condition,
+              "Escape character must be followed by '%%', '_' or the escape character itself");
 }
 
-StringView likePatternToRe2(StringView pattern, char escapeChar) {
+std::string likePatternToRe2(StringView pattern, char escapeChar) {
   std::string regex;
+  regex.reserve(pattern.size() * 2);
   regex.append("^");
   bool escaped = false;
-  for (const char* c = pattern.begin(); c < pattern.end(); ++c) {
-    checkEscape(!escaped || *c == '%' || *c == '_' || *c == escapeChar);
-    if (!escaped && (*c == escapeChar)) {
+  for (const char c : pattern) {
+    checkEscape(!escaped || c == '%' || c == '_' || c == escapeChar);
+    if (!escaped && (c == escapeChar)) {
       escaped = true;
     } else {
-      switch (*c) {
+      switch (c) {
         case '%':
           regex.append(escaped ? "%" : ".*");
           escaped = false;
@@ -148,14 +147,14 @@ StringView likePatternToRe2(StringView pattern, char escapeChar) {
         case '*':
           regex.append("\\");
         default:
-          regex.append(1, c[0]);
+          regex.append(1, c);
           escaped = false;
       }
     }
   }
   checkEscape(!escaped);
   regex.append("$");
-  return StringView(regex);
+  return regex;
 }
 
 template <bool (*Fn)(StringView, const RE2&)>
@@ -175,7 +174,7 @@ class Re2MatchConstantPattern final : public VectorFunction {
         ensureWritableBool(rows, context->pool(), resultRef);
     exec::LocalDecodedVector toSearch(context, *args[0], rows);
     checkForBadPattern(re_);
-    rows.applyToSelected([&](int i) {
+    rows.applyToSelected([&](vector_size_t i) {
       result.set(i, Fn(toSearch->valueAt<StringView>(i), re_));
     });
   }
