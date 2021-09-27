@@ -117,8 +117,9 @@ bool re2Extract(
 }
 
 void checkEscape(bool condition) {
-  VELOX_CHECK(condition,
-              "Escape character must be followed by '%%', '_' or the escape character itself");
+  VELOX_CHECK(
+      condition,
+      "Escape character must be followed by '%%', '_' or the escape character itself");
 }
 
 std::string likePatternToRe2(StringView pattern, char escapeChar) {
