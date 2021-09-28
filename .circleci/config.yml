@@ -91,14 +91,20 @@ jobs:
       - run:
           name: "Test Run"
           command: |
-            git status
+            git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
+            git config --global user.name "$GITHUB_ACTOR"
+            cd velox/docs
+            make html
+            git fetch origin gh-pages
             git checkout gh-pages
-            git config user.email "velox@fb.com"
-            git config user.name "Velox"
             git status
-            echo "# Test" >> ./CMakeLists.txt
-            git add --all
-            git commit -m "some update"
+            cp ../..
+            mv velox/docs/_build/html/ docs/
+            if [ -n "$(git status --porcelain)" ]
+            then
+              git commit docs -m "Sphinx rebuild ($(git rev-parse --short gh-pages))."
+              git push origin gh-pages
+            fi
             git push
       - run:
           name: "Calculate merge-base date for CCache"
