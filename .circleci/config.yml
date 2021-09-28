@@ -93,13 +93,13 @@ jobs:
           command: |
             git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
             git config --global user.name "$GITHUB_ACTOR"
-            cd velox/docs
-            make html
+            ls velox/docs
+            make -C velox/docs html
             git fetch origin gh-pages
             git checkout gh-pages
             git status
-            cp ../..
             mv velox/docs/_build/html/ docs/
+            git add docs
             if [ -n "$(git status --porcelain)" ]
             then
               git commit docs -m "Sphinx rebuild ($(git rev-parse --short gh-pages))."
