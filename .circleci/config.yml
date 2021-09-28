@@ -21,7 +21,7 @@ workflows:
       - format-check
       - header-check
 
-  # Everyday documnetation update
+  # Daily documentation update
   nightly:
     triggers:
       - schedule:
