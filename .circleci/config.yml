@@ -167,8 +167,8 @@ jobs:
               false
             fi
 
-  presto-sync:
-    executor: doc-gen-job
+  doc-gen-job:
+    executor: doc-gen
     steps:
       - checkout
       - add_ssh_keys:
