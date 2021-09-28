@@ -21,17 +21,15 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/Arena.h"
+#include "velox/exec/tests/TempFilePath.h"
 
 using namespace facebook::velox;
 
 TEST(FileHandleTest, localFile) {
   filesystems::registerLocalFileSystem();
 
-  auto pid = getpid();
-  auto tid = pthread_self();
-  std::stringstream file;
-  file << "/tmp/test" << pid << "_" << tid;
-  const auto filename = file.str();
+  auto tempFile = ::exec::test::TempFilePath::create();
+  const auto& filename = tempFile->path;
   remove(filename.c_str());
 
   {
@@ -48,5 +46,5 @@ TEST(FileHandleTest, localFile) {
   ASSERT_EQ(fileHandle->file->pread(0, 3, &arena), "foo");
 
   // Clean up
-  remove(filename.data());
+  remove(filename.c_str());
 }
