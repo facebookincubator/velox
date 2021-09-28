@@ -24,7 +24,7 @@ workflows:
 executors:
   build:
     docker:
-      - image : prestocpp/velox-circleci:mikesh-20210610
+      - image : prestocpp/velox-circleci:mikesh-20210922
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
@@ -85,6 +85,21 @@ jobs:
     executor: build
     steps:
       - checkout
+      - add_ssh_keys:
+          fingerprints:
+            - "ed:40:13:bc:d0:3d:28:26:98:cb:90:31:cc:d3:f1:6b"
+      - run:
+          name: "Test Run"
+          command: |
+            git status
+            git checkout gh-pages
+            git config user.email "velox@fb.com"
+            git config user.name "Velox"
+            git status
+            echo "# Test" >> ./CMakeLists.txt
+            git add --all
+            git commit -m "some update"
+            git push
       - run:
           name: "Calculate merge-base date for CCache"
           command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
