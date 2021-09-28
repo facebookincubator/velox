@@ -91,8 +91,8 @@ jobs:
       - run:
           name: "Test Run"
           command: |
-            git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
-            git config --global user.name "$GITHUB_ACTOR"
+            git config --global user.email "velox@users.noreply.github.com"
+            git config --global user.name "velox"
             ls velox/docs
             make -C velox/docs html
             git fetch origin gh-pages
