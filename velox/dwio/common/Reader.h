@@ -33,10 +33,10 @@ namespace facebook::dwio::common {
 /**
  * Abstract row reader interface.
  *
- * Row reader objects are used to fetch a scpecified subset of rows
+ * RowReader objects are used to fetch a specified subset of rows
  * and columns from a file.
  *
- * Row reades are created through Reader objects.
+ * RowReader objects are created through Reader objects.
  */
 class RowReader {
  public:

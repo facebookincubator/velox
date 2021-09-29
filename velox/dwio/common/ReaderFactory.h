@@ -30,7 +30,7 @@ namespace facebook::dwio::common {
  * Implement this interface to provide a factory of readers
  * for a particular file format. Factory objects should be
  * registered using registerReaderFactory method to become
- * available for connectors. Only single reader factory
+ * available for connectors. Only a single reader factory
  * per file format is allowed.
  */
 class ReaderFactory {

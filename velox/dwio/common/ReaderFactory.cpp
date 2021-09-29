@@ -19,12 +19,15 @@
 namespace facebook::dwio::common {
 
 namespace {
-std::unordered_map<FileFormat, std::shared_ptr<ReaderFactory>>&
-readerFactories() {
-  static std::unordered_map<FileFormat, std::shared_ptr<ReaderFactory>>
-      factories;
+
+using ReaderFactoriesMap =
+    std::unordered_map<FileFormat, std::shared_ptr<ReaderFactory>>;
+
+ReaderFactoriesMap& readerFactories() {
+  static ReaderFactoriesMap factories;
   return factories;
 }
+
 } // namespace
 
 bool registerReaderFactory(std::shared_ptr<ReaderFactory> factory) {
