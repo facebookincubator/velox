@@ -19,6 +19,7 @@
 # are the same size.
 export COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
 BUILD_DIR=_build
+INSTALL_DEPS_PREFIX=$(pwd)/deps
 
 set -eufx -o pipefail
 
@@ -66,14 +67,14 @@ function install_folly {
   git clone https://github.com/facebook/folly.git "${NAME}"
   cd "${NAME}"
   cmake \
+    -DCMAKE_INSTALL_PREFIX="$INSTALL_DEPS_PREFIX" \
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_BUILD_TYPE=Debug \
     -GNinja \
     -DFOLLY_HAVE_INT128_T=1 \
     .
-  ninja
-  sudo checkinstall -y ninja install
+  ninja install
 }
 
 install_folly
