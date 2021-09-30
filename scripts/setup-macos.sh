@@ -32,7 +32,10 @@ FB_OS_VERSION=v2021.05.10.00
 NPROC=$(sysctl -n hw.physicalcpu)
 COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja cmake ccache protobuf icu4c boost double-conversion gflags glog libevent lz4 lzo snappy xz zstd"
+MACOS_DEPS_BREW="ninja cmake ccache protobuf icu4c boost double-conversion gflags glog libevent lz4 lzo snappy xz zstd"
+MACOS_DEPS_MACPORTS="ninja cmake ccache protobuf3-cpp icu boost double-conversion gflags google-glog libevent lz4 lzo snappy xz zstd openssl"
+# Install non-packaged github dependencies locally rather than polluting /usr/local (and needing root)
+INSTALL_DEPS_PREFIX=${DEPENDENCY_DIR}/deps
 
 function run_and_time {
   time "$@"
@@ -86,23 +89,33 @@ function cmake_install {
   mkdir -p "${BINARY_DIR}"
   cmake -Wno-dev -B"${BINARY_DIR}" \
     -GNinja \
+    -DCMAKE_INSTALL_PREFIX="$INSTALL_DEPS_PREFIX" \
     -DCMAKE_CXX_STANDARD=17 \
-    "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
-    "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
     -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS}" \
     "$@"
   ninja -C "${BINARY_DIR}" install
 }
 
-function update_brew {
-  /usr/local/bin/brew update --force --quiet
+function install_build_prerequisites_brew {
+  for pkg in ${MACOS_DEPS_BREW}
+  do
+      brew install --formula $pkg && echo "Installation of $pkg is successful" || brew upgrade --formula $pkg
+  done
+}
+
+function install_build_prerequisites_macports {
+  for pkg in ${MACOS_DEPS_MACPORTS}
+  do
+    sudo port install $pkg
+  done
 }
 
 function install_build_prerequisites {
-  for pkg in ${MACOS_DEPS}
-  do
-    brew install --formula $pkg && echo "Installation of $pkg is successful" || brew upgrade --formula $pkg
-  done
+  if hash brew 2>/dev/null; then
+    install_build_prerequisites_brew
+  else
+    install_build_prerequisites_macports
+  fi
 
   pip3 install --user cmake-format regex
 }
@@ -117,9 +130,17 @@ function install_fmt {
   cmake_install -DFMT_TEST=OFF
 }
 
+function openssl_dir {
+  if hash brew 2>/dev/null; then
+    brew --prefix openssl
+  else
+    echo /opt/local/lib/openssl
+  fi
+}
+
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  OPENSSL_DIR=$(brew --prefix openssl)
+  OPENSSL_DIR=$(openssl_dir)
 
   if [[ ! -d "$OPENSSL_DIR" ]]
   then
