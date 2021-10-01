@@ -474,6 +474,26 @@ bool MultiRange::testBytesRange(
 
 std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
   switch (other->kind()) {
+    // Rules of MultiRange with IsNull/IsNotNull
+    // 1. MultiRange(nullAllowed=true) AND IS NULL => IS NULL
+    // 2. MultiRange(nullAllowed=true) AND IS NOT NULL =>
+    // MultiRange(nullAllowed=false)
+    // 3. MultiRange(nullAllowed=false) AND IS NULL
+    // => ALWAYS FALSE
+    // 4. MultiRange(nullAllowed=false) AND IS NOT NULL
+    // =>MultiRange(nullAllowed=false)
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return this->clone(/*nullAllowed=*/false);
+    case FilterKind::kDoubleRange:
+    case FilterKind::kFloatRange:
+    case FilterKind::kBytesRange:
+    case FilterKind::kBytesValues:
+      // TODO Implement
+      VELOX_UNREACHABLE();
     case FilterKind::kMultiRange: {
       const MultiRange* multiRangeOther = static_cast<const MultiRange*>(other);
       bool bothNullAllowed = nullAllowed_ && other->testNull();
@@ -501,21 +521,6 @@ std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
             new MultiRange(std::move(merged), bothNullAllowed, bothNanAllowed));
       }
     }
-
-    // Rules of MultiRange with IsNull/IsNotNull
-    // 1. MultiRange(nullAllowed=true) AND IS NULL => IS NULL
-    // 2. MultiRange(nullAllowed=true) AND IS NOT NULL =>
-    // MultiRange(nullAllowed=false)
-    // 3. MultiRange(nullAllowed=false) AND IS NULL
-    // => ALWAYS FALSE
-    // 4. MultiRange(nullAllowed=false) AND IS NOT NULL
-    // =>MultiRange(nullAllowed=false)
-    case FilterKind::kAlwaysTrue:
-    case FilterKind::kAlwaysFalse:
-    case FilterKind::kIsNull:
-      return other->mergeWith(this);
-    case FilterKind::kIsNotNull:
-      return this->clone(/*nullAllowed=*/false);
     default:
       VELOX_UNREACHABLE();
   }
