@@ -50,9 +50,11 @@ GroupingSet::GroupingSet(
     std::vector<std::vector<ChannelIndex>>&& channelLists,
     std::vector<std::vector<VectorPtr>>&& constantLists,
     bool ignoreNullKeys,
+    bool isRawInput,
     OperatorCtx* operatorCtx)
     : hashers_(std::move(hashers)),
       isGlobal_(hashers_.empty()),
+      isRawInput_(isRawInput),
       aggregates_(std::move(aggregates)),
       aggrMaskChannels_(std::move(aggrMaskChannels)),
       channelLists_(std::move(channelLists)),
@@ -93,8 +95,13 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
       const SelectivityVector& rows = getSelectivityVector(i);
       const bool canPushdown =
           mayPushdown && mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_);
-      aggregates_[i]->updateSingleGroup(
-          lookup_->hits[0], rows, tempVectors_, canPushdown);
+      if (isRawInput_) {
+        aggregates_[i]->addSingleGroupRawInput(
+            lookup_->hits[0], rows, tempVectors_, canPushdown);
+      } else {
+        aggregates_[i]->addSingleGroupIntermediateResults(
+            lookup_->hits[0], rows, tempVectors_, canPushdown);
+      }
     }
     tempVectors_.clear();
     return;
@@ -168,8 +175,13 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
     const bool canPushdown = (&rows != &activeRows_) && mayPushdown &&
         mayPushdown_[i] && areAllLazyNotLoaded(tempVectors_);
     populateTempVectors(i, input);
-    aggregates_[i]->update(
-        lookup_->hits.data(), rows, tempVectors_, canPushdown);
+    if (isRawInput_) {
+      aggregates_[i]->addRawInput(
+          lookup_->hits.data(), rows, tempVectors_, canPushdown);
+    } else {
+      aggregates_[i]->addIntermediateResults(
+          lookup_->hits.data(), rows, tempVectors_, canPushdown);
+    }
   }
   tempVectors_.clear();
 }
@@ -180,8 +192,13 @@ void GroupingSet::initializeGlobalAggregation() {
 
   // Row layout is:
   //  - null flags - one bit per aggregate,
+  // - uint32_t row size,
   //  - fixed-width accumulators - one per aggregate
-  int32_t offset = bits::nbytes(aggregates_.size());
+  //
+  // Here we always make space for a row size since we only have one
+  // row and no RowContainer.
+  int32_t rowSizeOffset = bits::nbytes(aggregates_.size());
+  int32_t offset = rowSizeOffset + sizeof(int32_t);
   int32_t nullOffset = 0;
 
   for (auto& aggregate : aggregates_) {
@@ -189,7 +206,8 @@ void GroupingSet::initializeGlobalAggregation() {
     aggregate->setOffsets(
         offset,
         RowContainer::nullByte(nullOffset),
-        RowContainer::nullMask(nullOffset));
+        RowContainer::nullMask(nullOffset),
+        rowSizeOffset);
     offset += aggregate->accumulatorFixedWidthSize();
     ++nullOffset;
   }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/caching/DataCache.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
@@ -37,6 +38,7 @@ class MultiFragmentTest : public OperatorTestBase {
     rowType_ =
         ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
             {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()});
+    filesystems::registerLocalFileSystem();
     auto dataCache = std::make_unique<SimpleLRUDataCache>(/*size=*/1 << 30);
     auto hiveConnector =
         connector::getConnectorFactory(kHiveConnectorName)
@@ -378,6 +380,35 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
 
     assertQuery(
         op, {leafTaskId}, "SELECT c0, c1, c2, c3, c4, c3, c2, c1, c0 FROM tmp");
+  }
+
+  // Test dropping the partitioning key
+  {
+    constexpr int32_t kFanout = 4;
+    auto leafTaskId = makeTaskId("leaf", 0);
+    auto leafPlan = PlanBuilder()
+                        .values(vectors_)
+                        .partitionedOutput({5}, kFanout, {2, 0, 3})
+                        .planNode();
+    auto leafTask = makeTask(leafTaskId, leafPlan, 0);
+    Task::start(leafTask, 4);
+
+    auto intermediatePlan = PlanBuilder()
+                                .exchange(leafPlan->outputType())
+                                .partitionedOutput({}, 1, {2, 1, 0})
+                                .planNode();
+    std::vector<std::string> intermediateTaskIds;
+    for (auto i = 0; i < kFanout; ++i) {
+      intermediateTaskIds.push_back(makeTaskId("intermediate", i));
+      auto intermediateTask =
+          makeTask(intermediateTaskIds.back(), intermediatePlan, i);
+      Task::start(intermediateTask, 1);
+      addRemoteSplits(intermediateTask, {leafTaskId});
+    }
+
+    auto op = PlanBuilder().exchange(intermediatePlan->outputType()).planNode();
+
+    assertQuery(op, intermediateTaskIds, "SELECT c3, c0, c2 FROM tmp");
   }
 }
 
