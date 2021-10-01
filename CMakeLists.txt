@@ -22,10 +22,11 @@ list(APPEND CMAKE_PREFIX_PATH ${DEPENDENCY_INSTALL_PREFIX})
 include_directories(SYSTEM "${DEPENDENCY_INSTALL_PREFIX}/include")
 
 if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-# Fix link errors on macOS BigSur, without this link fails unable to find -lSystem
-# based on same workaround found here:
-# https://github.com/ponylang/ponyc/pull/3686/commits/03cd3f02ffabbc0691382502e4f0579ade52e47c
-add_link_options("-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib")
+  # Fix link errors on macOS BigSur, without this link fails unable to find
+  # -lSystem.  Based on same workaround found here:
+  # https://github.com/ponylang/ponyc/pull/3686/commits/03cd3f02ffabbc0691382502e4f0579ade52e47c
+  add_link_options(
+    "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib")
 endif()
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
