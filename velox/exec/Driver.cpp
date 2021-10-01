@@ -67,26 +67,28 @@ DriverCtx::DriverCtx(
     int32_t _numDrivers)
     : task(_task),
       execCtx(std::make_unique<core::ExecCtx>(
-          task->pool()->addScopedChild("driver_root"),
+          task->addDriverPool(),
           task->queryCtx().get())),
       expressionEvaluator(
           std::make_unique<SimpleExpressionEvaluator>(execCtx.get())),
       driverId(_driverId),
       pipelineId(_pipelineId),
-      numDrivers(_numDrivers) {
-  auto parentTracker = task->pool()->getMemoryUsageTracker();
-  if (parentTracker) {
-    execCtx->pool()->setMemoryUsageTracker(
-        std::move(parentTracker->addChild()));
-  }
+      numDrivers(_numDrivers) {}
+
+velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool() {
+  return task->addOperatorPool(execCtx->pool());
 }
 
 std::unique_ptr<connector::ConnectorQueryCtx>
-DriverCtx::createConnectorQueryCtx(const std::string& connectorId) const {
+DriverCtx::createConnectorQueryCtx(
+    const std::string& connectorId,
+    const std::string& planNodeId) const {
   return std::make_unique<connector::ConnectorQueryCtx>(
       execCtx->pool(),
       task->queryCtx()->getConnectorConfig(connectorId),
-      expressionEvaluator.get());
+      expressionEvaluator.get(),
+      task->queryCtx()->mappedMemory(),
+      fmt::format("{}.{}", task->taskId(), planNodeId));
 }
 
 BlockingState::BlockingState(

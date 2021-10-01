@@ -64,6 +64,7 @@ struct TaskStats {
 
 class JoinBridge;
 class HashJoinBridge;
+class CrossJoinBridge;
 
 class Task {
  public:
@@ -95,6 +96,23 @@ class Task {
 
   const std::string& taskId() const {
     return taskId_;
+  }
+
+  velox::memory::MemoryPool* FOLLY_NONNULL addDriverPool() {
+    childPools_.push_back(pool_->addScopedChild("driver_root"));
+    auto* driverPool = childPools_.back().get();
+    auto parentTracker = pool_->getMemoryUsageTracker();
+    if (parentTracker) {
+      driverPool->setMemoryUsageTracker(parentTracker->addChild());
+    }
+
+    return driverPool;
+  }
+
+  velox::memory::MemoryPool* FOLLY_NONNULL
+  addOperatorPool(velox::memory::MemoryPool* FOLLY_NONNULL driverPool) {
+    childPools_.push_back(driverPool->addScopedChild("operator_ctx"));
+    return childPools_.back().get();
   }
 
   static void start(std::shared_ptr<Task> self, uint32_t maxDrivers);
@@ -261,11 +279,18 @@ class Task {
   // Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridges(const std::vector<core::PlanNodeId>& planNodeIds);
 
+  // Adds CrossJoinBridge's for all the specified plan node IDs.
+  void addCrossJoinBridges(const std::vector<core::PlanNodeId>& planNodeIds);
+
   // Returns a HashJoinBridge for 'planNodeId'. This is used for synchronizing
   // start of probe with completion of build for a join that has a
   // separate probe and build. 'id' is the PlanNodeId shared between
   // the probe and build Operators of the join.
   std::shared_ptr<HashJoinBridge> getHashJoinBridge(
+      const core::PlanNodeId& planNodeId);
+
+  // Returns a CrossJoinBridge for 'planNodeId'.
+  std::shared_ptr<CrossJoinBridge> getCrossJoinBridge(
       const core::PlanNodeId& planNodeId);
 
   // Sets the CancelPool of the QueryCtx to a terminate requested
@@ -430,6 +455,11 @@ class Task {
 
   TaskStats taskStats_;
   std::unique_ptr<velox::memory::MemoryPool> pool_;
+
+  // Keep driver and operator memory pools alive for the duration of the task to
+  // allow for sharing vectors across drivers without copy.
+  std::vector<std::unique_ptr<velox::memory::MemoryPool>> childPools_;
+
   std::vector<std::shared_ptr<MergeSource>> localMergeSources_;
 
   struct LocalExchange {

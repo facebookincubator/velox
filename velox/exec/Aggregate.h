@@ -33,8 +33,7 @@ bool isPartialOutput(core::AggregationNode::Step step);
 
 class Aggregate {
  protected:
-  explicit Aggregate(core::AggregationNode::Step step, TypePtr resultType)
-      : isRawInput_{isRawInput(step)}, resultType_(resultType) {}
+  explicit Aggregate(TypePtr resultType) : resultType_(resultType) {}
 
  public:
   virtual ~Aggregate() {}
@@ -48,6 +47,12 @@ class Aggregate {
   // width part of the state from the fixed part.
   virtual int32_t accumulatorFixedWidthSize() const = 0;
 
+  // Returns true if the accumulator never takes more than
+  // accumulatorFixedWidthSize() bytes.
+  virtual bool isFixedSize() const {
+    return true;
+  }
+
   void setAllocator(HashStringAllocator* allocator) {
     allocator_ = allocator;
   }
@@ -56,10 +61,19 @@ class Aggregate {
   // @param offset Offset in bytes from the start of the row of the accumulator
   // @param nullByte Offset in bytes from the start of the row of the null flag
   // @param nullMask The specific bit in the nullByte that stores the null flag
-  void setOffsets(int32_t offset, int32_t nullByte, uint8_t nullMask) {
+  // @param rowSizeOffset The offset of a uint32_t row size from the start of
+  // the row. Only applies to accumulators that store variable size data out of
+  // line. Fixed length accumulators do not use this. 0 if the row does not have
+  // a size field.
+  void setOffsets(
+      int32_t offset,
+      int32_t nullByte,
+      uint8_t nullMask,
+      int32_t rowSizeOffset) {
     nullByte_ = nullByte;
     nullMask_ = nullMask;
     offset_ = offset;
+    rowSizeOffset_ = rowSizeOffset;
   }
 
   // Initializes null flags and accumulators for newly encountered groups.
@@ -69,17 +83,11 @@ class Aggregate {
       char** groups,
       folly::Range<const vector_size_t*> indices) = 0;
 
-  // Initializes null flags and accumulators for newly encountered groups from
-  // partial results.
-  // @param groups Pointers to the start of the new group rows.
-  // @param indices Indices into 'groups' of the new entries.
-  // @param initialState Partial results extracted from `extractAccumulators`.
-  virtual void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/,
-      const VectorPtr& /*initialState*/) = 0;
-
-  // Updates the accumulator in 'groups' with the values in 'args'.
+  // Single Aggregate instance is able to take both raw data and
+  // intermediate result as input based on the assumption that Partial
+  // accumulator and Final accumulator are of the same type.
+  //
+  // Updates partial accumulators from raw input data.
   // @param groups Pointers to the start of the group rows. These are aligned
   // with the 'args', e.g. data in the i-th row of the 'args' goes to the i-th
   // group. The groups may repeat if different rows go into the same group.
@@ -87,35 +95,63 @@ class Aggregate {
   // contiguous if the aggregation has mask or is configured to drop null
   // grouping keys. The latter would be the case when aggregation is followed
   // by the join on the grouping keys.
-  // @param args Data to add to the accumulators.
+  // @param args Raw input.
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
   // LazyVector.
-  void update(
+  virtual void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
-      bool mayPushdown) {
-    isRawInput_ ? updatePartial(groups, rows, args, mayPushdown)
-                : updateFinal(groups, rows, args, mayPushdown);
-  }
+      bool mayPushdown) = 0;
 
-  // Updates the single accumulator used for global aggregation.
-  // @param group Pointer to the start of the group row.
-  // @param rows Rows of the 'args' to add to the accumulators. These may not
-  // be contiguous if the aggregation has mask.
-  // @param args Data to add to the accumulators.
+  // Updates final accumulators from intermediate results.
+  // @param groups Pointers to the start of the group rows. These are aligned
+  // with the 'args', e.g. data in the i-th row of the 'args' goes to the i-th
+  // group. The groups may repeat if different rows go into the same group.
+  // @param rows Rows of the 'args' to add to the accumulators. These may not be
+  // contiguous if the aggregation has mask or is configured to drop null
+  // grouping keys. The latter would be the case when aggregation is followed
+  // by the join on the grouping keys.
+  // @param args Intermediate results produced by extractAccumulators().
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
   // LazyVector.
-  void updateSingleGroup(
+  virtual void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) = 0;
+
+  // Updates the single partial accumulator from raw input data for global
+  // aggregation.
+  // @param group Pointer to the start of the group row.
+  // @param rows Rows of the 'args' to add to the accumulators. These may not
+  // be contiguous if the aggregation has mask.
+  // @param args Raw input to add to the accumulators.
+  // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
+  // The pushdown can happen only if this flag is true and 'args' is a single
+  // LazyVector.
+  virtual void addSingleGroupRawInput(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
-      bool mayPushdown) {
-    isRawInput_ ? updateSingleGroupPartial(group, rows, args, mayPushdown)
-                : updateSingleGroupFinal(group, rows, args, mayPushdown);
-  }
+      bool mayPushdown) = 0;
+
+  // Updates the single final accumulator from intermediate results for global
+  // aggregation.
+  // @param group Pointer to the start of the group row.
+  // @param rows Rows of the 'args' to add to the accumulators. These may not
+  // be contiguous if the aggregation has mask.
+  // @param args Intermediate results produced by extractAccumulators().
+  // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
+  // The pushdown can happen only if this flag is true and 'args' is a single
+  // LazyVector.
+  virtual void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) = 0;
 
   // Finalizes the state in groups. Defaults to no op for cases like
   // sum and max.
@@ -153,41 +189,15 @@ class Aggregate {
       const TypePtr& resultType);
 
  protected:
-  // Updates partial accumulators from raw input data.
-  // @param args Raw input.
-  virtual void updatePartial(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) = 0;
-
-  // Updates final accumulators from intermediate results.
-  // @param args Intermediate results produced by extractAccumulators().
-  virtual void updateFinal(
-      char** groups,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) = 0;
-
-  // Updates partial accumulators from raw input data for global aggregation.
-  // @param args Raw input to add to the accumulators.
-  virtual void updateSingleGroupPartial(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) = 0;
-
-  // Updates final accumulators from intermediate results for global
-  // aggregation.
-  // @param args Intermediate results produced by extractAccumulators().
-  virtual void updateSingleGroupFinal(
-      char* group,
-      const SelectivityVector& rows,
-      const std::vector<VectorPtr>& args,
-      bool mayPushdown) = 0;
-
   bool isNull(char* group) const {
     return numNulls_ && (group[nullByte_] & nullMask_);
+  }
+
+  void incrementRowSize(char* row, uint64_t bytes) {
+    VELOX_DCHECK(rowSizeOffset_);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
+    uint64_t size = *ptr + bytes;
+    *ptr = std::min<uint64_t>(size, std::numeric_limits<uint32_t>::max());
   }
 
   // Sets null flag for all specified groups to true.
@@ -232,7 +242,6 @@ class Aggregate {
     }
   }
 
-  const bool isRawInput_;
   const TypePtr resultType_;
 
   // Byte position of null flag in group row.
@@ -240,6 +249,14 @@ class Aggregate {
   uint8_t nullMask_;
   // Offset of fixed length accumulator state in group row.
   int32_t offset_;
+
+  // Offset of uint32_t row byte size of row. 0 if there are no
+  // variable width fields or accumulators on the row.  The size is
+  // capped at 4G and will stay at 4G and not wrap around if growing
+  // past this. This serves to track the batch size when extracting
+  // rows. A size in excess of 4G would finish the batch in any case,
+  // so larger values need not be represented.
+  int32_t rowSizeOffset_ = 0;
 
   // Number of null accumulators in the current state of the aggregation
   // operator for this aggregate. If 0, clearing the null as part of update
