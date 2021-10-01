@@ -142,21 +142,20 @@ constexpr char const* useInstanceCredentials{
     "hive.s3.use-instance-credentials"};
 } // namespace S3Config
 
-std::string getOptionalProperty(
-    const velox::Config& properties,
-    const std::string& name,
-    const std::string& defaultValue) {
-  auto value = properties.get(name);
-  if (!value.hasValue()) {
-    return defaultValue;
-  }
-  return value.value();
-}
-
 // Implement the S3FileSystem
 class S3FileSystem::Impl {
  public:
   Impl(const Config* config) : config_(config) {}
+
+  std::string getOptionalProperty(
+      const std::string& name,
+      const std::string& defaultValue) {
+    auto value = config_->get(name);
+    if (!value.hasValue()) {
+      return defaultValue;
+    }
+    return value.value();
+  }
 
   // Configure default AWS credentials provider chain.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
@@ -177,12 +176,12 @@ class S3FileSystem::Impl {
   void initializeClient() {
     Aws::Client::ClientConfiguration clientConfig;
 
-    const auto endpoint = getOptionalProperty(*config_, S3Config::endpoint, "");
+    const auto endpoint = getOptionalProperty(S3Config::endpoint, "");
     clientConfig.endpointOverride = endpoint;
 
     // default is use SSL
     const auto useSSL =
-        (getOptionalProperty(*config_, S3Config::sslEnabled, "true") == "true");
+        (getOptionalProperty(S3Config::sslEnabled, "true") == "true");
     if (useSSL) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
@@ -191,15 +190,13 @@ class S3FileSystem::Impl {
 
     // use virtual addressing for S3 on AWS
     const auto pathAccessStyle =
-        getOptionalProperty(*config_, S3Config::pathAccessStyle, "false");
+        getOptionalProperty(S3Config::pathAccessStyle, "false");
     const bool useVirtualAddressing = (pathAccessStyle == "false");
 
-    const auto accessKey =
-        getOptionalProperty(*config_, S3Config::accessKey, "");
-    const auto secretKey =
-        getOptionalProperty(*config_, S3Config::secretKey, "");
+    const auto accessKey = getOptionalProperty(S3Config::accessKey, "");
+    const auto secretKey = getOptionalProperty(S3Config::secretKey, "");
     const auto useInstanceCred =
-        getOptionalProperty(*config_, S3Config::useInstanceCredentials, "");
+        getOptionalProperty(S3Config::useInstanceCredentials, "");
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider;
     if (accessKey != "" && secretKey != "" && useInstanceCred != "true") {
       credentials_provider =
