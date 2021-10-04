@@ -187,5 +187,5 @@ jobs:
             if [ -n "$(git status --porcelain)" ]
             then
               git commit -m "Update documentation"
-              git push -f upstream update-docs:gh-pages
+              git push -f origin update-docs:gh-pages
             fi
