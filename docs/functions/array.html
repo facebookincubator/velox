@@ -68,6 +68,17 @@
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_distinct">
+<span class="sig-name descname"><span class="pre">array_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></em><span class="sig-paren">)</span><a class="headerlink" href="#array_distinct" title="Permalink to this definition">¶</a></dt>
+<dd><p>Remove duplicate values from the input array.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="n">SELECT</span> <span class="n">array_distinct</span><span class="p">(</span><span class="n">ARRAY</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">NULL</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="array_max">
 <span class="sig-name descname"><span class="pre">array_max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E)</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">E</span></span></span><a class="headerlink" href="#array_max" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the maximum value of input array.</p>
@@ -143,6 +154,12 @@ identity function (<code class="docutils literal notranslate"><span class="pre">
               <span class="n">s</span> <span class="o">-&gt;</span> <span class="n">IF</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">count</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="n">s</span><span class="o">.</span><span class="n">sum</span> <span class="o">/</span> <span class="n">s</span><span class="o">.</span><span class="n">count</span><span class="p">));</span>
 </pre></div>
 </div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="reverse">
+<span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(E))</span> <span class="pre">-&gt;</span> <span class="pre">array(E</span></em><span class="sig-paren">)</span><a class="headerlink" href="#reverse" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array which has the reversed order of the input array.</p>
 </dd></dl>
 
 <dl class="py function">

@@ -1,0 +1,758 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Plan Nodes and Operators &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="Joins" href="joins.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Plan Nodes and Operators</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="plan-nodes-and-operators">
+<h1>Plan Nodes and Operators<a class="headerlink" href="#plan-nodes-and-operators" title="Permalink to this headline">¶</a></h1>
+<p>Velox query plan is a tree of PlanNode’s. Each PlanNode has zero or more child
+PlanNodes. To execute a query plan, Velox converts it into a set of pipelines.
+Each pipeline is made of a linear sequence of operators. Each pipeline
+corresponds to a linear sub-tree of the plan that starts at the leaf node and
+goes all the way to the first node that has 2 or more children.</p>
+<a class="reference internal image-reference" href="../_images/local-planner.png"><img alt="../_images/local-planner.png" class="align-center" src="../_images/local-planner.png" style="width: 400px;" /></a>
+<p>The conversion of plan nodes to operators is mostly one-to-one. Some exceptions are:</p>
+<ul class="simple">
+<li><p>Filter node followed by Project node is converted into a single operator FilterProject</p></li>
+<li><p>Nodes with 2 or more children are converted to multiple operators, e.g. HashJoin node is converted to a pair of operators: HashProbe and HashBuild.</p></li>
+</ul>
+<p>Operators corresponding to leaf nodes are called source operators. Only a subset
+of plan nodes can be located at the leaves of the plan tree. There are:</p>
+<ul class="simple">
+<li><p>TableScanNode</p></li>
+<li><p>ValuesNode</p></li>
+<li><p>ExchangeNode</p></li>
+<li><p>LocalMergeNode</p></li>
+<li><p>MergeExchangeNode</p></li>
+</ul>
+<p>Here is a list of supported plan nodes and corresponding operators.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 49%" />
+<col style="width: 29%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Plan Node</p></th>
+<th class="head"><p>Operator(s)</p></th>
+<th class="head"><p>Leaf Node / Source Operator</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>TableScanNode</p></td>
+<td><p>TableScan</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>FilterNode</p></td>
+<td><p>FilterProject</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>ProjectNode</p></td>
+<td><p>FilterProject</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>AggregationNode</p></td>
+<td><p>HashAggregation</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>HashJoinNode</p></td>
+<td><p>HashProbe and HashBuild</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>CrossJoinNode</p></td>
+<td><p>CrossJoinProbe and CrossJoinBuild</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>OrderByNode</p></td>
+<td><p>OrderBy</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>TopNNode</p></td>
+<td><p>TopN</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>LimitNode</p></td>
+<td><p>Limit</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>UnnestNode</p></td>
+<td><p>Unnest</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>TableWriteNode</p></td>
+<td><p>TableWrite</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>PartitionedOutputNode</p></td>
+<td><p>PartitionedOutput</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>ExchangeNode</p></td>
+<td><p>Exchange</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>MergeExchangeNode</p></td>
+<td><p>MergeExchange</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>ValuesNode</p></td>
+<td><p>Values</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>LocalMergeNode</p></td>
+<td><p>LocalMerge</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>LocalPartitionNode</p></td>
+<td><p>LocalPartition and LocalExchangeSourceOperator</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>EnforceSingleRowNode</p></td>
+<td><p>EnforceSingleRow</p></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<section id="plan-nodes">
+<h2>Plan Nodes<a class="headerlink" href="#plan-nodes" title="Permalink to this headline">¶</a></h2>
+<section id="tablescannode">
+<h3>TableScanNode<a class="headerlink" href="#tablescannode" title="Permalink to this headline">¶</a></h3>
+<p>The table scan operation reads data from a connector. For example, when used
+with HiveConnector, table scan reads data from ORC or Parquet files.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns. This is a subset of columns available in the underlying table. The order of columns may not match the schema of the table.</p></td>
+</tr>
+<tr class="row-odd"><td><p>tableHandle</p></td>
+<td><p>Connector-specific description of the table. May include a pushed down filter.</p></td>
+</tr>
+<tr class="row-even"><td><p>assignments</p></td>
+<td><p>Connector-specific mapping from the table schema to output columns.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="filternode">
+<h3>FilterNode<a class="headerlink" href="#filternode" title="Permalink to this headline">¶</a></h3>
+<p>The filter operation eliminates one or more records from the input data based
+on a boolean filter expression.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>filter</p></td>
+<td><p>Boolean filter expression.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="projectnode">
+<h3>ProjectNode<a class="headerlink" href="#projectnode" title="Permalink to this headline">¶</a></h3>
+<p>The project operation produces one or more additional expressions based on the
+inputs of the dataset. The project operation may also drop one or more of the
+input columns.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>names</p></td>
+<td><p>Column names for the output expressions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>expressions</p></td>
+<td><p>Expressions for the output columns.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="aggregationnode">
+<h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Permalink to this headline">¶</a></h3>
+<p>The aggregate operation groups input data on a set of grouping keys, calculating
+each measure for each combination of the grouping keys.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>step</p></td>
+<td><p>Aggregation step: partial, final, intermediate, single.</p></td>
+</tr>
+<tr class="row-odd"><td><p>groupingKeys</p></td>
+<td><p>Zero or more grouping keys.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregateNames</p></td>
+<td><p>Names for the output columns for the measures.</p></td>
+</tr>
+<tr class="row-odd"><td><p>aggregates</p></td>
+<td><p>Expressions for computing the measures, e.g. count(1), sum(a), avg(b). Expressions must be in the form of aggregate function calls over input columns directly, e.g. sum(c) is ok, but sum(c + d) is not.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregationMasks</p></td>
+<td><p>For each measure, an optional boolean input column that is used to mask out rows for this particular measure.</p></td>
+</tr>
+<tr class="row-odd"><td><p>ignoreNullKeys</p></td>
+<td><p>A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="hashjoinnode">
+<h3>HashJoinNode<a class="headerlink" href="#hashjoinnode" title="Permalink to this headline">¶</a></h3>
+<p>The join operation combines two separate inputs into a single output, based on a
+join expression. A common subtype of joins is an equality join where the join
+expression is constrained to a list of equality (or equality + null equality)
+conditions between the two inputs of the join.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>joinType</p></td>
+<td><p>Join type: inner, left, right, full, semi, anti. You can read about different join types in this <a class="reference external" href="https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/">blog post</a>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>leftKeys</p></td>
+<td><p>Columns from the left hand side input that are part of the equality condition. At least one must be specified.</p></td>
+</tr>
+<tr class="row-even"><td><p>rightKeys</p></td>
+<td><p>Columns from the right hand side input that are part of the equality condition. At least one must be specified. The number and order of the rightKeys must match the number and order of the leftKeys.</p></td>
+</tr>
+<tr class="row-odd"><td><p>filter</p></td>
+<td><p>Optional non-equality filter expression that may reference columns from both inputs.</p></td>
+</tr>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="crossjoinnode">
+<h3>CrossJoinNode<a class="headerlink" href="#crossjoinnode" title="Permalink to this headline">¶</a></h3>
+<p>The cross join operation combines two separate inputs into a single output by
+combining each row of the left hand side input with each row of the right hand
+side input. If there are N rows in the left input and M rows in the right
+input, the output of the cross join will contain N * M rows.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="orderbynode">
+<h3>OrderByNode<a class="headerlink" href="#orderbynode" title="Permalink to this headline">¶</a></h3>
+<p>The sort or order by operation reorders a dataset based on one or more
+identified sort fields as well as a sorting order.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>sortingKeys</p></td>
+<td><p>List of one of more input columns to sort by.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sortingOrders</p></td>
+<td><p>Sorting order for each of the soring keys. The supported orders are: ascending nulls first, ascending nulls last, descending nulls first, descending nulls last.</p></td>
+</tr>
+<tr class="row-even"><td><p>isPartial</p></td>
+<td><p>Boolean indicating whether the sort operation processes only a portion of the dataset.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="topnnode">
+<h3>TopNNode<a class="headerlink" href="#topnnode" title="Permalink to this headline">¶</a></h3>
+<p>The top-n operation reorders a dataset based on one or more identified sort
+fields as well as a sorting order. Rather than sort the entire dataset, the
+top-n will only maintain the total number of records required to ensure a
+limited output. A top-n is a combination of a logical sort and logical limit
+operations.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>sortingKeys</p></td>
+<td><p>List of one of more input columns to sort by.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sortingOrders</p></td>
+<td><p>Sorting order for each of the soring keys. See OrderBy for the list of supported orders.</p></td>
+</tr>
+<tr class="row-even"><td><p>count</p></td>
+<td><p>Maximum number of rows to return.</p></td>
+</tr>
+<tr class="row-odd"><td><p>isPartial</p></td>
+<td><p>Boolean indicating whether the operation processes only a portion of the dataset.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="limitnode">
+<h3>LimitNode<a class="headerlink" href="#limitnode" title="Permalink to this headline">¶</a></h3>
+<p>The limit operation keeps up to a specified number of input rows and drops the
+rest.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>count</p></td>
+<td><p>Maximum number of rows to return.</p></td>
+</tr>
+<tr class="row-odd"><td><p>isPartial</p></td>
+<td><p>Boolean indicating whether the operation processes only a portion of the dataset.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="unnestnode">
+<h3>UnnestNode<a class="headerlink" href="#unnestnode" title="Permalink to this headline">¶</a></h3>
+<p>The unnest operation expands arrays and maps into separate columns. Arrays are
+expanded into a single column, and maps are expanded into two columns
+(key, value). Can be used to expand multiple columns. In this case produces as
+many rows as the highest cardinality array or map (the other columns are padded
+with nulls). Optionally can produce an ordinality column that specifies the row
+number starting with 1.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>replicateVariables</p></td>
+<td><p>Input columns that are returned unmodified.</p></td>
+</tr>
+<tr class="row-odd"><td><p>unnestVariables</p></td>
+<td><p>Input columns of type array or map to expand.</p></td>
+</tr>
+<tr class="row-even"><td><p>unnestNames</p></td>
+<td><p>Names to use for expanded columns. One name per array column. Two names per map column.</p></td>
+</tr>
+<tr class="row-odd"><td><p>ordinalityName</p></td>
+<td><p>Optional name for the ordinality column.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="tablewritenode">
+<h3>TableWriteNode<a class="headerlink" href="#tablewritenode" title="Permalink to this headline">¶</a></h3>
+<p>The table write operation consumes one output and writes it to storage via a
+connector. An example would be writing ORC or Parquet files. The table write
+operation return a single row with a single column containing the number of
+rows written to storage.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>columns</p></td>
+<td><p>A list of input columns to write to storage. This may be a subset of the input columns in different order.</p></td>
+</tr>
+<tr class="row-odd"><td><p>columnNames</p></td>
+<td><p>Column names to use when writing to storage. These can be different from the input column names.</p></td>
+</tr>
+<tr class="row-even"><td><p>insertTableHandle</p></td>
+<td><p>Connector-specific description of the destination table.</p></td>
+</tr>
+<tr class="row-odd"><td><p>outputType</p></td>
+<td><p>An output column containing a number of rows written to storage.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="partitionedoutputnode">
+<h3>PartitionedOutputNode<a class="headerlink" href="#partitionedoutputnode" title="Permalink to this headline">¶</a></h3>
+<p>The partitioned output operation redistributes data based on zero or more
+distribution fields.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>keys</p></td>
+<td><p>Zero or more input fields to use for calculating a partition for each row.</p></td>
+</tr>
+<tr class="row-odd"><td><p>numPartitions</p></td>
+<td><p>Number of partitions to split the data into.</p></td>
+</tr>
+<tr class="row-even"><td><p>broadcast</p></td>
+<td><p>Boolean flag indicating whether all rows should be sent to all partitions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>replicateNullsAndAny</p></td>
+<td><p>Boolean flag indicating whether rows with nulls in the keys should be sent to all partitions and, in case there are no such rows, whether a single arbitrarily chosen row should be sent to all partitions. Used to provide global-scope information necessary to implement anti join semantics on a single node.</p></td>
+</tr>
+<tr class="row-even"><td><p>partitionFunctionFactory</p></td>
+<td><p>Factory to make partition functions to use when calculating partitions for input rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>outputType</p></td>
+<td><p>A list of output columns. This is a subset of input columns possibly in a different order.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="valuesnode">
+<h3>ValuesNode<a class="headerlink" href="#valuesnode" title="Permalink to this headline">¶</a></h3>
+<p>The values operation returns specified data.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>values</p></td>
+<td><p>Set of rows to return.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="exchangenode">
+<h3>ExchangeNode<a class="headerlink" href="#exchangenode" title="Permalink to this headline">¶</a></h3>
+<p>A receiving operation that merges multiple streams in an arbitrary order. Input
+streams are coming from remote exchange or shuffle.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>type</p></td>
+<td><p>A list of columns in the input streams.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="mergeexchangenode">
+<h3>MergeExchangeNode<a class="headerlink" href="#mergeexchangenode" title="Permalink to this headline">¶</a></h3>
+<p>A receiving operation that merges multiple ordered streams to maintain
+orderedness. Input streams are coming from remote exchange or shuffle.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>type</p></td>
+<td><p>A list of columns in the input streams.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sortingKeys</p></td>
+<td><p>List of one of more input columns to sort by.</p></td>
+</tr>
+<tr class="row-even"><td><p>sortingOrders</p></td>
+<td><p>Sorting order for each of the soring keys. See OrderBy for the list of supported orders.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="localmergenode">
+<h3>LocalMergeNode<a class="headerlink" href="#localmergenode" title="Permalink to this headline">¶</a></h3>
+<p>An operation that merges multiple ordered streams to maintain orderedness. Input
+streams are coming from local exchange.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>sortingKeys</p></td>
+<td><p>List of one of more input columns to sort by.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sortingOrders</p></td>
+<td><p>Sorting order for each of the soring keys. See OrderBy for the list of supported orders.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="localpartitionnode">
+<h3>LocalPartitionNode<a class="headerlink" href="#localpartitionnode" title="Permalink to this headline">¶</a></h3>
+<p>A local exchange operation that partitions input data into multiple streams or
+combines data from multiple streams into a single stream.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>partitionFunctionFactory</p></td>
+<td><p>Factory to make partition functions to use when calculating partitions for input rows.</p></td>
+</tr>
+<tr class="row-odd"><td><p>outputType</p></td>
+<td><p>A list of output columns. This is a subset of input columns possibly in a different order.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="enforcesinglerownode">
+<h3>EnforceSingleRowNode<a class="headerlink" href="#enforcesinglerownode" title="Permalink to this headline">¶</a></h3>
+<p>The enforce single row operation checks that input contains at most one row and
+returns that row unmodified. If input is empty, returns a single row with all
+values set to null. If input contains more than one row raises an exception.</p>
+<p>Used for queries with non-correlated sub-queries.</p>
+</section>
+</section>
+<section id="examples">
+<h2>Examples<a class="headerlink" href="#examples" title="Permalink to this headline">¶</a></h2>
+<section id="join">
+<h3>Join<a class="headerlink" href="#join" title="Permalink to this headline">¶</a></h3>
+<p>A query plan with a join includes a HashJoinNode. Such a plan is translated into
+two pipelines: build and probe. Build pipeline is processing input from the
+build side of the join and uses HashBuild operator to build a hash table. Probe
+pipeline is processing input from the probe side of the join, probes the hash
+table and produces rows that match join criteria. Build pipeline provides the
+hash table to the probe pipeline via a special mechanism called JoinBridge.
+JoinBridge is like a future, where HashBuild operator completes the future with
+a HashTable as a result and HashProbe operator receives the HashTable when
+future completes.</p>
+<p>Each pipeline can run with different levels of parallelism. In the example
+below, the probe pipeline runs on 2 threads, while the build pipeline runs on 3
+threads. When the build pipeline runs multi-threaded, each pipeline processes a
+portion of the build-side input. The last pipeline to finish processing is
+responsible for combining the hash tables from the other pipelines and
+publishing the final table to the JoinBridge. When the probe pipeline for the
+right outer join runs multi-threaded, the last pipeline to finish processing is
+responsible for emitting rows from the build side that didn’t match the join
+condition.</p>
+<a class="reference internal image-reference" href="../_images/join.png"><img alt="../_images/join.png" class="align-center" src="../_images/join.png" style="width: 400px;" /></a>
+</section>
+<section id="local-exchange">
+<h3>Local Exchange<a class="headerlink" href="#local-exchange" title="Permalink to this headline">¶</a></h3>
+<p>A local exchange operation has multiple uses. It is used to change the
+parallelism of the data processing from multi-threaded to single-threaded or
+vice versa. For example, local exchange can be used in a sort operation where
+partial sort runs multi-threaded and then results are merged on a single
+thread. Local exchange operation is also used to combine results of multiple
+pipelines. For example to combine multiple inputs of the UNION or UNION ALL.</p>
+<p>Here are some examples.</p>
+<p>N-to-1 local exchange that could be used for combining partially sorted results
+for final merge sort.</p>
+<a class="reference internal image-reference" href="../_images/local-exchange-N-to-1.png"><img alt="../_images/local-exchange-N-to-1.png" class="align-center" src="../_images/local-exchange-N-to-1.png" style="width: 400px;" /></a>
+<p>1-to-N local exchange to increase parallelism after an operation that must run
+single-threaded.</p>
+<a class="reference internal image-reference" href="../_images/local-exchange-1-to-N.png"><img alt="../_images/local-exchange-1-to-N.png" class="align-center" src="../_images/local-exchange-1-to-N.png" style="width: 400px;" /></a>
+<p>Local exchange used to combine data from multiple pipelines, e.g. for UNION
+ALL.</p>
+<a class="reference internal image-reference" href="../_images/local-exchange.png"><img alt="../_images/local-exchange.png" class="align-center" src="../_images/local-exchange.png" style="width: 400px;" /></a>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Plan Nodes and Operators</a><ul>
+<li><a class="reference internal" href="#plan-nodes">Plan Nodes</a><ul>
+<li><a class="reference internal" href="#tablescannode">TableScanNode</a></li>
+<li><a class="reference internal" href="#filternode">FilterNode</a></li>
+<li><a class="reference internal" href="#projectnode">ProjectNode</a></li>
+<li><a class="reference internal" href="#aggregationnode">AggregationNode</a></li>
+<li><a class="reference internal" href="#hashjoinnode">HashJoinNode</a></li>
+<li><a class="reference internal" href="#crossjoinnode">CrossJoinNode</a></li>
+<li><a class="reference internal" href="#orderbynode">OrderByNode</a></li>
+<li><a class="reference internal" href="#topnnode">TopNNode</a></li>
+<li><a class="reference internal" href="#limitnode">LimitNode</a></li>
+<li><a class="reference internal" href="#unnestnode">UnnestNode</a></li>
+<li><a class="reference internal" href="#tablewritenode">TableWriteNode</a></li>
+<li><a class="reference internal" href="#partitionedoutputnode">PartitionedOutputNode</a></li>
+<li><a class="reference internal" href="#valuesnode">ValuesNode</a></li>
+<li><a class="reference internal" href="#exchangenode">ExchangeNode</a></li>
+<li><a class="reference internal" href="#mergeexchangenode">MergeExchangeNode</a></li>
+<li><a class="reference internal" href="#localmergenode">LocalMergeNode</a></li>
+<li><a class="reference internal" href="#localpartitionnode">LocalPartitionNode</a></li>
+<li><a class="reference internal" href="#enforcesinglerownode">EnforceSingleRowNode</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#examples">Examples</a><ul>
+<li><a class="reference internal" href="#join">Join</a></li>
+<li><a class="reference internal" href="#local-exchange">Local Exchange</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="joins.html"
+                        title="previous chapter">Joins</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/operators.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Plan Nodes and Operators</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

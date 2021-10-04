@@ -91,6 +91,12 @@ SQL-standard concatenation operator (<code class="docutils literal notranslate">
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="ltrim">
+<span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#ltrim" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes leading whitespace from string.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="replace">
 <span class="sig-name descname"><span class="pre">replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">search</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#replace" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
@@ -102,6 +108,12 @@ SQL-standard concatenation operator (<code class="docutils literal notranslate">
 <dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> with <code class="docutils literal notranslate"><span class="pre">replace</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">search</span></code> is an empty string, inserts <code class="docutils literal notranslate"><span class="pre">replace</span></code> in front of every
 character and at the end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="rtrim">
+<span class="sig-name descname"><span class="pre">rtrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#rtrim" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes trailing whitespace from string.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -133,6 +145,12 @@ as being relative to the end of the string.</p>
 <dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
 position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
 position is interpreted as being relative to the end of the string.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="trim">
+<span class="sig-name descname"><span class="pre">trim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#trim" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes starting and ending whitespaces from <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
