@@ -180,12 +180,13 @@ jobs:
           command: |
             git config --global user.email "velox@users.noreply.github.com"
             git config --global user.name "velox"
-            git checkout -b update-docs main
+            git checkout main
             make -C velox/docs html
+            git checkout gh-pages
             cp -R velox/docs/_build/html/* docs
             git add docs
             if [ -n "$(git status --porcelain)" ]
             then
               git commit -m "Update documentation"
-              git push -f origin update-docs:gh-pages
+              git push -f
             fi
