@@ -35,6 +35,7 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, "not");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max, "array_max");
@@ -54,6 +55,8 @@ void registerVectorFunctions() {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_substr, "substr");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, "lower");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_ltrim, "ltrim");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_rtrim, "rtrim");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_trim, "trim");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, "upper");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, "concat");
