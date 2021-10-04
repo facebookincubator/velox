@@ -185,10 +185,10 @@ jobs:
             git checkout gh-pages
             git rm -rf docs
             mv velox/docs/_build/html docs
+            touch docs/.nojekyll
             git add docs
             if [ -n "$(git status --porcelain)" ]
             then
               git commit docs -m "Sphinx rebuild ($(git rev-parse --short gh-pages))."
               git push origin gh-pages
             fi
-            git push
