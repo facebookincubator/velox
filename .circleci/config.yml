@@ -20,6 +20,7 @@ workflows:
       - macos-build
       - format-check
       - header-check
+      - doc-gen-job
 
   # Daily documentation update
   nightly:
@@ -182,7 +183,8 @@ jobs:
             make -C velox/docs html
             git fetch origin gh-pages
             git checkout gh-pages
-            mv velox/docs/_build/html/ docs/
+            git rm -rf docs
+            mv velox/docs/_build/html docs
             git add docs
             if [ -n "$(git status --porcelain)" ]
             then
