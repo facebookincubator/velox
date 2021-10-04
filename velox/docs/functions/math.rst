@@ -35,6 +35,14 @@ Mathematical Functions
 
     Returns the natural logarithm of ``x``.
 
+.. function:: log2(x) -> double
+
+    Returns the base 2 logarithm of ``x``.
+
+.. function:: log10(x) -> double
+
+    Returns the base 10 logarithm of ``x``.
+
 .. function:: mod(n, m) -> [same as n]
 
     Returns the modulus (remainder) of ``n`` divided by ``m``.
