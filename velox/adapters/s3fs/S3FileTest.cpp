@@ -34,11 +34,11 @@ void writeData(WriteFile* writeFile) {
 
 void readData(ReadFile* readFile) {
   Arena arena;
-  // ASSERT_EQ(readFile->size(), 15 + kOneMB);
+  ASSERT_EQ(readFile->size(), 15 + kOneMB);
   ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &arena), "ddddd");
   ASSERT_EQ(readFile->pread(0, 10, &arena), "aaaaabbbbb");
   ASSERT_EQ(readFile->pread(10, kOneMB, &arena), std::string(kOneMB, 'c'));
-  // ASSERT_EQ(readFile->size(), 15 + kOneMB);
+  ASSERT_EQ(readFile->size(), 15 + kOneMB);
   const std::string_view arf = readFile->pread(5, 10, &arena);
   const std::string zarf = readFile->pread(kOneMB, 15);
   auto buf = std::make_unique<char[]>(8);
@@ -72,6 +72,24 @@ TEST(S3File, WriteAndRead) {
   s3fs.initializeClient();
   auto readFile = s3fs.openFileForRead(s3File);
   readData(readFile.get());
+}
+
+TEST(S3File, MissingFile) {
+  const char* s3File = "s3://tmp/dummy.txt";
+
+  std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
+      {"hive.s3.aws-access-key", "admin"},
+      {"hive.s3.aws-secret-key", "password"},
+      {"hive.s3.endpoint", "127.0.0.1:9000"},
+      {"hive.s3.ssl.enabled", "false"},
+      {"hive.s3.path-style-access", "true"},
+  };
+  std::shared_ptr<const Config> config =
+      std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
+  filesystems::initializeS3Library();
+  filesystems::S3FileSystem s3fs(config);
+  s3fs.initializeClient();
+  EXPECT_THROW(s3fs.openFileForRead(s3File), VeloxException);
 }
 
 TEST(S3File, ViaRegistry) {

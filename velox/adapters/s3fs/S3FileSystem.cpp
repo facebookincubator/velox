@@ -15,6 +15,7 @@
  */
 
 #include "velox/adapters/s3fs/S3FileSystem.h"
+#include "velox/adapters/s3fs/S3Util.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Context.h"
 
@@ -25,35 +26,41 @@
 #include <stdexcept>
 
 #include <aws/core/Aws.h>
-#include <aws/core/Region.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/http/HttpResponse.h>
 #include <aws/core/utils/logging/ConsoleLogSystem.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/GetObjectRequest.h>
+#include <aws/s3/model/HeadObjectRequest.h>
 
 namespace facebook::velox {
-
-constexpr std::string_view kSep{"/"};
-constexpr std::string_view s3Scheme{"s3:"};
-
-bool inline isS3File(const std::string_view filename) {
-  return (filename.substr(0, s3Scheme.size()) == s3Scheme);
-}
-
-inline Aws::String getAwsString(const std::string& s) {
-  return Aws::String(s.begin(), s.end());
-}
-
-inline std::string_view fromAwsString(const Aws::String& s) {
-  return {s.data(), s.length()};
-}
 
 // Implement the S3ReadFile
 class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string path, std::shared_ptr<Aws::S3::S3Client> client)
-      : path_(std::move(path)), client_(client) {}
+      : client_(client) {
+    getS3BucketAndKeyFromPath(path, bucket_, key_);
+  }
+
+  // gets the length of the file
+  // checks if there are any issues accessing the file
+  void initialize() {
+    // make it a no-op if invoked twice.
+    if (length_ != -1) {
+      return;
+    }
+
+    Aws::S3::Model::HeadObjectRequest req;
+    req.SetBucket(getAwsString(bucket_));
+    req.SetKey(getAwsString(key_));
+
+    auto outcome = client_->HeadObject(req);
+    VELOX_CHECK_AWS_OUTCOME(
+        outcome, "Failed to initialize S3 File", bucket_, key_);
+    length_ = outcome.GetResult().GetContentLength();
+    VELOX_CHECK(length_ >= 0);
+  }
 
   std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
       const override {
@@ -79,17 +86,15 @@ class S3ReadFile final : public ReadFile {
   uint64_t preadv(
       uint64_t offset,
       const std::vector<folly::Range<char*>>& buffers) override {
-    throw std::runtime_error("failure in S3ReadFile::preadv.");
-    return -1;
+    VELOX_NYI();
   }
 
   uint64_t size() const override {
-    throw std::runtime_error("failure in S3ReadFile::size.");
+    return length_;
   }
 
   uint64_t memoryUsage() const override {
-    throw std::runtime_error("failure in S3ReadFile::memoryUsage.");
-    return 0;
+    VELOX_NYI();
   }
 
   bool shouldCoalesce() const final {
@@ -97,28 +102,31 @@ class S3ReadFile final : public ReadFile {
   }
 
  private:
+  // The assumption here is that "pos" has space for at least "length" bytes
   void preadInternal(uint64_t offset, uint64_t length, char* pos) const {
     // Read the desired range of bytes
     Aws::S3::Model::GetObjectRequest req;
     Aws::S3::Model::GetObjectResult result;
-    auto first_sep = path_.find_first_of(kSep);
-    req.SetBucket(getAwsString(path_.substr(0, first_sep)));
-    req.SetKey(getAwsString(path_.substr(first_sep + 1)));
+
+    req.SetBucket(getAwsString(bucket_));
+    req.SetKey(getAwsString(key_));
     std::stringstream ss;
     ss << "bytes=" << offset << "-" << offset + length - 1;
     req.SetRange(getAwsString(ss.str()));
     // TODO: Avoid copy below by using  req.SetResponseStreamFactory();
     // Reference: ARROW-8692
     auto outcome = client_->GetObject(req);
-    if (!outcome.IsSuccess()) {
-      throw std::runtime_error("failure in S3ReadFile::size preadInternal.");
-    }
+    VELOX_CHECK_AWS_OUTCOME(
+        outcome, "failure in S3ReadFile::preadInternal", bucket_, key_);
+
     result = std::move(outcome).GetResultWithOwnership();
     auto& stream = result.GetBody();
     stream.read(reinterpret_cast<char*>(pos), length);
   }
   std::shared_ptr<Aws::S3::S3Client> client_;
-  std::string path_;
+  std::string bucket_;
+  std::string key_;
+  int64_t length_ = -1;
 };
 
 namespace filesystems {
@@ -198,7 +206,7 @@ class S3FileSystem::Impl {
     const auto useInstanceCred =
         getOptionalProperty(S3Config::useInstanceCredentials, "");
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider;
-    if (accessKey != "" && secretKey != "" && useInstanceCred != "true") {
+    if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
       credentials_provider =
           getAccessSecretCredentialProvider(accessKey, secretKey);
     } else {
@@ -231,16 +239,15 @@ void S3FileSystem::initializeClient() {
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(std::string_view path) {
-  // Remove the S3://
-  const std::string bucket =
-      std::string(path.substr(s3Scheme.length() + 2 * kSep.length()));
-  return std::make_unique<S3ReadFile>(bucket, impl_->getS3Client());
+  const std::string file = getS3Path(path);
+  auto s3file = std::make_unique<S3ReadFile>(file, impl_->getS3Client());
+  s3file->initialize();
+  return s3file;
 }
 
 std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     std::string_view path) {
-  // Not yet implemented
-  return nullptr;
+  VELOX_NYI();
 }
 
 std::string S3FileSystem::name() const {

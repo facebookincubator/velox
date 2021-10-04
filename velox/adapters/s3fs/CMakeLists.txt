@@ -14,7 +14,7 @@
 
 # for generated headers
 
-add_library(velox_s3fs S3FileSystem.cpp S3FileSystem.h)
+add_library(velox_s3fs S3FileSystem.cpp S3FileSystem.h S3Util.h)
 target_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
 target_link_libraries(velox_s3fs ${AWSSDK_LIBRARIES})
 
