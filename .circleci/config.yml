@@ -182,7 +182,7 @@ jobs:
             git config --global user.name "velox"
             git checkout -b update-docs main
             make -C velox/docs html
-            cp -R velox/docs_build/html/* docs
+            cp -R velox/docs/_build/html/* docs
             git add docs
             if [ -n "$(git status --porcelain)" ]
             then
