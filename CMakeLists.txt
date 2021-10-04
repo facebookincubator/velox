@@ -50,7 +50,7 @@ set(POSITION_INDEPENDENT_CODE True)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c  -mbmi2 -march=native -D USE_VELOX_COMMON_BASE -g"
+    "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -mbmi2 -march=native -D USE_VELOX_COMMON_BASE -g"
 )
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
@@ -181,6 +181,18 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   endif()
 else()
   set(FILESYSTEM "")
+endif()
+
+# Whether to add duckDB in the build for differential testing. Unit tests
+# require duckDB, so cmake will fail if BUILD_TESTING is ON but
+# VELOX_ENABLE_DUCKDB is OFF.
+option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
+
+if(BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
+  message(
+    FATAL_ERROR
+      "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or BUILD_TESTING=OFF)"
+  )
 endif()
 
 include_directories(SYSTEM velox)

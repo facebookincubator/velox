@@ -27,5 +27,7 @@ add_library(
 
 target_link_libraries(velox_vector velox_memory velox_type velox_encode)
 
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()

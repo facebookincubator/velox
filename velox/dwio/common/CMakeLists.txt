@@ -14,7 +14,6 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
-add_subdirectory(tests)
 add_library(
   velox_dwio_common
   ColumnSelector.cpp
@@ -35,3 +34,7 @@ target_link_libraries(
   Boost::regex
   ${FOLLY_WITH_DEPENDENCIES}
   ${GLOG})
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

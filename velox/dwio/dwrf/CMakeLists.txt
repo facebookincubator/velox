@@ -15,6 +15,9 @@
 add_subdirectory(common)
 add_subdirectory(proto)
 add_subdirectory(reader)
-add_subdirectory(test)
 add_subdirectory(utils)
 add_subdirectory(writer)
+
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()

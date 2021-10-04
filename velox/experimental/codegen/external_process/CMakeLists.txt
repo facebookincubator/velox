@@ -13,4 +13,7 @@
 # limitations under the License.
 
 add_library(velox_codegen_external_process INTERFACE)
-add_subdirectory(tests)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

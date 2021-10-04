@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-add_subdirectory(tests)
 add_library(velox_codegen_vector_function INTERFACE)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(test)
-
 add_library(velox_dwio_dwrf_utils ProtoUtils.cpp BitIterator.h)
 
 add_dependencies(velox_dwio_dwrf_utils velox_dwio_dwrf_proto)
 
 target_link_libraries(velox_dwio_dwrf_utils velox_dwio_dwrf_proto velox_type)
+
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()

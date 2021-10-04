@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_subdirectory(hyperloglog)
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
 
 add_library(
   velox_aggregates OBJECT
@@ -38,3 +36,8 @@ add_library(
 
 target_link_libraries(velox_aggregates velox_aggregates_hyperloglog velox_exec
                       ${FOLLY_WITH_DEPENDENCIES})
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()

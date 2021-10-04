@@ -11,8 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(tests)
-
 add_library(velox_config Context.cpp)
 target_link_libraries(velox_config ${FOLLY_WITH_DEPENDENCIES})
 
@@ -21,3 +19,7 @@ add_library(velox_core FunctionRegistry.cpp PlanNode.cpp ScalarFunction.cpp
 
 target_link_libraries(velox_core velox_config velox_type velox_serialization
                       velox_vector ${FOLLY_WITH_DEPENDENCIES})
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

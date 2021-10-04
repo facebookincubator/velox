@@ -13,6 +13,9 @@
 # limitations under the License.
 
 add_library(velox_transform_utils INTERFACE)
-add_subdirectory(tests)
 target_compile_definitions(velox_transform_utils INTERFACE ENABLE_CONCEPTS=0
                                                            USE_STD_RANGE=0)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
