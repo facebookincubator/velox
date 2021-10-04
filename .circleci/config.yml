@@ -20,6 +20,7 @@ workflows:
       - macos-build
       - format-check
       - header-check
+      - doc-gen-job
 
   # Daily documentation update
   nightly:
@@ -187,5 +188,5 @@ jobs:
             if [ -n "$(git status --porcelain)" ]
             then
               git commit -m "Update documentation"
-              git push -f
+              git push
             fi
