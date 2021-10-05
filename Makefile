@@ -58,7 +58,7 @@ cmake:					#: Use CMake to create a Makefile build system
 		${CMAKE_FLAGS} \
 		$(GENERATOR) \
 		$(USE_CCACHE) \
-		$(FORCE_COLOR) -DVELOX_ENABLE_DUCKDB=OFF
+		$(FORCE_COLOR)
 
 build:					#: Build the software based in BUILD_DIR and BUILD_TYPE variables
 	cmake --build $(BUILD_BASE_DIR)/$(BUILD_DIR) -j ${NUM_THREADS}
