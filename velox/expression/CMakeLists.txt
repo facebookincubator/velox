@@ -26,4 +26,6 @@ add_library(
 target_link_libraries(velox_expression velox_core velox_vector
                       velox_common_base)
 
-add_subdirectory(tests)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+endif()

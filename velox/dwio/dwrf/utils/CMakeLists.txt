@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(test)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(test)
+endif()
 
 add_library(velox_dwio_dwrf_utils ProtoUtils.cpp BitIterator.h)
 

@@ -47,4 +47,6 @@ target_link_libraries(
   velox_core
   velox_exec
   velox_expression)
-add_subdirectory(tests)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+endif()

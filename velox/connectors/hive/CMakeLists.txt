@@ -21,4 +21,6 @@ add_library(velox_hive_partition_function HivePartitionFunction.cpp)
 
 target_link_libraries(velox_hive_partition_function velox_core)
 
-add_subdirectory(tests)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+endif()

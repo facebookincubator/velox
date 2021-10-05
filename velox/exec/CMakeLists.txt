@@ -58,5 +58,7 @@ target_link_libraries(
   velox_codegen
   velox_common_base)
 
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()

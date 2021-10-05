@@ -15,4 +15,6 @@ add_library(velox_functions_string INTERFACE)
 
 target_link_libraries(velox_functions_string INTERFACE velox_exception)
 
-add_subdirectory(tests)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+endif()

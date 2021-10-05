@@ -60,6 +60,8 @@ target_link_libraries(
 set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
                                                        high_memory_pool)
 
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
-add_subdirectory(coverage)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+  add_subdirectory(coverage)
+endif()

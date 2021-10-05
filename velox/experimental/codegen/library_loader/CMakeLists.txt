@@ -13,4 +13,6 @@
 # limitations under the License.
 
 add_library(velox_codegen_library_loader INTERFACE)
-add_subdirectory(tests)
+if(${ENABLE_ALL_TESTS})
+  add_subdirectory(tests)
+endif()
