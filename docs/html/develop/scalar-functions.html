@@ -1,0 +1,803 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>How to add a scalar function? &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="How to add an aggregate function?" href="aggregate-functions.html" />
+    <link rel="prev" title="Vectors" href="vectors.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="aggregate-functions.html" title="How to add an aggregate function?"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="vectors.html" title="Vectors"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">How to add a scalar function?</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="how-to-add-a-scalar-function">
+<h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Permalink to this headline">¶</a></h1>
+<section id="simple-functions">
+<h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Permalink to this headline">¶</a></h2>
+<p>A simple function, e.g. a <a class="reference internal" href="../functions/math.html"><span class="doc">mathematical function</span></a>, can be added by wrapping a
+C++ function in VELOX_UDF_BEGIN and VELOX_UDF_END macros. For example, a ceil
+function can be implemented like so:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here, we are wrapping a template to allow our function to be called on
+different input types, e.g. float and double.</p>
+<p>It is important to use the name “call” for the function.</p>
+<p>The function must return a boolean indicating whether the result of
+computation is null or not. True means the result is not null. False means
+the result is null. The arguments must start with an output
+parameter “result” followed by the function arguments. The “result” argument
+must be a reference. Function arguments must be const references. The C++
+types of the arguments must match Velox types as specified in the following
+mapping:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 42%" />
+<col style="width: 58%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<th class="head"><p>C++ Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>BOOLEAN</p></td>
+<td><p>bool</p></td>
+</tr>
+<tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>int8_t</p></td>
+</tr>
+<tr class="row-even"><td><p>SMALLINT</p></td>
+<td><p>int16_t</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>int32_t</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT</p></td>
+<td><p>int64_t</p></td>
+</tr>
+<tr class="row-odd"><td><p>REAL</p></td>
+<td><p>float</p></td>
+</tr>
+<tr class="row-even"><td><p>DOUBLE</p></td>
+<td><p>double</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARCHAR</p></td>
+<td><p>StringView</p></td>
+</tr>
+<tr class="row-even"><td><p>VARBINARY</p></td>
+<td><p>StringView</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP</p></td>
+<td><p>Timestamp</p></td>
+</tr>
+<tr class="row-even"><td><p>ARRAY</p></td>
+<td><p>ArrayValReader</p></td>
+</tr>
+<tr class="row-odd"><td><p>MAP</p></td>
+<td><p>SlowMapVal</p></td>
+</tr>
+<tr class="row-even"><td><p>ROW</p></td>
+<td><p>RowReader</p></td>
+</tr>
+</tbody>
+</table>
+<p>Note: Do not pay too much attention to complex type mappings at the moment.
+They are included here for completeness, but require a whole separate
+discussion.</p>
+<p>VELOX_UDF_BEGIN(ceil) expands to define udf_ceil struct. You can see the
+expanded struct in CLion by hovering on the VELOX_UDF_BEGIN macro.</p>
+<a class="reference internal image-reference" href="../_images/velox-udf-begin-macro.png"><img alt="../_images/velox-udf-begin-macro.png" src="../_images/velox-udf-begin-macro.png" style="width: 600px;" /></a>
+<section id="null-behavior">
+<h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Permalink to this headline">¶</a></h3>
+<p>Most functions have default null behavior, e.g. a null value in any of the
+arguments produces a null result. The expression evaluation engine
+automatically produces nulls for such inputs, eliding a call to the actual
+function. If a given function has a different behavior for null inputs, it
+must define a “callNullable” function instead of a “call” function. Here is
+an artificial example of a ceil function that returns 0 for null input:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callNullable</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="c1">// Return 0 if input is null.</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="o">*</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Notice that callNullable function takes arguments as raw pointers and not
+references to allow for specifying null values.</p>
+</section>
+<section id="determinism">
+<h3>Determinism<a class="headerlink" href="#determinism" title="Permalink to this headline">¶</a></h3>
+<p>By default simple functions are assumed to be deterministic, e.g. given the
+same inputs they always produce the same results. If this is not the case,
+the function must define a static constexpr bool is_deterministic:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>An example of such function is rand():</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">rand</span><span class="p">)</span><span class="w"></span>
+<span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">folly</span><span class="o">::</span><span class="n">Random</span><span class="o">::</span><span class="n">randDouble01</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="registration">
+<h3>Registration<a class="headerlink" href="#registration" title="Permalink to this headline">¶</a></h3>
+<p>Use registerFunction template to register simple functions.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">Func</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span> <span class="nc">TReturn</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="p">...</span><span class="w"> </span><span class="n">TArgs</span><span class="o">&gt;</span><span class="w"></span>
+<span class="kt">void</span><span class="w"> </span><span class="n">registerFunction</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">aliases</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">returnType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The first template parameter is the udf_xxx struct, the next template
+parameter is the return type, the remaining template parameters are argument
+types. Aliases parameter allows to specify multiple names for the same
+function. By default, with empty aliases, the function is registered under
+the name used in the VELOX_UDF_BEGIN macro, e.g. “ceil”. If aliases are
+specified, the name used in VELOX_UDF_BEGIN is ignored and the function is
+registered only under the specified names. E.g. calling registerFunction
+with {“ceiling”} registers only the “ceiling” name, not both “ceil”
+(default) and “ceiling”. To register both names, call registerFunction like
+so:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">udf_ceil</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here, we register the udf_ceil function that takes a double and returns a
+double. If we want to allow the ceil function to be called on float inputs,
+we need to call registerFunction again:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">udf_ceil</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>We need to call registerFunction for each signature we want to support.</p>
+</section>
+<section id="codegen">
+<h3>Codegen<a class="headerlink" href="#codegen" title="Permalink to this headline">¶</a></h3>
+<p>To allow the function to be used in the codegen, extract the “kernel” of the
+function into a header file and call that from the “call” or “callNullable”.
+Here is an example with ceil function.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/functions/prestosql/ArithmeticImpl.h&quot;</span><span class="cp"></span>
+
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>velox/functions/prestosql/ArithmeticImpl.h:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">T</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arg</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">T</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">arg</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">results</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Make sure the header files that define the “kernels” are free of dependencies
+as much as possible to allow for faster compilation in codegen.</p>
+</section>
+<section id="complex-types">
+<h3>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this headline">¶</a></h3>
+<p>Although it is possible to define simple functions that operate on complex
+types, e.g. arrays, maps and structs, it is generally not recommended to do
+so. These functions are inefficient because they require each value to be
+converted from a compact columnar representation into an STL container
+(std::vector, std::map, std::tuple). Also, it is not possible to define
+functions that accept generic arrays, maps or structs (e.g. map_keys,
+map_values, array_distinct, array_sort) as registerFunction requires all the
+signatures to be enumerated explicitly.</p>
+<p>Given this recommendation, we will not discuss how to define a simple function
+with complex type inputs or results.</p>
+</section>
+</section>
+<section id="vector-functions">
+<h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Permalink to this headline">¶</a></h2>
+<p>Simple functions process a single row and produce a single value as a result.
+Vector functions process a batch or rows and produce a vector of results.
+Some of the defining features of these functions are:</p>
+<ul class="simple">
+<li><p>take vectors as inputs and produce vectors as a result;</p></li>
+<li><p>have access to vector encodings and metadata;</p></li>
+<li><p>can be defined for generic input types;</p></li>
+<li><p>allow for implementing lambda functions;</p></li>
+<li><p>allow for pre-processing constant inputs and reusing the results across multiple batches, e.g. compile constant regular expressions once per query or thread of execution.</p></li>
+</ul>
+<p>Vector function interface allows for many optimizations that are not available
+to simple functions. These optimizations often leverage different vector
+encodings and columnar representations of the vectors. Here are some
+examples,</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="../functions/map.html#map_keys" title="map_keys"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_keys()</span></code></a> function takes advantage of the ArrayVector representation and simply returns the inner “keys” vector without doing any computation. Similarly, <a class="reference internal" href="../functions/map.html#map_values" title="map_values"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_values()</span></code></a> function simply returns the inner “values” vector.</p></li>
+<li><p><a class="reference internal" href="../functions/map.html#map_entries" title="map_entries"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_entries()</span></code></a> function takes the pieces of the input vector - “nulls”, “sizes” and “offsets”  buffers and “keys” and “values” vectors - and simply repackages them in the form of a RowVector.</p></li>
+<li><p><a class="reference internal" href="../functions/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function takes advantage of the ArrayVector and MapVector representations and simply returns the “sizes” buffer of the input vector.</p></li>
+<li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">is_null()</span></code> function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.</p></li>
+<li><p><a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.</p></li>
+<li><p><a class="reference internal" href="../functions/string.html#id2" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> function can avoid copying strings by returning StringViews that point to the string buffers in the input vector.</p></li>
+</ul>
+<p>To define a vector function, make a subclass of f4d::exec::VectorFunction and
+implement the “apply” method.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">apply</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">Expr</span><span class="o">*</span><span class="w"> </span><span class="n">caller</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">EvalCtx</span><span class="o">*</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"></span>
+</pre></div>
+</div>
+<section id="input-rows">
+<h3>Input rows<a class="headerlink" href="#input-rows" title="Permalink to this headline">¶</a></h3>
+<p>The “rows” parameter specifies the set of rows in the incoming batch to
+process. This set may not include all the rows. By default, a vector function
+is assumed to have the default null behavior, e.g. null in any input produces
+a null result. In this case, the expression evaluation engine will exclude
+rows with nulls from the “rows” specified in the call to “apply”. If a
+function has a different behavior for null inputs, it must override the
+isDefaultNullBehavior method to return false.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isDefaultNullBehavior</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>In this case, the “rows” parameter will include rows with null inputs and the
+function will need to handle these. By default, the function can assume that
+all inputs are not null for all “rows”.</p>
+<p>When evaluating a function as part of a conditional expression, e.g. AND, OR,
+IF, SWITCH, the set of “rows” represents a subset of the rows that need
+evaluating. Consider some examples.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="n">AND</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">7</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here, a &gt; 5 is evaluated on all rows where “a” is not null, but b &gt; 7 is
+evaluated on rows where b is not null and a is either null or not &gt; 5.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">IF</span><span class="p">(</span><span class="n">condition</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here, a + 5 is evaluated on rows where a is not null and condition is true,
+while b - 3 is evaluated on rows where b is not null and condition is not
+true.</p>
+<p>In some cases, the values outside of “rows” may be undefined, uninitialized or
+contain garbage. This would be the case if an earlier filter operation
+produced dictionary-encoded vectors with indices pointing to a subset of the
+rows which passed the filter. When evaluating f(g(a)), where a = Dict
+(a0), function “g” is evaluated on a subset of rows in “a0” and may produce a
+result where only that subset of rows is populated. Then, function “f” is
+evaluated on the same subset of rows in the result of “g”. The input to “f”
+will have values outside of “rows” undefined, uninitialized or contain
+garbage.</p>
+<p>Note that SelectivityVector::applyToSelected method can be used to loop over
+the specified rows in a way that’s rather similar to a standard for loop.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// row is the 0-based row number</span>
+<span class="w">    </span><span class="c1">// .... process the row</span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="input-vectors">
+<h3>Input vectors<a class="headerlink" href="#input-vectors" title="Permalink to this headline">¶</a></h3>
+<p>The “args” parameter is an std::vector of Velox vectors containing the values
+of the function arguments. These vectors are not necessarily flat and may be
+dictionary or constant encoded. However, a deterministic function that takes
+a single argument is guaranteed to receive its only input as a flat vector.
+By default, a function is assumed to be deterministic. If that’s not the
+case, the function must override isDeterministic method to return false.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isDeterministic</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Note that DecodedVector can be used to get a flat vector-like interface to any
+vector.</p>
+</section>
+<section id="result-vector">
+<h3>Result vector<a class="headerlink" href="#result-vector" title="Permalink to this headline">¶</a></h3>
+<p>The “result” parameter is a raw pointer to VectorPtr, which is a
+std::shared_ptr to BaseVector. It can be null, may point to a scratch vector
+that is maybe reusable or a partially populated vector whose contents must be
+preserved.</p>
+<p>A partially populated vector is specified when evaluating the “else” branch of
+an IF. In this case, the results of the “then” branch must be preserved. This
+can be easily achieved by following one of the two patterns.</p>
+<p>Calculate the result for all or just the specified rows into a new vector,
+then use EvalCtx::moveOrCopyResult method to either std::move the vector
+into “result” or copy individual rows into partially populated “result”.</p>
+<p>Here is an example of using moveOrCopyResult to implement map_keys function:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">Expr</span><span class="o">*</span><span class="w"> </span><span class="cm">/* caller */</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">*</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">mapVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">MapVector</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">mapKeys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">mapKeys</span><span class="p">();</span><span class="w"></span>
+
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">localResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="n">context</span><span class="o">-&gt;</span><span class="n">pool</span><span class="p">(),</span><span class="w"></span>
+<span class="w">      </span><span class="n">ARRAY</span><span class="p">(</span><span class="n">mapKeys</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()),</span><span class="w"></span>
+<span class="w">      </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">nulls</span><span class="p">(),</span><span class="w"></span>
+<span class="w">      </span><span class="n">rows</span><span class="p">.</span><span class="n">end</span><span class="p">(),</span><span class="w"></span>
+<span class="w">      </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">offsets</span><span class="p">(),</span><span class="w"></span>
+<span class="w">      </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">sizes</span><span class="p">(),</span><span class="w"></span>
+<span class="w">      </span><span class="n">mapKeys</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">getNullCount</span><span class="p">());</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">context</span><span class="o">-&gt;</span><span class="n">moveOrCopyResult</span><span class="p">(</span><span class="n">localResult</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Use BaseVector::ensureWritable method to initialize “result” to a flat
+uniquely-referenced vector while preserving values in rows not specified
+in “rows”. Then, calculate and fill in the “rows” in “result”.
+BaseVector::ensureWritable creates a new vector if “result” is null. If
+result is not null, but not-flat or not singly-referenced,
+BaseVector::ensureWritable creates a new vector and copies non-”rows” values
+from “result” into the newly created vector. If “result” is not null and
+flat, BaseVector::ensureWritable checks the inner buffers and copies these if
+they are not singly referenced. BaseVector::ensureWritable also recursively
+calls itself on inner vectors (elements vector for the array, keys and values
+for map, fields for struct) to make sure the vector is “writable” all the way
+through.</p>
+<p>Here is an example of using BaseVector::ensureWritable to implement
+cardinality function for maps:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">Expr</span><span class="o">*</span><span class="w"> </span><span class="cm">/* caller */</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">*</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">BIGINT</span><span class="p">(),</span><span class="w"> </span><span class="n">context</span><span class="o">-&gt;</span><span class="n">pool</span><span class="p">(),</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">resultValues</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">      </span><span class="p">(</span><span class="o">*</span><span class="n">result</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">mutableValues</span><span class="p">(</span><span class="n">rows</span><span class="p">.</span><span class="n">size</span><span class="p">());</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">rawResult</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resultValues</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">mapVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">MapVector</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">rawSizes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mapVector</span><span class="o">-&gt;</span><span class="n">rawSizes</span><span class="p">();</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResult</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">rawSizes</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="simple-implementation">
+<h3>Simple implementation<a class="headerlink" href="#simple-implementation" title="Permalink to this headline">¶</a></h3>
+<p>Vector function interface is very flexible and allows for many interesting
+optimizations. It may also feel very complicated. Let’s see how we can use
+DecodedVector and BaseVector::ensureWritable to implement the “power(a, b)”
+function as a vector function in a way that is not much more complicated than
+the simple function. To clarify, it is best to implement the “power” function
+as a simple function. I’m using it here for illustration purposes only.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Initialize flat results vector.</span>
+<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">DOUBLE</span><span class="p">(),</span><span class="w"> </span><span class="n">context</span><span class="o">-&gt;</span><span class="n">pool</span><span class="p">(),</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">rawResults</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="n">result</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">mutableRawValues</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">// Decode the arguments.</span>
+<span class="n">DecodedArgs</span><span class="w"> </span><span class="nf">decodedArgs</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decodedArgs</span><span class="p">.</span><span class="n">decodedVector</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">exp</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decodedArgs</span><span class="p">.</span><span class="n">decodedVector</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Loop over rows and calculate the results.</span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">),</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">));</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>You may want to optimize for the case when both base and exponent being flat
+and eliminate the overhead of calling DecodedVector::valueAt template.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">isIdentityMapping</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">isIdentityMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">baseValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">expValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">baseValues</span><span class="p">[</span><span class="n">row</span><span class="p">],</span><span class="w"> </span><span class="n">expValues</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">),</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>You may decide to further optimize for the case of flat base and constant
+exponent.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">isIdentityMapping</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">isIdentityMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">baseValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">expValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">baseValues</span><span class="p">[</span><span class="n">row</span><span class="p">],</span><span class="w"> </span><span class="n">expValues</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">isIdentityMapping</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">isConstantMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">baseValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">expValue</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">baseValues</span><span class="p">[</span><span class="n">row</span><span class="p">],</span><span class="w"> </span><span class="n">expValue</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="kt">int</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">rawResults</span><span class="p">[</span><span class="n">row</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">pow</span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">),</span><span class="w"> </span><span class="n">exp</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Hopefully, you can see now that additional complexity in the implementation
+comes only from introducing optimization paths. Developers need to decide
+whether that complexity is justified on a case by case basis.</p>
+</section>
+<section id="try-expression-support">
+<h3>TRY expression support<a class="headerlink" href="#try-expression-support" title="Permalink to this headline">¶</a></h3>
+<p>A built-in TRY expression evaluates input expression and handles certain types
+of errors by returning NULL. It is used for the cases where it is preferable
+that queries produce NULL or default values instead of failing when corrupt
+or invalid data is encountered. To specify default values, the TRY expression
+can be used in conjunction with the COALESCE function.</p>
+<p>The implementation of the TRY expression relies on the VectorFunction
+implementation to call EvalCtx::setError(row, exception) instead of throwing
+exceptions directly.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">setError</span><span class="p">(</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exception_ptr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">exceptionPtr</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>A typical pattern would be to loop over rows, apply a function wrapped in a
+try-catch and call context-&gt;setError(row, std::current_exception()); from the
+catch block.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// ... calculate and store the result for the row</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exception</span><span class="o">&amp;</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">context</span><span class="o">-&gt;</span><span class="n">setError</span><span class="p">(</span><span class="n">row</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">current_exception</span><span class="p">());</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>There is an EvalCtx::applyToSelectedNoThrow convenience method that can be used
+instead of the explicit try-catch block above:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">context</span><span class="o">-&gt;</span><span class="n">applyToSelectedNoThrow</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="p">[</span><span class="o">&amp;</span><span class="p">](</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="c1">// ... calculate and store the result for the row</span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Simple functions are compatible with the TRY expression by default. The framework
+wraps the “call” and “callNullable” methods in a try-catch and reports errors
+using context-&gt;setError.</p>
+</section>
+<section id="id1">
+<h3>Registration<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h3>
+<p>Use f4d::exec::registerVectorFunction to register a stateless vector function.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FunctionSignature</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">VectorFunction</span><span class="o">&gt;</span><span class="w"> </span><span class="n">func</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">overwrite</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>f4d::exec::registerVectorFunction takes a name, a list of supported signatures
+and unique_ptr to an instance of the function. An optional “overwrite” flag
+specifies whether to overwrite a function if a function with the specified
+name already exists.</p>
+<p>Use f4d::exec::registerStatefulVectorFunction to register a stateful vector
+function.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerStatefulVectorFunction</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FunctionSignature</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">VectorFunctionFactory</span><span class="w"> </span><span class="n">factory</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">overwrite</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">)</span><span class="w"></span>
+</pre></div>
+</div>
+<p>f4d::exec::registerStatefulVectorFunction takes a name, a list of supported
+signatures and a factory function that can be used to create an instance of
+the vector function. Expression evaluation engine uses a factory function to
+create a new instance of the vector function for each thread of execution. In
+a single-threaded execution, a single instance of the function is used to
+process all batches of data. In a multi-threaded execution, each thread makes
+a separate instance of the function.</p>
+<p>Factory function is called with a function name, types and optionally constant
+values for the arguments. For example, regular expressions functions are
+often called with constant regular expressions. A stateful vector function
+can compile the regular expression once (per thread of execution) and reuse
+the compiled expression for multiple batches of data. Similarly, an IN
+expression used with a constant IN-list can create a hash set of the values
+once and reuse it for all the batches of data.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Represents arguments for stateful vector functions. Stores element type, and</span>
+<span class="c1">// the constant value (if supplied).</span>
+<span class="k">struct</span> <span class="nc">VectorFunctionArg</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">constantValue</span><span class="p">;</span><span class="w"></span>
+<span class="p">};</span><span class="w"></span>
+
+<span class="k">using</span><span class="w"> </span><span class="n">VectorFunctionFactory</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">VectorFunction</span><span class="o">&gt;</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorFunctionArg</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">inputArgs</span><span class="p">)</span><span class="o">&gt;</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="function-signature">
+<h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
+<p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
+instances. FunctionSignatureBuilder and FunctionSignature support Java-like
+generics, variable number of arguments and lambdas. Here are some examples.</p>
+<p>The length function takes a single argument of type varchar and returns a
+bigint:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar -&gt; bigint</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The substr function takes a varchar and two integers for start and length. To
+specify types of multiple arguments, call argumentType() method for each
+argument in order.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar, integer, integer -&gt; bigint</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;integer&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;integer&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The concat function takes an arbitrary number of varchar inputs and returns a
+varchar. FunctionSignatureBuilder allows specifying that the last augment may
+appear zero or more times by calling variableArity() method.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// varchar... -&gt; varchar</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;varchar&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">variableArity</span><span class="p">()</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The map_keys function takes any map and returns an array of map keys.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// map(K,V) -&gt; array(K)</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;K&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;V&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(K)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;map(K,V)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The transform function takes an array and a lambda, applies the lambda to each
+element of the array and returns a new array of the results.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array(T), function(T, U) -&gt; array(U)</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;T&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">typeVariable</span><span class="p">(</span><span class="s">&quot;U&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(U)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T, U)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The type names used in FunctionSignatureBuilder can be either lowercase
+standard types, a special type “any”, or the ones defined by calling
+typeVariable() method. “any” type can be used to specify a printf-like
+function which takes any number of arguments of any possibly non-matching
+types.</p>
+</section>
+</section>
+<section id="testing">
+<h2>Testing<a class="headerlink" href="#testing" title="Permalink to this headline">¶</a></h2>
+<p>Add a test using FunctionBaseTest from
+velox/functions/prestosql/tests/FunctionBaseTest.h as a base class. Name your test
+and the .cpp file &lt;function-name&gt;Test, e.g. CardinalityTest in
+CardinalityTest.cpp or IsNullTest in IsNullTest.cpp.</p>
+<p>FunctionBaseTest has many helper methods for generating test vectors. It also
+provides an evaluate() method that takes a SQL expression and input data,
+evaluates the expression and returns the result vector. SQL expression is
+parsed using DuckDB and type resolution logic is leveraging the function
+signatures specified during registration. assertEqualVectors() method takes
+two vectors, expected and actual, and asserts that they represent the same
+values. The encodings of the vectors may not be the same.</p>
+<p>Here is an example of a test for vector function “contains”:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">TEST_F</span><span class="p">(</span><span class="n">ArrayContainsTest</span><span class="p">,</span><span class="w"> </span><span class="n">integerWithNulls</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeNullableArrayVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="p">{{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">},</span><span class="w"></span>
+<span class="w">       </span><span class="p">{</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">},</span><span class="w"></span>
+<span class="w">       </span><span class="p">{},</span><span class="w"></span>
+<span class="w">       </span><span class="p">{</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">9</span><span class="p">},</span><span class="w"></span>
+<span class="w">       </span><span class="p">{</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">},</span><span class="w"></span>
+<span class="w">       </span><span class="p">{</span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">9</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">}});</span><span class="w"></span>
+
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">testContains</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="o">&amp;</span><span class="p">](</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">search</span><span class="p">,</span><span class="w"></span>
+<span class="w">                          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">expected</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="o">&lt;</span><span class="n">SimpleVector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
+<span class="w">        </span><span class="s">&quot;contains(c0, c1)&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">        </span><span class="n">makeRowVector</span><span class="p">({</span><span class="w"></span>
+<span class="w">            </span><span class="n">arrayVector</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="n">makeConstant</span><span class="p">(</span><span class="n">search</span><span class="p">,</span><span class="w"> </span><span class="n">arrayVector</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">()),</span><span class="w"></span>
+<span class="w">        </span><span class="p">}));</span><span class="w"></span>
+
+<span class="w">    </span><span class="n">assertEqualVectors</span><span class="p">(</span><span class="n">makeNullableFlatVector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="n">expected</span><span class="p">),</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">};</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">testContains</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="n">testContains</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="n">testContains</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="n">testContains</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">});</span><span class="w"></span>
+<span class="w">  </span><span class="n">testContains</span><span class="p">(</span><span class="mi">-2</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">});</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Tests for simple functions could benefit from using the evaluateOnce
+() template which takes SQL expression and scalar values for the inputs,
+evaluates the expression on a vector of length 1 and returns the scalar
+result. Here is an example of a test for simple function “sqrt”:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">TEST_F</span><span class="p">(</span><span class="n">ArithmeticTest</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">kDoubleMax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">numeric_limits</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;::</span><span class="n">max</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">kNan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">numeric_limits</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;::</span><span class="n">quiet_NaN</span><span class="p">();</span><span class="w"></span>
+
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">sqrt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="o">&amp;</span><span class="p">](</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">evaluateOnce</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&quot;sqrt(c0)&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">};</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">1</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_TRUE</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isnan</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="mf">-1.0</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">)));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">0</span><span class="p">));</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">4</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="mi">9</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_FLOAT_EQ</span><span class="p">(</span><span class="mf">1.34078e+154</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">kDoubleMax</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_EQ</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">,</span><span class="w"> </span><span class="n">sqrt</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">nullopt</span><span class="p">));</span><span class="w"></span>
+<span class="w">  </span><span class="n">EXPECT_TRUE</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">isnan</span><span class="p">(</span><span class="n">sqrt</span><span class="p">(</span><span class="n">kNan</span><span class="p">).</span><span class="n">value_or</span><span class="p">(</span><span class="mi">-1</span><span class="p">)));</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="benchmarking">
+<h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
+<p>Add a benchmark using folly::Benchmark framework and FunctionBenchmarkBase
+from velox/functions/lib/benchmarks/FunctionBenchmarkBase.h as a base class.
+Benchmarks are a great way to check if an optimization is working, evaluate
+how much benefit it brings and decide whether it is worth the additional
+complexity.</p>
+</section>
+<section id="documenting">
+<h2>Documenting<a class="headerlink" href="#documenting" title="Permalink to this headline">¶</a></h2>
+<p>If a function implements Presto semantics, document it by adding an entry to
+one of the <cite>*.rst</cite> files in velox/docs/functions. Each file documents a set of
+related functions. E.g. math.rst contains all of the mathematical functions,
+while array.rst file contains all of the array functions. Within a file,
+functions are listed in alphabetical order.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">How to add a scalar function?</a><ul>
+<li><a class="reference internal" href="#simple-functions">Simple Functions</a><ul>
+<li><a class="reference internal" href="#null-behavior">Null Behavior</a></li>
+<li><a class="reference internal" href="#determinism">Determinism</a></li>
+<li><a class="reference internal" href="#registration">Registration</a></li>
+<li><a class="reference internal" href="#codegen">Codegen</a></li>
+<li><a class="reference internal" href="#complex-types">Complex Types</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#vector-functions">Vector Functions</a><ul>
+<li><a class="reference internal" href="#input-rows">Input rows</a></li>
+<li><a class="reference internal" href="#input-vectors">Input vectors</a></li>
+<li><a class="reference internal" href="#result-vector">Result vector</a></li>
+<li><a class="reference internal" href="#simple-implementation">Simple implementation</a></li>
+<li><a class="reference internal" href="#try-expression-support">TRY expression support</a></li>
+<li><a class="reference internal" href="#id1">Registration</a></li>
+<li><a class="reference internal" href="#function-signature">Function signature</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#testing">Testing</a></li>
+<li><a class="reference internal" href="#benchmarking">Benchmarking</a></li>
+<li><a class="reference internal" href="#documenting">Documenting</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="vectors.html"
+                        title="previous chapter">Vectors</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="aggregate-functions.html"
+                        title="next chapter">How to add an aggregate function?</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/scalar-functions.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="aggregate-functions.html" title="How to add an aggregate function?"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="vectors.html" title="Vectors"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">How to add a scalar function?</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

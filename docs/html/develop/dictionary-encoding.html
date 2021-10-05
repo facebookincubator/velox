@@ -1,0 +1,337 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Dictionary Encoding &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Arena Allocation" href="arena.html" />
+    <link rel="prev" title="Expression Evaluation" href="expression-evaluation.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="expression-evaluation.html" title="Expression Evaluation"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Dictionary Encoding</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="dictionary-encoding">
+<h1>Dictionary Encoding<a class="headerlink" href="#dictionary-encoding" title="Permalink to this headline">¶</a></h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h2>
+<p>Velox makes extensive use of Dictionary encoding to avoid data copying.
+Dictionary encoding is used to compactly represent repeated values and to
+represent a subset of rows without copying data.</p>
+<p>Dictionary vector consists of a nulls buffer, indices buffer and a base vector.</p>
+<p>Let’s say we have a table of people’s favourite colors. First column is a
+person’s name. Second column is the person’s favorite color.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 57%" />
+<col style="width: 43%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>name</p></th>
+<th class="head"><p>color</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Michael</p></td>
+<td><p>red</p></td>
+</tr>
+<tr class="row-odd"><td><p>Julia</p></td>
+<td><p>blue</p></td>
+</tr>
+<tr class="row-even"><td><p>Frank</p></td>
+<td><p>red</p></td>
+</tr>
+<tr class="row-odd"><td><p>Melissa</p></td>
+<td><p>red</p></td>
+</tr>
+<tr class="row-even"><td><p>Jack</p></td>
+<td><p>blue</p></td>
+</tr>
+<tr class="row-odd"><td><p>Samantha</p></td>
+<td><p>green</p></td>
+</tr>
+</tbody>
+</table>
+<p>Color column has lots of repeated values and can be represented as a dictionary
+vector. First, we make a flat base vector containing only distinct colors:
+[red, blue, green]. Then we map each color to an index into the base vector:
+0 - red, 1 - blue, 2 - green. Using this mapping, we convert the original values
+into an array of indices: [0, 1, 0, 0, 1, 2]. Finally, we combine the indices and
+a base vector to make a dictionary vector.</p>
+<a class="reference internal image-reference" href="../_images/dictionary-repeated.png"><img alt="../_images/dictionary-repeated.png" src="../_images/dictionary-repeated.png" style="width: 300px;" /></a>
+<p>Now, let’s say we want to represent a subset of the people whose favourite color
+is red. We can take the original flat vector of names and wrap it in a dictionary
+vector with indices pointing only to rows where color = “red”, e.g. rows 0, 2 and 3.</p>
+<a class="reference internal image-reference" href="../_images/dictionary-subset.png"><img alt="../_images/dictionary-subset.png" src="../_images/dictionary-subset.png" style="width: 300px;" /></a>
+<p>As you can see, dictionary vectors can be used to represent both cardinality increase
+and cardinality reduction. The array of indices can be smaller or larger than the size
+of the base vector. Indices may or may not repeat.</p>
+<p>We say that the dictionary vector wraps the base vector. Any vector can be wrapped in
+a dictionary vector, hence, a vector may have many layers of dictionaries on top of
+the base vector.</p>
+<p>Some examples of the operations that create dictionary vectors are:</p>
+<ul class="simple">
+<li><p>ORC Reader produces dictionary vectors for columns with lots of repeated values.</p></li>
+<li><p>Filter operator uses dictionary encoding to represent a subset of the input rows that passed the filter.</p></li>
+<li><p>Join operator uses dictionary encoding to represent cardinality change for the probe columns.</p></li>
+<li><p>Unnest operator will use dictionary encoding to “duplicate” the input rows without copying the data.</p></li>
+<li><p>Functions use dictionary encoding to represent the result as a subset of the input. E.g. <a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent the result as a subset of the input array elements or map values.</p></li>
+</ul>
+<p>A filter applied to a dictionary column produced by the ORC reader makes a dictionary
+vector two layers deep: Dict(Dict(Flat)). A projection using a function like <a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a>
+may add another layer of dictionary on top: Dict(Dict(Dict(Flat))).</p>
+</section>
+<section id="nulls">
+<h2>Nulls<a class="headerlink" href="#nulls" title="Permalink to this headline">¶</a></h2>
+<p>Dictionary vector has a nulls buffer separate from the nulls buffer of
+the base vector. This allows dictionary vectors to add nulls to a base vector
+which may not have nulls. This flexibility comes in handy in the
+implementation of the element_at function which returns null if the specified
+element doesn’t exist.</p>
+<p>Nulls buffer in a dictionary vector is optional and can be omitted if the
+dictionary doesn’t add nulls. A dictionary vector without the nulls buffer may
+still represent null values if the base vector has nulls.</p>
+<p>In the presence of the nulls buffer, values in the indices buffer
+corresponding to null entries are undefined.</p>
+<p>BaseVector::wrapInDictionary() is a convenience method that makes a dictionary
+vector from a nulls buffer, an indices buffer and a base vector.</p>
+</section>
+<section id="decodedvector">
+<h2>DecodedVector<a class="headerlink" href="#decodedvector" title="Permalink to this headline">¶</a></h2>
+<p>As we’ve seen a vector can have many layers of dictionaries:
+Dict(Dict(….Dict(Flat)…)). How do we access the data in such a vector? We
+use DecodedVector.</p>
+<p>DecodedVector combines multiple wrappings into at most one. It takes any
+vector and produces a reference to the flat base vector and an array of
+indices into that vector. DecodedVector also produces a combined nulls buffer
+from the nulls buffers of the dictionary encodings and the base vector.</p>
+<p>For scalar types, valueAt(index) and isNullAt(index) methods provide access to
+individual null flags and values. Here is an example of decoding and accessing
+the values of a vector of type INTEGER:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process null</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process non-null value of type int32_t</span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>DecodedVector takes a vector to decode and a SelectivityVector that
+specifies a subset of rows to decode. This ensures that decoding is performed
+only for the necessary rows.</p>
+<p>For complex types, base() and indices() methods provide access to the base
+vector and row mapping into the base vector. isNullAt(index) method can still
+be used to check for top level nulls. Here is an example of decoding and
+accessing the values of a vector of type ARRAY(INTEGER).</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">DecodedVector</span><span class="w"> </span><span class="nf">decoded</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">base</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">base</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">elements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">elements</span><span class="p">();</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">indices</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">indices</span><span class="p">();</span><span class="w"></span>
+
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process null array</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">sizeAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">offset</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">offsetAt</span><span class="p">(</span><span class="n">indices</span><span class="p">[</span><span class="n">row</span><span class="p">]);</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// process array elements stored in [offset, offset + size) slots of the elements vector</span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Node: DecodedVector applied to complex type vectors processes wrappings only
+for the top-level vector, e.g. array/map/row. Child vectors of the base vector
+(e.g. elements vector of an array, keys and values vectors of a map, fields of
+a row) are left unmodified. It may be necessary to decode these separately.</p>
+<p>DecodedVector transparently handles all kinds of wrappings, e.g.
+constant, dictionary and sequence, but detailed description of these is out of
+scope for this article.</p>
+</section>
+<section id="optimizations">
+<h2>Optimizations<a class="headerlink" href="#optimizations" title="Permalink to this headline">¶</a></h2>
+<section id="memory-reuse">
+<h3>Memory Reuse<a class="headerlink" href="#memory-reuse" title="Permalink to this headline">¶</a></h3>
+<p>DecodedVector allocates memory. Reuse instances of DecodedVector to reduce
+memory allocations.</p>
+<p>Use LocalDecodedVector when implementing a VectorFunction. LocalDecodedVector
+fetches an instance of DecodedVector from a pool of reusable instances stored
+in EvalCtx. The instance is automatically returned to the pool when
+LocalDecodedVector goes out of scope.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">LocalDecodedVector</span><span class="w"> </span><span class="nf">holder</span><span class="p">(</span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">decoded</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">holder</span><span class="p">.</span><span class="n">get</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>When implementing an aggregate function, use a DecodedVector member variable
+for each input vector. There will be a few variables for raw input vectors and
+a few more for intermediate input vectors.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ApproxDistinctAggregate</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+
+<span class="w">      </span><span class="c1">// partial aggregation</span>
+<span class="w">      </span><span class="kt">void</span><span class="w"> </span><span class="nf">decodeArguments</span><span class="p">(</span><span class="w"></span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">decodedValue_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">          </span><span class="n">decodedMaxStandardError_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+<span class="w">          </span><span class="n">checkSetMaxStandardError</span><span class="p">();</span><span class="w"></span>
+<span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="w">      </span><span class="p">}</span><span class="w"></span>
+
+<span class="w">      </span><span class="c1">// final aggregation</span>
+<span class="w">      </span><span class="n">decodedHll_</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedValue_</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedMaxStandardError_</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="n">DecodedVector</span><span class="w"> </span><span class="n">decodedHll_</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="flat-and-constant-encodings">
+<h3>Flat and Constant Encodings<a class="headerlink" href="#flat-and-constant-encodings" title="Permalink to this headline">¶</a></h3>
+<p>Often it is useful to provide a separate code path for constant or flat
+vectors with no nulls. Use DecodedVector::isConstantMapping() and
+DecodedVector::isFlatMapping() to tell whether the vector is constant or flat
+and DecodedVector::mayHaveNulls() to tell whether the vector has any nulls in
+the rows of interest.</p>
+<p>For example, here is an optimized calculation of a sum of integer values.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int32_t</span><span class="w"> </span><span class="n">sum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNulls</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">isFlatMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">values</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Compiler can autoSIMDize this loop</span>
+<span class="w">    </span><span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">rawValues</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="p">});</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">decoded</span><span class="p">.</span><span class="n">isConstantMapping</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">rows</span><span class="p">.</span><span class="n">countSelected</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">]</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">isNullAt</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">sum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">decoded</span><span class="p">.</span><span class="n">valueAt</span><span class="o">&lt;</span><span class="kt">int32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+<span class="k">return</span><span class="w"> </span><span class="n">sum</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Dictionary Encoding</a><ul>
+<li><a class="reference internal" href="#introduction">Introduction</a></li>
+<li><a class="reference internal" href="#nulls">Nulls</a></li>
+<li><a class="reference internal" href="#decodedvector">DecodedVector</a></li>
+<li><a class="reference internal" href="#optimizations">Optimizations</a><ul>
+<li><a class="reference internal" href="#memory-reuse">Memory Reuse</a></li>
+<li><a class="reference internal" href="#flat-and-constant-encodings">Flat and Constant Encodings</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="expression-evaluation.html"
+                        title="previous chapter">Expression Evaluation</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="arena.html"
+                        title="next chapter">Arena Allocation</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/dictionary-encoding.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="expression-evaluation.html" title="Expression Evaluation"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Dictionary Encoding</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

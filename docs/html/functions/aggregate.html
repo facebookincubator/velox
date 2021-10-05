@@ -1,0 +1,316 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Aggregate Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Developer Guide" href="../develop.html" />
+    <link rel="prev" title="URL Functions" href="url.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../develop.html" title="Developer Guide"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="url.html" title="URL Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="aggregate-functions">
+<h1>Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Permalink to this headline">¶</a></h1>
+<p>Aggregate functions operate on a set of values to compute a single result.</p>
+<p>Except for <a class="reference internal" href="#id0" title="count"><code class="xref py py-func docutils literal notranslate"><span class="pre">count()</span></code></a>, <a class="reference internal" href="#count_if" title="count_if"><code class="xref py py-func docutils literal notranslate"><span class="pre">count_if()</span></code></a>, <a class="reference internal" href="#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a>, <a class="reference internal" href="#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and
+<a class="reference internal" href="#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>, all of these aggregate functions ignore null values
+and return null for no input rows or when all values are null. For example,
+<a class="reference internal" href="#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a> returns null rather than zero and <a class="reference internal" href="#avg" title="avg"><code class="xref py py-func docutils literal notranslate"><span class="pre">avg()</span></code></a> does not include null
+values in the count. The <code class="docutils literal notranslate"><span class="pre">coalesce</span></code> function can be used to convert null into
+zero.</p>
+<p>Some aggregate functions such as <a class="reference internal" href="#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> produce different results
+depending on the order of input values.</p>
+<section id="general-aggregate-functions">
+<h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="arbitrary">
+<span class="sig-name descname"><span class="pre">arbitrary</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#arbitrary" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an arbitrary non-null value of <code class="docutils literal notranslate"><span class="pre">x</span></code>, if one exists.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="array_agg">
+<span class="sig-name descname"><span class="pre">array_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">array&lt;[same</span> <span class="pre">as</span> <span class="pre">input]&gt;</span></span></span><a class="headerlink" href="#array_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array created from the input <code class="docutils literal notranslate"><span class="pre">x</span></code> elements.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="avg">
+<span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#avg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the average (arithmetic mean) of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bool_and">
+<span class="sig-name descname"><span class="pre">bool_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">boolean</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#bool_and" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">TRUE</span></code> if every input value is <code class="docutils literal notranslate"><span class="pre">TRUE</span></code>, otherwise <code class="docutils literal notranslate"><span class="pre">FALSE</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bool_or">
+<span class="sig-name descname"><span class="pre">bool_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">boolean</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#bool_or" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">TRUE</span></code> if any input value is <code class="docutils literal notranslate"><span class="pre">TRUE</span></code>, otherwise <code class="docutils literal notranslate"><span class="pre">FALSE</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="count">
+<span class="sig-name descname"><span class="pre">count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">*</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#count" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of input rows.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of non-null input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="count_if">
+<span class="sig-name descname"><span class="pre">count_if</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#count_if" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of <code class="docutils literal notranslate"><span class="pre">TRUE</span></code> input values.
+This function is equivalent to <code class="docutils literal notranslate"><span class="pre">count(CASE</span> <span class="pre">WHEN</span> <span class="pre">x</span> <span class="pre">THEN</span> <span class="pre">1</span> <span class="pre">END)</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="max_by">
+<span class="sig-name descname"><span class="pre">max_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#max_by" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the maximum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="min_by">
+<span class="sig-name descname"><span class="pre">min_by</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#min_by" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the value of <code class="docutils literal notranslate"><span class="pre">x</span></code> associated with the minimum value of <code class="docutils literal notranslate"><span class="pre">y</span></code> over all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="max">
+<span class="sig-name descname"><span class="pre">max</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#max" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the maximum value of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="min">
+<span class="sig-name descname"><span class="pre">min</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#min" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the minimum value of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sum">
+<span class="sig-name descname"><span class="pre">sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#sum" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sum of all input values.</p>
+</dd></dl>
+
+</section>
+<section id="bitwise-aggregate-functions">
+<h2>Bitwise Aggregate Functions<a class="headerlink" href="#bitwise-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_and_agg">
+<span class="sig-name descname"><span class="pre">bitwise_and_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bitwise_and_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the bitwise AND of all input values in 2’s complement representation.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_or_agg">
+<span class="sig-name descname"><span class="pre">bitwise_or_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bitwise_or_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the bitwise OR of all input values in 2’s complement representation.</p>
+</dd></dl>
+
+</section>
+<section id="map-aggregate-functions">
+<h2>Map Aggregate Functions<a class="headerlink" href="#map-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="map_agg">
+<span class="sig-name descname"><span class="pre">map_agg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_agg" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map created from the input <code class="docutils literal notranslate"><span class="pre">key</span></code> / <code class="docutils literal notranslate"><span class="pre">value</span></code> pairs.</p>
+</dd></dl>
+
+</section>
+<section id="approximate-aggregate-functions">
+<h2>Approximate Aggregate Functions<a class="headerlink" href="#approximate-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="approx_distinct">
+<span class="sig-name descname"><span class="pre">approx_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#approx_distinct" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the approximate number of distinct input values.
+This function provides an approximation of <code class="docutils literal notranslate"><span class="pre">count(DISTINCT</span> <span class="pre">x)</span></code>.
+Zero is returned if all input values are null.</p>
+<p>This function should produce a standard error of 2.3%, which is the
+standard deviation of the (approximately normal) error distribution over
+all possible sets. It does not guarantee an upper bound on the error for
+any specific input set.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">approx_distinct</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the approximate number of distinct input values.
+This function provides an approximation of <code class="docutils literal notranslate"><span class="pre">count(DISTINCT</span> <span class="pre">x)</span></code>.
+Zero is returned if all input values are null.</p>
+<p>This function should produce a standard error of no more than <code class="docutils literal notranslate"><span class="pre">e</span></code>, which
+is the standard deviation of the (approximately normal) error distribution
+over all possible sets. It does not guarantee an upper bound on the error
+for any specific input set. The current implementation of this function
+requires that <code class="docutils literal notranslate"><span class="pre">e</span></code> be in the range of <code class="docutils literal notranslate"><span class="pre">[0.0040625,</span> <span class="pre">0.26000]</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="approx_percentile">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#approx_percentile" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile for all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code> at the
+given <code class="docutils literal notranslate"><span class="pre">percentage</span></code>. The value of <code class="docutils literal notranslate"><span class="pre">percentage</span></code> must be between zero and
+one and must be constant for all input rows.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the approximate weighed percentile for all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code>
+using the per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code> at the percentage <code class="docutils literal notranslate"><span class="pre">p</span></code>. The weight must be
+an integer value of at least one. It is effectively a replication count for
+the value <code class="docutils literal notranslate"><span class="pre">x</span></code> in the percentile set. The value of <code class="docutils literal notranslate"><span class="pre">p</span></code> must be between
+zero and one and must be constant for all input rows.</p>
+</dd></dl>
+
+</section>
+<section id="statistical-aggregate-functions">
+<h2>Statistical Aggregate Functions<a class="headerlink" href="#statistical-aggregate-functions" title="Permalink to this headline">¶</a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="stddev">
+<span class="sig-name descname"><span class="pre">stddev</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev" title="Permalink to this definition">¶</a></dt>
+<dd><p>This is an alias for stddev_samp().</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="stddev_pop">
+<span class="sig-name descname"><span class="pre">stddev_pop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev_pop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the population standard deviation of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="stddev_samp">
+<span class="sig-name descname"><span class="pre">stddev_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev_samp" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sample standard deviation of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="variance">
+<span class="sig-name descname"><span class="pre">variance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#variance" title="Permalink to this definition">¶</a></dt>
+<dd><p>This is an alias for var_samp().</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="var_pop">
+<span class="sig-name descname"><span class="pre">var_pop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#var_pop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the population variance of all input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="var_samp">
+<span class="sig-name descname"><span class="pre">var_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#var_samp" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sample variance of all input values.</p>
+</dd></dl>
+
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a></li>
+<li><a class="reference internal" href="#bitwise-aggregate-functions">Bitwise Aggregate Functions</a></li>
+<li><a class="reference internal" href="#map-aggregate-functions">Map Aggregate Functions</a></li>
+<li><a class="reference internal" href="#approximate-aggregate-functions">Approximate Aggregate Functions</a></li>
+<li><a class="reference internal" href="#statistical-aggregate-functions">Statistical Aggregate Functions</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="url.html"
+                        title="previous chapter">URL Functions</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="../develop.html"
+                        title="next chapter">Developer Guide</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/functions/aggregate.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../develop.html" title="Developer Guide"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="url.html" title="URL Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregate Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

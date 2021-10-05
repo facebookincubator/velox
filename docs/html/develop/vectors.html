@@ -1,0 +1,635 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Vectors &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="How to add a scalar function?" href="scalar-functions.html" />
+    <link rel="prev" title="Developer Guide" href="../develop.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="scalar-functions.html" title="How to add a scalar function?"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../develop.html" title="Developer Guide"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Vectors</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="vectors">
+<h1>Vectors<a class="headerlink" href="#vectors" title="Permalink to this headline">¶</a></h1>
+<p>Velox vectors is columnar in-memory format for storing query data during
+execution. It is similar to Arrow, but features more encodings and different
+layout for strings, arrays and maps which support out-of-order writes. Vectors
+form the very foundation of the Velox library.</p>
+<p>Velox vectors support scalar and complex types and come in a few different
+encodings.</p>
+<p>Supported encodings are:</p>
+<ul class="simple">
+<li><p>Flat</p></li>
+<li><p>Constant</p></li>
+<li><p>Dictionary</p></li>
+<li><p>Bias</p></li>
+<li><p>Sequence</p></li>
+</ul>
+<p>In this guide we’ll discuss flat, constant and dictionary encoding. Bias and
+sequence encodings are not in scope for this guide.</p>
+<p>Supported types are:</p>
+<ul class="simple">
+<li><p>Scalar types:</p>
+<ul>
+<li><p>BOOLEAN</p></li>
+<li><p>TINYINT</p></li>
+<li><p>SMALLINT</p></li>
+<li><p>INTEGER</p></li>
+<li><p>BIGINT</p></li>
+<li><p>TIMESTAMP</p></li>
+<li><p>REAL</p></li>
+<li><p>DOUBLE</p></li>
+<li><p>VARCHAR</p></li>
+<li><p>VARBINARY</p></li>
+<li><p>OPAQUE*</p></li>
+</ul>
+</li>
+<li><p>Complex types:</p>
+<ul>
+<li><p>ARRAY</p></li>
+<li><p>MAP</p></li>
+<li><p>ROW</p></li>
+</ul>
+</li>
+</ul>
+<p>(*) Opaque type is mentioned here for completeness. This guide will not discuss
+it.</p>
+<p>A single vector represents multiple rows of a single column. RowVector is used
+to represent a set of rows for multiple columns as well as a set of rows for a
+single column of type struct.</p>
+<p>Each vector has a type, encoding and size. Vector size is the number of rows
+stored in the vector. Flat, constant and dictionary encodings can be combined
+with any type.</p>
+<section id="buffers">
+<h2>Buffers<a class="headerlink" href="#buffers" title="Permalink to this headline">¶</a></h2>
+<p>Vector data is stored in memory using one or more buffers. A buffer is a
+contiguous range of bytes. Buffers are reference counted and must be held by
+BufferPtr. Buffers can either own their memory or represent a view into
+externally managed memory (BufferView). A buffer that owns its memory
+(AlignedBuffer) allocates memory from a MemoryPool. Such a buffer can be in a
+mutable state if there is a single reference to it, e.g. the buffer is uniquely
+referenced. If there are multiple references to a buffer, the buffer is
+read-only.</p>
+<p>Buffers themselves are not typed, but they provide type-specific convenience
+methods.</p>
+<p>AlignedBuffer::allocate&lt;T&gt;(size, pool) static method allocates a buffer that can
+hold at least ‘size’ values of type T from the MemoryPool.</p>
+<p>To allocate a buffer to store 100 64-bit integers:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The resulting buffer is at least sizeof(int64_t) * 100 = 800 bytes long. You can
+access the raw buffer for reading via as&lt;T&gt;() template method and for writing
+using asMutable&lt;T&gt;() template method:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read-only access.</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">// Read-write access.</span>
+<span class="kt">int64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawValues</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">values</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>To allocate a buffer to store 100 boolean flags:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">flags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AlignedBuffer</span><span class="o">::</span><span class="n">allocate</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The resulting buffer will be at least 100 / 8 = 13 bytes long (Velox uses just 1
+bit for each boolean flag). Unlike other types, boolean values cannot be
+accessed individually via a bool pointer. Instead, you interpret the buffer as
+a contiguous array of unsigned 64-bit integers and access individual values
+using helper methods from the “bits” namespace.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read-only access.</span>
+<span class="k">const</span><span class="w"> </span><span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">// Check if flag # 12 is set.</span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitSet</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Read-write access.</span>
+<span class="kt">uint64_t</span><span class="o">*</span><span class="w"> </span><span class="n">rawFlags</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">flags</span><span class="o">-&gt;</span><span class="n">asMutable</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+
+<span class="c1">// Set flag 15 to true/on.</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// or</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Set flag 16 to false/off.</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">clearBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// or</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setBit</span><span class="p">(</span><span class="n">rawFlags</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Since buffers are not typed, the size of the buffer reflects the number of bytes
+in the buffer, not the number of values.</p>
+</section>
+<section id="null-flags">
+<h2>Null Flags<a class="headerlink" href="#null-flags" title="Permalink to this headline">¶</a></h2>
+<p>Each vector contains an optional set of null flags which identify rows with null
+values. If there are no null values in a given vector, null flags may not be
+present. Null flags are bit-packed into an array of 64-bit unsigned integers.
+Zero indicates a null value. One indicates a non-null value.
+(This counterintuitive choice is motivated by compatibility with Arrow.)</p>
+<p>In the following diagram positions 2, 7 and 11 are null.</p>
+<a class="reference internal image-reference" href="../_images/nulls.png"><img alt="../_images/nulls.png" class="align-center" src="../_images/nulls.png" style="width: 100px;" /></a>
+<p>BaseVector is a base class for all kinds of vectors. It contains the type of
+values stored in the vector, e.g. INTEGER vs. VARCHAR, nulls buffer, and number
+of rows in the vector.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">type_</span><span class="p">;</span><span class="w"></span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">nulls_</span><span class="p">;</span><span class="w"></span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">length_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Vectors are always held by std::shared_ptr using the VectorPtr alias.</p>
+<p>using VectorPtr = std::shared_ptr&lt;BaseVector&gt;;</p>
+<p>The “bits” namespace contains a number of convenience functions for working with
+a nulls buffer.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Check if position #12 is null.</span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">isNull</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bits</span><span class="o">::</span><span class="n">isBitNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Set position #12 to null.</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Set position #12 to non-null.</span>
+<span class="n">bits</span><span class="o">::</span><span class="n">clearNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">);</span><span class="w"></span>
+<span class="n">bits</span><span class="o">::</span><span class="n">setNull</span><span class="p">(</span><span class="n">rawNulls</span><span class="p">,</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="flat-vectors-scalar-types">
+<h2>Flat Vectors - Scalar Types<a class="headerlink" href="#flat-vectors-scalar-types" title="Permalink to this headline">¶</a></h2>
+<p>Flat vectors of scalar types are represented using the FlatVector&lt;T&gt; template,
+where T is the type of values stored in the vector. These types are:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 19%" />
+<col style="width: 33%" />
+<col style="width: 48%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<th class="head"><p>C++ Type</p></th>
+<th class="head"><p>Bytes per Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>BOOLEAN</p></td>
+<td><p>bool</p></td>
+<td><p>0.125 (e.g. 1 bit)</p></td>
+</tr>
+<tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>int8_t</p></td>
+<td><p>1</p></td>
+</tr>
+<tr class="row-even"><td><p>SMALLINT</p></td>
+<td><p>int16_t</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>int32_t</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-even"><td><p>BIGINT</p></td>
+<td><p>int64_t</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-odd"><td><p>REAL</p></td>
+<td><p>float</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-even"><td><p>DOUBLE</p></td>
+<td><p>double</p></td>
+<td><p>8</p></td>
+</tr>
+<tr class="row-odd"><td><p>TIMESTAMP</p></td>
+<td><p>struct Timestamp</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-even"><td><p>VARCHAR</p></td>
+<td><p>struct StringView</p></td>
+<td><p>16</p></td>
+</tr>
+<tr class="row-odd"><td><p>VARBINARY</p></td>
+<td><p>struct StringView</p></td>
+<td><p>16</p></td>
+</tr>
+</tbody>
+</table>
+<p>FlatVector&lt;T&gt; contains a values buffer and in case of T = StringView one or more
+string buffers. Values buffer is a contiguous byte buffer with sizeof(T) bytes
+per value, including null values. The number of bytes per value is different
+for different types. Boolean values are bit-packed and use 1 byte per 8
+values.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">BufferPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stringBuffers_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>FlatVector&lt;T&gt; uses BaseVector as the base class and it gets the type, size and
+nulls buffer from it. Flat vectors like all other vectors are held by
+std::shared_ptr using the FlatVectorPtr alias.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">using</span><span class="w"> </span><span class="n">FlatVectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The following diagram shows a flat vector of type INTEGER with 11 values. This
+vector is represented as FlatVector&lt;int32_t&gt;. The <cite>values_</cite> buffer has space for
+at least 11 consecutive entries of 4 bytes each. Nulls buffer has space for at
+least 11 consecutive entries of 1 bit each.  Values in positions 2,7, 11 are
+null, e.g. bits 2, 7, 11 in <cite>nulls_</cite> buffer are 0. The rest of the bits in the
+<cite>nulls_</cite> buffer are 1. Entries 2, 7, 11 in <cite>values_</cite> buffer contain garbage.</p>
+<a class="reference internal image-reference" href="../_images/flat-vector.png"><img alt="../_images/flat-vector.png" class="align-center" src="../_images/flat-vector.png" style="width: 300px;" /></a>
+<p>All scalar values including strings are fixed-width, e.g. each value is stored
+in a fixed number of bytes. Since strings can be of variable length, the actual
+strings are stored in a set of string buffers that are separate from the values
+buffer. The values buffer stores 16-byte StringViews which consist of a 4-byte
+string size, 4-byte prefix and 8 byte pointer to the full string in one of the
+string buffers. Short strings, up to 12 characters, are stored completely
+within the StringView struct. They occupy the space that’s overwise is taken by
+the prefix and the pointer.</p>
+<a class="reference internal image-reference" href="../_images/string-view-layout.png"><img alt="../_images/string-view-layout.png" class="align-center" src="../_images/string-view-layout.png" style="width: 300px;" /></a>
+<p>The following diagram illustrates the difference in in-memory representation of
+a long and short string. “Yellowstone national park” is a 25-characters long
+string which is too long to be inlined. Hence, StringView stores a 4-byte
+prefix “Yell” and a pointer to the whole string in a string buffer. The “heavy
+rain” string is only 10-characters long and therefore stored inlined in the
+StringView. Having prefixes of long strings stored in the StringView allows
+optimizing comparison operations.</p>
+<a class="reference internal image-reference" href="../_images/string-views.png"><img alt="../_images/string-views.png" class="align-center" src="../_images/string-views.png" style="width: 600px;" /></a>
+<p>Strings in the string buffers appear not necessarily in order and there can be
+gaps between individual strings. A single vector may use one or more string
+buffers.</p>
+<p>The following diagram shows a vector of type VARCHAR with 7 values. This vector
+is represented as FlatVector&lt;StringView&gt;. <cite>values_</cite> buffer has space for at least
+7 entries 16 bytes each. <cite>stringBuffers_</cite> array has one entry containing a
+concatenation of non-inlined strings. Each entry in <cite>values_</cite> buffer uses 4 bytes
+to store the size of the string.</p>
+<a class="reference internal image-reference" href="../_images/string-vector.png"><img alt="../_images/string-vector.png" class="align-center" src="../_images/string-vector.png" style="width: 700px;" /></a>
+<p>Fixed-width values allow for populating vectors out of order, e.g. writing value
+for row 5 before writing value for row 2. This is useful when evaluating
+conditional expressions.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Velox vector of any type (scalar or complex) can be written out of order.
+This is the main difference between the Velox vectors and Arrow arrays.</p>
+</div>
+<p>Allowing strings in the string buffers to appear out of order and with gaps
+between individual strings allows for zero-copy implementation of functions
+like substr and split. The results of these functions consist of substrings of
+the original strings and therefore can use StringViews which point to the same
+string buffers as the input vectors.</p>
+<p>A result of applying substr(s, 2) function to a vector shown above looks like
+this:</p>
+<a class="reference internal image-reference" href="../_images/substr-result.png"><img alt="../_images/substr-result.png" class="align-center" src="../_images/substr-result.png" style="width: 700px;" /></a>
+<p>This vector is using the same string buffer as the original one. It simply
+references it using std::shared_ptr. The individual StringView entries either
+contain strings inline or refer to positions in the original strings buffer.
+After applying substr(s, 2) function string in position 1 became short enough
+to fit inside the StringView, hence, it no longer contains a pointer to a
+position in the string buffer.</p>
+<p>Flat vectors of type TIMESTAMP are represented by FlatVector&lt;Timestamp&gt;.
+Timestamp struct consists of two 64-bit integers: seconds and nanoseconds. Each
+entry uses 16 bytes.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">int64_t</span><span class="w"> </span><span class="n">seconds_</span><span class="p">;</span><span class="w"></span>
+<span class="kt">uint64_t</span><span class="w"> </span><span class="n">nanos_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="constant-vector-scalar-types">
+<h2>Constant Vector - Scalar Types<a class="headerlink" href="#constant-vector-scalar-types" title="Permalink to this headline">¶</a></h2>
+<p>Constant vectors are represented using ConstantVector&lt;T&gt; template which contains
+a value and a boolean indicating whether the value is null or not. It may
+contain a string buffer if T = StringView and the string is longer than 12
+characters.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">T</span><span class="w"> </span><span class="n">value_</span><span class="p">;</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">isNull_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">stringBuffer_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>BaseVector::wrapInConstant() static method can be used to create a constant
+vector from a scalar value.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">createConstant</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">variant</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">velox</span><span class="o">::</span><span class="n">memory</span><span class="o">::</span><span class="n">MemoryPool</span><span class="o">*</span><span class="w"> </span><span class="n">pool</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="dictionary-vector-scalar-types">
+<h2>Dictionary Vector - Scalar Types<a class="headerlink" href="#dictionary-vector-scalar-types" title="Permalink to this headline">¶</a></h2>
+<p>Dictionary encoding is used to compactly represent vectors with lots of
+duplicate values as well as a result of a filter or filter-like operation
+without copying the data. Dictionary encoding can also be used to represent a
+result of a sorting operation without copying the data.</p>
+<p>Dictionary vectors of scalar types are represented by the DictionaryVector&lt;T&gt;
+template. Dictionary vectors contain a shared pointer to a base vector which
+may or may not be flat and a buffer of indices into the base vector. Indices
+are 32-bit integers.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">indices_</span><span class="p">;</span><span class="w"></span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">dictionaryValues_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here is a dictionary vector of type VARCHAR that represents colors. The base
+vector contains just 5 entries: red, blue, yellow, pink, purple and golden. The
+dictionary vector contains a std::shared_ptr to the base vector plus a buffer
+of indices into that vector. Each entry in the dictionary vector points to an
+entry in the base vector. Entries 0 and 2 both point to entry 0 in the base
+vector which contains “red”. Entries 1, 4, 5, 10 point to the same but
+different entry 1 which contains “blue”. This encoding avoids copying the
+duplicate strings.</p>
+<a class="reference internal image-reference" href="../_images/dictionary-repeated2.png"><img alt="../_images/dictionary-repeated2.png" class="align-center" src="../_images/dictionary-repeated2.png" style="width: 500px;" /></a>
+<p>Multiple dictionary vectors can refer to the same base vector. We are saying
+that the dictionary vector wraps the base vector.</p>
+<p>Here is a dictionary of type INTEGER that represents a result of a filter: n % 2
+= 0. The base vector contains 11 entries. Only 5 of these entries passed the
+filter, hence, the size of the dictionary vector is 5. The indices buffer
+contains 5 entries referring to positions in the original vector that passed
+the filter.</p>
+<a class="reference internal image-reference" href="../_images/dictionary-subset2.png"><img alt="../_images/dictionary-subset2.png" class="align-center" src="../_images/dictionary-subset2.png" style="width: 500px;" /></a>
+<p>When filter or filter-like operation applies to multiple columns, the results
+can be represented as multiple dictionary vectors all sharing the same indices
+buffer. This allows to reduce the amount of memory needed for the indices
+buffers and enables efficient expression evaluation via peeling of shared
+dictionaries.</p>
+<p>Dictionary encoding is used to represent the results of a join, where probe side
+columns are wrapped into dictionaries to avoid duplicating the rows with
+multiple matches in the build side. Dictionary encoding is also used to
+represent the results of an unnest.</p>
+<p>Dictionary vector can wrap any other vector including another dictionary.
+Therefore, it is possible to have multiple layers of dictionaries on top of a
+single vector, e.g. Dict(Dict(Dict(Flat))).</p>
+<p>BaseVector::wrapInDictionary() static method can be used to wrap any given
+vector in a dictionary.</p>
+<blockquote>
+<div><dl class="simple">
+<dt>static std::shared_ptr&lt;BaseVector&gt; wrapInDictionary(</dt><dd><p>BufferPtr nulls,
+BufferPtr indices,
+vector_size_t size,
+std::shared_ptr&lt;BaseVector&gt; vector);</p>
+</dd>
+</dl>
+</div></blockquote>
+<p><strong>wrappedVector()</strong> virtual method defined in BaseVector provides access to the
+innermost vector of a dictionary, e.g. Dict(Dict(Flat))-&gt;wrappedVector() return
+Flat.</p>
+<p><strong>wrappedIndex(index)</strong> virtual method defined in BaseVector translates index into
+the dictionary vector into an index into the innermost vector, e.g.
+wrappedIndex(3) returns 6 for the dictionary vector above.</p>
+<p>Dictionary vector has its own nulls buffer independent of the nulls buffer of
+the base vector. This allows a dictionary vector to represent null values even
+if the base vector has no nulls. We say that “dictionary wrapping adds nulls”
+to the base vector.</p>
+<p>Here is an example. Entry #4 in the dictionary is marked as null. Corresponding
+entry in the indices buffer contains garbage and should not be accessed.</p>
+<a class="reference internal image-reference" href="../_images/dictionary-with-nulls.png"><img alt="../_images/dictionary-with-nulls.png" class="align-center" src="../_images/dictionary-with-nulls.png" style="width: 500px;" /></a>
+</section>
+<section id="flat-vectors-complex-types">
+<h2>Flat Vectors - Complex Types<a class="headerlink" href="#flat-vectors-complex-types" title="Permalink to this headline">¶</a></h2>
+<section id="arrays">
+<h3>Arrays<a class="headerlink" href="#arrays" title="Permalink to this headline">¶</a></h3>
+<p>Flat vectors of complex types ARRAY, MAP and ROW / STRUCT are represented using
+ArrayVector, MapVector and RowVector.</p>
+<p>ArrayVector stores values of type ARRAY. In addition to nulls buffer, it
+contains offsets and sizes buffers and an elements vector. Offsets and sizes
+are 32-bit integers.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span><span class="w"></span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span><span class="w"></span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">elements_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Elements vector contains all the individual elements of all the arrays. Elements
+from a specific array appear next to each other in order. Each array entry
+contains an offset and size. Offset points to the first element of the array in
+the elements vector. Size specifies the number of elements in the array.</p>
+<p>Here is an example.</p>
+<a class="reference internal image-reference" href="../_images/array-vector.png"><img alt="../_images/array-vector.png" class="align-center" src="../_images/array-vector.png" style="width: 400px;" /></a>
+<p>We refer to the array vector as a top-level vector and elements vector as a
+nested or inner vector. In the example above, the top-level array has 4
+top-level rows and the elements array has 11 nested rows. First 3 nested rows
+correspond to the 0th top-level row. Next 2 nested rows correspond to the 1st
+top-level row. The following 4 nested rows correspond to the 2nd top-level row.
+The remaining 2 nested rows correspond to the 3rd top-level row.</p>
+<p>The values in the elements vector may not appear in the same order as in the
+array vector. Here is an example of an alternative layout for the same logical
+array vector. Here, the values in the elements array appear in a different
+order, e.g. first come the elements of the 0th top-level row, followed by the
+elements of the 2nd top-level row, followed by the elements of the 1st
+top-level rows, followed by the element of the 3rd top-level row. The offsets
+are adjusted to point to the right entry in the elements array. The sizes are
+unchanged.</p>
+<a class="reference internal image-reference" href="../_images/array-out-of-order.png"><img alt="../_images/array-out-of-order.png" class="align-center" src="../_images/array-out-of-order.png" style="width: 400px;" /></a>
+<p>Having both offsets and sizes allows to write array vectors out of order, e.g.
+write entry 5 before writing entry 3.</p>
+<p>Empty arrays are specified by setting size to zero. The offset for empty arrays
+is considered undefined and can be any value. Consider using zero for the
+offset of an empty array.</p>
+<p>Null array and empty array are not the same.</p>
+<p>Elements vector may have a nulls buffer independent of the nulls buffer of the
+array vector itself. This allows us to specify non-null arrays with some or all
+null elements. Null array and array of all null elements are not the same.</p>
+</section>
+<section id="maps">
+<h3>Maps<a class="headerlink" href="#maps" title="Permalink to this headline">¶</a></h3>
+<p>MapVector stores values of type MAP. In addition to nulls buffer, it contains
+offsets and sizes buffers, keys and values vectors. Offsets and sizes are
+32-bit integers.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">offsets_</span><span class="p">;</span><span class="w"></span>
+<span class="n">BufferPtr</span><span class="w"> </span><span class="n">sizes_</span><span class="p">;</span><span class="w"></span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">keys_</span><span class="p">;</span><span class="w"></span>
+<span class="n">VectorPtr</span><span class="w"> </span><span class="n">values_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here is an example.</p>
+<a class="reference internal image-reference" href="../_images/map-vector.png"><img alt="../_images/map-vector.png" class="align-center" src="../_images/map-vector.png" style="width: 700px;" /></a>
+<p>Similarly to the array vector, individual map entries appear in the keys and
+values vector together in order. However, map entries for the top-level map #4
+do not need to appear just before the map entries for the top-level map #5.</p>
+<p>Empty maps are specified by setting size to zero. The offset for an empty map is
+considered undefined and can be any value. Consider using zero for the offset
+of an empty map.</p>
+<p>Null map and empty map are not the same.</p>
+<p>Keys and values vectors may have nulls buffer independent of each other and of
+the nulls buffer of the map vector itself. This allows us to specify non-null
+maps with some or all values being null. Technically speaking a map may have a
+null key as well, although this may not be very useful in practice. Null map
+and a map with all values being null are not the same.</p>
+<p>Map vector layout does not guarantee or require that keys of individual maps are
+unique. However, in practice, places which create maps, e.g. ORC and Parquet
+readers, <a class="reference internal" href="../functions/map.html#id0" title="map"><code class="xref py py-func docutils literal notranslate"><span class="pre">map()</span></code></a> function, etc., ensure that map keys are unique.</p>
+</section>
+<section id="structs">
+<h3>Structs<a class="headerlink" href="#structs" title="Permalink to this headline">¶</a></h3>
+<p>Finally, RowVector stores values of type ROW (e.g. structs). In addition to the
+nulls buffer, it contains a list of child vectors.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">children_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here is an example.</p>
+<a class="reference internal image-reference" href="../_images/row-vector.png"><img alt="../_images/row-vector.png" class="align-center" src="../_images/row-vector.png" style="width: 700px;" /></a>
+<p>ROW vectors can have any number of child vectors, including zero.</p>
+<p>For each top-level row in the ROW vector there is exactly one row in each of the
+child vectors.</p>
+<p>Child vectors may include nulls buffers of their own, therefore, it is possible
+to have a non-null top-level struct value with some or all child fields being
+null. A null struct is not the same as a struct with all its fields being null.
+Values of child fields for rows where the top-level struct is null are
+undefined.</p>
+<p>RowVector is used to represent a single column of type struct as well as a
+collection of columns that are being passed from one operator to the next
+during query execution.</p>
+</section>
+</section>
+<section id="constant-vector-complex-types">
+<h2>Constant Vector - Complex Types<a class="headerlink" href="#constant-vector-complex-types" title="Permalink to this headline">¶</a></h2>
+<p>Constant vectors of complex types are represented by
+ConstantVector&lt;ComplexType&gt;, where ComplexType is a special marker type that is
+used for all complex types. Constant vector of type ARRAY(INTEGER) and constant
+vector of type MAP(TINYINT, VARCHAR) as represented by the same class:
+ConstantVector&lt;ComplexType&gt;.</p>
+<p>ConstantVector&lt;ComplexType&gt; identifies a specific complex type value by pointing
+to a particular row in another vector.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">valueVector_</span><span class="p">;</span><span class="w"></span>
+<span class="n">vector_size_t</span><span class="w"> </span><span class="n">index_</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The following diagram shows a complex vector of type ARRAY(INTEGER) representing
+an array of 3 integers: [10, 12, -1, 0]. It is defined as a pointer to row 2 in
+some other ArrayVector.</p>
+<a class="reference internal image-reference" href="../_images/constant-array-vector.png"><img alt="../_images/constant-array-vector.png" class="align-center" src="../_images/constant-array-vector.png" style="width: 800px;" /></a>
+<p>Use BaseVector::wrapInConstant() static method to create a constant vector of
+complex type. Any vector can be wrapped in a constant vector. When you use
+wrapInConstant() with a non-flat vector, the resulting constant vector ends up
+referring to the innermost vector, e.g. wrapInConstant(100, 5, Dict
+(Flat)) returns ConstantVector&lt;ComplexType&gt;(100, Dict-&gt;wrappedIndex(5), Flat).</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">wrapInConstant</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">length</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">index</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">BaseVector</span><span class="o">&gt;</span><span class="w"> </span><span class="n">vector</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p><strong>wrappedVector()</strong> virtual method defined in BaseVector provides access to the
+underlying flat vector.</p>
+<p><strong>wrappedIndex(index)</strong> virtual method defined in BaseVector returns the index into
+the underlying flat vector that identifies the constant value. This method
+returns the same value for all inputs as all rows of the constant vector map to
+the same row of the underlying flat vector.</p>
+</section>
+<section id="dictionary-vector-complex-types">
+<h2>Dictionary Vector - Complex Types<a class="headerlink" href="#dictionary-vector-complex-types" title="Permalink to this headline">¶</a></h2>
+<p>Similarly to constant vectors, dictionary vectors of complex types are
+represented by DictionaryVector&lt;ComplexType&gt;, where ComplexType is a special
+marker type that is used for all complex types. Dictionary vector of type ARRAY
+(INTEGER) and dictionary vector of type MAP(TINYINT, VARCHAR) as represented by
+the same class: DictionaryVector&lt;ComplexType&gt;. Otherwise, dictionary vectors of
+complex types are no different than dictionary vectors of scalar types.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Vectors</a><ul>
+<li><a class="reference internal" href="#buffers">Buffers</a></li>
+<li><a class="reference internal" href="#null-flags">Null Flags</a></li>
+<li><a class="reference internal" href="#flat-vectors-scalar-types">Flat Vectors - Scalar Types</a></li>
+<li><a class="reference internal" href="#constant-vector-scalar-types">Constant Vector - Scalar Types</a></li>
+<li><a class="reference internal" href="#dictionary-vector-scalar-types">Dictionary Vector - Scalar Types</a></li>
+<li><a class="reference internal" href="#flat-vectors-complex-types">Flat Vectors - Complex Types</a><ul>
+<li><a class="reference internal" href="#arrays">Arrays</a></li>
+<li><a class="reference internal" href="#maps">Maps</a></li>
+<li><a class="reference internal" href="#structs">Structs</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#constant-vector-complex-types">Constant Vector - Complex Types</a></li>
+<li><a class="reference internal" href="#dictionary-vector-complex-types">Dictionary Vector - Complex Types</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="../develop.html"
+                        title="previous chapter">Developer Guide</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="scalar-functions.html"
+                        title="next chapter">How to add a scalar function?</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/vectors.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="scalar-functions.html" title="How to add a scalar function?"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../develop.html" title="Developer Guide"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Vectors</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

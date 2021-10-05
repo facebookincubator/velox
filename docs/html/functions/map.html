@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Map Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Regular Expression Functions" href="regexp.html" />
+    <link rel="prev" title="Array Functions" href="array.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="regexp.html" title="Regular Expression Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="array.html" title="Array Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Map Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="map-functions">
+<h1>Map Functions<a class="headerlink" href="#map-functions" title="Permalink to this headline">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><p>Returns the cardinality (size) of the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">element_at</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span></dt>
+<dd><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>, or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> if the key is not contained in the map.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map">
+<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">map&lt;unknown,</span> <span class="pre">unknown&gt;</span></span></span><a class="headerlink" href="#map" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an empty map.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">();</span> <span class="o">--</span> <span class="p">{}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">map</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(K)</span></em>, <em class="sig-param"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V</span></em><span class="sig-paren">)</span><a class="headerlink" href="#id0" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns a map created using the given key/value arrays.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="nb">map</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">4</span><span class="p">]);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">1</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>See also <a class="reference internal" href="aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> for creating a map as an aggregation.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_entries">
+<span class="sig-name descname"><span class="pre">map_entries</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(row(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_entries" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an array of all entries in the given map.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_entries</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;x&#39;</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">]));</span> <span class="o">--</span> <span class="p">[</span><span class="n">ROW</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;x&#39;</span><span class="p">),</span> <span class="n">ROW</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s1">&#39;y&#39;</span><span class="p">)]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_concat">
+<span class="sig-name descname"><span class="pre">map_concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map1(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">map2(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">...</span></em>, <em class="sig-param"><span class="pre">mapN(K</span></em>, <em class="sig-param"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V</span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_concat" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the union of all the given maps. If a key is found in multiple given maps,
+that key’s value in the resulting map comes from the last one of those maps.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_filter">
+<span class="sig-name descname"><span class="pre">map_filter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">function(K</span></em>, <em class="sig-param"><span class="pre">V</span></em>, <em class="sig-param"><span class="pre">boolean))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V</span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_filter" title="Permalink to this definition">¶</a></dt>
+<dd><p>Constructs a map from those entries of <code class="docutils literal notranslate"><span class="pre">map</span></code> for which <code class="docutils literal notranslate"><span class="pre">function</span></code> returns true:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_filter</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[],</span> <span class="n">ARRAY</span><span class="p">[]),</span> <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">true</span><span class="p">);</span> <span class="o">--</span> <span class="p">{}</span>
+<span class="n">SELECT</span> <span class="n">map_filter</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="n">NULL</span><span class="p">,</span> <span class="s1">&#39;c&#39;</span><span class="p">]),</span> <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">v</span> <span class="n">IS</span> <span class="n">NOT</span> <span class="n">NULL</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="mi">10</span> <span class="o">-&gt;</span> <span class="n">a</span><span class="p">,</span> <span class="mi">30</span> <span class="o">-&gt;</span> <span class="n">c</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">map_filter</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">[</span><span class="s1">&#39;k1&#39;</span><span class="p">,</span> <span class="s1">&#39;k2&#39;</span><span class="p">,</span> <span class="s1">&#39;k3&#39;</span><span class="p">],</span> <span class="n">ARRAY</span><span class="p">[</span><span class="mi">20</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">]),</span> <span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">v</span> <span class="o">&gt;</span> <span class="mi">10</span><span class="p">);</span> <span class="o">--</span> <span class="p">{</span><span class="n">k1</span> <span class="o">-&gt;</span> <span class="mi">20</span><span class="p">,</span> <span class="n">k3</span> <span class="o">-&gt;</span> <span class="mi">15</span><span class="p">}</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_keys">
+<span class="sig-name descname"><span class="pre">map_keys</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x(K</span></em>, <em class="sig-param"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(K</span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_keys" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns all the keys in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="map_values">
+<span class="sig-name descname"><span class="pre">map_values</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x(K</span></em>, <em class="sig-param"><span class="pre">V))</span> <span class="pre">-&gt;</span> <span class="pre">array(V</span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_values" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns all the values in the map <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="subscript">
+<span class="sig-name descname"><span class="pre">subscript</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">map(K</span></em>, <em class="sig-param"><span class="pre">V)</span></em>, <em class="sig-param"><span class="pre">key</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">V</span></span></span><a class="headerlink" href="#subscript" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns value for given <code class="docutils literal notranslate"><span class="pre">key</span></code>. Throws if the key is not contained in the map.
+Corresponds to SQL subscript operator [].</p>
+<p>SELECT name_to_age_map[‘Bob’] AS bob_age;</p>
+</dd></dl>
+
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="array.html"
+                        title="previous chapter">Array Functions</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="regexp.html"
+                        title="next chapter">Regular Expression Functions</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/functions/map.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="regexp.html" title="Regular Expression Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="array.html" title="Array Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Map Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

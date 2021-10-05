@@ -1,0 +1,443 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Expression Evaluation &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Dictionary Encoding" href="dictionary-encoding.html" />
+    <link rel="prev" title="How to add an aggregate function?" href="aggregate-functions.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="dictionary-encoding.html" title="Dictionary Encoding"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="aggregate-functions.html" title="How to add an aggregate function?"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Expression Evaluation</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="expression-evaluation">
+<h1>Expression Evaluation<a class="headerlink" href="#expression-evaluation" title="Permalink to this headline">¶</a></h1>
+<p>Velox features vectorized expression evaluation. It is used in FilterProject
+operator to evaluate filter and project expressions and in HiveConnector to
+evaluate the “remaining” filter expression. It can also be used standalone.</p>
+<p>Check <strong>velox/example/ExpressionEval.cpp</strong> for an example usage of the API.</p>
+<section id="expression-trees">
+<h2>Expression Trees<a class="headerlink" href="#expression-trees" title="Permalink to this headline">¶</a></h2>
+<p>Expression evaluation takes expression trees as input. Each node in the tree is
+a subclass of core::ITypedExpr which specifies return type and zero or more
+input expressions (child nodes in the tree). Each expression can be one of:</p>
+<ul class="simple">
+<li><p>FieldAccessTypedExpr</p></li>
+<li><p>ConstantTypedExpr</p></li>
+<li><p>CallTypedExpr</p></li>
+<li><p>CastTypedExpr</p></li>
+<li><p>LambdaTypedExpr</p></li>
+</ul>
+<p><strong>FieldAccessTypedExpr</strong> represents a column of the input RowVector. The column is
+identified by name. This is always a leaf node in the tree.</p>
+<p><strong>ConstantTypedExpr</strong> represents a constant value (or literal). This is always a
+leaf node in the tree.</p>
+<p><strong>CallTypedExpr</strong> represents a function call. A function is identified by name. The
+input expressions specify the number and types of arguments for the function
+which allows to identify a specific function implementation unambiguously. The
+function could be a simple function or vectorized function.</p>
+<p><strong>CallTypedExpr</strong> can also represent a special form by specifying one of the
+predefined names. These names cannot be used by simple or vector functions.</p>
+<dl>
+<dt>and</dt><dd><p>AND expression. Takes 2 or more input expressions of type boolean. Returns
+true if all inputs are true, false if at least one input is false, null
+otherwise.</p>
+<p>If some input generates an error for a row on which another input returns
+false, the error is suppressed.</p>
+</dd>
+<dt>or</dt><dd><p>OR expression. Takes 2 or more input expressions of type boolean. Returns
+true if at least one input is true, false if all inputs are false, null
+otherwise.</p>
+<p>If some input generates an error for a row on which another input returns
+true, the error is suppressed.</p>
+</dd>
+<dt>if</dt><dd><p>IF expression. Takes 2 or 3 input expressions: a boolean condition; then
+clause; optional else clause.</p>
+<p>When the else clause is not specified, the expression returns null for rows
+which do not pass the condition. When the else clause is specified, its
+return type must be the same as the return type of the then clause.</p>
+</dd>
+<dt>switch</dt><dd><p>SWITCH expression represents a generalization of the IF expression. It takes
+one or more (condition, then clause) pairs and an optional else clause.</p>
+<p>When the else clause is not specified, the expression returns null for rows
+which do not pass any of the conditions.</p>
+<p>The return types of all the then clauses and the else clause must be the
+same.</p>
+</dd>
+<dt>cast</dt><dd><p>CAST expression. Takes a single input expression. The result type determines
+the target type for the cast.</p>
+</dd>
+<dt>try</dt><dd><p>TRY expression. Takes a single input expression.</p>
+<p>Handles errors generated by the input expression by returning nulls for the
+corresponding rows.</p>
+</dd>
+</dl>
+<p>When evaluating AND and OR expressions, the engine adaptively reorders the
+conjuncts to evaluate the cheapest most decisive conjuncts first. E.g. the AND
+expression chooses to evaluate the cheapest conjunct that returns FALSE most
+often while the OR expression chooses to evaluate the cheapest conjunct that
+returns TRUE most often.</p>
+<p>The error suppression logic in the AND and OR expressions is designed to deliver
+consistent results regardless of the order of the conjuncts.</p>
+<p><strong>CastTypedExpr</strong> - Same as CAST expression above.</p>
+<p><strong>LambdaTypedExpr</strong> represents a lambda expression specified by input types
+(signature of the lambda) and an expression (body of the lambda). This is
+always a leaf node in the tree.</p>
+</section>
+<section id="id1">
+<h2>Expression Evaluation<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
+<p>Expression evaluation is broken down into two steps: compilation and evaluation.
+Compilation step takes a list of expressions in the form of core::ITypedExpr
+trees and produces a list of executable expressions in the form of exec::Expr
+trees. Evaluation takes input data as a RowVector, evaluates compiled
+expressions and returns the results. The evaluation step can be repeated as
+many times as needed to process all the data.</p>
+<section id="compilation">
+<h3>Compilation<a class="headerlink" href="#compilation" title="Permalink to this headline">¶</a></h3>
+<p>To compile an expression, one creates an instance of exec::ExprSet. ExprSet’s
+constructor takes a list of expressions (core::ITypedExpr pointing to the root
+of the expression tree) and a context (core::ExecCtx). The constructor
+processes the expressions and creates trees of exec::Expr class instances.</p>
+<p>ExprSet accepts multiple expressions and identifies common subexpressions across
+all of them so that they can be calculated just once. FilterProject operator
+benefits from this capability as it creates a single ExprSet for all of the
+filter and project expressions.</p>
+<p>Each node in the expression tree is transformed to a corresponding instance of
+the exec::Expr class.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 74%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>core::ITypedExpr node</p></th>
+<th class="head"><p>exec::Expr instance</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>FieldAccessTypedExpr</p></td>
+<td><p>FieldReference</p></td>
+</tr>
+<tr class="row-odd"><td><p>ConstantTypedExpr</p></td>
+<td><p>ConstantExpr</p></td>
+</tr>
+<tr class="row-even"><td><p>CallTypedExpr</p></td>
+<td><ul class="simple">
+<li><p>Expr if function name points to a simple or vector function;</p></li>
+<li><p>CastExpr if function name is “cast”;</p></li>
+<li><p>ConjunctExpr if function name is “and” or “or”;</p></li>
+<li><p>SwitchExpr if function name is “if” or “switch”;</p></li>
+<li><p>TryExpr if function name is “try”;</p></li>
+</ul>
+</td>
+</tr>
+<tr class="row-odd"><td><p>CastTypedExpr</p></td>
+<td><p>CastExpr</p></td>
+</tr>
+<tr class="row-even"><td><p>LambdaTypedExpr</p></td>
+<td><p>LambdaExpr</p></td>
+</tr>
+</tbody>
+</table>
+<p>CallTypedExpr nodes are processed to determine whether function names refer to
+special form expressions or functions (vectorized or simple). The lookup is
+performed in the following order and the search stops on the first match:</p>
+<ul class="simple">
+<li><p>Check if name matches one of special forms</p></li>
+<li><p>Check if name and signature (e.g. input types) matches one of simple functions</p></li>
+<li><p>Check if name matches one of vectorized functions</p></li>
+</ul>
+<p>The following diagram shows the expression tree for the <strong>strpos(upper
+(a), ‘FOO’) &gt; 0 OR strpos(upper(a), ‘BAR’) &gt; 0</strong> expression. Here, <strong>upper
+(a)</strong> is a common subexpression. It is represented by a single instance of Expr
+class which appears twice in the tree.</p>
+<a class="reference internal image-reference" href="../_images/cse.png"><img alt="../_images/cse.png" class="align-center" src="../_images/cse.png" style="width: 600px;" /></a>
+<section id="constant-folding">
+<h4>Constant Folding<a class="headerlink" href="#constant-folding" title="Permalink to this headline">¶</a></h4>
+<p>Once we have a tree of executable expressions (exec::Expr), ExprSet identifies
+deterministic subexpressions which do not depend on any columns, evaluates
+these and replaces them with a single constant expression. This optimization is
+called constant folding.</p>
+<p>For example, in the expression <strong>upper(a) &gt; upper(‘Foo’)</strong> subexpression <strong>upper
+(‘Foo’)</strong> is deterministic and doesn’t depend on any columns. It will be
+evaluated during compilation time and replaced by a single ConstantExpr
+node <strong>FOO</strong>.</p>
+<a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" /></a>
+</section>
+<section id="flatten-ands-and-ors">
+<h4>Flatten ANDs and ORs<a class="headerlink" href="#flatten-ands-and-ors" title="Permalink to this headline">¶</a></h4>
+<p>Adjacent AND nodes are consolidated into one. Similarly, adjacent OR nodes are
+consolidated into one. This maximizes the effect of adaptive conjunct
+reordering during execution of the AND and OR expressions.</p>
+<a class="reference internal image-reference" href="../_images/flatten-and.png"><img alt="../_images/flatten-and.png" class="align-center" src="../_images/flatten-and.png" style="width: 600px;" /></a>
+</section>
+<section id="expression-metadata">
+<h4>Expression Metadata<a class="headerlink" href="#expression-metadata" title="Permalink to this headline">¶</a></h4>
+<p>Executable expressions include a set of metadata that’s used during evaluation.
+This is calculated by Expr::computeMetadata() virtual methods and stored in
+member variables of the exec::Expr class.</p>
+<ul class="simple">
+<li><p><em>distinctFields_</em> - List of distinct input columns if different from the parent expression. This list is empty if the list of distinct input columns is the same as for the parent expression.</p></li>
+<li><p><em>propagatesNulls_</em> - Boolean indicating whether a null in any of the input columns causes this expression to always return null for the row.</p></li>
+<li><p><em>deterministic_</em> - Boolean indicating whether this expression and all its children are deterministic.</p></li>
+<li><p><em>hasConditionals_</em> - Boolean indicating whether this expression or any of its children is an IF, SWITCH, AND or OR expression.</p></li>
+<li><p><em>isMultiplyReferenced_</em> - Boolean indicating whether this is a common subexpression, e.g. a subexpression that appears more than once in the set of expressions managed by the ExprSet.</p></li>
+</ul>
+<p>Here is an example of <em>distinctFields_</em> for an expression <strong>strpos(upper
+(a), ‘FOO’) &gt; 0 OR strpos(upper(b), BAR) &gt; 0</strong>. Distinct fields for each
+expression are shown in brackets to the right of the expression node. OR node
+has 2 fields: a and b. Each of the greater then nodes have a single field: a or
+b. Nodes evaluating strpos and upper functions have an empty list of distinct
+fields because they depend on exactly the same columns as their parent nodes.
+The distinct fields metadata triggers peeling of encodings for the input data
+and allows to run whole subexpressions on a subset of unique values.</p>
+<a class="reference internal image-reference" href="../_images/distinct-fields.png"><img alt="../_images/distinct-fields.png" class="align-center" src="../_images/distinct-fields.png" style="width: 300px;" /></a>
+</section>
+</section>
+<section id="evaluation">
+<h3>Evaluation<a class="headerlink" href="#evaluation" title="Permalink to this headline">¶</a></h3>
+<p>An instance of ExprSet represents one or more executable expressions.
+ExprSet::eval() method can be invoked repeatedly to evaluate all or a subset of
+the expressions on multiple batches of data.</p>
+<p>FilterProject operator uses a single instance of the ExprSet for all of the
+filter and project expressions. For each batch of input data, the operator
+first evaluates the filter expression on all input rows and then evaluates all
+of the project expressions on a subset of rows that passed the filter. If no
+rows passed the filter, the evaluation of project expressions is skipped.</p>
+<p>The input to ExprSet::eval() is EvalCtx which contains a RowVector representing
+the input data and a SelectivityVector which identifies a subset of rows for
+which to evaluate the expressions.</p>
+<section id="common-subexpressions-cses">
+<h4>Common SubExpressions (CSEs)<a class="headerlink" href="#common-subexpressions-cses" title="Permalink to this headline">¶</a></h4>
+<p>ExprSet::eval() calls Expr::eval() for individual expressions. Expr::eval
+() first checks if the expression is a deterministic common subexpression
+(<em>isMultiplyReferenced_</em> == true) and if so whether it has been evaluated
+already. If it was, the previously calculated results are returned and
+evaluation concludes.</p>
+<p>It is possible that the set of rows used in previous evaluation is less than the
+current set of rows. In this case, the evaluation proceeds to compute the
+expression for the missing rows. The results are combined with the previously
+computed values to produce a final result.</p>
+<p>Individual expressions recursively call Expr::eval() for the input expressions.
+This allows the common subexpression optimization to apply at any level of the
+tree, not just at the root.</p>
+</section>
+<section id="computing-on-distinct-values-only">
+<h4>Computing on Distinct Values Only<a class="headerlink" href="#computing-on-distinct-values-only" title="Permalink to this headline">¶</a></h4>
+<p>When inputs are dictionary encoded, deterministic expressions are calculated on
+distinct values only. This is achieved by examining input columns
+(<em>distinctFields_</em>) to identify shared dictionary wrappings, peeling off these
+wrappings to extract a set of inner vectors with a set of indices corresponding
+to the original rows, evaluating the expression on these inner vectors and
+wrapping the results into dictionary vectors using the original wrappings.</p>
+<p>One way to illustrate this mechanism is by considering an <strong>upper
+(color)</strong> expression over the “color” column that is dictionary encoded using a
+dictionary of 3 values: 0 - red, 1 - green, 2 - blue. Let’s say the dictionary
+vector has 1’000 entries. These are represented with an indices buffer of 1000
+values in the range of [0, 2] and an inner flat vector of size 3: [red, green,
+blue]. When evaluating <strong>upper(color)</strong> expression, Expr::peelEncodings
+() method is used to peel off a dictionary and produce a new set of inputs:
+inner flat vector or size 3 and a set of indices into that vector: [0, 1, 2].
+Then, “upper” function is applied to 3 values - [red, green, blue] - to produce
+another flat vector of size 3: [RED, GREEN, BLUE]. Finally, the result is
+wrapped in a dictionary vector using the original indices to produce a
+dictionary vector that represents 1000 color values in upper case.</p>
+<p>Peeling of encodings occurs at the highest node in the expression tree that
+depends on a given set of columns. This is achieved by applying peelEncodings
+method to <em>distinctFields_</em> which are populated only if the set of columns is
+different from the parent expression. E.g. in expression f(g(color)) dictionary
+encoding is peeled off at the very top of the expression tree and the whole
+expression is evaluated on just 3 distinct values.</p>
+</section>
+<section id="memoizing-the-dictionaries">
+<h4>Memoizing the Dictionaries<a class="headerlink" href="#memoizing-the-dictionaries" title="Permalink to this headline">¶</a></h4>
+<p>When input vectors come from TableScan we can have multiple batches of input
+dictionary vectors referencing the same base vector. A “color” column may have
+millions of rows that refer to the same base set of values: red, green, blue.
+In this case, each batch of input has a dictionary vector with the same base
+vector and different indices buffer. Expr::eval() remembers the results of
+evaluating the expression on the underlying base vector and re-uses these
+results for subsequent batches. For each new batch it just wraps the original
+results using indices buffer of the input vector. This logic is implemented in
+the Expr::evalWithMemo() method and applies only to deterministic expressions.</p>
+</section>
+<section id="handling-nulls">
+<h4>Handling Nulls<a class="headerlink" href="#handling-nulls" title="Permalink to this headline">¶</a></h4>
+<p>When an expression is propagating nulls (<em>propagatingNulls_</em> metadata described
+earlier), the expression is evaluated only on rows where no input is null and
+the results are updated to set nulls for rows with null inputs. Here, it comes
+in handy that DictionaryVector allows for adding nulls (e.g. DictionaryVector
+has a nulls buffer that is separate from the nulls buffer of the base vector).
+Thus nulls can be added efficiently regardless of whether the results of the
+expression evaluation are flat or dictionary encoded.</p>
+</section>
+<section id="evaluation-algorithm">
+<h4>Evaluation Algorithm<a class="headerlink" href="#evaluation-algorithm" title="Permalink to this headline">¶</a></h4>
+<p>Expression evaluation traverses the expression tree starting at the root in the
+depth-first order. For each node a sequence of operations is performed.</p>
+<a class="reference internal image-reference" href="../_images/expression-evaluation.png"><img alt="../_images/expression-evaluation.png" class="align-center" src="../_images/expression-evaluation.png" style="width: 800px;" /></a>
+<ol class="arabic simple">
+<li><p><strong>Expr::eval</strong> - entry point into the node evaluation. Check if the expression is a shared subexpression that has already been evaluated. If so, check if it was evaluated for all the necessary rows. If so, produce the result and terminate evaluation early. Otherwise, set the rows for evaluation to a subset of rows for which results are missing and proceed to next steps.</p></li>
+<li><p><strong>Expr::evalEncodings</strong> - If expression is deterministic and depends on fewer columns than its parent, try to peel off shared encodings of the input columns. If peeling is successful, replace input columns with corresponding inner vectors, update the set of rows for evaluation to corresponding rows in the inner vectors and store the peeled off wrappings for later use.</p></li>
+<li><p><strong>Expr::evalWithNulls</strong> - If expression propagates nulls, check input columns and identify rows where at least one input is null. Remove these rows from the set of rows for evaluation.</p></li>
+<li><p><strong>Expr::evalAll</strong> - The expression can be either a special form or a function call. If it is a special form, evaluate the expression by invoking Expr::evalSpecialForm(). If it is a function call, recursively evaluate all input expressions by calling Expr::eval() on the child nodes and produce input vectors. If the function has default null behavior, identify all rows where input vectors are null and remove these from the set of rows for evaluation. If the function is deterministic and input vectors are not flat, try to peel off encodings. If peeling is successful, replace input vectors with corresponding inner vectors, update the set of rows for evaluation to corresponding rows in the inner vectors and store the peeled off wrappings for later use. Evaluate the function by calling VectorFunction::apply(). Adjust the results by wrapping them using peeled encodings and by setting nulls on rows which were removed due to null inputs. NOTE: The handling of nulls and peeling of encodings in this step may seem to be duplicating the similar steps from Expr::evalEncodings and Expr::evalWithNulls. The difference is that Expr::evalEncodings and Expr::evalWithNulls are working with the input data provided for the whole expression tree while this step is working with the input vectors that were calculated by evaluating input expressions.</p></li>
+<li><p><strong>Finalize</strong> - Set nulls for rows that were removed from evaluation due to null inputs. If any encoding was peeled off, use it to wrap the result. If the expression is a shared subexpression and there is a partial result from prior evaluation, incorporate it into the final result, then save the result for future use.</p></li>
+</ol>
+</section>
+<section id="error-handling-in-and-or-try">
+<h4>Error Handling in AND, OR, TRY<a class="headerlink" href="#error-handling-in-and-or-try" title="Permalink to this headline">¶</a></h4>
+<p>When evaluating AND expression, If some input generates an error for a row on
+which another input returns false, the error is suppressed.</p>
+<p>When evaluating OR expression, If some input generates an error for a row on
+which another input returns true, the error is suppressed.</p>
+<p>The error suppression logic in the AND and OR expressions is designed to deliver
+consistent results regardless of the order of the conjuncts.</p>
+<p>TRY expression handles the exceptions by setting the result to null in the
+corresponding rows. Error handling in AND, OR and TRY expressions relies on all
+expressions and vector functions to properly support EvalCtx::throwOnError
+flag. When set to false, the expression and vector functions should not throw
+exceptions if a row’s data is invalid, but record the error by calling
+EvalCtx::setError(row, exception).</p>
+</section>
+<section id="adaptive-conjunct-reordering-in-and-and-or">
+<h4>Adaptive Conjunct Reordering in AND and OR<a class="headerlink" href="#adaptive-conjunct-reordering-in-and-and-or" title="Permalink to this headline">¶</a></h4>
+<p>AND and OR expressions use the same mechanism as Selective ORC Reader to track
+the performance of individual conjuncts and adaptively reorder these to
+evaluate conjuncts that drop most rows fastest first.</p>
+<p>The AND expression evaluates the cheapest conjunct that returns FALSE most often
+first while the OR expression evaluates the cheapest conjunct that returns TRUE
+most often first.</p>
+</section>
+<section id="evaluation-of-if-switch">
+<h4>Evaluation of IF, SWITCH<a class="headerlink" href="#evaluation-of-if-switch" title="Permalink to this headline">¶</a></h4>
+<p>SWITCH expression evaluation goes through the following steps:
+* Evaluate the first condition on all rows.
+* Evaluate the first “then” clause on a subset of rows where the first condition is true and produce a partially populated result vector.
+* Evaluate the second condition on rows where the first condition is not true.
+* Evaluate the second “then” clause on a subset of rows where the second condition. Pass the partially populated result vector to Expr::eval when evaluating the “then” clause and expect the expression to update the result vector with the calculated values for the specified rows while preserving the already calculated results.
+* Continue to process all the (condition, then clause) pairs. Terminate early if run out of rows.
+* Finally, evaluate the else clause for the remaining rows. If the else clause is not specified, set nulls for the remaining rows.</p>
+<p>SWITCH expression sets EvalCtx::isFinalSelection flag to false. The expressions
+are expected to use this flag to decide whether the partially populated result
+vector must be preserved or can be overwritten.</p>
+</section>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Expression Evaluation</a><ul>
+<li><a class="reference internal" href="#expression-trees">Expression Trees</a></li>
+<li><a class="reference internal" href="#id1">Expression Evaluation</a><ul>
+<li><a class="reference internal" href="#compilation">Compilation</a><ul>
+<li><a class="reference internal" href="#constant-folding">Constant Folding</a></li>
+<li><a class="reference internal" href="#flatten-ands-and-ors">Flatten ANDs and ORs</a></li>
+<li><a class="reference internal" href="#expression-metadata">Expression Metadata</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#evaluation">Evaluation</a><ul>
+<li><a class="reference internal" href="#common-subexpressions-cses">Common SubExpressions (CSEs)</a></li>
+<li><a class="reference internal" href="#computing-on-distinct-values-only">Computing on Distinct Values Only</a></li>
+<li><a class="reference internal" href="#memoizing-the-dictionaries">Memoizing the Dictionaries</a></li>
+<li><a class="reference internal" href="#handling-nulls">Handling Nulls</a></li>
+<li><a class="reference internal" href="#evaluation-algorithm">Evaluation Algorithm</a></li>
+<li><a class="reference internal" href="#error-handling-in-and-or-try">Error Handling in AND, OR, TRY</a></li>
+<li><a class="reference internal" href="#adaptive-conjunct-reordering-in-and-and-or">Adaptive Conjunct Reordering in AND and OR</a></li>
+<li><a class="reference internal" href="#evaluation-of-if-switch">Evaluation of IF, SWITCH</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="aggregate-functions.html"
+                        title="previous chapter">How to add an aggregate function?</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="dictionary-encoding.html"
+                        title="next chapter">Dictionary Encoding</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/expression-evaluation.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="dictionary-encoding.html" title="Dictionary Encoding"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="aggregate-functions.html" title="How to add an aggregate function?"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Expression Evaluation</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

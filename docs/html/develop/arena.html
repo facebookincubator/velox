@@ -1,0 +1,280 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Arena Allocation &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Joins" href="joins.html" />
+    <link rel="prev" title="Dictionary Encoding" href="dictionary-encoding.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="dictionary-encoding.html" title="Dictionary Encoding"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Arena Allocation</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="arena-allocation">
+<h1>Arena Allocation<a class="headerlink" href="#arena-allocation" title="Permalink to this headline">¶</a></h1>
+<p>exec::HashStringAllocator implements an arena backed by MappedMemory::Allocation
+and supports contiguous and non-contiguous allocations. It is used to store
+variable width accumulators for the aggregate functions, hash tables for joins
+and aggregations. It is also used to back byte streams used to serialize and
+deserialize shuffle data.</p>
+<p>This implementation is inspired by <a class="reference external" href="http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf">TLSF: a New Dynamic Memory Allocator for
+Real-Time Systems</a> paper and
+<a class="reference external" href="https://github.com/mattconte/tlsf">GitHub implementation</a>.</p>
+<p>If you want to implement aggregate functions with variable width accumulators,
+it would be helpful to understand the HashStringAllocator.</p>
+<section id="layout">
+<h2>Layout<a class="headerlink" href="#layout" title="Permalink to this headline">¶</a></h2>
+<p>Memory is allocated in standard size contiguous runs of 4KB pages. The available
+sizes are: 4, 8, 16, 32, 64, 128, 256 pages. The minimum run is 16KB = 4 pages
+of 4KB each. Individual blocks are then allocated from the page runs.</p>
+<a class="reference internal image-reference" href="../_images/arena-page-runs.png"><img alt="../_images/arena-page-runs.png" src="../_images/arena-page-runs.png" style="width: 600px;" /></a>
+<p>exec::HashStringAllocator writes a 4 bytes end marker (kArenaEnd) at the end of
+each page run. Blocks are allocated one after another. Each block starts with a
+4 bytes header which contains 1-bit flags and size. kFree bit indicates whether
+a block is free. kContinued indicates a block in a multi-part non-contiguous
+allocation. kPreviousFree indicates that a block immediately before this block
+is free,</p>
+<a class="reference internal image-reference" href="../_images/arena-block.png"><img alt="../_images/arena-block.png" src="../_images/arena-block.png" style="width: 600px;" /></a>
+<p>When blocks are freed, adjacent free blocks are coalesced into larger free
+blocks.</p>
+<p>Free blocks are organized into a circular doubly linked list. 6-byte pointers to
+next and previous free blocks are stored in 12 bytes immediately following the
+header. The size of the free block is stored in the header and also in the last
+4 bytes of the block.</p>
+<a class="reference internal image-reference" href="../_images/arena-free-block.png"><img alt="../_images/arena-free-block.png" src="../_images/arena-free-block.png" style="width: 800px;" /></a>
+<p>The size of the free block written at the end of the block is used to coalesce
+adjacent free blocks. When a block is freed, we check if the block immediately
+before is free using kPreviousFree bit. We find the size of the preceding free
+block by reading 4 bytes before the header of the current block. We then
+calculate the start of the preceding free block by subtracting its size and 4
+bytes for the header from the start of the current block. To coalesce the two
+blocks we calculate the combined size of the blocks and write it into the header
+of the first block. We also store the new size in the last 4 bytes of the second
+block. The next and previous links stored in CompactDoubleList do not need
+updating.</p>
+<p>Blocks in multi-part non-contiguous allocations use kContinued bit to indicate
+the presence of the “next” block and store the pointer to that block in the last
+8 bytes.</p>
+<a class="reference internal image-reference" href="../_images/arena-multipart-block.png"><img alt="../_images/arena-multipart-block.png" src="../_images/arena-multipart-block.png" style="width: 600px;" /></a>
+</section>
+<section id="api">
+<h2>API<a class="headerlink" href="#api" title="Permalink to this headline">¶</a></h2>
+<p>Allocate() and free() methods allocate and free continuous blocks of specified
+size. When the free() method is called on the first block in a multi-part
+non-contiguous allocation, it frees all the blocks in that allocation.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Allocates &#39;size&#39; contiguous bytes preceded by a Header. Returns</span>
+<span class="c1">// the address of Header.</span>
+<span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">allocate</span><span class="p">(</span><span class="kt">int32_t</span><span class="w"> </span><span class="n">size</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Adds the allocation of &#39;header&#39; and any extensions (if header has</span>
+<span class="c1">// kContinued set) to the free list.</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">free</span><span class="p">(</span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>StlAllocator, an allocator backed by HashStringAllocator that can be used with
+STL containers, is implemented using the above allocate() and free() methods.</p>
+<p>NewWrite(), extendWrite() and finishWrite() methods allow for serializing
+variable width data whose size is not known in advance using ByteStream. When
+using ByteStream, the underlying data may come from multiple non-contiguous
+blocks. ByteStream transparently manages allocation of additional blocks by
+calling HashStringAllocator::newRange() method.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets stream to write to this pool. The write can span multiple</span>
+<span class="c1">// non-contiguous runs. Each contiguous run will have at least</span>
+<span class="c1">// kMinContiguous bytes of contiguous space. finishWrite finalizes</span>
+<span class="c1">// the allocation information after the write is done.</span>
+<span class="c1">// Returns the position at the start of the allocated block.</span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">newWrite</span><span class="p">(</span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">preferredSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kMinContiguous</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Completes a write prepared with newWrite or</span>
+<span class="c1">// extendWrite. Up to &#39;numReserveBytes&#39; unused bytes, if available, are left</span>
+<span class="c1">// after the end of the write to accommodate another write. Returns the</span>
+<span class="c1">// position immediately after the last written byte.</span>
+<span class="n">Position</span><span class="w"> </span><span class="nf">finishWrite</span><span class="p">(</span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numReserveBytes</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Sets &#39;stream&#39; to write starting at &#39;position&#39;. If new ranges have to</span>
+<span class="c1">// be allocated when writing, headers will be updated accordingly.</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">extendWrite</span><span class="p">(</span><span class="n">Position</span><span class="w"> </span><span class="n">position</span><span class="p">,</span><span class="w"> </span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The prepareRead() method allows deserializing the data using ByteStream.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets &#39;stream&#39; to range over the data in the range of &#39;header&#39; and</span>
+<span class="c1">// possible continuation ranges.</span>
+<span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">prepareRead</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">Header</span><span class="o">*</span><span class="w"> </span><span class="n">FOLLY_NONNULL</span><span class="w"> </span><span class="n">header</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">ByteStream</span><span class="o">&amp;</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="examples-of-usage">
+<h2>Examples of Usage<a class="headerlink" href="#examples-of-usage" title="Permalink to this headline">¶</a></h2>
+<p>Variable-width accumulators of aggregate functions use HashStringAllocator to
+allocate memory.</p>
+<section id="singlevalueaccumulator">
+<h3>SingleValueAccumulator<a class="headerlink" href="#singlevalueaccumulator" title="Permalink to this headline">¶</a></h3>
+<p>SingleValueAccumulator used by <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions stores a single value of variable-width type, e.g. string, array, map or struct.</p>
+<p>To write the first value, the accumulator allocates a new block using newWrite()
+and stores the position to the start of the block in a member variable. When
+re-writing the value, the accumulator calls extendWrite() and provides the
+position to the start of the block. This way the data is re-written in-place.
+The accumulator calls finishWrite() after writing the value.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
+<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="c1">// ... write to the stream</span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Update the value</span>
+<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="c1">// ... write to the stream</span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The accumulator uses prepareRead() to read the data back using ByteStream.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">ByteStream</span><span class="w"> </span><span class="n">stream</span><span class="p">;</span><span class="w"></span>
+<span class="n">exec</span><span class="o">::</span><span class="n">HashStringAllocator</span><span class="o">::</span><span class="n">prepareRead</span><span class="p">(</span><span class="n">begin</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="c1">// … read from the stream</span>
+</pre></div>
+</div>
+</section>
+<section id="valuelist">
+<h3>ValueList<a class="headerlink" href="#valuelist" title="Permalink to this headline">¶</a></h3>
+<p>ValueList append-only accumulator used by <a class="reference internal" href="../functions/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a
+list of values. ValueListReader allows for copying the values from the ValueList
+into a flat Vector.</p>
+<p>This accumulator starts by allocating the first block using newWrite() and
+stores the position to the start of that first block. It also stores the
+position after the last write returned from the finishWrite() call. To append
+data, the accumulator calls entendWrite() with the position after the last
+write.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Write first value</span>
+<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">newWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="c1">// ... write to the stream</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">current</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Update the value</span>
+<span class="n">ByteStream</span><span class="w"> </span><span class="nf">stream</span><span class="p">(</span><span class="n">allocator</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">begin</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">allocator</span><span class="o">-&gt;</span><span class="n">extendWrite</span><span class="p">(</span><span class="n">current</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+<span class="c1">// ... write to the stream</span>
+<span class="n">allocator</span><span class="o">-&gt;</span><span class="n">finishWrite</span><span class="p">(</span><span class="n">stream</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="stlallocator">
+<h3>StlAllocator<a class="headerlink" href="#stlallocator" title="Permalink to this headline">¶</a></h3>
+<p>An StlAllocator defined in velox/exec/HashStringAllocator.h can be used to make
+STL containers (e.g. std::vector) backed by memory allocated via the
+HashStringAllocator. StlAllocator is not an accumulator itself, but can be used
+to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>
+and <a class="reference internal" href="../functions/aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">values</span><span class="p">{</span><span class="n">exec</span><span class="o">::</span><span class="n">StlAllocator</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">(</span><span class="n">allocator</span><span class="p">)};</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Arena Allocation</a><ul>
+<li><a class="reference internal" href="#layout">Layout</a></li>
+<li><a class="reference internal" href="#api">API</a></li>
+<li><a class="reference internal" href="#examples-of-usage">Examples of Usage</a><ul>
+<li><a class="reference internal" href="#singlevalueaccumulator">SingleValueAccumulator</a></li>
+<li><a class="reference internal" href="#valuelist">ValueList</a></li>
+<li><a class="reference internal" href="#stlallocator">StlAllocator</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="dictionary-encoding.html"
+                        title="previous chapter">Dictionary Encoding</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="joins.html"
+                        title="next chapter">Joins</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/arena.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="dictionary-encoding.html" title="Dictionary Encoding"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Arena Allocation</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>
