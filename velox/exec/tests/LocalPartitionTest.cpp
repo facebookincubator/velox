@@ -174,6 +174,51 @@ TEST_F(LocalPartitionTest, partition) {
   verifyExchangeSourceOperatorStats(task, 300);
 }
 
+TEST_F(LocalPartitionTest, singlePartition) {
+  auto makeVector = [&](int32_t val, size_t size) {
+    return makeFlatVector<int32_t>(size, [val](auto /* row */) { return val; });
+  };
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({makeVector(1, 100)}),
+      makeRowVector({makeVector(1, 0)}),
+      makeRowVector({makeVector(1, 100)}),
+  };
+
+  auto valuesNode = [&](int index) {
+    return PlanBuilder().values({vectors[index]}).planNode();
+  };
+
+  auto op = PlanBuilder(3)
+                .localPartition(
+                    {0},
+                    {
+                        valuesNode(0),
+                        valuesNode(1),
+                        valuesNode(2),
+                    })
+                .partialAggregation({}, {"sum(c0)"})
+                .planNode();
+
+  CursorParameters params;
+  params.planNode = op;
+  params.maxDrivers = 2;
+
+  auto noMoreSplits = false;
+  auto task = ::assertQuery(
+      params,
+      [&](exec::Task* task) {
+        if (noMoreSplits) {
+          return;
+        }
+        task->noMoreSplits("0");
+        noMoreSplits = true;
+      },
+      "SELECT 200 UNION ALL SELECT NULL",
+      duckDbQueryRunner_,
+      std::nullopt);
+  verifyExchangeSourceOperatorStats(task, 200);
+}
+
 TEST_F(LocalPartitionTest, maxBufferSizeGather) {
   std::vector<RowVectorPtr> vectors;
   for (auto i = 0; i < 21; i++) {
