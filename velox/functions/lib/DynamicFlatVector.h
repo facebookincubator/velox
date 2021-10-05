@@ -69,14 +69,16 @@ class DynamicFlatVector {
   }
 
   // Overwrite the string buffers associated with the elements array.
-  void setStringBuffers(std::vector<BufferPtr> buffers) {
-    static_assert(std::is_same_v<T, StringView>, "Only valid for strings.");
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setStringBuffers(std::vector<BufferPtr> buffers) {
     vector_->setStringBuffers(std::move(buffers));
   }
 
   // Overwrite the string buffers associated with the elements array.
-  void setStringBuffers(const BaseVector* source) {
-    static_assert(std::is_same_v<T, StringView>, "Only valid for strings.");
+  template <typename U = T>
+  typename std::enable_if<std::is_same<U, StringView>::value, void>::type
+  setStringBuffers(const BaseVector* source) {
     vector_->acquireSharedStringBuffers(source);
   }
 
