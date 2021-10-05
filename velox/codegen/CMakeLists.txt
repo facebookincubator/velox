@@ -19,6 +19,6 @@ else()
   target_link_libraries(velox_codegen velox_core velox_exec velox_expression
                         ${FOLLY_WITH_DEPENDENCIES})
 endif()
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

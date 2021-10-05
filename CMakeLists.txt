@@ -17,13 +17,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # set the project name
 project(velox)
 
-if((NOT DEFINED ENABLE_ALL_TESTS) OR (ENABLE_ALL_TESTS MATCHES "TRUE"))
-  message(STATUS "Enabling all tests")
-  set(ENABLE_ALL_TESTS True)
-else()
-  message(STATUS "Disabling all tests")
-  set(ENABLE_ALL_TESTS False)
-endif()
+option(VELOX_BUILD_TESTING "Enable Velox tests" ON)
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler

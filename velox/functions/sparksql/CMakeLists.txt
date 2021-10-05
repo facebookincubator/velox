@@ -30,6 +30,6 @@ target_link_libraries(velox_functions_spark velox_functions_lib
 set_property(TARGET velox_functions_spark PROPERTY JOB_POOL_COMPILE
                                                    high_memory_pool)
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

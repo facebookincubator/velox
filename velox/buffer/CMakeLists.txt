@@ -16,6 +16,6 @@ add_library(velox_buffer StringViewBufferHolder.cpp)
 
 target_link_libraries(velox_buffer ${FOLLY_WITH_DEPENDENCIES})
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

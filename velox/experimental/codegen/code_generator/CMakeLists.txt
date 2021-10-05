@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 add_library(velox_codegen_code_generator ExprCodeGenerator.cpp)

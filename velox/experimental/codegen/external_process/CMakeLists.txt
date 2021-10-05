@@ -13,6 +13,6 @@
 # limitations under the License.
 
 add_library(velox_codegen_external_process INTERFACE)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

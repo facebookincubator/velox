@@ -27,7 +27,7 @@ add_library(
 
 target_link_libraries(velox_vector velox_memory velox_type velox_encode)
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 add_subdirectory(benchmarks)

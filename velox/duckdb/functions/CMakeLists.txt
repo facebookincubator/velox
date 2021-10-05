@@ -16,6 +16,6 @@ add_library(velox_duckdb_functions DuckFunctions.cpp)
 target_link_libraries(velox_duckdb_functions velox_duckdb_conversion velox_core
                       velox_vector duckdb)
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

@@ -15,7 +15,7 @@
 add_subdirectory(common)
 add_subdirectory(proto)
 add_subdirectory(reader)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(test)
 endif()
 add_subdirectory(utils)

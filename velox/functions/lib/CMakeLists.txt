@@ -17,7 +17,7 @@ add_library(velox_functions_lib LambdaFunctionUtil.cpp Re2Functions.cpp)
 target_link_libraries(velox_functions_lib velox_vector ${RE2})
 
 add_subdirectory(string)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(benchmarks)
   add_subdirectory(tests)
 endif()

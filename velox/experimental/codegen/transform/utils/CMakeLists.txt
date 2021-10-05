@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_library(velox_transform_utils INTERFACE)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 target_compile_definitions(velox_transform_utils INTERFACE ENABLE_CONCEPTS=0

@@ -14,6 +14,6 @@
 
 add_library(velox_codegen_utils_timer INTERFACE)
 target_link_libraries(velox_codegen_utils_timer INTERFACE ${FMT})
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

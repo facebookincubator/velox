@@ -15,6 +15,6 @@
 add_library(velox_codegen_compiler_utils INTERFACE)
 add_dependencies(velox_codegen_compiler_utils velox_codegen_external_process
                  velox_codegen_proto)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

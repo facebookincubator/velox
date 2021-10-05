@@ -15,6 +15,6 @@ add_library(velox_presto_serializer PrestoSerializer.cpp)
 
 target_link_libraries(velox_presto_serializer velox_vector)
 
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

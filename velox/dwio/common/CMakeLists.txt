@@ -14,7 +14,7 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
-if(${ENABLE_ALL_TESTS})
+if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 add_library(
