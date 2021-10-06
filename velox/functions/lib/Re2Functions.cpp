@@ -368,13 +368,34 @@ class LikeConstantPattern final : public VectorFunction {
     // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
 
-    exec::LocalDecodedVector toSearch(context, *args[0], rows);
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
-    rows.applyToSelected([&](vector_size_t i) {
-      result.set(i, re2FullMatch(toSearch->valueAt<StringView>(i), re_));
-    });
+    BaseVector* toSearchVector = args[0].get();
+    auto toSearchEncoding = toSearchVector->encoding();
+    if (toSearchEncoding == VectorEncoding::Simple::FLAT) {
+      const StringView* rawtoSearchVector =
+              toSearchVector->as<FlatVector<StringView>>()->rawValues();
+      rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, re2FullMatch(rawtoSearchVector[i], re_));
+      });
+      return;
+    }
+
+    if (toSearchEncoding == VectorEncoding::Simple::CONSTANT) {
+      const StringView constToSearchString =
+              toSearchVector->as<ConstantVector<StringView>>()->valueAt(0);
+      bool likeValue = re2FullMatch(constToSearchString, re_);
+      rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, likeValue);
+      });
+      return;
+    }
+
+    // Since the likePattern and escapeChar (2nd and 3rd args) are both constants,
+    // so the first arg is expected to be either of flat or constant vector only.
+    // This code path is unreachable.
+    VELOX_UNREACHABLE();
   }
 
  private:
