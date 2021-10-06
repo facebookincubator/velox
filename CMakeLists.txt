@@ -20,7 +20,6 @@ project(velox)
 option(VELOX_BUILD_TESTING "Enable Velox tests" ON)
 option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 
-
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler
 if((NOT DEFINED CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
