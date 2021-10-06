@@ -375,26 +375,24 @@ class LikeConstantPattern final : public VectorFunction {
     auto toSearchEncoding = toSearchVector->encoding();
     if (toSearchEncoding == VectorEncoding::Simple::FLAT) {
       const StringView* rawtoSearchVector =
-              toSearchVector->as<FlatVector<StringView>>()->rawValues();
+          toSearchVector->as<FlatVector<StringView>>()->rawValues();
       rows.applyToSelected([&](vector_size_t i) {
-          result.set(i, re2FullMatch(rawtoSearchVector[i], re_));
+        result.set(i, re2FullMatch(rawtoSearchVector[i], re_));
       });
       return;
     }
 
     if (toSearchEncoding == VectorEncoding::Simple::CONSTANT) {
       const StringView constToSearchString =
-              toSearchVector->as<ConstantVector<StringView>>()->valueAt(0);
+          toSearchVector->as<ConstantVector<StringView>>()->valueAt(0);
       bool likeValue = re2FullMatch(constToSearchString, re_);
-      rows.applyToSelected([&](vector_size_t i) {
-          result.set(i, likeValue);
-      });
+      rows.applyToSelected([&](vector_size_t i) { result.set(i, likeValue); });
       return;
     }
 
-    // Since the likePattern and escapeChar (2nd and 3rd args) are both constants,
-    // so the first arg is expected to be either of flat or constant vector only.
-    // This code path is unreachable.
+    // Since the likePattern and escapeChar (2nd and 3rd args) are both
+    // constants, so the first arg is expected to be either of flat or constant
+    // vector only. This code path is unreachable.
     VELOX_UNREACHABLE();
   }
 
