@@ -378,8 +378,8 @@ operations.</p>
 </section>
 <section id="limitnode">
 <h3>LimitNode<a class="headerlink" href="#limitnode" title="Permalink to this headline">¶</a></h3>
-<p>The limit operation keeps up to a specified number of input rows and drops the
-rest.</p>
+<p>The limit operation skips a specified number of input rows and then keeps up to a
+specified number of rows and drops the rest.</p>
 <table class="colwidths-given docutils align-left">
 <colgroup>
 <col style="width: 25%" />
@@ -391,10 +391,13 @@ rest.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>count</p></td>
+<tr class="row-even"><td><p>offset</p></td>
+<td><p>Number of rows of input to skip.</p></td>
+</tr>
+<tr class="row-odd"><td><p>count</p></td>
 <td><p>Maximum number of rows to return.</p></td>
 </tr>
-<tr class="row-odd"><td><p>isPartial</p></td>
+<tr class="row-even"><td><p>isPartial</p></td>
 <td><p>Boolean indicating whether the operation processes only a portion of the dataset.</p></td>
 </tr>
 </tbody>

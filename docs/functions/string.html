@@ -117,6 +117,21 @@ character and at the end of the <code class="docutils literal notranslate"><span
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="split">
+<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#split" title="Permalink to this definition">¶</a></dt>
+<dd><p>Splits <code class="docutils literal notranslate"><span class="pre">string</span></code> on <code class="docutils literal notranslate"><span class="pre">delimiter</span></code> and returns an array.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">split</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">delimiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">limit</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">Splits</span> <span class="pre">``string``</span> <span class="pre">on</span> <span class="pre">``delimiter``</span> <span class="pre">and</span> <span class="pre">returns</span> <span class="pre">an</span> <span class="pre">array</span> <span class="pre">of</span> <span class="pre">size</span> <span class="pre">at</span> <span class="pre">most</span> <span class="pre">``limit``.</span></span></dt>
+<dd><p>The last element in the array always contains everything left in the string.
+<code class="docutils literal notranslate"><span class="pre">limit</span></code> must be a positive number.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="strpos">
 <span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#strpos" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the starting position of the first instance of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in
@@ -124,8 +139,8 @@ character and at the end of the <code class="docutils literal notranslate"><span
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id1">
-<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id2">
+<span class="sig-name descname"><span class="pre">strpos</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">substring</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the position of the N-th <code class="docutils literal notranslate"><span class="pre">instance</span></code> of <code class="docutils literal notranslate"><span class="pre">substring</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.
 <code class="docutils literal notranslate"><span class="pre">instance</span></code> must be a positive number.
 Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. If not found, <code class="docutils literal notranslate"><span class="pre">0</span></code> is returned.</p>
@@ -140,8 +155,8 @@ as being relative to the end of the string.</p>
 </dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">substr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns a substring from <code class="docutils literal notranslate"><span class="pre">string</span></code> of length <code class="docutils literal notranslate"><span class="pre">length</span></code> from the starting
 position <code class="docutils literal notranslate"><span class="pre">start</span></code>. Positions start with <code class="docutils literal notranslate"><span class="pre">1</span></code>. A negative starting
 position is interpreted as being relative to the end of the string.</p>

@@ -263,7 +263,7 @@ examples,</p>
 <li><p><a class="reference internal" href="../functions/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function takes advantage of the ArrayVector and MapVector representations and simply returns the “sizes” buffer of the input vector.</p></li>
 <li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">is_null()</span></code> function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.</p></li>
 <li><p><a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.</p></li>
-<li><p><a class="reference internal" href="../functions/string.html#id2" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> function can avoid copying strings by returning StringViews that point to the string buffers in the input vector.</p></li>
+<li><p><a class="reference internal" href="../functions/string.html#id3" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> function can avoid copying strings by returning StringViews that point to the string buffers in the input vector.</p></li>
 </ul>
 <p>To define a vector function, make a subclass of f4d::exec::VectorFunction and
 implement the “apply” method.</p>
