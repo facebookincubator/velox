@@ -346,6 +346,14 @@ TEST_F(Re2FunctionsTest, likePattern) {
   EXPECT_EQ(like("abc", "B%"), false);
   EXPECT_EQ(like("bcd", "B%"), false);
   EXPECT_EQ(like("cde", "B%"), false);
+
+  EXPECT_EQ(like("stringwithmorethan16chars", "string%"), true);
+  EXPECT_EQ(like("stringwithmorethan16chars", "stringwithmorethan16chars"), true);
+  EXPECT_EQ(like("stringwithmorethan16chars", "stringwithlessthan16chars"), false);
+
+  EXPECT_EQ(like(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 abc", u8"\u4FE1\u5FF5 \u7231%"), true);
+  EXPECT_EQ(like(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 ", u8"\u4FE1%\u7231%"), true);
+  EXPECT_EQ(like(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 ", u8"\u7231\u4FE1%\u7231%"), false);
 }
 
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {

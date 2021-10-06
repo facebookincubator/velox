@@ -141,11 +141,21 @@ std::string likePatternToRe2(StringView pattern, char escapeChar) {
           regex.append(escaped ? "_" : ".");
           escaped = false;
           break;
+        // Escape all the meta characters in re2
         case '\\':
+        case '|':
         case '^':
         case '$':
         case '.':
         case '*':
+        case '+':
+        case '?':
+        case '(':
+        case ')':
+        case '[':
+        case ']':
+        case '{':
+        case '}':
           regex.append("\\");
         default:
           regex.append(1, c);
@@ -362,11 +372,6 @@ class LikeConstantPattern final : public VectorFunction {
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
-    bool mustRefSourceStrings = false;
-    // Use constant group id with re2Extract
-    FOLLY_DECLARE_REUSED(groups, std::vector<re2::StringPiece>);
-    groups.resize(1);
-
     rows.applyToSelected([&](vector_size_t i) {
       result.set(i, re2FullMatch(toSearch->valueAt<StringView>(i), re_));
     });
@@ -539,7 +544,6 @@ std::shared_ptr<exec::VectorFunction> makeLike(
 
   char escapeChar;
   if (numArgs == 3) {
-    // TODO(aditi) : Validate that escapeChar is a single char.
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
         "{} requires third argument of type VARCHAR, but got {}",
