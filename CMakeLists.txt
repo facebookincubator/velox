@@ -18,6 +18,8 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 project(velox)
 
 option(VELOX_BUILD_TESTING "Enable Velox tests" ON)
+option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
+
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler
@@ -179,8 +181,6 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
 else()
   set(FILESYSTEM "")
 endif()
-
-option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
   message(
