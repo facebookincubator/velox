@@ -327,9 +327,9 @@ TEST_F(Re2FunctionsTest, regexExtractConstantPatternNoGroupId) {
 
 TEST_F(Re2FunctionsTest, likePattern) {
   auto like =
-      ([&](std::optional<std::string> str, std::optional<std::string> pattern) {
+      [&](std::optional<std::string> str, std::optional<std::string> pattern) {
         return evaluateOnce<bool>("like(c0, '" + *pattern + "')", str);
-      });
+      };
 
   EXPECT_EQ(like("abc", "%b%"), true);
   EXPECT_EQ(like("bcd", "%b%"), true);

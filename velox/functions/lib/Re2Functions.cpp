@@ -157,6 +157,7 @@ std::string likePatternToRe2(StringView pattern, char escapeChar) {
         case '{':
         case '}':
           regex.append("\\");
+        // Append the meta character after the escape. Note: The fallthrough is intentional.
         default:
           regex.append(1, c);
           escaped = false;
