@@ -354,7 +354,7 @@ class Re2SearchAndExtract final : public VectorFunction {
 
 class LikeConstantPattern final : public VectorFunction {
  public:
-   LikeConstantPattern(StringView pattern, char escapeChar)
+  LikeConstantPattern(StringView pattern, char escapeChar)
       : re_(toStringPiece(likePatternToRe2(pattern, escapeChar)), RE2::Quiet) {}
 
   void apply(
