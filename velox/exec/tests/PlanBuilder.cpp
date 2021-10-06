@@ -236,12 +236,12 @@ PlanBuilder& PlanBuilder::aggregation(
   auto groupingExpr = fields(groupingKeys);
 
   // Generate masks vector for aggregations.
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggrMasks(
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
       aggregateExprs.size());
   if (!masks.empty()) {
     VELOX_CHECK_EQ(aggregates.size(), masks.size());
     for (auto i = 0; i < masks.size(); i++) {
-      aggrMasks[i] = field(masks[i]);
+      aggregateMasks[i] = field(masks[i]);
     }
   }
 
@@ -251,7 +251,7 @@ PlanBuilder& PlanBuilder::aggregation(
       groupingExpr,
       names,
       aggregateExprs,
-      aggrMasks,
+      aggregateMasks,
       ignoreNullKeys,
       planNode_);
   return *this;
@@ -309,9 +309,9 @@ PlanBuilder& PlanBuilder::topN(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::limit(int32_t count, bool isPartial) {
+PlanBuilder& PlanBuilder::limit(int32_t offset, int32_t count, bool isPartial) {
   planNode_ = std::make_shared<core::LimitNode>(
-      nextPlanNodeId(), count, isPartial, planNode_);
+      nextPlanNodeId(), offset, count, isPartial, planNode_);
   return *this;
 }
 

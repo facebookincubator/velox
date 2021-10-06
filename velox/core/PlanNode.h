@@ -415,7 +415,8 @@ class AggregationNode : public PlanNode {
           groupingKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<std::shared_ptr<const CallTypedExpr>>& aggregates,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& aggrMasks,
+      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+          aggregateMasks,
       bool ignoreNullKeys,
       std::shared_ptr<const PlanNode> source);
 
@@ -444,9 +445,9 @@ class AggregationNode : public PlanNode {
     return aggregates_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& aggrMasks()
-      const {
-    return aggrMasks_;
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+  aggregateMasks() const {
+    return aggregateMasks_;
   }
 
   bool ignoreNullKeys() const {
@@ -493,7 +494,8 @@ class AggregationNode : public PlanNode {
   const std::vector<std::shared_ptr<const CallTypedExpr>> aggregates_;
   // Keeps mask/'no mask' for every aggregation. Mask, if given, is a reference
   // to a boolean projection column, used to mask out rows for the aggregation.
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> aggrMasks_;
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
+      aggregateMasks_;
   const bool ignoreNullKeys_;
   const std::vector<std::shared_ptr<const PlanNode>> sources_;
   const RowTypePtr outputType_;
@@ -1066,10 +1068,15 @@ class LimitNode : public PlanNode {
   // nodes.
   LimitNode(
       const PlanNodeId& id,
+      int32_t offset,
       int32_t count,
       bool isPartial,
       const std::shared_ptr<const PlanNode>& source)
-      : PlanNode(id), count_(count), isPartial_(isPartial), sources_{source} {
+      : PlanNode(id),
+        offset_(offset),
+        count_(count),
+        isPartial_(isPartial),
+        sources_{source} {
     VELOX_CHECK(
         count > 0,
         "Limit must specify greater than zero number of rows to keep");
@@ -1081,6 +1088,10 @@ class LimitNode : public PlanNode {
 
   const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
     return sources_;
+  }
+
+  int32_t offset() const {
+    return offset_;
   }
 
   int32_t count() const {
@@ -1096,6 +1107,7 @@ class LimitNode : public PlanNode {
   }
 
  private:
+  const int32_t offset_;
   const int32_t count_;
   const bool isPartial_;
   const std::vector<std::shared_ptr<const PlanNode>> sources_;
