@@ -21,7 +21,7 @@ ENABLE_WALL ?= 1
 
 # Control whether to build unit tests. By default set to "ON"; set to
 # "OFF" to disable.
-VELOX_BUILD_TESTING ?= "OFF"
+VELOX_BUILD_TESTING ?= "ON"
 VELOX_ENABLE_DUCKDB ?= "ON"
 
 CMAKE_FLAGS := -DTREAT_WARNINGS_AS_ERRORS=${TREAT_WARNINGS_AS_ERRORS}
