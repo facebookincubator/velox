@@ -94,7 +94,9 @@ class S3ReadFile final : public ReadFile {
   }
 
   uint64_t memoryUsage() const override {
-    VELOX_NYI();
+    // TODO: Check if any buffers are being used by the S3 library
+    return sizeof(Aws::S3::S3Client) + kS3MaxKeySize + 2 * sizeof(std::string) +
+        sizeof(int64_t);
   }
 
   bool shouldCoalesce() const final {

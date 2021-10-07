@@ -30,6 +30,8 @@ namespace facebook::velox {
 
 constexpr std::string_view kSep{"/"};
 constexpr std::string_view kS3Scheme{"s3:"};
+// From AWS documentation
+constexpr int kS3MaxKeySize{1024};
 
 inline bool isS3File(const std::string_view filename) {
   return (filename.substr(0, kS3Scheme.size()) == kS3Scheme);
