@@ -23,7 +23,7 @@
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/type/Type.h"
 
-namespace facebook::dwio::common {
+namespace facebook::velox::dwio::common {
 
 constexpr uint64_t MAX_UINT64 = std::numeric_limits<uint64_t>::max();
 using SeqFilter = std::shared_ptr<const std::unordered_set<size_t>>;
@@ -289,4 +289,4 @@ class FilterType {
   }
 };
 
-} // namespace facebook::dwio::common
+} // namespace facebook::velox::dwio::common
