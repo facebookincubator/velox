@@ -34,16 +34,16 @@ See https://github.com/google/re2/wiki/Syntax for more information.
 
         SELECT regexp_like('1a 2b 14m', '\d+b'); -- true
 
-.. function:: like(string, pattern) -> varchar
-              like(string, pattern, escape) -> varchar
+.. function:: like(string, pattern) -> boolean
+              like(string, pattern, escape) -> boolean
 
-   Evaluates a regular expression from ``pattern`` and returns if the
-   ``string`` matches it. Patterns can contain regular characters as well
-   as wildcards. Wildcard characters can be escaped using the single character
-   specified for the ``escape`` parameter. Matching is case sensitive.
+    Evaluates if the ``string`` matches the ``pattern``. Patterns can contain
+    regular characters as well as wildcards. Wildcard characters can be escaped
+    using the single character specified for the ``escape`` parameter.
+    Matching is case sensitive.
 
-   Note: The wildcard '%' represents 0, 1 or multiple characters and the
-   wildcard '_' represents exactly one character.
+    Note: The wildcard '%' represents 0, 1 or multiple characters and the
+    wildcard '_' represents exactly one character.
 
    This function is used for the ``LIKE`` operator. 
 

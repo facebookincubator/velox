@@ -373,22 +373,19 @@ class LikeConstantPattern final : public VectorFunction {
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
-    BaseVector* toSearchVector = args[0].get();
-    auto toSearchEncoding = toSearchVector->encoding();
-    if (toSearchEncoding == VectorEncoding::Simple::FLAT) {
-      const StringView* rawtoSearchVector =
-          toSearchVector->as<FlatVector<StringView>>()->rawValues();
+    exec::DecodedArgs decodedArgs(rows, args, context);
+    auto toSearch = decodedArgs.at(0);
+    if (toSearch->isIdentityMapping()) {
+      auto rawStrings = toSearch->data<StringView>();
       rows.applyToSelected([&](vector_size_t i) {
-        result.set(i, re2FullMatch(rawtoSearchVector[i], re_));
+        result.set(i, re2FullMatch(rawStrings[i], re_));
       });
       return;
     }
 
-    if (toSearchEncoding == VectorEncoding::Simple::CONSTANT) {
-      const StringView constToSearchString =
-          toSearchVector->as<ConstantVector<StringView>>()->valueAt(0);
-      bool likeValue = re2FullMatch(constToSearchString, re_);
-      rows.applyToSelected([&](vector_size_t i) { result.set(i, likeValue); });
+    if (toSearch->isConstantMapping()) {
+      bool match = re2FullMatch(toSearch->valueAt<StringView>(0), re_);
+      rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
       return;
     }
 
