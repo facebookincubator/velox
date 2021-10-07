@@ -200,7 +200,7 @@ endif()
 if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
   message(
     FATAL_ERROR
-      "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or BUILD_TESTING=OFF)"
+      "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or VELOX_BUILD_TESTING=OFF)"
   )
 endif()
 
