@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/adapters/s3fs/MinioServer.h"
 #include "velox/adapters/s3fs/S3FileSystem.h"
+#include "velox/adapters/s3fs/S3Util.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Context.h"
+#include "velox/exec/tests/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
@@ -24,47 +27,75 @@ using namespace facebook::velox;
 
 constexpr int kOneMB = 1 << 20;
 
-void writeData(WriteFile* writeFile) {
-  writeFile->append("aaaaa");
-  writeFile->append("bbbbb");
-  writeFile->append(std::string(kOneMB, 'c'));
-  writeFile->append("ddddd");
-  ASSERT_EQ(writeFile->size(), 15 + kOneMB);
-}
+class S3FileSystemTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    if (minio_server_ == nullptr) {
+      minio_server_ = std::make_shared<MinioServer>();
+      minio_server_->Start();
+    }
+  }
 
-void readData(ReadFile* readFile) {
-  Arena arena;
-  ASSERT_EQ(readFile->size(), 15 + kOneMB);
-  ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &arena), "ddddd");
-  ASSERT_EQ(readFile->pread(0, 10, &arena), "aaaaabbbbb");
-  ASSERT_EQ(readFile->pread(10, kOneMB, &arena), std::string(kOneMB, 'c'));
-  ASSERT_EQ(readFile->size(), 15 + kOneMB);
-  const std::string_view arf = readFile->pread(5, 10, &arena);
-  const std::string zarf = readFile->pread(kOneMB, 15);
-  auto buf = std::make_unique<char[]>(8);
-  const std::string_view warf = readFile->pread(4, 8, buf.get());
-  const std::string_view warfFromBuf(buf.get(), 8);
-  ASSERT_EQ(arf, "bbbbbccccc");
-  ASSERT_EQ(zarf, "ccccccccccddddd");
-  ASSERT_EQ(warf, "abbbbbcc");
-  ASSERT_EQ(warfFromBuf, "abbbbbcc");
-}
+  static void TearDownTestSuite() {
+    if (minio_server_ != nullptr) {
+      minio_server_->Stop();
+      minio_server_ = nullptr;
+    }
+  }
 
-TEST(S3File, WriteAndRead) {
-  const char* filename = "/Users/deepak/workspace/minio/tmp/test.txt";
-  const char* s3File = "s3://tmp/test.txt";
-  remove(filename);
+  void addBucket(const char* bucket) {
+    minio_server_->addBucket(bucket);
+  }
+
+  std::string getLocalPath(const char* directory) {
+    return minio_server_->getPath() + "/" + directory;
+  }
+  std::string getBucket(const char* bucket) {
+    return std::string(kS3Scheme) + "//" + bucket;
+  }
+
+  void writeData(WriteFile* writeFile) {
+    writeFile->append("aaaaa");
+    writeFile->append("bbbbb");
+    writeFile->append(std::string(kOneMB, 'c'));
+    writeFile->append("ddddd");
+    ASSERT_EQ(writeFile->size(), 15 + kOneMB);
+  }
+
+  void readData(ReadFile* readFile) {
+    Arena arena;
+    ASSERT_EQ(readFile->size(), 15 + kOneMB);
+    ASSERT_EQ(readFile->pread(10 + kOneMB, 5, &arena), "ddddd");
+    ASSERT_EQ(readFile->pread(0, 10, &arena), "aaaaabbbbb");
+    ASSERT_EQ(readFile->pread(10, kOneMB, &arena), std::string(kOneMB, 'c'));
+    ASSERT_EQ(readFile->size(), 15 + kOneMB);
+    const std::string_view arf = readFile->pread(5, 10, &arena);
+    const std::string zarf = readFile->pread(kOneMB, 15);
+    auto buf = std::make_unique<char[]>(8);
+    const std::string_view warf = readFile->pread(4, 8, buf.get());
+    const std::string_view warfFromBuf(buf.get(), 8);
+    ASSERT_EQ(arf, "bbbbbccccc");
+    ASSERT_EQ(zarf, "ccccccccccddddd");
+    ASSERT_EQ(warf, "abbbbbcc");
+    ASSERT_EQ(warfFromBuf, "abbbbbcc");
+  }
+
+  static std::shared_ptr<MinioServer> minio_server_;
+};
+
+std::shared_ptr<MinioServer> S3FileSystemTest::minio_server_ = nullptr;
+
+TEST_F(S3FileSystemTest, WriteAndRead) {
+  const char* bucket = "data";
+  const char* file = "test.txt";
+  const std::string filename = getLocalPath(bucket) + "/" + file;
+  const std::string s3File = getBucket(bucket) + "/" + file;
+  addBucket(bucket);
   {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
-      {"hive.s3.aws-access-key", "admin"},
-      {"hive.s3.aws-secret-key", "password"},
-      {"hive.s3.endpoint", "127.0.0.1:9000"},
-      {"hive.s3.ssl.enabled", "false"},
-      {"hive.s3.path-style-access", "true"},
-  };
+  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -73,16 +104,12 @@ TEST(S3File, WriteAndRead) {
   readData(readFile.get());
 }
 
-TEST(S3File, MissingFile) {
-  const char* s3File = "s3://tmp/dummy.txt";
-
-  std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
-      {"hive.s3.aws-access-key", "admin"},
-      {"hive.s3.aws-secret-key", "password"},
-      {"hive.s3.endpoint", "127.0.0.1:9000"},
-      {"hive.s3.ssl.enabled", "false"},
-      {"hive.s3.path-style-access", "true"},
-  };
+TEST_F(S3FileSystemTest, MissingFile) {
+  const char* bucket = "data1";
+  const char* file = "i-do-not-exist.txt";
+  const std::string s3File = getBucket(bucket) + "/" + file;
+  addBucket(bucket);
+  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -90,22 +117,18 @@ TEST(S3File, MissingFile) {
   EXPECT_THROW(s3fs.openFileForRead(s3File), VeloxException);
 }
 
-TEST(S3File, ViaRegistry) {
-  const char* filename = "/Users/deepak/workspace/minio/tmp/test.txt";
-  const char* s3File = "s3://tmp/test.txt";
-  remove(filename);
+TEST_F(S3FileSystemTest, ViaRegistry) {
+  const char* bucket = "data2";
+  const char* file = "test.txt";
+  const std::string filename = getLocalPath(bucket) + "/" + file;
+  const std::string s3File = getBucket(bucket) + "/" + file;
   filesystems::registerS3FileSystem();
+  addBucket(bucket);
   {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  std::unordered_map<std::string, std::string> hiveConnectorConfigs = {
-      {"hive.s3.aws-access-key", "admin"},
-      {"hive.s3.aws-secret-key", "password"},
-      {"hive.s3.endpoint", "127.0.0.1:9000"},
-      {"hive.s3.ssl.enabled", "false"},
-      {"hive.s3.path-style-access", "true"},
-  };
+  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   auto s3fs = filesystems::getFileSystem(s3File, config);

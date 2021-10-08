@@ -60,7 +60,7 @@ inline Aws::String getAwsString(const std::string& s) {
     if (!outcome.IsSuccess()) {                               \
       auto error = outcome.GetError();                        \
       VELOX_FAIL(                                             \
-          "{} with bucket {} and key {} due to {}:{}",        \
+          "{} with bucket '{}' and key '{}' due to {}:{}",    \
           header,                                             \
           bucket,                                             \
           key,                                                \
