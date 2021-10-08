@@ -11,37 +11,56 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# VELOX_BASE
 add_subdirectory(buffer)
 add_subdirectory(common)
 add_subdirectory(core)
-add_subdirectory(external/date)
 add_subdirectory(serializers)
 add_subdirectory(type)
 add_subdirectory(vector)
 add_subdirectory(row)
 add_subdirectory(flag_definitions)
-add_subdirectory(expression)
+add_subdirectory(external/date)
+add_subdirectory(external/md5)
+#
 
-#add_subdirectory(examples)
+# examples depend on expression
+if((${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION}) OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(examples)
+endif()
 
-#add_subdirectory(parse)
+if(${VELOX_ENABLE_EXPRESSION} OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(expression)
+endif()
 
-#add_subdirectory(connectors)
-#add_subdirectory(dwio)
+if(${VELOX_ENABLE_PARSE} OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(parse)
+endif()
 
-#add_subdirectory(functions)
-#add_subdirectory(exec)
+# hive connector depends on dwio
+if(${VELOX_ENABLE_HIVE_CONNECTOR} OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(dwio)
+endif()
 
-#add_subdirectory(aggregates)
+add_subdirectory(functions)  # depends on md5 (postgresql)
+add_subdirectory(connectors)
 
+# exec depends on codegen
+if(${VELOX_ENABLE_EXEC} OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(exec)
+  add_subdirectory(codegen)
+endif()
+
+if(${VELOX_ENABLE_AGGREGATES} OR ${VELOX_BUILD_TESTING})
+  add_subdirectory(aggregates)
+endif()
 
 if(${VELOX_ENABLE_DUCKDB} OR ${VELOX_BUILD_TESTING})
   add_subdirectory(duckdb)
   add_subdirectory(external/duckdb)
 endif()
 
-#add_subdirectory(codegen)
-#add_subdirectory(external/md5)
 if(${CODEGEN_SUPPORT} AND ${VELOX_BUILD_TESTING})
   add_subdirectory(experimental/codegen)
 endif()

@@ -50,7 +50,6 @@ add_library(
 
 target_link_libraries(
   velox_functions_prestosql
-  velox_exec
   velox_functions_json
   velox_functions_lib
   velox_expression
