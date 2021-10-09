@@ -124,10 +124,11 @@ class VectorAdapterFactory {
  public:
   virtual std::unique_ptr<VectorFunction> getVectorInterpreter() const = 0;
   virtual ~VectorAdapterFactory() = default;
+  virtual const TypePtr returnType() const = 0;
 };
 
 /// Returns a list of signatured supposed by VectorFunction with the specified
-/// name. Returns std::nullopt if there is not function with the specified name.
+/// name. Returns std::nullopt if there is no function with the specified name.
 std::optional<std::vector<std::shared_ptr<FunctionSignature>>>
 getVectorFunctionSignatures(const std::string& name);
 

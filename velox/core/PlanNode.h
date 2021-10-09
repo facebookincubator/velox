@@ -415,7 +415,8 @@ class AggregationNode : public PlanNode {
           groupingKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<std::shared_ptr<const CallTypedExpr>>& aggregates,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& aggrMasks,
+      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+          aggregateMasks,
       bool ignoreNullKeys,
       std::shared_ptr<const PlanNode> source);
 
@@ -444,9 +445,9 @@ class AggregationNode : public PlanNode {
     return aggregates_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& aggrMasks()
-      const {
-    return aggrMasks_;
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+  aggregateMasks() const {
+    return aggregateMasks_;
   }
 
   bool ignoreNullKeys() const {
@@ -493,7 +494,8 @@ class AggregationNode : public PlanNode {
   const std::vector<std::shared_ptr<const CallTypedExpr>> aggregates_;
   // Keeps mask/'no mask' for every aggregation. Mask, if given, is a reference
   // to a boolean projection column, used to mask out rows for the aggregation.
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> aggrMasks_;
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
+      aggregateMasks_;
   const bool ignoreNullKeys_;
   const std::vector<std::shared_ptr<const PlanNode>> sources_;
   const RowTypePtr outputType_;
@@ -609,25 +611,54 @@ class LocalMergeNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 };
 
-/// Hash partitions data using specified keys. The number of partitions is
-/// determined by the parallelism of the upstream pipeline. Can be used to
+/// Calculates partition number for each row of the specified vector.
+class PartitionFunction {
+ public:
+  virtual ~PartitionFunction() = default;
+
+  /// @param input RowVector to split into partitions.
+  /// @param [out] partitions Computed partition numbers for each row in
+  /// 'input'.
+  virtual void partition(
+      const RowVector& input,
+      std::vector<uint32_t>& partitions) = 0;
+};
+
+using PartitionFunctionFactory =
+    std::function<std::unique_ptr<PartitionFunction>(int numPartitions)>;
+
+/// Partitions data using specified partition function. The number of partitions
+/// is determined by the parallelism of the upstream pipeline. Can be used to
 /// gather data from multiple sources. The order of columns in the output may be
 /// different from input.
 class LocalPartitionNode : public PlanNode {
  public:
   LocalPartitionNode(
       const PlanNodeId& id,
-      std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> keys,
+      PartitionFunctionFactory partitionFunctionFactory,
       RowTypePtr outputType,
       std::vector<std::shared_ptr<const PlanNode>> sources)
       : PlanNode(id),
         sources_{std::move(sources)},
-        keys_{std::move(keys)},
+        partitionFunctionFactory_{std::move(partitionFunctionFactory)},
         outputType_{std::move(outputType)} {
     VELOX_CHECK_GT(
         sources_.size(),
         0,
         "Local repartitioning node requires at least one source");
+  }
+
+  static std::shared_ptr<LocalPartitionNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::vector<std::shared_ptr<const PlanNode>> sources) {
+    return std::make_shared<LocalPartitionNode>(
+        id,
+        [](auto /*numPartitions*/) -> std::unique_ptr<PartitionFunction> {
+          VELOX_UNREACHABLE();
+        },
+        std::move(outputType),
+        std::move(sources));
   }
 
   const RowTypePtr& outputType() const override {
@@ -642,8 +673,8 @@ class LocalPartitionNode : public PlanNode {
     return sources_[0]->outputType();
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& keys() const {
-    return keys_;
+  const PartitionFunctionFactory& partitionFunctionFactory() const {
+    return partitionFunctionFactory_;
   }
 
   std::string_view name() const override {
@@ -652,20 +683,21 @@ class LocalPartitionNode : public PlanNode {
 
  private:
   const std::vector<std::shared_ptr<const PlanNode>> sources_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> keys_;
+  const PartitionFunctionFactory partitionFunctionFactory_;
   const RowTypePtr outputType_;
 };
 
 class PartitionedOutputNode : public PlanNode {
  public:
-  explicit PartitionedOutputNode(
+  PartitionedOutputNode(
       const PlanNodeId& id,
       const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
           keys,
       int numPartitions,
       bool broadcast,
       bool replicateNullsAndAny,
-      const RowTypePtr outputType,
+      PartitionFunctionFactory partitionFunctionFactory,
+      RowTypePtr outputType,
       std::shared_ptr<const PlanNode> source)
       : PlanNode(id),
         sources_{{std::move(source)}},
@@ -673,7 +705,8 @@ class PartitionedOutputNode : public PlanNode {
         numPartitions_(numPartitions),
         broadcast_(broadcast),
         replicateNullsAndAny_(replicateNullsAndAny),
-        outputType_(outputType) {
+        partitionFunctionFactory_(std::move(partitionFunctionFactory)),
+        outputType_(std::move(outputType)) {
     VELOX_CHECK(numPartitions > 0, "numPartitions must be greater than zero");
     if (numPartitions == 1) {
       VELOX_CHECK(
@@ -685,6 +718,43 @@ class PartitionedOutputNode : public PlanNode {
           keys_.empty(),
           "Broadcast partitioning doesn't allow for partitioning keys");
     }
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> broadcast(
+      const PlanNodeId& id,
+      int numPartitions,
+      RowTypePtr outputType,
+      std::shared_ptr<const PlanNode> source) {
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> noKeys;
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        noKeys,
+        numPartitions,
+        true,
+        false,
+        [](auto /*numPartitions*/) -> std::unique_ptr<PartitionFunction> {
+          VELOX_UNREACHABLE();
+        },
+        std::move(outputType),
+        std::move(source));
+  }
+
+  static std::shared_ptr<PartitionedOutputNode> single(
+      const PlanNodeId& id,
+      RowTypePtr outputType,
+      std::shared_ptr<const PlanNode> source) {
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> noKeys;
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        noKeys,
+        1,
+        false,
+        false,
+        [](auto /*numPartitions*/) -> std::unique_ptr<PartitionFunction> {
+          VELOX_UNREACHABLE();
+        },
+        std::move(outputType),
+        std::move(source));
   }
 
   const RowTypePtr& outputType() const override {
@@ -719,6 +789,10 @@ class PartitionedOutputNode : public PlanNode {
     return replicateNullsAndAny_;
   }
 
+  const PartitionFunctionFactory& partitionFunctionFactory() const {
+    return partitionFunctionFactory_;
+  }
+
   std::string_view name() const override {
     return "repartitioning";
   }
@@ -729,6 +803,7 @@ class PartitionedOutputNode : public PlanNode {
   const int numPartitions_;
   const bool broadcast_;
   const bool replicateNullsAndAny_;
+  const PartitionFunctionFactory partitionFunctionFactory_;
   const RowTypePtr outputType_;
 };
 
@@ -837,6 +912,32 @@ class HashJoinNode : public PlanNode {
   // has a special meaning for outer joins. For inner joins, this is
   // equivalent to a Filter above the join.
   const std::shared_ptr<const ITypedExpr> filter_;
+  const std::vector<std::shared_ptr<const PlanNode>> sources_;
+  const RowTypePtr outputType_;
+};
+
+// Cross join.
+class CrossJoinNode : public PlanNode {
+ public:
+  CrossJoinNode(
+      const PlanNodeId& id,
+      std::shared_ptr<const PlanNode> left,
+      std::shared_ptr<const PlanNode> right,
+      RowTypePtr outputType);
+
+  const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "cross join";
+  }
+
+ private:
   const std::vector<std::shared_ptr<const PlanNode>> sources_;
   const RowTypePtr outputType_;
 };
@@ -967,10 +1068,15 @@ class LimitNode : public PlanNode {
   // nodes.
   LimitNode(
       const PlanNodeId& id,
+      int32_t offset,
       int32_t count,
       bool isPartial,
       const std::shared_ptr<const PlanNode>& source)
-      : PlanNode(id), count_(count), isPartial_(isPartial), sources_{source} {
+      : PlanNode(id),
+        offset_(offset),
+        count_(count),
+        isPartial_(isPartial),
+        sources_{source} {
     VELOX_CHECK(
         count > 0,
         "Limit must specify greater than zero number of rows to keep");
@@ -982,6 +1088,10 @@ class LimitNode : public PlanNode {
 
   const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
     return sources_;
+  }
+
+  int32_t offset() const {
+    return offset_;
   }
 
   int32_t count() const {
@@ -997,6 +1107,7 @@ class LimitNode : public PlanNode {
   }
 
  private:
+  const int32_t offset_;
   const int32_t count_;
   const bool isPartial_;
   const std::vector<std::shared_ptr<const PlanNode>> sources_;

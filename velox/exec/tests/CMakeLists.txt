@@ -28,10 +28,12 @@ target_link_libraries(
   velox_dwio_common
   velox_dwio_type_fbhive
   velox_dwrf_test_utils
-  velox_presto_serializer)
+  velox_presto_serializer
+  ${GTEST_BOTH_LIBRARIES})
 
 add_executable(
   velox_exec_test
+  CrossJoinTest.cpp
   DriverTest.cpp
   EnforceSingleRowTest.cpp
   FilterProjectTest.cpp
@@ -48,6 +50,7 @@ add_executable(
   MultiFragmentTest.cpp
   ParseTypeSignatureTest.cpp
   PartitionedOutputBufferManagerTest.cpp
+  RoundRobinPartitionFunctionTest.cpp
   TableWriteTest.cpp
   TopNTest.cpp
   LimitTest.cpp

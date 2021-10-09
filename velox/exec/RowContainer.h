@@ -80,6 +80,9 @@ using normalized_key_t = uint64_t;
 // Collection of rows for aggregation, hash join, order by
 class RowContainer {
  public:
+  static constexpr uint64_t kUnlimited = std::numeric_limits<uint64_t>::max();
+  using Eraser = std::function<void(folly::Range<char**> rows)>;
+
   // 'keyTypes' gives the type of row and use 'mappedMemory' for bulk
   // allocation.
   RowContainer(
@@ -96,6 +99,7 @@ class RowContainer {
             false, // hasNormalizedKey
             mappedMemory,
             ContainerRowSerde::instance()) {}
+
   // 'keyTypes' gives the type of the key of each row. For a group by,
   // order by or right outer join build side these may be
   // nullable. 'nullableKeys' specifies if these have a null flag.
@@ -127,9 +131,22 @@ class RowContainer {
   // Allocates a new row and initializes possible aggregates to null.
   char* newRow();
 
+  uint32_t rowSize(const char* row) const {
+    return fixedRowSize_ +
+        (rowSizeOffset_
+             ? *reinterpret_cast<const uint32_t*>(row + rowSizeOffset_)
+             : 0);
+  }
+
   // Adds 'rows' to the free rows list and frees any associated
   // variable length data.
   void eraseRows(folly::Range<char**> rows);
+
+  void incrementRowSize(char* row, uint64_t bytes) {
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
+    uint64_t size = *ptr + bytes;
+    *ptr = std::min<uint64_t>(size, std::numeric_limits<uint32_t>::max());
+  }
 
   // Initialize row. 'reuse' specifies whether the 'row' is reused or
   // not. If it is reused, it will free memory associated with the row
@@ -182,10 +199,35 @@ class RowContainer {
     return 1 << (nullOffset & 7);
   }
 
-  // Extracts up to 'maxRows' rows starting at the position of 'iter'. A default
-  // constructed or reset iter starts at the beginning. Returns the number of
-  // rows written to 'rows'. Returns 0 when at end.
-  int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows);
+  // Extracts up to 'maxRows' rows starting at the position of
+  // 'iter'. A default constructed or reset iter starts at the
+  // beginning. Returns the number of rows written to 'rows'. Returns
+  // 0 when at end. Stops after the total size of returned rows exceeds
+  // maxBytes.
+  int32_t listRows(
+      RowContainerIterator* iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) {
+    return listRows<false>(iter, maxRows, maxBytes, rows);
+  }
+
+  int32_t listRows(RowContainerIterator* iter, int32_t maxRows, char** rows) {
+    return listRows<false>(iter, maxRows, kUnlimited, rows);
+  }
+
+  /// Sets 'probed' flag for the specified rows. Used by the right join to mark
+  /// build-side rows that matches join condition.
+  void setProbedFlag(char** rows, int32_t numRows);
+
+  /// Returns rows with 'probed' flag unset. Used by the right join.
+  int32_t listNotProbedRows(
+      RowContainerIterator* iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) {
+    return listRows<true>(iter, maxRows, maxBytes, rows);
+  }
 
   // Returns true if 'row' at 'column' equals the value at 'index' in
   // 'decoded'. 'mayHaveNulls' specifies if nulls need to be checked. This is
@@ -236,6 +278,12 @@ class RowContainer {
     return probedFlagOffset_;
   }
 
+  // Returns the offset of a uint32_t row size or 0 if the row has no
+  // variable width fields or accumulators.
+  int32_t rowSizeOffset() const {
+    return rowSizeOffset_;
+  }
+
   // For a hash join table with possible non-unique entries, the offset of
   // the pointer to the next row with the same key. 0 if keys are
   // guaranteed unique, e.g. for a group by or semijoin build.
@@ -257,6 +305,16 @@ class RowContainer {
 
   // Resets the state to be as after construction. Frees memory for payload.
   void clear();
+
+  int32_t compareRows(const char* left, const char* right) {
+    for (auto i = 0; i < keyTypes_.size(); ++i) {
+      auto result = compare(left, right, i);
+      if (result) {
+        return result;
+      }
+    }
+    return 0;
+  }
 
   // Returns estimated number of rows a batch can support for
   // the given batchSizeInBytes.
@@ -338,6 +396,11 @@ class RowContainer {
 
   char*& nextFree(char* row) {
     return *reinterpret_cast<char**>(row + kNextFreeOffset);
+  }
+
+  uint32_t& variableRowSize(char* row) {
+    DCHECK(rowSizeOffset_);
+    return *reinterpret_cast<uint32_t*>(row + rowSizeOffset_);
   }
 
   template <TypeKind Kind>
@@ -548,6 +611,70 @@ class RowContainer {
       int32_t nullByte = 0,
       uint8_t nullMask = 0);
 
+  template <bool nonProbedRowsOnly>
+  int32_t listRows(
+      RowContainerIterator* iter,
+      int32_t maxRows,
+      uint64_t maxBytes,
+      char** rows) {
+    int32_t count = 0;
+    uint64_t totalBytes = 0;
+    auto numAllocations = rows_.numAllocations();
+    if (iter->allocationIndex == 0 && iter->runIndex == 0 &&
+        iter->rowOffset == 0) {
+      iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
+    }
+    int32_t rowSize = fixedRowSize_ +
+        (iter->normalizedKeysLeft > 0 ? sizeof(normalized_key_t) : 0);
+    for (auto i = iter->allocationIndex; i < numAllocations; ++i) {
+      auto allocation = rows_.allocationAt(i);
+      auto numRuns = allocation->numRuns();
+      for (auto runIndex = iter->runIndex; runIndex < numRuns; ++runIndex) {
+        memory::MappedMemory::PageRun run = allocation->runAt(runIndex);
+        auto data = run.data<char>();
+        int64_t limit;
+        if (i == numAllocations - 1 && runIndex == rows_.currentRunIndex()) {
+          limit = rows_.currentOffset();
+        } else {
+          limit = run.numPages() * memory::MappedMemory::kPageSize;
+        }
+        auto row = iter->rowOffset;
+        while (row + rowSize <= limit) {
+          rows[count++] = data + row +
+              (iter->normalizedKeysLeft > 0 ? sizeof(normalized_key_t) : 0);
+          row += rowSize;
+          if (--iter->normalizedKeysLeft == 0) {
+            rowSize -= sizeof(normalized_key_t);
+          }
+          if (bits::isBitSet(rows[count - 1], freeFlagOffset_)) {
+            --count;
+            continue;
+          }
+          if constexpr (nonProbedRowsOnly) {
+            if (bits::isBitSet(rows[count - 1], probedFlagOffset_)) {
+              --count;
+              continue;
+            }
+          }
+          totalBytes += rowSize;
+          if (rowSizeOffset_) {
+            totalBytes += variableRowSize(rows[count - 1]);
+          }
+          if (count == maxRows || totalBytes > maxBytes) {
+            iter->rowOffset = row;
+            iter->runIndex = runIndex;
+            iter->allocationIndex = i;
+            return count;
+          }
+        }
+        iter->rowOffset = 0;
+      }
+      iter->runIndex = 0;
+    }
+    iter->allocationIndex = std::numeric_limits<int32_t>::max();
+    return count;
+  }
+
   static void extractComplexType(
       const char* const* rows,
       int32_t numRows,
@@ -609,8 +736,11 @@ class RowContainer {
   std::vector<RowColumn> rowColumns_;
   // Bit position of probed flag, 0 if none.
   int32_t probedFlagOffset_ = 0;
+
   // Bit position of free bit.
-  int32_t freeFlagOffset_{0};
+  int32_t freeFlagOffset_ = 0;
+  int32_t rowSizeOffset_ = 0;
+
   int32_t fixedRowSize_;
   // True if normalized keys are enabled in initial state.
   const bool hasNormalizedKeys_;
@@ -623,7 +753,7 @@ class RowContainer {
   // Copied over the null bits of each row on initialization. Keys are
   // not null, aggregates are null.
   std::vector<uint8_t> initialNulls_;
-  int64_t numRows_ = 0;
+  uint64_t numRows_ = 0;
   // Head of linked list of free rows.
   char* firstFreeRow_ = nullptr;
   uint64_t numFreeRows_ = 0;
@@ -631,7 +761,6 @@ class RowContainer {
   AllocationPool rows_;
   HashStringAllocator stringAllocator_;
   const RowSerde& serde_;
-
   // RowContainer requires a valid reference to a vector of aggregates. We use
   // a static constant to ensure the aggregates_ is valid throughout the
   // lifetime of the RowContainer.

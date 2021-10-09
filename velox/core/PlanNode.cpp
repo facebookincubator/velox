@@ -28,7 +28,8 @@ AggregationNode::AggregationNode(
         groupingKeys,
     const std::vector<std::string>& aggregateNames,
     const std::vector<std::shared_ptr<const CallTypedExpr>>& aggregates,
-    const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& aggrMasks,
+    const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+        aggregateMasks,
     bool ignoreNullKeys,
     std::shared_ptr<const PlanNode> source)
     : PlanNode(id),
@@ -36,7 +37,7 @@ AggregationNode::AggregationNode(
       groupingKeys_(groupingKeys),
       aggregateNames_(aggregateNames),
       aggregates_(aggregates),
-      aggrMasks_(aggrMasks),
+      aggregateMasks_(aggregateMasks),
       ignoreNullKeys_(ignoreNullKeys),
       sources_{source},
       outputType_(getOutputType(groupingKeys_, aggregateNames_, aggregates_)) {
@@ -168,4 +169,13 @@ HashJoinNode::HashJoinNode(
     }
   }
 }
+
+CrossJoinNode::CrossJoinNode(
+    const PlanNodeId& id,
+    std::shared_ptr<const PlanNode> left,
+    std::shared_ptr<const PlanNode> right,
+    RowTypePtr outputType)
+    : PlanNode(id),
+      sources_({std::move(left), std::move(right)}),
+      outputType_(std::move(outputType)) {}
 } // namespace facebook::velox::core

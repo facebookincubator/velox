@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/exec/tests/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
@@ -76,8 +78,8 @@ TEST(InMemoryFile, writeAndRead) {
 }
 
 TEST(LocalFile, WriteAndRead) {
-  // TODO: use the appropriate test directory.
-  const char filename[] = "/tmp/test";
+  auto tempFile = ::exec::test::TempFilePath::create();
+  const auto& filename = tempFile->path.c_str();
   remove(filename);
   {
     LocalWriteFile writeFile(filename);
@@ -88,13 +90,15 @@ TEST(LocalFile, WriteAndRead) {
 }
 
 TEST(LocalFile, ViaRegistry) {
+  filesystems::registerLocalFileSystem();
   const char filename[] = "/tmp/test";
   remove(filename);
+  auto lfs = filesystems::getFileSystem(filename, nullptr);
   {
-    auto writeFile = generateWriteFile(filename);
+    auto writeFile = lfs->openFileForWrite(filename);
     writeFile->append("snarf");
   }
-  auto readFile = generateReadFile(filename);
+  auto readFile = lfs->openFileForRead(filename);
   ASSERT_EQ(readFile->size(), 5);
   Arena arena;
   ASSERT_EQ(readFile->pread(0, 5, &arena), "snarf");

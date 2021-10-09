@@ -35,6 +35,14 @@ Mathematical Functions
 
     Returns the natural logarithm of ``x``.
 
+.. function:: log2(x) -> double
+
+    Returns the base 2 logarithm of ``x``.
+
+.. function:: log10(x) -> double
+
+    Returns the base 10 logarithm of ``x``.
+
 .. function:: mod(n, m) -> [same as n]
 
     Returns the modulus (remainder) of ``n`` divided by ``m``.
@@ -105,3 +113,23 @@ Trigonometric Functions
 .. function:: atan2(y, x) -> double
 
     Returns the arc tangent of ``y / x``.
+
+.. function:: cos(x) -> double
+
+    Returns the cosine of ``x``.
+
+.. function:: cosh(x) -> double
+
+    Returns the hyperbolic cosine of ``x``.
+
+.. function:: sin(x) -> double
+
+    Returns the sine of ``x``.
+
+.. function:: tan(x) -> double
+
+    Returns the tangent of ``x``.
+
+.. function:: tanh(x) -> double
+
+    Returns the hyperbolic tangent of ``x``.

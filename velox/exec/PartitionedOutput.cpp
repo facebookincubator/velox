@@ -16,14 +16,13 @@
 
 #include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
-#include "velox/expression/Expr.h"
 
 namespace facebook::velox::exec {
 
 BlockingReason Destination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
-    const RowVectorPtr& input,
+    const RowVectorPtr& output,
     PartitionedOutputBufferManager& bufferManager,
     bool* atEnd,
     ContinueFuture* future) {
@@ -42,7 +41,7 @@ BlockingReason Destination::advance(
       bytesInCurrent_ += sizes[rows_[row_].begin + i];
     }
     if (bytesInCurrent_ >= maxBytes) {
-      serialize(input, firstRow, row_ + 1);
+      serialize(output, firstRow, row_ + 1);
       if (row_ == rows_.size() - 1) {
         *atEnd = true;
       }
@@ -50,25 +49,25 @@ BlockingReason Destination::advance(
       return flush(bufferManager, future);
     }
   }
-  serialize(input, firstRow, row_);
+  serialize(output, firstRow, row_);
   *atEnd = true;
   return BlockingReason::kNotBlocked;
 }
 
 void Destination::serialize(
-    const RowVectorPtr& input,
+    const RowVectorPtr& output,
     vector_size_t begin,
     vector_size_t end) {
   if (!current_) {
     current_ = std::make_unique<VectorStreamGroup>(memory_);
-    auto rowType = std::dynamic_pointer_cast<const RowType>(input->type());
+    auto rowType = std::dynamic_pointer_cast<const RowType>(output->type());
     vector_size_t numRows = 0;
     for (vector_size_t i = begin; i < end; i++) {
       numRows += rows_[i].size;
     }
     current_->createStreamTree(rowType, numRows);
   }
-  current_->append(input, folly::Range(&rows_[begin], end - begin));
+  current_->append(output, folly::Range(&rows_[begin], end - begin));
 }
 
 BlockingReason Destination::flush(
@@ -83,22 +82,23 @@ BlockingReason Destination::flush(
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {
+  input_ = std::move(input);
   if (outputChannels_.empty()) {
-    input_ = std::move(input);
+    output_ = input_;
   } else {
     std::vector<VectorPtr> outputColumns;
     outputColumns.reserve(outputChannels_.size());
     for (auto& i : outputChannels_) {
-      outputColumns.push_back(input->childAt(i));
+      outputColumns.push_back(input_->childAt(i));
     }
 
-    input_ = std::make_shared<RowVector>(
-        input->pool(),
+    output_ = std::make_shared<RowVector>(
+        input_->pool(),
         outputType_,
-        input->nulls(),
-        input->size(),
+        input_->nulls(),
+        input_->size(),
         outputColumns,
-        input->getNullCount());
+        input_->getNullCount());
   }
 }
 
@@ -108,10 +108,6 @@ void PartitionedOutput::initializeDestinations() {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
       destinations_.push_back(std::make_unique<Destination>(taskId, i, memory));
-    }
-    for (auto channel : keyChannels_) {
-      hashers_.push_back(
-          VectorHasher::create(input_->childAt(channel)->type(), channel));
     }
   }
 }
@@ -124,7 +120,6 @@ void PartitionedOutput::initializeSizeBuffers() {
     for (auto i = numOld; i < numInput; ++i) {
       topLevelRanges_[i] = IndexRange{i, 1};
     }
-    hashes_.resize(numInput);
     rowSize_.resize(numInput);
     sizePointers_.resize(numInput);
     // Set all the size pointers since 'rowSize_' may have been reallocated.
@@ -134,24 +129,12 @@ void PartitionedOutput::initializeSizeBuffers() {
   }
 }
 
-void PartitionedOutput::calculateHashes() {
-  if (!keyChannels_.empty()) {
-    auto numInput = input_->size();
-    rows_.resize(numInput);
-    rows_.setAll();
-    for (auto i = 0; i < keyChannels_.size(); ++i) {
-      hashers_[i]->hash(
-          *input_->childAt(keyChannels_[i]), rows_, i > 0, &hashes_);
-    }
-  }
-}
-
 void PartitionedOutput::estimateRowSizes() {
   auto numInput = input_->size();
   std::fill(rowSize_.begin(), rowSize_.end(), 0);
-  for (int i = 0; i < input_->childrenSize(); ++i) {
+  for (int i = 0; i < output_->childrenSize(); ++i) {
     VectorStreamGroup::estimateSerializedSize(
-        input_->childAt(i),
+        output_->childAt(i),
         folly::Range(topLevelRanges_.data(), numInput),
         sizePointers_.data());
   }
@@ -168,8 +151,6 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
 
   initializeSizeBuffers();
 
-  calculateHashes();
-
   estimateRowSizes();
 
   for (auto& destination : destinations_) {
@@ -180,8 +161,9 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   if (numDestinations_ == 1) {
     destinations_[0]->addRows(IndexRange{0, numInput});
   } else {
+    partitionFunction_->partition(*input_, partitions_);
     if (replicateNullsAndAny_) {
-      collectNullRows(rows_);
+      collectNullRows();
 
       vector_size_t start = 0;
       if (!replicatedAny_) {
@@ -193,32 +175,39 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
         start = 1;
       }
       for (auto i = start; i < numInput; ++i) {
-        if (rows_.isValid(i)) {
+        if (nullRows_.isValid(i)) {
           for (auto& destination : destinations_) {
             destination->addRow(i);
           }
         } else {
-          destinations_[hashes_[i] % numDestinations_]->addRow(i);
+          destinations_[partitions_[i]]->addRow(i);
         }
       }
     } else {
       for (vector_size_t i = 0; i < numInput; ++i) {
-        destinations_[hashes_[i] % numDestinations_]->addRow(i);
+        destinations_[partitions_[i]]->addRow(i);
       }
     }
   }
 }
 
-void PartitionedOutput::collectNullRows(SelectivityVector& nullRows) {
-  nullRows.clearAll();
-  for (const auto& hasher : hashers_) {
-    auto rawNulls = hasher->decodedVector().nulls();
-    if (rawNulls) {
+void PartitionedOutput::collectNullRows() {
+  auto size = input_->size();
+  rows_.resize(size);
+  rows_.setAll();
+
+  nullRows_.resize(size);
+  nullRows_.clearAll();
+
+  for (auto i : keyChannels_) {
+    auto& keyVector = input_->childAt(i);
+    if (keyVector->mayHaveNulls()) {
+      auto* rawNulls = keyVector->flatRawNulls(rows_);
       bits::orWithNegatedBits(
-          nullRows.asMutableRange().bits(), rawNulls, 0, nullRows.size());
+          nullRows_.asMutableRange().bits(), rawNulls, 0, size);
     }
   }
-  nullRows.updateBounds();
+  nullRows_.updateBounds();
 }
 
 RowVectorPtr PartitionedOutput::getOutput() {
@@ -240,7 +229,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       blockingReason_ = destination->advance(
           kMaxDestinationSize,
           rowSize_,
-          input_,
+          output_,
           *bufferManager,
           &atEnd,
           &future_);
@@ -270,7 +259,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
     }
     return nullptr;
   }
-  // All of 'input_' is written into the destinations. We are finishing, hence
+  // All of 'output_' is written into the destinations. We are finishing, hence
   // move all the destinations to the output queue. This will not grow memory
   // and hence does not need blocking.
   if (isFinishing_) {
@@ -287,6 +276,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   }
   // The input is fully processed, drop the reference to allow reuse.
   input_ = nullptr;
+  output_ = nullptr;
   return nullptr;
 }
 
