@@ -19,6 +19,8 @@ project(velox)
 
 # Add all options below
 option(VELOX_BUILD_TESTING "Enable Velox tests" ON)
+option(VELOX_BASE
+       "Build base components. This will override other build options." OFF)
 option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
 option(VELOX_ENABLE_AGGREGATES "Build aggregates." ON)
@@ -39,7 +41,7 @@ if(VELOX_ENABLE_S3)
   find_package(AWSSDK REQUIRED COMPONENTS s3)
   add_definitions(-DVELOX_ENABLE_S3)
 
-if(${VELOX_DEFAULT})
+if(${VELOX_BASE})
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_EXPRESSION ON)
