@@ -132,15 +132,6 @@ class S3ReadFile final : public ReadFile {
 };
 
 namespace filesystems {
-std::once_flag s3InitializeFlag;
-
-void initializeS3Library() {
-  std::call_once(s3InitializeFlag, []() {
-    Aws::SDKOptions aws_options;
-    aws_options.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
-    Aws::InitAPI(aws_options);
-  });
-}
 
 namespace S3Config {
 constexpr char const* pathAccessStyle{"hive.s3.path-style-access"};
@@ -155,7 +146,25 @@ constexpr char const* useInstanceCredentials{
 // Implement the S3FileSystem
 class S3FileSystem::Impl {
  public:
-  Impl(const Config* config) : config_(config) {}
+  Impl(const Config* config) : config_(config) {
+    const size_t origCount = initCounter_++;
+    if (origCount == 0) {
+      Aws::SDKOptions aws_options;
+      aws_options.loggingOptions.logLevel =
+          Aws::Utils::Logging::LogLevel::Fatal;
+      Aws::InitAPI(aws_options);
+    }
+  }
+
+  ~Impl() {
+    const size_t newCount = --initCounter_;
+    if (newCount == 0) {
+      Aws::SDKOptions aws_options;
+      aws_options.loggingOptions.logLevel =
+          Aws::Utils::Logging::LogLevel::Fatal;
+      Aws::ShutdownAPI(aws_options);
+    }
+  }
 
   std::string getOptionalProperty(
       const std::string& name,
@@ -229,7 +238,9 @@ class S3FileSystem::Impl {
  private:
   const Config* config_;
   std::shared_ptr<Aws::S3::S3Client> client_;
+  static std::atomic<size_t> initCounter_;
 };
+std::atomic<size_t> S3FileSystem::Impl::initCounter_(0);
 
 S3FileSystem::S3FileSystem(std::shared_ptr<const Config> config)
     : FileSystem(config) {
@@ -261,7 +272,6 @@ std::function<bool(std::string_view)> schemeMatcher =
 
 std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
     filesystemGenerator = [](std::shared_ptr<const Config> properties) {
-      initializeS3Library();
       // TODO: Cache the FileSystem
       auto s3fs = std::make_shared<S3FileSystem>(properties);
       s3fs->initializeClient();

@@ -25,10 +25,6 @@
 
 namespace facebook::velox::filesystems {
 
-// The AWS SDK CPP requires this to be invoked
-// once before the library is used.
-void initializeS3Library();
-
 // Implementation of S3 FileSystem
 class S3FileSystem : public FileSystem {
  public:
@@ -47,6 +43,7 @@ class S3FileSystem : public FileSystem {
   class Impl;
   std::shared_ptr<Impl> impl_;
 };
+
 // Register the S3 filesystem.
 void registerS3FileSystem();
 } // namespace facebook::velox::filesystems

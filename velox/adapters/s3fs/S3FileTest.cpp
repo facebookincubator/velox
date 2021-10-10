@@ -67,7 +67,6 @@ TEST(S3File, WriteAndRead) {
   };
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
-  filesystems::initializeS3Library();
   filesystems::S3FileSystem s3fs(config);
   s3fs.initializeClient();
   auto readFile = s3fs.openFileForRead(s3File);
@@ -86,7 +85,6 @@ TEST(S3File, MissingFile) {
   };
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
-  filesystems::initializeS3Library();
   filesystems::S3FileSystem s3fs(config);
   s3fs.initializeClient();
   EXPECT_THROW(s3fs.openFileForRead(s3File), VeloxException);
