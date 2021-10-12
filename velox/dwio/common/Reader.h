@@ -28,7 +28,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
-namespace facebook::dwio::common {
+namespace facebook::velox::dwio::common {
 
 /**
  * Abstract row reader interface.
@@ -122,4 +122,4 @@ class Reader {
       const RowReaderOptions& options = {}) const = 0;
 };
 
-} // namespace facebook::dwio::common
+} // namespace facebook::velox::dwio::common

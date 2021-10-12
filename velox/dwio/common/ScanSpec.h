@@ -26,10 +26,10 @@
 #include <vector>
 
 namespace facebook {
+namespace velox {
 namespace dwio::common {
 class ColumnStatistics;
 }
-namespace velox {
 namespace common {
 
 // Describes the filtering and value extraction for a

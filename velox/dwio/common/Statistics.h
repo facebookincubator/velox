@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook::dwio::common {
+namespace facebook::velox::dwio::common {
 
 /**
  * Statistics that are available for all types of columns.
@@ -427,4 +427,4 @@ struct RuntimeStatistics {
   }
 };
 
-} // namespace facebook::dwio::common
+} // namespace facebook::velox::dwio::common

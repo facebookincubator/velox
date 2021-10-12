@@ -16,7 +16,7 @@
 
 #include "velox/dwio/common/ReaderFactory.h"
 
-namespace facebook::dwio::common {
+namespace facebook::velox::dwio::common {
 
 namespace {
 
@@ -53,4 +53,4 @@ std::shared_ptr<ReaderFactory> getReaderFactory(FileFormat format) {
   return it->second;
 }
 
-} // namespace facebook::dwio::common
+} // namespace facebook::velox::dwio::common

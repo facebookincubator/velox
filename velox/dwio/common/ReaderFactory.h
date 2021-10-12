@@ -22,7 +22,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 
-namespace facebook::dwio::common {
+namespace facebook::velox::dwio::common {
 
 /**
  * Reader factory interface.
@@ -86,4 +86,4 @@ bool unregisterReaderFactory(FileFormat format);
  */
 std::shared_ptr<ReaderFactory> getReaderFactory(FileFormat format);
 
-} // namespace facebook::dwio::common
+} // namespace facebook::velox::dwio::common
