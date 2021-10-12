@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# for generated headers
-
-add_library(velox_s3fs S3FileSystem.cpp S3FileSystem.h S3Util.h)
-target_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
-target_link_libraries(velox_s3fs ${AWSSDK_LIBRARIES})
-
-if(${VELOX_BUILD_TESTING})
-  add_executable(velox_s3file_test S3FileTest.cpp MinioServer.h)
-  add_test(velox_s3file_test velox_s3file_test)
-  target_link_libraries(velox_s3file_test velox_file velox_s3fs velox_core
-                        velox_exec_test_lib ${GTEST_BOTH_LIBRARIES})
-endif()
+add_executable(velox_s3file_test S3FileTest.cpp MinioServer.h)
+add_test(velox_s3file_test velox_s3file_test)
+target_link_libraries(velox_s3file_test velox_file velox_s3fs velox_core
+                      velox_exec_test_lib ${GTEST_BOTH_LIBRARIES})

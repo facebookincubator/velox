@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/adapters/s3fs/S3FileSystem.h"
-#include "velox/adapters/s3fs/S3Util.h"
+#include "S3FileSystem.h"
+#include "S3Util.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Context.h"
 
@@ -40,7 +40,7 @@ class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(std::string path, std::shared_ptr<Aws::S3::S3Client> client)
       : client_(client) {
-    getS3BucketAndKeyFromPath(path, bucket_, key_);
+    getBucketAndKeyFromS3Path(path, bucket_, key_);
   }
 
   // gets the length of the file
@@ -57,7 +57,7 @@ class S3ReadFile final : public ReadFile {
 
     auto outcome = client_->HeadObject(req);
     VELOX_CHECK_AWS_OUTCOME(
-        outcome, "Failed to initialize S3 File", bucket_, key_);
+        outcome, "failed to initialize S3 file", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK(length_ >= 0);
   }
@@ -134,6 +134,7 @@ class S3ReadFile final : public ReadFile {
 namespace filesystems {
 
 namespace S3Config {
+namespace {
 constexpr char const* pathAccessStyle{"hive.s3.path-style-access"};
 constexpr char const* endpoint{"hive.s3.endpoint"};
 constexpr char const* secretKey{"hive.s3.aws-secret-key"};
@@ -141,6 +142,7 @@ constexpr char const* accessKey{"hive.s3.aws-access-key"};
 constexpr char const* sslEnabled{"hive.s3.ssl.enabled"};
 constexpr char const* useInstanceCredentials{
     "hive.s3.use-instance-credentials"};
+} // namespace
 } // namespace S3Config
 
 // Implement the S3FileSystem
@@ -149,20 +151,18 @@ class S3FileSystem::Impl {
   Impl(const Config* config) : config_(config) {
     const size_t origCount = initCounter_++;
     if (origCount == 0) {
-      Aws::SDKOptions aws_options;
-      aws_options.loggingOptions.logLevel =
-          Aws::Utils::Logging::LogLevel::Fatal;
-      Aws::InitAPI(aws_options);
+      Aws::SDKOptions awsOptions;
+      awsOptions.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
+      Aws::InitAPI(awsOptions);
     }
   }
 
   ~Impl() {
     const size_t newCount = --initCounter_;
     if (newCount == 0) {
-      Aws::SDKOptions aws_options;
-      aws_options.loggingOptions.logLevel =
-          Aws::Utils::Logging::LogLevel::Fatal;
-      Aws::ShutdownAPI(aws_options);
+      Aws::SDKOptions awsOptions;
+      awsOptions.loggingOptions.logLevel = Aws::Utils::Logging::LogLevel::Fatal;
+      Aws::ShutdownAPI(awsOptions);
     }
   }
 
@@ -216,16 +216,16 @@ class S3FileSystem::Impl {
     const auto secretKey = getOptionalProperty(S3Config::secretKey, "");
     const auto useInstanceCred =
         getOptionalProperty(S3Config::useInstanceCredentials, "");
-    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider;
+    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
     if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
-      credentials_provider =
+      credentialsProvider =
           getAccessSecretCredentialProvider(accessKey, secretKey);
     } else {
-      credentials_provider = getDefaultCredentialProvider();
+      credentialsProvider = getDefaultCredentialProvider();
     }
 
     client_ = std::make_shared<Aws::S3::S3Client>(
-        credentials_provider,
+        credentialsProvider,
         clientConfig,
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
         useVirtualAddressing);
@@ -267,10 +267,7 @@ std::string S3FileSystem::name() const {
   return "S3";
 }
 
-std::function<bool(std::string_view)> schemeMatcher =
-    [](std::string_view filename) { return isS3File(filename); };
-
-std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
+static std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
     filesystemGenerator = [](std::shared_ptr<const Config> properties) {
       // TODO: Cache the FileSystem
       auto s3fs = std::make_shared<S3FileSystem>(properties);
@@ -279,7 +276,7 @@ std::function<std::shared_ptr<FileSystem>(std::shared_ptr<const Config>)>
     };
 
 void registerS3FileSystem() {
-  registerFileSystem(schemeMatcher, filesystemGenerator);
+  registerFileSystem(isS3File, filesystemGenerator);
 }
 
 } // namespace filesystems

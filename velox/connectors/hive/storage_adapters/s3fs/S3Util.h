@@ -28,27 +28,29 @@
 
 namespace facebook::velox {
 
+namespace {
 constexpr std::string_view kSep{"/"};
-constexpr std::string_view kS3Scheme{"s3:"};
+constexpr std::string_view kS3Scheme{"s3://"};
 // From AWS documentation
 constexpr int kS3MaxKeySize{1024};
+} // namespace
 
 inline bool isS3File(const std::string_view filename) {
   return (filename.substr(0, kS3Scheme.size()) == kS3Scheme);
 }
 
-inline void getS3BucketAndKeyFromPath(
+inline void getBucketAndKeyFromS3Path(
     const std::string& path,
     std::string& bucket,
     std::string& key) {
-  auto first_sep = path.find_first_of(kSep);
-  bucket = path.substr(0, first_sep);
-  key = path.substr(first_sep + 1);
+  auto firstSep = path.find_first_of(kSep);
+  bucket = path.substr(0, firstSep);
+  key = path.substr(firstSep + 1);
 }
 
 inline std::string getS3Path(const std::string_view& path) {
   // Remove the prefix S3:// from the given path
-  return std::string(path.substr(kS3Scheme.length() + 2 * kSep.length()));
+  return std::string(path.substr(kS3Scheme.length()));
 }
 
 inline Aws::String getAwsString(const std::string& s) {

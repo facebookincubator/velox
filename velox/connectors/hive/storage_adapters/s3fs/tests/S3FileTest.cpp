@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/adapters/s3fs/MinioServer.h"
-#include "velox/adapters/s3fs/S3FileSystem.h"
-#include "velox/adapters/s3fs/S3Util.h"
+#include "MinioServer.h"
+#include "connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
+#include "connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Context.h"
 #include "velox/exec/tests/TempFilePath.h"
@@ -30,25 +30,25 @@ constexpr int kOneMB = 1 << 20;
 class S3FileSystemTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    if (minio_server_ == nullptr) {
-      minio_server_ = std::make_shared<MinioServer>();
-      minio_server_->Start();
+    if (minioServer_ == nullptr) {
+      minioServer_ = std::make_shared<MinioServer>();
+      minioServer_->Start();
     }
   }
 
   static void TearDownTestSuite() {
-    if (minio_server_ != nullptr) {
-      minio_server_->Stop();
-      minio_server_ = nullptr;
+    if (minioServer_ != nullptr) {
+      minioServer_->Stop();
+      minioServer_ = nullptr;
     }
   }
 
   void addBucket(const char* bucket) {
-    minio_server_->addBucket(bucket);
+    minioServer_->addBucket(bucket);
   }
 
   std::string getLocalPath(const char* directory) {
-    return minio_server_->getPath() + "/" + directory;
+    return minioServer_->getPath() + "/" + directory;
   }
   std::string getBucket(const char* bucket) {
     return std::string(kS3Scheme) + "//" + bucket;
@@ -80,12 +80,12 @@ class S3FileSystemTest : public testing::Test {
     ASSERT_EQ(warfFromBuf, "abbbbbcc");
   }
 
-  static std::shared_ptr<MinioServer> minio_server_;
+  static std::shared_ptr<MinioServer> minioServer_;
 };
 
-std::shared_ptr<MinioServer> S3FileSystemTest::minio_server_ = nullptr;
+std::shared_ptr<MinioServer> S3FileSystemTest::minioServer_ = nullptr;
 
-TEST_F(S3FileSystemTest, WriteAndRead) {
+TEST_F(S3FileSystemTest, writeAndRead) {
   const char* bucket = "data";
   const char* file = "test.txt";
   const std::string filename = getLocalPath(bucket) + "/" + file;
@@ -95,7 +95,7 @@ TEST_F(S3FileSystemTest, WriteAndRead) {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
+  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -104,12 +104,12 @@ TEST_F(S3FileSystemTest, WriteAndRead) {
   readData(readFile.get());
 }
 
-TEST_F(S3FileSystemTest, MissingFile) {
+TEST_F(S3FileSystemTest, missingFile) {
   const char* bucket = "data1";
   const char* file = "i-do-not-exist.txt";
   const std::string s3File = getBucket(bucket) + "/" + file;
   addBucket(bucket);
-  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
+  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -117,7 +117,7 @@ TEST_F(S3FileSystemTest, MissingFile) {
   EXPECT_THROW(s3fs.openFileForRead(s3File), VeloxException);
 }
 
-TEST_F(S3FileSystemTest, ViaRegistry) {
+TEST_F(S3FileSystemTest, viaRegistry) {
   const char* bucket = "data2";
   const char* file = "test.txt";
   const std::string filename = getLocalPath(bucket) + "/" + file;
@@ -128,10 +128,24 @@ TEST_F(S3FileSystemTest, ViaRegistry) {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  auto hiveConnectorConfigs = minio_server_->getHiveConfig();
+  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   auto s3fs = filesystems::getFileSystem(s3File, config);
   auto readFile = s3fs->openFileForRead(s3File);
   readData(readFile.get());
+}
+
+TEST(S3UtilTest, utilTest) {
+  EXPECT_FALSE(isS3File("s3:"));
+  EXPECT_FALSE(isS3File("s3::/bucket"));
+  EXPECT_FALSE(isS3File("s3:/bucket"));
+  const char* const uri = "s3://bucket/file.txt";
+  EXPECT_TRUE(isS3File(uri));
+  auto s3path = getS3Path(uri);
+  EXPECT_EQ(s3path, "bucket/file.txt");
+  std::string bucket, key;
+  getBucketAndKeyFromS3Path(s3path, bucket, key);
+  EXPECT_EQ(bucket, "bucket");
+  EXPECT_EQ(key, "file.txt");
 }

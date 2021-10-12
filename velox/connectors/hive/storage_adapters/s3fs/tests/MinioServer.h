@@ -20,37 +20,39 @@
 
 using namespace facebook::velox;
 
+namespace {
 // Adapted from the Apache Arrow library
 constexpr char const* kMinioExecutableName{"minio"};
 constexpr char const* kMinioAccessKey{"minio"};
 constexpr char const* kMinioSecretKey{"miniopass"};
 constexpr char const* kMinioConnectionString{"127.0.0.1:9000"};
+} // namespace
 
 // A minio server, managed as a child process
 class MinioServer {
  public:
   MinioServer() {
-    temp_path_ = ::exec::test::TempDirectoryPath::create();
+    tempPath_ = ::exec::test::TempDirectoryPath::create();
   }
   void Start();
   void Stop();
 
   void addBucket(const char* bucket) {
-    std::string path = temp_path_->path + "/" + bucket;
+    std::string path = tempPath_->path + "/" + bucket;
     mkdir(path.c_str(), S_IRWXU | S_IRWXG);
   }
 
   std::string getConnectionString() const {
-    return connection_string_;
+    return connectionString_;
   }
   std::string getAccessKey() const {
-    return access_key_;
+    return accessKey_;
   }
   std::string getSecretKey() const {
-    return secret_key_;
+    return secretKey_;
   }
   std::string getPath() const {
-    return temp_path_->path;
+    return tempPath_->path;
   }
 
   std::unordered_map<std::string, std::string> getHiveConfig() const {
@@ -64,11 +66,11 @@ class MinioServer {
   }
 
  private:
-  std::shared_ptr<exec::test::TempDirectoryPath> temp_path_;
-  std::string connection_string_ = kMinioConnectionString;
-  std::string access_key_ = kMinioAccessKey;
-  std::string secret_key_ = kMinioSecretKey;
-  std::shared_ptr<::boost::process::child> server_process_;
+  std::shared_ptr<exec::test::TempDirectoryPath> tempPath_;
+  std::string connectionString_ = kMinioConnectionString;
+  std::string accessKey_ = kMinioAccessKey;
+  std::string secretKey_ = kMinioSecretKey;
+  std::shared_ptr<::boost::process::child> serverProcess_;
 };
 
 void MinioServer::Start() {
@@ -76,30 +78,30 @@ void MinioServer::Start() {
   env["MINIO_ACCESS_KEY"] = getAccessKey();
   env["MINIO_SECRET_KEY"] = getSecretKey();
 
-  auto exe_path = boost::process::search_path(kMinioExecutableName);
-  if (exe_path.empty()) {
+  auto exePath = boost::process::search_path(kMinioExecutableName);
+  if (exePath.empty()) {
     VELOX_FAIL("Failed to find minio executable {}'", kMinioExecutableName);
   }
 
   try {
-    server_process_ = std::make_shared<boost::process::child>(
+    serverProcess_ = std::make_shared<boost::process::child>(
         env,
-        exe_path,
+        exePath,
         "server",
         "--quiet",
         "--compat",
         "--address",
         getConnectionString(),
-        temp_path_->path.c_str());
+        tempPath_->path.c_str());
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Minio server: {}", e.what());
   }
 }
 
 void MinioServer::Stop() {
-  if (server_process_ && server_process_->valid()) {
+  if (serverProcess_ && serverProcess_->valid()) {
     // Brutal shutdown
-    server_process_->terminate();
-    server_process_->wait();
+    serverProcess_->terminate();
+    serverProcess_->wait();
   }
 }

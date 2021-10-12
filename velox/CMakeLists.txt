@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(adapters)
+add_subdirectory(connectors/hive/storage_adapters)
 add_subdirectory(aggregates)
 add_subdirectory(buffer)
 add_subdirectory(common)

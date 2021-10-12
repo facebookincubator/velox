@@ -14,23 +14,22 @@
  * limitations under the License.
  */
 
-// Implementation of S3 filesystem and file interface.
-// We provide a registration method for read and write files so the appropriate
-// type of file can be constructed based on a filename. See the
-// (register|generate)ReadFile and (register|generate)WriteFile functions.
-
 #pragma once
 
 #include "velox/common/file/FileSystems.h"
 
 namespace facebook::velox::filesystems {
 
-// Implementation of S3 FileSystem
+// Implementation of S3 filesystem and file interface.
+// We provide a registration method for read and write files so the appropriate
+// type of file can be constructed based on a filename. See the
+// (register|generate)ReadFile and (register|generate)WriteFile functions.
 class S3FileSystem : public FileSystem {
  public:
   S3FileSystem(std::shared_ptr<const Config> config);
   ~S3FileSystem() {}
 
+  // Initialize the Aws::S3::S3Client from the input Config parameters.
   void initializeClient();
 
   std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override;
