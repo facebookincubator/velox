@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/TempFilePath.h"
+#include "TempFilePath.h"
 
 namespace facebook::velox::exec::test {
 
