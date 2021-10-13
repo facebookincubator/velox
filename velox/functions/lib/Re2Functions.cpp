@@ -124,7 +124,7 @@ likePatternToRe2(StringView pattern, char escapeChar, bool& validPattern) {
   regex.append("^");
   bool escaped = false;
   for (const char c : pattern) {
-    if (escaped &&  !(c == '%' || c == '_' || c == escapeChar)) {
+    if (escaped && !(c == '%' || c == '_' || c == escapeChar)) {
       validPattern = false;
     }
     if (!escaped && (c == escapeChar)) {
@@ -370,11 +370,10 @@ class LikeConstantPattern final : public VectorFunction {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
 
     if (!validPattern_) {
-        auto error = std::make_exception_ptr(
-                std::invalid_argument("Escape character must be followed by '%%', '_' or the escape character itself\""));
-        rows.applyToSelected(
-                [&](auto row) { context->setError(row, error); });
-        return;
+      auto error = std::make_exception_ptr(std::invalid_argument(
+          "Escape character must be followed by '%%', '_' or the escape character itself\""));
+      rows.applyToSelected([&](auto row) { context->setError(row, error); });
+      return;
     }
 
     // apply() will not be invoked if the pattern was invalid or the selection
@@ -389,16 +388,14 @@ class LikeConstantPattern final : public VectorFunction {
     if (toSearch->isIdentityMapping()) {
       auto rawStrings = toSearch->data<StringView>();
       rows.applyToSelected([&](vector_size_t i) {
-          result.set(i, re2FullMatch(rawStrings[i], re_));
+        result.set(i, re2FullMatch(rawStrings[i], re_));
       });
       return;
     }
 
     if (toSearch->isConstantMapping()) {
       bool match = re2FullMatch(toSearch->valueAt<StringView>(0), re_);
-      rows.applyToSelected([&](vector_size_t i) {
-          result.set(i, match);
-      });
+      rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
       return;
     }
 
