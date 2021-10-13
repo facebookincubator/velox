@@ -104,9 +104,9 @@ class S3ReadFile final : public ReadFile {
 
  private:
   // The assumption here is that "position" has space for at least "length"
-  // bytes
+  // bytes.
   void preadInternal(uint64_t offset, uint64_t length, char* position) const {
-    // Read the desired range of bytes
+    // Read the desired range of bytes.
     Aws::S3::Model::GetObjectRequest request;
     Aws::S3::Model::GetObjectResult result;
 
@@ -167,16 +167,6 @@ class S3FileSystem::Impl {
     }
   }
 
-  std::string getOptionalProperty(
-      const std::string& name,
-      const std::string& defaultValue) {
-    auto value = config_->get(name);
-    if (!value.hasValue()) {
-      return defaultValue;
-    }
-    return value.value();
-  }
-
   // Configure default AWS credentials provider chain.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
   getDefaultCredentialProvider() {
@@ -196,28 +186,27 @@ class S3FileSystem::Impl {
   void initializeClient() {
     Aws::Client::ClientConfiguration clientConfig;
 
-    const auto endpoint = getOptionalProperty(S3Config::kEndpoint, "");
+    const std::string endpoint =
+        config_->get(S3Config::kEndpoint, std::string(""));
     clientConfig.endpointOverride = endpoint;
 
     // Default is to use SSL.
-    const auto useSSL =
-        (getOptionalProperty(S3Config::kSSLEnabled, "true") == "true");
+    const auto useSSL = config_->get(S3Config::kSSLEnabled, true);
     if (useSSL) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
     }
 
-    // Virtual addressing is used for S3 on AWS.
+    // Virtual addressing is used for S3 on AWS and is the default.
     // Path access style is used for some on-prem systems like Minio.
-    const auto pathAccessStyle =
-        getOptionalProperty(S3Config::kPathAccessStyle, "false");
-    const bool useVirtualAddressing = (pathAccessStyle == "false");
+    const bool useVirtualAddressing =
+        !config_->get(S3Config::kPathAccessStyle, false);
 
-    const auto accessKey = getOptionalProperty(S3Config::kAccessKey, "");
-    const auto secretKey = getOptionalProperty(S3Config::kSecretKey, "");
+    const auto accessKey = config_->get(S3Config::kAccessKey, std::string(""));
+    const auto secretKey = config_->get(S3Config::kSecretKey, std::string(""));
     const auto useInstanceCred =
-        getOptionalProperty(S3Config::kUseInstanceCredentials, "");
+        config_->get(S3Config::kUseInstanceCredentials, std::string(""));
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
     if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
       credentialsProvider =
