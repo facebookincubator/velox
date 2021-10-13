@@ -376,8 +376,7 @@ class LikeConstantPattern final : public VectorFunction {
       return;
     }
 
-    // apply() will not be invoked if the pattern was invalid or the selection
-    // is empty.
+    // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
 
     FlatVector<bool>& result =
