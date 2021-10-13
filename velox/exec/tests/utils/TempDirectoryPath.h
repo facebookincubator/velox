@@ -24,36 +24,32 @@
 
 namespace facebook::velox::exec::test {
 
-// It manages the lifetime of a temporary file.
-class TempFilePath {
+// It manages the lifetime of a temporary directory.
+class TempDirectoryPath {
  public:
-  static std::shared_ptr<TempFilePath> create();
+  static std::shared_ptr<TempDirectoryPath> create();
 
-  virtual ~TempFilePath() {
-    unlink(path.c_str());
-    close(fd);
-  }
+  virtual ~TempDirectoryPath();
 
   const std::string path;
 
-  TempFilePath(const TempFilePath&) = delete;
-  TempFilePath& operator=(const TempFilePath&) = delete;
+  TempDirectoryPath(const TempDirectoryPath&) = delete;
+  TempDirectoryPath& operator=(const TempDirectoryPath&) = delete;
 
  private:
-  int fd;
+  char* error_;
 
-  TempFilePath() : path(createTempFile(this)) {
-    VELOX_CHECK_NE(fd, -1);
+  TempDirectoryPath() : path(createTempDirectory(this)) {
+    VELOX_CHECK_NE(error_, nullptr);
   }
 
-  static std::string createTempFile(TempFilePath* tempFilePath) {
+  static std::string createTempDirectory(TempDirectoryPath* tempDirectoryPath) {
     char path[] = "/tmp/velox_test_XXXXXX";
-    tempFilePath->fd = mkstemp(path);
-    if (tempFilePath->fd == -1) {
-      throw std::logic_error("Cannot open temp file");
+    tempDirectoryPath->error_ = mkdtemp(path);
+    if (tempDirectoryPath->error_ == nullptr) {
+      throw std::logic_error("Cannot open temp directory");
     }
     return path;
   }
 };
-
 } // namespace facebook::velox::exec::test

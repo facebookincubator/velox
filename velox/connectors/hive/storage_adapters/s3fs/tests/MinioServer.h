@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/TempFilePath.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include "boost/process.hpp"
 

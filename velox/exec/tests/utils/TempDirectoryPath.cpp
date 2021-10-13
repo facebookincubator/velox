@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/TempFilePath.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "boost/filesystem.hpp"
 
 namespace facebook::velox::exec::test {
 
-std::shared_ptr<TempFilePath> TempFilePath::create() {
-  struct SharedTempFilePath : public TempFilePath {
-    SharedTempFilePath() : TempFilePath() {}
+std::shared_ptr<TempDirectoryPath> TempDirectoryPath::create() {
+  struct SharedTempDirectoryPath : public TempDirectoryPath {
+    SharedTempDirectoryPath() : TempDirectoryPath() {}
   };
-  return std::make_shared<SharedTempFilePath>();
+  return std::make_shared<SharedTempDirectoryPath>();
+}
+
+TempDirectoryPath::~TempDirectoryPath() {
+  boost::filesystem::remove_all(path.c_str());
 }
 
 } // namespace facebook::velox::exec::test
