@@ -53,11 +53,7 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, "map_values");
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_substr, "substr");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, "lower");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_ltrim, "ltrim");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_rtrim, "rtrim");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_trim, "trim");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_split, "split");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, "upper");
@@ -78,6 +74,7 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_to_utf8, "to_utf8");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_from_unixtime, "from_unixtime");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_hour, "hour");
 
   // TODO Fix Koski parser and clean this up.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, "ROW");

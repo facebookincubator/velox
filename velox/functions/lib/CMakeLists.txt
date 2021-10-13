@@ -13,9 +13,12 @@
 # limitations under the License.
 find_library(RE2 re2 REQUIRED)
 
-add_library(velox_functions_lib LambdaFunctionUtil.cpp Re2Functions.cpp)
+add_library(velox_functions_lib LambdaFunctionUtil.cpp Re2Functions.cpp
+                                StringEncodingUtils.cpp)
 target_link_libraries(velox_functions_lib velox_vector ${RE2})
 
-add_subdirectory(benchmarks)
 add_subdirectory(string)
-add_subdirectory(tests)
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(benchmarks)
+  add_subdirectory(tests)
+endif()

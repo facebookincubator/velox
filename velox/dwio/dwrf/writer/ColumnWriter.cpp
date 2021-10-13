@@ -25,7 +25,7 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
-using namespace facebook::dwio::common;
+using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::memory;
 
 namespace facebook::velox::dwrf {
@@ -958,6 +958,14 @@ class StringColumnWriter : public ColumnWriter {
     dictEncoder_.clear();
     rows_.clear();
     strideOffsets_.clear();
+  }
+
+ protected:
+  bool useDictionaryEncoding() const override {
+    return (sequence_ == 0 ||
+            !context_.getConfig(
+                Config::MAP_FLAT_DISABLE_DICT_ENCODING_STRING)) &&
+        !context_.isLowMemoryMode();
   }
 
  private:
