@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "S3FileSystem.h"
-#include "S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "velox/core/Context.h"
 
 #include <fmt/format.h>
@@ -34,52 +34,51 @@
 #include <aws/s3/model/HeadObjectRequest.h>
 
 namespace facebook::velox {
-
-// Implement the S3ReadFile
+namespace {
 class S3ReadFile final : public ReadFile {
  public:
-  S3ReadFile(std::string path, std::shared_ptr<Aws::S3::S3Client> client)
-      : client_(client) {
+  S3ReadFile(const std::string& path, std::shared_ptr<Aws::S3::S3Client> client)
+      : client_(std::move(client)) {
     getBucketAndKeyFromS3Path(path, bucket_, key_);
   }
 
-  // gets the length of the file
-  // checks if there are any issues accessing the file
+  // Gets the length of the file.
+  // Checks if there are any issues reading the file.
   void initialize() {
-    // make it a no-op if invoked twice.
+    // Make it a no-op if invoked twice.
     if (length_ != -1) {
       return;
     }
 
-    Aws::S3::Model::HeadObjectRequest req;
-    req.SetBucket(getAwsString(bucket_));
-    req.SetKey(getAwsString(key_));
+    Aws::S3::Model::HeadObjectRequest request;
+    request.SetBucket(getAwsString(bucket_));
+    request.SetKey(getAwsString(key_));
 
-    auto outcome = client_->HeadObject(req);
+    auto outcome = client_->HeadObject(request);
     VELOX_CHECK_AWS_OUTCOME(
-        outcome, "failed to initialize S3 file", bucket_, key_);
+        outcome, "Failed to initialize S3 file", bucket_, key_);
     length_ = outcome.GetResult().GetContentLength();
-    VELOX_CHECK(length_ >= 0);
+    VELOX_CHECK_GE(length_, 0);
   }
 
   std::string_view pread(uint64_t offset, uint64_t length, Arena* arena)
       const override {
-    char* pos = arena->reserve(length);
-    preadInternal(offset, length, pos);
-    return {pos, length};
+    char* position = arena->reserve(length);
+    preadInternal(offset, length, position);
+    return {position, length};
   }
 
-  std::string_view pread(uint64_t offset, uint64_t length, void* buf)
+  std::string_view pread(uint64_t offset, uint64_t length, void* buffer)
       const override {
-    preadInternal(offset, length, static_cast<char*>(buf));
-    return {static_cast<char*>(buf), length};
+    preadInternal(offset, length, static_cast<char*>(buffer));
+    return {static_cast<char*>(buffer), length};
   }
 
   std::string pread(uint64_t offset, uint64_t length) const override {
     // TODO: use allocator that doesn't initialize memory?
     std::string result(length, 0);
-    char* pos = result.data();
-    preadInternal(offset, length, pos);
+    char* position = result.data();
+    preadInternal(offset, length, position);
     return result;
   }
 
@@ -104,48 +103,50 @@ class S3ReadFile final : public ReadFile {
   }
 
  private:
-  // The assumption here is that "pos" has space for at least "length" bytes
-  void preadInternal(uint64_t offset, uint64_t length, char* pos) const {
+  // The assumption here is that "position" has space for at least "length"
+  // bytes
+  void preadInternal(uint64_t offset, uint64_t length, char* position) const {
     // Read the desired range of bytes
-    Aws::S3::Model::GetObjectRequest req;
+    Aws::S3::Model::GetObjectRequest request;
     Aws::S3::Model::GetObjectResult result;
 
-    req.SetBucket(getAwsString(bucket_));
-    req.SetKey(getAwsString(key_));
+    request.SetBucket(getAwsString(bucket_));
+    request.SetKey(getAwsString(key_));
     std::stringstream ss;
     ss << "bytes=" << offset << "-" << offset + length - 1;
-    req.SetRange(getAwsString(ss.str()));
+    request.SetRange(getAwsString(ss.str()));
     // TODO: Avoid copy below by using  req.SetResponseStreamFactory();
     // Reference: ARROW-8692
-    auto outcome = client_->GetObject(req);
+    auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(
-        outcome, "failure in S3ReadFile::preadInternal", bucket_, key_);
+        outcome, "Failure in S3ReadFile::preadInternal", bucket_, key_);
 
     result = std::move(outcome).GetResultWithOwnership();
     auto& stream = result.GetBody();
-    stream.read(reinterpret_cast<char*>(pos), length);
+    stream.read(reinterpret_cast<char*>(position), length);
   }
+
   std::shared_ptr<Aws::S3::S3Client> client_;
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
 };
+} // namespace
 
 namespace filesystems {
 
 namespace S3Config {
 namespace {
-constexpr char const* pathAccessStyle{"hive.s3.path-style-access"};
-constexpr char const* endpoint{"hive.s3.endpoint"};
-constexpr char const* secretKey{"hive.s3.aws-secret-key"};
-constexpr char const* accessKey{"hive.s3.aws-access-key"};
-constexpr char const* sslEnabled{"hive.s3.ssl.enabled"};
-constexpr char const* useInstanceCredentials{
+constexpr char const* kPathAccessStyle{"hive.s3.path-style-access"};
+constexpr char const* kEndpoint{"hive.s3.endpoint"};
+constexpr char const* kSecretKey{"hive.s3.aws-secret-key"};
+constexpr char const* kAccessKey{"hive.s3.aws-access-key"};
+constexpr char const* kSSLEnabled{"hive.s3.ssl.enabled"};
+constexpr char const* kUseInstanceCredentials{
     "hive.s3.use-instance-credentials"};
 } // namespace
 } // namespace S3Config
 
-// Implement the S3FileSystem
 class S3FileSystem::Impl {
  public:
   Impl(const Config* config) : config_(config) {
@@ -182,7 +183,7 @@ class S3FileSystem::Impl {
     return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
   }
 
-  // Configure with access and secret keys. Used for on-prem.
+  // Configure with access and secret keys.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
   getAccessSecretCredentialProvider(
       std::string accessKey,
@@ -191,31 +192,32 @@ class S3FileSystem::Impl {
         getAwsString(accessKey), getAwsString(secretKey), getAwsString(""));
   }
 
-  // Use the input Config parameters and initialize the S3Client
+  // Use the input Config parameters and initialize the S3Client.
   void initializeClient() {
     Aws::Client::ClientConfiguration clientConfig;
 
-    const auto endpoint = getOptionalProperty(S3Config::endpoint, "");
+    const auto endpoint = getOptionalProperty(S3Config::kEndpoint, "");
     clientConfig.endpointOverride = endpoint;
 
-    // default is use SSL
+    // Default is to use SSL.
     const auto useSSL =
-        (getOptionalProperty(S3Config::sslEnabled, "true") == "true");
+        (getOptionalProperty(S3Config::kSSLEnabled, "true") == "true");
     if (useSSL) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
     }
 
-    // use virtual addressing for S3 on AWS
+    // Virtual addressing is used for S3 on AWS.
+    // Path access style is used for some on-prem systems like Minio.
     const auto pathAccessStyle =
-        getOptionalProperty(S3Config::pathAccessStyle, "false");
+        getOptionalProperty(S3Config::kPathAccessStyle, "false");
     const bool useVirtualAddressing = (pathAccessStyle == "false");
 
-    const auto accessKey = getOptionalProperty(S3Config::accessKey, "");
-    const auto secretKey = getOptionalProperty(S3Config::secretKey, "");
+    const auto accessKey = getOptionalProperty(S3Config::kAccessKey, "");
+    const auto secretKey = getOptionalProperty(S3Config::kSecretKey, "");
     const auto useInstanceCred =
-        getOptionalProperty(S3Config::useInstanceCredentials, "");
+        getOptionalProperty(S3Config::kUseInstanceCredentials, "");
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
     if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
       credentialsProvider =
@@ -231,7 +233,7 @@ class S3FileSystem::Impl {
         useVirtualAddressing);
   }
 
-  std::shared_ptr<Aws::S3::S3Client> getS3Client() {
+  std::shared_ptr<Aws::S3::S3Client> s3Client() {
     return client_;
   }
 
@@ -253,7 +255,7 @@ void S3FileSystem::initializeClient() {
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(std::string_view path) {
   const std::string file = getS3Path(path);
-  auto s3file = std::make_unique<S3ReadFile>(file, impl_->getS3Client());
+  auto s3file = std::make_unique<S3ReadFile>(file, impl_->s3Client());
   s3file->initialize();
   return s3file;
 }
