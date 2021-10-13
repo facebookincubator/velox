@@ -37,6 +37,7 @@ HashAggregation::HashAggregation(
       maxPartialAggregationMemoryUsage_(
           operatorCtx_->task()
               ->queryCtx()
+              ->config()
               ->maxPartialAggregationMemoryUsage()) {
   auto inputType = aggregationNode->sources()[0]->outputType();
 
