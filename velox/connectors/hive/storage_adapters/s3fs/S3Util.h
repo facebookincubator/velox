@@ -39,7 +39,7 @@ inline bool isS3File(const std::string_view filename) {
   return (filename.substr(0, kS3Scheme.size()) == kS3Scheme);
 }
 
-inline void getBucketAndKeyFromS3Path(
+inline void bucketAndKeyFromS3Path(
     const std::string& path,
     std::string& bucket,
     std::string& key) {
@@ -48,12 +48,12 @@ inline void getBucketAndKeyFromS3Path(
   key = path.substr(firstSep + 1);
 }
 
-inline std::string getS3Path(const std::string_view& path) {
+inline std::string s3Path(const std::string_view& path) {
   // Remove the prefix S3:// from the given path
   return std::string(path.substr(kS3Scheme.length()));
 }
 
-inline Aws::String getAwsString(const std::string& s) {
+inline Aws::String awsString(const std::string& s) {
   return Aws::String(s.begin(), s.end());
 }
 

@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "MinioServer.h"
 #include "connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/common/file/File.h"
 #include "velox/core/Context.h"
-#include "velox/exec/tests/TempFilePath.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
@@ -47,10 +47,11 @@ class S3FileSystemTest : public testing::Test {
     minioServer_->addBucket(bucket);
   }
 
-  std::string getLocalPath(const char* directory) {
-    return minioServer_->getPath() + "/" + directory;
+  std::string localPath(const char* directory) {
+    return minioServer_->path() + "/" + directory;
   }
-  std::string getBucket(const char* bucket) {
+
+  std::string s3URI(const char* bucket) {
     return std::string(kS3Scheme) + "//" + bucket;
   }
 
@@ -86,16 +87,16 @@ class S3FileSystemTest : public testing::Test {
 std::shared_ptr<MinioServer> S3FileSystemTest::minioServer_ = nullptr;
 
 TEST_F(S3FileSystemTest, writeAndRead) {
-  const char* bucket = "data";
+  const char* bucket_name = "data";
   const char* file = "test.txt";
-  const std::string filename = getLocalPath(bucket) + "/" + file;
-  const std::string s3File = getBucket(bucket) + "/" + file;
-  addBucket(bucket);
+  const std::string filename = localPath(bucket_name) + "/" + file;
+  const std::string s3File = s3URI(bucket_name) + "/" + file;
+  addBucket(bucket_name);
   {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
+  auto hiveConnectorConfigs = minioServer_->hiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -105,11 +106,11 @@ TEST_F(S3FileSystemTest, writeAndRead) {
 }
 
 TEST_F(S3FileSystemTest, missingFile) {
-  const char* bucket = "data1";
+  const char* bucket_name = "data1";
   const char* file = "i-do-not-exist.txt";
-  const std::string s3File = getBucket(bucket) + "/" + file;
-  addBucket(bucket);
-  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
+  const std::string s3File = s3URI(bucket_name) + "/" + file;
+  addBucket(bucket_name);
+  auto hiveConnectorConfigs = minioServer_->hiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   filesystems::S3FileSystem s3fs(config);
@@ -118,34 +119,20 @@ TEST_F(S3FileSystemTest, missingFile) {
 }
 
 TEST_F(S3FileSystemTest, viaRegistry) {
-  const char* bucket = "data2";
+  const char* bucket_name = "data2";
   const char* file = "test.txt";
-  const std::string filename = getLocalPath(bucket) + "/" + file;
-  const std::string s3File = getBucket(bucket) + "/" + file;
+  const std::string filename = localPath(bucket_name) + "/" + file;
+  const std::string s3File = s3URI(bucket_name) + "/" + file;
   filesystems::registerS3FileSystem();
-  addBucket(bucket);
+  addBucket(bucket_name);
   {
     LocalWriteFile writeFile(filename);
     writeData(&writeFile);
   }
-  auto hiveConnectorConfigs = minioServer_->getHiveConfig();
+  auto hiveConnectorConfigs = minioServer_->hiveConfig();
   std::shared_ptr<const Config> config =
       std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
   auto s3fs = filesystems::getFileSystem(s3File, config);
   auto readFile = s3fs->openFileForRead(s3File);
   readData(readFile.get());
-}
-
-TEST(S3UtilTest, utilTest) {
-  EXPECT_FALSE(isS3File("s3:"));
-  EXPECT_FALSE(isS3File("s3::/bucket"));
-  EXPECT_FALSE(isS3File("s3:/bucket"));
-  const char* const uri = "s3://bucket/file.txt";
-  EXPECT_TRUE(isS3File(uri));
-  auto s3path = getS3Path(uri);
-  EXPECT_EQ(s3path, "bucket/file.txt");
-  std::string bucket, key;
-  getBucketAndKeyFromS3Path(s3path, bucket, key);
-  EXPECT_EQ(bucket, "bucket");
-  EXPECT_EQ(key, "file.txt");
 }

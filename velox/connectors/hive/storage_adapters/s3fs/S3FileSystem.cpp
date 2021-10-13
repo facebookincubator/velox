@@ -39,7 +39,7 @@ class S3ReadFile final : public ReadFile {
  public:
   S3ReadFile(const std::string& path, std::shared_ptr<Aws::S3::S3Client> client)
       : client_(std::move(client)) {
-    getBucketAndKeyFromS3Path(path, bucket_, key_);
+    bucketAndKeyFromS3Path(path, bucket_, key_);
   }
 
   // Gets the length of the file.
@@ -51,8 +51,8 @@ class S3ReadFile final : public ReadFile {
     }
 
     Aws::S3::Model::HeadObjectRequest request;
-    request.SetBucket(getAwsString(bucket_));
-    request.SetKey(getAwsString(key_));
+    request.SetBucket(awsString(bucket_));
+    request.SetKey(awsString(key_));
 
     auto outcome = client_->HeadObject(request);
     VELOX_CHECK_AWS_OUTCOME(
@@ -110,11 +110,11 @@ class S3ReadFile final : public ReadFile {
     Aws::S3::Model::GetObjectRequest request;
     Aws::S3::Model::GetObjectResult result;
 
-    request.SetBucket(getAwsString(bucket_));
-    request.SetKey(getAwsString(key_));
+    request.SetBucket(awsString(bucket_));
+    request.SetKey(awsString(key_));
     std::stringstream ss;
     ss << "bytes=" << offset << "-" << offset + length - 1;
-    request.SetRange(getAwsString(ss.str()));
+    request.SetRange(awsString(ss.str()));
     // TODO: Avoid copy below by using  req.SetResponseStreamFactory();
     // Reference: ARROW-8692
     auto outcome = client_->GetObject(request);
@@ -169,17 +169,17 @@ class S3FileSystem::Impl {
 
   // Configure default AWS credentials provider chain.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-  getDefaultCredentialProvider() {
+  getDefaultCredentialProvider() const {
     return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
   }
 
   // Configure with access and secret keys.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
   getAccessSecretCredentialProvider(
-      std::string accessKey,
-      std::string secretKey) {
+      const std::string& accessKey,
+      const std::string& secretKey) const {
     return std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
-        getAwsString(accessKey), getAwsString(secretKey), getAwsString(""));
+        awsString(accessKey), awsString(secretKey), awsString(""));
   }
 
   // Use the input Config parameters and initialize the S3Client.
@@ -222,7 +222,7 @@ class S3FileSystem::Impl {
         useVirtualAddressing);
   }
 
-  std::shared_ptr<Aws::S3::S3Client> s3Client() {
+  std::shared_ptr<Aws::S3::S3Client> s3Client() const {
     return client_;
   }
 
@@ -231,6 +231,7 @@ class S3FileSystem::Impl {
   std::shared_ptr<Aws::S3::S3Client> client_;
   static std::atomic<size_t> initCounter_;
 };
+
 std::atomic<size_t> S3FileSystem::Impl::initCounter_(0);
 
 S3FileSystem::S3FileSystem(std::shared_ptr<const Config> config)
@@ -243,7 +244,7 @@ void S3FileSystem::initializeClient() {
 }
 
 std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(std::string_view path) {
-  const std::string file = getS3Path(path);
+  const std::string file = s3Path(path);
   auto s3file = std::make_unique<S3ReadFile>(file, impl_->s3Client());
   s3file->initialize();
   return s3file;

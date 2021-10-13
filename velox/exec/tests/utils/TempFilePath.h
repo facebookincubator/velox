@@ -69,16 +69,16 @@ class TempDirectoryPath {
   TempDirectoryPath& operator=(const TempDirectoryPath&) = delete;
 
  private:
-  char* err;
+  char* error_;
 
   TempDirectoryPath() : path(createTempDirectory(this)) {
-    VELOX_CHECK_NE(err, nullptr);
+    VELOX_CHECK_NE(error_, nullptr);
   }
 
   static std::string createTempDirectory(TempDirectoryPath* tempDirectoryPath) {
     char path[] = "/tmp/velox_test_XXXXXX";
-    tempDirectoryPath->err = mkdtemp(path);
-    if (tempDirectoryPath->err == nullptr) {
+    tempDirectoryPath->error_ = mkdtemp(path);
+    if (tempDirectoryPath->error_ == nullptr) {
       throw std::logic_error("Cannot open temp directory");
     }
     return path;
