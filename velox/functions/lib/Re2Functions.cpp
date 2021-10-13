@@ -32,18 +32,6 @@ using ::facebook::velox::exec::VectorFunction;
 using ::facebook::velox::exec::VectorFunctionArg;
 using ::re2::RE2;
 
-#define LIKE_PATTERN_EXCEPTION                          \
-  std::make_exception_ptr(VeloxUserError(               \
-      __FILE__,                                         \
-      __LINE__,                                         \
-      __FUNCTION__,                                     \
-      "",                                               \
-      "Escape character must be followed by '%%', '_' " \
-      "or the escape character itself",                 \
-      error_source::kErrorSourceUser,                   \
-      error_code::kInvalidArgument,                     \
-      false))
-
 std::string printTypesCsv(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   std::string result;
@@ -136,7 +124,7 @@ likePatternToRe2(StringView pattern, char escapeChar, bool& validPattern) {
   regex.append("^");
   bool escaped = false;
   for (const char c : pattern) {
-    if (!escaped || c == '%' || c == '_' || c == escapeChar) {
+    if (escaped &&  !(c == '%' || c == '_' || c == escapeChar)) {
       validPattern = false;
     }
     if (!escaped && (c == escapeChar)) {
@@ -175,7 +163,7 @@ likePatternToRe2(StringView pattern, char escapeChar, bool& validPattern) {
       }
     }
   }
-  if (!escaped) {
+  if (escaped) {
     validPattern = false;
   }
 
@@ -381,6 +369,14 @@ class LikeConstantPattern final : public VectorFunction {
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
 
+    if (!validPattern_) {
+        auto error = std::make_exception_ptr(
+                std::invalid_argument("Escape character must be followed by '%%', '_' or the escape character itself\""));
+        rows.applyToSelected(
+                [&](auto row) { context->setError(row, error); });
+        return;
+    }
+
     // apply() will not be invoked if the pattern was invalid or the selection
     // is empty.
     checkForBadPattern(re_);
@@ -393,11 +389,7 @@ class LikeConstantPattern final : public VectorFunction {
     if (toSearch->isIdentityMapping()) {
       auto rawStrings = toSearch->data<StringView>();
       rows.applyToSelected([&](vector_size_t i) {
-        if (!validPattern_) {
-          context->setError(i, LIKE_PATTERN_EXCEPTION);
-        } else {
           result.set(i, re2FullMatch(rawStrings[i], re_));
-        }
       });
       return;
     }
@@ -405,11 +397,7 @@ class LikeConstantPattern final : public VectorFunction {
     if (toSearch->isConstantMapping()) {
       bool match = re2FullMatch(toSearch->valueAt<StringView>(0), re_);
       rows.applyToSelected([&](vector_size_t i) {
-        if (!validPattern_) {
-          context->setError(i, LIKE_PATTERN_EXCEPTION);
-        } else {
           result.set(i, match);
-        }
       });
       return;
     }

@@ -384,9 +384,7 @@ TEST_F(Re2FunctionsTest, likePatternAndEscape) {
   EXPECT_EQ(like("%cd", "%#%%", '#'), true);
   EXPECT_EQ(like("cde", "%#%%", '#'), false);
 
-  assertUserInvalidArgument(
-      [&]() { evaluateOnce<bool>("like(\"abcd\", \"a#}#+\", '#')"); },
-      "Escape character must be followed by '%%', '_'r");
+  EXPECT_THROW(like("abcd", "a#}#+", '#'), std::exception);
 }
 
 } // namespace
