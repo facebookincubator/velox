@@ -33,9 +33,9 @@ class MinioServer {
  public:
   MinioServer() : tempPath_(::exec::test::TempDirectoryPath::create()) {}
 
-  void Start();
+  void start();
 
-  void Stop();
+  void stop();
 
   void addBucket(const char* bucket) {
     const std::string path = tempPath_->path + "/" + bucket;
@@ -64,7 +64,7 @@ class MinioServer {
   std::shared_ptr<::boost::process::child> serverProcess_;
 };
 
-void MinioServer::Start() {
+void MinioServer::start() {
   boost::process::environment env = boost::this_process::environment();
   env["MINIO_ACCESS_KEY"] = accessKey_;
   env["MINIO_SECRET_KEY"] = secretKey_;
@@ -89,7 +89,7 @@ void MinioServer::Start() {
   }
 }
 
-void MinioServer::Stop() {
+void MinioServer::stop() {
   if (serverProcess_ && serverProcess_->valid()) {
     // Brutal shutdown
     serverProcess_->terminate();

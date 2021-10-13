@@ -32,13 +32,13 @@ class S3FileSystemTest : public testing::Test {
   static void SetUpTestSuite() {
     if (minioServer_ == nullptr) {
       minioServer_ = std::make_shared<MinioServer>();
-      minioServer_->Start();
+      minioServer_->start();
     }
   }
 
   static void TearDownTestSuite() {
     if (minioServer_ != nullptr) {
-      minioServer_->Stop();
+      minioServer_->stop();
       minioServer_ = nullptr;
     }
   }

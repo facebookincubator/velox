@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+
 #include "boost/filesystem.hpp"
 
 namespace facebook::velox::exec::test {
