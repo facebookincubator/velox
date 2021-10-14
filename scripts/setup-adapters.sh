@@ -1,3 +1,4 @@
+#!/bin/bash
 # Copyright (c) Facebook, Inc. and its affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +18,7 @@ function install_aws-sdk-cpp {
   local AWS_SDK_VERSION="1.9.96"
 
   if [ -d "${NAME}" ]; then
-    read -p "do you want to rebuild '${NAME}'? (y/n) " confirm
+    read -r -p "do you want to rebuild '${NAME}'? (y/n) " confirm
     if [[ "${confirm}" =~ ^[yy]$ ]]; then
       rm -rf "${NAME}"
     else
@@ -27,7 +28,7 @@ function install_aws-sdk-cpp {
 
   git clone --depth 1 --recurse-submodules --branch "${AWS_SDK_VERSION}" https://github.com/aws/aws-sdk-cpp.git "${NAME}"
   mkdir "${NAME}_build"
-  cd "${NAME}_build"
+  cd "${NAME}_build" || exit
   cmake ../"${NAME}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_BUILD_TYPE=Debug \
@@ -47,7 +48,7 @@ function install_aws-sdk-cpp {
   ninja install
 }
 
-cd "${DEPENDENCY_DIR}"
+cd "${DEPENDENCY_DIR}" || exit
 # aws-sdk-cpp missing dependencies
 # TODO: Bake them into the docker image
 yum install -y curl-devel
