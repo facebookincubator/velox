@@ -82,6 +82,23 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="like">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Permalink to this definition">¶</a></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">escape</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span></dt>
+<dd><p>Evaluates if the <code class="docutils literal notranslate"><span class="pre">string</span></code> matches the <code class="docutils literal notranslate"><span class="pre">pattern</span></code>. Patterns can contain
+regular characters as well as wildcards. Wildcard characters can be escaped
+using the single character specified for the <code class="docutils literal notranslate"><span class="pre">escape</span></code> parameter.
+Matching is case sensitive.</p>
+<p>Note: The wildcard ‘%’ represents 0, 1 or multiple characters and the
+wildcard ‘_’ represents exactly one character.</p>
+<blockquote>
+<div><p>SELECT like(‘abc’, ‘%b%’); – true
+SELECT like(‘a_c’, ‘%#_%’, ‘#’); – true</p>
+</div></blockquote>
+</dd></dl>
+
 </section>
 
 
