@@ -36,20 +36,15 @@ class TempDirectoryPath {
   TempDirectoryPath(const TempDirectoryPath&) = delete;
   TempDirectoryPath& operator=(const TempDirectoryPath&) = delete;
 
- private:
-  char* error_;
+  TempDirectoryPath() : path(createTempDirectory()) {}
 
-  TempDirectoryPath() : path(createTempDirectory(this)) {
-    VELOX_CHECK_NE(error_, nullptr);
-  }
-
-  static std::string createTempDirectory(TempDirectoryPath* tempDirectoryPath) {
+  static std::string createTempDirectory() {
     char path[] = "/tmp/velox_test_XXXXXX";
-    tempDirectoryPath->error_ = mkdtemp(path);
-    if (tempDirectoryPath->error_ == nullptr) {
+    const char* tempDirectoryPath = mkdtemp(path);
+    if (tempDirectoryPath == nullptr) {
       throw std::logic_error("Cannot open temp directory");
     }
-    return path;
+    return tempDirectoryPath;
   }
 };
 } // namespace facebook::velox::exec::test
