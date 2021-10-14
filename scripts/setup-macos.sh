@@ -90,12 +90,23 @@ function cmake_install {
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
     -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS}" \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_TESTS=OFF \
     "$@"
   ninja -C "${BINARY_DIR}" install
 }
 
 function update_brew {
   /usr/local/bin/brew update --force --quiet
+}
+
+function openssl_dir {
+  local OPENSSL_DIR=$(brew --prefix openssl)
+  if [[ -d "$OPENSSL_DIR" ]]; then
+    echo "${OPENSSL_DIR}"
+  else
+    echo /usr/local/opt/openssl
+  fi
 }
 
 function install_build_prerequisites {
@@ -124,14 +135,7 @@ function install_double_conversion {
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  OPENSSL_DIR=$(brew --prefix openssl)
-
-  if [[ ! -d "$OPENSSL_DIR" ]]
-  then
-    OPENSSL_DIR="/usr/local/opt/openssl"
-  fi
-
-  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="${OPENSSL_DIR}"
+  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="$(openssl_dir)"
 }
 
 function install_ranges_v3 {
