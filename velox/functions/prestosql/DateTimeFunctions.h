@@ -118,23 +118,25 @@ FOLLY_ALWAYS_INLINE bool call(
 }
 VELOX_UDF_END();
 
-VELOX_UDF_BEGIN(hour)
-const date::time_zone* timeZone_ = nullptr;
+struct udf_hour {
+  VELOX_UDF_BEGIN2(hour)
+  const date::time_zone* timeZone_ = nullptr;
 
-FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
-  timeZone_ = getTimeZoneFromConfig(config);
-}
+  FOLLY_ALWAYS_INLINE void initialize(const core::QueryConfig& config) {
+    timeZone_ = getTimeZoneFromConfig(config);
+  }
 
-FOLLY_ALWAYS_INLINE bool call(
-    int64_t& result,
-    const arg_type<Timestamp>& timestamp) {
-  int64_t seconds = getSeconds(timestamp, timeZone_);
-  std::tm dateTime;
-  gmtime_r((const time_t*)&seconds, &dateTime);
-  result = dateTime.tm_hour;
-  return true;
-}
-VELOX_UDF_END();
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    int64_t seconds = getSeconds(timestamp, timeZone_);
+    std::tm dateTime;
+    gmtime_r((const time_t*)&seconds, &dateTime);
+    result = dateTime.tm_hour;
+    return true;
+  }
+  VELOX_UDF_END2();
+};
 
 VELOX_UDF_BEGIN(minute)
 const date::time_zone* timeZone_ = nullptr;
