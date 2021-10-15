@@ -91,7 +91,6 @@ function cmake_install {
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
     -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS}" \
     -DBUILD_TESTING=OFF \
-    -DBUILD_TESTS=OFF \
     "$@"
   ninja -C "${BINARY_DIR}" install
 }
@@ -140,12 +139,12 @@ function install_folly {
 
 function install_ranges_v3 {
   github_checkout ericniebler/range-v3 master
-  cmake_install -DRANGES_ENABLE_WERROR=OFF
+  cmake_install -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
 function install_re2 {
   github_checkout google/re2 2021-04-01
-  cmake_install
+  cmake_install -DRE2_BUILD_TESTING=OFF
 }
 
 function install_velox_deps {
