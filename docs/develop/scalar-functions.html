@@ -170,6 +170,89 @@ the function must define a static constexpr bool is_deterministic:</p>
 </pre></div>
 </div>
 </section>
+<section id="all-ascii-fast-path">
+<h3>All-ASCII Fast Path<a class="headerlink" href="#all-ascii-fast-path" title="Permalink to this headline">¶</a></h3>
+<p>Functions that process string inputs must work correctly for UTF-8 inputs.
+However, these functions often can be implemented more efficiently if input is
+known to contain only ASCII characters. Such functions can provide a “call”
+method to process UTF-8 strings and a “callAscii” method to process ASCII-only
+strings. The engine will check the input strings and invoke “callAscii” method
+if input is all ASCII or “call” if input may contain multi-byte characters.</p>
+<p>In addition, most functions that take string inputs and produce a string output
+have so-called default ASCII behavior, e.g. all-ASCII input guarantees
+all-ASCII output. If that’s the case, the function can indicate so by defining
+the is_default_ascii_behavior member variable and initializing it to true. The
+engine will automatically mark the result strings as all-ASCII. When these
+strings are passed as input to some other function, the engine won’t need to
+scan the strings to determine whether they are ASCII or not.</p>
+<p>Here is an example of a trim function:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">trim</span><span class="p">)</span><span class="w"></span>
+
+<span class="c1">// ASCII input always produces ASCII result.</span>
+<span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_default_ascii_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">// Properly handles multi-byte characters.</span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimUnicodeWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="c1">// Assumes input is all ASCII.</span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callAscii</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimAsciiWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="zero-copy-string-result">
+<h3>Zero-copy String Result<a class="headerlink" href="#zero-copy-string-result" title="Permalink to this headline">¶</a></h3>
+<p>Functions like <a class="reference internal" href="../functions/string.html#id3" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> and <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a> can produce zero-copy results by
+referencing input strings. To do that they must define a reuse_strings_from_arg
+member variable and initialize it to the index of the argument whose strings
+are being re-used in the result. This will allow the engine to add a reference
+to input string buffers to the result vector and ensure that these buffers will
+not go away prematurely.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Results refer to strings in the first argument.</span>
+<span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">reuse_strings_from_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="access-to-session-properties">
+<h3>Access to Session Properties<a class="headerlink" href="#access-to-session-properties" title="Permalink to this headline">¶</a></h3>
+<p>Some functions require access to session properties such as session’s timezone.
+Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
+functions. To get access to session properties the function must define an
+initialize method which receives a constant reference to QueryConfig from which
+the function can extract the necessary properties. The engine calls the
+initialize method once per query and thread of execution.</p>
+<p>Here is an example of an hour function extracting time zone from the session
+properties and using it when processing inputs.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">hour</span><span class="p">)</span><span class="w"></span>
+<span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
+
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">config</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getTimeZoneFromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">);</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Timestamp</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">timestamp</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">seconds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getSeconds</span><span class="p">(</span><span class="n">timestamp</span><span class="p">,</span><span class="w"> </span><span class="n">timeZone_</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">tm</span><span class="w"> </span><span class="n">dateTime</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="n">gmtime_r</span><span class="p">((</span><span class="k">const</span><span class="w"> </span><span class="kt">time_t</span><span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">seconds</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">dateTime</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dateTime</span><span class="p">.</span><span class="n">tm_hour</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
 <section id="registration">
 <h3>Registration<a class="headerlink" href="#registration" title="Permalink to this headline">¶</a></h3>
 <p>Use registerFunction template to register simple functions.</p>
@@ -729,6 +812,9 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#simple-functions">Simple Functions</a><ul>
 <li><a class="reference internal" href="#null-behavior">Null Behavior</a></li>
 <li><a class="reference internal" href="#determinism">Determinism</a></li>
+<li><a class="reference internal" href="#all-ascii-fast-path">All-ASCII Fast Path</a></li>
+<li><a class="reference internal" href="#zero-copy-string-result">Zero-copy String Result</a></li>
+<li><a class="reference internal" href="#access-to-session-properties">Access to Session Properties</a></li>
 <li><a class="reference internal" href="#registration">Registration</a></li>
 <li><a class="reference internal" href="#codegen">Codegen</a></li>
 <li><a class="reference internal" href="#complex-types">Complex Types</a></li>

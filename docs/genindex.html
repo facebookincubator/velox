@@ -38,6 +38,7 @@
  <a href="#A"><strong>A</strong></a>
  | <a href="#B"><strong>B</strong></a>
  | <a href="#C"><strong>C</strong></a>
+ | <a href="#D"><strong>D</strong></a>
  | <a href="#E"><strong>E</strong></a>
  | <a href="#F"><strong>F</strong></a>
  | <a href="#L"><strong>L</strong></a>
@@ -50,6 +51,7 @@
  | <a href="#V"><strong>V</strong></a>
  | <a href="#W"><strong>W</strong></a>
  | <a href="#X"><strong>X</strong></a>
+ | <a href="#Y"><strong>Y</strong></a>
  
 </div>
 <h2 id="A">A</h2>
@@ -300,6 +302,10 @@
 </li>
         <li><a href="functions/aggregate.html#count_if">count_if()</a>
 </li>
+        <li><a href="functions/datetime.html#day">day()</a>
+</li>
+        <li><a href="functions/datetime.html#day_of_month">day_of_month()</a>
+</li>
         <li><a href="functions/array.html#element_at">element_at()</a>
 </li>
         <li><a href="functions/math.html#exp">exp()</a>
@@ -354,7 +360,11 @@
 </li>
         <li><a href="functions/aggregate.html#min_by">min_by()</a>
 </li>
+        <li><a href="functions/datetime.html#minute">minute()</a>
+</li>
         <li><a href="functions/math.html#mod">mod()</a>
+</li>
+        <li><a href="functions/datetime.html#month">month()</a>
 </li>
         <li><a href="functions/math.html#pow">pow()</a>
 </li>
@@ -370,6 +380,8 @@
 </li>
         <li><a href="functions/regexp.html#id0">regexp_extract()</a>, <a href="functions/regexp.html#regexp_extract">[1]</a>
 </li>
+        <li><a href="functions/regexp.html#regexp_extract_all">regexp_extract_all()</a>
+</li>
         <li><a href="functions/regexp.html#regexp_like">regexp_like()</a>
 </li>
         <li><a href="functions/string.html#id0">replace()</a>, <a href="functions/string.html#replace">[1]</a>
@@ -379,6 +391,8 @@
         <li><a href="functions/math.html#id0">round()</a>, <a href="functions/math.html#round">[1]</a>
 </li>
         <li><a href="functions/string.html#rtrim">rtrim()</a>
+</li>
+        <li><a href="functions/datetime.html#second">second()</a>
 </li>
         <li><a href="functions/math.html#sin">sin()</a>
 </li>
@@ -431,6 +445,8 @@
         <li><a href="functions/math.html#id1">width_bucket()</a>, <a href="functions/math.html#width_bucket">[1]</a>
 </li>
         <li><a href="functions/binary.html#xxhash64">xxhash64()</a>
+</li>
+        <li><a href="functions/datetime.html#year">year()</a>
 </li>
       </ul></li>
   </ul></td>
@@ -530,6 +546,28 @@
 
       <ul>
         <li><a href="functions/aggregate.html#count_if">built-in function</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="D">D</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    day()
+
+      <ul>
+        <li><a href="functions/datetime.html#day">built-in function</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    day_of_month()
+
+      <ul>
+        <li><a href="functions/datetime.html#day_of_month">built-in function</a>
 </li>
       </ul></li>
   </ul></td>
@@ -709,8 +747,6 @@
         <li><a href="functions/map.html#map_values">built-in function</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     max()
 
@@ -718,6 +754,8 @@
         <li><a href="functions/aggregate.html#max">built-in function</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     max_by()
 
@@ -754,10 +792,24 @@
 </li>
       </ul></li>
       <li>
+    minute()
+
+      <ul>
+        <li><a href="functions/datetime.html#minute">built-in function</a>
+</li>
+      </ul></li>
+      <li>
     mod()
 
       <ul>
         <li><a href="functions/math.html#mod">built-in function</a>
+</li>
+      </ul></li>
+      <li>
+    month()
+
+      <ul>
+        <li><a href="functions/datetime.html#month">built-in function</a>
 </li>
       </ul></li>
   </ul></td>
@@ -823,6 +875,13 @@
         <li><a href="functions/regexp.html#id0">built-in function</a>, <a href="functions/regexp.html#regexp_extract">[1]</a>
 </li>
       </ul></li>
+      <li>
+    regexp_extract_all()
+
+      <ul>
+        <li><a href="functions/regexp.html#regexp_extract_all">built-in function</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li>
@@ -866,6 +925,13 @@
 <h2 id="S">S</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    second()
+
+      <ul>
+        <li><a href="functions/datetime.html#second">built-in function</a>
+</li>
+      </ul></li>
       <li>
     sin()
 
@@ -1084,6 +1150,19 @@
 
       <ul>
         <li><a href="functions/binary.html#xxhash64">built-in function</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="Y">Y</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    year()
+
+      <ul>
+        <li><a href="functions/datetime.html#year">built-in function</a>
 </li>
       </ul></li>
   </ul></td>

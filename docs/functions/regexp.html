@@ -68,6 +68,16 @@ in <code class="docutils literal notranslate"><span class="pre">string</span></c
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="regexp_extract_all">
+<span class="sig-name descname"><span class="pre">regexp_extract_all</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">group</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#regexp_extract_all" title="Permalink to this definition">¶</a></dt>
+<dd><p>Finds all occurrences of the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> in
+<code class="docutils literal notranslate"><span class="pre">string</span></code> and returns the capturing group number <code class="docutils literal notranslate"><span class="pre">group</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_extract_all</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([a-z]+)&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">,</span> <span class="s1">&#39;m&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="regexp_like">
 <span class="sig-name descname"><span class="pre">regexp_like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#regexp_like" title="Permalink to this definition">¶</a></dt>
 <dd><p>Evaluates the regular expression <code class="docutils literal notranslate"><span class="pre">pattern</span></code> and determines if it is
