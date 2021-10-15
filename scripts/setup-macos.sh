@@ -32,7 +32,7 @@ FB_OS_VERSION=v2021.05.10.00
 NPROC=$(sysctl -n hw.physicalcpu)
 COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd"
+MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl"
 
 function run_and_time {
   time "$@"
@@ -99,15 +99,6 @@ function update_brew {
   /usr/local/bin/brew update --force --quiet
 }
 
-function openssl_dir {
-  local OPENSSL_DIR=$(brew --prefix openssl)
-  if [[ -d "$OPENSSL_DIR" ]]; then
-    echo "${OPENSSL_DIR}"
-  else
-    echo /usr/local/opt/openssl
-  fi
-}
-
 function install_build_prerequisites {
   for pkg in ${MACOS_DEPS}
   do
@@ -134,7 +125,7 @@ function install_double_conversion {
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="$(openssl_dir)"
+  cmake_install -DBUILD_TESTS=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix openssl)"
 }
 
 function install_ranges_v3 {
