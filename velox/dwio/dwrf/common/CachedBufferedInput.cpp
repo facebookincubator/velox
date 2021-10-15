@@ -40,7 +40,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
   }
   requests_.emplace_back(CacheRequest{
       RawFileCacheKey{fileNum_, region.offset}, region.length, id, CachePin()});
-  tracker_->recordReference(id, region.length, groupId_);
+  tracker_->recordReference(id, region.length, fileNum_, groupId_);
   return std::make_unique<CacheInputStream>(
       cache_, ioStats_.get(), region, input_, fileNum_, tracker_, id, groupId_);
 }

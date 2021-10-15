@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/GroupTracker.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/dwrf/common/BufferedInput.h"
@@ -90,6 +91,12 @@ class CachedBufferedInput : public BufferedInput {
 
   bool shouldPrefetchStripes() const override {
     return true;
+  }
+
+  void setNumStripes(int32_t numStripes) override {
+    if (tracker_->fileGroupStats()) {
+      tracker_->fileGroupStats()->recordFile(fileNum_, groupId_, numStripes);
+    }
   }
 
  private:

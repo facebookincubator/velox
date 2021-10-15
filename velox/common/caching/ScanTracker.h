@@ -55,6 +55,10 @@ class TrackingId {
     return id_;
   }
 
+  int32_t columnId() const {
+    return id_ >> kNodeShift;
+  }
+
  private:
   int32_t id_;
 };
@@ -71,6 +75,8 @@ struct hash<::facebook::velox::cache::TrackingId> {
 } // namespace std
 
 namespace facebook::velox::cache {
+
+class FileGroupStats;
 
 // Records references and actual uses of a stream.
 struct TrackingData {
@@ -106,8 +112,9 @@ class ScanTracker {
   // remove the weak_ptr from the map of pending trackers.
   ScanTracker(
       std::string_view id,
-      std::function<void(ScanTracker*)> unregisterer)
-      : id_(id), unregisterer_(unregisterer) {}
+      std::function<void(ScanTracker*)> unregisterer,
+      FileGroupStats* FOLLY_NULLABLE fileGroupStats = nullptr)
+      : id_(id), unregisterer_(unregisterer), fileGroupStats_(fileGroupStats) {}
 
   ~ScanTracker() {
     if (unregisterer_) {
@@ -117,11 +124,19 @@ class ScanTracker {
 
   // Records that a scan references 'bytes' bytes of the stream given
   // by 'id'. This is called when preparing to read a stripe.
-  void recordReference(const TrackingId id, uint64_t bytes, uint64_t groupId);
+  void recordReference(
+      const TrackingId id,
+      uint64_t bytes,
+      uint64_t fileId,
+      uint64_t groupId);
 
   // Records that 'bytes' bytes have actually been read from the stream
   // given by 'id'.
-  void recordRead(const TrackingId id, uint64_t bytes, uint64_t groupId);
+  void recordRead(
+      const TrackingId id,
+      uint64_t bytes,
+      uint64_t fileId,
+      uint64_t groupId);
 
   // True if 'trackingId' is read at least  'minReadPct' % of the time.
   bool shouldPrefetch(TrackingId id, int32_t minReadPct) {
@@ -138,6 +153,10 @@ class ScanTracker {
     return id_;
   }
 
+  FileGroupStats* FOLLY_NULLABLE fileGroupStats() const {
+    return fileGroupStats_;
+  }
+
   std::string toString() const;
 
  private:
@@ -147,6 +166,7 @@ class ScanTracker {
   std::function<void(ScanTracker*)> unregisterer_;
   folly::F14FastMap<TrackingId, TrackingData> data_;
   TrackingData sum_;
+  FileGroupStats* FOLLY_NULLABLE fileGroupStats_;
 };
 
 } // namespace facebook::velox::cache

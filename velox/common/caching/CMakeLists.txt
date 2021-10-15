@@ -13,7 +13,8 @@
 # limitations under the License.
 
 add_library(velox_caching DataCache.cpp FileIds.cpp StringIdMap.cpp
-                          AsyncDataCache.cpp ScanTracker.cpp)
+                          AsyncDataCache.cpp ScanTracker.cpp GroupTracker.cpp)
+
 target_link_libraries(velox_caching velox_memory velox_exception ${GLOG}
                       ${FOLLY_WITH_DEPENDENCIES})
 

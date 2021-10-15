@@ -56,7 +56,7 @@ bool CacheInputStream::Next(const void** buffer, int32_t* size) {
   offsetInRun_ += *size;
   position_ += *size;
   if (tracker_) {
-    tracker_->recordRead(trackingId_, *size, groupId_);
+    tracker_->recordRead(trackingId_, *size, fileNum_, groupId_);
   }
   return true;
 }
