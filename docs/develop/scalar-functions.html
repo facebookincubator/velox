@@ -226,7 +226,7 @@ not go away prematurely.</p>
 <section id="access-to-session-properties">
 <h3>Access to Session Properties<a class="headerlink" href="#access-to-session-properties" title="Permalink to this headline">¶</a></h3>
 <p>Some functions require access to session properties such as session’s timezone.
-Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
+Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
 functions. To get access to session properties the function must define an
 initialize method which receives a constant reference to QueryConfig from which
 the function can extract the necessary properties. The engine calls the
