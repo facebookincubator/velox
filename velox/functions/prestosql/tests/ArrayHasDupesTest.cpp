@@ -30,7 +30,8 @@ class ArrayHasDupesTest : public FunctionBaseTest {
       const VectorPtr& expected,
       const std::string& expression,
       const std::vector<VectorPtr>& input) {
-    auto result = evaluate<SimpleVector<bool>>(expression, makeRowVector(input));
+    auto result =
+        evaluate<SimpleVector<bool>>(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
   }
 
