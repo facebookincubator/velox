@@ -30,8 +30,8 @@ class ArrayDupesFunction : public exec::VectorFunction {
  public:
   /// This class implements the array_dupes query function.
 
-  /// Along with the hash map, we maintain a `hasNull` flag that indicates whether
-  /// null is present in the array.
+  /// Along with the hash map, we maintain a `hasNull` flag that indicates
+  /// whether null is present in the array.
   ///
   /// Zero element copy:
   ///
@@ -48,9 +48,9 @@ class ArrayDupesFunction : public exec::VectorFunction {
   // Validate element type inside the vector
   void validateElementType(const TypeKind& kind) const {
     VELOX_USER_CHECK(
-        kind == TypeKind::TINYINT ||
-            kind == TypeKind::SMALLINT || kind == TypeKind::INTEGER ||
-            kind == TypeKind::BIGINT || kind == TypeKind::VARCHAR,
+        kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+            kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+            kind == TypeKind::VARCHAR,
         "array_dupes only takes argument of type array(varchar) or array(bigint)");
   }
 
@@ -187,9 +187,6 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 } // namespace
 
 // Register function.
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_array_dupes,
-    signatures(),
-    create);
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(udf_array_dupes, signatures(), create);
 
 } // namespace facebook::velox::functions
