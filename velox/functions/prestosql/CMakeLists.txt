@@ -17,8 +17,7 @@ add_library(
   velox_functions_prestosql OBJECT
   ArrayConstructor.cpp
   ArrayContains.cpp
-  ArrayDistinct.cpp
-  ArrayDupes.cpp
+  ArrayUnique.cpp
   ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   Cardinality.cpp
