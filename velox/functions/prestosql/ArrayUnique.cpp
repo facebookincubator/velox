@@ -49,7 +49,14 @@ class ArrayUniqueFunction : public exec::VectorFunction {
 
  protected:
   // Validate element type inside the vector
-  virtual void validateElementType(const TypeKind& kind) const {}
+  virtual void validateElementType(const TypeKind& kind) const {
+    VELOX_USER_CHECK(
+        kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+            kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+            kind == TypeKind::VARCHAR,
+        "{} only takes argument of type array(varchar) or array(bigint)",
+        name_);
+  }
 
   const std::string& name_;
 };
@@ -179,7 +186,7 @@ class ArrayDupesFunction : public ArrayUniqueFunction {
     // Acquire the array elements vector.
     auto arrayVector = args.front()->as<ArrayVector>();
     auto elementsVector = arrayVector->elements();
-    validateElementType(elementsVector->typeKind());
+    ArrayUniqueFunction::validateElementType(elementsVector->typeKind());
 
     auto elementsRows =
         toElementRows(elementsVector->size(), rows, arrayVector);
@@ -262,15 +269,74 @@ class ArrayDupesFunction : public ArrayUniqueFunction {
                 .argumentType("array(T)")
                 .build()};
   }
+};
 
- protected:
-  void validateElementType(const TypeKind& kind) const override {
-    VELOX_USER_CHECK(
-        kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
-            kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
-            kind == TypeKind::VARCHAR,
-        "{} only takes argument of type array(varchar) or array(bigint)",
-        ArrayUniqueFunction::name_);
+/// This class implements the array_has_dupes query function.
+///
+/// Along with the hash set, we maintain:
+/// 1) a `hasNull` flag that indicates whether null is present in the array;
+/// 2) a `hasDupe` flag that indicates whether there is any duplicate found.
+template <typename T>
+class ArrayHasDupesFunction : public ArrayUniqueFunction {
+ public:
+  ArrayHasDupesFunction() : ArrayUniqueFunction("array_has_dupes") {}
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      exec::Expr* caller,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    // Acquire the array elements vector.
+    auto arrayVector = args.front()->as<ArrayVector>();
+    auto elementsVector = arrayVector->elements();
+    ArrayUniqueFunction::validateElementType(elementsVector->typeKind());
+
+    auto elementsRows =
+        toElementRows(elementsVector->size(), rows, arrayVector);
+    exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
+
+    // Prepare and return result set.
+    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
+    FlatVector<bool>* flatResult = (*result)->asFlatVector<bool>();
+
+    // Process the rows: store unique values in the hash table.
+    folly::F14FastSet<T> uniqueSet;
+
+    rows.applyToSelected([&](vector_size_t row) {
+      auto size = arrayVector->sizeAt(row);
+      auto offset = arrayVector->offsetAt(row);
+
+      bool hasNulls = false;
+      bool hasDupe = false;
+      for (vector_size_t i = offset; i < offset + size; ++i) {
+        if (elements->isNullAt(i)) {
+          if (!hasNulls) {
+            hasNulls = true;
+          } else {
+            hasDupe = true;
+            break;
+          }
+        } else {
+          auto value = elements->valueAt<T>(i);
+          if (!uniqueSet.insert(value).second) {
+            hasDupe = true;
+            break;
+          }
+        }
+      }
+      uniqueSet.clear();
+      flatResult->set(row, hasDupe);
+    });
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    // array(T) -> boolean
+    return {exec::FunctionSignatureBuilder()
+                .typeVariable("T")
+                .returnType("boolean")
+                .argumentType("array(T)")
+                .build()};
   }
 };
 
@@ -293,6 +359,10 @@ std::shared_ptr<exec::VectorFunction> createTyped(
     return functionPtr;
   } else if constexpr (std::is_same_v<ArrayDupesFunction<T>, F<T>>) {
     auto functionPtr = std::make_shared<ArrayDupesFunction<T>>();
+    functionPtr->validateType(inputArgs);
+    return functionPtr;
+  } else if constexpr (std::is_same_v<ArrayHasDupesFunction<T>, F<T>>) {
+    auto functionPtr = std::make_shared<ArrayHasDupesFunction<T>>();
     functionPtr->validateType(inputArgs);
     return functionPtr;
   }
@@ -320,5 +390,10 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_array_dupes,
     ArrayDupesFunction<void>::signatures(),
     create<ArrayDupesFunction>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_array_has_dupes,
+    ArrayHasDupesFunction<void>::signatures(),
+    create<ArrayHasDupesFunction>);
 
 } // namespace facebook::velox::functions
