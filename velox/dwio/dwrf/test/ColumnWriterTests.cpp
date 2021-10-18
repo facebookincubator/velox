@@ -29,14 +29,12 @@
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/test/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/type/Type.h"
 #include "velox/vector/DictionaryVector.h"
 using namespace ::testing;
-using namespace facebook::dwio::common;
+using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
-using namespace facebook::dwio::type::fbhive;
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
 using folly::Random;
@@ -74,16 +72,19 @@ class MockStreamInformation : public StreamInformation {
   const StreamIdentifier& streamIdentifier_;
 };
 
-class MockStripeStreams : public StripeStreamsBase {
+class TestStripeStreams : public StripeStreamsBase {
  public:
-  MockStripeStreams(
+  TestStripeStreams(
       WriterContext& context,
       const proto::StripeFooter& footer,
-      const std::shared_ptr<const RowType>& rowType)
+      const std::shared_ptr<const RowType>& rowType,
+      bool returnFlatVector = false)
       : StripeStreamsBase{&memory::getProcessDefaultMemoryManager().getRoot()},
         context_{context},
         footer_{footer},
-        selector_{rowType} {}
+        selector_{rowType} {
+    options_.setReturnFlatVector(returnFlatVector);
+  }
 
   std::unique_ptr<SeekableInputStream> getStream(
       const StreamIdentifier& si,
@@ -283,7 +284,7 @@ void verifyBatch(
 
 template <typename T>
 void testDataTypeWriter(
-    const std::string& ser,
+    const TypePtr& type,
     std::vector<std::optional<T>>& data,
     const uint32_t sequence = 0) {
   // Generate a seed and randomly shuffle the data
@@ -294,12 +295,8 @@ void testDataTypeWriter(
   auto scopedPool = getDefaultScopedMemoryPool();
   auto& pool = scopedPool->getPool();
   WriterContext context{config, getDefaultScopedMemoryPool()};
-  HiveTypeParser parser;
-  auto type = parser.parse(ser);
-  const std::shared_ptr<const RowType>& rowType =
-      std::dynamic_pointer_cast<const RowType>(type);
-  auto& dataType = rowType->childAt(0);
-  auto dataTypeWithId = TypeWithId::create(dataType, 1);
+  auto rowType = ROW({type});
+  auto dataTypeWithId = TypeWithId::create(type, 1);
 
   // write
   auto writer = ColumnWriter::create(context, *dataTypeWithId, sequence);
@@ -318,7 +315,7 @@ void testDataTypeWriter(
       return *sf.add_encoding();
     });
 
-    MockStripeStreams streams(context, sf, rowType);
+    TestStripeStreams streams(context, sf, rowType);
     auto typeWithId = TypeWithId::create(rowType);
     auto reqType = typeWithId->childAt(0);
     auto reader = ColumnReader::build(reqType, reqType, streams, sequence);
@@ -353,10 +350,10 @@ TEST(ColumnWriterTests, TestBooleanWriter) {
     bool value = (bool)(Random::rand32() & 1);
     data.emplace_back(value);
   }
-  testDataTypeWriter("struct<a:boolean>", data);
+  testDataTypeWriter(BOOLEAN(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:boolean>", data, 3);
+  testDataTypeWriter(BOOLEAN(), data, 3);
 }
 
 TEST(ColumnWriterTests, TestNullBooleanWriter) {
@@ -364,7 +361,7 @@ TEST(ColumnWriterTests, TestNullBooleanWriter) {
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:boolean>", data);
+  testDataTypeWriter(BOOLEAN(), data);
 }
 
 TEST(ColumnWriterTests, TestTimestampEpochWriter) {
@@ -378,7 +375,7 @@ TEST(ColumnWriterTests, TestTimestampEpochWriter) {
   data.emplace_back(Timestamp(0, 0));
   data.emplace_back(Timestamp(0, 1));
   data.emplace_back(Timestamp(0, MAX_NANOS));
-  testDataTypeWriter("struct<a:timestamp>", data);
+  testDataTypeWriter(TIMESTAMP(), data);
 }
 
 TEST(ColumnWriterTests, TestTimestampWriter) {
@@ -387,10 +384,10 @@ TEST(ColumnWriterTests, TestTimestampWriter) {
     Timestamp ts(i, i);
     data.emplace_back(ts);
   }
-  testDataTypeWriter("struct<a:timestamp>", data);
+  testDataTypeWriter(TIMESTAMP(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:timestamp>", data, 6);
+  testDataTypeWriter(TIMESTAMP(), data, 6);
 }
 
 TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
@@ -405,7 +402,7 @@ TEST(ColumnWriterTests, TestTimestampBoundaryValuesWriter) {
     }
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:timestamp>", data);
+  testDataTypeWriter(TIMESTAMP(), data);
 }
 
 TEST(ColumnWriterTests, TestTimestampMixedWriter) {
@@ -421,7 +418,7 @@ TEST(ColumnWriterTests, TestTimestampMixedWriter) {
     // Add null value
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:timestamp>", data);
+  testDataTypeWriter(TIMESTAMP(), data);
 }
 
 void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
@@ -433,8 +430,7 @@ void verifyInvalidTimestamp(int64_t seconds, int64_t nanos) {
   Timestamp ts(seconds, nanos);
   data.emplace_back(ts);
   EXPECT_THROW(
-      testDataTypeWriter("struct<a:timestamp>", data),
-      exception::LoggedException);
+      testDataTypeWriter(TIMESTAMP(), data), exception::LoggedException);
 }
 
 TEST(ColumnWriterTests, TestTimestampInvalidWriter) {
@@ -452,7 +448,7 @@ TEST(ColumnWriterTests, TestTimestampNullWriter) {
   for (int64_t i = 0; i < ITERATIONS; ++i) {
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:timestamp>", data);
+  testDataTypeWriter(TIMESTAMP(), data);
 }
 
 TEST(ColumnWriterTests, TestBooleanMixedWriter) {
@@ -462,7 +458,7 @@ TEST(ColumnWriterTests, TestBooleanMixedWriter) {
     data.emplace_back(value);
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:boolean>", data);
+  testDataTypeWriter(BOOLEAN(), data);
 }
 
 TEST(ColumnWriterTests, TestAllBytesWriter) {
@@ -473,7 +469,7 @@ TEST(ColumnWriterTests, TestAllBytesWriter) {
   for (int16_t i = INT8_MAX; i >= INT8_MIN; --i) {
     data.emplace_back(i);
   }
-  testDataTypeWriter("struct<a:tinyint>", data);
+  testDataTypeWriter(TINYINT(), data);
 }
 
 TEST(ColumnWriterTests, TestRepeatedValuesByteWriter) {
@@ -481,7 +477,7 @@ TEST(ColumnWriterTests, TestRepeatedValuesByteWriter) {
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(INT8_MIN);
   }
-  testDataTypeWriter("struct<a:tinyint>", data);
+  testDataTypeWriter(TINYINT(), data);
 }
 
 TEST(ColumnWriterTests, TestOnlyNullByteWriter) {
@@ -489,7 +485,7 @@ TEST(ColumnWriterTests, TestOnlyNullByteWriter) {
   for (auto i = 0; i <= ITERATIONS; ++i) {
     data.emplace_back();
   }
-  testDataTypeWriter("struct<a:tinyint>", data);
+  testDataTypeWriter(TINYINT(), data);
 }
 
 TEST(ColumnWriterTests, TestByteNullAndExtremeValueMixed) {
@@ -499,7 +495,7 @@ TEST(ColumnWriterTests, TestByteNullAndExtremeValueMixed) {
     data.emplace_back();
     data.emplace_back(INT8_MAX);
   }
-  testDataTypeWriter("struct<a:tinyint>", data);
+  testDataTypeWriter(TINYINT(), data);
 }
 
 template <typename T>
@@ -518,37 +514,37 @@ void generateSampleData(std::vector<std::optional<T>>& data) {
 TEST(ColumnWriterTests, TestByteWriter) {
   std::vector<std::optional<int8_t>> data;
   generateSampleData(data);
-  testDataTypeWriter("struct<a:tinyint>", data);
+  testDataTypeWriter(TINYINT(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:tinyint>", data, 5);
+  testDataTypeWriter(TINYINT(), data, 5);
 }
 
 TEST(ColumnWriterTests, TestShortWriter) {
   std::vector<std::optional<int16_t>> data;
   generateSampleData(data);
-  testDataTypeWriter("struct<a:smallint>", data);
+  testDataTypeWriter(SMALLINT(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:smallint>", data, 23);
+  testDataTypeWriter(SMALLINT(), data, 23);
 }
 
 TEST(ColumnWriterTests, TestIntWriter) {
   std::vector<std::optional<int32_t>> data;
   generateSampleData(data);
-  testDataTypeWriter("struct<a:int>", data);
+  testDataTypeWriter(INTEGER(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:int>", data, 1);
+  testDataTypeWriter(INTEGER(), data, 1);
 }
 
 TEST(ColumnWriterTests, TestLongWriter) {
   std::vector<std::optional<int64_t>> data;
   generateSampleData(data);
-  testDataTypeWriter("struct<a:bigint>", data);
+  testDataTypeWriter(BIGINT(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:bigint>", data, 42);
+  testDataTypeWriter(BIGINT(), data, 42);
 }
 
 TEST(ColumnWriterTests, TestBinaryWriter) {
@@ -562,39 +558,75 @@ TEST(ColumnWriterTests, TestBinaryWriter) {
     }
     ASSERT_EQ(i != 20 && i != 40, data.at(i).has_value());
   }
-  testDataTypeWriter("struct<a:binary>", data);
+  testDataTypeWriter(VARBINARY(), data);
 
   // Test writer with non-zero sequence
-  testDataTypeWriter("struct<a:binary>", data, 42);
+  testDataTypeWriter(VARBINARY(), data, 42);
 }
 
 TEST(ColumnWriterTests, TestBinaryWriterAllNulls) {
   std::vector<std::optional<StringView>> data{100};
-  testDataTypeWriter("struct<a:binary>", data);
+  testDataTypeWriter(VARBINARY(), data);
 }
 
 template <typename T>
-std::string getValue(VectorPtr& batch, const uint32_t offset) {
-  auto scalarBatch = std::dynamic_pointer_cast<FlatVector<T>>(batch);
-  return std::to_string(scalarBatch->valueAt(offset));
-}
+struct ValueOf {
+  static std::string get(const VectorPtr& batch, const uint32_t offset) {
+    auto scalarBatch = std::dynamic_pointer_cast<FlatVector<T>>(batch);
+    return std::to_string(scalarBatch->valueAt(offset));
+  }
+};
 
 template <>
-std::string getValue<StringView>(VectorPtr& batch, const uint32_t offset) {
-  auto scalarBatch = std::dynamic_pointer_cast<FlatVector<StringView>>(batch);
-  return scalarBatch->valueAt(offset).str();
-}
+struct ValueOf<bool> {
+  static std::string get(const VectorPtr& batch, const uint32_t offset) {
+    auto scalarBatch = std::dynamic_pointer_cast<FlatVector<bool>>(batch);
+    return folly::to<std::string>(scalarBatch->valueAt(offset));
+  }
+};
 
 template <>
-std::string getValue<Map<int, int>>(VectorPtr& batch, const uint32_t offset) {
-  auto mapBatch = std::dynamic_pointer_cast<MapVector>(batch);
-  auto keyBatch =
-      std::dynamic_pointer_cast<FlatVector<int32_t>>(mapBatch->mapKeys());
-  auto valueBatch =
-      std::dynamic_pointer_cast<FlatVector<int32_t>>(mapBatch->mapValues());
-  return std::to_string(keyBatch->valueAt(offset)) + " : " +
-      std::to_string(valueBatch->valueAt(offset));
-}
+struct ValueOf<StringView> {
+  static std::string get(const VectorPtr& batch, const uint32_t offset) {
+    auto scalarBatch = std::dynamic_pointer_cast<FlatVector<StringView>>(batch);
+    return scalarBatch->valueAt(offset).str();
+  }
+};
+
+template <typename keyT, typename valueT>
+struct ValueOf<Map<keyT, valueT>> {
+  static std::string get(const VectorPtr& batch, const uint32_t offset) {
+    auto mapBatch = std::dynamic_pointer_cast<MapVector>(batch);
+    return folly::to<std::string>(
+        "map at ",
+        offset,
+        " child: ",
+        mapBatch->offsetAt(offset),
+        ":",
+        mapBatch->sizeAt(offset));
+  }
+};
+
+template <typename elemT>
+struct ValueOf<Array<elemT>> {
+  static std::string get(const VectorPtr& batch, const uint32_t offset) {
+    auto arrayBatch = std::dynamic_pointer_cast<ArrayVector>(batch);
+    return folly::to<std::string>(
+        "array at ",
+        offset,
+        " child: ",
+        arrayBatch->offsetAt(offset),
+        ":",
+        arrayBatch->sizeAt(offset));
+  }
+};
+
+template <typename... T>
+struct ValueOf<Row<T...>> {
+  static std::string get(const VectorPtr& /* batch */, const uint32_t offset) {
+    return folly::to<std::string>("row at ", offset);
+  }
+};
 
 template <typename T>
 std::string getNullCountStr(const T& vector) {
@@ -622,8 +654,8 @@ void printMap(const std::string& title, const VectorPtr& batch) {
           << ", Values Null count: " << getNullCountStr(*values);
 
   for (int32_t i = 0; i < keys->size(); ++i) {
-    VLOG(3) << "[" << i << "]: " << getValue<TKEY>(keys, i) << " -> "
-            << (values->isNullAt(i) ? "null" : getValue<TVALUE>(values, i));
+    VLOG(3) << "[" << i << "]: " << ValueOf<TKEY>::get(keys, i) << " -> "
+            << (values->isNullAt(i) ? "null" : ValueOf<TVALUE>::get(values, i));
   }
 }
 
@@ -672,31 +704,38 @@ void testMapWriter(
       return *sf.add_encoding();
     });
 
-    MockStripeStreams streams(context, sf, rowType);
-    const auto reader =
-        ColumnReader::build(dataTypeWithId, dataTypeWithId, streams, false);
-    VectorPtr out;
+    auto validate = [&](bool returnFlatVector = false) {
+      TestStripeStreams streams(context, sf, rowType, returnFlatVector);
+      const auto reader =
+          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
+      VectorPtr out;
 
-    // Read map
-    for (auto strideI = 0; strideI < strideCount; ++strideI) {
-      reader->next(batch->size(), out);
-      ASSERT_EQ(out->size(), batch->size()) << "Batch size mismatch";
+      // Read map
+      for (auto strideI = 0; strideI < strideCount; ++strideI) {
+        reader->next(batch->size(), out);
+        ASSERT_EQ(out->size(), batch->size()) << "Batch size mismatch";
 
-      if (printMaps) {
-        printMap<TKEY, TVALUE>("Result", out);
+        if (printMaps) {
+          printMap<TKEY, TVALUE>("Result", out);
+        }
+
+        for (int32_t i = 0; i < batch->size(); ++i) {
+          ASSERT_TRUE(batch->equalValueAt(out.get(), i, i))
+              << "Row mismatch at index " << i;
+        }
       }
 
-      for (int32_t i = 0; i < batch->size(); ++i) {
-        ASSERT_TRUE(batch->equalValueAt(out.get(), i, i))
-            << "Row mismatch at index " << i;
-      }
+      // Reader API requires the caller to read the Stripe for number of
+      // values and iterate only until that number.
+      // It does not support hasNext/next protocol.
+      // Use a bigger number like 50, as some values may be bit packed.
+      EXPECT_THROW({ reader->next(50, out); }, exception::LoggedException);
+    };
+
+    validate();
+    if (useFlatMap) {
+      validate(true);
     }
-
-    // Reader API requires the caller to read the Stripe for number of
-    // values and iterate only until that number.
-    // It does not support hasNext/next protocol.
-    // Use a bigger number like 50, as some values may be bit packed.
-    EXPECT_THROW({ reader->next(50, out); }, exception::LoggedException);
 
     context.nextStripe();
 
@@ -791,15 +830,15 @@ TEST(ColumnWriterTests, TestMapWriterInt8Key) {
 
 TEST(ColumnWriterTests, TestMapWriterStringKey) {
   using keyType = StringView;
-  using valueType = int32_t;
+  using valueType = StringView;
   using b = MapBuilder<keyType, valueType>;
 
   std::unique_ptr<ScopedMemoryPool> scopedPool = getDefaultScopedMemoryPool();
   auto& pool = *scopedPool;
   auto batch = b::create(
       pool,
-      {b::row{b::pair{"1", 3}, b::pair{"2", 2}},
-       b::row{b::pair{"2", 5}, b::pair{"3", 8}}});
+      {b::row{b::pair{"1", "3"}, b::pair{"2", "2"}},
+       b::row{b::pair{"2", "5"}, b::pair{"3", "8"}}});
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false);
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true);
@@ -884,9 +923,8 @@ TEST(ColumnWriterTests, TestMapWriterBinaryKey) {
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true);
 }
 
-TEST(ColumnWriterTests, TestMapWriterNestedMap) {
-  using keyType = int32_t;
-  using valueType = Map<int32_t, int32_t>;
+template <typename keyType, typename valueType>
+void testMapWriterImpl() {
   auto type = CppToType<Map<keyType, valueType>>::create();
 
   std::unique_ptr<ScopedMemoryPool> scopedPool = getDefaultScopedMemoryPool();
@@ -894,6 +932,21 @@ TEST(ColumnWriterTests, TestMapWriterNestedMap) {
   auto batch = BatchMaker::createVector<TypeKind::MAP>(type, 100, pool);
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false, false);
+  testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true, false);
+}
+
+TEST(ColumnWriterTests, TestMapWriterNestedMap) {
+  testMapWriterImpl<int32_t, bool>();
+  testMapWriterImpl<int32_t, Array<int32_t>>();
+  testMapWriterImpl<int32_t, Array<bool>>();
+  testMapWriterImpl<int32_t, Array<StringView>>();
+  testMapWriterImpl<int32_t, Map<int32_t, bool>>();
+  testMapWriterImpl<int32_t, Map<int32_t, int32_t>>();
+  testMapWriterImpl<int32_t, Map<int32_t, StringView>>();
+  testMapWriterImpl<int32_t, Map<int32_t, Array<int32_t>>>();
+  testMapWriterImpl<int32_t, Map<int32_t, Map<int32_t, StringView>>>();
+  testMapWriterImpl<int32_t, Map<int32_t, Row<int32_t, bool, StringView>>>();
+  testMapWriterImpl<int32_t, Row<int32_t, bool, StringView>>();
 }
 
 TEST(ColumnWriterTests, TestMapWriterDifferentStripeBatches) {
@@ -1077,12 +1130,12 @@ void testMapWriterStats(const std::shared_ptr<const RowType> type) {
 
   for (int32_t i = 0; i < mapReader->getFooter().statistics_size(); ++i) {
     LOG(INFO) << "Stats " << i
-              << "     map: " << mapReader->getColumnStatistics(i)->toString();
-    LOG(INFO) << "Stats " << i << " flatmap: "
-              << flatMapReader->getColumnStatistics(i)->toString();
-    auto mapReaderStatString = mapReader->getColumnStatistics(i)->toString();
+              << "     map: " << mapReader->columnStatistics(i)->toString();
+    LOG(INFO) << "Stats " << i
+              << " flatmap: " << flatMapReader->columnStatistics(i)->toString();
+    auto mapReaderStatString = mapReader->columnStatistics(i)->toString();
     auto flatMapReaderStatString =
-        flatMapReader->getColumnStatistics(i)->toString();
+        flatMapReader->columnStatistics(i)->toString();
 
     removeSizeFromStats(mapReaderStatString);
     removeSizeFromStats(flatMapReaderStatString);
@@ -1155,93 +1208,93 @@ TEST(ColumnWriterTests, TestMapWriterCompareStatsInt64Key) {
 }
 
 template <typename type>
-void testFractionalWrite(const std::string& typeStr) {
+void testFractionalWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   generateSampleData(data);
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatWriter) {
-  testFractionalWrite<float>("struct<a:float>");
+  testFractionalWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleWriter) {
-  testFractionalWrite<double>("struct<a:double>");
+  testFractionalWrite<double>(DOUBLE());
 }
 
 template <typename type>
-void testFractionalInfinityWrite(const std::string& typeStr) {
+void testFractionalInfinityWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   type infinity = std::numeric_limits<type>::infinity();
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(infinity);
   }
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatInfinityWriter) {
-  testFractionalInfinityWrite<float>("struct<a:float>");
+  testFractionalInfinityWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleInfinityWriter) {
-  testFractionalInfinityWrite<double>("struct<a:double>");
+  testFractionalInfinityWrite<double>(DOUBLE());
 }
 
 template <typename type>
-void testFractionalNegativeInfinityWrite(const std::string& typeStr) {
+void testFractionalNegativeInfinityWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   type negativeInfinity = -std::numeric_limits<type>::infinity();
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(negativeInfinity);
   }
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatNegativeInfinityWriter) {
-  testFractionalNegativeInfinityWrite<float>("struct<a:float>");
+  testFractionalNegativeInfinityWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleNegativeInfinityWriter) {
-  testFractionalNegativeInfinityWrite<double>("struct<a:double>");
+  testFractionalNegativeInfinityWrite<double>(DOUBLE());
 }
 
 template <typename type>
-void testFractionalNaNWrite(const std::string& typeStr) {
+void testFractionalNaNWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   type nan = -std::numeric_limits<type>::quiet_NaN();
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back(nan);
   }
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatNanWriter) {
-  testFractionalNaNWrite<float>("struct<a:float>");
+  testFractionalNaNWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleNanWriter) {
-  testFractionalNaNWrite<double>("struct<a:double>");
+  testFractionalNaNWrite<double>(DOUBLE());
 }
 
 template <typename type>
-void testFractionalNullWrite(const std::string& typeStr) {
+void testFractionalNullWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   for (auto i = 0; i < ITERATIONS; ++i) {
     data.emplace_back();
   }
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatAllNullWriter) {
-  testFractionalNullWrite<float>("struct<a:float>");
+  testFractionalNullWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleAllNullWriter) {
-  testFractionalNullWrite<double>("struct<a:double>");
+  testFractionalNullWrite<double>(DOUBLE());
 }
 
 template <typename type>
-void testFractionalMixedWrite(const std::string& typeStr) {
+void testFractionalMixedWrite(const TypePtr& t) {
   std::vector<std::optional<type>> data;
   type nan = -std::numeric_limits<type>::quiet_NaN();
   type negativeInfinity = -std::numeric_limits<type>::infinity();
@@ -1257,15 +1310,15 @@ void testFractionalMixedWrite(const std::string& typeStr) {
     data.emplace_back(min);
     data.emplace_back(max);
   }
-  testDataTypeWriter(typeStr, data);
+  testDataTypeWriter(t, data);
 }
 
 TEST(ColumnWriterTests, TestFloatMixedWriter) {
-  testFractionalMixedWrite<float>("struct<a:float>");
+  testFractionalMixedWrite<float>(REAL());
 }
 
 TEST(ColumnWriterTests, TestDoubleMixedWriter) {
-  testFractionalMixedWrite<double>("struct<a:double>");
+  testFractionalMixedWrite<double>(DOUBLE());
 }
 
 // This generation method is skewed due to double precision. However, this
@@ -1518,7 +1571,7 @@ struct IntegerColumnWriterTypedTestCase {
       // Read and verify.
       const size_t nodeId = 1;
       auto rowType = ROW({{"integral_column", type}});
-      MockStripeStreams streams(context, stripeFooter, rowType);
+      TestStripeStreams streams(context, stripeFooter, rowType);
       EncodingKey key{nodeId};
       const auto& encoding = streams.getEncoding(key);
       if (writeDirect) {
@@ -1533,7 +1586,7 @@ struct IntegerColumnWriterTypedTestCase {
       }
       typeWithId = TypeWithId::create(rowType);
       auto reqType = typeWithId->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams, false);
+      auto columnReader = ColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO Make reuse work
@@ -2386,7 +2439,7 @@ struct StringColumnWriterTestCase {
       // Read and verify.
       const size_t nodeId = 1;
       auto rowType = ROW({{"string_column", type}});
-      MockStripeStreams streams(context, stripeFooter, rowType);
+      TestStripeStreams streams(context, stripeFooter, rowType);
       EncodingKey key{nodeId};
       const auto& encoding = streams.getEncoding(key);
       if (writeDirect) {
@@ -2401,7 +2454,7 @@ struct StringColumnWriterTestCase {
       }
       typeWithId = TypeWithId::create(rowType);
       auto reqType = typeWithId->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams, false);
+      auto columnReader = ColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         if (!writeDirect) {
@@ -2844,7 +2897,7 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
 
   // get data stream
-  MockStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
   StreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
@@ -2890,7 +2943,7 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
   ASSERT_EQ(enc.kind(), proto::ColumnEncoding_Kind_DICTIONARY);
 
   // get data stream
-  MockStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
   StreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
@@ -2930,21 +2983,18 @@ TEST(ColumnWriterTests, RemovePresentStream) {
   });
 
   // get data stream
-  MockStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
   StreamIdentifier si{1, 0, 0, proto::Stream_Kind_PRESENT};
   ASSERT_EQ(streams.getStream(si, false), nullptr);
 }
 
 template <typename T>
 struct DictColumnWriterTestCase {
-  DictColumnWriterTestCase(
-      size_t size,
-      bool writeDirect,
-      const std::string& rowTypeString)
-      : size_(size), writeDirect_(writeDirect), rowTypeString_(rowTypeString) {}
+  DictColumnWriterTestCase(size_t size, bool writeDirect, const TypePtr& type)
+      : size_(size), writeDirect_(writeDirect), type_(type) {}
   const size_t size_;
   const bool writeDirect_;
-  const std::string rowTypeString_;
+  TypePtr type_;
 
   BufferPtr randomIndices(vector_size_t size) {
     BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, &pool_);
@@ -2967,7 +3017,7 @@ struct DictColumnWriterTestCase {
       std::function<T(vector_size_t /*index*/)> valueAt,
       std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr) {
     auto vector = std::dynamic_pointer_cast<FlatVector<T>>(
-        BaseVector::create(CppToType<T>::create(), size, &pool_));
+        BaseVector::create(type_, size, &pool_));
     for (int32_t i = 0; i < size; ++i) {
       if (isNullAt && isNullAt(i)) {
         vector->setNull(i, true);
@@ -3031,17 +3081,15 @@ struct DictColumnWriterTestCase {
       std::function<T(vector_size_t /*index*/)> valueAt,
       std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr) {
     auto config = std::make_shared<Config>();
-    auto type = CppToType<T>::create();
-    auto typeWithId = TypeWithId::create(type, 1);
-    auto rowType = std::dynamic_pointer_cast<const RowType>(
-        HiveTypeParser().parse(rowTypeString_));
+    auto typeWithId = TypeWithId::create(type_, 1);
+    auto rowType = ROW({type_});
 
     WriterContext context{config, getDefaultScopedMemoryPool()};
 
     // complexVectorType will be nullptr if the vector is not complex.
-    bool isComplexType = std::dynamic_pointer_cast<const RowType>(type) ||
-        std::dynamic_pointer_cast<const MapType>(type) ||
-        std::dynamic_pointer_cast<const ArrayType>(type);
+    bool isComplexType = std::dynamic_pointer_cast<const RowType>(type_) ||
+        std::dynamic_pointer_cast<const MapType>(type_) ||
+        std::dynamic_pointer_cast<const ArrayType>(type_);
 
     auto complexVectorType = isComplexType ? rowType : nullptr;
     auto batch =
@@ -3062,12 +3110,12 @@ struct DictColumnWriterTestCase {
     });
 
     // Reading the vector out
-    MockStripeStreams streams(context, sf, rowType);
+    TestStripeStreams streams(context, sf, rowType);
     EXPECT_CALL(streams.getMockStrideIndexProvider(), getStrideIndex())
         .WillRepeatedly(Return(0));
     auto rowTypeWithId = TypeWithId::create(rowType);
     auto reqType = rowTypeWithId->childAt(0);
-    auto reader = ColumnReader::build(reqType, reqType, streams, false);
+    auto reader = ColumnReader::build(reqType, reqType, streams);
     VectorPtr out;
     reader->next(batch->size(), out);
     compareResults(batch, out);
@@ -3095,68 +3143,60 @@ std::function<bool(vector_size_t /*index*/)> randomNulls(int32_t n) {
 
 template <typename T>
 void testDictionary(
-    const std::string& rowType,
+    const TypePtr& type,
     std::function<bool(vector_size_t)> isNullAt = nullptr,
     std::function<T(vector_size_t)> valueAt = nullptr) {
   constexpr int32_t vectorSize = 200;
 
   // Tests for null/non null data with direct or dict write
-  DictColumnWriterTestCase<T>(vectorSize, true, rowType)
+  DictColumnWriterTestCase<T>(vectorSize, true, type)
       .runTest(valueAt, isNullAt);
 
-  DictColumnWriterTestCase<T>(vectorSize, false, rowType)
+  DictColumnWriterTestCase<T>(vectorSize, false, type)
       .runTest(valueAt, isNullAt);
 
   // Tests for non null data with direct or dict write
-  DictColumnWriterTestCase<T>(vectorSize, true, rowType)
-      .runTest(valueAt, [](int) { return false; });
+  DictColumnWriterTestCase<T>(vectorSize, true, type).runTest(valueAt, [](int) {
+    return false;
+  });
 
-  DictColumnWriterTestCase<T>(vectorSize, false, rowType)
+  DictColumnWriterTestCase<T>(vectorSize, false, type)
       .runTest(valueAt, [](int) { return false; });
 }
 
 TEST(ColumnWriterTests, ColumnWriterDictionarySimple) {
-  testDictionary<Timestamp>(
-      "struct<a:timestamp>", randomNulls(11), [](vector_size_t i) {
-        return Timestamp(i * 5, i * 2);
-      });
-
-  testDictionary<int64_t>(
-      "struct<a:bigint>", randomNulls(5), [](vector_size_t i) {
-        return i % 5;
-      });
-
-  testDictionary<int32_t>(
-      "struct<a:int>", randomNulls(9), [](vector_size_t i) { return i % 5; });
-
-  testDictionary<int16_t>(
-      "struct<a:smallint>", randomNulls(11), [](vector_size_t i) {
-        return i % 5;
-      });
-
-  testDictionary<int8_t>(
-      "struct<a:tinyint>", randomNulls(13), [](vector_size_t i) {
-        return i % 5;
-      });
-
-  testDictionary<float>("struct<a:float>", randomNulls(7), [](vector_size_t i) {
-    return (i % 3) * 0.2;
+  testDictionary<Timestamp>(TIMESTAMP(), randomNulls(11), [](vector_size_t i) {
+    return Timestamp(i * 5, i * 2);
   });
 
+  testDictionary<int64_t>(
+      BIGINT(), randomNulls(5), [](vector_size_t i) { return i % 5; });
+
+  testDictionary<int32_t>(
+      INTEGER(), randomNulls(9), [](vector_size_t i) { return i % 5; });
+
+  testDictionary<int16_t>(
+      SMALLINT(), randomNulls(11), [](vector_size_t i) { return i % 5; });
+
+  testDictionary<int8_t>(
+      TINYINT(), randomNulls(13), [](vector_size_t i) { return i % 5; });
+
+  testDictionary<float>(
+      REAL(), randomNulls(7), [](vector_size_t i) { return (i % 3) * 0.2; });
+
   testDictionary<double>(
-      "struct<a:double>", randomNulls(9), [](vector_size_t i) {
-        return (i % 3) * 0.2;
-      });
+      DOUBLE(), randomNulls(9), [](vector_size_t i) { return (i % 3) * 0.2; });
 
   testDictionary<bool>(
-      "struct<a:boolean>", randomNulls(11), [](vector_size_t i) {
-        return i % 2 == 0;
-      });
+      BOOLEAN(), randomNulls(11), [](vector_size_t i) { return i % 2 == 0; });
 
-  testDictionary<StringView>(
-      "struct<a:string>", randomNulls(9), [](vector_size_t i) {
-        return StringView(std::string("str") + std::to_string(i % 3));
-      });
+  testDictionary<StringView>(VARCHAR(), randomNulls(9), [](vector_size_t i) {
+    return StringView(std::string("str") + std::to_string(i % 3));
+  });
+
+  testDictionary<StringView>(VARBINARY(), randomNulls(9), [](vector_size_t i) {
+    return StringView(std::string("binary") + std::to_string(i % 3));
+  });
 };
 
 TEST(ColumnWriterTests, rowDictionary) {
@@ -3164,60 +3204,69 @@ TEST(ColumnWriterTests, rowDictionary) {
   // randomly
 
   // Row tests
-  testDictionary<Row<int>>("struct<a:struct<a:int>>", randomNulls(5));
+  testDictionary<Row<int32_t>>(ROW({INTEGER()}), randomNulls(5));
 
-  testDictionary<Row<StringView, int>>(
-      "struct<t: struct<a:string, b:int>>", randomNulls(11));
+  testDictionary<Row<StringView, int32_t>>(
+      ROW({VARCHAR(), INTEGER()}), randomNulls(11));
 
-  testDictionary<Row<Row<StringView, int>>>(
-      "struct<x: struct<y: struct<a:string, b:int>>>", randomNulls(11));
+  testDictionary<Row<Row<StringView, int32_t>>>(
+      ROW({ROW({VARCHAR(), INTEGER()})}), randomNulls(11));
 
-  testDictionary<Row<int, double, StringView>>(
-      "struct<a:struct<a:int, b:double, c:string>>", randomNulls(5));
+  testDictionary<Row<int32_t, double, StringView>>(
+      ROW({INTEGER(), DOUBLE(), VARCHAR()}), randomNulls(5));
 
-  testDictionary<Row<int, StringView, double, StringView>>(
-      "struct<a:struct<a:int, x: string, b:double, c:string>>", randomNulls(5));
+  testDictionary<Row<int32_t, StringView, double, StringView>>(
+      ROW({INTEGER(), VARCHAR(), DOUBLE(), VARCHAR()}), randomNulls(5));
 
   testDictionary<Row<Array<StringView>, StringView>>(
-      "struct<x:struct<a:array<string>, b: string>>", randomNulls(11));
+      ROW({ARRAY(VARCHAR()), VARCHAR()}), randomNulls(11));
 
   testDictionary<
-      Row<Map<int, double>,
-          Array<Map<int, Row<int, double>>>,
-          Row<int, StringView>>>(
-      "struct<a: struct<a: map<int, double>, b: array<map<int, struct<a:int, b: double>>>, c: struct<x: int, y: string>>>",
+      Row<Map<int32_t, double>,
+          Array<Map<int32_t, Row<int32_t, double>>>,
+          Row<int32_t, StringView>>>(
+      ROW(
+          {MAP(INTEGER(), DOUBLE()),
+           ARRAY(MAP(INTEGER(), ROW({INTEGER(), DOUBLE()}))),
+           ROW({INTEGER(), VARCHAR()})}),
       randomNulls(11));
 }
 
 TEST(ColumnWriterTests, arrayDictionary) {
   // Array tests
-  testDictionary<Array<float>>("struct<a:array<float>>", randomNulls(7));
+  testDictionary<Array<float>>(ARRAY(REAL()), randomNulls(7));
 
   testDictionary<
-      Row<Array<int>, Row<StringView, Array<Map<StringView, StringView>>>>>(
-      "struct<t: struct<a: array<int>, b: struct<a: string, b: array<map<string, string>>>>>",
+      Row<Array<int32_t>, Row<StringView, Array<Map<StringView, StringView>>>>>(
+      ROW(
+          {ARRAY(INTEGER()),
+           ROW({VARCHAR(), ARRAY(MAP(VARCHAR(), VARCHAR()))})}),
       randomNulls(11));
 
   testDictionary<
-      Array<Map<int, Array<Map<int8_t, Row<StringView, Array<double>>>>>>>(
-      "struct<a:array<map<int, array<map<tinyint, struct<i: string, j: array<double>>>>>>>",
+      Array<Map<int32_t, Array<Map<int8_t, Row<StringView, Array<double>>>>>>>(
+      ARRAY(MAP(
+          INTEGER(), ARRAY(MAP(TINYINT(), ROW({VARCHAR(), ARRAY(DOUBLE())}))))),
       randomNulls(7));
 }
 
 TEST(ColumnWriterTests, mapDictionary) {
   // Map tests
-  testDictionary<Map<int, double>>(
-      "struct<a:map<int, double>>", randomNulls(7));
+  testDictionary<Map<int32_t, double>>(
+      MAP(INTEGER(), DOUBLE()), randomNulls(7));
 
   testDictionary<Map<StringView, StringView>>(
-      "struct<a:map<string, string>>", randomNulls(13));
+      MAP(VARCHAR(), VARCHAR()), randomNulls(13));
 
   testDictionary<
-      Map<StringView, Map<int, Array<Row<int, int, Array<double>>>>>>(
-      "struct<a:map<string, map<int, array<struct<x:int, y:int, z:array<double>>>>>>",
+      Map<StringView,
+          Map<int32_t, Array<Row<int32_t, int32_t, Array<double>>>>>>(
+      MAP(VARCHAR(),
+          MAP(INTEGER(), ARRAY(ROW({INTEGER(), INTEGER(), ARRAY(DOUBLE())})))),
       randomNulls(9));
 
-  testDictionary<Map<int, Map<StringView, Map<StringView, int8_t>>>>(
-      "struct<a:map<int, map<string, map<string, tinyint>>>>", randomNulls(3));
+  testDictionary<Map<int32_t, Map<StringView, Map<StringView, int8_t>>>>(
+      MAP(INTEGER(), MAP(VARCHAR(), MAP(VARCHAR(), TINYINT()))),
+      randomNulls(3));
 }
 } // namespace facebook::velox::dwrf

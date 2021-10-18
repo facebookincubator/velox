@@ -32,8 +32,8 @@
 #include <numeric>
 
 using namespace ::testing;
-using namespace facebook::dwio::common;
-using namespace facebook::dwio::type::fbhive;
+using namespace facebook::velox::dwio::common;
+using namespace facebook::velox::dwio::type::fbhive;
 using namespace facebook::velox;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::test;
@@ -90,7 +90,8 @@ void verifyFlatMapReading(
   rowReaderOpts.select(std::make_shared<ColumnSelector>(requestedType));
   auto reader =
       DwrfReader::create(std::make_unique<FileInputStream>(file), readerOpts);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
+  auto rowReaderOwner = reader->createRowReader(rowReaderOpts);
+  auto rowReader = dynamic_cast<DwrfRowReader*>(rowReaderOwner.get());
   VectorPtr batch;
 
   int32_t batchId = 0;

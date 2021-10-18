@@ -1025,8 +1025,9 @@ void Expr::applyFunction(
     EvalCtx* context,
     VectorPtr* result) {
   computeIsAsciiForInputs(vectorFunction_.get(), inputValues_, rows);
-  auto isAscii =
-      computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows);
+  auto isAscii = type()->isVarchar()
+      ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
+      : std::nullopt;
   applyVectorFunction(rows, context, result);
   if (isAscii.has_value()) {
     (*result)->asUnchecked<SimpleVector<StringView>>()->setIsAscii(
@@ -1163,7 +1164,7 @@ void ExprSetSimplified::eval(
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
     core::ExecCtx* execCtx) {
-  if (execCtx->queryCtx()->exprEvalSimplified() ||
+  if (execCtx->queryCtx()->config().exprEvalSimplified() ||
       FLAGS_force_eval_simplified) {
     return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
   }
