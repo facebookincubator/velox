@@ -762,7 +762,19 @@ class StringProxy<FlatVector<StringView>, false /*reuseInput*/>
   StringProxy(FlatVector<StringView>* vector, int32_t offset)
       : vector_(vector), offset_(offset) {}
 
+  StringProxy(StringView value)
+    : vector_(nullptr), offset_(-1), value_{value.str()} {}
+
  public:
+
+  bool initialized() const {
+    return offset_ >= 0;
+  }
+
+  const std::string& value() const {
+    return value_;
+  }
+
   /// Reserve a space for the output string with size of at least newCapacity
   void reserve(size_t newCapacity) override {
     if (newCapacity <= capacity()) {
@@ -822,6 +834,8 @@ class StringProxy<FlatVector<StringView>, false /*reuseInput*/>
   FlatVector<StringView>* vector_;
 
   int32_t offset_;
+
+  std::string value_;
 };
 
 // A string proxy with UDFOutputString semantics that utilizes a pre-allocated
@@ -900,8 +914,12 @@ struct VectorWriter<
   }
 
   void copyCommit(const proxy_t& data) {
-    // Not really copying.
-    proxy_.finalize();
+    if (!proxy_.initialized()) {
+      vector_->set(offset_, StringView(data.value()));
+    } else {
+      // Not really copying.
+      proxy_.finalize();
+    }
   }
 
   void commitNull() {
