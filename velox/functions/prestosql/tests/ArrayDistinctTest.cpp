@@ -276,7 +276,7 @@ TEST_F(ArrayDistinctTest, stringArrays) {
   testExpr(expected, "array_distinct(C0)", {array});
 }
 
-TEST_F(ArrayDistinctTest, testNonContiguousRows) {
+TEST_F(ArrayDistinctTest, nonContiguousRows) {
   auto c0 = makeFlatVector<int32_t>(4, [](auto row) { return row; });
   auto c1 = makeArrayVector<int32_t>({
       {1, 2, 3, 3},
