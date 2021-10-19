@@ -405,7 +405,6 @@ class LikeConstantPattern final : public VectorFunction {
 
     // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
-
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
@@ -745,9 +744,9 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       name,
       inputArgs[1].type->toString());
 
-  bool hasEscape = false;
+  bool hasEscape = numArgs == 3;
   char escapeChar;
-  if (numArgs == 3) {
+  if (hasEscape) {
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
         "{} requires third argument of type VARCHAR, but got {}",
@@ -766,7 +765,6 @@ std::shared_ptr<exec::VectorFunction> makeLike(
     // Escape char should be a single char value
     VELOX_USER_CHECK_EQ(constantEscape->valueAt(0).size(), 1);
     escapeChar = constantEscape->valueAt(0).data()[0];
-    hasEscape = true;
   }
 
   BaseVector* constantPattern = inputArgs[1].constantValue.get();
