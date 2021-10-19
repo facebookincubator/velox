@@ -125,18 +125,21 @@ bool re2Extract(
   }
 }
 
-std::string
-likePatternToRe2(StringView pattern, bool hasEscape, char escapeChar, bool& validPattern) {
+std::string likePatternToRe2(
+    StringView pattern,
+    bool hasEscape,
+    char escapeChar,
+    bool& validPattern) {
   std::string regex;
   validPattern = true;
   regex.reserve(pattern.size() * 2);
   regex.append("^");
   bool escaped = false;
   for (const char c : pattern) {
-      if (hasEscape && escaped && !(c == '%' || c == '_' || c == escapeChar)) {
+    if (hasEscape && escaped && !(c == '%' || c == '_' || c == escapeChar)) {
       validPattern = false;
     }
-      if (hasEscape && !escaped && (c == escapeChar)) {
+    if (hasEscape && !escaped && (c == escapeChar)) {
       escaped = true;
     } else {
       switch (c) {
@@ -378,7 +381,11 @@ class Re2SearchAndExtract final : public VectorFunction {
 class LikeConstantPattern final : public VectorFunction {
  public:
   LikeConstantPattern(StringView pattern, bool hasEscape, char escapeChar)
-      : re_(toStringPiece(likePatternToRe2(pattern, hasEscape, escapeChar, validPattern_)),
+      : re_(toStringPiece(likePatternToRe2(
+                pattern,
+                hasEscape,
+                escapeChar,
+                validPattern_)),
             RE2::Quiet) {}
 
   void apply(
