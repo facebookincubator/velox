@@ -26,21 +26,20 @@ add_subdirectory(external/md5)
 #
 
 # examples depend on expression
-if((${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
-   OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_EXAMPLES} AND ${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(examples)
 endif()
 
-if(${VELOX_ENABLE_EXPRESSION} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_EXPRESSION})
   add_subdirectory(expression)
 endif()
 
-if(${VELOX_ENABLE_PARSE} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_PARSE})
   add_subdirectory(parse)
 endif()
 
 # hive connector depends on dwio
-if(${VELOX_ENABLE_HIVE_CONNECTOR} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_HIVE_CONNECTOR})
   add_subdirectory(dwio)
 endif()
 
@@ -48,16 +47,16 @@ add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
 
 # exec depends on codegen
-if(${VELOX_ENABLE_EXEC} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_EXEC})
   add_subdirectory(exec)
   add_subdirectory(codegen)
 endif()
 
-if(${VELOX_ENABLE_AGGREGATES} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_AGGREGATES})
   add_subdirectory(aggregates)
 endif()
 
-if(${VELOX_ENABLE_DUCKDB} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_DUCKDB})
   add_subdirectory(duckdb)
   add_subdirectory(external/duckdb)
 endif()

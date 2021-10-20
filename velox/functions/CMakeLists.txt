@@ -17,11 +17,11 @@ target_link_libraries(velox_function_registry velox_expression velox_type
                       velox_core velox_exception)
 
 add_subdirectory(lib)
-if(${VELOX_ENABLE_PRESTO_FUNCTIONS} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_PRESTO_FUNCTIONS})
   add_subdirectory(prestosql)
 endif()
 
-if(${VELOX_ENABLE_SPARK_FUNCTIONS} OR ${VELOX_BUILD_TESTING})
+if(${VELOX_ENABLE_SPARK_FUNCTIONS})
   add_subdirectory(sparksql)
 endif()
 
