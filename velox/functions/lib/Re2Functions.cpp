@@ -125,18 +125,20 @@ bool re2Extract(
   }
 }
 
-std::string
-likePatternToRe2(StringView pattern, char escapeChar, bool& validPattern) {
+std::string likePatternToRe2(
+    StringView pattern,
+    std::optional<char> escapeChar,
+    bool& validPattern) {
   std::string regex;
   validPattern = true;
   regex.reserve(pattern.size() * 2);
   regex.append("^");
   bool escaped = false;
   for (const char c : pattern) {
-    if (escaped && !(c == '%' || c == '_' || c == escapeChar)) {
+    if (escaped && !(c == '%' || c == '_' || c == *escapeChar)) {
       validPattern = false;
     }
-    if (!escaped && (c == escapeChar)) {
+    if (!escaped && (c == *escapeChar)) {
       escaped = true;
     } else {
       switch (c) {
@@ -377,7 +379,7 @@ class Re2SearchAndExtract final : public VectorFunction {
 
 class LikeConstantPattern final : public VectorFunction {
  public:
-  LikeConstantPattern(StringView pattern, char escapeChar)
+  LikeConstantPattern(StringView pattern, std::optional<char> escapeChar)
       : re_(toStringPiece(likePatternToRe2(pattern, escapeChar, validPattern_)),
             RE2::Quiet) {}
 
@@ -398,7 +400,6 @@ class LikeConstantPattern final : public VectorFunction {
 
     // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
-
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
@@ -738,7 +739,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       name,
       inputArgs[1].type->toString());
 
-  char escapeChar;
+  std::optional<char> escapeChar;
   if (numArgs == 3) {
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
@@ -843,6 +844,31 @@ std::shared_ptr<VectorFunction> makeRe2ExtractAll(
     default:
       VELOX_UNREACHABLE();
   }
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+re2ExtractAllSignatures() {
+  // varchar, varchar -> array<varchar>
+  // varchar, varchar, integer|bigint -> array<varchar>
+  return {
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .argumentType("bigint")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .argumentType("integer")
+          .build(),
+  };
 }
 
 } // namespace facebook::velox::functions

@@ -81,16 +81,14 @@ class MapFunction : public exec::VectorFunction {
             kArrayLengthsMismatch);
       });
 
-      BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(
-          rows.size(), context->pool(), 0);
+      BufferPtr offsets = allocateOffsets(rows.size(), context->pool());
       auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-      BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(
-          rows.size(), context->pool(), 0);
+      BufferPtr sizes = allocateSizes(rows.size(), context->pool());
       auto rawSizes = sizes->asMutable<vector_size_t>();
 
-      BufferPtr valuesIndices = AlignedBuffer::allocate<vector_size_t>(
-          keysArray->elements()->size(), context->pool(), 0);
+      BufferPtr valuesIndices =
+          allocateIndices(keysArray->elements()->size(), context->pool());
       auto rawValuesIndices = valuesIndices->asMutable<vector_size_t>();
 
       rows.applyToSelected([&](vector_size_t row) {

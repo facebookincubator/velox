@@ -64,12 +64,9 @@ class ArrayDistinctFunction : public exec::VectorFunction {
 
     // Allocate new vectors for indices, length and offsets.
     memory::MemoryPool* pool = context->pool();
-    BufferPtr newIndices =
-        AlignedBuffer::allocate<vector_size_t>(elementsCount, pool);
-    BufferPtr newLengths =
-        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
-    BufferPtr newOffsets =
-        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+    BufferPtr newIndices = allocateIndices(elementsCount, pool);
+    BufferPtr newLengths = allocateSizes(rowCount, pool);
+    BufferPtr newOffsets = allocateOffsets(rowCount, pool);
 
     // Pointers and cursors to the raw data.
     vector_size_t indicesCursor = 0;
