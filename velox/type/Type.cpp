@@ -52,6 +52,7 @@ TypeKind mapNameToTypeKind(const std::string& name) {
       {"VARCHAR", TypeKind::VARCHAR},
       {"VARBINARY", TypeKind::VARBINARY},
       {"TIMESTAMP", TypeKind::TIMESTAMP},
+      {"DATE", TypeKind::DATE},
       {"ARRAY", TypeKind::ARRAY},
       {"MAP", TypeKind::MAP},
       {"ROW", TypeKind::ROW},
@@ -81,6 +82,7 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
       {TypeKind::VARCHAR, "VARCHAR"},
       {TypeKind::VARBINARY, "VARBINARY"},
       {TypeKind::TIMESTAMP, "TIMESTAMP"},
+      {TypeKind::DATE, "DATE"},
       {TypeKind::ARRAY, "ARRAY"},
       {TypeKind::MAP, "MAP"},
       {TypeKind::ROW, "ROW"},
@@ -534,6 +536,10 @@ std::shared_ptr<const TimestampType> TIMESTAMP() {
   return std::make_shared<const TimestampType>();
 };
 
+std::shared_ptr<const DateType> DATE() {
+  return std::make_shared<const DateType>();
+};
+
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<std::shared_ptr<const Type>>&& argumentTypes,
     std::shared_ptr<const Type> returnType) {
@@ -573,6 +579,12 @@ template <>
 std::shared_ptr<const Type> createType<TypeKind::TIMESTAMP>(
     std::vector<std::shared_ptr<const Type>>&& /*children*/) {
   return TIMESTAMP();
+}
+
+template <>
+std::shared_ptr<const Type> createType<TypeKind::DATE>(
+    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
+  return DATE();
 }
 
 template <>
