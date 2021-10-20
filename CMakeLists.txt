@@ -260,3 +260,5 @@ include_directories(.)
 install(FILES velox/type/Type.h DESTINATION "include/velox")
 
 add_subdirectory(velox)
+
+message(STATUS "MIKE: parse=${VELOX_ENABLE_PARSE} expression=${VELOX_ENABLE_EXPRESSION}")
