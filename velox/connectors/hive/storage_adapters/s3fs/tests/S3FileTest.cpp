@@ -18,6 +18,7 @@
 #include "connectors/hive/storage_adapters/s3fs/S3Util.h"
 #include "connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/FileHandle.h"
 #include "velox/core/Context.h"
 #include "velox/exec/tests/utils/TempFilePath.h"
 
@@ -135,4 +136,25 @@ TEST_F(S3FileSystemTest, viaRegistry) {
   auto s3fs = filesystems::getFileSystem(s3File, config);
   auto readFile = s3fs->openFileForRead(s3File);
   readData(readFile.get());
+}
+
+TEST_F(S3FileSystemTest, fileHandle) {
+  const char* bucket_name = "data3";
+  const char* file = "test.txt";
+  const std::string filename = localPath(bucket_name) + "/" + file;
+  const std::string s3File = s3URI(bucket_name) + "/" + file;
+  filesystems::registerS3FileSystem();
+  addBucket(bucket_name);
+  {
+    LocalWriteFile writeFile(filename);
+    writeData(&writeFile);
+  }
+  auto hiveConnectorConfigs = minioServer_->hiveConfig();
+  std::shared_ptr<const Config> config =
+      std::make_shared<const core::MemConfig>(std::move(hiveConnectorConfigs));
+  FileHandleFactory factory(
+      std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1000),
+      std::make_unique<FileHandleGenerator>());
+  auto fileHandle = factory.generate(s3File);
+  readData(fileHandle->file.get());
 }
