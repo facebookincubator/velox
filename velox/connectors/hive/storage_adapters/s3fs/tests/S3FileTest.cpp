@@ -52,7 +52,7 @@ class S3FileSystemTest : public testing::Test {
   }
 
   std::string s3URI(const char* bucket) {
-    return std::string(kS3Scheme) + "//" + bucket;
+    return std::string(kS3Scheme) + bucket;
   }
 
   void writeData(WriteFile* writeFile) {
