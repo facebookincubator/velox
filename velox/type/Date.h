@@ -28,11 +28,10 @@ namespace facebook::velox {
 struct Date {
  public:
   constexpr Date() : days_(0) {}
-  constexpr Date(int32_t days)
-  : days_(days) {}
+  constexpr Date(int32_t days) : days_(days) {}
 
   int32_t getDays() const {
-      return days_;
+    return days_;
   }
 
   bool operator==(const Date& b) const {
@@ -48,15 +47,15 @@ struct Date {
   }
 
   bool operator<=(const Date& b) const {
-      return days_ <= b.days_;
+    return days_ <= b.days_;
   }
 
   bool operator>(const Date& b) const {
-      return days_ > b.days_;
+    return days_ > b.days_;
   }
 
   bool operator>=(const Date& b) const {
-      return days_ >= b.days_;
+    return days_ >= b.days_;
   }
 
   // Needed for serialization of FlatVector<Date>
@@ -66,12 +65,12 @@ struct Date {
 
   std::string toString() const {
     // Find the number of seconds for the days_;
-    int64_t day_seconds = days_*86400;
+    int64_t day_seconds = days_ * 86400;
     auto tmValue = gmtime((const time_t*)&day_seconds);
     if (!tmValue) {
-        const auto& error_message = folly::to<std::string>(
-                "Can't convert days to time: ", folly::to<std::string>(days_));
-        throw std::runtime_error{error_message};
+      const auto& error_message = folly::to<std::string>(
+          "Can't convert days to time: ", folly::to<std::string>(days_));
+      throw std::runtime_error{error_message};
     }
 
     // return ISO 8601 time format.
@@ -86,7 +85,7 @@ struct Date {
   }
 
   operator folly::dynamic() const {
-      return folly::dynamic(days_);
+    return folly::dynamic(days_);
   }
 
  private:
