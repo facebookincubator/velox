@@ -328,22 +328,32 @@ void copyImpl(
     using NativeType = typename velox::TypeTraits<K>::NativeType;
     auto& tgt = static_cast<FlatVector<NativeType>&>(target);
     auto& src = static_cast<const FlatVector<NativeType>&>(source);
-    std::memcpy(
-        const_cast<NativeType*>(tgt.rawValues()) + targetIndex,
+    std::copy(
         src.rawValues() + sourceIndex,
-        count * sizeof(NativeType));
+        src.rawValues() + sourceIndex + count,
+        const_cast<NativeType*>(tgt.rawValues()) + targetIndex);
   }
 }
 
 template <>
 void copyImpl<TypeKind::BOOLEAN>(
     const std::shared_ptr<const Type>& /* type */,
-    BaseVector& /* target */,
-    vector_size_t /* targetIndex */,
-    const BaseVector& /* source */,
-    vector_size_t /* sourceIndex */,
-    vector_size_t /* count */) {
-  DWIO_RAISE("not implemented");
+    BaseVector& target,
+    vector_size_t targetIndex,
+    const BaseVector& source,
+    vector_size_t sourceIndex,
+    vector_size_t count) {
+  // copy values if not all are nulls
+  if (copyNulls(target, targetIndex, source, sourceIndex, count) != count) {
+    auto& tgt = static_cast<FlatVector<bool>&>(target);
+    auto& src = static_cast<const FlatVector<bool>&>(source);
+    bits::copyBits(
+        src.rawValues<uint64_t>(),
+        sourceIndex,
+        const_cast<uint64_t*>(tgt.rawValues<uint64_t>()),
+        targetIndex,
+        count);
+  }
 }
 
 void copyStrings(
@@ -356,10 +366,10 @@ void copyStrings(
   if (copyNulls(target, targetIndex, source, sourceIndex, count) != count) {
     auto& tgt = static_cast<FlatVector<StringView>&>(target);
     auto& src = static_cast<const FlatVector<StringView>&>(source);
-    std::memcpy(
-        const_cast<StringView*>(tgt.rawValues()) + targetIndex,
+    std::copy(
         src.rawValues() + sourceIndex,
-        count * sizeof(StringView));
+        src.rawValues() + sourceIndex + count,
+        const_cast<StringView*>(tgt.rawValues()) + targetIndex);
   }
 }
 
@@ -417,10 +427,10 @@ vector_size_t copyOffsets(
       nextChildOffset += size;
     }
   } else {
-    std::memcpy(
-        tgtSizes + targetIndex,
+    std::copy(
         srcSizes + sourceIndex,
-        count * sizeof(vector_size_t));
+        srcSizes + sourceIndex + count,
+        tgtSizes + targetIndex);
     for (vector_size_t i = 0; i < count; ++i) {
       auto index = targetIndex + i;
       tgtOffsets[index] = nextChildOffset;
@@ -575,11 +585,19 @@ void copyOneImpl(
 template <>
 void copyOneImpl<TypeKind::BOOLEAN>(
     const std::shared_ptr<const Type>& /* type */,
-    BaseVector& /* target */,
-    vector_size_t /* targetIndex */,
-    const BaseVector& /* source */,
-    vector_size_t /* sourceIndex */) {
-  DWIO_RAISE("not implemented");
+    BaseVector& target,
+    vector_size_t targetIndex,
+    const BaseVector& source,
+    vector_size_t sourceIndex) {
+  // copy value if not null
+  if (!copyNull(target, targetIndex, source, sourceIndex)) {
+    auto& tgt = static_cast<FlatVector<bool>&>(target);
+    auto& src = static_cast<const FlatVector<bool>&>(source);
+    bits::setBit(
+        const_cast<uint64_t*>(tgt.rawValues<uint64_t>()),
+        targetIndex,
+        bits::isBitSet(src.rawValues<uint64_t>(), sourceIndex));
+  }
 }
 
 void copyString(

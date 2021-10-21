@@ -205,7 +205,7 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
 
   // Set an artificially low buffer size limit to trigger blocking behavior.
   params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryCtx::kMaxLocalExchangeBufferSize, "100"},
+      {core::QueryConfig::kMaxLocalExchangeBufferSize, "100"},
   });
 
   auto task = ::assertQuery(
@@ -251,7 +251,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   // Set an artificially low buffer size limit to trigger blocking behavior.
   params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryCtx::kMaxLocalExchangeBufferSize, "100"},
+      {core::QueryConfig::kMaxLocalExchangeBufferSize, "100"},
   });
 
   uint32_t fileIndex = 0;
@@ -273,7 +273,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   // Re-run with higher memory limit (enough to hold ~10 vectors at a time).
   params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryCtx::kMaxLocalExchangeBufferSize, "10240"},
+      {core::QueryConfig::kMaxLocalExchangeBufferSize, "10240"},
   });
 
   fileIndex = 0;
@@ -337,6 +337,23 @@ TEST_F(LocalPartitionTest, outputLayout) {
 
   task = assertQuery(
       op, std::vector<std::shared_ptr<TempFilePath>>{}, "SELECT 300, -71, 102");
+  verifyExchangeSourceOperatorStats(task, 300);
+
+  op = PlanBuilder()
+           .localPartition(
+               {},
+               {
+                   valuesNode(0),
+                   valuesNode(1),
+                   valuesNode(2),
+               },
+               // Drop all columns.
+               {})
+           .singleAggregation({}, {"count(1)"})
+           .planNode();
+
+  task = assertQuery(
+      op, std::vector<std::shared_ptr<TempFilePath>>{}, "SELECT 300");
   verifyExchangeSourceOperatorStats(task, 300);
 }
 

@@ -16,6 +16,8 @@ add_library(
   Aggregate.cpp
   AllocationPool.cpp
   ContainerRowSerde.cpp
+  CrossJoinBuild.cpp
+  CrossJoinProbe.cpp
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
@@ -23,6 +25,7 @@ add_library(
   GroupingSet.cpp
   HashAggregation.cpp
   HashBuild.cpp
+  HashPartitionFunction.cpp
   HashProbe.cpp
   HashStringAllocator.cpp
   HashTable.cpp
@@ -55,5 +58,7 @@ target_link_libraries(
   velox_codegen
   velox_common_base)
 
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+  add_subdirectory(benchmarks)
+endif()

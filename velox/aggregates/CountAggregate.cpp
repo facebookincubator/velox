@@ -24,8 +24,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
   using BaseAggregate = SimpleNumericAggregate<bool, int64_t, int64_t>;
 
  public:
-  explicit CountAggregate(core::AggregationNode::Step step)
-      : BaseAggregate(step, BIGINT()) {}
+  explicit CountAggregate() : BaseAggregate(BIGINT()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(int64_t);
@@ -40,13 +39,6 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     }
   }
 
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/,
-      const VectorPtr& /*initialState*/) override {
-    VELOX_NYI();
-  }
-
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
@@ -54,7 +46,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     });
   }
 
-  void updatePartial(
+  void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -82,7 +74,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     }
   }
 
-  void updateFinal(
+  void addIntermediateResults(
       char** /*groups*/,
       const SelectivityVector& /*rows*/,
       const std::vector<VectorPtr>& /*args*/,
@@ -90,7 +82,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     VELOX_UNREACHABLE();
   }
 
-  void updateSingleGroupPartial(
+  void addSingleGroupRawInput(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -118,7 +110,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     }
   }
 
-  void updateSingleGroupFinal(
+  void addSingleGroupIntermediateResults(
       char* /*group*/,
       const SelectivityVector& /*rows*/,
       const std::vector<VectorPtr>& /*args*/,
@@ -143,10 +135,10 @@ bool registerCountAggregate(const std::string& name) {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         if (exec::isRawInput(step)) {
-          return std::make_unique<CountAggregate>(step);
+          return std::make_unique<CountAggregate>();
         } else {
           return std::make_unique<SumAggregate<int64_t, int64_t, int64_t>>(
-              step, BIGINT());
+              BIGINT());
         }
       });
   return true;

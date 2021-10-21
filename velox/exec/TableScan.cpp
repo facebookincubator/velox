@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/TableScan.h"
+#include "velox/common/time/Timer.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
@@ -68,8 +69,8 @@ RowVectorPtr TableScan::getOutput() {
 
       if (!connector_) {
         connector_ = connector::getConnector(connectorSplit->connectorId);
-        connectorQueryCtx_ =
-            driverCtx_->createConnectorQueryCtx(connectorSplit->connectorId);
+        connectorQueryCtx_ = driverCtx_->createConnectorQueryCtx(
+            connectorSplit->connectorId, planNodeId_);
         dataSource_ = connector_->createDataSource(
             outputType_,
             tableHandle_,
@@ -89,7 +90,11 @@ RowVectorPtr TableScan::getOutput() {
       ++stats_.numSplits;
     }
 
+    const auto ioTimeStartMicros = getCurrentTimeMicro();
     auto data = dataSource_->next(kDefaultBatchSize);
+    stats().addRuntimeStat(
+        "dataSourceWallNanos",
+        (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000);
     stats_.rawInputPositions = dataSource_->getCompletedRows();
     stats_.rawInputBytes = dataSource_->getCompletedBytes();
     if (data) {

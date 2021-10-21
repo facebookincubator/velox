@@ -137,16 +137,10 @@ BlockingReason LocalExchangeSource::next(
       return BlockingReason::kWaitForExchange;
     }
 
-    // TODO Avoid the copy. The data was allocated from the producer's memory
-    // pool and may go away before it is fully processed by the consumer.
-    auto sourceVector = queue.front();
-    *data = std::static_pointer_cast<RowVector>(
-        BaseVector::create(sourceVector->type(), sourceVector->size(), pool));
-    (*data)->copy(sourceVector.get(), 0, 0, sourceVector->size());
-
+    *data = queue.front();
     queue.pop();
 
-    memoryManager_->decreaseMemoryUsage(sourceVector->retainedSize());
+    memoryManager_->decreaseMemoryUsage((*data)->retainedSize());
 
     if (noMoreProducers_ && pendingProducers_ == 0 && queue.empty()) {
       producerPromises = std::move(producerPromises_);
@@ -224,23 +218,15 @@ LocalPartition::LocalPartition(
           "LocalPartition"),
       localExchangeSources_{ctx->task->getLocalExchangeSources(planNode->id())},
       numPartitions_{localExchangeSources_.size()},
-      keyChannels_{
+      partitionFunction_(
           numPartitions_ == 1
-              ? std::vector<ChannelIndex>{}
-              : toChannels(planNode->inputType(), planNode->keys())},
+              ? nullptr
+              : planNode->partitionFunctionFactory()(numPartitions_)),
       outputChannels_{calculateOutputChannels(
           planNode->inputType(),
           planNode->outputType())},
       blockingReasons_{numPartitions_} {
-  VELOX_CHECK(numPartitions_ == 1 || !keyChannels_.empty());
-  VELOX_CHECK_GT(outputType_->size(), 0);
-
-  const auto& inputType = planNode->inputType();
-  hashers_.reserve(keyChannels_.size());
-  for (auto channel : keyChannels_) {
-    hashers_.emplace_back(
-        VectorHasher::create(inputType->childAt(channel), channel));
-  }
+  VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
 
   for (auto& source : localExchangeSources_) {
     source->addProducer();
@@ -260,8 +246,7 @@ std::vector<BufferPtr> allocateIndexBuffers(
   std::vector<BufferPtr> indexBuffers;
   indexBuffers.reserve(numBuffers);
   for (auto i = 0; i < numBuffers; i++) {
-    indexBuffers.emplace_back(
-        AlignedBuffer::allocate<vector_size_t>(size, pool));
+    indexBuffers.emplace_back(allocateIndices(size, pool));
   }
   return indexBuffers;
 }
@@ -331,7 +316,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
       numBlockedPartitions_ = 1;
     }
   } else {
-    calculateHashes();
+    partitionFunction_->partition(*input_, partitions_);
 
     auto numInput = input_->size();
     auto indexBuffers = allocateIndexBuffers(numPartitions_, numInput, pool());
@@ -339,7 +324,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
 
     std::vector<vector_size_t> maxIndex(numPartitions_, 0);
     for (auto i = 0; i < numInput; ++i) {
-      auto partition = hashes_[i] % numPartitions_;
+      auto partition = partitions_[i];
       rawIndices[partition][maxIndex[partition]] = i;
       ++maxIndex[partition];
     }
@@ -361,19 +346,6 @@ void LocalPartition::addInput(RowVectorPtr input) {
         futures_[numBlockedPartitions_] = std::move(future);
         ++numBlockedPartitions_;
       }
-    }
-  }
-}
-
-void LocalPartition::calculateHashes() {
-  auto numInput = input_->size();
-  if (!keyChannels_.empty()) {
-    hashes_.resize(numInput);
-    allRows_.resize(numInput);
-    allRows_.setAll();
-    for (auto i = 0; i < keyChannels_.size(); ++i) {
-      hashers_[i]->hash(
-          *input_->childAt(keyChannels_[i]), allRows_, i > 0, &hashes_);
     }
   }
 }

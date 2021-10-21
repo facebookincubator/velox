@@ -19,10 +19,8 @@
 #include <gflags/gflags.h>
 
 namespace facebook::velox {
-
 StringIdMap& fileIds() {
-  static std::unique_ptr<StringIdMap> ids = std::make_unique<StringIdMap>();
+  static StringIdMap* ids = new StringIdMap();
   return *ids;
 }
-
 } // namespace facebook::velox

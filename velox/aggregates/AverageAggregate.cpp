@@ -34,8 +34,7 @@ struct SumCount {
 template <typename T>
 class AverageAggregate : public exec::Aggregate {
  public:
-  AverageAggregate(core::AggregationNode::Step step, TypePtr resultType)
-      : exec::Aggregate(step, resultType) {}
+  explicit AverageAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(SumCount);
@@ -48,13 +47,6 @@ class AverageAggregate : public exec::Aggregate {
     for (auto i : indices) {
       new (groups[i] + offset_) SumCount();
     }
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/,
-      const VectorPtr& /*initialState*/) override {
-    VELOX_NYI();
   }
 
   void finalize(char** /* unused */, int32_t /* unused */) override {}
@@ -103,8 +95,7 @@ class AverageAggregate : public exec::Aggregate {
     }
   }
 
- protected:
-  void updatePartial(
+  void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -135,7 +126,7 @@ class AverageAggregate : public exec::Aggregate {
     }
   }
 
-  void updateSingleGroupPartial(
+  void addSingleGroupRawInput(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -167,7 +158,7 @@ class AverageAggregate : public exec::Aggregate {
     }
   }
 
-  void updateFinal(
+  void addIntermediateResults(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -209,7 +200,7 @@ class AverageAggregate : public exec::Aggregate {
     }
   }
 
-  void updateSingleGroupFinal(
+  void addSingleGroupIntermediateResults(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -305,20 +296,15 @@ bool registerAverageAggregate(const std::string& name) {
         if (exec::isRawInput(step)) {
           switch (inputType->kind()) {
             case TypeKind::SMALLINT:
-              return std::make_unique<AverageAggregate<int16_t>>(
-                  step, resultType);
+              return std::make_unique<AverageAggregate<int16_t>>(resultType);
             case TypeKind::INTEGER:
-              return std::make_unique<AverageAggregate<int32_t>>(
-                  step, resultType);
+              return std::make_unique<AverageAggregate<int32_t>>(resultType);
             case TypeKind::BIGINT:
-              return std::make_unique<AverageAggregate<int64_t>>(
-                  step, resultType);
+              return std::make_unique<AverageAggregate<int64_t>>(resultType);
             case TypeKind::REAL:
-              return std::make_unique<AverageAggregate<float>>(
-                  step, resultType);
+              return std::make_unique<AverageAggregate<float>>(resultType);
             case TypeKind::DOUBLE:
-              return std::make_unique<AverageAggregate<double>>(
-                  step, resultType);
+              return std::make_unique<AverageAggregate<double>>(resultType);
             default:
               VELOX_FAIL(
                   "Unknown input type for {} aggregation {}",
@@ -330,7 +316,7 @@ bool registerAverageAggregate(const std::string& name) {
           checkSumCountRowType(
               inputType,
               "Input type for final aggregation must be (sum:double, count:bigint) struct");
-          return std::make_unique<AverageAggregate<int64_t>>(step, resultType);
+          return std::make_unique<AverageAggregate<int64_t>>(resultType);
         }
       });
   return true;

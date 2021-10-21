@@ -26,10 +26,12 @@
 #include <string_view>
 #include <vector>
 #include "folly/CPortability.h"
+#include "folly/Likely.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/lib/string/StringCore.h"
+#include "velox/type/StringView.h"
 
 namespace facebook::velox::functions::stringImpl {
 using namespace stringCore;
@@ -221,7 +223,7 @@ FOLLY_ALWAYS_INLINE void replaceInPlace(
     TInOutString& string,
     const TInString& replaced,
     const TInString& replacement) {
-  assert(replacement.size() <= replaced.size() && "invlaid inplace replace");
+  assert(replacement.size() <= replaced.size() && "invalid inplace replace");
 
   auto outputSize = stringCore::replace(
       string.data(),
@@ -443,5 +445,128 @@ FOLLY_ALWAYS_INLINE bool urlUnescape(
   }
   output.resize(outputBuffer - output.data());
   return true;
+}
+
+// Presto supports both ascii whitespace and unicode line separator \u2028
+FOLLY_ALWAYS_INLINE bool isUnicodeWhiteSpace(utf8proc_int32_t codePoint) {
+  // 9 -> \t, 10 -> \n, 13 -> \r, 32 -> ' ', 8232 -> \u2028
+  return codePoint == 9 || codePoint == 10 || codePoint == 13 ||
+      codePoint == 8232 || codePoint == 32;
+}
+
+FOLLY_ALWAYS_INLINE bool isAsciiWhiteSpace(char ch) {
+  return ch == '\t' || ch == '\n' || ch == '\r' || ch == ' ';
+}
+
+template <
+    bool leftTrim,
+    bool rightTrim,
+    typename TOutString,
+    typename TInString>
+FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
+    TOutString& output,
+    const TInString& input) {
+  if (input.empty()) {
+    output.setEmpty();
+    return;
+  }
+
+  auto curPos = input.begin();
+  if constexpr (leftTrim) {
+    while (curPos < input.end() && isAsciiWhiteSpace(*curPos)) {
+      curPos++;
+    }
+  }
+  if (curPos >= input.end()) {
+    output.setEmpty();
+    return;
+  }
+  auto start = curPos;
+  curPos = input.end() - 1;
+  if constexpr (rightTrim) {
+    while (curPos > start && isAsciiWhiteSpace(*curPos)) {
+      curPos--;
+    }
+  }
+  output.setNoCopy(StringView(start, curPos - start + 1));
+}
+
+template <
+    bool leftTrim,
+    bool rightTrim,
+    typename TOutString,
+    typename TInString>
+FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
+    TOutString& output,
+    const TInString& input) {
+  if (input.empty()) {
+    output.setEmpty();
+    return;
+  }
+
+  auto curPos = 0;
+  int codePointSize = 0;
+  if constexpr (leftTrim) {
+    while (curPos < input.size()) {
+      auto codePoint = utf8proc_codepoint(input.data() + curPos, codePointSize);
+      // Invalid encoding, return the remaining of the input
+      if (UNLIKELY(-1 == codePoint)) {
+        output.setNoCopy(
+            StringView(input.data() + curPos, input.size() - curPos));
+        break;
+      }
+
+      if (isUnicodeWhiteSpace(codePoint)) {
+        curPos += codePointSize;
+      } else {
+        break;
+      }
+    }
+  }
+  if (curPos >= input.size()) {
+    output.setEmpty();
+    return;
+  }
+  size_t start = curPos;
+
+  // Right trim for unicode input requires to traverse the whole string
+  size_t lastNonWhiteSpace = input.size();
+  bool hasWhiteSpace = false;
+  if constexpr (rightTrim) {
+    while (curPos < input.size()) {
+      auto codePoint = utf8proc_codepoint(input.data() + curPos, codePointSize);
+      // Invalid encoding, return the remaining of the input
+      if (UNLIKELY(-1 == codePoint)) {
+        output.setNoCopy(
+            StringView(input.data() + start, input.size() - start));
+        return;
+      }
+
+      if (isUnicodeWhiteSpace(codePoint)) {
+        if (!hasWhiteSpace) {
+          lastNonWhiteSpace = curPos;
+          hasWhiteSpace = true;
+        }
+      } else {
+        // reset if the next one is not a white space
+        lastNonWhiteSpace = input.size();
+        hasWhiteSpace = false;
+      }
+      curPos += codePointSize;
+    }
+  }
+  output.setNoCopy(StringView(input.data() + start, lastNonWhiteSpace - start));
+}
+
+template <bool ascii, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void reverse(TOutString& output, const TInString& input) {
+  auto inputSize = input.size();
+  output.resize(inputSize);
+
+  if constexpr (ascii) {
+    reverseAscii(output.data(), input.data(), inputSize);
+  } else {
+    reverseUnicode(output.data(), input.data(), inputSize);
+  }
 }
 } // namespace facebook::velox::functions::stringImpl

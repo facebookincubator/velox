@@ -452,7 +452,7 @@ class BaseVector {
   }
 
   template <typename T>
-  static inline vector_size_t byteSize(vector_size_t count) {
+  static inline uint64_t byteSize(vector_size_t count) {
     return sizeof(T) * count;
   }
 
@@ -627,13 +627,19 @@ class BaseVector {
 };
 
 template <>
-vector_size_t BaseVector::byteSize<bool>(vector_size_t count);
+uint64_t BaseVector::byteSize<bool>(vector_size_t count);
 
 using VectorPtr = std::shared_ptr<BaseVector>;
 
 // Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
 // been loaded yet.
 bool isLazyNotLoaded(const BaseVector& vector);
+
+// Allocates a buffer to fit at least 'size' indices and initializes them to
+// zero.
+inline BufferPtr allocateIndices(vector_size_t size, memory::MemoryPool* pool) {
+  return AlignedBuffer::allocate<vector_size_t>(size, pool, 0);
+}
 
 } // namespace velox
 } // namespace facebook

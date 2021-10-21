@@ -15,8 +15,11 @@
  */
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/StringEncodingUtils.h"
+#include "velox/functions/lib/string/StringCore.h"
 
 namespace facebook::velox::functions::sparksql {
+
+using namespace stringCore;
 namespace {
 
 template <bool isAscii>
@@ -40,7 +43,7 @@ class Instr : public exec::VectorFunction {
   void apply(
       const SelectivityVector& selected,
       std::vector<VectorPtr>& args,
-      exec::Expr*,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
@@ -79,7 +82,7 @@ class Length : public exec::VectorFunction {
   void apply(
       const SelectivityVector& selected,
       std::vector<VectorPtr>& args,
-      exec::Expr*,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 1);

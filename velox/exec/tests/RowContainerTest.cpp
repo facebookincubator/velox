@@ -26,7 +26,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
-using namespace facebook::dwio;
+using namespace facebook::velox::dwio;
 
 class RowContainerTest : public testing::Test {
  protected:
@@ -40,7 +40,7 @@ class RowContainerTest : public testing::Test {
       const size_t size,
       std::function<void(RowVectorPtr)> customizeData) {
     std::string schema = fmt::format("struct<{}>", columns);
-    facebook::dwio::type::fbhive::HiveTypeParser parser;
+    facebook::velox::dwio::type::fbhive::HiveTypeParser parser;
     auto rowType =
         std::dynamic_pointer_cast<const RowType>(parser.parse(schema));
     auto batch = std::static_pointer_cast<RowVector>(
@@ -362,4 +362,44 @@ TEST_F(RowContainerTest, erase) {
   auto newRow = data->newRow();
   EXPECT_EQ(rowSet.end(), rowSet.find(newRow));
   data->checkConsistency();
+}
+
+TEST_F(RowContainerTest, rowSize) {
+  constexpr int32_t kNumRows = 100;
+  auto data = makeRowContainer({SMALLINT()}, {VARCHAR()});
+
+  // The layout is expected to be smallint - 6 bytes of padding - 1 byte of bits
+  // - StringView - rowSize - next pointer. The bits are a null flag for the
+  // second smallint, a probed flag and a free flag.
+  EXPECT_EQ(25, data->rowSizeOffset());
+  EXPECT_EQ(29, data->nextOffset());
+  // 2nd bit in first byte of flags.
+  EXPECT_EQ(data->probedFlagOffset(), 8 * 8 + 1);
+  std::unordered_set<char*> rowSet;
+  std::vector<char*> rows;
+  for (int i = 0; i < kNumRows; ++i) {
+    rows.push_back(data->newRow());
+    rowSet.insert(rows.back());
+  }
+  EXPECT_EQ(kNumRows, data->numRows());
+  for (auto i = 0; i < rows.size(); ++i) {
+    data->incrementRowSize(rows[i], i * 1000);
+  }
+  // The first size overflows 32 bits.
+  data->incrementRowSize(rows[0], 2000000000);
+  data->incrementRowSize(rows[0], 2000000000);
+  data->incrementRowSize(rows[0], 2000000000);
+  std::vector<char*> rowsFromContainer(kNumRows);
+  RowContainerIterator iter;
+  // The first row is returned alone.
+  auto numRows =
+      data->listRows(&iter, kNumRows, 100000, rowsFromContainer.data());
+  EXPECT_EQ(1, numRows);
+  while (numRows < kNumRows) {
+    numRows += data->listRows(
+        &iter, kNumRows, 100000, rowsFromContainer.data() + numRows);
+  }
+  EXPECT_EQ(0, data->listRows(&iter, kNumRows, rows.data()));
+
+  EXPECT_EQ(rows, rowsFromContainer);
 }

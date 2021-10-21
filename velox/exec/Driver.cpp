@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
@@ -67,26 +69,28 @@ DriverCtx::DriverCtx(
     int32_t _numDrivers)
     : task(_task),
       execCtx(std::make_unique<core::ExecCtx>(
-          task->pool()->addScopedChild("driver_root"),
+          task->addDriverPool(),
           task->queryCtx().get())),
       expressionEvaluator(
           std::make_unique<SimpleExpressionEvaluator>(execCtx.get())),
       driverId(_driverId),
       pipelineId(_pipelineId),
-      numDrivers(_numDrivers) {
-  auto parentTracker = task->pool()->getMemoryUsageTracker();
-  if (parentTracker) {
-    execCtx->pool()->setMemoryUsageTracker(
-        std::move(parentTracker->addChild()));
-  }
+      numDrivers(_numDrivers) {}
+
+velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool() {
+  return task->addOperatorPool(execCtx->pool());
 }
 
 std::unique_ptr<connector::ConnectorQueryCtx>
-DriverCtx::createConnectorQueryCtx(const std::string& connectorId) const {
+DriverCtx::createConnectorQueryCtx(
+    const std::string& connectorId,
+    const std::string& planNodeId) const {
   return std::make_unique<connector::ConnectorQueryCtx>(
       execCtx->pool(),
       task->queryCtx()->getConnectorConfig(connectorId),
-      expressionEvaluator.get());
+      expressionEvaluator.get(),
+      task->queryCtx()->mappedMemory(),
+      fmt::format("{}.{}", task->taskId(), planNodeId));
 }
 
 BlockingState::BlockingState(
@@ -107,14 +111,12 @@ BlockingState::BlockingState(
 }
 
 // static
-void BlockingState::setResume(
-    std::shared_ptr<BlockingState> state,
-    folly::Executor* executor) {
+void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
   VELOX_CHECK(!state->driver_->isOnThread());
   auto& exec = folly::QueuedImmediateExecutor::instance();
   std::move(state->future_)
       .via(&exec)
-      .thenValue([state, executor](bool /* unused */) {
+      .thenValue([state](bool /* unused */) {
         state->operator_->recordBlockingTime(state->sinceMicros_);
         auto driver = state->driver_;
         {
@@ -213,15 +215,15 @@ void Driver::testingJoinAndReinitializeExecutor(int32_t threads) {
 }
 
 // static
-void Driver::enqueue(
-    std::shared_ptr<Driver> driver,
-    folly::Executor* executor) {
+void Driver::enqueue(std::shared_ptr<Driver> driver) {
   // This is expected to be called inside the Driver's CancelPool mutex.
-  VELOX_CHECK(!driver->state().isEnqueued);
-  driver->state().isEnqueued = true;
-  auto currentExecutor = (executor ? executor : Driver::executor());
-  currentExecutor->add(
-      [driver, currentExecutor]() { Driver::run(driver, currentExecutor); });
+  driver->enqueueInternal();
+  auto& task = driver->task_;
+  auto executor = task ? task->queryCtx()->executor() : nullptr;
+  if (!executor) {
+    executor = Driver::executor();
+  }
+  executor->add([driver]() { Driver::run(driver); });
 }
 
 Driver::Driver(
@@ -231,6 +233,7 @@ Driver::Driver(
       task_(ctx_->task),
       cancelPool_(ctx_->task->cancelPool()),
       operators_(std::move(operators)) {
+  curOpIndex_ = operators_.size() - 1;
   // Operators need access to their Driver for adaptation.
   ctx_->driver = this;
 }
@@ -297,9 +300,23 @@ void Driver::pushdownFilters(int operatorIndex) {
   op->clearDynamicFilters();
 }
 
+void Driver::enqueueInternal() {
+  VELOX_CHECK(!state_.isEnqueued);
+  state_.isEnqueued = true;
+  // When enqueuing, starting timing the queue time.
+  queueTimeStartMicros_ = getCurrentTimeMicro();
+}
+
 core::StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>* blockingState) {
+  // Update the next operator's queueTime.
+  if (curOpIndex_ < operators_.size()) {
+    operators_[curOpIndex_]->stats().addRuntimeStat(
+        "queuedWallNanos",
+        (getCurrentTimeMicro() - queueTimeStartMicros_) * 1'000);
+  }
+
   auto stop = cancelPool_->enter(state_);
   if (stop != core::StopReason::kNone) {
     if (stop == core::StopReason::kTerminate) {
@@ -316,6 +333,7 @@ core::StopReason Driver::runInternal(
     }
     return stop;
   }
+
   CancelPoolGuard guard(
       cancelPool_.get(), &state_, [this](core::StopReason reason) {
         auto task = task_.get();
@@ -332,6 +350,12 @@ core::StopReason Driver::runInternal(
         }
         close();
       });
+
+  // Ensure we remove the writer we might have set when we exit this function in
+  // any way.
+  const auto statWriterGuard =
+      folly::makeGuard([]() { setRunTimeStatWriter(nullptr); });
+
   try {
     int32_t numOperators = operators_.size();
     ContinueFuture future(false);
@@ -345,6 +369,14 @@ core::StopReason Driver::runInternal(
         }
 
         auto op = operators_[i].get();
+        // In case we are blocked, this index will point to the operator, whose
+        // queuedTime we should update.
+        curOpIndex_ = i;
+        // Set up the runtime stats writer with the current operator, whose
+        // runtime stats would be updated (for instance time taken to load lazy
+        // vectors).
+        setRunTimeStatWriter(std::make_unique<OperatorRuntimeStatWriter>(op));
+
         blockingReason_ = op->isBlocked(&future);
         if (blockingReason_ != BlockingReason::kNotBlocked) {
           *blockingState = std::make_shared<BlockingState>(
@@ -366,7 +398,7 @@ core::StopReason Driver::runInternal(
             uint64_t resultBytes = 0;
             RowVectorPtr result;
             {
-              OperationTimer timer(op->stats().getOutputTiming);
+              CpuWallTimer timer(op->stats().getOutputTiming);
               result = op->getOutput();
               if (result) {
                 op->stats().outputPositions += result->size();
@@ -376,7 +408,7 @@ core::StopReason Driver::runInternal(
             }
             pushdownFilters(i);
             if (result) {
-              OperationTimer timer(nextOp->stats().addInputTiming);
+              CpuWallTimer timer(nextOp->stats().addInputTiming);
               nextOp->stats().inputPositions += result->size();
               nextOp->stats().inputBytes += resultBytes;
               nextOp->addInput(result);
@@ -405,7 +437,7 @@ core::StopReason Driver::runInternal(
               }
               if (op->isFinishing()) {
                 if (!nextOp->isFinishing()) {
-                  OperationTimer timer(nextOp->stats().finishTiming);
+                  CpuWallTimer timer(nextOp->stats().finishTiming);
                   nextOp->finish();
                   break;
                 }
@@ -418,7 +450,7 @@ core::StopReason Driver::runInternal(
           // this will be detected when trying to add input and we
           // will come back here after this is again on thread.
           {
-            OperationTimer timer(op->stats().getOutputTiming);
+            CpuWallTimer timer(op->stats().getOutputTiming);
             op->getOutput();
           }
           pushdownFilters(i);
@@ -431,7 +463,7 @@ core::StopReason Driver::runInternal(
             close();
             return core::StopReason::kAtEnd;
           }
-          OperationTimer timer(op->stats().finishTiming);
+          CpuWallTimer timer(op->stats().finishTiming);
           op->finish();
           break;
         }
@@ -449,7 +481,7 @@ core::StopReason Driver::runInternal(
 }
 
 // static
-void Driver::run(std::shared_ptr<Driver> self, folly::Executor* executor) {
+void Driver::run(std::shared_ptr<Driver> self) {
   std::shared_ptr<BlockingState> blockingState;
   auto reason = self->runInternal(self, &blockingState);
   switch (reason) {
@@ -457,12 +489,12 @@ void Driver::run(std::shared_ptr<Driver> self, folly::Executor* executor) {
       // Set the resume action outside of the CancelPool so that, if the
       // future is already realized we do not have a second thread
       // entering the same Driver.
-      BlockingState::setResume(blockingState, executor);
+      BlockingState::setResume(blockingState);
       return;
 
     case core::StopReason::kYield:
       // Go to the end of the queue.
-      enqueue(self, executor);
+      enqueue(self);
       return;
 
     case core::StopReason::kPause:

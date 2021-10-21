@@ -16,6 +16,8 @@
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/CallbackSink.h"
+#include "velox/exec/CrossJoinBuild.h"
+#include "velox/exec/CrossJoinProbe.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
@@ -91,6 +93,13 @@ OperatorSupplier makeConsumerSupplier(
       return std::make_unique<HashBuild>(operatorId, ctx, join);
     };
   }
+
+  if (auto join =
+          std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+    return [join](int32_t operatorId, DriverCtx* ctx) {
+      return std::make_unique<CrossJoinBuild>(operatorId, ctx, join);
+    };
+  }
   return nullptr;
 }
 
@@ -106,13 +115,16 @@ void plan(
   }
 
   auto sources = planNode->sources();
-
-  for (int32_t i = 0; i < sources.size(); ++i) {
-    plan(
-        sources[i],
-        mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
-        makeConsumerSupplier(planNode),
-        driverFactories);
+  if (sources.empty()) {
+    driverFactories->back()->inputDriver = true;
+  } else {
+    for (int32_t i = 0; i < sources.size(); ++i) {
+      plan(
+          sources[i],
+          mustStartNewPipeline(planNode, i) ? nullptr : currentPlanNodes,
+          makeConsumerSupplier(planNode),
+          driverFactories);
+    }
   }
 
   currentPlanNodes->push_back(planNode);
@@ -168,8 +180,11 @@ uint32_t maxDrivers(
 
     if (auto tableWrite =
             std::dynamic_pointer_cast<const core::TableWriteNode>(node)) {
-      // Multi-threaded table write is not supported yet.
-      return 1;
+      if (!tableWrite->insertTableHandle()
+               ->connectorInsertTableHandle()
+               ->supportsMultiThreading()) {
+        return 1;
+      }
     }
   }
   return std::numeric_limits<uint32_t>::max();
@@ -186,6 +201,8 @@ void LocalPlanner::plan(
       nullptr,
       detail::makeConsumerSupplier(consumerSupplier),
       driverFactories);
+
+  (*driverFactories)[0]->outputDriver = true;
 
   for (auto& factory : *driverFactories) {
     factory->maxDrivers = detail::maxDrivers(factory->planNodes);
@@ -257,6 +274,11 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto joinNode =
             std::dynamic_pointer_cast<const core::HashJoinNode>(planNode)) {
       operators.push_back(std::make_unique<HashProbe>(id, ctx.get(), joinNode));
+    } else if (
+        auto joinNode =
+            std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+      operators.push_back(
+          std::make_unique<CrossJoinProbe>(id, ctx.get(), joinNode));
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {

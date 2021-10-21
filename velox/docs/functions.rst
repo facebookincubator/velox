@@ -57,32 +57,41 @@ for :doc:`all <functions/coverage>` and :doc:`most used
     ===========================  ===========================  ===========================  ==  ===========================
     Scalar Functions                                                                           Aggregate Functions
     =====================================================================================  ==  ===========================
-    :func:`abs`                  divide                       multiply                         :func:`approx_distinct`
-    :func:`array_constructor`    :func:`element_at`           negate                           :func:`approx_percentile`
-    :func:`array_except`         eq                           neq                              :func:`arbitrary`
-    :func:`array_intersect`      :func:`exp`                  not                              :func:`array_agg`
-    :func:`array_max`            :func:`filter`               plus                             :func:`avg`
-    :func:`array_min`            :func:`floor`                :func:`power`                    :func:`bitwise_and_agg`
-    :func:`atan`                 :func:`from_base64`          :func:`rand`                     :func:`bitwise_or_agg`
-    :func:`atan2`                :func:`from_hex`             :func:`reduce`                   :func:`bool_and`
-    :func:`between`              :func:`from_unixtime`        :func:`regexp_extract`           :func:`bool_or`
-    :func:`bitwise_and`          gt                           :func:`regexp_like`              :func:`count`
-    :func:`bitwise_not`          gte                          :func:`replace`                  :func:`count_if`
-    :func:`bitwise_or`           :func:`in`                   :func:`round`                    :func:`map_agg`
-    :func:`bitwise_xor`          :func:`is_null`              :func:`sqrt`                     :func:`max`
-    :func:`cardinality`          :func:`json_extract_scalar`  :func:`strpos`                   :func:`max_by`
-    :func:`cbrt`                 :func:`length`               :func:`subscript`                :func:`min`
-    :func:`ceil`                 :func:`ln`                   :func:`substr`                   :func:`min_by`
-    checked_divide               :func:`lower`                :func:`to_base64`                :func:`stddev`
-    checked_minus                lt                           :func:`to_hex`                   :func:`stddev_pop`
-    checked_modulus              lte                          :func:`to_unixtime`              :func:`stddev_samp`
-    checked_multiply             :func:`map`                  :func:`to_utf8`                  :func:`sum`
-    checked_negate               :func:`map_concat`           :func:`transform`                :func:`var_pop`
-    checked_plus                 :func:`map_entries`          :func:`upper`                    :func:`var_samp`
-    :func:`chr`                  :func:`map_filter`           :func:`url_decode`               :func:`variance`
-    :func:`clamp`                :func:`map_keys`             :func:`url_encode`
-    :func:`coalesce`             :func:`map_values`           :func:`width_bucket`
-    :func:`codepoint`            :func:`md5`                  :func:`xxhash64`
-    :func:`concat`               minus
-    :func:`contains`             modulus
+    :func:`abs`                  :func:`exp`                  plus                             :func:`approx_distinct`
+    :func:`acos`                 :func:`filter`               :func:`pow`                      :func:`approx_percentile`
+    :func:`array_constructor`    :func:`floor`                :func:`power`                    :func:`arbitrary`
+    :func:`array_distinct`       :func:`from_base64`          :func:`radians`                  :func:`array_agg`
+    :func:`array_except`         :func:`from_hex`             :func:`rand`                     :func:`avg`
+    :func:`array_intersect`      :func:`from_unixtime`        :func:`reduce`                   :func:`bitwise_and_agg`
+    :func:`array_max`            gt                           :func:`regexp_extract`           :func:`bitwise_or_agg`
+    :func:`array_min`            gte                          :func:`regexp_extract_all`       :func:`bool_and`
+    :func:`asin`                 :func:`hour`                 :func:`regexp_like`              :func:`bool_or`
+    :func:`atan`                 :func:`in`                   :func:`replace`                  :func:`count`
+    :func:`atan2`                :func:`is_null`              :func:`reverse`                  :func:`count_if`
+    :func:`between`              :func:`json_extract_scalar`  :func:`round`                    :func:`map_agg`
+    :func:`bitwise_and`          :func:`length`               :func:`rtrim`                    :func:`max`
+    :func:`bitwise_not`          :func:`like`                 :func:`second`                   :func:`max_by`
+    :func:`bitwise_or`           :func:`ln`                   :func:`sin`                      :func:`min`
+    :func:`bitwise_xor`          :func:`log10`                :func:`split`                    :func:`min_by`
+    :func:`cardinality`          :func:`log2`                 :func:`sqrt`                     :func:`stddev`
+    :func:`cbrt`                 :func:`lower`                :func:`strpos`                   :func:`stddev_pop`
+    :func:`ceil`                 lt                           :func:`subscript`                :func:`stddev_samp`
+    :func:`ceiling`              lte                          :func:`substr`                   :func:`sum`
+    :func:`chr`                  :func:`ltrim`                :func:`tan`                      :func:`var_pop`
+    :func:`clamp`                :func:`map`                  :func:`tanh`                     :func:`var_samp`
+    :func:`coalesce`             :func:`map_concat`           :func:`to_base64`                :func:`variance`
+    :func:`codepoint`            :func:`map_entries`          :func:`to_hex`
+    :func:`concat`               :func:`map_filter`           :func:`to_unix_timestamp`
+    :func:`contains`             :func:`map_keys`             :func:`to_unixtime`
+    :func:`cos`                  :func:`map_values`           :func:`to_utf8`
+    :func:`cosh`                 :func:`md5`                  :func:`transform`
+    :func:`day`                  :func:`millisecond`          :func:`trim`
+    :func:`day_of_month`         minus                        :func:`upper`
+    :func:`day_of_week`          :func:`minute`               :func:`url_decode`
+    :func:`day_of_year`          modulus                      :func:`url_encode`
+    divide                       :func:`month`                :func:`width_bucket`
+    :func:`dow`                  multiply                     :func:`xxhash64`
+    :func:`doy`                  negate                       :func:`year`
+    :func:`element_at`           neq
+    eq                           not
     ===========================  ===========================  ===========================  ==  ===========================

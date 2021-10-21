@@ -19,7 +19,11 @@
 #include <exception>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/core/FunctionRegistry.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/expression/tests/ExpressionFuzzer.h"
 #include "velox/expression/tests/VectorFuzzer.h"
 #include "velox/type/Type.h"
@@ -36,9 +40,24 @@ DEFINE_int32(
     "Chance of adding a null constant to the plan, or null value in a vector "
     "(expressed using '1 in x' semantic).");
 
+DEFINE_bool(
+    retry_with_try,
+    false,
+    "Retry failed expressions by wrapping it using a try() statement.");
+
 namespace facebook::velox::test {
 
 namespace {
+
+using exec::SignatureBinder;
+
+// TODO: List of the functions that at some point crash or fail and need to
+// be fixed before we can enable.
+static std::unordered_set<std::string> kSkipFunctions = {
+    "replace",
+    // Fails because like requires 2nd arg to be a constant of type VARCHAR.
+    "like",
+};
 
 // Called if at least one of the ptrs has an exception.
 void compareExceptions(
@@ -104,9 +123,43 @@ void compareVectors(const VectorPtr& vec1, const VectorPtr& vec2) {
 
   for (auto i = 0; i < vectorSize; i++) {
     VELOX_CHECK(
-        vec1->equalValueAt(vec2.get(), i, i), "Different results at idx {}", i);
+        vec1->equalValueAt(vec2.get(), i, i),
+        "Different results at idx '{}': '{}' vs. '{}'",
+        i,
+        vec1->toString(i),
+        vec2->toString(i));
   }
   LOG(INFO) << "All results match.";
+}
+
+/// Returns if `functionName` with the given `argTypes` is deterministic.
+/// Returns std::nullopt if the function was not found.
+std::optional<bool> isDeterministic(
+    const std::string& functionName,
+    const std::vector<TypePtr>& argTypes) {
+  // Check if this is a scalar function.
+  auto key = core::FunctionKey(functionName, argTypes);
+  if (core::ScalarFunctions().Has(key)) {
+    auto scalarFunction = core::ScalarFunctions().Create(key);
+    return scalarFunction->isDeterministic();
+  }
+
+  // Vector functions are a bit more complicated. We need to fetch the list of
+  // available signatures and check if any of them bind given the current input
+  // arg types. If it binds (if there's a match), we fetch the function and
+  // return the isDeterministic bool.
+  if (auto vectorFunctionSignatures =
+          exec::getVectorFunctionSignatures(functionName)) {
+    for (const auto& signature : *vectorFunctionSignatures) {
+      if (exec::SignatureBinder(*signature, argTypes).tryBind()) {
+        if (auto vectorFunction =
+                exec::getVectorFunction(functionName, argTypes, {})) {
+          return vectorFunction->isDeterministic();
+        }
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 VectorFuzzer::Options getFuzzerOptions() {
@@ -118,31 +171,126 @@ VectorFuzzer::Options getFuzzerOptions() {
   return opts;
 }
 
-} // namespace
+// Represents one available function signature.
+struct CallableSignature {
+  // Function name.
+  std::string name;
 
-std::string CallableSignature::toString() const {
-  std::string buf = name;
-  buf.append("( ");
-  for (const auto& arg : args) {
-    buf.append(arg->toString());
-    buf.append(" ");
+  // Input arguments and return type.
+  std::vector<TypePtr> args;
+  TypePtr returnType;
+
+  // Convenience print function.
+  std::string toString() const {
+    std::string buf = name;
+    buf.append("( ");
+    for (const auto& arg : args) {
+      buf.append(arg->toString());
+      buf.append(" ");
+    }
+    buf.append(") -> ");
+    buf.append(returnType->toString());
+    return buf;
   }
-  buf.append(") -> ");
-  buf.append(returnType->toString());
-  return buf;
+};
+
+std::optional<CallableSignature> processSignature(
+    const std::string& functionName,
+    const exec::FunctionSignature& signature) {
+  // Don't support functions with parametrized signatures or variable number of
+  // arguments yet.
+  if (!signature.typeVariableConstants().empty() || signature.variableArity()) {
+    LOG(WARNING) << "Skipping unsupported signature: " << functionName
+                 << signature.toString();
+    return std::nullopt;
+  }
+
+  CallableSignature callable{
+      .name = functionName,
+      .args = {},
+      .returnType =
+          SignatureBinder::tryResolveType(signature.returnType(), {})};
+  VELOX_CHECK_NOT_NULL(callable.returnType);
+
+  // For now, ensure that this function only takes (and returns) primitives
+  // types.
+  bool onlyPrimitiveTypes = callable.returnType->isPrimitiveType();
+
+  // Process each argument and figure out its type.
+  for (const auto& arg : signature.argumentTypes()) {
+    auto resolvedType = SignatureBinder::tryResolveType(arg, {});
+    VELOX_CHECK_NOT_NULL(resolvedType);
+
+    onlyPrimitiveTypes &= resolvedType->isPrimitiveType();
+    callable.args.emplace_back(resolvedType);
+  }
+
+  if (onlyPrimitiveTypes) {
+    if (isDeterministic(callable.name, callable.args).value()) {
+      return callable;
+    } else {
+      LOG(WARNING) << "Skipping non-deterministic function: "
+                   << callable.toString();
+    }
+  } else {
+    LOG(WARNING) << "Skipping '" << callable.toString()
+                 << "' because it contains non-primitive types.";
+  }
+  return std::nullopt;
 }
 
 class ExpressionFuzzer {
  public:
-  ExpressionFuzzer(
-      std::vector<CallableSignature> signatures,
-      size_t initialSeed)
-      : signatures_(std::move(signatures)),
-        vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()) {
+  ExpressionFuzzer(FunctionSignatureMap signatureMap, size_t initialSeed)
+      : vectorFuzzer_(getFuzzerOptions(), execCtx_.pool()) {
     seed(initialSeed);
 
+    // Process each available signature for every function.
+    for (const auto& function : signatureMap) {
+      if (kSkipFunctions.count(function.first) > 0) {
+        LOG(INFO) << "Skipping buggy function: " << function.first;
+        continue;
+      }
+
+      for (const auto& signature : function.second) {
+        if (auto callableFunction =
+                processSignature(function.first, *signature)) {
+          signatures_.emplace_back(*callableFunction);
+        }
+      }
+    }
+
+    // We sort the available signatures to ensure we can deterministically
+    // generate expressions across platforms. We just do this once and the
+    // vector is small, so it doesn't need to be very efficient.
+    std::sort(
+        signatures_.begin(),
+        signatures_.end(),
+        // Returns true if lhs is less (comes before).
+        [](const CallableSignature& lhs, const CallableSignature& rhs) {
+          // The comparison logic is the following:
+          //
+          // 1. Compare based on function name.
+          // 2. If names are the same, compare the number of args.
+          // 3. If number of args are the same, look for any different arg
+          // types.
+          // 4. If all arg types are the same, compare return type.
+          if (lhs.name == rhs.name) {
+            if (lhs.args.size() == rhs.args.size()) {
+              for (size_t i = 0; i < lhs.args.size(); ++i) {
+                if (!lhs.args[i]->kindEquals(rhs.args[i])) {
+                  return lhs.args[i]->toString() < rhs.args[i]->toString();
+                }
+              }
+              return lhs.returnType->toString() < rhs.returnType->toString();
+            }
+            return lhs.args.size() < rhs.args.size();
+          }
+          return lhs.name < rhs.name;
+        });
+
     // Generates signaturesMap, which maps a given type to the function
-    // signature that return it.
+    // signature that returns it.
     for (const auto& it : signatures_) {
       signaturesMap_[it.returnType->kind()].push_back(&it);
     }
@@ -164,6 +312,20 @@ class ExpressionFuzzer {
     return folly::Random::oneIn(n, rng_);
   }
 
+  void printRowVector(const RowVectorPtr& rowVector) {
+    LOG(INFO) << "RowVector contents:";
+
+    for (size_t i = 0; i < rowVector->childrenSize(); ++i) {
+      LOG(INFO) << "Column C" << i << ":";
+      auto child = rowVector->childAt(i);
+
+      // If verbose mode, print the whole vector.
+      for (size_t j = 0; j < child->size(); ++j) {
+        LOG(INFO) << "\tC" << i << "[" << j << "]: " << child->toString(j);
+      }
+    }
+  }
+
   RowVectorPtr generateRowVector() {
     std::vector<VectorPtr> vectors;
     vectors.reserve(inputRowTypes_.size());
@@ -172,17 +334,6 @@ class ExpressionFuzzer {
     for (const auto& inputRowType : inputRowTypes_) {
       auto vector = vectorFuzzer_.fuzz(inputRowType);
 
-      // If verbose mode, print the whole vector.
-      if (VLOG_IS_ON(1)) {
-        for (size_t i = 0; i < vector->size(); ++i) {
-          if (vector->isNullAt(i)) {
-            LOG(INFO) << "C" << idx << "[" << i << "]: null";
-          } else {
-            LOG(INFO) << "C" << idx << "[" << i << "]: " << vector->toString(i);
-          }
-        }
-      }
-      LOG(INFO) << "\t" << vector->toString();
       vectors.emplace_back(vector);
       ++idx;
     }
@@ -203,10 +354,7 @@ class ExpressionFuzzer {
     inputRowTypes_.emplace_back(arg);
 
     return std::make_shared<core::FieldAccessTypedExpr>(
-        arg,
-        std::vector<core::TypedExprPtr>{
-            std::make_shared<const core::InputTypedExpr>(ROW({arg}))},
-        fmt::format("c{}", inputRowTypes_.size() - 1));
+        arg, fmt::format("c{}", inputRowTypes_.size() - 1));
   }
 
   std::vector<core::TypedExprPtr> generateArgs(const CallableSignature& input) {
@@ -256,8 +404,88 @@ class ExpressionFuzzer {
         chosen->returnType, args, chosen->name);
   }
 
+  // Executes an expression. Returns:
+  //
+  //  - true if both succeeded and returned the exact same results.
+  //  - false if both failed with compatible exceptions.
+  //  - throws otherwise (incompatible exceptions or different results).
+  bool executeExpression(
+      const core::TypedExprPtr& plan,
+      const RowVectorPtr& rowVector,
+      bool canThrow) {
+    LOG(INFO) << "Executing expression: " << plan->toString();
+
+    if (rowVector) {
+      LOG(INFO) << rowVector->childrenSize() << " vectors as input:";
+      for (const auto& child : rowVector->children()) {
+        LOG(INFO) << "\t" << child->toString();
+      }
+
+      if (VLOG_IS_ON(1)) {
+        printRowVector(rowVector);
+      }
+    }
+
+    // Execute expression plan using both common and simplified evals.
+    std::vector<VectorPtr> commonEvalResult(1);
+    std::vector<VectorPtr> simplifiedEvalResult(1);
+
+    std::exception_ptr exceptionCommonPtr;
+    std::exception_ptr exceptionSimplifiedPtr;
+
+    VLOG(1) << "Starting common eval execution.";
+    SelectivityVector rows{rowVector ? rowVector->size() : 1};
+
+    // Execute with common expression eval path.
+    try {
+      exec::ExprSet exprSetCommon({plan}, &execCtx_);
+      exec::EvalCtx evalCtxCommon(&execCtx_, &exprSetCommon, rowVector.get());
+
+      exprSetCommon.eval(rows, &evalCtxCommon, &commonEvalResult);
+    } catch (...) {
+      if (!canThrow) {
+        LOG(ERROR)
+            << "Common eval wasn't supposed to throw, but it did. Aborting.";
+        throw;
+      }
+      exceptionCommonPtr = std::current_exception();
+    }
+
+    VLOG(1) << "Starting simplified eval execution.";
+
+    // Execute with simplified expression eval path.
+    try {
+      exec::ExprSetSimplified exprSetSimplified({plan}, &execCtx_);
+      exec::EvalCtx evalCtxSimplified(
+          &execCtx_, &exprSetSimplified, rowVector.get());
+
+      exprSetSimplified.eval(rows, &evalCtxSimplified, &simplifiedEvalResult);
+    } catch (...) {
+      if (!canThrow) {
+        LOG(ERROR)
+            << "Simplified eval wasn't supposed to throw, but it did. Aborting.";
+        throw;
+      }
+      exceptionSimplifiedPtr = std::current_exception();
+    }
+
+    // Compare results or exceptions (if any). Fail is anything is different.
+    if (exceptionCommonPtr || exceptionSimplifiedPtr) {
+      // Throws in case exceptions are not compatible. If they are compatible,
+      // return false to signal that the expression failed.
+      compareExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
+      return false;
+    } else {
+      // Throws in case output is different.
+      compareVectors(commonEvalResult.front(), simplifiedEvalResult.front());
+    }
+    return true;
+  }
+
  public:
   void go(size_t steps) {
+    VELOX_CHECK(!signatures_.empty(), "No function signatures available.");
+
     for (size_t i = 0; i < steps; ++i) {
       LOG(INFO) << "==============================> Started iteration " << i
                 << " (seed: " << currentSeed_ << ")";
@@ -267,60 +495,22 @@ class ExpressionFuzzer {
       size_t idx = folly::Random::rand32(signatures_.size(), rng_);
       const auto& rootType = signatures_[idx].returnType;
 
-      // Generate an expression tree.
+      // Generate expression tree and input data vectors.
       auto plan = generateExpression(rootType);
-      LOG(INFO) << "Generated expression: " << plan->toString();
-
-      // Generate the input data vectors.
       auto rowVector = generateRowVector();
-      SelectivityVector rows{rowVector ? rowVector->size() : 1};
 
-      if (rowVector) {
-        LOG(INFO) << "Generated " << rowVector->childrenSize() << " vectors:";
-        for (const auto& child : rowVector->children()) {
-          LOG(INFO) << "\t" << child->toString();
-        }
-      }
-
-      // Execute expression using both common and simplified evals.
-      std::vector<VectorPtr> commonEvalResult(1);
-      std::vector<VectorPtr> simplifiedEvalResult(1);
-
-      std::exception_ptr exceptionCommonPtr;
-      std::exception_ptr exceptionSimplifiedPtr;
-
-      VLOG(1) << "Starting common eval execution.";
-
-      // Execute with common expression eval path.
-      try {
-        exec::ExprSet exprSetCommon({plan}, &execCtx_);
-        exec::EvalCtx evalCtxCommon(&execCtx_, &exprSetCommon, rowVector.get());
-
-        exprSetCommon.eval(rows, &evalCtxCommon, &commonEvalResult);
-      } catch (...) {
-        exceptionCommonPtr = std::current_exception();
-      }
-
-      VLOG(1) << "Starting simplified eval execution.";
-
-      // Execute with simplified expression eval path.
-      try {
-        exec::ExprSetSimplified exprSetSimplified({plan}, &execCtx_);
-        exec::EvalCtx evalCtxSimplified(
-            &execCtx_, &exprSetSimplified, rowVector.get());
-
-        exprSetSimplified.eval(rows, &evalCtxSimplified, &simplifiedEvalResult);
-      } catch (...) {
-        exceptionSimplifiedPtr = std::current_exception();
-      }
-
-      // Compare results or exceptions (if any). Fail is anything is different.
-      if (exceptionCommonPtr || exceptionSimplifiedPtr) {
-        compareExceptions(exceptionCommonPtr, exceptionSimplifiedPtr);
+      // If both paths threw compatible exceptions, we add a try() function to
+      // the expression's root and execute it again. This time the expression
+      // cannot throw.
+      if (!executeExpression(plan, rowVector, true) && FLAGS_retry_with_try) {
         LOG(INFO)
-            << "Both paths failed with compatible exceptions. Continuing.";
-      } else {
-        compareVectors(commonEvalResult.front(), simplifiedEvalResult.front());
+            << "Both paths failed with compatible exceptions. Retrying expression using try().";
+
+        plan = std::make_shared<core::CallTypedExpr>(
+            plan->type(), std::vector<core::TypedExprPtr>{plan}, "try");
+
+        // At this point, the function throws if anything goes wrong.
+        executeExpression(plan, rowVector, false);
       }
 
       LOG(INFO) << "==============================> Done with iteration " << i;
@@ -329,17 +519,19 @@ class ExpressionFuzzer {
   }
 
  private:
-  folly::Random::DefaultGenerator rng_;
+  FuzzerGenerator rng_;
   size_t currentSeed_{0};
 
-  const std::vector<CallableSignature> signatures_;
+  std::vector<CallableSignature> signatures_;
 
   // Maps a given type to the functions that return that type.
   std::unordered_map<TypeKind, std::vector<const CallableSignature*>>
       signaturesMap_;
 
   std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::create()};
-  core::ExecCtx execCtx_{memory::getDefaultScopedMemoryPool(), queryCtx_.get()};
+  std::unique_ptr<memory::MemoryPool> pool_{
+      memory::getDefaultScopedMemoryPool()};
+  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
 
   test::VectorMaker vectorMaker_{execCtx_.pool()};
   VectorFuzzer vectorFuzzer_;
@@ -349,11 +541,13 @@ class ExpressionFuzzer {
   std::vector<TypePtr> inputRowTypes_;
 };
 
+} // namespace
+
 void expressionFuzzer(
-    std::vector<CallableSignature> signatures,
+    FunctionSignatureMap signatureMap,
     size_t steps,
     size_t seed) {
-  ExpressionFuzzer(std::move(signatures), seed).go(steps);
+  ExpressionFuzzer(std::move(signatureMap), seed).go(steps);
 }
 
 } // namespace facebook::velox::test

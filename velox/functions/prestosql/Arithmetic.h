@@ -150,6 +150,34 @@ FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
 }
 VELOX_UDF_END();
 
+VELOX_UDF_BEGIN(log2)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::log2(a);
+  return true;
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(log10)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::log10(a);
+  return true;
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(cos)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::cos(a);
+  return true;
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(cosh)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::cosh(a);
+  return true;
+}
+VELOX_UDF_END();
+
 VELOX_UDF_BEGIN(acos)
 FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
   result = std::acos(a);
@@ -157,9 +185,30 @@ FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
 }
 VELOX_UDF_END();
 
+VELOX_UDF_BEGIN(sin)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::sin(a);
+  return true;
+}
+VELOX_UDF_END();
+
 VELOX_UDF_BEGIN(asin)
 FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
   result = std::asin(a);
+  return true;
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(tan)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::tan(a);
+  return true;
+}
+VELOX_UDF_END();
+
+VELOX_UDF_BEGIN(tanh)
+FOLLY_ALWAYS_INLINE bool call(double& result, double a) {
+  result = std::tanh(a);
   return true;
 }
 VELOX_UDF_END();

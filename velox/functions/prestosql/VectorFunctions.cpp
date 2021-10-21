@@ -20,6 +20,12 @@
 
 namespace facebook::velox::functions {
 
+std::shared_ptr<exec::VectorFunction> makeRegexExtract(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs) {
+  return makeRe2Extract(name, inputArgs, /*emptyNoMatch=*/false);
+}
+
 void registerVectorFunctions() {
   registerType("timestamp with time zone", [](auto /*childTypes*/) {
     return TIMESTAMP_WITH_TIME_ZONE();
@@ -35,6 +41,7 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, "not");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max, "array_max");
@@ -52,9 +59,8 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_keys, "map_keys");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_values, "map_values");
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_substr, "substr");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, "lower");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_trim, "trim");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_split, "split");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, "upper");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, "concat");
@@ -65,8 +71,11 @@ void registerVectorFunctions() {
   exec::registerStatefulVectorFunction(
       "width_bucket", widthBucketArraySignature(), makeWidthBucketArray);
 
+  exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
   exec::registerStatefulVectorFunction(
-      "regexp_extract", re2ExtractSignatures(), makeRe2Extract);
+      "regexp_extract", re2ExtractSignatures(), makeRegexExtract);
+  exec::registerStatefulVectorFunction(
+      "regexp_extract_all", re2ExtractAllSignatures(), makeRe2ExtractAll);
   exec::registerStatefulVectorFunction(
       "regexp_like", re2SearchSignatures(), makeRe2Search);
 

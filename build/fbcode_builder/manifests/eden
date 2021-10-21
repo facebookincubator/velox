@@ -43,7 +43,7 @@ osxfuse
 libcurl
 
 [shipit.pathmap]
-fbcode/common/rust/shed/hostcaps = common/rust/shed/hostcaps
+fbcode/common/rust/shed = common/rust/shed
 fbcode/eden/oss = .
 fbcode/eden = eden
 fbcode/tools/lfs = tools/lfs
@@ -65,6 +65,7 @@ INSTALL_PYTHON_LIB=ON
 
 [cmake.defines.fb=on]
 USE_CARGO_VENDOR=ON
+INCLUDE_FB_INTEGRATION_LIB=ON
 
 [depends.environment]
 EDEN_VERSION_OVERRIDE

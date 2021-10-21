@@ -30,7 +30,7 @@
 #include "velox/experimental/codegen/CodegenLogger.h"
 #include "velox/experimental/codegen/code_generator/ExprCodeGenerator.h"
 #include "velox/experimental/codegen/utils/resources/ResourcePath.h"
-#include "velox/functions/prestosql/CoreFunctions.h"
+#include "velox/functions/prestosql/SimpleFunctions.h"
 #include "velox/functions/prestosql/VectorFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -105,8 +105,7 @@ class CodegenTestCore {
             eventSequence_);
     pool_ = memory::getDefaultScopedMemoryPool();
     queryCtx_ = std::make_shared<core::QueryCtx>();
-    execCtx_ = std::make_unique<core::ExecCtx>(
-        memory::getDefaultScopedMemoryPool(), queryCtx_.get());
+    execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
 
     exec::test::registerTypeResolver();
     functions::registerFunctions();

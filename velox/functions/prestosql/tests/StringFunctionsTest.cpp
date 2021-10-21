@@ -28,6 +28,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions::test;
+using namespace std::string_literals;
 
 namespace {
 /// Generate an ascii random string of size length
@@ -290,6 +291,7 @@ class StringFunctionsTest : public FunctionBaseTest {
   using strpos_input_test_t = std::vector<
       std::pair<std::tuple<std::string, std::string, int64_t>, int64_t>>;
 
+  template <typename TInstance>
   void testStringPositionAllFlatVector(
       const strpos_input_test_t& tests,
       const std::vector<std::optional<bool>>& stringEncodings,
@@ -326,6 +328,48 @@ class StringFunctionsTest : public FunctionBaseTest {
   void testXXHash64(
       const std::vector<std::pair<std::string, int64_t>>& tests,
       bool stringVariant);
+
+  static std::string generateInvalidUtf8() {
+    std::string str;
+    str.resize(2);
+    // Create corrupt data below.
+    char16_t c = u'\u04FF';
+    str[0] = (char)c;
+    str[1] = (char)c;
+    return str;
+  }
+
+  // Generate complex encoding with the format:
+  // whitespace|unicode line separator|ascii|two bytes encoding|three bytes
+  // encoding|four bytes encoding|whitespace|unicode line separator
+  static std::string generateComplexUtf8(bool invalid = false) {
+    std::string str;
+    // White spaces
+    str.append(" \u2028"s);
+    if (invalid) {
+      str.append(generateInvalidUtf8());
+    }
+    // Ascii
+    str.append("hello");
+    // two bytes
+    str.append(" \u017F");
+    // three bytes
+    str.append(" \u4FE1");
+    // four bytes
+    std::string tmp;
+    tmp.resize(4);
+    tmp[0] = 0xF0;
+    tmp[1] = 0xAF;
+    tmp[2] = 0xA8;
+    tmp[3] = 0x9F;
+    str.append(" ").append(tmp);
+    if (invalid) {
+      str.append(generateInvalidUtf8());
+    }
+    // white spaces
+    str.append("\u2028 ");
+    return str;
+  }
 };
 
 /**
@@ -815,6 +859,7 @@ TEST_F(StringFunctionsTest, length) {
 }
 
 // Test strpos function
+template <typename TInstance>
 void StringFunctionsTest::testStringPositionAllFlatVector(
     const strpos_input_test_t& tests,
     const std::vector<std::optional<bool>>& asciiEncodings,
@@ -822,7 +867,7 @@ void StringFunctionsTest::testStringPositionAllFlatVector(
   auto stringVector = makeFlatVector<StringView>(tests.size());
   auto subStringVector = makeFlatVector<StringView>(tests.size());
   auto instanceVector =
-      withInstanceArgument ? makeFlatVector<int64_t>(tests.size()) : nullptr;
+      withInstanceArgument ? makeFlatVector<TInstance>(tests.size()) : nullptr;
 
   for (int i = 0; i < tests.size(); i++) {
     stringVector->set(i, StringView(std::get<0>(tests[i].first)));
@@ -873,9 +918,13 @@ TEST_F(StringFunctionsTest, stringPosition) {
   // We dont have to try all encoding combinations here since there is a test
   // that test the encoding resolution but we want to to have a test for each
   // possible resolution
-  testStringPositionAllFlatVector(testsAscii, {true, true}, false);
+  testStringPositionAllFlatVector<int64_t>(testsAscii, {true, true}, false);
 
-  testStringPositionAllFlatVector(testsAsciiWithPosition, {false, false}, true);
+  // Try instance parameter using BIGINT and INTEGER.
+  testStringPositionAllFlatVector<int32_t>(
+      testsAsciiWithPosition, {false, false}, true);
+  testStringPositionAllFlatVector<int64_t>(
+      testsAsciiWithPosition, {false, false}, true);
 
   // Test constant vectors
   auto rows = makeRowVector(makeRowType({BIGINT()}), 10);
@@ -1195,6 +1244,29 @@ TEST_F(StringFunctionsTest, toBase64) {
       "SGVsbG8gV29ybGQgZnJvbSBWZWxveCE=", toBase64("Hello World from Velox!"));
 }
 
+TEST_F(StringFunctionsTest, reverse) {
+  const auto reverse = [&](std::optional<std::string> value) {
+    return evaluateOnce<std::string>("reverse(c0)", value);
+  };
+
+  std::string invalidStr = "Ψ\xFF\xFFΣΓΔA";
+  std::string expectedInvalidStr = "AΔΓΣ\xFF\xFFΨ";
+
+  EXPECT_EQ(std::nullopt, reverse(std::nullopt));
+  EXPECT_EQ("", reverse(""));
+  EXPECT_EQ("a", reverse("a"));
+  EXPECT_EQ("cba", reverse("abc"));
+  EXPECT_EQ("koobecaF", reverse("Facebook"));
+  EXPECT_EQ("ΨΧΦΥΤΣΣΡΠΟΞΝΜΛΚΙΘΗΖΕΔΓΒΑ", reverse("ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΣΤΥΦΧΨ"));
+  EXPECT_EQ(
+      u8" \u2028 \u671B\u5E0C \u7231 \u5FF5\u4FE1",
+      reverse(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "));
+  EXPECT_EQ(
+      u8"\u671B\u5E0C\u2014\u7231\u2014\u5FF5\u4FE1",
+      reverse(u8"\u4FE1\u5FF5\u2014\u7231\u2014\u5E0C\u671B"));
+  EXPECT_EQ(expectedInvalidStr, reverse(invalidStr));
+}
+
 TEST_F(StringFunctionsTest, fromBase64) {
   const auto fromBase64 = [&](std::optional<std::string> value) {
     return evaluateOnce<std::string>("from_base64(c0)", value);
@@ -1228,43 +1300,6 @@ TEST_F(StringFunctionsTest, urlEncode) {
       urlEncode("http://\u30c6\u30b9\u30c8"));
   EXPECT_EQ("%7E%40%3A.-*_%2B+%E2%98%83", urlEncode("~@:.-*_+ \u2603"));
   EXPECT_EQ("test", urlEncode("test"));
-}
-
-TEST_F(StringFunctionsTest, trim) {
-  // Making input vector
-  auto strings = std::vector<std::string>{
-      "  facebook  ",
-      "  facebook",
-      "facebook  ",
-      "\n\nfacebook \n ",
-      " \n",
-      "",
-      "    ",
-      "  a  ",
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 ",
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B  ",
-      " \u4FE1\u5FF5 \u7231 \u5E0C\u671B ",
-      "  \u4FE1\u5FF5 \u7231 \u5E0C\u671B",
-      " \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"};
-  auto row = makeRowVector({makeFlatVector(strings)});
-  auto result = evaluate<FlatVector<StringView>>("trim(c0)", row);
-
-  EXPECT_EQ("facebook", result->valueAt(0).getString());
-  EXPECT_EQ("facebook", result->valueAt(1).getString());
-  EXPECT_EQ("facebook", result->valueAt(2).getString());
-  EXPECT_EQ("facebook", result->valueAt(3).getString());
-  EXPECT_EQ("", result->valueAt(4).getString());
-  EXPECT_EQ("", result->valueAt(5).getString());
-  EXPECT_EQ("", result->valueAt(6).getString());
-  EXPECT_EQ("a", result->valueAt(7).getString());
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028",
-      result->valueAt(8).getString());
-  EXPECT_EQ("\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(9).getString());
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(10).getString());
-  EXPECT_EQ(
-      "\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(11).getString());
 }
 
 TEST_F(StringFunctionsTest, urlDecode) {
@@ -1310,7 +1345,7 @@ class MultiStringFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* /*context*/,
       VectorPtr* result) const override {
     *result = BaseVector::wrapInConstant(rows.size(), 0, args[0]);
@@ -1467,10 +1502,10 @@ class InputModifyingFunction : public MultiStringFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* expr,
+      const TypePtr& outputType,
       exec::EvalCtx* ctx,
       VectorPtr* result) const override {
-    MultiStringFunction::apply(rows, args, expr, ctx, result);
+    MultiStringFunction::apply(rows, args, outputType, ctx, result);
 
     // Modify args and remove its asciness
     for (auto& arg : args) {
@@ -1587,4 +1622,161 @@ TEST_F(StringFunctionsTest, asciiPropagationWithDisparateInput) {
   testAsciiPropagation(c1, c2, c3, all, false, "ascii_propagation_check", {});
 
   testAsciiPropagation(c1, c3, c2, all, true, "ascii_propagation_check", {});
+}
+
+TEST_F(StringFunctionsTest, trim) {
+  // Making input vector
+  std::string complexStr = generateComplexUtf8();
+  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 8);
+  std::string invalidStr = generateComplexUtf8(true);
+  std::string expectedInvalidStr = invalidStr.substr(4, invalidStr.size() - 4);
+  auto strings = std::vector<std::string>{
+      "  facebook  "s,
+      "  facebook"s,
+      "facebook  "s,
+      "\n\nfacebook \n "s,
+      " \n"s,
+      ""s,
+      "    "s,
+      "  a  "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "s,
+      u8" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "s,
+      u8"  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"s,
+      u8" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"s,
+      complexStr,
+      invalidStr};
+  auto row = makeRowVector({makeFlatVector(strings)});
+  auto result = evaluate<FlatVector<StringView>>("trim(c0)", row);
+
+  EXPECT_EQ("facebook", result->valueAt(0).getString());
+  EXPECT_EQ("facebook", result->valueAt(1).getString());
+  EXPECT_EQ("facebook", result->valueAt(2).getString());
+  EXPECT_EQ("facebook", result->valueAt(3).getString());
+  EXPECT_EQ("", result->valueAt(4).getString());
+  EXPECT_EQ("", result->valueAt(5).getString());
+  EXPECT_EQ("", result->valueAt(6).getString());
+  EXPECT_EQ("a", result->valueAt(7).getString());
+  EXPECT_EQ(
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(8).getString());
+  EXPECT_EQ(
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(9).getString());
+  EXPECT_EQ(
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(10).getString());
+  EXPECT_EQ(
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(11).getString());
+  EXPECT_EQ(
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B", result->valueAt(12).getString());
+  EXPECT_EQ(expectedComplexStr, result->valueAt(13).getString());
+  EXPECT_EQ(expectedInvalidStr, result->valueAt(14).getString());
+}
+
+TEST_F(StringFunctionsTest, ltrim) {
+  std::string complexStr = generateComplexUtf8();
+  std::string expectedComplexStr = complexStr.substr(4, complexStr.size() - 4);
+  std::string invalidStr = generateComplexUtf8(true);
+  std::string expectedInvalidStr = invalidStr.substr(4, invalidStr.size() - 4);
+  std::vector<std::string> inputStrings = {
+      "facebook"s,
+      "  facebook "s,
+      "\n\nfacebook \n"s,
+      "\n"s,
+      " "s,
+      "    "s,
+      "  a  "s,
+      " facebo ok"s,
+      "\tmove fast"s,
+      "\r\t move fast"s,
+      "\n\t\r hello"s,
+      u8" \u4F60\u597D"s,
+      u8" \u4F60\u597D "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "s,
+      u8" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "s,
+      u8"  \u4FE1\u5FF5 \u7231 \u5E0C\u671B"s,
+      u8" \u2028 \u4FE1\u5FF5 \u7231 \u5E0C\u671B"s,
+      complexStr,
+      invalidStr};
+
+  auto expectedStrings = makeNullableFlatVector<StringView>(
+      {StringView("facebook"),
+       std::nullopt,
+       StringView("facebook \n"),
+       StringView(""),
+       StringView(""),
+       StringView(""),
+       StringView("a  "),
+       StringView("facebo ok"),
+       StringView("move fast"),
+       StringView("move fast"),
+       StringView("hello"),
+       std::nullopt,
+       StringView(u8"\u4F60\u597D "),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B "),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(expectedComplexStr),
+       StringView(expectedInvalidStr)});
+
+  vector_size_t size = inputStrings.size();
+  auto inputStringsVector = makeStrings(size, inputStrings);
+
+  auto result = evaluate<FlatVector<StringView>>(
+      "ltrim(c0)", makeRowVector({inputStringsVector}));
+  assertEqualVectors(expectedStrings, result);
+}
+
+TEST_F(StringFunctionsTest, rtrim) {
+  std::string complexStr = generateComplexUtf8();
+  std::string expectedComplexStr = complexStr.substr(0, complexStr.size() - 4);
+  std::string invalidStr = generateComplexUtf8(true);
+  std::string expectedInvalidStr = invalidStr;
+  std::vector<std::string> inputStrings = {
+      "facebook"s,
+      " facebook  "s,
+      "\nfacebook \n\n"s,
+      "\n"s,
+      " "s,
+      "    "s,
+      "  a  "s,
+      "facebo ok "s,
+      "move fast\t"s,
+      "move fast\r\t "s,
+      "hello\n\t\r "s,
+      u8" \u4F60\u597D"s,
+      u8" \u4F60\u597D "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "s,
+      u8" \u4FE1\u5FF5 \u7231 \u5E0C\u671B "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B  "s,
+      u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 "s,
+      complexStr,
+      invalidStr};
+
+  auto expectedStrings = makeNullableFlatVector<StringView>(
+      {StringView("facebook"),
+       std::nullopt,
+       StringView("\nfacebook"),
+       StringView(""),
+       StringView(""),
+       StringView(""),
+       StringView("  a"),
+       StringView("facebo ok"),
+       StringView("move fast"),
+       StringView("move fast"),
+       StringView("hello"),
+       std::nullopt,
+       StringView(u8" \u4F60\u597D"),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(u8" \u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B"),
+       StringView(expectedComplexStr),
+       StringView(expectedInvalidStr)});
+
+  vector_size_t size = inputStrings.size();
+  auto inputStringsVector = makeStrings(size, inputStrings);
+
+  auto result = evaluate<FlatVector<StringView>>(
+      "rtrim(c0)", makeRowVector({inputStringsVector}));
+  assertEqualVectors(expectedStrings, result);
 }

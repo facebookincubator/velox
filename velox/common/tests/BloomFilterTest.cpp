@@ -14,15 +14,26 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/TempFilePath.h"
+#include "velox/common/base/BloomFilter.h"
+#include <folly/Random.h>
+#include <unordered_set>
 
-namespace facebook::velox::exec::test {
+#include <gtest/gtest.h>
 
-std::shared_ptr<TempFilePath> TempFilePath::create() {
-  struct SharedTempFilePath : public TempFilePath {
-    SharedTempFilePath() : TempFilePath() {}
-  };
-  return std::make_shared<SharedTempFilePath>();
+using namespace facebook::velox;
+
+TEST(BloomFilterTest, basic) {
+  constexpr int32_t kSize = 1024;
+  BloomFilter bloom;
+  bloom.reset(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    bloom.insert(i);
+  }
+  int32_t numFalsePositives = 0;
+  for (auto i = 0; i < kSize; ++i) {
+    EXPECT_TRUE(bloom.mayContain(i));
+    numFalsePositives += bloom.mayContain(i + kSize);
+    numFalsePositives += bloom.mayContain((i + kSize) * 123451);
+  }
+  EXPECT_GT(2, 100 * numFalsePositives / kSize);
 }
-
-} // namespace facebook::velox::exec::test

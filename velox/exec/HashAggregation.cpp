@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -36,7 +37,8 @@ HashAggregation::HashAggregation(
       maxPartialAggregationMemoryUsage_(
           operatorCtx_->task()
               ->queryCtx()
-              ->maxPartialAggregationMemoryUsage()) {
+              ->config()
+              .maxPartialAggregationMemoryUsage()) {
   auto inputType = aggregationNode->sources()[0]->outputType();
 
   auto numHashers = aggregationNode->groupingKeys().size();
@@ -78,7 +80,7 @@ HashAggregation::HashAggregation(
 
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
-    const auto& aggrMask = aggregationNode->aggrMasks()[i];
+    const auto& aggrMask = aggregationNode->aggregateMasks()[i];
     if (aggrMask == nullptr) {
       aggrMaskChannels.emplace_back(std::optional<ChannelIndex>{});
     } else {
@@ -117,6 +119,7 @@ HashAggregation::HashAggregation(
       std::move(args),
       std::move(constantLists),
       aggregationNode->ignoreNullKeys(),
+      isRawInput(aggregationNode->step()),
       operatorCtx_.get());
 }
 
@@ -150,8 +153,7 @@ RowVectorPtr HashAggregation::getOutput() {
 
     auto lookup = groupingSet_->hashLookup();
     auto size = lookup.newGroups.size();
-    BufferPtr indices =
-        AlignedBuffer::allocate<vector_size_t>(size, operatorCtx_->pool());
+    BufferPtr indices = allocateIndices(size, operatorCtx_->pool());
     auto indicesPtr = indices->asMutable<vector_size_t>();
     std::copy(lookup.newGroups.begin(), lookup.newGroups.end(), indicesPtr);
     newDistincts_ = false;

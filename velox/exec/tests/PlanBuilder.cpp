@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/PlanBuilder.h"
-#include <boost/algorithm/string.hpp>
-#include <gtest/gtest.h>
 #include <velox/exec/Aggregate.h>
+#include <velox/exec/HashPartitionFunction.h>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -237,12 +236,12 @@ PlanBuilder& PlanBuilder::aggregation(
   auto groupingExpr = fields(groupingKeys);
 
   // Generate masks vector for aggregations.
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggrMasks(
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
       aggregateExprs.size());
   if (!masks.empty()) {
     VELOX_CHECK_EQ(aggregates.size(), masks.size());
     for (auto i = 0; i < masks.size(); i++) {
-      aggrMasks[i] = field(masks[i]);
+      aggregateMasks[i] = field(masks[i]);
     }
   }
 
@@ -252,7 +251,7 @@ PlanBuilder& PlanBuilder::aggregation(
       groupingExpr,
       names,
       aggregateExprs,
-      aggrMasks,
+      aggregateMasks,
       ignoreNullKeys,
       planNode_);
   return *this;
@@ -310,9 +309,9 @@ PlanBuilder& PlanBuilder::topN(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::limit(int32_t count, bool isPartial) {
+PlanBuilder& PlanBuilder::limit(int32_t offset, int32_t count, bool isPartial) {
   planNode_ = std::make_shared<core::LimitNode>(
-      nextPlanNodeId(), count, isPartial, planNode_);
+      nextPlanNodeId(), offset, count, isPartial, planNode_);
   return *this;
 }
 
@@ -339,6 +338,26 @@ RowTypePtr toRowType(
   }
   return ROW(std::move(names), std::move(types));
 }
+
+core::PartitionFunctionFactory createPartitionFunctionFactory(
+    const RowTypePtr& inputType,
+    const std::vector<ChannelIndex>& keyIndices,
+    const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+        keys) {
+  if (keys.empty()) {
+    return
+        [](auto /*numPartitions*/) -> std::unique_ptr<core::PartitionFunction> {
+          VELOX_UNREACHABLE();
+        };
+  } else {
+    return [inputType, keyIndices](
+               auto numPartitions) -> std::unique_ptr<core::PartitionFunction> {
+      return std::make_unique<exec::HashPartitionFunction>(
+          numPartitions, inputType, keyIndices);
+    };
+  }
+}
+
 } // namespace
 
 PlanBuilder& PlanBuilder::partitionedOutput(
@@ -355,12 +374,15 @@ PlanBuilder& PlanBuilder::partitionedOutput(
     const std::vector<ChannelIndex>& outputLayout) {
   auto outputType = toRowType(planNode_->outputType(), outputLayout);
   auto keys = fields(keyIndices);
+  auto partitionFunctionFactory =
+      createPartitionFunctionFactory(planNode_->outputType(), keyIndices, keys);
   planNode_ = std::make_shared<core::PartitionedOutputNode>(
       nextPlanNodeId(),
       keys,
       numPartitions,
       false,
       replicateNullsAndAny,
+      std::move(partitionFunctionFactory),
       outputType,
       planNode_);
   return *this;
@@ -369,14 +391,8 @@ PlanBuilder& PlanBuilder::partitionedOutput(
 PlanBuilder& PlanBuilder::partitionedOutputBroadcast(
     const std::vector<ChannelIndex>& outputLayout) {
   auto outputType = toRowType(planNode_->outputType(), outputLayout);
-  planNode_ = std::make_shared<core::PartitionedOutputNode>(
-      nextPlanNodeId(),
-      std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
-      1,
-      true,
-      false,
-      outputType,
-      planNode_);
+  planNode_ = core::PartitionedOutputNode::broadcast(
+      nextPlanNodeId(), 1, outputType, planNode_);
   return *this;
 }
 
@@ -387,8 +403,10 @@ PlanBuilder& PlanBuilder::localPartition(
   auto inputType = sources[0]->outputType();
   auto outputType = toRowType(inputType, outputLayout);
   auto keys = fields(inputType, keyIndices);
+  auto partitionFunctionFactory =
+      createPartitionFunctionFactory(inputType, keyIndices, keys);
   planNode_ = std::make_shared<core::LocalPartitionNode>(
-      nextPlanNodeId(), keys, outputType, sources);
+      nextPlanNodeId(), partitionFunctionFactory, outputType, sources);
   return *this;
 }
 
@@ -445,6 +463,17 @@ PlanBuilder& PlanBuilder::hashJoin(
       std::move(planNode_),
       build,
       outputType);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::crossJoin(
+    const std::shared_ptr<core::PlanNode>& build,
+    const std::vector<ChannelIndex>& output) {
+  auto resultType = concat(planNode_->outputType(), build->outputType());
+  auto outputType = extract(resultType, output);
+
+  planNode_ = std::make_shared<core::CrossJoinNode>(
+      nextPlanNodeId(), std::move(planNode_), build, outputType);
   return *this;
 }
 
@@ -512,10 +541,7 @@ std::shared_ptr<const core::FieldAccessTypedExpr> PlanBuilder::field(
     int index) {
   auto name = inputType->names()[index];
   auto type = inputType->childAt(index);
-  std::vector<std::shared_ptr<const core::ITypedExpr>> inputs = {
-      std::make_shared<core::InputTypedExpr>(inputType)};
-  return std::make_shared<core::FieldAccessTypedExpr>(
-      type, std::move(inputs), name);
+  return std::make_shared<core::FieldAccessTypedExpr>(type, name);
 }
 
 std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>

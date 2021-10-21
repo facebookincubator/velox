@@ -55,8 +55,8 @@ class ArrayBuilder {
       vector_size_t estimatedNumElements,
       memory::MemoryPool* pool)
       : numArrays_(numArrays),
-        offsetsBuffer_(AlignedBuffer::allocate<vector_size_t>(numArrays, pool)),
-        sizesBuffer_(AlignedBuffer::allocate<vector_size_t>(numArrays, pool)),
+        offsetsBuffer_(allocateOffsets(numArrays, pool)),
+        sizesBuffer_(allocateSizes(numArrays, pool)),
         elements_(std::max(estimatedNumElements, 16), pool) {
     std::fill(offsets_, offsets_ + numArrays_, 0);
     std::fill(sizes_, sizes_ + numArrays_, 0);
@@ -101,6 +101,11 @@ class ArrayBuilder {
   // Overwrite the string buffers associated with the elements array.
   void setStringBuffers(std::vector<BufferPtr> buffers) {
     elements_.setStringBuffers(std::move(buffers));
+  }
+
+  // Overwrite the string buffers associated with the elements array.
+  void setStringBuffers(const BaseVector* source) {
+    elements_.setStringBuffers(source);
   }
 
   // Convert the collected data into an ArrayVector. It is not valid to call

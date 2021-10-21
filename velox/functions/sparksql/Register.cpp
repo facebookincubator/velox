@@ -20,7 +20,9 @@
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/JsonExtractScalar.h"
 #include "velox/functions/prestosql/Rand.h"
+#include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/sparksql/Hash.h"
+#include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
 #include "velox/functions/sparksql/RegexFunctions.h"
 #include "velox/functions/sparksql/RegisterArithmetic.h"
@@ -46,11 +48,9 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_concat, prefix + "concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_lower, prefix + "lower");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_substr, prefix + "substring");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, prefix + "upper");
   // Logical.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_coalesce, prefix + "coalesce");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, prefix + "in");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_is_null, prefix + "isnull");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
 }
@@ -66,6 +66,11 @@ void registerFunctions(const std::string& prefix) {
   // Register string functions.
   registerFunction<udf_chr, Varchar, int64_t>();
   registerFunction<udf_ascii, int32_t, Varchar>();
+
+  registerFunction<udf_substr<int32_t>, Varchar, Varchar, int32_t>(
+      {prefix + "substring"});
+  registerFunction<udf_substr<int32_t>, Varchar, Varchar, int32_t, int32_t>(
+      {prefix + "substring"});
 
   exec::registerStatefulVectorFunction("instr", instrSignatures(), makeInstr);
   exec::registerStatefulVectorFunction(
@@ -90,6 +95,7 @@ void registerFunctions(const std::string& prefix) {
       prefix + "greatest", greatestSignatures(), makeGreatest);
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash);
+  exec::registerStatefulVectorFunction(prefix + "in", inSignatures(), makeIn);
 
   // These vector functions are only accessible via the
   // VELOX_REGISTER_VECTOR_FUNCTION macro, which must be invoked in the same

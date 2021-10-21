@@ -21,9 +21,6 @@
 
 namespace facebook::velox::exec {
 
-using OperationTimer = CpuWallTimer;
-using OperationTiming = CpuWallTiming;
-
 // Represents a column that is copied from input to output, possibly
 // with cardinality change, i.e. values removed or duplicated.
 struct IdentityProjection {
@@ -113,12 +110,12 @@ struct OperatorStats {
   uint64_t rawInputBytes = 0;
   uint64_t rawInputPositions = 0;
 
-  OperationTiming addInputTiming;
+  CpuWallTiming addInputTiming;
   // Bytes of input in terms of retained size of input vectors.
   uint64_t inputBytes = 0;
   uint64_t inputPositions = 0;
 
-  OperationTiming getOutputTiming;
+  CpuWallTiming getOutputTiming;
   // Bytes of output in terms of retained size of vectors.
   uint64_t outputBytes = 0;
   uint64_t outputPositions = 0;
@@ -127,7 +124,7 @@ struct OperatorStats {
 
   uint64_t blockedWallNanos = 0;
 
-  OperationTiming finishTiming;
+  CpuWallTiming finishTiming;
 
   MemoryStats memoryStats;
 
@@ -153,8 +150,7 @@ struct OperatorStats {
 
 class OperatorCtx {
  public:
-  explicit OperatorCtx(DriverCtx* driverCtx)
-      : driverCtx_(driverCtx), pool_(driverCtx_->addOperatorPool()) {}
+  explicit OperatorCtx(DriverCtx* driverCtx);
 
   velox::memory::MemoryPool* pool() const {
     return pool_;
@@ -393,7 +389,7 @@ class Operator {
 
   std::unordered_map<ChannelIndex, std::shared_ptr<common::Filter>>
       dynamicFilters_;
-}; // namespace facebook::velox::exec
+};
 
 constexpr ChannelIndex kConstantChannel =
     std::numeric_limits<ChannelIndex>::max();
@@ -436,6 +432,23 @@ class SourceOperator : public Operator {
   void addInput(RowVectorPtr /* unused */) override {
     VELOX_CHECK(false, "SourceOperator does not support addInput()");
   }
+};
+
+// Concrete class implementing the base runtime stats writer. Wraps around
+// operator pointer to be called at any time to updated runtime stats.
+// Used for reporting IO wall time from lazy vectors, for example.
+class OperatorRuntimeStatWriter : public BaseRuntimeStatWriter {
+ public:
+  explicit OperatorRuntimeStatWriter(Operator* op) : operator_{op} {}
+
+  void addRuntimeStat(const std::string& name, int64_t value) override {
+    if (operator_) {
+      operator_->stats().addRuntimeStat(name, value);
+    }
+  }
+
+ private:
+  Operator* operator_;
 };
 
 } // namespace facebook::velox::exec

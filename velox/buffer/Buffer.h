@@ -88,7 +88,7 @@ class Buffer {
 
   template <typename T>
   Range<T> asRange() {
-    return Range(as<T>(), 0, size() / sizeof(T));
+    return Range<T>(as<T>(), 0, size() / sizeof(T));
   }
 
   template <typename T>
@@ -102,7 +102,7 @@ class Buffer {
 
   template <typename T>
   MutableRange<T> asMutableRange() {
-    return MutableRange(asMutable<T>(), 0, size() / sizeof(T));
+    return MutableRange<T>(asMutable<T>(), 0, size() / sizeof(T));
   }
 
   size_t size() const {
@@ -603,7 +603,7 @@ class NonPODAlignedBuffer : public Buffer {
   }
 
   void freeToPool() override {
-    pool_->free(this, sizeof(this) + capacity_);
+    pool_->free(this, AlignedBuffer::kPaddedSize + capacity_);
   }
 
   // Needs to use this class from static methods of AlignedBuffer

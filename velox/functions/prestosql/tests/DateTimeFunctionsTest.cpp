@@ -16,10 +16,19 @@
 
 #include "velox/functions/prestosql/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/type/Timestamp.h"
 
 using namespace facebook::velox;
 
-class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {};
+class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
+ protected:
+  void setQueryTimeZone(const std::string& timeZone) {
+    queryCtx_->setConfigOverridesUnsafe({
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+  }
+};
 
 // Test cases from PrestoDB [1] are covered here as well:
 // Timestamp(998474645, 321000000) from "TIMESTAMP '2001-08-22 03:04:05.321'"
@@ -108,13 +117,263 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
     return evaluateOnce<Timestamp>("from_unixtime(c0)", t);
   };
 
+  static const double kInf = std::numeric_limits<double>::infinity();
+  static const double kNan = std::numeric_limits<double>::quiet_NaN();
+
   EXPECT_EQ(Timestamp(0, 0), fromUnixtime(0));
   EXPECT_EQ(Timestamp(-1, 9000), fromUnixtime(-0.999991));
   EXPECT_EQ(Timestamp(4000000000, 0), fromUnixtime(4000000000));
+  EXPECT_EQ(
+      Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(3.87111e+37));
   // double(123000000) to uint64_t conversion returns 123000144.
   EXPECT_EQ(Timestamp(4000000000, 123000144), fromUnixtime(4000000000.123));
+  EXPECT_EQ(Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(kInf));
   EXPECT_EQ(
-      std::nullopt, fromUnixtime(std::numeric_limits<double>::infinity()));
+      Timestamp(-9'223'372'036'854'776, 192'000'000), fromUnixtime(-kInf));
+  EXPECT_EQ(Timestamp(0, 0), fromUnixtime(kNan));
+}
+
+TEST_F(DateTimeFunctionsTest, year) {
+  const auto year = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("year(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, year(std::nullopt));
+  EXPECT_EQ(1970, year(Timestamp(0, 0)));
+  EXPECT_EQ(1969, year(Timestamp(-1, 9000)));
+  EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
+  EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(2001, year(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, year(std::nullopt));
+  EXPECT_EQ(1969, year(Timestamp(0, 0)));
+  EXPECT_EQ(1969, year(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(2096, year(Timestamp(4000000000, 0)));
+  EXPECT_EQ(2096, year(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(2001, year(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(2001, year(Timestamp(998423705, 321000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, month) {
+  const auto month = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("month(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, month(std::nullopt));
+  EXPECT_EQ(1, month(Timestamp(0, 0)));
+  EXPECT_EQ(12, month(Timestamp(-1, 9000)));
+  EXPECT_EQ(10, month(Timestamp(4000000000, 0)));
+  EXPECT_EQ(10, month(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(8, month(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(8, month(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, month(std::nullopt));
+  EXPECT_EQ(12, month(Timestamp(0, 0)));
+  EXPECT_EQ(12, month(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(10, month(Timestamp(4000000000, 0)));
+  EXPECT_EQ(10, month(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(8, month(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(8, month(Timestamp(998423705, 321000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, hour) {
+  const auto hour = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("hour(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+  EXPECT_EQ(0, hour(Timestamp(0, 0)));
+  EXPECT_EQ(23, hour(Timestamp(-1, 9000)));
+  EXPECT_EQ(7, hour(Timestamp(4000000000, 0)));
+  EXPECT_EQ(7, hour(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(10, hour(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(19, hour(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, hour(std::nullopt));
+  EXPECT_EQ(13, hour(Timestamp(0, 0)));
+  EXPECT_EQ(12, hour(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(21, hour(Timestamp(4000000000, 0)));
+  EXPECT_EQ(21, hour(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(23, hour(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(8, hour(Timestamp(998423705, 321000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, dayOfMonth) {
+  const auto day = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("day_of_month(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(1, day(Timestamp(0, 0)));
+  EXPECT_EQ(31, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(30, day(Timestamp(1632989700, 0)));
+  EXPECT_EQ(1, day(Timestamp(1633076100, 0)));
+  EXPECT_EQ(6, day(Timestamp(1633508100, 0)));
+  EXPECT_EQ(31, day(Timestamp(1635668100, 0)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(31, day(Timestamp(0, 0)));
+  EXPECT_EQ(31, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(30, day(Timestamp(1632989700, 0)));
+  EXPECT_EQ(1, day(Timestamp(1633076100, 0)));
+  EXPECT_EQ(6, day(Timestamp(1633508100, 0)));
+  EXPECT_EQ(31, day(Timestamp(1635668100, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, dayOfWeek) {
+  const auto day = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("day_of_week(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(4, day(Timestamp(0, 0)));
+  EXPECT_EQ(3, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(1, day(Timestamp(1633940100, 0)));
+  EXPECT_EQ(2, day(Timestamp(1634026500, 0)));
+  EXPECT_EQ(3, day(Timestamp(1634112900, 0)));
+  EXPECT_EQ(4, day(Timestamp(1634199300, 0)));
+  EXPECT_EQ(5, day(Timestamp(1634285700, 0)));
+  EXPECT_EQ(6, day(Timestamp(1634372100, 0)));
+  EXPECT_EQ(7, day(Timestamp(1633853700, 0)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(3, day(Timestamp(0, 0)));
+  EXPECT_EQ(3, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(1, day(Timestamp(1633940100, 0)));
+  EXPECT_EQ(2, day(Timestamp(1634026500, 0)));
+  EXPECT_EQ(3, day(Timestamp(1634112900, 0)));
+  EXPECT_EQ(4, day(Timestamp(1634199300, 0)));
+  EXPECT_EQ(5, day(Timestamp(1634285700, 0)));
+  EXPECT_EQ(6, day(Timestamp(1634372100, 0)));
+  EXPECT_EQ(7, day(Timestamp(1633853700, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, dayOfYear) {
+  const auto day = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("day_of_year(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(1, day(Timestamp(0, 0)));
+  EXPECT_EQ(365, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(273, day(Timestamp(1632989700, 0)));
+  EXPECT_EQ(274, day(Timestamp(1633076100, 0)));
+  EXPECT_EQ(279, day(Timestamp(1633508100, 0)));
+  EXPECT_EQ(304, day(Timestamp(1635668100, 0)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, day(std::nullopt));
+  EXPECT_EQ(365, day(Timestamp(0, 0)));
+  EXPECT_EQ(365, day(Timestamp(-1, 9000)));
+  EXPECT_EQ(273, day(Timestamp(1632989700, 0)));
+  EXPECT_EQ(274, day(Timestamp(1633076100, 0)));
+  EXPECT_EQ(279, day(Timestamp(1633508100, 0)));
+  EXPECT_EQ(304, day(Timestamp(1635668100, 0)));
+}
+
+TEST_F(DateTimeFunctionsTest, minute) {
+  const auto minute = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("minute(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+  EXPECT_EQ(0, minute(Timestamp(0, 0)));
+  EXPECT_EQ(59, minute(Timestamp(-1, 9000)));
+  EXPECT_EQ(6, minute(Timestamp(4000000000, 0)));
+  EXPECT_EQ(6, minute(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(4, minute(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(55, minute(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(std::nullopt, minute(std::nullopt));
+  EXPECT_EQ(30, minute(Timestamp(0, 0)));
+  EXPECT_EQ(29, minute(Timestamp(-1, 9000)));
+  EXPECT_EQ(36, minute(Timestamp(4000000000, 0)));
+  EXPECT_EQ(36, minute(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(34, minute(Timestamp(998474645, 321000000)));
+  EXPECT_EQ(25, minute(Timestamp(998423705, 321000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, second) {
+  const auto second = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>("second(c0)", timestamp);
+  };
+  EXPECT_EQ(std::nullopt, second(std::nullopt));
+  EXPECT_EQ(0, second(Timestamp(0, 0)));
+  EXPECT_EQ(40, second(Timestamp(4000000000, 0)));
+  EXPECT_EQ(59, second(Timestamp(-1, 123000000)));
+  EXPECT_EQ(59, second(Timestamp(-1, 12300000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, millisecond) {
+  const auto millisecond = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>("millisecond(c0)", timestamp);
+  };
+  EXPECT_EQ(std::nullopt, millisecond(std::nullopt));
+  EXPECT_EQ(0, millisecond(Timestamp(0, 0)));
+  EXPECT_EQ(0, millisecond(Timestamp(4000000000, 0)));
+  EXPECT_EQ(123, millisecond(Timestamp(-1, 123000000)));
+  EXPECT_EQ(12300, millisecond(Timestamp(-1, 12300000000)));
+}
+
+TEST_F(DateTimeFunctionsTest, dateTrunc) {
+  const auto dateTrunc = [&](const std::string& unit,
+                             std::optional<Timestamp> timestamp) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("date_trunc('{}', c0)", unit), timestamp);
+  };
+
+  setQueryTimeZone("America/Los_Angeles");
+
+  EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 0)));
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 123)));
   EXPECT_EQ(
-      std::nullopt, fromUnixtime(std::numeric_limits<double>::quiet_NaN()));
+      Timestamp(998474645, 0),
+      dateTrunc("second", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998474640, 0),
+      dateTrunc("minute", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998474400, 0),
+      dateTrunc("hour", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998463600, 0),
+      dateTrunc("day", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(996649200, 0),
+      dateTrunc("month", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(978336000, 0),
+      dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
+
+  setQueryTimeZone("Asia/Kolkata");
+
+  EXPECT_EQ(std::nullopt, dateTrunc("second", std::nullopt));
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 0)));
+  EXPECT_EQ(Timestamp(0, 0), dateTrunc("second", Timestamp(0, 123)));
+  EXPECT_EQ(
+      Timestamp(998474645, 0),
+      dateTrunc("second", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998474640, 0),
+      dateTrunc("minute", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998472600, 0),
+      dateTrunc("hour", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(998418600, 0),
+      dateTrunc("day", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(996604200, 0),
+      dateTrunc("month", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
+      Timestamp(978287400, 0),
+      dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
 }

@@ -62,9 +62,8 @@ class FilterFunctionBase : public exec::VectorFunction {
     auto inputSizes = input->rawSizes();
 
     auto pool = context->pool();
-    resultSizes = AlignedBuffer::allocate<vector_size_t>(rows.size(), pool, 0);
-    resultOffsets =
-        AlignedBuffer::allocate<vector_size_t>(rows.size(), pool, 0);
+    resultSizes = allocateSizes(rows.size(), pool);
+    resultOffsets = allocateOffsets(rows.size(), pool);
     auto rawResultSizes = resultSizes->asMutable<vector_size_t>();
     auto rawResultOffsets = resultOffsets->asMutable<vector_size_t>();
     auto numElements = lambdaArgs[0]->size();
@@ -115,7 +114,7 @@ class ArrayFilterFunction : public FilterFunctionBase {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
@@ -175,7 +174,7 @@ class MapFilterFunction : public FilterFunctionBase {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* caller,
+      const TypePtr& outputType,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 2);
@@ -211,7 +210,7 @@ class MapFilterFunction : public FilterFunctionBase {
                                      : nullptr;
     auto localResult = std::make_shared<MapVector>(
         flatMap->pool(),
-        caller->type(),
+        outputType,
         flatMap->nulls(),
         rows.size(),
         std::move(resultOffsets),

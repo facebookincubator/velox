@@ -36,6 +36,18 @@ struct StringWriter : public UDFOutputString {
     setData(storage_.data());
   }
 
+  /* implicit */ StringWriter(StringView /*value*/) {
+    VELOX_NYI();
+  }
+
+  void setEmpty() {
+    VELOX_FAIL("setEmpty is not implemented");
+  }
+
+  void setNoCopy(StringView /*value*/) {
+    VELOX_FAIL("setNoCopy is not implemented");
+  }
+
   StringWriter(const StringWriter& rh) : storage_{rh.storage_} {
     setData(storage_.data());
     setSize(rh.size());

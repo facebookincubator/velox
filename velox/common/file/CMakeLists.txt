@@ -14,10 +14,18 @@
 
 # for generated headers
 include_directories(.)
-add_library(file File.cpp)
-target_link_libraries(file velox_exception ${GTEST_BOTH_LIBRARIES} ${GLOG}
-                      ${FOLLY_WITH_DEPENDENCIES} ${FMT})
+add_library(velox_file File.cpp FileSystems.cpp FileSystems.h)
+target_link_libraries(velox_file)
 
-add_executable(file_test FileTest.cpp)
-add_test(file_test file_test)
-target_link_libraries(file_test file)
+if(${VELOX_BUILD_TESTING})
+  add_executable(velox_file_test FileTest.cpp)
+  add_test(velox_file_test velox_file_test)
+  target_link_libraries(
+    velox_file_test
+    velox_file
+    velox_exception
+    velox_exec_test_util
+    ${FMT}
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${GTEST_BOTH_LIBRARIES})
+endif()

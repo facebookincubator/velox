@@ -26,8 +26,7 @@ class SumAggregate
       SimpleNumericAggregate<TInput, TAccumulator, ResultType>;
 
  public:
-  explicit SumAggregate(core::AggregationNode::Step step, TypePtr resultType)
-      : BaseAggregate(step, resultType) {}
+  explicit SumAggregate(TypePtr resultType) : BaseAggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TAccumulator);
@@ -40,13 +39,6 @@ class SumAggregate
     for (auto i : indices) {
       *exec::Aggregate::value<ResultType>(groups[i]) = 0;
     }
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/,
-      const VectorPtr& /*initialState*/) override {
-    VELOX_NYI();
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -65,7 +57,7 @@ class SumAggregate
         });
   }
 
-  void updatePartial(
+  void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -73,7 +65,7 @@ class SumAggregate
     updateInternal<TAccumulator>(groups, rows, args, mayPushdown);
   }
 
-  void updateFinal(
+  void addIntermediateResults(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -81,7 +73,7 @@ class SumAggregate
     updateInternal<ResultType>(groups, rows, args, mayPushdown);
   }
 
-  void updateSingleGroupPartial(
+  void addSingleGroupRawInput(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -96,7 +88,7 @@ class SumAggregate
         0);
   }
 
-  void updateSingleGroupFinal(
+  void addSingleGroupIntermediateResults(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -158,29 +150,23 @@ bool registerSumAggregate(const std::string& name) {
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
           case TypeKind::TINYINT:
-            return std::make_unique<T<int8_t, int64_t, int64_t>>(
-                step, BIGINT());
+            return std::make_unique<T<int8_t, int64_t, int64_t>>(BIGINT());
           case TypeKind::SMALLINT:
-            return std::make_unique<T<int16_t, int64_t, int64_t>>(
-                step, BIGINT());
+            return std::make_unique<T<int16_t, int64_t, int64_t>>(BIGINT());
           case TypeKind::INTEGER:
-            return std::make_unique<T<int32_t, int64_t, int64_t>>(
-                step, BIGINT());
+            return std::make_unique<T<int32_t, int64_t, int64_t>>(BIGINT());
           case TypeKind::BIGINT:
-            return std::make_unique<T<int64_t, int64_t, int64_t>>(
-                step, BIGINT());
+            return std::make_unique<T<int64_t, int64_t, int64_t>>(BIGINT());
           case TypeKind::REAL:
             if (resultType->kind() == TypeKind::REAL) {
-              return std::make_unique<T<float, double, float>>(
-                  step, resultType);
+              return std::make_unique<T<float, double, float>>(resultType);
             }
-            return std::make_unique<T<float, double, double>>(step, DOUBLE());
+            return std::make_unique<T<float, double, double>>(DOUBLE());
           case TypeKind::DOUBLE:
             if (resultType->kind() == TypeKind::REAL) {
-              return std::make_unique<T<double, double, float>>(
-                  step, resultType);
+              return std::make_unique<T<double, double, float>>(resultType);
             }
-            return std::make_unique<T<double, double, double>>(step, DOUBLE());
+            return std::make_unique<T<double, double, double>>(DOUBLE());
           default:
             VELOX_CHECK(
                 false,

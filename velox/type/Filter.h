@@ -68,7 +68,10 @@ class Filter {
     return kind_;
   }
 
-  virtual std::unique_ptr<Filter> clone() const = 0;
+  /// Return a copy of this filter. If nullAllowed is set, modified the
+  /// nullAllowed flag in the copy to match.
+  virtual std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const = 0;
 
   /**
    * A filter becomes non-deterministic when applies to nested column,
@@ -240,7 +243,8 @@ class AlwaysFalse final : public Filter {
  public:
   AlwaysFalse() : Filter(true, false, FilterKind::kAlwaysFalse) {}
 
-  std::unique_ptr<Filter> clone() const final {
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<AlwaysFalse>();
   }
 
@@ -295,7 +299,8 @@ class AlwaysTrue final : public Filter {
  public:
   AlwaysTrue() : Filter(true, true, FilterKind::kAlwaysTrue) {}
 
-  std::unique_ptr<Filter> clone() const final {
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<AlwaysTrue>();
   }
 
@@ -359,7 +364,8 @@ class IsNull final : public Filter {
  public:
   IsNull() : Filter(true, true, FilterKind::kIsNull) {}
 
-  std::unique_ptr<Filter> clone() const final {
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<IsNull>();
   }
 
@@ -416,7 +422,8 @@ class IsNotNull final : public Filter {
  public:
   IsNotNull() : Filter(true, false, FilterKind::kIsNotNull) {}
 
-  std::unique_ptr<Filter> clone() const final {
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
     return std::make_unique<IsNotNull>();
   }
 
@@ -478,8 +485,13 @@ class BoolValue final : public Filter {
   BoolValue(bool value, bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBoolValue), value_(value) {}
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BoolValue>(*this);
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BoolValue>(this->value_, nullAllowed.value());
+    } else {
+      return std::make_unique<BoolValue>(*this);
+    }
   }
 
   bool testBool(bool value) const final {
@@ -527,8 +539,14 @@ class BigintRange final : public Filter {
         upper16_(std::min<int64_t>(upper, std::numeric_limits<int16_t>::max())),
         isSingleValue_(upper_ == lower_) {}
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BigintRange>(*this);
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintRange>(*this);
+    }
   }
 
   bool testInt64(int64_t value) const final {
@@ -637,8 +655,14 @@ class BigintValuesUsingHashTable final : public Filter {
         hashTable_(other.hashTable_),
         containsEmptyMarker_(other.containsEmptyMarker_) {}
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BigintValuesUsingHashTable>(*this);
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintValuesUsingHashTable>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintValuesUsingHashTable>(*this);
+    }
   }
 
   bool testInt64(int64_t value) const final;
@@ -700,8 +724,14 @@ class BigintValuesUsingBitmask final : public Filter {
         min_(other.min_),
         max_(other.max_) {}
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BigintValuesUsingBitmask>(*this);
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BigintValuesUsingBitmask>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<BigintValuesUsingBitmask>(*this);
+    }
   }
 
   bool testInt64(int64_t value) const final;
@@ -782,8 +812,29 @@ class FloatingPointRange final : public AbstractRange {
     VELOX_CHECK(upperUnbounded || !std::isnan(upper_));
   }
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<FloatingPointRange<T>>(*this);
+  FloatingPointRange(const FloatingPointRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            (std::is_same<T, double>::value) ? FilterKind::kDoubleRange
+                                             : FilterKind::kFloatRange),
+        lower_(other.lower_),
+        upper_(other.upper_) {
+    VELOX_CHECK(lowerUnbounded_ || !std::isnan(lower_));
+    VELOX_CHECK(upperUnbounded_ || !std::isnan(upper_));
+  }
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<FloatingPointRange<T>>(
+          *this, nullAllowed.value());
+    } else {
+      return std::make_unique<FloatingPointRange<T>>(*this);
+    }
   }
 
   bool testDouble(double value) const final {
@@ -1021,8 +1072,35 @@ class BytesRange final : public AbstractRange {
             !lowerExclusive_ && !upperExclusive_ && !lowerUnbounded_ &&
             !upperUnbounded_ && lower_ == upper_) {}
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BytesRange>(*this);
+  BytesRange(const BytesRange& other, bool nullAllowed)
+      : AbstractRange(
+            other.lowerUnbounded_,
+            other.lowerExclusive_,
+            other.upperUnbounded_,
+            other.upperExclusive_,
+            nullAllowed,
+            FilterKind::kBytesRange),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        singleValue_(other.singleValue_) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BytesRange>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<BytesRange>(*this);
+    }
+  }
+
+  std::string toString() const final {
+    return fmt::format(
+        "BytesRange: {}{}, {}{} {}",
+        (lowerUnbounded_ || lowerExclusive_) ? "(" : "[",
+        lowerUnbounded_ ? "..." : lower_,
+        upperUnbounded_ ? "..." : upper_,
+        (upperUnbounded_ || upperExclusive_) ? ")" : "]",
+        nullAllowed_ ? "with nulls" : "no nulls");
   }
 
   bool testBytes(const char* value, int32_t length) const final;
@@ -1040,6 +1118,8 @@ class BytesRange final : public AbstractRange {
     return !singleValue_ || lower_.size() == length;
   }
 
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
   __m256si test8xLength(__m256si lengths) const final {
     using V32 = simd::Vectors<int32_t>;
     VELOX_DCHECK(singleValue_);
@@ -1048,6 +1128,14 @@ class BytesRange final : public AbstractRange {
 
   bool isSingleValue() const {
     return singleValue_;
+  }
+
+  bool isUpperUnbounded() const {
+    return upperUnbounded_;
+  }
+
+  bool isLowerUnbounded() const {
+    return lowerUnbounded_;
   }
 
   const std::string& lower() const {
@@ -1083,8 +1171,20 @@ class BytesValues final : public Filter {
     upper_ = *std::max_element(values_.begin(), values_.end());
   }
 
-  std::unique_ptr<Filter> clone() const final {
-    return std::make_unique<BytesValues>(*this);
+  BytesValues(const BytesValues& other, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kBytesValues),
+        lower_(other.lower_),
+        upper_(other.upper_),
+        values_(other.values_),
+        lengths_(other.lengths_) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<BytesValues>(*this, nullAllowed.value());
+    } else {
+      return std::make_unique<BytesValues>(*this);
+    }
   }
 
   bool testLength(int32_t length) const final {
@@ -1100,6 +1200,12 @@ class BytesValues final : public Filter {
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,
       bool hasNull) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  const folly::F14FastSet<std::string>& values() const {
+    return values_;
+  }
 
  private:
   std::string lower_;
@@ -1120,7 +1226,10 @@ class BigintMultiRange final : public Filter {
       std::vector<std::unique_ptr<BigintRange>> ranges,
       bool nullAllowed);
 
-  std::unique_ptr<Filter> clone() const final;
+  BigintMultiRange(const BigintMultiRange& other, bool nullAllowed);
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final;
 
   bool testInt64(int64_t value) const final;
 
@@ -1167,7 +1276,8 @@ class MultiRange final : public Filter {
         filters_(std::move(filters)),
         nanAllowed_(nanAllowed) {}
 
-  std::unique_ptr<Filter> clone() const final;
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final;
 
   bool testDouble(double value) const final;
 
@@ -1181,6 +1291,16 @@ class MultiRange final : public Filter {
       std::optional<std::string_view> min,
       std::optional<std::string_view> max,
       bool hasNull) const override;
+
+  const std::vector<std::unique_ptr<Filter>>& filters() const {
+    return filters_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const override final;
+
+  bool nanAllowed() const {
+    return nanAllowed_;
+  }
 
  private:
   const std::vector<std::unique_ptr<Filter>> filters_;

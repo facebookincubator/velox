@@ -109,10 +109,8 @@ inline uint64_t hashOne<StringView>(StringView value) {
 template <typename T>
 class ApproxDistinctAggregate : public exec::Aggregate {
  public:
-  ApproxDistinctAggregate(
-      core::AggregationNode::Step step,
-      const TypePtr& resultType)
-      : exec::Aggregate(step, resultType) {}
+  explicit ApproxDistinctAggregate(const TypePtr& resultType)
+      : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(HllAccumulator);
@@ -126,13 +124,6 @@ class ApproxDistinctAggregate : public exec::Aggregate {
       auto group = groups[i];
       new (group + offset_) HllAccumulator(allocator_);
     }
-  }
-
-  void initializeNewGroups(
-      char** /*groups*/,
-      folly::Range<const vector_size_t*> /*indices*/,
-      const VectorPtr& /*initialState*/) override {
-    VELOX_NYI();
   }
 
   void finalize(char** /*groups*/, int32_t /*numGroups*/) override {
@@ -184,8 +175,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
 
   void destroy(folly::Range<char**> /*groups*/) override {}
 
- protected:
-  void updatePartial(
+  void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -208,7 +198,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     });
   }
 
-  void updateFinal(
+  void addIntermediateResults(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -230,7 +220,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     });
   }
 
-  void updateSingleGroupPartial(
+  void addSingleGroupRawInput(
       char* group,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -252,7 +242,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
     });
   }
 
-  void updateSingleGroupFinal(
+  void addSingleGroupIntermediateResults(
       char* group,
       const SelectivityVector& row,
       const std::vector<VectorPtr>& args,
@@ -357,10 +347,9 @@ class ApproxDistinctAggregate : public exec::Aggregate {
 
 template <TypeKind kind>
 std::unique_ptr<exec::Aggregate> createApproxDistinct(
-    core::AggregationNode::Step step,
     const TypePtr& resultType) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<ApproxDistinctAggregate<T>>(step, resultType);
+  return std::make_unique<ApproxDistinctAggregate<T>>(resultType);
 }
 
 bool registerApproxDistinct(const std::string& name) {
@@ -396,7 +385,7 @@ bool registerApproxDistinct(const std::string& name) {
             ? std::dynamic_pointer_cast<const Type>(VARBINARY())
             : BIGINT();
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createApproxDistinct, type->kind(), step, aggResultType);
+            createApproxDistinct, type->kind(), aggResultType);
       });
   return true;
 }

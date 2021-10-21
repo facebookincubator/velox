@@ -24,6 +24,7 @@
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/encryption/Encryption.h"
 
 namespace facebook::velox::dwrf {
@@ -32,6 +33,7 @@ class ColumnReaderFactory;
 } // namespace facebook::velox::dwrf
 
 namespace facebook {
+namespace velox {
 namespace dwio {
 namespace common {
 
@@ -92,7 +94,7 @@ class RowReaderOptions {
   bool returnFlatVector_ = false;
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
-  velox::dwrf::ColumnReaderFactory* columnReaderFactory_ = nullptr;
+  velox::common::ScanSpec* scanSpec_ = nullptr;
   std::unordered_set<uint32_t> flatmapNodeIdAsStruct_;
 
  public:
@@ -103,7 +105,7 @@ class RowReaderOptions {
     projectSelectedType = other.projectSelectedType;
     errorTolerance_ = other.errorTolerance_;
     selector_ = other.selector_;
-    columnReaderFactory_ = other.columnReaderFactory_;
+    scanSpec_ = other.scanSpec_;
     returnFlatVector_ = other.returnFlatVector_;
     flatmapNodeIdAsStruct_ = other.flatmapNodeIdAsStruct_;
   }
@@ -224,12 +226,12 @@ class RowReaderOptions {
     return errorTolerance_;
   }
 
-  velox::dwrf::ColumnReaderFactory* getColumnReaderFactory() const {
-    return columnReaderFactory_;
+  velox::common::ScanSpec* getScanSpec() const {
+    return scanSpec_;
   }
 
-  void setColumnReaderFactory(velox::dwrf::ColumnReaderFactory* factory) {
-    columnReaderFactory_ = factory;
+  void setScanSpec(velox::common::ScanSpec* scanSpec) {
+    scanSpec_ = scanSpec;
   }
 
   void setFlatmapNodeIdsAsStruct(
@@ -282,9 +284,8 @@ enum class PrefetchMode {
  * PReads into the same |cache|.
  */
 struct DataCacheConfig {
-  velox::DataCache* cache;
-  // We identify the file the data belongs to by a 64 bit integer. One
-  // practical option is to use an external filename->incrementing integer map.
+  velox::DataCache* cache{nullptr};
+  // We identify the file the data belongs to by an id from StringIdMap.
   uint64_t filenum;
 };
 
@@ -488,4 +489,5 @@ class ReaderOptions {
 
 } // namespace common
 } // namespace dwio
+} // namespace velox
 } // namespace facebook

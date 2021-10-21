@@ -22,8 +22,10 @@
 
 namespace facebook::velox::dwrf {
 
+using dwio::common::ColumnStatistics;
 using dwio::common::InputStream;
 using dwio::common::LogType;
+using dwio::common::Statistics;
 using dwio::common::encryption::DecrypterFactory;
 using encryption::DecryptionHandler;
 using memory::MemoryPool;
@@ -56,7 +58,7 @@ FooterStatisticsImpl::FooterStatisticsImpl(
             group.statistics(nodeIndex), &decrypter);
         for (uint32_t statsIndex = 0; statsIndex < stats->statistics_size();
              ++statsIndex) {
-          colStats_[node + statsIndex] = ColumnStatistics::fromProto(
+          colStats_[node + statsIndex] = buildColumnStatisticsFromProto(
               stats->statistics(statsIndex), statsContext);
         }
       }
@@ -66,7 +68,7 @@ FooterStatisticsImpl::FooterStatisticsImpl(
   for (int32_t i = 0; i < footer.statistics_size(); i++) {
     if (!colStats_[i]) {
       colStats_[i] =
-          ColumnStatistics::fromProto(footer.statistics(i), statsContext);
+          buildColumnStatisticsFromProto(footer.statistics(i), statsContext);
     }
   }
 }
@@ -95,7 +97,7 @@ ReaderBase::ReaderBase(
   input_ = bufferedInputFactory_->create(*stream_, pool, dataCacheConfig);
 
   // We may have cached the tail before, in which case we can skip the read.
-  if (dataCacheConfig) {
+  if (dataCacheConfig && dataCacheConfig->cache) {
     const std::string tailKey = TailKey(dataCacheConfig->filenum);
     std::string tail;
     if (dataCacheConfig->cache->get(tailKey, &tail)) {
@@ -204,14 +206,25 @@ ReaderBase::ReaderBase(
   }
 
   // Insert the tail in the data cache so we can skip the disk read next time.
-  if (dataCacheConfig) {
+  if (dataCacheConfig && dataCacheConfig->cache) {
     std::unique_ptr<char[]> tail(new char[tailSize]);
     input_->read(fileLength_ - tailSize, tailSize, LogType::FOOTER)
         ->readFully(tail.get(), tailSize);
     const std::string tailKey = TailKey(dataCacheConfig->filenum);
     dataCacheConfig->cache->put(tailKey, {tail.get(), tailSize});
   }
-
+  if (input_->shouldPrefetchStripes()) {
+    auto numStripes = getFooter().stripes_size();
+    for (auto i = 0; i < numStripes; i++) {
+      const auto& stripe = getFooter().stripes(i);
+      input_->enqueue(
+          {stripe.offset() + stripe.indexlength() + stripe.datalength(),
+           stripe.footerlength()});
+    }
+    if (numStripes) {
+      input_->load(LogType::FOOTER);
+    }
+  }
   // initialize file decrypter
   handler_ = DecryptionHandler::create(*footer_, factory);
 }
@@ -240,7 +253,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
   StatsContext statsContext(getWriterVersion());
   if (!handler_->isEncrypted(index)) {
     auto& stats = footer_->statistics(index);
-    return ColumnStatistics::fromProto(stats, statsContext);
+    return buildColumnStatisticsFromProto(stats, statsContext);
   }
 
   auto root = handler_->getEncryptionRoot(index);
@@ -251,7 +264,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
   // if key is not loaded, return plaintext stats
   if (!decrypter.isKeyLoaded()) {
     auto& stats = footer_->statistics(index);
-    return ColumnStatistics::fromProto(stats, statsContext);
+    return buildColumnStatisticsFromProto(stats, statsContext);
   }
 
   // find the right offset inside the group
@@ -265,7 +278,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
   DWIO_ENSURE_LT(nodeIndex, group.nodes_size());
   auto stats = readProtoFromString<proto::FileStatistics>(
       group.statistics(nodeIndex), &decrypter);
-  return ColumnStatistics::fromProto(
+  return buildColumnStatisticsFromProto(
       stats->statistics(index - root), statsContext);
 }
 

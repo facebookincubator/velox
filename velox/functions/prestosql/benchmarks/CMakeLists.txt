@@ -28,6 +28,11 @@ add_executable(velox_functions_benchmarks_array_contains
 target_link_libraries(velox_functions_benchmarks_array_contains
                       ${BENCHMARK_DEPENDENCIES})
 
+add_executable(velox_functions_benchmarks_array_min_max
+               ArrayMinMaxBenchmark.cpp)
+target_link_libraries(velox_functions_benchmarks_array_min_max
+                      ${BENCHMARK_DEPENDENCIES})
+
 add_executable(velox_functions_benchmarks_width_bucket WidthBucketBenchmark.cpp)
 target_link_libraries(velox_functions_benchmarks_width_bucket
                       ${BENCHMARK_DEPENDENCIES})
@@ -39,3 +44,7 @@ target_link_libraries(velox_functions_benchmarks_string_ascii_utf_functions
 
 add_executable(velox_functions_benchmarks_not NotBenchmark.cpp)
 target_link_libraries(velox_functions_benchmarks_not ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_benchmarks_date_time DateTimeBenchmark.cpp)
+target_link_libraries(velox_functions_benchmarks_date_time
+                      ${BENCHMARK_DEPENDENCIES})

@@ -47,9 +47,7 @@ class BlockingState {
       Operator* FOLLY_NONNULL op,
       BlockingReason reason);
 
-  static void setResume(
-      std::shared_ptr<BlockingState> state,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr);
+  static void setResume(std::shared_ptr<BlockingState> state);
 
   Operator* FOLLY_NONNULL op() {
     return operator_;
@@ -82,19 +80,14 @@ struct DriverCtx {
       int _pipelineId,
       int32_t numDrivers);
 
-  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool() {
-    opMemPools_.push_back(execCtx->pool()->addScopedChild("operator_ctx"));
-    return opMemPools_.back().get();
-  }
+  velox::memory::MemoryPool* FOLLY_NONNULL addOperatorPool();
 
+  // Makes an extract of QueryCtx for use in a connector. 'planNodeId'
+  // is the id of the calling TableScan. This and the task id identify
+  // the scan for column access tracking.
   std::unique_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
-      const std::string& connectorId) const;
-
- private:
-  // Lifetime of operator memory pools is same as the driverCtx, since some
-  // buffers allocated within an operator context may still be referenced by
-  // other operators.
-  std::vector<std::unique_ptr<velox::memory::MemoryPool>> opMemPools_;
+      const std::string& connectorId,
+      const std::string& planNodeId) const;
 };
 
 class Driver {
@@ -110,13 +103,9 @@ class Driver {
   static folly::CPUThreadPoolExecutor* FOLLY_NONNULL
   executor(int32_t threads = 0);
 
-  static void run(
-      std::shared_ptr<Driver> self,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr);
+  static void run(std::shared_ptr<Driver> self);
 
-  static void enqueue(
-      std::shared_ptr<Driver> instance,
-      folly::Executor* FOLLY_NULLABLE executor = nullptr);
+  static void enqueue(std::shared_ptr<Driver> instance);
 
   // Waits for activity on 'executor_' to finish and then makes a new
   // executor. Testing uses this to ensure that there are no live
@@ -176,6 +165,8 @@ class Driver {
   }
 
  private:
+  void enqueueInternal();
+
   core::StopReason runInternal(
       std::shared_ptr<Driver>& self,
       std::shared_ptr<BlockingState>* FOLLY_NONNULL blockingState);
@@ -192,6 +183,12 @@ class Driver {
 
   // Set via 'cancelPool_' and serialized by 'cancelPool_'s mutex.
   core::ThreadState state_;
+
+  // Timer used to track down the time we are sitting in the driver queue.
+  size_t queueTimeStartMicros_{0};
+  // Index of the current operator to run (or the 1st one if we haven't started
+  // yet). Used to determine which operator's queueTime we should update.
+  size_t curOpIndex_{0};
 
   std::vector<std::unique_ptr<Operator>> operators_;
 
@@ -212,6 +209,12 @@ struct DriverFactory {
   // constructed.
   OperatorSupplier consumerSupplier;
   uint32_t maxDrivers;
+  // True if 'planNodes' contains a source node for the task, e.g. TableScan or
+  // Exchange.
+  bool inputDriver{false};
+  // True if 'planNodes' contains a sync node for the task, e.g.
+  // PartitionedOutput.
+  bool outputDriver{false};
 
   std::shared_ptr<Driver> createDriver(
       std::unique_ptr<DriverCtx> ctx,
@@ -252,6 +255,7 @@ struct DriverFactory {
     return std::nullopt;
   }
 
+  /// Returns plan node IDs of all HashJoinNode's in the pipeline.
   std::vector<core::PlanNodeId> needsHashJoinBridges() const {
     std::vector<core::PlanNodeId> planNodeIds;
     for (const auto& planNode : planNodes) {
@@ -262,6 +266,19 @@ struct DriverFactory {
     }
     return planNodeIds;
   }
+
+  /// Returns plan node IDs of all CrossJoinNode's in the pipeline.
+  std::vector<core::PlanNodeId> needsCrossJoinBridges() const {
+    std::vector<core::PlanNodeId> joinNodeIds;
+    for (const auto& planNode : planNodes) {
+      if (auto joinNode =
+              std::dynamic_pointer_cast<const core::CrossJoinNode>(planNode)) {
+        joinNodeIds.emplace_back(joinNode->id());
+      }
+    }
+
+    return joinNodeIds;
+  }
 };
 
 // Begins and ends a section where a thread is running but not
@@ -270,10 +287,10 @@ struct DriverFactory {
 // the contending threads go suspended and each in turn enters a
 // global critical section. When running the arbitration strategy, a
 // thread can stop and restart Tasks, including its own. When a Task
-// is stopped, its drivers are blocked or suspended and the strategy thread can
-// alter the Task's memory including spilling or killing the whole Task. Other
-// threads waiting to run the arbitration, are in a suspended state which also
-// means that they are instantaneously killable or spillable.
+// is stopped, its drivers are blocked or suspended and the strategy thread
+// can alter the Task's memory including spilling or killing the whole Task.
+// Other threads waiting to run the arbitration, are in a suspended state
+// which also means that they are instantaneously killable or spillable.
 class SuspendedSection {
  public:
   explicit SuspendedSection(Driver* FOLLY_NONNULL driver);

@@ -76,7 +76,7 @@ class VectorFunction {
   virtual void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-      Expr* caller,
+      const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* result) const = 0;
 
@@ -122,12 +122,15 @@ class VectorFunction {
 // Factory for functions which are template generated from scalar functions.
 class VectorAdapterFactory {
  public:
-  virtual std::unique_ptr<VectorFunction> getVectorInterpreter() const = 0;
+  virtual std::unique_ptr<VectorFunction> getVectorInterpreter(
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs) const = 0;
   virtual ~VectorAdapterFactory() = default;
+  virtual const TypePtr returnType() const = 0;
 };
 
 /// Returns a list of signatured supposed by VectorFunction with the specified
-/// name. Returns std::nullopt if there is not function with the specified name.
+/// name. Returns std::nullopt if there is no function with the specified name.
 std::optional<std::vector<std::shared_ptr<FunctionSignature>>>
 getVectorFunctionSignatures(const std::string& name);
 

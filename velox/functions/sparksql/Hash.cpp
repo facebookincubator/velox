@@ -114,7 +114,7 @@ class HashFunction final : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
-      exec::Expr* caller,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* resultRef) const final {
     constexpr int32_t kSeed = 42;
@@ -124,19 +124,16 @@ class HashFunction final : public exec::VectorFunction {
     FlatVector<int32_t>& result = *(*resultRef)->as<FlatVector<int32_t>>();
     rows.applyToSelected([&](int row) { result.set(row, kSeed); });
 
-    std::optional<exec::LocalSelectivityVector> cached_local_selected;
+    exec::LocalSelectivityVector selectedMinusNulls(context);
 
     for (auto& arg : args) {
       exec::LocalDecodedVector decoded(context, *arg, rows);
       const SelectivityVector* selected = &rows;
       if (arg->mayHaveNulls()) {
-        if (!cached_local_selected) {
-          cached_local_selected.emplace(context, rows.end());
-        }
-        *cached_local_selected->get() = rows;
-        cached_local_selected->get()->deselectNulls(
+        *selectedMinusNulls.get(rows.end()) = rows;
+        selectedMinusNulls->deselectNulls(
             arg->flatRawNulls(rows), rows.begin(), rows.end());
-        selected = cached_local_selected->get();
+        selected = selectedMinusNulls.get();
       }
       switch (arg->type()->kind()) {
 #define CASE(typeEnum, hashFn, inputType)                                      \

@@ -26,7 +26,7 @@
 #include "velox/experimental/codegen/compiler_utils/tests/definitions.h"
 #include "velox/experimental/codegen/utils/resources/ResourcePath.h"
 #include "velox/experimental/codegen/vector_function/StringTypes.h"
-#include "velox/functions/prestosql/CoreFunctions.h"
+#include "velox/functions/prestosql/SimpleFunctions.h"
 #include "velox/functions/prestosql/VectorFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -492,9 +492,6 @@ class ExpressionCodegenTestBase : public testing::Test {
   UDFManager udfManager;
 
   virtual void SetUp() override {
-    queryCtx_ = std::make_shared<core::QueryCtx>();
-    execCtx_ = std::make_unique<facebook::velox::core::ExecCtx>(
-        memory::getDefaultScopedMemoryPool(), queryCtx_.get());
     codeManager_ =
         std::make_unique<CodeManager>(getCompilerOptions(), eventSequence_);
     generator_ = std::make_unique<ExprCodeGenerator>(
@@ -582,8 +579,13 @@ class ExpressionCodegenTestBase : public testing::Test {
         core::ConcatTypedExpr({"c0"}, {typedExpr}));
   }
 
-  std::unique_ptr<core::ExecCtx> execCtx_;
-  std::shared_ptr<core::QueryCtx> queryCtx_;
+  std::shared_ptr<core::QueryCtx> queryCtx_{std::make_shared<core::QueryCtx>()};
+  std::unique_ptr<memory::MemoryPool> pool_{
+      memory::getDefaultScopedMemoryPool()};
+  std::unique_ptr<core::ExecCtx> execCtx_{
+      std::make_unique<facebook::velox::core::ExecCtx>(
+          pool_.get(),
+          queryCtx_.get())};
   std::unique_ptr<CodeManager> codeManager_;
   std::unique_ptr<ExprCodeGenerator> generator_;
   DefaultScopedTimer::EventSequence eventSequence_;

@@ -97,6 +97,23 @@ TEST_F(BufferTest, testAlignedBuffer) {
   EXPECT_EQ(pool_->getCurrentBytes(), 0);
 }
 
+TEST_F(BufferTest, testAsRange) {
+  // Simple 2 element vector.
+  std::vector<uint8_t> testData({5, 255});
+  BufferPtr buffer =
+      AlignedBuffer::allocate<uint8_t>(2 /*numElements*/, pool_.get());
+
+  memcpy(buffer->asMutable<uint8_t>(), testData.data(), testData.size());
+
+  Range<uint8_t> range = buffer->asRange<uint8_t>();
+  MutableRange<uint8_t> mutRange = buffer->asMutableRange<uint8_t>();
+  EXPECT_EQ(5, range[0]);
+  EXPECT_EQ(255, range[1]);
+
+  EXPECT_EQ(5, mutRange[0]);
+  EXPECT_EQ(255, mutRange[1]);
+}
+
 TEST_F(BufferTest, testAlignedBufferPrint) {
   // We'll only put non-default values for the first 2 bytes. Note how below
   // in the string it has 05 ff which corresponds to these.
@@ -307,6 +324,13 @@ TEST_F(BufferTest, testNonPOD) {
   // free stuff
   buf = nullptr;
   EXPECT_EQ(NonPOD::constructed, NonPOD::destructed);
+}
+
+TEST_F(BufferTest, testNonPODMemoryUsage) {
+  using T = std::shared_ptr<void>;
+  const int64_t currentBytes = pool_->getCurrentBytes();
+  { auto buffer = AlignedBuffer::allocate<T>(0, pool_.get()); }
+  EXPECT_EQ(pool_->getCurrentBytes(), currentBytes);
 }
 
 } // namespace velox

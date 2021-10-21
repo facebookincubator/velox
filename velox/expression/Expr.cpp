@@ -160,12 +160,7 @@ void Expr::evalSimplified(
   if (remainingRows->hasSelections()) {
     evalSimplifiedImpl(*remainingRows, context, result);
   }
-
-  // If there's no output vector yet, return a null constant.
-  if (*result == nullptr) {
-    *result =
-        BaseVector::createNullConstant(type(), rows.size(), context->pool());
-  }
+  addNulls(rows, remainingRows->asRange().bits(), context, result);
 }
 
 void Expr::evalSimplifiedImpl(
@@ -212,11 +207,10 @@ void Expr::evalSimplifiedImpl(
   }
 
   // Apply the actual function.
-  vectorFunction_->apply(remainingRows, inputValues_, this, context, result);
+  vectorFunction_->apply(remainingRows, inputValues_, type(), context, result);
 
   // Make sure the returned vector has its null bitmap properly set.
-  (*result)->addNulls(
-      remainingRows.asRange().bits(), SelectivityVector((*result)->size()));
+  addNulls(rows, remainingRows.asRange().bits(), context, result);
   inputValues_.clear();
 }
 
@@ -1031,8 +1025,9 @@ void Expr::applyFunction(
     EvalCtx* context,
     VectorPtr* result) {
   computeIsAsciiForInputs(vectorFunction_.get(), inputValues_, rows);
-  auto isAscii =
-      computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows);
+  auto isAscii = type()->isVarchar()
+      ? computeIsAsciiForResult(vectorFunction_.get(), inputValues_, rows)
+      : std::nullopt;
   applyVectorFunction(rows, context, result);
   if (isAscii.has_value()) {
     (*result)->asUnchecked<SimpleVector<StringView>>()->setIsAscii(
@@ -1050,7 +1045,7 @@ void Expr::applyVectorFunction(
       inputValues_[0]->isConstantEncoding()) {
     applySingleConstArgVectorFunction(rows, context, result);
   } else {
-    vectorFunction_->apply(rows, inputValues_, this, context, result);
+    vectorFunction_->apply(rows, inputValues_, type(), context, result);
   }
 }
 
@@ -1080,7 +1075,7 @@ void Expr::applySingleConstArgVectorFunction(
   }
 
   VectorPtr tempResult;
-  vectorFunction_->apply(*inputRows, args, this, context, &tempResult);
+  vectorFunction_->apply(*inputRows, args, type(), context, &tempResult);
 
   if (*result && !context->isFinalSelection()) {
     BaseVector::ensureWritable(rows, type(), context->pool(), result);
@@ -1169,7 +1164,7 @@ void ExprSetSimplified::eval(
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
     core::ExecCtx* execCtx) {
-  if (execCtx->queryCtx()->exprEvalSimplified() ||
+  if (execCtx->queryCtx()->config().exprEvalSimplified() ||
       FLAGS_force_eval_simplified) {
     return std::make_unique<ExprSetSimplified>(std::move(source), execCtx);
   }

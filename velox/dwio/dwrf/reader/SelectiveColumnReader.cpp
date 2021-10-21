@@ -98,7 +98,8 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
   std::vector<uint32_t> stridesToSkip;
   for (auto i = 0; i < index_->entry_size(); i++) {
     const auto& entry = index_->entry(i);
-    auto columnStats = ColumnStatistics::fromProto(entry.statistics(), context);
+    auto columnStats =
+        buildColumnStatisticsFromProto(entry.statistics(), context);
     if (!testFilter(filter, columnStats.get(), rowGroupSize, type_)) {
       stridesToSkip.push_back(i); // Skipping stride based on column stats.
     }
@@ -3974,7 +3975,8 @@ class ColumnLoader : public velox::VectorLoader {
         fieldReader_(fieldReader),
         version_(version) {}
 
-  void load(RowSet rows, ValueHook* hook, VectorPtr* result) override;
+ protected:
+  void loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) override;
 
  private:
   SelectiveStructColumnReader* structReader_;
@@ -4002,7 +4004,10 @@ static void scatter(RowSet rows, VectorPtr* result) {
       BaseVector::wrapInDictionary(BufferPtr(nullptr), indices, end, *result);
 }
 
-void ColumnLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {
+void ColumnLoader::loadInternal(
+    RowSet rows,
+    ValueHook* hook,
+    VectorPtr* result) {
   VELOX_CHECK_EQ(
       version_,
       structReader_->numReads(),
