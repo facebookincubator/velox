@@ -178,7 +178,7 @@ VectorPtr createBinary(
     vector->setNull(i, !notNull);
     if (notNull) {
       // Make sure not all strings will be inlined
-      auto len = Random::rand32(0, 10, gen) + 1;
+      auto len = Random::rand32(0, 20, gen) + 1;
       lengths[i] = len;
       childSize += len;
     } else {

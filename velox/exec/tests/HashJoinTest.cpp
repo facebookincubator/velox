@@ -241,8 +241,8 @@ TEST_F(HashJoinTest, memory) {
   auto tracker = memory::MemoryUsageTracker::create();
   params.queryCtx->pool()->setMemoryUsageTracker(tracker);
   auto [taskCursor, rows] = readCursor(params, [](Task*) {});
-  EXPECT_GT(2500, tracker->getNumAllocs());
-  EXPECT_GT(7'500'000, tracker->getCumulativeBytes());
+  EXPECT_GT(2800, tracker->getNumAllocs());
+  EXPECT_GT(11'810'000, tracker->getCumulativeBytes());
 }
 
 TEST_F(HashJoinTest, lazyVectors) {
