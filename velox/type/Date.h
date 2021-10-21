@@ -60,7 +60,9 @@ struct Date {
   }
 
   // Needed for serialization of FlatVector<Date>
-  operator StringView() const {VELOX_NYI()};
+  operator StringView() const {
+      VELOX_NYI()
+  };
 
   std::string toString() const;
 
