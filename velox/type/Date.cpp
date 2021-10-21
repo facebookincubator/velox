@@ -22,20 +22,20 @@ void parseTo(folly::StringPiece in, Date& out) {
 }
 
 std::string Date::toString() const {
-    // Find the number of seconds for the days_;
-    int64_t day_seconds = days_ * 86400;
-    auto tmValue = gmtime((const time_t*)&day_seconds);
-    if (!tmValue) {
-        const auto& error_message = folly::to<std::string>(
-                "Can't convert days to time: ", folly::to<std::string>(days_));
-        throw std::runtime_error{error_message};
-    }
+  // Find the number of seconds for the days_;
+  int64_t day_seconds = days_ * 86400;
+  auto tmValue = gmtime((const time_t*)&day_seconds);
+  if (!tmValue) {
+    const auto& error_message = folly::to<std::string>(
+        "Can't convert days to time: ", folly::to<std::string>(days_));
+    throw std::runtime_error{error_message};
+  }
 
-    // return ISO 8601 time format.
-    // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-    std::ostringstream oss;
-    oss << std::put_time(tmValue, "%F");
-    return oss.str();
+  // return ISO 8601 time format.
+  // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
+  std::ostringstream oss;
+  oss << std::put_time(tmValue, "%F");
+  return oss.str();
 }
 
 } // namespace facebook::velox

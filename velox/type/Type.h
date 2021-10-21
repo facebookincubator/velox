@@ -1260,9 +1260,7 @@ VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <
     TypeKind KIND,
-    std::enable_if_t<
-        KIND != TypeKind::TIMESTAMP,
-        int32_t> = 0>
+    std::enable_if_t<KIND != TypeKind::TIMESTAMP, int32_t> = 0>
 std::shared_ptr<const Type> createScalarType() {
   return ScalarType<KIND>::create();
 }

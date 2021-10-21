@@ -36,33 +36,31 @@ struct Date {
   }
 
   bool operator==(const Date& other) const {
-      return days_ == other.days_;
+    return days_ == other.days_;
   }
 
   bool operator!=(const Date& other) const {
-      return days_ != other.days_;
+    return days_ != other.days_;
   }
 
   bool operator<(const Date& other) const {
-      return days_ < other.days_;
+    return days_ < other.days_;
   }
 
   bool operator<=(const Date& other) const {
-      return days_ <= other.days_;
+    return days_ <= other.days_;
   }
 
   bool operator>(const Date& other) const {
-      return days_ > other.days_;
+    return days_ > other.days_;
   }
 
   bool operator>=(const Date& other) const {
-      return days_ >= other.days_;
+    return days_ >= other.days_;
   }
 
   // Needed for serialization of FlatVector<Date>
-  operator StringView() const {
-    VELOX_NYI()
-  };
+  operator StringView() const {VELOX_NYI()};
 
   std::string toString() const;
 
@@ -83,7 +81,7 @@ void parseTo(folly::StringPiece in, ::facebook::velox::Date& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Date& value, T* result) {
-    VELOX_NYI();
+  VELOX_NYI();
 }
 
 } // namespace facebook::velox
