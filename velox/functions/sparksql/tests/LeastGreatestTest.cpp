@@ -294,6 +294,5 @@ TEST_F(GreatestTest, timestamp) {
           Timestamp(1569, 25), Timestamp(4859, 482), Timestamp(581, 1651)),
       Timestamp(4859, 482));
 }
-
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
