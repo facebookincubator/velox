@@ -49,7 +49,7 @@ class ArrayDistinctFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* caller,
+      const TypePtr& outputType,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     // Acquire the array elements vector.
@@ -64,12 +64,9 @@ class ArrayDistinctFunction : public exec::VectorFunction {
 
     // Allocate new vectors for indices, length and offsets.
     memory::MemoryPool* pool = context->pool();
-    BufferPtr newIndices =
-        AlignedBuffer::allocate<vector_size_t>(elementsCount, pool);
-    BufferPtr newLengths =
-        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
-    BufferPtr newOffsets =
-        AlignedBuffer::allocate<vector_size_t>(rowCount, pool);
+    BufferPtr newIndices = allocateIndices(elementsCount, pool);
+    BufferPtr newLengths = allocateSizes(rowCount, pool);
+    BufferPtr newOffsets = allocateOffsets(rowCount, pool);
 
     // Pointers and cursors to the raw data.
     vector_size_t indicesCursor = 0;
@@ -112,7 +109,7 @@ class ArrayDistinctFunction : public exec::VectorFunction {
     // Prepare and return result set.
     auto resultArray = std::make_shared<ArrayVector>(
         pool,
-        caller->type(),
+        outputType,
         nullptr,
         rowCount,
         std::move(newOffsets),

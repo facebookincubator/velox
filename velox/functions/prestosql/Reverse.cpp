@@ -48,7 +48,7 @@ class ReverseFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* caller,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
@@ -103,8 +103,7 @@ class ReverseFunction : public exec::VectorFunction {
 
     // Allocate new vectors for indices.
     auto pool = context->pool();
-    BufferPtr indices =
-        AlignedBuffer::allocate<vector_size_t>(elementCount, pool);
+    BufferPtr indices = allocateIndices(elementCount, pool);
     auto rawIndices = indices->asMutable<vector_size_t>();
 
     auto elementsVector = arrayVector->elements();

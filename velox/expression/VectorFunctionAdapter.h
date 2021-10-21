@@ -40,12 +40,11 @@ class VectorAdapter : public VectorFunction {
   struct ApplyContext {
     ApplyContext(
         const SelectivityVector* _rows,
-        Expr* caller,
+        const TypePtr& outputType,
         EvalCtx* _context,
         VectorPtr* _result)
         : rows{_rows}, context{_context} {
-      BaseVector::ensureWritable(
-          *rows, caller->type(), context->pool(), _result);
+      BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);
     }
@@ -62,21 +61,56 @@ class VectorAdapter : public VectorFunction {
     bool allAscii{false};
   };
 
+  template <
+      int32_t POSITION,
+      typename... Values,
+      typename std::enable_if_t<POSITION<FUNC::num_args, int32_t> = 0> void
+          unpack(
+              const core::QueryConfig& config,
+              const std::vector<VectorPtr>& packed,
+              const Values*... values) const {
+    if (packed.at(POSITION) != nullptr) {
+      auto oneUnpacked =
+          packed.at(POSITION)
+              ->template asUnchecked<ConstantVector<exec_arg_at<POSITION>>>();
+      auto oneValue = oneUnpacked->valueAt(0);
+
+      unpack<POSITION + 1>(config, packed, values..., &oneValue);
+    } else {
+      using temp_type = exec_arg_at<POSITION>;
+      unpack<POSITION + 1>(
+          config, packed, values..., (const temp_type*)nullptr);
+    }
+  }
+
+  // unpack: base case
+  template <
+      int32_t POSITION,
+      typename... Values,
+      typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
+  void unpack(
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& /*packed*/,
+      const Values*... values) const {
+    return (*fn_).initialize(config, values...);
+  }
+
  public:
   explicit VectorAdapter(
       const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs,
       std::shared_ptr<const Type> returnType)
       : fn_{std::make_unique<FUNC>(move(returnType))} {
-    fn_->initialize(config);
+    unpack<0>(config, constantInputs);
   }
 
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* caller,
+      const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* result) const override {
-    ApplyContext applyContext{&rows, caller, context, result};
+    ApplyContext applyContext{&rows, outputType, context, result};
     DecodedArgs decodedArgs{rows, args, context};
 
     // Enable fast all-ASCII path if all string inputs are ASCII and the
@@ -389,8 +423,10 @@ class VectorAdapterFactoryImpl : public VectorAdapterFactory {
       : returnType_(std::move(returnType)) {}
 
   std::unique_ptr<VectorFunction> getVectorInterpreter(
-      const core::QueryConfig& config) const override {
-    return std::make_unique<VectorAdapter<FUNC>>(config, returnType_);
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs) const override {
+    return std::make_unique<VectorAdapter<FUNC>>(
+        config, constantInputs, returnType_);
   }
 
   const std::shared_ptr<const Type> returnType() const override {

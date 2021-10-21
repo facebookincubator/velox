@@ -69,7 +69,7 @@ class ReduceFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 4);
@@ -87,8 +87,8 @@ class ReduceFunction : public exec::VectorFunction {
     SelectivityVector* callableRows;
 
     SelectivityVector arrayRows(flatArray->size(), false);
-    BufferPtr elementIndices = AlignedBuffer::allocate<vector_size_t>(
-        flatArray->size(), context->pool());
+    BufferPtr elementIndices =
+        allocateIndices(flatArray->size(), context->pool());
 
     const auto& initialState = args[1];
     auto partialResult =

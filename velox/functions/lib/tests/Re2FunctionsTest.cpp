@@ -48,7 +48,7 @@ class Re2FunctionsTest : public test::FunctionBaseTest {
     exec::registerStatefulVectorFunction(
         "re2_extract", re2ExtractSignatures(), makeRegexExtract);
     exec::registerStatefulVectorFunction(
-        "re2_extract_all", re2ExtractSignatures(), makeRe2ExtractAll);
+        "re2_extract_all", re2ExtractAllSignatures(), makeRe2ExtractAll);
     exec::registerStatefulVectorFunction("like", likeSignatures(), makeLike);
   }
 
@@ -355,6 +355,7 @@ TEST_F(Re2FunctionsTest, likePattern) {
   EXPECT_EQ(like("abc", "%b%"), true);
   EXPECT_EQ(like("bcd", "%b%"), true);
   EXPECT_EQ(like("cde", "%b%"), false);
+  EXPECT_EQ(like("cde", "def"), false);
 
   EXPECT_EQ(like("abc", "_b%"), true);
   EXPECT_EQ(like("bcd", "_b%"), false);
@@ -387,6 +388,8 @@ TEST_F(Re2FunctionsTest, likePattern) {
           u8"\u4FE1\u5FF5 \u7231 \u5E0C\u671B \u2028 ",
           u8"\u7231\u4FE1%\u7231%"),
       false);
+
+  EXPECT_EQ(like("abc", "MEDIUM POLISHED%"), false);
 }
 
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {
@@ -640,8 +643,8 @@ TEST_F(Re2FunctionsTest, regexExtractAllBadArgs) {
     const std::string expression = "re2_extract_all(c0, c1, c2)";
     return evaluateOnce<std::string>(expression, str, pattern, groupId);
   };
-  EXPECT_EQ(eval("123", std::nullopt, 0), std::nullopt);
-  EXPECT_EQ(eval(std::nullopt, "(\\d+)", 0), std::nullopt);
+  EXPECT_THROW(eval("123", std::nullopt, 0), VeloxException);
+  EXPECT_THROW(eval(std::nullopt, "(\\d+)", 0), VeloxException);
   EXPECT_THROW(eval("", "", 123), VeloxException);
   EXPECT_THROW(eval("123", "", 99), VeloxException);
   EXPECT_THROW(eval("123", "(\\d+)", 1), VeloxException);

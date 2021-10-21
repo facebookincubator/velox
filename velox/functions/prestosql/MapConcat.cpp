@@ -25,7 +25,7 @@ class MapConcatFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* caller,
+      const TypePtr& outputType,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK(args.size() >= 2);
@@ -34,7 +34,7 @@ class MapConcatFunction : public exec::VectorFunction {
     for (auto& arg : args) {
       VELOX_CHECK(mapType->kindEquals(arg->type()));
     }
-    VELOX_CHECK(mapType->kindEquals(caller->type()));
+    VELOX_CHECK(mapType->kindEquals(outputType));
 
     auto numArgs = args.size();
     exec::DecodedArgs decodedArgs(rows, args, context);
@@ -48,8 +48,8 @@ class MapConcatFunction : public exec::VectorFunction {
       });
     }
 
-    auto keyType = caller->type()->asMap().keyType();
-    auto valueType = caller->type()->asMap().valueType();
+    auto keyType = outputType->asMap().keyType();
+    auto valueType = outputType->asMap().valueType();
 
     auto combinedKeys = BaseVector::create(keyType, maxSize, context->pool());
     auto combinedValues =
@@ -57,12 +57,10 @@ class MapConcatFunction : public exec::VectorFunction {
 
     // Initialize offsets and sizes to 0 so that canonicalize() will
     // work also for sparse 'rows'.
-    BufferPtr offsets =
-        AlignedBuffer::allocate<vector_size_t>(rows.size(), context->pool(), 0);
+    BufferPtr offsets = allocateOffsets(rows.size(), context->pool());
     auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-    BufferPtr sizes =
-        AlignedBuffer::allocate<vector_size_t>(rows.size(), context->pool(), 0);
+    BufferPtr sizes = allocateSizes(rows.size(), context->pool());
     auto rawSizes = sizes->asMutable<vector_size_t>();
 
     vector_size_t offset = 0;
@@ -85,7 +83,7 @@ class MapConcatFunction : public exec::VectorFunction {
 
     auto combinedMap = std::make_shared<MapVector>(
         context->pool(),
-        caller->type(),
+        outputType,
         BufferPtr(nullptr),
         rows.size(),
         offsets,
@@ -122,8 +120,7 @@ class MapConcatFunction : public exec::VectorFunction {
       uniqueKeys.updateBounds();
       auto uniqueCount = uniqueKeys.countSelected();
 
-      BufferPtr uniqueIndices =
-          AlignedBuffer::allocate<vector_size_t>(uniqueCount, context->pool());
+      BufferPtr uniqueIndices = allocateIndices(uniqueCount, context->pool());
       auto rawUniqueIndices = uniqueIndices->asMutable<vector_size_t>();
       vector_size_t index = 0;
       uniqueKeys.applyToSelected(
@@ -135,7 +132,7 @@ class MapConcatFunction : public exec::VectorFunction {
 
       combinedMap = std::make_shared<MapVector>(
           context->pool(),
-          caller->type(),
+          outputType,
           BufferPtr(nullptr),
           rows.size(),
           offsets,

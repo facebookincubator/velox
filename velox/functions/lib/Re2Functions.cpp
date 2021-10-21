@@ -125,18 +125,20 @@ bool re2Extract(
   }
 }
 
-std::string
-likePatternToRe2(StringView pattern, char escapeChar, bool& validPattern) {
+std::string likePatternToRe2(
+    StringView pattern,
+    std::optional<char> escapeChar,
+    bool& validPattern) {
   std::string regex;
   validPattern = true;
   regex.reserve(pattern.size() * 2);
   regex.append("^");
   bool escaped = false;
   for (const char c : pattern) {
-    if (escaped && !(c == '%' || c == '_' || c == escapeChar)) {
+    if (escaped && !(c == '%' || c == '_' || c == *escapeChar)) {
       validPattern = false;
     }
-    if (!escaped && (c == escapeChar)) {
+    if (!escaped && (c == *escapeChar)) {
       escaped = true;
     } else {
       switch (c) {
@@ -189,7 +191,7 @@ class Re2MatchConstantPattern final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* /* caller */,
+      const TypePtr& /* outputType */,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK_EQ(args.size(), 2);
@@ -212,13 +214,13 @@ class Re2Match final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* caller,
+      const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* resultRef) const override {
     VELOX_CHECK_EQ(args.size(), 2);
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
       Re2MatchConstantPattern<Fn>(*pattern).apply(
-          rows, args, caller, context, resultRef);
+          rows, args, outputType, context, resultRef);
       return;
     }
     // General case.
@@ -251,7 +253,7 @@ class Re2SearchAndExtractConstantPattern final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* /* caller */,
+      const TypePtr& /* outputType */,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
@@ -327,14 +329,14 @@ class Re2SearchAndExtract final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* caller,
+      const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
     // Handle the common case of a constant pattern.
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
       Re2SearchAndExtractConstantPattern<T>(*pattern, emptyNoMatch_)
-          .apply(rows, args, caller, context, resultRef);
+          .apply(rows, args, outputType, context, resultRef);
       return;
     }
 
@@ -377,14 +379,14 @@ class Re2SearchAndExtract final : public VectorFunction {
 
 class LikeConstantPattern final : public VectorFunction {
  public:
-  LikeConstantPattern(StringView pattern, char escapeChar)
+  LikeConstantPattern(StringView pattern, std::optional<char> escapeChar)
       : re_(toStringPiece(likePatternToRe2(pattern, escapeChar, validPattern_)),
             RE2::Quiet) {}
 
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* /* caller */,
+      const TypePtr& /* outputType */,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
@@ -398,7 +400,6 @@ class LikeConstantPattern final : public VectorFunction {
 
     // apply() will not be invoked if the selection is empty.
     checkForBadPattern(re_);
-
     FlatVector<bool>& result =
         ensureWritableBool(rows, context->pool(), resultRef);
 
@@ -462,7 +463,7 @@ class Re2ExtractAllConstantPattern final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr*,
+      const TypePtr& /* outputType */,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
@@ -526,7 +527,7 @@ class Re2ExtractAll final : public VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      Expr* expr,
+      const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* resultRef) const final {
     VELOX_CHECK(args.size() == 2 || args.size() == 3);
@@ -534,7 +535,7 @@ class Re2ExtractAll final : public VectorFunction {
     //
     if (auto pattern = getIfConstant<StringView>(*args[1])) {
       Re2ExtractAllConstantPattern<T>(*pattern).apply(
-          rows, args, expr, context, resultRef);
+          rows, args, outputType, context, resultRef);
       return;
     }
 
@@ -738,7 +739,7 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       name,
       inputArgs[1].type->toString());
 
-  char escapeChar;
+  std::optional<char> escapeChar;
   if (numArgs == 3) {
     VELOX_USER_CHECK(
         inputArgs[2].type->isVarchar(),
@@ -843,6 +844,31 @@ std::shared_ptr<VectorFunction> makeRe2ExtractAll(
     default:
       VELOX_UNREACHABLE();
   }
+}
+
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+re2ExtractAllSignatures() {
+  // varchar, varchar -> array<varchar>
+  // varchar, varchar, integer|bigint -> array<varchar>
+  return {
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .argumentType("bigint")
+          .build(),
+      exec::FunctionSignatureBuilder()
+          .returnType("array(varchar)")
+          .argumentType("varchar")
+          .argumentType("varchar")
+          .argumentType("integer")
+          .build(),
+  };
 }
 
 } // namespace facebook::velox::functions
