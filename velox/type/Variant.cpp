@@ -515,7 +515,7 @@ uint64_t variant::hash() const {
     }
     case TypeKind::DATE: {
       auto dateValue = value<TypeKind::DATE>();
-      return folly::Hash{}(dateValue.getDays());
+      return folly::Hash{}(dateValue.days());
     }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();

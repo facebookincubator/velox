@@ -536,10 +536,6 @@ std::shared_ptr<const TimestampType> TIMESTAMP() {
   return std::make_shared<const TimestampType>();
 };
 
-std::shared_ptr<const DateType> DATE() {
-  return std::make_shared<const DateType>();
-};
-
 std::shared_ptr<const FunctionType> FUNCTION(
     std::vector<std::shared_ptr<const Type>>&& argumentTypes,
     std::shared_ptr<const Type> returnType) {
@@ -561,6 +557,7 @@ KOSKI_DEFINE_SCALAR_ACCESSOR(REAL);
 KOSKI_DEFINE_SCALAR_ACCESSOR(DOUBLE);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARCHAR);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARBINARY);
+KOSKI_DEFINE_SCALAR_ACCESSOR(DATE);
 KOSKI_DEFINE_SCALAR_ACCESSOR(UNKNOWN);
 
 #undef KOSKI_DEFINE_SCALAR_ACCESSOR
@@ -579,12 +576,6 @@ template <>
 std::shared_ptr<const Type> createType<TypeKind::TIMESTAMP>(
     std::vector<std::shared_ptr<const Type>>&& /*children*/) {
   return TIMESTAMP();
-}
-
-template <>
-std::shared_ptr<const Type> createType<TypeKind::DATE>(
-    std::vector<std::shared_ptr<const Type>>&& /*children*/) {
-  return DATE();
 }
 
 template <>

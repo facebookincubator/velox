@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/StringView.h"
 
 #include <iomanip>
@@ -30,55 +31,40 @@ struct Date {
   constexpr Date() : days_(0) {}
   constexpr Date(int32_t days) : days_(days) {}
 
-  int32_t getDays() const {
+  int32_t days() const {
     return days_;
   }
 
-  bool operator==(const Date& b) const {
-    return days_ == b.days_;
+  bool operator==(const Date& other) const {
+      return days_ == other.days_;
   }
 
-  bool operator!=(const Date& b) const {
-    return days_ != b.days_;
+  bool operator!=(const Date& other) const {
+      return days_ != other.days_;
   }
 
-  bool operator<(const Date& b) const {
-    return days_ < b.days_;
+  bool operator<(const Date& other) const {
+      return days_ < other.days_;
   }
 
-  bool operator<=(const Date& b) const {
-    return days_ <= b.days_;
+  bool operator<=(const Date& other) const {
+      return days_ <= other.days_;
   }
 
-  bool operator>(const Date& b) const {
-    return days_ > b.days_;
+  bool operator>(const Date& other) const {
+      return days_ > other.days_;
   }
 
-  bool operator>=(const Date& b) const {
-    return days_ >= b.days_;
+  bool operator>=(const Date& other) const {
+      return days_ >= other.days_;
   }
 
   // Needed for serialization of FlatVector<Date>
   operator StringView() const {
-    return StringView("TODO: Implement");
+    VELOX_NYI()
   };
 
-  std::string toString() const {
-    // Find the number of seconds for the days_;
-    int64_t day_seconds = days_ * 86400;
-    auto tmValue = gmtime((const time_t*)&day_seconds);
-    if (!tmValue) {
-      const auto& error_message = folly::to<std::string>(
-          "Can't convert days to time: ", folly::to<std::string>(days_));
-      throw std::runtime_error{error_message};
-    }
-
-    // return ISO 8601 time format.
-    // %F - equivalent to "%Y-%m-%d" (the ISO 8601 date format)
-    std::ostringstream oss;
-    oss << std::put_time(tmValue, "%F");
-    return oss.str();
-  }
+  std::string toString() const;
 
   operator std::string() const {
     return toString();
@@ -89,7 +75,7 @@ struct Date {
   }
 
  private:
-  // Number of days since the epoch ( 1970-01-01)
+  // Number of days since the epoch ( 1970-01-01).
   int32_t days_;
 };
 
@@ -97,7 +83,7 @@ void parseTo(folly::StringPiece in, ::facebook::velox::Date& out);
 
 template <typename T>
 void toAppend(const ::facebook::velox::Date& value, T* result) {
-  // TODO Implement
+    VELOX_NYI();
 }
 
 } // namespace facebook::velox
@@ -105,8 +91,8 @@ void toAppend(const ::facebook::velox::Date& value, T* result) {
 namespace std {
 template <>
 struct hash<::facebook::velox::Date> {
-  size_t operator()(const ::facebook::velox::Date value) const {
-    return std::hash<int32_t>{}(value.getDays());
+  size_t operator()(const ::facebook::velox::Date& value) const {
+    return std::hash<int32_t>{}(value.days());
   }
 };
 
@@ -117,8 +103,8 @@ std::string to_string(const ::facebook::velox::Date& ts);
 namespace folly {
 template <>
 struct hasher<::facebook::velox::Date> {
-  size_t operator()(const ::facebook::velox::Date value) const {
-    return std::hash<int32_t>{}(value.getDays());
+  size_t operator()(const ::facebook::velox::Date& value) const {
+    return std::hash<int32_t>{}(value.days());
   }
 };
 

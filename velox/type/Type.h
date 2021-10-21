@@ -88,7 +88,6 @@ class ScalarType;
 class ArrayType;
 class MapType;
 class RowType;
-class DateType;
 class TimestampType;
 class FunctionType;
 class OpaqueType;
@@ -253,7 +252,7 @@ struct TypeTraits<TypeKind::TIMESTAMP> {
 // Date is internally an int32_t that represents the days since the epoch
 template <>
 struct TypeTraits<TypeKind::DATE> {
-  using ImplType = DateType;
+  using ImplType = ScalarType<TypeKind::DATE>;
   using NativeType = Date;
   using DeepCopiedType = Date;
   static constexpr uint32_t minSubTypes = 0;
@@ -575,39 +574,6 @@ class TimestampType : public TypeBase<TypeKind::TIMESTAMP> {
   }
 };
 
-class DateType : public TypeBase<TypeKind::DATE> {
- public:
-  DateType() = default;
-
-  uint32_t size() const override {
-    return 0;
-  }
-
-  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"Date type has no children"};
-  }
-
-  std::string toString() const override {
-    return TypeTraits<TypeKind::DATE>::name;
-  }
-
-  size_t cppSizeInBytes() const override {
-    // int32_t for the number of days since the epoch
-    return sizeof(int32_t);
-  }
-
-  bool operator==(const Type& other) const override {
-    return TypeKind::DATE == other.kind();
-  }
-
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<TypeKind::DATE>::name;
-    return obj;
-  }
-};
-
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
   UnknownType() = default;
@@ -909,6 +875,7 @@ using RealType = ScalarType<TypeKind::REAL>;
 using DoubleType = ScalarType<TypeKind::DOUBLE>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
+using DateType = ScalarType<TypeKind::DATE>;
 
 // Used as T for SimpleVector subclasses that wrap another vector when
 // the wrapped vector is of a complex type. Applies to
@@ -937,13 +904,6 @@ template <>
 struct TypeFactory<TypeKind::TIMESTAMP> {
   static std::shared_ptr<const TimestampType> create() {
     return std::make_shared<TimestampType>();
-  }
-};
-
-template <>
-struct TypeFactory<TypeKind::DATE> {
-  static std::shared_ptr<const DateType> create() {
-    return std::make_shared<DateType>();
   }
 };
 
@@ -1295,12 +1255,13 @@ VELOX_SCALAR_ACCESSOR(REAL);
 VELOX_SCALAR_ACCESSOR(DOUBLE);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
+VELOX_SCALAR_ACCESSOR(DATE);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <
     TypeKind KIND,
     std::enable_if_t<
-        KIND != TypeKind::TIMESTAMP && KIND != TypeKind::DATE,
+        KIND != TypeKind::TIMESTAMP,
         int32_t> = 0>
 std::shared_ptr<const Type> createScalarType() {
   return ScalarType<KIND>::create();
@@ -1311,11 +1272,6 @@ template <
     std::enable_if_t<KIND == TypeKind::TIMESTAMP, int32_t> = 0>
 std::shared_ptr<const Type> createScalarType() {
   return TIMESTAMP();
-}
-
-template <TypeKind KIND, std::enable_if_t<KIND == TypeKind::DATE, int32_t> = 0>
-std::shared_ptr<const Type> createScalarType() {
-  return DATE();
 }
 
 std::shared_ptr<const Type> createScalarType(TypeKind kind);
@@ -1338,10 +1294,6 @@ std::shared_ptr<const Type> createType(
 
 template <>
 std::shared_ptr<const Type> createType<TypeKind::TIMESTAMP>(
-    std::vector<std::shared_ptr<const Type>>&& /*children*/);
-
-template <>
-std::shared_ptr<const Type> createType<TypeKind::DATE>(
     std::vector<std::shared_ptr<const Type>>&& /*children*/);
 
 template <>

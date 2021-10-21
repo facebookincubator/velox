@@ -156,10 +156,6 @@ TEST_F(LeastTest, timestamp) {
       Timestamp(581, 1651));
 }
 
-TEST_F(LeastTest, date) {
-  EXPECT_EQ(least<Date>(Date(1569), Date(4859), Date(581)), Date(581));
-}
-
 class GreatestTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>
@@ -299,8 +295,5 @@ TEST_F(GreatestTest, timestamp) {
       Timestamp(4859, 482));
 }
 
-TEST_F(GreatestTest, date) {
-  EXPECT_EQ(greatest<Date>(Date(1569), Date(4859), Date(581)), Date(4859));
-}
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
