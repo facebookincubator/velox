@@ -60,9 +60,7 @@ struct Date {
   }
 
   // Needed for serialization of FlatVector<Date>
-  operator StringView() const {
-      VELOX_NYI()
-  };
+  operator StringView() const {VELOX_NYI()};
 
   std::string toString() const;
 
@@ -76,7 +74,7 @@ struct Date {
 
  private:
   // Number of days since the epoch ( 1970-01-01).
-  int32_t days_;
+  const int32_t days_;
 };
 
 void parseTo(folly::StringPiece in, ::facebook::velox::Date& out);

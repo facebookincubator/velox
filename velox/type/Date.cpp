@@ -26,7 +26,7 @@ std::string Date::toString() const {
   int64_t daySeconds = days_ * 86400;
   auto tmValue = gmtime((const time_t*)&daySeconds);
   if (!tmValue) {
-      VELOX_FAIL("Can't convert days to time: {}", folly::to<std::string>(days_));
+    VELOX_FAIL("Can't convert days to time: {}", folly::to<std::string>(days_));
   }
 
   // return ISO 8601 time format.
