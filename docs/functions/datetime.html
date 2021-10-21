@@ -62,6 +62,48 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> as a UNIX timestamp.</p>
 </dd></dl>
 
+<section id="truncation-function">
+<h2>Truncation Function<a class="headerlink" href="#truncation-function" title="Permalink to this headline">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">date_trunc</span></code> function supports the following units:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 71%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Unit</p></th>
+<th class="head"><p>Example Truncated Value</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">second</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">03:04:05.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">minute</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">03:04:00.000</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">hour</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">03:00:00.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">day</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">00:00:00.000</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">month</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-08-01</span> <span class="pre">00:00:00.000</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">year</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2001-01-01</span> <span class="pre">00:00:00.000</span></code></p></td>
+</tr>
+</tbody>
+</table>
+<p>The above examples use the timestamp <code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">03:04:05.321</span></code> as the input.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="date_trunc">
+<span class="sig-name descname"><span class="pre">date_trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#date_trunc" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> truncated to <code class="docutils literal notranslate"><span class="pre">unit</span></code>.</p>
+</dd></dl>
+
+</section>
 <section id="convenience-extraction-functions">
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this headline">¶</a></h2>
 <dl class="py function">
@@ -151,6 +193,7 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
   <h3><a href="../index.html">Table of Contents</a></h3>
   <ul>
 <li><a class="reference internal" href="#">Date and Time Functions</a><ul>
+<li><a class="reference internal" href="#truncation-function">Truncation Function</a></li>
 <li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a></li>
 </ul>
 </li>

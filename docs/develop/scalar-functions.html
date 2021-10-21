@@ -223,20 +223,28 @@ not go away prematurely.</p>
 </pre></div>
 </div>
 </section>
-<section id="access-to-session-properties">
-<h3>Access to Session Properties<a class="headerlink" href="#access-to-session-properties" title="Permalink to this headline">¶</a></h3>
+<section id="access-to-session-properties-and-constant-inputs">
+<h3>Access to Session Properties and Constant Inputs<a class="headerlink" href="#access-to-session-properties-and-constant-inputs" title="Permalink to this headline">¶</a></h3>
 <p>Some functions require access to session properties such as session’s timezone.
 Some examples are the <a class="reference internal" href="../functions/datetime.html#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>, <a class="reference internal" href="../functions/datetime.html#hour" title="hour"><code class="xref py py-func docutils literal notranslate"><span class="pre">hour()</span></code></a>, and <a class="reference internal" href="../functions/datetime.html#minute" title="minute"><code class="xref py py-func docutils literal notranslate"><span class="pre">minute()</span></code></a> Presto
-functions. To get access to session properties the function must define an
-initialize method which receives a constant reference to QueryConfig from which
-the function can extract the necessary properties. The engine calls the
-initialize method once per query and thread of execution.</p>
+functions. Other functions could benefit from pre-processing some of the
+constant inputs, e.g. compile regular expression patterns or parse date and
+time units. To get access to session properties and constant inputs the
+function must define an initialize method which receives a constant reference
+to QueryConfig and a list of constant pointers for each of the input arguments.
+Constant inputs will have their values specified. Inputs which are not constant
+will be passed as nullptr’s. The signature of the initialize method is similar
+to that of callNullable method with an additional first parameter const
+core::QueryConfig&amp;. The engine calls the initialize method once per query and
+thread of execution.</p>
 <p>Here is an example of an hour function extracting time zone from the session
 properties and using it when processing inputs.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">hour</span><span class="p">)</span><span class="w"></span>
 <span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
 
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">config</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">config</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Timestamp</span><span class="o">&gt;*</span><span class="w"> </span><span class="cm">/*timestamp*/</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getTimeZoneFromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">);</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
 
@@ -250,6 +258,33 @@ properties and using it when processing inputs.</p>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
 <span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Here is another example of the <a class="reference internal" href="../functions/datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a> function parsing the constant
+unit argument during initialize and re-using parsed value when processing
+individual rows.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">date_trunc</span><span class="p">)</span><span class="w"></span>
+<span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">DateTimeUnit</span><span class="o">&gt;</span><span class="w"> </span><span class="n">unit_</span><span class="p">;</span><span class="w"></span>
+
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">QueryConfig</span><span class="o">&amp;</span><span class="w"> </span><span class="n">config</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;*</span><span class="w"> </span><span class="n">unitString</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Timestamp</span><span class="o">&gt;*</span><span class="w"> </span><span class="cm">/*timestamp*/</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getTimeZoneFromConfig</span><span class="p">(</span><span class="n">config</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">unitString</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="n">unit_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fromDateTimeUnitString</span><span class="p">(</span><span class="o">*</span><span class="n">unitString</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+
+<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Timestamp</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">unitString</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Timestamp</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">timestamp</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">unit</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">      </span><span class="n">unit_</span><span class="p">.</span><span class="n">has_value</span><span class="p">()</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">unit_</span><span class="p">.</span><span class="n">value</span><span class="p">()</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">fromDateTimeUnitString</span><span class="p">(</span><span class="n">unitString</span><span class="p">);</span><span class="w"></span>
+<span class="w">  </span><span class="p">...</span><span class="o">&lt;</span><span class="n">use</span><span class="w"> </span><span class="n">unit</span><span class="w"> </span><span class="k">enum</span><span class="o">&gt;</span><span class="p">...</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -814,7 +849,7 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#determinism">Determinism</a></li>
 <li><a class="reference internal" href="#all-ascii-fast-path">All-ASCII Fast Path</a></li>
 <li><a class="reference internal" href="#zero-copy-string-result">Zero-copy String Result</a></li>
-<li><a class="reference internal" href="#access-to-session-properties">Access to Session Properties</a></li>
+<li><a class="reference internal" href="#access-to-session-properties-and-constant-inputs">Access to Session Properties and Constant Inputs</a></li>
 <li><a class="reference internal" href="#registration">Registration</a></li>
 <li><a class="reference internal" href="#codegen">Codegen</a></li>
 <li><a class="reference internal" href="#complex-types">Complex Types</a></li>
