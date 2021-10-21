@@ -108,13 +108,13 @@ TEST(Type, TimestampComparison) {
 }
 
 TEST(Type, Date) {
-  auto date0 = DATE();
-  EXPECT_EQ(date0->toString(), "DATE");
-  EXPECT_EQ(date0->size(), 0);
-  EXPECT_THROW(date0->childAt(0), std::invalid_argument);
-  EXPECT_EQ(date0->kind(), TypeKind::DATE);
-  EXPECT_STREQ(date0->kindName(), "DATE");
-  EXPECT_EQ(date0->begin(), date0->end());
+  auto date = DATE();
+  EXPECT_EQ(date->toString(), "DATE");
+  EXPECT_EQ(date->size(), 0);
+  EXPECT_THROW(date->childAt(0), std::invalid_argument);
+  EXPECT_EQ(date->kind(), TypeKind::DATE);
+  EXPECT_STREQ(date->kindName(), "DATE");
+  EXPECT_EQ(date->begin(), date->end());
 }
 
 TEST(Type, DateToString) {
