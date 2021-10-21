@@ -28,7 +28,7 @@ namespace {
 template <typename T>
 class ArrayDistinctFunction : public exec::VectorFunction {
  public:
-  /// This class implements the array_distint query function.
+  /// This class implements the array_distinct query function.
   ///
   /// Along with the set, we maintain a `hasNull` flag that indicates whether
   /// null is present in the array.
