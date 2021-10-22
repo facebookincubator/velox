@@ -74,7 +74,7 @@ struct Date {
 
  private:
   // Number of days since the epoch ( 1970-01-01).
-  const int32_t days_;
+  int32_t days_;
 };
 
 void parseTo(folly::StringPiece in, ::facebook::velox::Date& out);
