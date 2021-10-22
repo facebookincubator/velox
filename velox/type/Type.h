@@ -67,14 +67,18 @@ enum class TypeKind : int8_t {
   VARCHAR = 7,
   VARBINARY = 8,
   TIMESTAMP = 9,
-  DATE = 17,
-  ARRAY = 10,
-  MAP = 11,
-  ROW = 12,
-  UNKNOWN = 13,
-  FUNCTION = 14,
-  OPAQUE = 15,
-  INVALID = 16
+  DATE = 10,
+
+  // Enum values for ComplexTypes start after 30 to leave
+  // some values space to accommodate adding new scalar/native
+  // types above.
+  ARRAY = 30,
+  MAP = 31,
+  ROW = 32,
+  UNKNOWN = 33,
+  FUNCTION = 34,
+  OPAQUE = 35,
+  INVALID = 36
 };
 
 TypeKind mapNameToTypeKind(const std::string& name);
@@ -88,7 +92,6 @@ class ScalarType;
 class ArrayType;
 class MapType;
 class RowType;
-class TimestampType;
 class FunctionType;
 class OpaqueType;
 class UnknownType;
@@ -235,7 +238,7 @@ struct TypeTraits<TypeKind::VARCHAR> {
 
 template <>
 struct TypeTraits<TypeKind::TIMESTAMP> {
-  using ImplType = TimestampType;
+  using ImplType = ScalarType<TypeKind::TIMESTAMP>;
   using NativeType = Timestamp;
   using DeepCopiedType = Timestamp;
   static constexpr uint32_t minSubTypes = 0;
@@ -540,40 +543,6 @@ const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
   return instance;
 }
 
-class TimestampType : public TypeBase<TypeKind::TIMESTAMP> {
- public:
-  TimestampType() = default;
-
-  uint32_t size() const override {
-    return 0;
-  }
-
-  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"TimestampType type has no children"};
-  }
-
-  std::string toString() const override {
-    return TypeTraits<TypeKind::TIMESTAMP>::name;
-  }
-
-  size_t cppSizeInBytes() const override {
-    // nanos + seconds size.
-    // TODO: use Timestamp type here.
-    return sizeof(int64_t) + sizeof(int64_t);
-  }
-
-  bool operator==(const Type& other) const override {
-    return TypeKind::TIMESTAMP == other.kind();
-  }
-
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<TypeKind::TIMESTAMP>::name;
-    return obj;
-  }
-};
-
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
   UnknownType() = default;
@@ -873,6 +842,7 @@ using SmallintType = ScalarType<TypeKind::SMALLINT>;
 using BigintType = ScalarType<TypeKind::BIGINT>;
 using RealType = ScalarType<TypeKind::REAL>;
 using DoubleType = ScalarType<TypeKind::DOUBLE>;
+using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
@@ -897,13 +867,6 @@ struct TypeFactory {
   // default factory
   static std::shared_ptr<const typename TypeTraits<KIND>::ImplType> create() {
     return TypeTraits<KIND>::ImplType::create();
-  }
-};
-
-template <>
-struct TypeFactory<TypeKind::TIMESTAMP> {
-  static std::shared_ptr<const TimestampType> create() {
-    return std::make_shared<TimestampType>();
   }
 };
 
@@ -1253,23 +1216,15 @@ VELOX_SCALAR_ACCESSOR(SMALLINT);
 VELOX_SCALAR_ACCESSOR(BIGINT);
 VELOX_SCALAR_ACCESSOR(REAL);
 VELOX_SCALAR_ACCESSOR(DOUBLE);
+VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 VELOX_SCALAR_ACCESSOR(DATE);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
-template <
-    TypeKind KIND,
-    std::enable_if_t<KIND != TypeKind::TIMESTAMP, int32_t> = 0>
+template <TypeKind KIND>
 std::shared_ptr<const Type> createScalarType() {
   return ScalarType<KIND>::create();
-}
-
-template <
-    TypeKind KIND,
-    std::enable_if_t<KIND == TypeKind::TIMESTAMP, int32_t> = 0>
-std::shared_ptr<const Type> createScalarType() {
-  return TIMESTAMP();
 }
 
 std::shared_ptr<const Type> createScalarType(TypeKind kind);
@@ -1289,10 +1244,6 @@ std::shared_ptr<const Type> createType(
   VELOX_USER_CHECK(TypeTraits<KIND>::isPrimitiveType);
   return ScalarType<KIND>::create();
 }
-
-template <>
-std::shared_ptr<const Type> createType<TypeKind::TIMESTAMP>(
-    std::vector<std::shared_ptr<const Type>>&& /*children*/);
 
 template <>
 std::shared_ptr<const Type> createType<TypeKind::ROW>(

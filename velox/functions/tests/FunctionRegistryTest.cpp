@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/expression/Expr.h"
@@ -79,7 +80,7 @@ class VectorFuncOne : public velox::exec::VectorFunction {
   void apply(
       const velox::SelectivityVector& /* rows */,
       std::vector<velox::VectorPtr>& /* args */,
-      velox::exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       velox::exec::EvalCtx* /* context */,
       velox::VectorPtr* /* result */) const override {}
 
@@ -98,7 +99,7 @@ class VectorFuncTwo : public velox::exec::VectorFunction {
   void apply(
       const velox::SelectivityVector& /* rows */,
       std::vector<velox::VectorPtr>& /* args */,
-      velox::exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       velox::exec::EvalCtx* /* context */,
       velox::VectorPtr* /* result */) const override {}
 
@@ -117,7 +118,7 @@ class VectorFuncThree : public velox::exec::VectorFunction {
   void apply(
       const velox::SelectivityVector& /* rows */,
       std::vector<velox::VectorPtr>& /* args */,
-      velox::exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       velox::exec::EvalCtx* /* context */,
       velox::VectorPtr* /* result */) const override {}
 
@@ -136,7 +137,7 @@ class VectorFuncFour : public velox::exec::VectorFunction {
   void apply(
       const velox::SelectivityVector& /* rows */,
       std::vector<velox::VectorPtr>& /* args */,
-      velox::exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       velox::exec::EvalCtx* /* context */,
       velox::VectorPtr* /* result */) const override {}
 
@@ -243,23 +244,27 @@ TEST_F(FunctionRegistryTest, getFunctionSignatures) {
           .build()
           ->toString());
 
-  ASSERT_EQ(
-      functionSignatures["func_two"].at(0)->toString(),
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("bigint")
-          .argumentType("integer")
-          .build()
-          ->toString());
-
-  ASSERT_EQ(
-      functionSignatures["func_two"].at(1)->toString(),
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("bigint")
-          .argumentType("smallint")
-          .build()
-          ->toString());
+  std::vector<std::string> funcTwoSignatures;
+  std::transform(
+      functionSignatures["func_two"].begin(),
+      functionSignatures["func_two"].end(),
+      std::back_inserter(funcTwoSignatures),
+      [](auto& signature) { return signature->toString(); });
+  ASSERT_THAT(
+      funcTwoSignatures,
+      testing::UnorderedElementsAre(
+          exec::FunctionSignatureBuilder()
+              .returnType("bigint")
+              .argumentType("bigint")
+              .argumentType("integer")
+              .build()
+              ->toString(),
+          exec::FunctionSignatureBuilder()
+              .returnType("bigint")
+              .argumentType("bigint")
+              .argumentType("smallint")
+              .build()
+              ->toString()));
 
   ASSERT_EQ(
       functionSignatures["func_three_alias1"].at(0)->toString(),

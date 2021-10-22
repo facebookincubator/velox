@@ -30,7 +30,7 @@ class SimpleVectorLoader : public VectorLoader {
   explicit SimpleVectorLoader(std::function<VectorPtr(RowSet)> loader)
       : loader_(loader) {}
 
-  void load(RowSet rows, ValueHook* hook, VectorPtr* result) override {
+  void loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) override {
     VELOX_CHECK(!hook, "SimpleVectorLoader doesn't support ValueHook");
     *result = loader_(rows);
   }
@@ -55,6 +55,10 @@ class VectorMaker {
       std::vector<std::shared_ptr<const Type>>&& types);
 
   RowVectorPtr rowVector(const std::vector<VectorPtr>& children);
+
+  RowVectorPtr rowVector(
+      std::vector<std::string> childNames,
+      const std::vector<VectorPtr>& children);
 
   RowVectorPtr rowVector(
       const std::shared_ptr<const RowType>& rowType,

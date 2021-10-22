@@ -27,6 +27,7 @@
 #include "velox/vector/tests/VectorMaker.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::test;
 
 struct OpaqueState;
 
@@ -96,19 +97,6 @@ struct TestData {
   VectorAndReference<std::shared_ptr<void>> opaquestate1;
 };
 
-class TestingVectorLoader : public VectorLoader {
- public:
-  explicit TestingVectorLoader(std::function<VectorPtr(RowSet)> loader)
-      : loader_(std::move(loader)) {}
-
-  void load(RowSet rows, ValueHook* hook, VectorPtr* result) override {
-    VELOX_CHECK(!hook, "SimpleVectorLoader doesn't support ValueHook");
-    *result = loader_(rows);
-  }
-
- private:
-  const std::function<VectorPtr(RowSet)> loader_;
-};
 } // namespace
 
 class ExprTest : public testing::Test {
@@ -657,7 +645,7 @@ class ExprTest : public testing::Test {
         execCtx_->pool(),
         CppToType<T>::create(),
         size,
-        std::make_unique<TestingVectorLoader>([=](RowSet rows) {
+        std::make_unique<SimpleVectorLoader>([=](RowSet rows) {
           VELOX_CHECK_EQ(rows.size(), expectedSize);
           for (auto i = 0; i < rows.size(); i++) {
             VELOX_CHECK_EQ(rows[i], expectedRowAt(i));
@@ -1091,7 +1079,7 @@ class PlusConstantFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
@@ -1219,7 +1207,7 @@ class PlusRandomIntegerFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), 1);
@@ -1349,7 +1337,7 @@ class AddSuffixFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     auto input = args[0]->asFlatVector<StringView>();
@@ -1614,7 +1602,7 @@ class StatefulVectorFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /* caller */,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK_EQ(args.size(), numInputs_);
@@ -1955,7 +1943,7 @@ class TestingConstantFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* /*context*/,
       VectorPtr* result) const override {
     VELOX_CHECK(rows.isAllSelected());
@@ -1983,7 +1971,7 @@ class TestingDictionaryFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* /*context*/,
       VectorPtr* result) const override {
     VELOX_CHECK(rows.isAllSelected());
@@ -2015,7 +2003,7 @@ class TestingSequenceFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* /*caller*/,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK(rows.isAllSelected());
@@ -2106,7 +2094,7 @@ class NullArrayFunction : public exec::VectorFunction {
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      exec::Expr* caller,
+      const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     // This function returns a vector of all nulls
