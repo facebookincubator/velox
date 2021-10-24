@@ -26,12 +26,19 @@ namespace {
 
 template <typename T>
 VELOX_UDF_BEGIN(contains)
-// UDF to tell whether a element is part of an array
+// UDF to tell whether an element is part of an array
 FOLLY_ALWAYS_INLINE bool call(
     bool& out,
     const arg_type<Array<T>>& x,
     const arg_type<T>& element) {
-  out = std::find(x.begin(), x.end(), element) != x.end();
+  const auto size = x.size();
+  out = false;
+  for (auto i = 0; i < size; ++i) {
+    if (x[i] == element) {
+      out = true;
+      break;
+    }
+  }
   return true;
 }
 VELOX_UDF_END();

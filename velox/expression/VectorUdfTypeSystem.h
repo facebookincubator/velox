@@ -28,7 +28,47 @@ namespace facebook::velox::exec {
 template <typename VectorType = FlatVector<StringView>, bool reuseInput = false>
 class StringProxy;
 
+template <typename V>
+class ArrayProxy;
+
+template <typename K, typename V>
+class MapProxy;
+
+template <typename... T>
+class RowProxy;
+
+template <typename T, typename U>
+struct VectorReader;
+
 namespace detail {
+
+template <typename T>
+struct inverse_resolver {
+  using type = T;
+};
+
+template <>
+struct inverse_resolver<StringView> {
+  using type = Varchar;
+};
+
+template <typename V>
+struct inverse_resolver<ArrayProxy<V>> {
+  using type = Array<typename inverse_resolver<V>::type>;
+};
+
+template <typename K, typename V>
+struct inverse_resolver<MapProxy<K, V>> {
+  using type =
+      Map<typename inverse_resolver<K>::type,
+          typename inverse_resolver<V>::type>;
+};
+
+template <typename... T>
+struct inverse_resolver<RowProxy<T...>> {
+  using type = Row<typename inverse_resolver<T>::type...>;
+};
+
 template <typename T>
 struct resolver {
   using in_type = typename CppToType<T>::NativeType;
@@ -45,8 +85,8 @@ struct resolver {
 
 template <typename K, typename V>
 struct resolver<Map<K, V>> {
-  using in_type = core::
-      SlowMapVal<typename resolver<K>::in_type, typename resolver<V>::in_type>;
+  using in_type =
+      MapProxy<typename resolver<K>::in_type, typename resolver<V>::in_type>;
   using out_type = core::SlowMapWriter<
       typename resolver<K>::out_type,
       typename resolver<V>::out_type>;
@@ -66,7 +106,7 @@ struct resolver<Map<K, V>> {
 
 template <typename... T>
 struct resolver<Row<T...>> {
-  using in_type = core::RowReader<typename resolver<T>::in_type...>;
+  using in_type = RowProxy<typename resolver<T>::in_type...>;
   using out_type = core::RowWriter<typename resolver<T>::out_type...>;
 
   static variant toVariant(const in_type& t) {
@@ -84,7 +124,7 @@ struct resolver<Row<T...>> {
 
 template <typename V>
 struct resolver<Array<V>> {
-  using in_type = core::ArrayValReader<typename resolver<V>::in_type>;
+  using in_type = ArrayProxy<typename resolver<V>::in_type>;
   using out_type = core::ArrayValWriter<typename resolver<V>::out_type>;
 
   static variant toVariant(const in_type& t) {
@@ -105,18 +145,7 @@ struct resolver<Array<V>> {
   }
 
   static in_type fromVariant(const variant& t) {
-    using childType = typename resolver<V>::in_type;
-    VELOX_CHECK_EQ(t.kind(), TypeKind::ARRAY);
-    const auto& values = t.array();
-    in_type retVal;
-    for (auto& v : values) {
-      auto convertedVal = v.isNull()
-          ? std::optional<childType>{}
-          : std::optional<childType>{resolver<V>::fromVariant(v)};
-      retVal.append(std::move(convertedVal));
-    }
-
-    return retVal;
+    VELOX_NYI();
   }
 };
 
@@ -245,6 +274,14 @@ struct VectorReader {
     return !decoded_.isNullAt(offset);
   }
 
+  bool mayHaveNulls() const {
+    return decoded_.mayHaveNulls();
+  }
+
+  void initialize(size_t /*offset*/) {
+    // nothing to do
+  }
+
   bool doLoad(size_t offset, exec_in_t& v) const {
     if (isSet(offset)) {
       v = decoded_[offset];
@@ -340,6 +377,123 @@ struct VectorWriter<Map<K, V>> {
   size_t offset_ = 0;
 };
 
+template <typename V>
+class ArrayProxy {
+ public:
+  using reader_t = VectorReader<typename detail::inverse_resolver<V>::type>;
+  using element_t = typename reader_t::exec_in_t;
+
+  ArrayProxy(reader_t reader)
+      : reader_{std::move(reader)}, offset_{0}, size_{0} {}
+
+  void initialize(vector_size_t offset, vector_size_t size) {
+    offset_ = offset;
+    size_ = size;
+  }
+
+  // TODO Replace with hasNulls() and check bits in bulk.
+  // TODO Replace with isAllSet().
+  bool mayHaveNulls() const {
+    return reader_.mayHaveNulls();
+  }
+
+  bool isSet(size_t index) const {
+    return reader_.isSet(offset_ + index);
+  }
+
+  const element_t& operator[](size_t index) const {
+    return reader_[offset_ + index];
+  }
+
+  vector_size_t size() const {
+    return size_;
+  }
+
+ private:
+  reader_t reader_;
+  vector_size_t offset_;
+  vector_size_t size_;
+};
+
+template <typename K, typename V>
+class MapProxy {
+ public:
+  using key_reader_t = VectorReader<typename detail::inverse_resolver<K>::type>;
+  using value_reader_t =
+      VectorReader<typename detail::inverse_resolver<V>::type>;
+  using key_t = typename key_reader_t::exec_in_t;
+  using value_t = typename value_reader_t::exec_in_t;
+
+  MapProxy(key_reader_t keyReader, value_reader_t valueReader)
+      : keyReader_{std::move(keyReader)},
+        valueReader_{std::move(valueReader)},
+        offset_{0},
+        size_{0} {}
+
+  void initialize(vector_size_t offset, vector_size_t size) {
+    offset_ = offset;
+    size_ = size;
+  }
+
+  // TODO Replace with hasNulls() and check bits in bulk.
+  // TODO Replace with isAllSet().
+  bool mayHaveNulls() const {
+    return valueReader_.mayHaveNulls();
+  }
+
+  vector_size_t size() const {
+    return size_;
+  }
+
+  const key_t& keyAt(size_t index) const {
+    return keyReader_[offset_ + index];
+  }
+
+  bool isSet(size_t index) const {
+    return valueReader_.isSet(offset_ + index);
+  }
+
+  const value_t& valueAt(size_t index) const {
+    return valueReader_[offset_ + index];
+  }
+
+ private:
+  key_reader_t keyReader_;
+  value_reader_t valueReader_;
+  vector_size_t offset_;
+  vector_size_t size_;
+};
+
+template <typename... T>
+class RowProxy {
+ public:
+  RowProxy(
+      std::tuple<VectorReader<typename detail::inverse_resolver<T>::type>...>
+          readers)
+      : readers_{std::move(readers)}, offset_{0} {}
+
+  void initialize(vector_size_t offset) {
+    offset_ = offset;
+    //    std::apply([](auto&&... args) {((/* args.dosomething() */), ...);},
+    //    the_tuple);
+  }
+
+  template <size_t N>
+  bool isSet(size_t index) const {
+    return std::get<N>(readers_).isSet(offset_ + index);
+  }
+
+  template <size_t N>
+  const auto& atNew() const {
+    return std::get<N>(readers_)[offset_];
+  }
+
+ private:
+  std::tuple<VectorReader<typename detail::inverse_resolver<T>::type>...>
+      readers_;
+  vector_size_t offset_;
+};
+
 namespace detail {
 
 template <typename TOut, typename TIn>
@@ -376,40 +530,14 @@ struct VectorReader<Map<K, V>> {
         keyReader_{
             detail::decode<exec_in_key_t>(decodedKeys_, *vector_.mapKeys())},
         valReader_{
-            detail::decode<exec_in_val_t>(decodedVals_, *vector_.mapValues())} {
-  }
-
-  bool doLoad(size_t outerOffset, exec_in_t& target) const {
-    if (UNLIKELY(!isSet(outerOffset))) {
-      return false;
-    }
-    vector_size_t offset = decoded_.decodedIndex(outerOffset);
-    const size_t offsetStart = offsets_[offset];
-    const size_t offsetEnd = offsetStart + lengths_[offset];
-
-    target.reserve(target.size() + offsetEnd - offsetStart);
-
-    for (size_t i = offsetStart; i != offsetEnd; ++i) {
-      exec_in_key_t key{};
-      exec_in_val_t val{};
-      if (UNLIKELY(!keyReader_.doLoad(i, key))) {
-        VELOX_USER_CHECK(false, "null map key not allowed");
-      }
-      const bool isSet = valReader_.doLoad(i, val);
-      if (LIKELY(isSet)) {
-        target.emplace(key, std::optional<exec_in_val_t>{std::move(val)});
-      } else {
-        target.emplace(key, std::optional<exec_in_val_t>{});
-      }
-    }
-    return true;
-  }
+            detail::decode<exec_in_val_t>(decodedVals_, *vector_.mapValues())},
+        m_{std::move(keyReader_), std::move(valReader_)} {}
 
   // note: because it uses a cached map; it is only valid until a new offset
   // is fetched!! scary
-  exec_in_t& operator[](size_t offset) const {
-    m_.clear();
-    doLoad(offset, m_);
+  const exec_in_t& operator[](size_t offset) const {
+    auto index = decoded_.decodedIndex(offset);
+    m_.initialize(offsets_[index], lengths_[index]);
     return m_;
   }
 
@@ -421,12 +549,12 @@ struct VectorReader<Map<K, V>> {
   const MapVector& vector_;
   DecodedVector decodedKeys_;
   DecodedVector decodedVals_;
-  mutable exec_in_t m_{};
 
   const vector_size_t* offsets_;
   const vector_size_t* lengths_;
   VectorReader<K> keyReader_;
   VectorReader<V> valReader_;
+  mutable exec_in_t m_;
 };
 
 template <typename V>
@@ -441,38 +569,16 @@ struct VectorReader<Array<V>> {
         vector_(detail::getDecoded<in_vector_t>(decoded_)),
         offsets_{vector_.rawOffsets()},
         lengths_{vector_.rawSizes()},
-        childReader_{
-            detail::decode<exec_in_child_t>(decoder_, *vector_.elements())} {}
-
-  bool doLoad(size_t outerOffset, exec_in_t& results) const {
-    if (!isSet(outerOffset)) {
-      return false;
-    }
-    vector_size_t offset = decoded_.decodedIndex(outerOffset);
-    const size_t offsetStart = offsets_[offset];
-    const size_t offsetEnd = offsetStart + lengths_[offset];
-
-    results.reserve(results.size() + offsetEnd - offsetStart);
-
-    for (size_t i = offsetStart; i < offsetEnd; ++i) {
-      exec_in_child_t childval{};
-      if (childReader_.doLoad(i, childval)) {
-        results.append(std::move(childval));
-      } else {
-        results.appendNullable();
-      }
-    }
-
-    return true;
-  }
+        returnval_{VectorReader<V>(
+            detail::decode<exec_in_child_t>(decoder_, *vector_.elements()))} {}
 
   bool isSet(size_t offset) const {
     return !decoded_.isNullAt(offset);
   }
 
   exec_in_t& operator[](size_t offset) const {
-    returnval_.clear();
-    doLoad(offset, returnval_);
+    auto index = decoder_.index(offset);
+    returnval_.initialize(offsets_[index], lengths_[index]);
     return returnval_;
   }
 
@@ -481,7 +587,6 @@ struct VectorReader<Array<V>> {
   const ArrayVector& vector_;
   const vector_size_t* offsets_;
   const vector_size_t* lengths_;
-  VectorReader<V> childReader_;
   mutable exec_in_t returnval_;
 };
 
@@ -570,25 +675,17 @@ struct VectorReader<Row<T...>> {
         decoders_{vector_.childrenSize()},
         childReader_{prepareChildReaders(
             vector_,
-            std::make_index_sequence<sizeof...(T)>{})} {}
+            std::make_index_sequence<sizeof...(T)>{})},
+        returnval_{std::move(childReader_)} {}
 
   exec_in_t& operator[](size_t offset) const {
-    returnval_.clear();
-    doLoad(offset, returnval_);
+    auto index = decoded_.decodedIndex(offset);
+    returnval_.initialize(index);
     return returnval_;
   }
 
   bool isSet(size_t offset) const {
     return !decoded_.isNullAt(offset);
-  }
-
-  bool doLoad(size_t offset, exec_in_t& results) const {
-    if (!isSet(offset)) {
-      return false;
-    }
-
-    doLoadInternal<0, T...>(offset, results);
-    return true;
   }
 
  private:
@@ -606,21 +703,6 @@ struct VectorReader<Row<T...>> {
         detail::decode<
             typename VectorExec::template resolver<CHILD_T>::in_type>(
             decoder, *vector_.childAt(I)));
-  }
-
-  template <size_t N, typename Type, typename... Types>
-  void doLoadInternal(size_t offset, exec_in_t& results) const {
-    using exec_child_in_t = typename VectorExec::resolver<Type>::in_type;
-
-    exec_child_in_t childval{};
-
-    if (std::get<N>(childReader_).doLoad(offset, childval)) {
-      results.template at<N>() = childval;
-    }
-
-    if constexpr (sizeof...(Types) > 0) {
-      doLoadInternal<N + 1, Types...>(offset, results);
-    }
   }
 
   DecodeResult<exec_in_t> decoded_;

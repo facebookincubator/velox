@@ -171,6 +171,7 @@ class ArrayValWriter {
   const_iterator end() const {
     return values_.end();
   }
+
   const_reference at(size_t index) const {
     return values_.at(index);
   }
@@ -191,6 +192,18 @@ class ArrayValReader : public ArrayValWriter<VAL> {
     for (auto& val : vals) {
       append(std::move(val));
     }
+  }
+
+  bool mayHaveNulls() const {
+    VELOX_NYI();
+  }
+
+  bool isSet(size_t index) const {
+    VELOX_NYI();
+  }
+
+  VAL operator[](size_t index) const {
+    VELOX_NYI();
   }
 };
 
@@ -223,6 +236,11 @@ struct RowWriter {
   template <size_t N>
   const auto& at() const {
     return std::get<N>(values_);
+  }
+
+  template <size_t N>
+  const auto& atNew() const {
+    return std::get<N>(values_).value();
   }
 
   void clear() {
@@ -297,6 +315,18 @@ struct IMapVal {
   }
   size_t size() const {
     return data_.size();
+  }
+
+  const key_type& keyAt(size_t index) const {
+    VELOX_NYI();
+  }
+
+  bool isSet(size_t index) const {
+    VELOX_NYI();
+  }
+
+  const val_type& valueAt(size_t index) const {
+    VELOX_NYI();
   }
 
  private:

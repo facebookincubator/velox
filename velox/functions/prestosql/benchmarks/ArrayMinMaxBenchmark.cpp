@@ -63,10 +63,24 @@ VectorPtr fastMax(const VectorPtr& in) {
 template <typename T>
 VELOX_UDF_BEGIN(array_min_simple)
 FOLLY_ALWAYS_INLINE bool call(T& out, const arg_type<Array<T>>& x) {
-  if (x.begin() == x.end()) {
-    return false;
+  const auto size = x.size();
+  if (size == 0) {
+    return false; // NULL
   }
-  out = std::min_element(x.begin(), x.end())->value();
+  if (x.mayHaveNulls()) {
+    for (auto i = 0; i < size; ++i) {
+      if (!x.isSet(i)) {
+        return false; // NULL
+      }
+    }
+  }
+  out = x[0];
+  for (auto i = 1; i < size; ++i) {
+    auto v = x[i];
+    if (v < out) {
+      out = v;
+    }
+  }
   return true;
 }
 VELOX_UDF_END();
@@ -74,10 +88,24 @@ VELOX_UDF_END();
 template <typename T>
 VELOX_UDF_BEGIN(array_max_simple)
 FOLLY_ALWAYS_INLINE bool call(T& out, const arg_type<Array<T>>& x) {
-  if (x.begin() == x.end()) {
-    return false;
+  const auto size = x.size();
+  if (size == 0) {
+    return false; // NULL
   }
-  out = std::max_element(x.begin(), x.end())->value();
+  if (x.mayHaveNulls()) {
+    for (auto i = 0; i < size; ++i) {
+      if (!x.isSet(i)) {
+        return false; // NULL
+      }
+    }
+  }
+  out = x[0];
+  for (auto i = 1; i < size; ++i) {
+    auto v = x[i];
+    if (v > out) {
+      out = v;
+    }
+  }
   return true;
 }
 VELOX_UDF_END();
