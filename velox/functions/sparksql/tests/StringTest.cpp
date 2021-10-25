@@ -54,6 +54,13 @@ class StringTest : public SparkFunctionBaseTest {
     return evaluateOnce<std::string, std::string>(
         "md5(c0)", {arg}, {VARBINARY()});
   }
+
+  bool compareFunction(
+      const std::string& function,
+      const std::optional<std::string>& str,
+      const std::optional<std::string>& pattern) {
+    return evaluateOnce<bool>(function + "(c0, c1)", str, pattern).value();
+  }
 };
 
 TEST_F(StringTest, Ascii) {
@@ -116,6 +123,39 @@ TEST_F(StringTest, MD5) {
   EXPECT_EQ(md5(std::nullopt), std::nullopt);
   EXPECT_EQ(md5(""), "d41d8cd98f00b204e9800998ecf8427e");
   EXPECT_EQ(md5("Infinity"), "eb2ac5b04180d8d6011a016aeb8f75b3");
+}
+
+TEST_F(StringTest, stringSearchFunctions) {
+  EXPECT_FALSE(compareFunction("startsWith", "hello", "ello"));
+  EXPECT_TRUE(compareFunction("startsWith", "hello", "hell"));
+  EXPECT_FALSE(compareFunction("startsWith", "hello", "hello there!"));
+  EXPECT_TRUE(compareFunction("startsWith", "hello there!", "hello"));
+
+  EXPECT_TRUE(compareFunction("startsWith", "-- hello there!", "-"));
+  EXPECT_TRUE(compareFunction("contains", "hello", "ello"));
+  EXPECT_TRUE(compareFunction("contains", "hello", "hell"));
+  EXPECT_FALSE(compareFunction("contains", "hello", "hello there!"));
+  EXPECT_TRUE(compareFunction("contains", "hello there!", "hello"));
+
+  EXPECT_TRUE(compareFunction("endsWith", "hello", "ello"));
+  EXPECT_FALSE(compareFunction("endsWith", "hello", "hell"));
+  EXPECT_FALSE(compareFunction("endsWith", "hello", "hello there!"));
+  EXPECT_FALSE(compareFunction("endsWith", "hello there!", "hello"));
+  EXPECT_TRUE(compareFunction("endsWith", "hello there!", "!"));
+  EXPECT_TRUE(compareFunction("endsWith", "hello there!", "there!"));
+  EXPECT_TRUE(compareFunction("endsWith", "hello there!", "hello there!"));
+  EXPECT_FALSE(compareFunction("endsWith", "hello there!", "hello there"));
+  EXPECT_FALSE(compareFunction("endsWith", "-- hello there!", "hello there"));
+
+  static constexpr int kIterations = 10000;
+  const std::string kLargeStringTemplate = "My large string ";
+  std::string largeStr;
+  for (auto i = 0; i < kIterations; i++) {
+    largeStr += kLargeStringTemplate;
+  }
+  EXPECT_TRUE(compareFunction("startsWith", largeStr, kLargeStringTemplate));
+  EXPECT_TRUE(compareFunction("endsWith", largeStr, kLargeStringTemplate));
+  EXPECT_TRUE(compareFunction("contains", largeStr, kLargeStringTemplate));
 }
 
 } // namespace
