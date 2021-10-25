@@ -17,6 +17,7 @@ workflows:
   dist-compile:
     jobs:
       - linux-build
+      - linux-build-tests
       - linux-storage-adapters-build
       - macos-build
       - format-check
