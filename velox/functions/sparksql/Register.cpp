@@ -107,6 +107,10 @@ void registerFunctions(const std::string& prefix) {
   registerArithmeticFunctions(prefix);
   registerCompareFunctions(prefix);
 
+  // Compare nullsafe functions
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_equalto_nullsafe, prefix + "equalnullsafe");
+
   // String sreach function
   registerFunction<udf_starts_with, bool, Varchar, Varchar>(
       {prefix + "startswith"});
