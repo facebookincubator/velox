@@ -18,7 +18,10 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 project(velox)
 
 # Add all options below
-option(VELOX_BUILD_TESTING "Enable Velox tests. This will enable all other build options automatically." ON)
+option(
+  VELOX_BUILD_TESTING
+  "Enable Velox tests. This will enable all other build options automatically."
+  ON)
 option(VELOX_BASE
        "Build base components. This will override other build options." OFF)
 
@@ -30,7 +33,9 @@ option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
 option(VELOX_ENABLE_PARSE "Build parse." ON)
-option(VELOX_ENABLE_EXAMPLES "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically." ON)
+option(VELOX_ENABLE_EXAMPLES
+       "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
+       ON)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 
