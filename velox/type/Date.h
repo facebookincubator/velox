@@ -36,7 +36,7 @@ struct Date {
   }
 
   static Date fromDays(int32_t days) {
-      return Date(days);
+    return Date(days);
   }
 
   bool operator==(const Date& other) const {
