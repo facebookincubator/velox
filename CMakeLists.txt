@@ -143,7 +143,8 @@ find_package(gflags COMPONENTS shared)
 
 find_library(GMock gmock)
 
-find_library(GLOG glog)
+find_package(glog REQUIRED)
+set(GLOG glog::glog)
 include_directories(SYSTEM ${GTEST_INCLUDE_DIRS})
 
 find_library(FMT fmt)
