@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_subdirectory(reader)
-add_subdirectory(test)
+add_subdirectory(tests)

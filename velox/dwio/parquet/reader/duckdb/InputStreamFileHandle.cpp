@@ -24,9 +24,9 @@ InputStreamFileHandle::~InputStreamFileHandle() {
 }
 
 void InputStreamFileHandle::Close() {
-  if (streamId) {
-    dynamic_cast<InputStreamFileSystem&>(file_system).CloseStream(streamId);
-    streamId = 0;
+  if (streamId_) {
+    dynamic_cast<InputStreamFileSystem&>(file_system).CloseStream(streamId_);
+    streamId_ = 0;
   }
 }
 

@@ -24,30 +24,31 @@ class InputStreamFileSystem;
 
 class InputStreamFileHandle : public ::duckdb::FileHandle {
  public:
-  InputStreamFileHandle(::duckdb::FileSystem& fileSystem, int _streamId)
-      : FileHandle(fileSystem, std::to_string(_streamId)),
-        streamId(_streamId),
-        offset(0) {}
+  InputStreamFileHandle(::duckdb::FileSystem& fileSystem, int streamId)
+      : FileHandle(fileSystem, std::to_string(streamId)),
+        streamId_(streamId),
+        offset_(0) {}
 
   ~InputStreamFileHandle() override;
 
-  int getStreamId() const {
-    return streamId;
+  int streamId() const {
+    return streamId_;
   }
 
-  uint64_t getOffset() const {
-    return offset;
+  uint64_t offset() const {
+    return offset_;
   }
+
   void setOffset(uint64_t newOffset) {
-    offset = newOffset;
+    offset_ = newOffset;
   }
 
  protected:
   void Close() override;
 
  private:
-  int streamId;
-  uint64_t offset;
+  int streamId_;
+  uint64_t offset_;
 };
 
 } // namespace facebook::velox::duckdb

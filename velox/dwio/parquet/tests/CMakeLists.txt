@@ -42,6 +42,7 @@ add_test(
 
 target_link_libraries(
   velox_dwio_parquet_reader_test
+  velox_vector_test_lib
   ${VELOX_LINK_LIBS}
   ${FOLLY_WITH_DEPENDENCIES}
   ${FMT}

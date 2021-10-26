@@ -14,5 +14,7 @@
 
 add_subdirectory(common)
 add_subdirectory(dwrf)
-add_subdirectory(parquet)
+if(VELOX_ENABLE_PARQUET)
+  add_subdirectory(parquet)
+endif()
 add_subdirectory(type)

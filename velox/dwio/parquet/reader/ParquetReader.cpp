@@ -29,20 +29,28 @@ void toDuckDbFilter(
     ::duckdb::TableFilterSet& filters) {
   switch (filter->kind()) {
     case common::FilterKind::kBigintRange: {
-      auto rangeFilter = dynamic_cast<common::BigintRange*>(filter);
-      if (rangeFilter->lower() != std::numeric_limits<int64_t>::min()) {
+      auto rangeFilter = static_cast<common::BigintRange*>(filter);
+      if (rangeFilter->lower() == rangeFilter->upper()) {
         filters.PushFilter(
             colIdx,
             std::make_unique<::duckdb::ConstantFilter>(
-                ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+                ::duckdb::ExpressionType::COMPARE_EQUAL,
                 ::duckdb::Value(rangeFilter->lower())));
-      }
-      if (rangeFilter->upper() != std::numeric_limits<int64_t>::max()) {
-        filters.PushFilter(
-            colIdx,
-            std::make_unique<::duckdb::ConstantFilter>(
-                ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO,
-                ::duckdb::Value(rangeFilter->upper())));
+      } else {
+        if (rangeFilter->lower() != std::numeric_limits<int64_t>::min()) {
+          filters.PushFilter(
+              colIdx,
+              std::make_unique<::duckdb::ConstantFilter>(
+                  ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+                  ::duckdb::Value(rangeFilter->lower())));
+        }
+        if (rangeFilter->upper() != std::numeric_limits<int64_t>::max()) {
+          filters.PushFilter(
+              colIdx,
+              std::make_unique<::duckdb::ConstantFilter>(
+                  ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO,
+                  ::duckdb::Value(rangeFilter->upper())));
+        }
       }
     } break;
 
@@ -183,7 +191,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> ParquetReader::columnStatistics(
   return std::make_unique<ColumnStatistics>();
 }
 
-const std::shared_ptr<const velox::RowType>& ParquetReader::rowType() const {
+const velox::RowTypePtr& ParquetReader::rowType() const {
   return type_;
 }
 
