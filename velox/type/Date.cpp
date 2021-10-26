@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 #include "velox/type/Date.h"
+#include "velox/type/TimestampConversion.h"
 
 namespace facebook::velox {
 
 void parseTo(folly::StringPiece in, Date& out) {
-  VELOX_NYI();
+  auto daysSinceEpoch = ::facebook::velox::util::fromDateString(in.data());
+  out = Date(daysSinceEpoch);
 }
 
 std::string Date::toString() const {

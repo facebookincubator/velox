@@ -385,4 +385,26 @@ struct Converter<TypeKind::TIMESTAMP> {
   }
 };
 
+// Allow conversions from string to DATE type.
+template <>
+struct Converter<TypeKind::DATE> {
+  using T = typename TypeTraits<TypeKind::DATE>::NativeType;
+  template <typename From>
+  static T cast(const From& /* v */, bool& nullOutput) {
+    VELOX_NYI();
+  }
+
+  static T cast(folly::StringPiece v, bool& nullOutput) {
+    return fromDateString(v.data(), v.size());
+  }
+
+  static T cast(const StringView& v, bool& nullOutput) {
+    return fromDateString(v);
+  }
+
+  static T cast(const std::string& v, bool& nullOutput) {
+    return fromDateString(v);
+  }
+};
+
 } // namespace facebook::velox::util

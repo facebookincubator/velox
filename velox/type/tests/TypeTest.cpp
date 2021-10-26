@@ -133,6 +133,23 @@ TEST(Type, DateToString) {
   EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
 }
 
+TEST(Type, ParseStringToDate) {
+  Date epoch;
+  parseTo("1970-01-01", epoch);
+  EXPECT_EQ(epoch.days(), 0);
+
+  // 50 years after epoch
+  Date jan2020(18262);
+  EXPECT_EQ(jan2020.toString(), "2020-01-01");
+
+  Date beforeEpoch(-5);
+  EXPECT_EQ(beforeEpoch.toString(), "1969-12-27");
+
+  // 50 years before epoch
+  Date wayBeforeEpoch(-18262);
+  EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
+}
+
 TEST(Type, DateComparison) {
   Date epoch(0);
   Date beforeEpoch(-5);
