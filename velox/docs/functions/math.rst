@@ -93,6 +93,10 @@ Mathematical Functions
     For example, if ``bins`` is ``ARRAY[0, 2, 4]``, then we have four bins:
     ``(-infinity(), 0)``, ``[0, 2)``, ``[2, 4)`` and ``[4, infinity())``.
 
+.. function:: sign(x) -> [same as x]
+
+    Returns the signum function of ``x``. If ``x`` is a double and has ``NaN`` value, ``NaN`` is returned.
+
 
 ====================================
 Trigonometric Functions
