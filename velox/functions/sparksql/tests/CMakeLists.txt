@@ -17,6 +17,7 @@ add_executable(
   ArithmeticTest.cpp
   HashTest.cpp
   InTest.cpp
+  IsNotNullTest.cpp
   LeastGreatestTest.cpp
   RegexFunctionsTest.cpp
   SplitFunctionsTest.cpp
