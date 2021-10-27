@@ -95,7 +95,15 @@ Mathematical Functions
 
 .. function:: sign(x) -> [same as x]
 
-    Returns the signum function of ``x``. If ``x`` is a double and has ``NaN`` value, ``NaN`` is returned.
+    Returns the signum function of ``x``. For both integer and floating point arguments, it returns:
+    * 0 if the argument is 0,
+    * 1 if the argument is greater than 0,
+    * -1 if the argument is less than 0.
+
+    For double arguments, the function additionally return:
+    * NaN if the argument is NaN,
+    * 1 if the argument is +Infinity,
+    * -1 if the argument is -Infinity.
 
 
 ====================================

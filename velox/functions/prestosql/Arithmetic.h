@@ -327,14 +327,11 @@ template <typename T>
 VELOX_UDF_BEGIN(sign)
 FOLLY_ALWAYS_INLINE bool call(T& result, const T& a) {
   if constexpr (std::is_floating_point<T>::value) {
-    const T epsilon = std::numeric_limits<T>::epsilon() * std::fabs(a);
-    if (std::isnan(a))
+    if (std::isnan(a)) {
       result = std::numeric_limits<T>::quiet_NaN();
-    // Make sure a is not infinity because that makes epsilon infinity as well.
-    else if (!std::isinf(a) && std::fabs(a - 0.0) <= epsilon)
-      result = 0.0;
-    else
-      result = (a > 0.0) ? 1.0 : -1.0;
+    } else {
+      result = (a == 0.0) ? 0.0 : (a > 0.0) ? 1.0 : -1.0;
+    }
   } else {
     result = (a == 0) ? 0 : (a > 0) ? 1 : -1;
   }

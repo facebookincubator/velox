@@ -457,9 +457,9 @@ TEST_F(ArithmeticTest, sign) {
 
   EXPECT_FLOAT_EQ(0.0, sign_flt(0.0).value_or(-1));
   EXPECT_FLOAT_EQ(1.0, sign_flt(10.1).value_or(-1));
-  EXPECT_FLOAT_EQ(-1.0, sign_flt(-10.1).value_or(-1));
-  EXPECT_FLOAT_EQ(1.0, sign_flt(kInf).value_or(1));
-  EXPECT_FLOAT_EQ(-1.0, sign_flt(-kInf).value_or(-1));
+  EXPECT_FLOAT_EQ(-1.0, sign_flt(-10.1).value_or(1));
+  EXPECT_FLOAT_EQ(1.0, sign_flt(kInf).value_or(-1));
+  EXPECT_FLOAT_EQ(-1.0, sign_flt(-kInf).value_or(1));
   EXPECT_THAT(sign_flt(kNan), IsNan());
 }
 

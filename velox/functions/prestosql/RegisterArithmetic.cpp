@@ -91,8 +91,8 @@ void registerArithmeticFunctions() {
   registerBitwiseUnaryIntegral<udf_bitwise_not>({});
   registerBitwiseBinaryIntegral<udf_bitwise_or>({});
   registerBitwiseBinaryIntegral<udf_bitwise_xor>({});
-  registerFunction<udf_sign<double>, double, double>({"sign"});
-  registerFunction<udf_sign<int64_t>, int64_t, int64_t>({"sign"});
+  registerUnaryFloatingPoint<udf_sign>({});
+  registerUnaryIntegral<udf_sign>({});
 }
 
 } // namespace facebook::velox::functions
