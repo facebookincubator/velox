@@ -679,6 +679,6 @@ TEST_F(SimpleFunctionTest, mapArrayReader) {
   ASSERT_EQ(size, result->size());
   for (auto i = 0; i < size; i++) {
     EXPECT_NEAR(expected->valueAt(i), result->valueAt(i), 0.0000001);
-  }
+  }asa
 }
 } // namespace
