@@ -27,6 +27,9 @@
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 
+constexpr char const* kHiveConnectorName = "hive";
+constexpr char const* kHiveHadoop2ConnectorName = "hive-hadoop2";
+
 namespace facebook::velox::connector::hive {
 
 class HiveColumnHandle : public ColumnHandle {
@@ -269,6 +272,11 @@ class HiveConnectorFactory : public ConnectorFactory {
     dwio::common::FileSink::registerFactory();
   }
 
+  HiveConnectorFactory(const char* connectorName)
+      : ConnectorFactory(connectorName) {
+    dwio::common::FileSink::registerFactory();
+  }
+
   std::shared_ptr<Connector> newConnector(
       const std::string& id,
       std::shared_ptr<const Config> properties,
@@ -277,6 +285,12 @@ class HiveConnectorFactory : public ConnectorFactory {
     return std::make_shared<HiveConnector>(
         id, properties, std::move(dataCache), executor);
   }
+};
+
+class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
+ public:
+  HiveHadoop2ConnectorFactory()
+      : HiveConnectorFactory(kHiveHadoop2ConnectorName) {}
 };
 
 } // namespace facebook::velox::connector::hive
