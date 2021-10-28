@@ -518,6 +518,123 @@ class Replace : public exec::VectorFunction {
     return {{0, 2}};
   }
 };
+
+/*
+ * split_part(string, string, index) -> varchar
+ * Splits the input string based on the delimiter and returns
+ * the element at the index
+ */
+class SplitPartFunction : public velox::exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    VELOX_CHECK(args.size() == 3, "split_part accepts only 3 arguments");
+    VELOX_CHECK(
+        args[0]->typeKind() == TypeKind::VARCHAR,
+        "The first argument must be a string");
+    VELOX_CHECK(
+        args[1]->typeKind() == TypeKind::VARCHAR,
+        "The second argument must be a string");
+    VELOX_CHECK(
+        args[2]->typeKind() == TypeKind::INTEGER ||
+            args[2]->typeKind() == TypeKind::BIGINT,
+        "The third argument must be a integer");
+    velox::BaseVector::ensureWritable(
+        rows, outputType, context->pool(), result);
+    velox::FlatVector<velox::StringView>* flatResult =
+        (*result)->asFlatVector<velox::StringView>();
+
+    velox::exec::LocalDecodedVector firstInputColumnHolder(context);
+    velox::exec::LocalDecodedVector secondInputColumnHolder(context);
+    velox::exec::LocalDecodedVector thirdInputColumnHolder(context);
+    auto firstInputColumn = firstInputColumnHolder.get();
+    firstInputColumn->decode(*args.at(0).get(), rows);
+    auto secondInputColumn = secondInputColumnHolder.get();
+    secondInputColumn->decode(*args.at(1).get(), rows);
+    auto thirdInputColumn = thirdInputColumnHolder.get();
+    thirdInputColumn->decode(*args.at(2).get(), rows);
+
+    rows.applyToSelected([&](auto row) {
+      try {
+        std::string str =
+            firstInputColumn->valueAt<velox::StringView>(row).getString();
+        std::string delimiter =
+            secondInputColumn->valueAt<velox::StringView>(row).getString();
+        int64_t index = thirdInputColumn->valueAt<int64_t>(row);
+
+        // if input string is empty or index is less than 1
+        // then return null
+        if (str.empty() || index < 1) {
+          flatResult->setNull(row, true);
+          return true;
+        }
+
+        // empty delimiter means every character is a split
+        if (delimiter.empty()) {
+          if (index > str.size()) {
+            flatResult->setNull(row, true);
+            return true;
+          }
+
+          flatResult->set(row, velox::StringView(str.substr(index - 1, 1)));
+          return true;
+        }
+
+        int matchCount = 0;
+
+        int previousIndex = 0;
+        while (previousIndex < str.size()) {
+          auto matchIndex = str.find(delimiter, previousIndex);
+          // No match
+          if (matchIndex == std::string::npos) {
+            break;
+          }
+          // Reached the requested part?
+          if (++matchCount == index) {
+            flatResult->set(
+                row,
+                velox::StringView(
+                    str.substr(previousIndex, matchIndex - previousIndex)));
+            return true;
+          }
+          // Continue searching after the delimiter
+          previousIndex = matchIndex + delimiter.size();
+        }
+
+        if (matchCount == index - 1) {
+          // returns last section of the split
+          flatResult->set(
+              row,
+              velox::StringView(
+                  str.substr(previousIndex, str.size() - previousIndex)));
+          return true;
+        }
+
+        // Index too big
+        flatResult->setNull(row, true);
+        return true;
+      } catch (const std::invalid_argument& e) {
+        flatResult->setNull(row, true);
+        return true;
+      }
+    });
+  }
+
+  static std::vector<std::shared_ptr<velox::exec::FunctionSignature>>
+  signatures() {
+    // varchar, varchar, bigint -> varchar
+    return {velox::exec::FunctionSignatureBuilder()
+                .returnType("varchar")
+                .argumentType("varchar")
+                .argumentType("varchar")
+                .argumentType("bigint")
+                .build()};
+  }
+};
 } // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
@@ -544,5 +661,10 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     udf_replace,
     Replace::signatures(),
     std::make_unique<Replace>());
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_split_part,
+    SplitPartFunction::signatures(),
+    std::make_unique<SplitPartFunction>());
 
 } // namespace facebook::velox::functions

@@ -473,6 +473,162 @@ TEST_F(StringFunctionsTest, substrSlowPath) {
   }
 }
 
+/*
+ * Test for split_part function
+ */
+TEST_F(StringFunctionsTest, testStringSplit) {
+  vector_size_t size = 100;
+  auto dummyInput = makeRowVector(makeRowType({BIGINT()}), size);
+  auto result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-def-@-ghi', '-@-', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-def-@-ghi', '-@-', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "def");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-def-@-ghi', '-@-', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "ghi");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-def-@-ghi', '-@-', 4)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-def-@-ghi', '-@-', 99)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', 'abc', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', 'abc', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', 'abc', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '-@-', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '-@-', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('', 'abc', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result =
+      evaluate<SimpleVector<StringView>>("SPLIT_PART('', '', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "a");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "b");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "c");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '', 4)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', '', 99)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', 'abcd', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc', 'abcd', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc--@--def', '-@-', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc-");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc--@--def', '-@-', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "-def");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-@-@-def', '-@-', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-@-@-def', '-@-', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "@");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abc-@-@-@-def', '-@-', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "def");
+
+  result =
+      evaluate<SimpleVector<StringView>>("SPLIT_PART(' ', ' ', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abcdddddef', 'dd', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "abc");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abcdddddef', 'dd', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('abcdddddef', 'dd', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "def");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('a/b/c', '/', 4)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('a/b/c/', '/', 4)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  // test split_part for non-ascii
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', ',', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "\u4FE1\u5FF5");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', ',', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "\u7231");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', ',', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "\u5E0C\u671B");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', ',', 4)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u8B49\u8BC1\u8A3C', '\u8BC1', 1)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "\u8B49");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u8B49\u8BC1\u8A3C', '\u8BC1', 2)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "\u8A3C");
+
+  result = evaluate<SimpleVector<StringView>>(
+      "SPLIT_PART('\u8B49\u8BC1\u8A3C', '\u8BC1', 3)", dummyInput);
+  EXPECT_EQ(result->valueAt(0).getString(), "");
+}
+
 /**
  * The test for negative start indexes
  */

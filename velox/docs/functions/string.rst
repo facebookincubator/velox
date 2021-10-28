@@ -70,6 +70,12 @@ String Functions
     The last element in the array always contains everything left in the string.
     ``limit`` must be a positive number.
 
+.. function:: split_part(string, delimiter, index) → varchar
+
+    Splits string on delimiter and returns the field index. Field indexes start
+    with 1. If the index is larger than than the number of fields, then null
+    is returned.
+
 .. function:: strpos(string, substring) -> bigint
 
     Returns the starting position of the first instance of ``substring`` in
