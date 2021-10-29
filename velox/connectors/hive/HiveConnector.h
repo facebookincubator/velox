@@ -27,10 +27,12 @@
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 
-constexpr char const* kHiveConnectorName = "hive";
-constexpr char const* kHiveHadoop2ConnectorName = "hive-hadoop2";
-
 namespace facebook::velox::connector::hive {
+
+namespace {
+const std::string kHiveConnectorName = "hive";
+const std::string kHiveHadoop2ConnectorName = "hive-hadoop2";
+} // namespace
 
 class HiveColumnHandle : public ColumnHandle {
  public:
@@ -272,7 +274,7 @@ class HiveConnectorFactory : public ConnectorFactory {
     dwio::common::FileSink::registerFactory();
   }
 
-  HiveConnectorFactory(const char* connectorName)
+  HiveConnectorFactory(const std::string& connectorName)
       : ConnectorFactory(connectorName) {
     dwio::common::FileSink::registerFactory();
   }
