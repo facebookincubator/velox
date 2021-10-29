@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/JsonExtractScalar.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/sparksql/CompareFunctionsNullSafe.h"
 #include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/In.h"
 #include "velox/functions/sparksql/LeastGreatest.h"
@@ -58,9 +59,9 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
 namespace sparksql {
 
 void registerFunctions(const std::string& prefix) {
-  registerFunction<udf_rand, double>({"rand"});
+  registerFunction<RandFunction, double>({"rand"});
 
-  registerFunction<udf_json_extract_scalar, Varchar, Varchar, Varchar>(
+  registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {prefix + "get_json_object"});
 
   // Register string functions.
@@ -96,6 +97,10 @@ void registerFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(prefix + "in", inSignatures(), makeIn);
+
+  // Compare nullsafe functions
+  exec::registerStatefulVectorFunction(
+      prefix + "equalnullsafe", equalNullSafeSignatures(), makeEqualNullSafe);
 
   // These vector functions are only accessible via the
   // VELOX_REGISTER_VECTOR_FUNCTION macro, which must be invoked in the same
