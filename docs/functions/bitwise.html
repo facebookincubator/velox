@@ -50,6 +50,24 @@
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="bitwise_arithmetic_shift_right">
+<span class="sig-name descname"><span class="pre">bitwise_arithmetic_shift_right</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_arithmetic_shift_right" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the arithmetic right shift operation on <code class="docutils literal notranslate"><span class="pre">x</span></code> shifted by <code class="docutils literal notranslate"><span class="pre">shift</span></code> in 2’s complement representation.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_left_shift">
+<span class="sig-name descname"><span class="pre">bitwise_left_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_left_shift" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the left shifted value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Here x can be of type <code class="docutils literal notranslate"><span class="pre">TINYINT</span></code> , <code class="docutils literal notranslate"><span class="pre">SMALLINT</span></code>, <code class="docutils literal notranslate"><span class="pre">INTEGER</span></code> and <code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_logical_shift_right">
+<span class="sig-name descname"><span class="pre">bitwise_logical_shift_right</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_logical_shift_right" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the logical right shift operation on <code class="docutils literal notranslate"><span class="pre">x</span></code> (treated as <code class="docutils literal notranslate"><span class="pre">bits</span></code>-bit integer) shifted by <code class="docutils literal notranslate"><span class="pre">shift</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="bitwise_not">
 <span class="sig-name descname"><span class="pre">bitwise_not</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">bigint</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#bitwise_not" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the bitwise NOT of <code class="docutils literal notranslate"><span class="pre">x</span></code> in 2’s complement representation.</p>
@@ -59,6 +77,24 @@
 <dt class="sig sig-object py" id="bitwise_or">
 <span class="sig-name descname"><span class="pre">bitwise_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">bigint</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#bitwise_or" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the bitwise OR of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in 2’s complement representation.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_right_shift">
+<span class="sig-name descname"><span class="pre">bitwise_right_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_right_shift" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the logical right shifted value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Here x can be of type <code class="docutils literal notranslate"><span class="pre">TINYINT</span></code>, <code class="docutils literal notranslate"><span class="pre">SMALLINT</span></code>, <code class="docutils literal notranslate"><span class="pre">INTEGER</span></code> and <code class="docutils literal notranslate"><span class="pre">BIGINT</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_right_shift_arithmetic">
+<span class="sig-name descname"><span class="pre">bitwise_right_shift_arithmetic</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_right_shift_arithmetic" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the arithmetic right shift value of <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="bitwise_shift_left">
+<span class="sig-name descname"><span class="pre">bitwise_shift_left</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shift</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[bigint]``</span></span></span><a class="headerlink" href="#bitwise_shift_left" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the left shift operation on <code class="docutils literal notranslate"><span class="pre">x</span></code> (treated as <code class="docutils literal notranslate"><span class="pre">bits</span></code>-bit integer) shifted by <code class="docutils literal notranslate"><span class="pre">shift</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
