@@ -175,6 +175,19 @@ is assumed to be in sorted ascending order.</p>
 <code class="docutils literal notranslate"><span class="pre">(-infinity(),</span> <span class="pre">0)</span></code>, <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">2)</span></code>, <code class="docutils literal notranslate"><span class="pre">[2,</span> <span class="pre">4)</span></code> and <code class="docutils literal notranslate"><span class="pre">[4,</span> <span class="pre">infinity())</span></code>.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="sign">
+<span class="sig-name descname"><span class="pre">sign</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#sign" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the signum function of <code class="docutils literal notranslate"><span class="pre">x</span></code>. For both integer and floating point arguments, it returns:
+* 0 if the argument is 0,
+* 1 if the argument is greater than 0,
+* -1 if the argument is less than 0.</p>
+<p>For double arguments, the function additionally return:
+* NaN if the argument is NaN,
+* 1 if the argument is +Infinity,
+* -1 if the argument is -Infinity.</p>
+</dd></dl>
+
 </section>
 <section id="trigonometric-functions">
 <h1>Trigonometric Functions<a class="headerlink" href="#trigonometric-functions" title="Permalink to this headline">¶</a></h1>
