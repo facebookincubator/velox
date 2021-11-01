@@ -63,7 +63,8 @@ class ParquetReader : public dwio::common::Reader {
 
   const velox::RowTypePtr& rowType() const override;
 
-  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId() const;
+  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
+      const override;
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
       const dwio::common::RowReaderOptions& options = {}) const override;

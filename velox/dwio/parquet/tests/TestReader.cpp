@@ -40,7 +40,7 @@ class ParquetReaderTest : public testing::Test {
  protected:
   std::string getExampleFilePath(const std::string& fileName) {
     return test::getDataFilePath(
-        "velox/dwio/parquet/test", "examples/" + fileName);
+        "velox/dwio/parquet/tests", "examples/" + fileName);
   }
 
   RowReaderOptions getSampleReaderOpts() {
