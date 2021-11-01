@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/StringFunctions.h"
 #include "velox/functions/prestosql/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/URLFunctions.h"
 
 namespace facebook::velox::functions {
 
@@ -95,6 +96,22 @@ void registerFunctions() {
       Varchar>({"parse_datetime"});
 
   registerFunction<CardinalityFunction, int64_t, HyperLogLog>({"cardinality"});
+
+  // Url Functions.
+  registerFunction<UrlExtractHostFunction, Varchar, Varchar>(
+      {"url_extract_host"});
+  registerFunction<UrlExtractFragmentFunction, Varchar, Varchar>(
+      {"url_extract_fragment"});
+  registerFunction<UrlExtractPathFunction, Varchar, Varchar>(
+      {"url_extract_path"});
+  registerFunction<UrlExtractParameterFunction, Varchar, Varchar, Varchar>(
+      {"url_extract_parameter"});
+  registerFunction<UrlExtractProtocolFunction, Varchar, Varchar>(
+      {"url_extract_protocol"});
+  registerFunction<UrlExtractPortFunction, int64_t, Varchar>(
+      {"url_extract_port"});
+  registerFunction<UrlExtractQueryFunction, Varchar, Varchar>(
+      {"url_extract_query"});
 
   registerArithmeticFunctions();
   registerCheckedArithmeticFunctions();
