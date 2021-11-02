@@ -23,6 +23,17 @@ set(BENCHMARK_DEPENDENCIES
     ${FOLLY_WITH_DEPENDENCIES}
     ${FOLLY_BENCHMARK})
 
+set(BENCHMARK_DEPENDENCIES_NO_FUNCTIONS
+    velox_functions_test_lib
+    velox_exec
+    velox_functions_prestosql
+    velox_exec_test_util
+    velox_vector_fuzzer
+    ${GTEST_BOTH_LIBRARIES}
+    ${gflags_LIBRARIES}
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${FOLLY_BENCHMARK})
+
 add_executable(velox_functions_prestosql_benchmarks_array_contains
                ArrayContainsBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_array_contains
@@ -61,3 +72,8 @@ target_link_libraries(velox_functions_prestosql_benchmarks_bitwise
 add_executable(velox_functions_prestosql_benchmarks_in InBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_in
                       ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_functions_prestosql_benchmarks_map_input
+               MapInputBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_map_input
+                      ${BENCHMARK_DEPENDENCIES_NO_FUNCTIONS})
