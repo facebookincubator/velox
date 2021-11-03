@@ -21,7 +21,7 @@ ENABLE_WALL ?= 1
 
 # Control whether to build unit tests. By default set to "ON"; set to
 # "OFF" to disable.
-VELOX_BASE ?= "ON"
+VELOX_BASE ?= "OFF"
 VELOX_BUILD_TESTING ?= "ON"
 VELOX_ENABLE_DUCKDB ?= "ON"
 VELOX_ENABLE_PARQUET ?= "OFF"
