@@ -76,4 +76,4 @@ target_link_libraries(velox_functions_prestosql_benchmarks_in
 add_executable(velox_functions_prestosql_benchmarks_map_input
                MapInputBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_map_input
-                      ${BENCHMARK_DEPENDENCIES_NO_FUNCTIONS})
+                      ${BENCHMARK_DEPENDENCIES})
