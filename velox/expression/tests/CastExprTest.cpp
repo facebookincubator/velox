@@ -320,6 +320,35 @@ TEST_F(CastExprTest, timestampAdjustToTimezoneInvalid) {
   EXPECT_THROW(testFunc(), std::runtime_error);
 }
 
+TEST_F(CastExprTest, date) {
+  testCast<std::string, Date>(
+      "date",
+      {
+          "1970-01-01",
+          "2020-01-01",
+          "1969-12-27",
+          "1920-01-02",
+          std::nullopt,
+      },
+      {
+          Date(0),
+          Date(18262),
+          Date(-5),
+          Date(-18262),
+          std::nullopt,
+      });
+}
+
+TEST_F(CastExprTest, dateInvalid) {
+  testCast<int8_t, Date>("date", {12}, {Date(0)}, true);
+  testCast<int16_t, Date>("date", {1234}, {Date(0)}, true);
+  testCast<int32_t, Date>("date", {1234}, {Date(0)}, true);
+  testCast<int64_t, Date>("date", {1234}, {Date(0)}, true);
+
+  testCast<float, Date>("date", {12.99}, {Date(0)}, true);
+  testCast<double, Date>("date", {12.99}, {Date(0)}, true);
+}
+
 TEST_F(CastExprTest, truncateVsRound) {
   // Testing truncate vs round cast from double to int.
   setCastIntByTruncate(true);
