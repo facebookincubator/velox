@@ -172,7 +172,7 @@ jobs:
             ccache -s
           no_output_timeout: 1h
       - store_artifacts:
-          path: '_build/debug/.ninja_log'
+          path: '_build/release/.ninja_log'
       - save_cache:
           name: "Save CCache cache"
           key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
@@ -182,7 +182,7 @@ jobs:
           name: "Run Unit Tests"
           command: |
             export PATH=~/adapter-deps/install/bin:${PATH}
-            make unittest VELOX_ENABLE_ADAPTERS=ON AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16
+            make unittestrel VELOX_ENABLE_ADAPTERS=ON AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16
           no_output_timeout: 1h
 
   format-check:
