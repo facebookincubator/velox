@@ -29,11 +29,6 @@
 
 namespace facebook::velox::connector::hive {
 
-namespace {
-const std::string kHiveConnectorName = "hive";
-const std::string kHiveHadoop2ConnectorName = "hive-hadoop2";
-} // namespace
-
 class HiveColumnHandle : public ColumnHandle {
  public:
   enum class ColumnType { kPartitionKey, kRegular, kSynthesized };
@@ -270,6 +265,9 @@ class HiveConnector final : public Connector {
 
 class HiveConnectorFactory : public ConnectorFactory {
  public:
+  static const std::string kHiveConnectorName;
+  static const std::string kHiveHadoop2ConnectorName;
+
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {
     dwio::common::FileSink::registerFactory();
   }
@@ -288,6 +286,9 @@ class HiveConnectorFactory : public ConnectorFactory {
         id, properties, std::move(dataCache), executor);
   }
 };
+const std::string HiveConnectorFactory::kHiveConnectorName = "hive";
+const std::string HiveConnectorFactory::kHiveHadoop2ConnectorName =
+    "hive-hadoop2";
 
 class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
  public:
