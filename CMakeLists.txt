@@ -32,7 +32,7 @@ option(VELOX_ENABLE_HIVE_CONNECTOR "Build Hive connector." ON)
 option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
-option(VELOX_ENABLE_PARSE "Build parse." ON)
+option(VELOX_ENABLE_PARSE "Build parser used for unit tests." ON)
 option(VELOX_ENABLE_EXAMPLES
        "Build examples. This will enable VELOX_ENABLE_EXPRESSION automatically."
        ON)
@@ -40,7 +40,7 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 
 if(${VELOX_BASE})
-  # enable / disable components for velox base build
+  # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_DUCKDB ON)
@@ -270,6 +270,3 @@ install(FILES velox/type/Type.h DESTINATION "include/velox")
 
 add_subdirectory(velox)
 
-message(
-  STATUS
-    "MIKE: parse=${VELOX_ENABLE_PARSE} expression=${VELOX_ENABLE_EXPRESSION}")
