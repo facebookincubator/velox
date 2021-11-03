@@ -24,72 +24,8 @@
 
 namespace facebook::velox {
 
-// Represents the result of decoding a vector into base data, nulls
-// and indices for base data/nulls. This is meant to be lightweight
-// copyable and does not own memory.
 template <typename T>
-class DecodeResult {
- public:
-  DecodeResult(
-      const BaseVector* base,
-      const T* values,
-      const uint64_t* nulls,
-      const vector_size_t* indices,
-      const vector_size_t* nullIndices,
-      bool mayHaveNulls)
-      : base_(base),
-        values_(values),
-        nulls_(nulls),
-        indices_(indices),
-        nullIndices_(nullIndices),
-        mayHaveNulls_(mayHaveNulls) {}
-
-  bool isNullAt(vector_size_t index) const {
-    if (!mayHaveNulls_) {
-      return false;
-    }
-    if (!nullIndices_) {
-      return bits::isBitNull(nulls_, index);
-    }
-    vector_size_t innerIndex = nullIndices_[index];
-    return bits::isBitNull(nulls_, innerIndex);
-  }
-
-  const T& operator[](vector_size_t index) const {
-    return values_[decodedIndex(index)];
-  }
-
-  bool mayHaveNulls() const {
-    return mayHaveNulls_;
-  }
-
-  inline vector_size_t decodedIndex(vector_size_t index) const {
-    return indices_[index];
-  }
-
-  const BaseVector* base() const {
-    return base_;
-  }
-
- private:
-  const BaseVector* base_;
-  const T* values_;
-  const uint64_t* nulls_;
-  const vector_size_t* indices_;
-  const vector_size_t* nullIndices_;
-  bool mayHaveNulls_;
-  // Needed for returning a reference to a boolean value. Booleans in
-  // vectors are bits that are not individually addressable.
-  mutable bool boolHolder_;
-};
-
-template <>
-inline const bool& DecodeResult<bool>::operator[](vector_size_t idx) const {
-  boolHolder_ = bits::isBitSet(
-      reinterpret_cast<const uint64_t*>(values_), decodedIndex(idx));
-  return boolHolder_;
-}
-
+class DecodeResult;
 // Canonicalizes an arbitrary vector to its base array (or vector, if
 // complex type) and a list of indices into this, so that the indices
 // cover the positions in a SelectivityVector. Nulls are represented
@@ -97,7 +33,9 @@ inline const bool& DecodeResult<bool>::operator[](vector_size_t idx) const {
 class DecodedVector {
  public:
   DecodedVector() = default;
+
   DecodedVector(const DecodedVector& other) = delete;
+
   DecodedVector& operator=(const DecodedVector& other) = delete;
 
   // DecodedVector is used in VectorExec and needs to be move constructed
@@ -133,8 +71,7 @@ class DecodedVector {
 
   template <typename T>
   inline DecodeResult<T> as() {
-    return DecodeResult<T>(
-        base(), data<T>(), nulls(), indices(), nullIndices(), mayHaveNulls_);
+    return DecodeResult<T>(*this);
   }
 
   template <typename T>
@@ -225,6 +162,7 @@ class DecodedVector {
   bool isConstantMapping() const {
     return isConstantMapping_;
   }
+
   // Wraps a vector with the same wrapping as another. 'wrapper' must
   // have been previously decoded by 'this'. This is used when 'data'
   // is a component of the base vector of 'wrapper' and must be used
@@ -253,9 +191,12 @@ class DecodedVector {
 
  private:
   void setFlatNulls(const BaseVector& vector, const SelectivityVector& rows);
+
   template <TypeKind kind>
   void decodeBiased(const BaseVector& vector, const SelectivityVector& rows);
+
   void makeIndicesMutable();
+
   void combineWrappers(
       const BaseVector* vector,
       const SelectivityVector& rows,
@@ -264,7 +205,9 @@ class DecodedVector {
   void copyNulls(vector_size_t size);
 
   void fillInIndices();
+
   void setBaseData(const BaseVector& vector, const SelectivityVector& rows);
+
   // Last valid index into 'indices_' + 1.
   vector_size_t size_ = 0;
 
@@ -320,4 +263,45 @@ inline bool DecodedVector::valueAt(vector_size_t idx) const {
   return bits::isBitSet(reinterpret_cast<const uint64_t*>(data_), index(idx));
 }
 
+// Represents the result of decoding a vector into base data, nulls
+// and indices for base data/nulls. This is meant to be lightweight
+// copyable and does not own memory. Its valid as long as the deocder
+// it came from is valid.
+template <typename T>
+class DecodeResult {
+ public:
+  DecodeResult(const DecodedVector& decodedVector) : decoded_(decodedVector) {}
+
+  bool isNullAt(vector_size_t index) const {
+    return decoded_.isNullAt(index);
+  }
+
+  vector_size_t nullIndex(vector_size_t index) const {
+    return decoded_.nullIndex(index);
+  }
+
+  T operator[](vector_size_t index) const {
+    return decoded_.template valueAt<T>(index);
+  }
+
+  bool mayHaveNulls() const {
+    return decoded_.mayHaveNulls();
+  }
+
+  inline vector_size_t decodedIndex(vector_size_t index) const {
+    return decoded_.index(index);
+  }
+
+  const BaseVector* base() const {
+    return decoded_.base();
+  }
+
+ private:
+  const DecodedVector& decoded_;
+};
+
+template <>
+inline bool DecodeResult<bool>::operator[](vector_size_t idx) const {
+  return decoded_.valueAt<bool>(idx);
+}
 } // namespace facebook::velox

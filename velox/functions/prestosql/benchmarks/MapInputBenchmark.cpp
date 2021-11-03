@@ -15,6 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <chrono>
 #include <iostream>
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
@@ -24,6 +25,8 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
 namespace {
+//    auto totalTime1 =0;
+//    auto totalTime2 =0;
 
 class MapSumValuesAndKeysVector : public exec::VectorFunction {
  public:
@@ -35,9 +38,9 @@ class MapSumValuesAndKeysVector : public exec::VectorFunction {
       VectorPtr* result) const override {
     auto arg = args.at(0);
 
-    auto mapVector = arg->as<MapVector>();
     exec::LocalDecodedVector mapHolder(context, *arg, rows);
     auto mapIndices = mapHolder->indices();
+    auto mapVector = mapHolder->base()->as<MapVector>();
 
     auto mapKeys = mapVector->mapKeys();
     exec::LocalDecodedVector mapKeysHolder(context, *mapKeys, rows);
@@ -78,9 +81,9 @@ class NestedMapSumValuesAndKeysVector : public exec::VectorFunction {
       VectorPtr* result) const override {
     auto arg = args.at(0);
 
-    auto mapVector = arg->as<MapVector>();
     exec::LocalDecodedVector mapHolder(context, *arg, rows);
     auto mapIndices = mapHolder->indices();
+    auto mapVector = mapHolder->base()->as<MapVector>();
 
     auto mapKeys = mapVector->mapKeys();
     exec::LocalDecodedVector mapKeysHolder(context, *mapKeys, rows);
@@ -114,6 +117,8 @@ class NestedMapSumValuesAndKeysVector : public exec::VectorFunction {
     BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
     auto flatResult = (*result)->asFlatVector<int64_t>();
 
+    //            using namespace std;
+    //            const auto &start = std::chrono::high_resolution_clock::now();
     rows.applyToSelected([&](vector_size_t row) {
       size_t mapIndex = mapIndices[row];
       size_t offsetStart = rawOffsets[mapIndex];
@@ -136,6 +141,50 @@ class NestedMapSumValuesAndKeysVector : public exec::VectorFunction {
 
       flatResult->set(row, sum);
     });
+    //            const auto &stop = std::chrono::high_resolution_clock::now();
+    //            totalTime1+=chrono::duration_cast<chrono::microseconds>(stop -
+    //            start).count() ;
+  }
+};
+
+class NestedMapSumValuesAndKeysVectorUsingMapView
+    : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    auto arg = args.at(0);
+
+    DecodedVector decoded_;
+    using exec_in_t = typename VectorExec::template resolver<
+        Map<int64_t, Map<int64_t, int64_t>>>::in_type;
+    decoded_.decode(*arg, rows);
+    VectorReader<Map<int64_t, Map<int64_t, int64_t>>> reader{
+        decoded_.as<exec_in_t>()};
+
+    // Prepare results
+    BaseVector::ensureWritable(rows, BIGINT(), context->pool(), result);
+    auto flatResult = (*result)->asFlatVector<int64_t>();
+    //            using namespace std;
+    //            const auto &start = std::chrono::high_resolution_clock::now();
+    rows.applyToSelected([&](vector_size_t row) {
+      auto sum = 0;
+      for (const auto& entry : reader[row]) {
+        sum += entry.key();
+        for (const auto& entryInner : *entry.value()) {
+          sum += entryInner.key();
+          sum += *entryInner.value();
+        }
+      }
+
+      flatResult->set(row, sum);
+    });
+    //            const auto& stop = std::chrono::high_resolution_clock::now();
+    //            totalTime2+=chrono::duration_cast<chrono::microseconds>(stop -
+    //            start).count() ;
   }
 };
 
@@ -149,8 +198,8 @@ struct MapSumValuesAndKeysSimple {
       const arg_type<Map<int64_t, int64_t>>& map) {
     out = 0;
     for (const auto& entry : map) {
-      out += entry.first;
-      out += *entry.second;
+      out += entry.key();
+      out += *entry.value();
     }
     return true;
   }
@@ -165,10 +214,10 @@ struct NestedMapSumValuesAndKeysSimple {
       const arg_type<Map<int64_t, Map<int64_t, int64_t>>>& map) {
     out = 0;
     for (const auto& innerMap : map) {
-      out += innerMap.first;
-      for (const auto& entry : *innerMap.second) {
-        out += entry.first;
-        out += *entry.second;
+      out += innerMap.key();
+      for (const auto& entry : *innerMap.value()) {
+        out += entry.key();
+        out += *entry.value();
       }
     }
     return true;
@@ -204,10 +253,20 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
              .argumentType("map(K,V)")
              .build()},
         std::make_unique<NestedMapSumValuesAndKeysVector>());
+
+    facebook::velox::exec::registerVectorFunction(
+        "nested_map_sum_vector_mapview",
+        {exec::FunctionSignatureBuilder()
+             .typeVariable("K")
+             .typeVariable("V")
+             .returnType("bigint")
+             .argumentType("map(K,V)")
+             .build()},
+        std::make_unique<NestedMapSumValuesAndKeysVectorUsingMapView>());
   }
 
   RowVectorPtr makeMapDataMap() {
-    const vector_size_t size = 1'000;
+    const vector_size_t size = 1000;
     auto mapVector = vectorMaker_.mapVector<int64_t, int64_t>(
         size,
         [](auto row) { return row % 100; },
@@ -296,6 +355,7 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
     auto rowVector = makeMapDataMap();
     auto exprSet1 = compileExpression("map_sum_vector(c0)", rowVector->type());
     auto exprSet2 = compileExpression("map_sum_simple(c0)", rowVector->type());
+
     return hasSameResults(exprSet1, exprSet2, rowVector);
   }
 
@@ -305,7 +365,11 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
         compileExpression("nested_map_sum_vector(c0)", rowVector->type());
     auto exprSet2 =
         compileExpression("nested_map_sum_simple(c0)", rowVector->type());
-    return hasSameResults(exprSet1, exprSet2, rowVector);
+    auto exprSet3 = compileExpression(
+        "nested_map_sum_vector_mapview(c0)", rowVector->type());
+
+    return hasSameResults(exprSet1, exprSet2, rowVector) &&
+        hasSameResults(exprSet3, exprSet2, rowVector);
   }
 };
 
@@ -328,11 +392,22 @@ BENCHMARK_RELATIVE(nestedSumSimpleFunction) {
   MapInputBenchmark benchmark;
   benchmark.runNested("nested_map_sum_simple");
 }
+
+BENCHMARK_RELATIVE(nestedSumVectorFunctionMapView) {
+  MapInputBenchmark benchmark;
+  benchmark.runNested("nested_map_sum_vector_mapview");
+}
 } // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
   MapInputBenchmark benchmark;
-  if (benchmark.testNestedMapSum() && benchmark.testMapSum()) {
+  //    benchmark.runNested("nested_map_sum_vector");
+  //    benchmark.runNested("nested_map_sum_vector_mapview");
+  //
+  //    std::cout<<totalTime1<<"\n";
+  //    std::cout<<totalTime2<<"\n";
+
+  if (benchmark.testMapSum() && benchmark.testNestedMapSum()) {
     folly::runBenchmarks();
   } else {
     VELOX_UNREACHABLE("tests failed");

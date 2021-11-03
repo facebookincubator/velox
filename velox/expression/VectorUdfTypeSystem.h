@@ -15,6 +15,7 @@
  */
 
 #pragma once
+
 #include <algorithm>
 
 #include "velox/core/CoreTypeSystem.h"
@@ -27,6 +28,9 @@ namespace facebook::velox::exec {
 
 template <typename VectorType = FlatVector<StringView>, bool reuseInput = false>
 class StringProxy;
+
+template <typename K, typename V>
+class MapView;
 
 namespace detail {
 template <typename T>
@@ -45,8 +49,7 @@ struct resolver {
 
 template <typename K, typename V>
 struct resolver<Map<K, V>> {
-  using in_type = core::
-      SlowMapVal<typename resolver<K>::in_type, typename resolver<V>::in_type>;
+  using in_type = MapView<K, V>;
   using out_type = core::SlowMapWriter<
       typename resolver<K>::out_type,
       typename resolver<V>::out_type>;
@@ -218,6 +221,7 @@ struct VectorWriter {
       vector_->setNull(offset_, true);
     }
   }
+
   void setOffset(int32_t offset) {
     offset_ = offset;
   }
@@ -237,7 +241,7 @@ struct VectorReader {
 
   VectorReader(const DecodeResult<exec_in_t>& decoded) : decoded_{decoded} {}
 
-  const exec_in_t& operator[](size_t offset) const {
+  exec_in_t operator[](size_t offset) const {
     return decoded_[offset];
   }
 
@@ -342,6 +346,91 @@ struct VectorWriter<Map<K, V>> {
 
 namespace detail {
 
+template <typename ReaderType>
+struct OptionalValueAccessor {
+  OptionalValueAccessor(const ReaderType* reader, size_t index)
+      : reader_(reader), index_(index) {}
+
+  using element_t = typename ReaderType::exec_in_t;
+
+  operator bool() const {
+    return this->has_value();
+  }
+
+  bool operator==(const element_t& rhs) const {
+    return has_value() && (rhs == value());
+  }
+
+  bool operator==(const std::optional<element_t>& rhs) const {
+    if (!rhs.has_value()) {
+      return !has_value();
+    } else {
+      return rhs == value();
+    }
+  }
+
+  bool has_value() const {
+    return reader_->isSet(index_);
+  }
+
+  element_t value() const {
+    DCHECK(has_value());
+    return (*reader_)[index_];
+  }
+
+  element_t operator*() const {
+    DCHECK(has_value());
+    return (*reader_)[index_];
+  }
+
+ private:
+  const ReaderType* reader_;
+  size_t index_;
+};
+
+template <typename ElementType>
+struct SequentialIndexBasedIterator
+    : public std::iterator<std::input_iterator_tag, ElementType, size_t> {
+  explicit SequentialIndexBasedIterator(const ElementType& element)
+      : element_(element) {}
+
+  bool operator!=(const SequentialIndexBasedIterator<ElementType>& rhs) const {
+    return element_.index_ != rhs.element_.index_;
+  }
+
+  bool operator==(const SequentialIndexBasedIterator<ElementType>& rhs) const {
+    return element_.index_ == rhs.element_.index_;
+  }
+
+  const ElementType& operator*() const {
+    return element_;
+  }
+
+  const ElementType* operator->() const {
+    return &element_;
+  }
+
+  bool operator<(const SequentialIndexBasedIterator<ElementType>& rhs) const {
+    return this->element_.index_ < rhs.element_.index_;
+  }
+
+  // post increment
+  SequentialIndexBasedIterator<ElementType> operator++(int) {
+    SequentialIndexBasedIterator<ElementType> old = *this;
+    ++element_.index_;
+    return old;
+  }
+
+  // pre increment
+  SequentialIndexBasedIterator<ElementType>& operator++() {
+    ++element_.index_;
+    return *this;
+  }
+
+ private:
+  ElementType element_;
+};
+
 template <typename TOut, typename TIn>
 const TOut& getDecoded(const DecodeResult<TIn>& decoded) {
   auto base = decoded.base();
@@ -356,6 +445,73 @@ DecodeResult<T> decode(DecodedVector& decoder, const BaseVector& vector) {
 }
 
 }; // namespace detail
+
+template <typename K, typename V>
+class MapView {
+ public:
+  using key_reader_t = VectorReader<K>;
+  using value_reader_t = VectorReader<V>;
+
+  MapView(
+      const key_reader_t* keyReader,
+      const value_reader_t* valueReader,
+      vector_size_t offset,
+      vector_size_t size)
+      : keyReader_(keyReader),
+        valueReader_(valueReader),
+        offset_(offset),
+        size_(size) {}
+
+  MapView()
+      : keyReader_(nullptr), valueReader_(nullptr), offset_(0), size_(0) {}
+
+  using ValueElement = detail::OptionalValueAccessor<value_reader_t>;
+
+  struct Element {
+    Element(const MapView& mapView, size_t index)
+        : keyReader_(mapView.keyReader_),
+          valueReader_(mapView.valueReader_),
+          index_(index + mapView.offset_) {}
+
+    typename key_reader_t::exec_in_t key() const {
+      return keyReader_->operator[](index_);
+    }
+
+    // values are wrapped in optionals
+    ValueElement value() const {
+      return ValueElement{valueReader_, index_};
+    }
+
+    // we can either have this or have mapView
+    const key_reader_t* keyReader_;
+    const value_reader_t* valueReader_;
+    size_t index_;
+  };
+
+  using Iterator = detail::SequentialIndexBasedIterator<Element>;
+
+  const Iterator begin() const {
+    return Iterator{Element{*this, 0}};
+  }
+
+  const Iterator end() const {
+    return Iterator{Element{*this, size_}};
+  }
+
+  const Element operator[](size_t index) const {
+    return Element{*this, index};
+  }
+
+  size_t size() const {
+    return size_;
+  }
+
+ private:
+  const key_reader_t* keyReader_;
+  const value_reader_t* valueReader_;
+  const vector_size_t offset_;
+  const size_t size_;
+};
 
 template <typename K, typename V>
 struct VectorReader<Map<K, V>> {
@@ -380,37 +536,16 @@ struct VectorReader<Map<K, V>> {
   }
 
   bool doLoad(size_t outerOffset, exec_in_t& target) const {
-    if (UNLIKELY(!isSet(outerOffset))) {
-      return false;
-    }
-    vector_size_t offset = decoded_.decodedIndex(outerOffset);
-    const size_t offsetStart = offsets_[offset];
-    const size_t offsetEnd = offsetStart + lengths_[offset];
-
-    target.reserve(target.size() + offsetEnd - offsetStart);
-
-    for (size_t i = offsetStart; i != offsetEnd; ++i) {
-      exec_in_key_t key{};
-      exec_in_val_t val{};
-      if (UNLIKELY(!keyReader_.doLoad(i, key))) {
-        VELOX_USER_CHECK(false, "null map key not allowed");
-      }
-      const bool isSet = valReader_.doLoad(i, val);
-      if (LIKELY(isSet)) {
-        target.emplace(key, std::optional<exec_in_val_t>{std::move(val)});
-      } else {
-        target.emplace(key, std::optional<exec_in_val_t>{});
-      }
-    }
+    //    if (UNLIKELY(!isSet(outerOffset))) {
+    //      return false;
+    //    }
+    target = *this[outerOffset];
     return true;
   }
 
-  // note: because it uses a cached map; it is only valid until a new offset
-  // is fetched!! scary
-  exec_in_t& operator[](size_t offset) const {
-    m_.clear();
-    doLoad(offset, m_);
-    return m_;
+  exec_in_t operator[](size_t offset) const {
+    auto index = decoded_.decodedIndex(offset);
+    return MapView{&keyReader_, &valReader_, offsets_[index], lengths_[index]};
   }
 
   bool isSet(size_t offset) const {
@@ -419,12 +554,12 @@ struct VectorReader<Map<K, V>> {
 
   DecodeResult<exec_in_t> decoded_;
   const MapVector& vector_;
-  DecodedVector decodedKeys_;
-  DecodedVector decodedVals_;
-  mutable exec_in_t m_{};
-
   const vector_size_t* offsets_;
   const vector_size_t* lengths_;
+
+  DecodedVector decodedKeys_;
+  DecodedVector decodedVals_;
+
   VectorReader<K> keyReader_;
   VectorReader<V> valReader_;
 };
@@ -552,6 +687,7 @@ struct VectorWriter<Array<V>> {
     m_.clear();
     childWriter_.reset();
   }
+
   vector_t* vector_ = nullptr;
   exec_out_t m_{};
 

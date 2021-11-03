@@ -374,46 +374,6 @@ class UDFHolder final
     }
   }
 
-  variant callDynamic(const std::vector<variant>& inputs) final {
-    exec_return_type result;
-    bool isSet = evalDynamic<0>(result, inputs);
-    if (isSet) {
-      return Exec::template resolver<TReturn>::toVariant(result);
-    } else {
-      return variant{CppToType<TReturn>::typeKind};
-    }
-  }
-
- private:
-  template <int32_t offset>
-  bool evalDynamic(
-      exec_return_type& result,
-      const std::vector<variant>& /* toUnpack */,
-      const typename Exec::template resolver<TArgs>::in_type*... unpacked) {
-    // TODO: This could be possibly be optimized if we knew if the function was
-    // is_default_null_behavior.  Otherwise we might be optifying only to turn
-    // around and unoptify.
-    return callNullable(result, unpacked...);
-  }
-
-  template <
-      int32_t offset,
-      typename... Unpacked,
-      typename std::enable_if_t<offset != Metadata::num_args, int32_t> = 0>
-  bool evalDynamic(
-      exec_return_type& result,
-      const std::vector<variant>& toUnpack,
-      const Unpacked*... unpacked) {
-    auto& d = toUnpack.at(offset);
-    if (d.isNull()) {
-      const exec_type_at<offset>* nullPtr = nullptr;
-      return evalDynamic<offset + 1>(result, toUnpack, unpacked..., nullPtr);
-    } else {
-      auto converted = Exec::template resolver<
-          typename Metadata::template type_at<offset>>::fromVariant(d);
-      return evalDynamic<offset + 1>(result, toUnpack, unpacked..., &converted);
-    }
-  }
 };
 
 } // namespace facebook::velox::core
