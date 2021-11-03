@@ -265,14 +265,15 @@ class HiveConnector final : public Connector {
 
 class HiveConnectorFactory : public ConnectorFactory {
  public:
-  static const std::string kHiveConnectorName;
-  static const std::string kHiveHadoop2ConnectorName;
+  static constexpr const char* FOLLY_NONNULL kHiveConnectorName = "hive";
+  static constexpr const char* FOLLY_NONNULL kHiveHadoop2ConnectorName =
+      "hive-hadoop2";
 
   HiveConnectorFactory() : ConnectorFactory(kHiveConnectorName) {
     dwio::common::FileSink::registerFactory();
   }
 
-  HiveConnectorFactory(const std::string& connectorName)
+  HiveConnectorFactory(const char* FOLLY_NONNULL connectorName)
       : ConnectorFactory(connectorName) {
     dwio::common::FileSink::registerFactory();
   }
@@ -286,9 +287,6 @@ class HiveConnectorFactory : public ConnectorFactory {
         id, properties, std::move(dataCache), executor);
   }
 };
-const std::string HiveConnectorFactory::kHiveConnectorName = "hive";
-const std::string HiveConnectorFactory::kHiveHadoop2ConnectorName =
-    "hive-hadoop2";
 
 class HiveHadoop2ConnectorFactory : public HiveConnectorFactory {
  public:
