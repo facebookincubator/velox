@@ -102,6 +102,7 @@ TypePtr toVeloxType(LogicalType type) {
     case LogicalTypeId::VARCHAR:
       return VARCHAR();
     case LogicalTypeId::DATE:
+      return DATE();
     case LogicalTypeId::TIMESTAMP:
       return TIMESTAMP();
     case LogicalTypeId::BLOB:

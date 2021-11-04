@@ -52,3 +52,33 @@ TEST_F(ComparisonsTest, betweenVarchar) {
   EXPECT_EQ(true, between("orange"));
   EXPECT_EQ(true, between("pear"));
 }
+
+TEST_F(ComparisonsTest, betweenDate) {
+  Date beforeJune2019;
+  parseTo("2019-05-01", beforeJune2019);
+  Date june2019;
+  parseTo("2019-06-01", june2019);
+  Date july2019;
+  parseTo("2019-07-01", july2019);
+  Date may2020;
+  parseTo("2020-05-31", may2020);
+  Date june2020;
+  parseTo("2020-06-01", june2020);
+  Date afterJune2020;
+  parseTo("2020-07-01", afterJune2020);
+  std::vector<std::tuple<Date, bool>> testData = {
+      {beforeJune2019, false},
+      {june2019, true},
+      {july2019, true},
+      {may2020, true},
+      {june2020, true},
+      {afterJune2020, false}};
+
+  auto result = evaluate<SimpleVector<bool>>(
+      "c0 between cast(\'2019-06-01\' as date) and cast(\'2020-06-01\' as date)",
+      makeRowVector({makeFlatVector<Date, 0>(testData)}));
+
+  for (int i = 0; i < testData.size(); ++i) {
+    EXPECT_EQ(result->valueAt(i), std::get<1>(testData[i])) << "at " << i;
+  }
+}
