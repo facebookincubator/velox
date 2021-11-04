@@ -22,8 +22,10 @@ option(
   VELOX_BUILD_TESTING
   "Enable Velox tests. This will enable all other build options automatically."
   ON)
-option(VELOX_BASE
-       "Build base components. This will override other build options." OFF)
+option(
+  VELOX_BUILD_MINIMAL
+  "Build a minimal set of components only. This will override other build options."
+  OFF)
 
 option(VELOX_ENABLE_DUCKDB "Build duckDB to enable differential testing." ON)
 option(VELOX_ENABLE_EXEC "Build exec." ON)
@@ -39,7 +41,7 @@ option(VELOX_ENABLE_EXAMPLES
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 
-if(${VELOX_BASE})
+if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
@@ -55,7 +57,7 @@ if(${VELOX_BASE})
 endif()
 
 if(${VELOX_BUILD_TESTING})
-  # to build tests enable all components
+  # Enable all components to build testing binaries
   set(VELOX_ENABLE_PRESTO_FUNCTIONS ON)
   set(VELOX_ENABLE_DUCKDB ON)
   set(VELOX_ENABLE_EXPRESSION ON)
