@@ -87,3 +87,15 @@ TEST(RawVectorTest, iota) {
   // Larger sizes are allocated in 'storage'.
   EXPECT_FALSE(storage.empty());
 }
+
+TEST(RawVectorTest, iterator) {
+  raw_vector<int> data;
+  data.push_back(11);
+  data.push_back(22);
+  data.push_back(33);
+  int32_t sum = 0;
+  for (auto d : data) {
+    sum += d;
+  }
+  EXPECT_EQ(66, sum);
+}
