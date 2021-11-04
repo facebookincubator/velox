@@ -137,13 +137,13 @@ jobs:
             make fuzzertest
           no_output_timeout: 5m
       - run:
-         name: "Run the two velox examples"
+         name: "Run the velox examples"
          command: |
            _build/debug/velox/examples/velox_example_expression_eval
            _build/debug/velox/examples/velox_example_opaque_type
 
-  # Test build different build options
-  linux-build-tests:
+  # Build with different options
+  linux-build-options:
     executor: build
     steps:
       - checkout
@@ -155,21 +155,22 @@ jobs:
           keys:
             - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
       - run:
-          name: Build setup
+          name: Build minimal velox
           command: |
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
             source /opt/rh/gcc-toolset-9/enable
-      - run:
-          name: Build minimal velox
-          command: |
             make min_debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
             ccache -s
           no_output_timeout: 1h
       - run:
           name: Build velox without testing
           command: |
+            mkdir -p .ccache
+            export CCACHE_DIR=$(realpath .ccache)
+            ccache -sz -M 5Gi
+            source /opt/rh/gcc-toolset-9/enable
             make clean
             make debug EXTRA_CMAKE_FLAGS="-DVELOX_BUILD_TESTING=OFF" NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
             ccache -s
