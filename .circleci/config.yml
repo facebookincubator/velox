@@ -159,7 +159,7 @@ jobs:
       - run:
           name: Build base velox
           command: |
-            make base_debug
+            make min_debug
             ccache -s
             make clean
           no_output_timeout: 1h
