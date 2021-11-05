@@ -53,14 +53,14 @@ TEST_F(ComparisonsTest, betweenVarchar) {
   EXPECT_EQ(true, between("pear"));
 }
 
-inline Date parseDate(std::string dateStr) {
+inline Date parseDate(const std::string& dateStr) {
   Date returnDate;
   parseTo(dateStr, returnDate);
   return returnDate;
 }
 
 TEST_F(ComparisonsTest, betweenDate) {
-  qgit q std::vector<std::tuple<Date, bool>> testData = {
+  std::vector<std::tuple<Date, bool>> testData = {
       {parseDate("2019-05-01"), false},
       {parseDate("2019-06-01"), true},
       {parseDate("2019-07-01"), true},
