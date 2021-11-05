@@ -180,7 +180,7 @@ variant randVariantImpl(
     }
   }
   if constexpr (std::is_same_v<TCpp, Timestamp>) {
-      return variant(randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
+    return variant(randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
   } else if constexpr (std::is_same_v<TCpp, Date>) {
     return variant(randDate(rng));
   } else {
