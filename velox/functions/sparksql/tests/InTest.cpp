@@ -36,11 +36,11 @@ class InTest : public SparkFunctionBaseTest {
     std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
     const auto argType = CppToType<T>::create();
     args.push_back(std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"));
-    for (const std::optional<T>& element : rhs) {
-      args.push_back(std::make_shared<core::ConstantTypedExpr>(
-          argType,
-          element ? variant(*element) : variant::null(argType->kind())));
-    }
+
+    auto rhsArrayVector =
+        vectorMaker_.arrayVectorNullable<T>({std::optional(rhs)});
+    args.push_back(std::make_shared<core::ConstantTypedExpr>(
+        BaseVector::wrapInConstant(1, 0, rhsArrayVector)));
     exec::ExprSet expr(
         {std::make_shared<core::CallTypedExpr>(BOOLEAN(), args, "in")},
         &execCtx_);
