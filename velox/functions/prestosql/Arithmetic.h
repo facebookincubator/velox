@@ -26,32 +26,45 @@
 namespace facebook::velox::functions {
 
 template <typename T>
-VELOX_UDF_BEGIN(plus)
-FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
-  result = plus(a, b);
-  return true;
-}
-VELOX_UDF_END();
+struct PlusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(
+      TInput& result,
+      const TInput& a,
+      const TInput& b) {
+    result = plus(a, b);
+    return true;
+  }
+};
 
 template <typename T>
-VELOX_UDF_BEGIN(minus)
-FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
-  result = minus(a, b);
-  return true;
-}
-VELOX_UDF_END();
+struct MinusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(
+      TInput& result,
+      const TInput& a,
+      const TInput& b) {
+    result = minus(a, b);
+    return true;
+  }
+};
 
 template <typename T>
-VELOX_UDF_BEGIN(multiply)
-FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
-  result = multiply(a, b);
-  return true;
-}
-VELOX_UDF_END();
+struct MultiplyFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(
+      TInput& result,
+      const TInput& a,
+      const TInput& b) {
+    result = multiply(a, b);
+    return true;
+  }
+};
 
 template <typename T>
-VELOX_UDF_BEGIN(divide)
-FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b)
+struct DivideFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput& a, const TInput& b)
 // depend on compiler have correct behaviour for divide by zero
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
@@ -59,18 +72,22 @@ FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b)
 #endif
 #endif
 {
-  result = a / b;
-  return true;
+    result = a / b;
+    return true;
 }
-VELOX_UDF_END();
+};
 
 template <typename T>
-VELOX_UDF_BEGIN(modulus)
-FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
-  result = modulus(a, b);
-  return true;
-}
-VELOX_UDF_END();
+struct ModulusFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(
+      TInput& result,
+      const TInput& a,
+      const TInput& b) {
+    result = modulus(a, b);
+    return true;
+  }
+};
 
 template <typename T>
 VELOX_UDF_BEGIN(ceil)
