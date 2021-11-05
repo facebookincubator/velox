@@ -54,19 +54,19 @@ TEST_F(ComparisonsTest, betweenVarchar) {
 }
 
 inline Date parseDate(std::string dateStr) {
-    Date returnDate;
-    parseTo(dateStr, returnDate);
-    return returnDate;
+  Date returnDate;
+  parseTo(dateStr, returnDate);
+  return returnDate;
 }
 
-TEST_F(ComparisonsTest, betweenDate) {qgit q
-  std::vector<std::tuple<Date, bool>> testData = {
-          {parseDate("2019-05-01"), false},
-          {parseDate("2019-06-01"), true},
-          {parseDate("2019-07-01"), true},
-          {parseDate("2020-05-31"), true},
-          {parseDate("2020-06-01"), true},
-          {parseDate("2020-07-01"), false}};
+TEST_F(ComparisonsTest, betweenDate) {
+  qgit q std::vector<std::tuple<Date, bool>> testData = {
+      {parseDate("2019-05-01"), false},
+      {parseDate("2019-06-01"), true},
+      {parseDate("2019-07-01"), true},
+      {parseDate("2020-05-31"), true},
+      {parseDate("2020-06-01"), true},
+      {parseDate("2020-07-01"), false}};
 
   auto result = evaluate<SimpleVector<bool>>(
       "c0 between cast(\'2019-06-01\' as date) and cast(\'2020-06-01\' as date)",
