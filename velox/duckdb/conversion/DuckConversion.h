@@ -108,7 +108,7 @@ struct DuckDateConversion {
   static ::duckdb::date_t toDuck(
       const Date& input,
       ::duckdb::Vector& /* unused */) {
-      return ::duckdb::Date::EpochDaysToDate(input.days());
+    return ::duckdb::Date::EpochDaysToDate(input.days());
   }
   static Date toVelox(const ::duckdb::date_t& input) {
     return Date(::duckdb::Date::EpochDays(input));

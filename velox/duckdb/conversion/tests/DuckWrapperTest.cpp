@@ -105,8 +105,7 @@ TEST_F(BaseDuckWrapperTest, scalarTypes) {
   verifyUnaryResult<double>("SELECT 1::DOUBLE", {1.0});
 
   // date/timestamp
-  verifyUnaryResult<Date>(
-      "SELECT DATE '1992-01-01'", {Date(8035)});
+  verifyUnaryResult<Date>("SELECT DATE '1992-01-01'", {Date(8035)});
   verifyUnaryResult<Timestamp>(
       "SELECT TIMESTAMP '1992-01-01 13:04:20'", {Timestamp(694271060, 0)});
 
@@ -159,8 +158,7 @@ TEST_F(BaseDuckWrapperTest, types) {
   verifyUnaryResult<Date>(
       "SELECT i FROM (VALUES (DATE '1992-01-01'), (NULL)) tbl(i)",
       {Date(8035), Date(0)},
-      {false, true}
-      );
+      {false, true});
   verifyUnaryResult<Timestamp>(
       "SELECT i FROM (VALUES (TIMESTAMP '1992-01-01 13:04:20'), (NULL)) tbl(i)",
       {Timestamp(694271060, 0), Timestamp(0, 0)},
@@ -189,7 +187,7 @@ TEST_F(BaseDuckWrapperTest, tpchSF1) {
   // test conversion of date, decimal and string
   verifyUnaryResult<double>("SELECT l_discount FROM lineitem LIMIT 1", {0.04});
   verifyUnaryResult<Date>(
-          "SELECT l_shipdate FROM lineitem LIMIT 1", {Date(9568)});
+      "SELECT l_shipdate FROM lineitem LIMIT 1", {Date(9568)});
   verifyUnaryResult<StringView>(
       "SELECT l_comment FROM lineitem LIMIT 1",
       {StringView("egular courts above the")});
