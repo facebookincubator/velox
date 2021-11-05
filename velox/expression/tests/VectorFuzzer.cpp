@@ -17,6 +17,7 @@
 #include "velox/expression/tests/VectorFuzzer.h"
 #include <codecvt>
 #include <locale>
+#include "velox/type/Date.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/NullsBuilder.h"
@@ -84,6 +85,10 @@ Timestamp randTimestamp(
       : Timestamp(
             folly::Random::rand32(rng),
             (folly::Random::rand32(rng) % MAX_NANOS));
+}
+
+Date randDate(FuzzerGenerator& rng) {
+    return Date(folly::Random::rand32(rng));
 }
 
 /// Unicode character ranges.
@@ -179,6 +184,11 @@ variant randVariantImpl(
   } else {
     return variant(rand<TCpp>(rng));
   }
+  if constexpr (std::is_same_v<TCpp, Date>) {
+      return variant(randDate(rng));
+  } else {
+      return variant(rand<TCpp>(rng));
+  }
 }
 
 template <TypeKind kind>
@@ -199,7 +209,10 @@ void fuzzFlatImpl(
     } else if constexpr (std::is_same_v<TCpp, Timestamp>) {
       flatVector->set(
           i, randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
-    } else {
+    } else if constexpr (std::is_same_v<TCpp, Date>) {
+        flatVector->set(i, randDate(rng));
+    }
+    else {
       flatVector->set(i, rand<TCpp>(rng));
     }
   }

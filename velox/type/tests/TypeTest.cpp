@@ -163,31 +163,29 @@ TEST(Type, DateComparison) {
 }
 
 TEST(Type, parseStringToDate) {
-  Date epoch;
-  parseTo("1970-01-01", epoch);
-  EXPECT_EQ(epoch.days(), 0);
+    auto parseDate = [](const std::string& dateStr) {
+        Date returnDate;
+        parseTo(dateStr, returnDate);
+        return returnDate;
+    };
 
-  // 50 years after epoch
-  Date jan2020;
-  parseTo("2020-01-01", jan2020);
-  EXPECT_EQ(jan2020.days(), 18262);
+    // Epoch.
+  EXPECT_EQ(parseDate("1970-01-01").days(), 0);
 
-  Date beforeEpoch;
-  parseTo("1969-12-27", beforeEpoch);
-  EXPECT_EQ(beforeEpoch.days(), -5);
+  // 50 years after epoch.
+  EXPECT_EQ(parseDate("2020-01-01").days(), 18262);
 
-  // 50 years before epoch
-  Date wayBeforeEpoch;
-  parseTo("1920-01-02", wayBeforeEpoch);
-  EXPECT_EQ(wayBeforeEpoch.days(), -18262);
+  // Before epoch.
+  EXPECT_EQ(parseDate("1969-12-27").days(), -5);
 
-  Date wayWayBeforeEpoch;
-  parseTo("1812-04-15", wayWayBeforeEpoch);
-  EXPECT_EQ(wayWayBeforeEpoch.days(), -57604);
+  // 50 years before epoch.
+  EXPECT_EQ(parseDate("1920-01-02").days(), -18262);
 
-  Date wayAfterEpoch;
-  parseTo("2135-11-09", wayAfterEpoch);
-  EXPECT_EQ(wayAfterEpoch.days(), 60577);
+  // Century before epoch.
+  EXPECT_EQ(parseDate("1812-04-15").days(), -57604);
+
+  // Century after epoch.
+  EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
 }
 
 TEST(Type, Map) {
