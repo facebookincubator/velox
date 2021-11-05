@@ -88,7 +88,7 @@ Timestamp randTimestamp(
 }
 
 Date randDate(FuzzerGenerator& rng) {
-    return Date(folly::Random::rand32(rng));
+  return Date(folly::Random::rand32(rng));
 }
 
 /// Unicode character ranges.
@@ -185,9 +185,9 @@ variant randVariantImpl(
     return variant(rand<TCpp>(rng));
   }
   if constexpr (std::is_same_v<TCpp, Date>) {
-      return variant(randDate(rng));
+    return variant(randDate(rng));
   } else {
-      return variant(rand<TCpp>(rng));
+    return variant(rand<TCpp>(rng));
   }
 }
 
@@ -210,9 +210,8 @@ void fuzzFlatImpl(
       flatVector->set(
           i, randTimestamp(rng, opts.useMicrosecondPrecisionTimestamp));
     } else if constexpr (std::is_same_v<TCpp, Date>) {
-        flatVector->set(i, randDate(rng));
-    }
-    else {
+      flatVector->set(i, randDate(rng));
+    } else {
       flatVector->set(i, rand<TCpp>(rng));
     }
   }

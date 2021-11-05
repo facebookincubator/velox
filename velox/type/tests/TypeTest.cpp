@@ -163,13 +163,13 @@ TEST(Type, DateComparison) {
 }
 
 TEST(Type, parseStringToDate) {
-    auto parseDate = [](const std::string& dateStr) {
-        Date returnDate;
-        parseTo(dateStr, returnDate);
-        return returnDate;
-    };
+  auto parseDate = [](const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  };
 
-    // Epoch.
+  // Epoch.
   EXPECT_EQ(parseDate("1970-01-01").days(), 0);
 
   // 50 years after epoch.
