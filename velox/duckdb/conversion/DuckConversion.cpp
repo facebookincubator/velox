@@ -74,6 +74,7 @@ bool duckdbTypeIsSupported(LogicalType type) {
     case LogicalTypeId::DOUBLE:
     case LogicalTypeId::VARCHAR:
     case LogicalTypeId::TIMESTAMP:
+    case LogicalTypeId::DATE:
       return true;
     default:
       return false;
