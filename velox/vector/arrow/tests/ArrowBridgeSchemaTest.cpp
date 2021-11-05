@@ -114,6 +114,7 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
   testScalarType(VARBINARY(), "z");
 
   testScalarType(TIMESTAMP(), "ttn");
+  testScalarType(DATE(), "tdD");
 }
 
 TEST_F(ArrowBridgeSchemaExportTest, nested) {
@@ -216,12 +217,14 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
 
   // Temporal.
   EXPECT_EQ(*TIMESTAMP(), *testSchemaImport("ttn"));
+  EXPECT_EQ(*DATE(), *testSchemaImport("tdD"));
 }
 
 TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {
   // Array.
   EXPECT_EQ(*ARRAY(BIGINT()), *testSchemaImportComplex("+L", {"l"}));
   EXPECT_EQ(*ARRAY(TIMESTAMP()), *testSchemaImportComplex("+L", {"ttn"}));
+  EXPECT_EQ(*ARRAY(DATE()), *testSchemaImportComplex("+L", {"tdD"}));
   EXPECT_EQ(*ARRAY(VARCHAR()), *testSchemaImportComplex("+L", {"U"}));
 
   // Map.
@@ -254,7 +257,6 @@ TEST_F(ArrowBridgeSchemaImportTest, unsupported) {
   EXPECT_THROW(testSchemaImport("d:19,10"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("w:42"), VeloxUserError);
 
-  EXPECT_THROW(testSchemaImport("tdD"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("tdm"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("tts"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("ttm"), VeloxUserError);
