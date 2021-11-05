@@ -162,21 +162,32 @@ TEST(Type, DateComparison) {
   EXPECT_GE(epoch, beforeEpoch);
 }
 
-TEST(Type, ParseStringToDate) {
+TEST(Type, parseStringToDate) {
   Date epoch;
   parseTo("1970-01-01", epoch);
   EXPECT_EQ(epoch.days(), 0);
 
   // 50 years after epoch
-  Date jan2020(18262);
-  EXPECT_EQ(jan2020.toString(), "2020-01-01");
+  Date jan2020;
+  parseTo("2020-01-01", jan2020);
+  EXPECT_EQ(jan2020.days(), 18262);
 
-  Date beforeEpoch(-5);
-  EXPECT_EQ(beforeEpoch.toString(), "1969-12-27");
+  Date beforeEpoch;
+  parseTo("1969-12-27", beforeEpoch);
+  EXPECT_EQ(beforeEpoch.days(), -5);
 
   // 50 years before epoch
-  Date wayBeforeEpoch(-18262);
-  EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
+  Date wayBeforeEpoch;
+  parseTo("1920-01-02", wayBeforeEpoch);
+  EXPECT_EQ(wayBeforeEpoch.days(), -18262);
+
+  Date wayWayBeforeEpoch;
+  parseTo("1812-04-15", wayWayBeforeEpoch);
+  EXPECT_EQ(wayWayBeforeEpoch.days(), -57604);
+
+  Date wayAfterEpoch;
+  parseTo("2135-11-09", wayAfterEpoch);
+  EXPECT_EQ(wayAfterEpoch.days(), 60577);
 }
 
 TEST(Type, Map) {
