@@ -1,0 +1,154 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>September 2021 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="October 2021 Update" href="october-2021.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="october-2021.html" title="October 2021 Update"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">September 2021 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="september-2021-update">
+<h1>September 2021 Update<a class="headerlink" href="#september-2021-update" title="Permalink to this headline">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add new articles: <a class="reference internal" href="../develop/vectors.html"><span class="doc">Vectors</span></a> and
+<a class="reference internal" href="../develop/joins.html"><span class="doc">Joins</span></a>.</p></li>
+<li><p>Add Presto functions coverage maps: <a class="reference internal" href="../functions/coverage.html"><span class="doc">all</span></a>
+and <a class="reference internal" href="../functions/most_used_coverage.html"><span class="doc">most used</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for converting flat Velox vectors of primitive types to Arrow arrays.</p></li>
+<li><p>Add support for round-robin and Hive-compatible partitioning.</p></li>
+<li><p>Add support for LEFT OUTER and CROSS joins.</p></li>
+<li><p>Add EnforceSingleRow operator to support uncorrelated subqueries.</p></li>
+<li><p>Add function registry API.</p></li>
+<li><p>Enable dynamic filter pushdown for semi joins.</p></li>
+<li><p>Enable all-ASCII fast path for all eligible string functions.</p></li>
+<li><p>Fix the long standing problem of constant vectors not knowing their size and delete kMaxElements constant.</p></li>
+<li><p>Add ExpressionFuzzer tests to CircleCI and increase coverage.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/array.html#array_distinct" title="array_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_distinct()</span></code></a>, <a class="reference internal" href="../functions/array.html#array_except" title="array_except"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_except()</span></code></a>, reverse(array) functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/datetime.html#millisecond" title="millisecond"><code class="xref py py-func docutils literal notranslate"><span class="pre">millisecond()</span></code></a> function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/string.html#trim" title="trim"><code class="xref py py-func docutils literal notranslate"><span class="pre">trim()</span></code></a>, <a class="reference internal" href="../functions/string.html#ltrim" title="ltrim"><code class="xref py py-func docutils literal notranslate"><span class="pre">ltrim()</span></code></a>, <a class="reference internal" href="../functions/string.html#rtrim" title="rtrim"><code class="xref py py-func docutils literal notranslate"><span class="pre">rtrim()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/math.html#sin" title="sin"><code class="xref py py-func docutils literal notranslate"><span class="pre">sin()</span></code></a>, <a class="reference internal" href="../functions/math.html#asin" title="asin"><code class="xref py py-func docutils literal notranslate"><span class="pre">asin()</span></code></a>, <a class="reference internal" href="../functions/math.html#cos" title="cos"><code class="xref py py-func docutils literal notranslate"><span class="pre">cos()</span></code></a>, <a class="reference internal" href="../functions/math.html#acos" title="acos"><code class="xref py py-func docutils literal notranslate"><span class="pre">acos()</span></code></a>, <a class="reference internal" href="../functions/math.html#tan" title="tan"><code class="xref py py-func docutils literal notranslate"><span class="pre">tan()</span></code></a>,
+<a class="reference internal" href="../functions/math.html#atan" title="atan"><code class="xref py py-func docutils literal notranslate"><span class="pre">atan()</span></code></a>, <a class="reference internal" href="../functions/math.html#atan2" title="atan2"><code class="xref py py-func docutils literal notranslate"><span class="pre">atan2()</span></code></a>, <a class="reference internal" href="../functions/math.html#cosh" title="cosh"><code class="xref py py-func docutils literal notranslate"><span class="pre">cosh()</span></code></a>, <a class="reference internal" href="../functions/math.html#tanh" title="tanh"><code class="xref py py-func docutils literal notranslate"><span class="pre">tanh()</span></code></a> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/string.html#to_utf8" title="to_utf8"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_utf8()</span></code></a>, <a class="reference internal" href="../functions/url.html#url_encode" title="url_encode"><code class="xref py py-func docutils literal notranslate"><span class="pre">url_encode()</span></code></a>, <a class="reference internal" href="../functions/url.html#url_decode" title="url_decode"><code class="xref py py-func docutils literal notranslate"><span class="pre">url_decode()</span></code></a>,
+<a class="reference internal" href="../functions/binary.html#to_base64" title="to_base64"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_base64()</span></code></a>, <a class="reference internal" href="../functions/binary.html#from_base64" title="from_base64"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_base64()</span></code></a>, <a class="reference internal" href="../functions/binary.html#to_hex" title="to_hex"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_hex()</span></code></a>, <a class="reference internal" href="../functions/binary.html#from_hex" title="from_hex"><code class="xref py py-func docutils literal notranslate"><span class="pre">from_hex()</span></code></a> functions..</p></li>
+<li><p>Add BETWEEN operator for strings.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/aggregate.html#stddev_pop" title="stddev_pop"><code class="xref py py-func docutils literal notranslate"><span class="pre">stddev_pop()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#stddev_samp" title="stddev_samp"><code class="xref py py-func docutils literal notranslate"><span class="pre">stddev_samp()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#var_pop" title="var_pop"><code class="xref py py-func docutils literal notranslate"><span class="pre">var_pop()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#var_samp" title="var_samp"><code class="xref py py-func docutils literal notranslate"><span class="pre">var_samp()</span></code></a>
+aggregate Presto functions.</p></li>
+<li><p>Add timestamp with time zone Presto type.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<p>Adam Simpkins, Aditi Pandit, Amit Dutta, Andy Lee, Aniket Mokashi, Anuradha
+Weeraman, Chao Chen, Christy Lee-Eusman (PL&amp;R), Darren Fu, Deepak Majeti, Huameng Jiang, Jake
+Jung, Jialiang Tan, Krishna Pai, MJ Deng, Masha Basmanova, Michael Shang, Orri
+Erling, Pedro Eugenio Rocha Pedreira, Ravindra Sunkad, Rob Kinyon, Sagar
+Mittal, Sarah Li, Sergey Pershin, Sourav Kumar, Stefan Roesch, Wenlei Xie, Yuan
+Chao Chou, Yue Yin, Zeyi (Rice) Fan, Zhengchao Liu, Zhenyuan Zhao, amaliujia,
+ienkovich, miaoever.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">September 2021 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="october-2021.html"
+                        title="previous chapter">October 2021 Update</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/september-2021.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="october-2021.html" title="October 2021 Update"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">September 2021 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>
