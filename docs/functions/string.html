@@ -91,6 +91,15 @@ SQL-standard concatenation operator (<code class="docutils literal notranslate">
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="lpad">
+<span class="sig-name descname"><span class="pre">lpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padstring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#lpad" title="Permalink to this definition">¶</a></dt>
+<dd><p>Left pads <code class="docutils literal notranslate"><span class="pre">string</span></code> to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters with <code class="docutils literal notranslate"><span class="pre">padstring</span></code>. If
+<code class="docutils literal notranslate"><span class="pre">size</span></code> is less than the length of <code class="docutils literal notranslate"><span class="pre">string</span></code>, the result is truncated
+to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters. <code class="docutils literal notranslate"><span class="pre">size</span></code> must not be negative and <code class="docutils literal notranslate"><span class="pre">padstring</span></code>
+must be non-empty.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="ltrim">
 <span class="sig-name descname"><span class="pre">ltrim</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#ltrim" title="Permalink to this definition">¶</a></dt>
 <dd><p>Removes leading whitespace from string.</p>
@@ -108,6 +117,21 @@ SQL-standard concatenation operator (<code class="docutils literal notranslate">
 <dd><p>Replaces all instances of <code class="docutils literal notranslate"><span class="pre">search</span></code> with <code class="docutils literal notranslate"><span class="pre">replace</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">search</span></code> is an empty string, inserts <code class="docutils literal notranslate"><span class="pre">replace</span></code> in front of every
 character and at the end of the <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="reverse">
+<span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#reverse" title="Permalink to this definition">¶</a></dt>
+<dd><p>Reverses <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="rpad">
+<span class="sig-name descname"><span class="pre">rpad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padstring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#rpad" title="Permalink to this definition">¶</a></dt>
+<dd><p>Right pads <code class="docutils literal notranslate"><span class="pre">string</span></code> to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters with <code class="docutils literal notranslate"><span class="pre">padstring</span></code>. If
+<code class="docutils literal notranslate"><span class="pre">size</span></code> is less than the length of <code class="docutils literal notranslate"><span class="pre">string</span></code>, the result is truncated
+to <code class="docutils literal notranslate"><span class="pre">size</span></code> characters. <code class="docutils literal notranslate"><span class="pre">size</span></code> must not be negative and <code class="docutils literal notranslate"><span class="pre">padstring</span></code>
+must be non-empty.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -171,12 +195,6 @@ position is interpreted as being relative to the end of the string.</p>
 <dt class="sig sig-object py" id="upper">
 <span class="sig-name descname"><span class="pre">upper</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#upper" title="Permalink to this definition">¶</a></dt>
 <dd><p>Converts <code class="docutils literal notranslate"><span class="pre">string</span></code> to uppercase.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="reverse">
-<span class="sig-name descname"><span class="pre">reverse</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#reverse" title="Permalink to this definition">¶</a></dt>
-<dd><p>Reverses <code class="docutils literal notranslate"><span class="pre">string</span></code>.</p>
 </dd></dl>
 
 <section id="unicode-functions">
