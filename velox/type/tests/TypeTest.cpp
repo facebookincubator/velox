@@ -131,6 +131,9 @@ TEST(Type, DateToString) {
   // 50 years before epoch
   Date wayBeforeEpoch(-18262);
   EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
+
+  Date dateOverflow(-1855961014);
+  EXPECT_THROW(dateOverflow.toString(), VeloxRuntimeError);
 }
 
 TEST(Type, DateComparison) {

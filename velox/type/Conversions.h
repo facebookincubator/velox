@@ -385,7 +385,7 @@ struct Converter<TypeKind::TIMESTAMP> {
   }
 
   static T cast(const Date& d, bool& nullOutput) {
-    static const int32_t kMillisPerDay{86'400'000};
+    static const int64_t kMillisPerDay{86'400'000};
     return Timestamp::fromMillis(d.days() * kMillisPerDay);
   }
 };
