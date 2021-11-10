@@ -89,7 +89,8 @@ endif()
 
 # If CODEGEN support isn't explicitly set, we guestimate the value based on the
 # compiler
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+if((NOT DEFINED VELOX_CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES
+                                            "Clang"))
   message(STATUS "Enabling Codegen")
   set(VELOX_CODEGEN_SUPPORT True)
 else()
