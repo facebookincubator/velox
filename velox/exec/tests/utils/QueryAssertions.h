@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #pragma once
+#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
-#include "velox/exec/tests/Cursor.h"
 #include "velox/external/duckdb/duckdb.hpp"
 #include "velox/vector/ComplexVector.h"
 
