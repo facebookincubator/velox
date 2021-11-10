@@ -149,6 +149,10 @@ of plan nodes can be located at the leaves of the plan tree. There are:</p>
 <td><p>EnforceSingleRow</p></td>
 <td></td>
 </tr>
+<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
+<td><p>AssignUniqueId</p></td>
+<td></td>
+</tr>
 </tbody>
 </table>
 <section id="plan-nodes">
@@ -632,6 +636,36 @@ returns that row unmodified. If input is empty, returns a single row with all
 values set to null. If input contains more than one row raises an exception.</p>
 <p>Used for queries with non-correlated sub-queries.</p>
 </section>
+<section id="assignuniqueidnode">
+<h3>AssignUniqueIdNode<a class="headerlink" href="#assignuniqueidnode" title="Permalink to this headline">¶</a></h3>
+<p>The assign unique id operation adds one column at the end of the input columns
+with unique value per row. This unique value marks each output row to be unique
+among all output rows of this operator.</p>
+<p>The 64-bit unique id is built in following way:
+- first 24 bits - task unique id
+- next 40 bits - operator counter value</p>
+<p>The task unique id is added to ensure the generated id is unique across all
+the nodes executing the same query stage in a distributed query execution.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>idName</p></td>
+<td><p>Column name for the generated unique id column.</p></td>
+</tr>
+<tr class="row-odd"><td><p>taskUniqueId</p></td>
+<td><p>A 24-bit integer to uniquely identify the task id across all the nodes.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 <section id="examples">
 <h2>Examples<a class="headerlink" href="#examples" title="Permalink to this headline">¶</a></h2>
@@ -708,6 +742,7 @@ ALL.</p>
 <li><a class="reference internal" href="#localmergenode">LocalMergeNode</a></li>
 <li><a class="reference internal" href="#localpartitionnode">LocalPartitionNode</a></li>
 <li><a class="reference internal" href="#enforcesinglerownode">EnforceSingleRowNode</a></li>
+<li><a class="reference internal" href="#assignuniqueidnode">AssignUniqueIdNode</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#examples">Examples</a><ul>
