@@ -104,6 +104,18 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 </dd></dl>
 
 </section>
+<section id="java-date-functions">
+<h2>Java Date Functions<a class="headerlink" href="#java-date-functions" title="Permalink to this headline">¶</a></h2>
+<p>The functions in this section leverage a native cpp implementation that follows
+a format string compatible with JodaTime’s <a class="reference external" href="http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html">DateTimeFormat</a>
+pattern format.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="parse_datetime">
+<span class="sig-name descname"><span class="pre">parse_datetime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#parse_datetime" title="Permalink to this definition">¶</a></dt>
+<dd><p>Parses string into a timestamp with time zone using <code class="docutils literal notranslate"><span class="pre">format</span></code>.</p>
+</dd></dl>
+
+</section>
 <section id="convenience-extraction-functions">
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this headline">¶</a></h2>
 <dl class="py function">
@@ -194,6 +206,7 @@ The value ranges from <code class="docutils literal notranslate"><span class="pr
   <ul>
 <li><a class="reference internal" href="#">Date and Time Functions</a><ul>
 <li><a class="reference internal" href="#truncation-function">Truncation Function</a></li>
+<li><a class="reference internal" href="#java-date-functions">Java Date Functions</a></li>
 <li><a class="reference internal" href="#convenience-extraction-functions">Convenience Extraction Functions</a></li>
 </ul>
 </li>
