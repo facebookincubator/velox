@@ -26,7 +26,7 @@
 #include "velox/functions/prestosql/RegisterComparisons.h"
 #include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/StringFunctions.h"
-#include "velox/functions/prestosql/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::functions {
 
