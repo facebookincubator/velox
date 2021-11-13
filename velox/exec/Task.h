@@ -425,6 +425,15 @@ class Task {
 
   void addSplitLocked(SplitsState& splitsState, exec::Split&& split);
 
+  std::unique_ptr<velox::memory::MemoryPool> pool_;
+
+  // Keep driver and operator memory pools alive for the duration of
+  // the task to allow for sharing vectors across drivers without
+  // copy. Declare before other members so as to have this last in
+  // destruction order, e.g. after JoinBridges and other things that
+  // can hold vectors allocated in these pools.
+  std::vector<std::unique_ptr<velox::memory::MemoryPool>> childPools_;
+
   const std::string taskId_;
   std::shared_ptr<const core::PlanNode> planNode_;
   const int destination_;
@@ -467,11 +476,6 @@ class Task {
   std::vector<VeloxPromise<bool>> stateChangePromises_;
 
   TaskStats taskStats_;
-  std::unique_ptr<velox::memory::MemoryPool> pool_;
-
-  // Keep driver and operator memory pools alive for the duration of the task to
-  // allow for sharing vectors across drivers without copy.
-  std::vector<std::unique_ptr<velox::memory::MemoryPool>> childPools_;
 
   std::vector<std::shared_ptr<MergeSource>> localMergeSources_;
 

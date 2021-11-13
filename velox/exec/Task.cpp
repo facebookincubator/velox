@@ -35,13 +35,13 @@ Task::Task(
     std::shared_ptr<core::QueryCtx> queryCtx,
     ConsumerSupplier consumerSupplier,
     std::function<void(std::exception_ptr)> onError)
-    : taskId_(taskId),
+    : pool_(queryCtx->pool()->addScopedChild("task_root")),
+      taskId_(taskId),
       planNode_(planNode),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
-      pool_(queryCtx_->pool()->addScopedChild("task_root")),
       bufferManager_(
           PartitionedOutputBufferManager::getInstance(queryCtx_->host())) {}
 
