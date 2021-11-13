@@ -94,6 +94,21 @@ used later by calling <code class="docutils literal notranslate"><span class="pr
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="empty_approx_set">
+<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#empty_approx_set" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an empty <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code>.
+The value of the maximum standard error is defaulted to <code class="docutils literal notranslate"><span class="pre">0.01625</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">empty_approx_set</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">e</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an empty <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> with a maximum standard error of <code class="docutils literal notranslate"><span class="pre">e</span></code>.
+The current implementation of this function requires that <code class="docutils literal notranslate"><span class="pre">e</span></code> be in
+the range of <code class="docutils literal notranslate"><span class="pre">[0.0040625,</span> <span class="pre">0.26000]</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="merge">
 <span class="sig-name descname"><span class="pre">merge</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">HyperLogLog</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">HyperLogLog</span></span></span><a class="headerlink" href="#merge" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the <code class="docutils literal notranslate"><span class="pre">HyperLogLog</span></code> of the aggregate union of the individual <code class="docutils literal notranslate"><span class="pre">hll</span></code>
