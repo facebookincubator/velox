@@ -223,7 +223,8 @@ void CastExpr::applyCast(
       return applyCastWithTry<To, double>(
           rows, context, input, resultFlatVector);
     }
-    case TypeKind::VARCHAR: {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY: {
       return applyCastWithTry<To, StringView>(
           rows, context, input, resultFlatVector);
     }
@@ -441,14 +442,14 @@ void CastExpr::apply(
         input->flatRawNulls(rows), rows.begin(), rows.end());
   }
 
-  DecodedVector decoded(*input, rows);
+  LocalDecodedVector decoded(context, *input, rows);
 
   if (toType->isArray() || toType->isMap() || toType->isRow()) {
     LocalSelectivityVector translatedRows(
-        context->execCtx(), decoded.base()->size());
+        context->execCtx(), decoded->base()->size());
     translatedRows->clearAll();
     nonNullRows->applyToSelected(
-        [&](auto row) { translatedRows->setValid(decoded.index(row), true); });
+        [&](auto row) { translatedRows->setValid(decoded->index(row), true); });
     translatedRows->updateBounds();
 
     VectorPtr localResult;
@@ -458,7 +459,7 @@ void CastExpr::apply(
       case TypeKind::MAP:
         localResult = applyMap(
             *translatedRows,
-            decoded.base()->asUnchecked<MapVector>(),
+            decoded->base()->asUnchecked<MapVector>(),
             context,
             fromType->asMap(),
             toType->asMap());
@@ -466,7 +467,7 @@ void CastExpr::apply(
       case TypeKind::ARRAY:
         localResult = applyArray(
             *translatedRows,
-            decoded.base()->asUnchecked<ArrayVector>(),
+            decoded->base()->asUnchecked<ArrayVector>(),
             context,
             fromType->asArray(),
             toType->asArray());
@@ -474,7 +475,7 @@ void CastExpr::apply(
       case TypeKind::ROW:
         localResult = applyRow(
             *translatedRows,
-            decoded.base()->asUnchecked<RowVector>(),
+            decoded->base()->asUnchecked<RowVector>(),
             context,
             fromType->asRow(),
             toType->asRow());
@@ -484,11 +485,8 @@ void CastExpr::apply(
       }
     }
 
-    if (decoded.isConstantMapping()) {
-      localResult = BaseVector::wrapInConstant(
-          rows.end(), translatedRows->begin(), localResult);
-    } else if (!decoded.isIdentityMapping()) {
-      localResult = decoded.wrap(localResult, *input, rows);
+    if (!decoded->isIdentityMapping()) {
+      localResult = decoded->wrap(localResult, *input, rows);
     }
 
     context->moveOrCopyResult(localResult, rows, result);
@@ -503,7 +501,7 @@ void CastExpr::apply(
         fromType->kind(),
         *nonNullRows,
         context,
-        decoded,
+        *decoded,
         result);
   }
 

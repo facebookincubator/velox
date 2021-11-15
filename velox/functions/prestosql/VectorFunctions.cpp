@@ -15,8 +15,9 @@
  */
 #include "velox/functions/prestosql/VectorFunctions.h"
 #include "velox/functions/lib/Re2Functions.h"
-#include "velox/functions/prestosql/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/WidthBucketArray.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::functions {
 
@@ -31,6 +32,9 @@ void registerVectorFunctions() {
     return TIMESTAMP_WITH_TIME_ZONE();
   });
 
+  registerType(
+      "hyperloglog", [](auto /*childTypes*/) { return HYPERLOGLOG(); });
+
   VELOX_REGISTER_VECTOR_FUNCTION(udf_element_at, "element_at");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_subscript, "subscript");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, "transform");
@@ -42,6 +46,7 @@ void registerVectorFunctions() {
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, "array_duplicates");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_intersect, "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max, "array_max");
@@ -52,7 +57,6 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, "map_filter");
 
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, "contains");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_length, "length");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, "map");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_concat, "map_concat");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_entries, "map_entries");

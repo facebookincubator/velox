@@ -15,12 +15,14 @@
  */
 
 #pragma once
-#include <algorithm>
 
+#include <algorithm>
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/ComplexViewTypes.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/type/Type.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
@@ -28,146 +30,58 @@ namespace facebook::velox::exec {
 template <typename VectorType = FlatVector<StringView>, bool reuseInput = false>
 class StringProxy;
 
+template <typename V>
+class ArrayView;
+
+template <typename K, typename V>
+class MapView;
+
+template <typename T, typename U>
+struct VectorReader;
+
 namespace detail {
 template <typename T>
 struct resolver {
   using in_type = typename CppToType<T>::NativeType;
   using out_type = typename CppToType<T>::NativeType;
-
-  static variant toVariant(const in_type& t) {
-    return variant{t};
-  }
-
-  static in_type fromVariant(const variant& v) {
-    return v.value<in_type>();
-  }
 };
 
 template <typename K, typename V>
 struct resolver<Map<K, V>> {
-  using in_type = core::
-      SlowMapVal<typename resolver<K>::in_type, typename resolver<V>::in_type>;
+  using in_type = MapView<K, V>;
   using out_type = core::SlowMapWriter<
       typename resolver<K>::out_type,
       typename resolver<V>::out_type>;
-
-  static variant toVariant(const in_type& t) {
-    VELOX_NYI();
-  }
-
-  static variant toVariant(const out_type& t) {
-    VELOX_NYI();
-  }
-
-  static in_type fromVariant(const variant& v) {
-    VELOX_NYI();
-  }
 };
 
 template <typename... T>
 struct resolver<Row<T...>> {
   using in_type = core::RowReader<typename resolver<T>::in_type...>;
   using out_type = core::RowWriter<typename resolver<T>::out_type...>;
-
-  static variant toVariant(const in_type& t) {
-    VELOX_NYI();
-  }
-
-  static variant toVariant(const out_type& t) {
-    VELOX_NYI();
-  }
-
-  static in_type fromVariant(const variant& t) {
-    VELOX_NYI();
-  }
 };
 
 template <typename V>
 struct resolver<Array<V>> {
-  using in_type = core::ArrayValReader<typename resolver<V>::in_type>;
+  using in_type = ArrayView<V>;
   using out_type = core::ArrayValWriter<typename resolver<V>::out_type>;
-
-  static variant toVariant(const in_type& t) {
-    using childType = typename resolver<V>::in_type;
-    std::vector<variant> v(t.size());
-    std::transform(
-        t.begin(), t.end(), v.begin(), [](const std::optional<childType>& v) {
-          return v.has_value()
-              ? resolver<childType>::toVariant(v)
-              : variant::null(in_type::veloxType()->childAt(0)->kind());
-        });
-
-    return variant::array(std::move(v));
-  }
-
-  static variant toVariant(const out_type& t) {
-    VELOX_NYI();
-  }
-
-  static in_type fromVariant(const variant& t) {
-    using childType = typename resolver<V>::in_type;
-    VELOX_CHECK_EQ(t.kind(), TypeKind::ARRAY);
-    const auto& values = t.array();
-    in_type retVal;
-    for (auto& v : values) {
-      auto convertedVal = v.isNull()
-          ? std::optional<childType>{}
-          : std::optional<childType>{resolver<V>::fromVariant(v)};
-      retVal.append(std::move(convertedVal));
-    }
-
-    return retVal;
-  }
 };
 
 template <>
 struct resolver<Varchar> {
   using in_type = StringView;
   using out_type = StringProxy<>;
-
-  static variant toVariant(const in_type& t) {
-    VELOX_NYI();
-  }
-
-  static variant toVariant(const out_type& t) {
-    VELOX_NYI();
-  }
-
-  static in_type fromVariant(const variant& v) {
-    VELOX_NYI();
-  }
 };
 
 template <>
 struct resolver<Varbinary> {
   using in_type = StringView;
   using out_type = StringProxy<>;
-
-  static variant toVariant(const in_type& t) {
-    VELOX_NYI();
-  }
-
-  static variant toVariant(const out_type& t) {
-    VELOX_NYI();
-  }
-
-  static in_type fromVariant(const variant& v) {
-    VELOX_NYI();
-  }
 };
 
 template <typename T>
 struct resolver<std::shared_ptr<T>> {
   using in_type = std::shared_ptr<T>;
   using out_type = std::shared_ptr<T>;
-
-  static variant toVariant(const in_type& t) {
-    return variant::opaque(t);
-  }
-
-  static in_type fromVariant(const variant& v) {
-    return v.opaque<T>();
-  }
 };
 } // namespace detail
 
@@ -218,6 +132,7 @@ struct VectorWriter {
       vector_->setNull(offset_, true);
     }
   }
+
   void setOffset(int32_t offset) {
     offset_ = offset;
   }
@@ -243,6 +158,10 @@ struct VectorReader {
 
   bool isSet(size_t offset) const {
     return !decoded_.isNullAt(offset);
+  }
+
+  bool mayHaveNulls() const {
+    return decoded_.mayHaveNulls();
   }
 
   bool doLoad(size_t offset, exec_in_t& v) const {
@@ -354,16 +273,11 @@ DecodeResult<T> decode(DecodedVector& decoder, const BaseVector& vector) {
   decoder.decode(vector, rows);
   return decoder.as<T>();
 }
-
-}; // namespace detail
+} // namespace detail
 
 template <typename K, typename V>
 struct VectorReader<Map<K, V>> {
-  // todo(youknowjack): in future, directly expose the slice data
-
   using in_vector_t = typename TypeToFlatVector<Map<K, V>>::type;
-  using key_vector_t = typename TypeToFlatVector<K>::type;
-  using val_vector_t = typename TypeToFlatVector<V>::type;
   using exec_in_t = typename VectorExec::template resolver<Map<K, V>>::in_type;
   using exec_in_key_t = typename VectorExec::template resolver<K>::in_type;
   using exec_in_val_t = typename VectorExec::template resolver<V>::in_type;
@@ -379,38 +293,9 @@ struct VectorReader<Map<K, V>> {
             detail::decode<exec_in_val_t>(decodedVals_, *vector_.mapValues())} {
   }
 
-  bool doLoad(size_t outerOffset, exec_in_t& target) const {
-    if (UNLIKELY(!isSet(outerOffset))) {
-      return false;
-    }
-    vector_size_t offset = decoded_.decodedIndex(outerOffset);
-    const size_t offsetStart = offsets_[offset];
-    const size_t offsetEnd = offsetStart + lengths_[offset];
-
-    target.reserve(target.size() + offsetEnd - offsetStart);
-
-    for (size_t i = offsetStart; i != offsetEnd; ++i) {
-      exec_in_key_t key{};
-      exec_in_val_t val{};
-      if (UNLIKELY(!keyReader_.doLoad(i, key))) {
-        VELOX_USER_CHECK(false, "null map key not allowed");
-      }
-      const bool isSet = valReader_.doLoad(i, val);
-      if (LIKELY(isSet)) {
-        target.emplace(key, std::optional<exec_in_val_t>{std::move(val)});
-      } else {
-        target.emplace(key, std::optional<exec_in_val_t>{});
-      }
-    }
-    return true;
-  }
-
-  // note: because it uses a cached map; it is only valid until a new offset
-  // is fetched!! scary
-  exec_in_t& operator[](size_t offset) const {
-    m_.clear();
-    doLoad(offset, m_);
-    return m_;
+  exec_in_t operator[](size_t offset) const {
+    auto index = decoded_.decodedIndex(offset);
+    return MapView{&keyReader_, &valReader_, offsets_[index], lengths_[index]};
   }
 
   bool isSet(size_t offset) const {
@@ -421,7 +306,6 @@ struct VectorReader<Map<K, V>> {
   const MapVector& vector_;
   DecodedVector decodedKeys_;
   DecodedVector decodedVals_;
-  mutable exec_in_t m_{};
 
   const vector_size_t* offsets_;
   const vector_size_t* lengths_;
@@ -444,25 +328,13 @@ struct VectorReader<Array<V>> {
         childReader_{
             detail::decode<exec_in_child_t>(decoder_, *vector_.elements())} {}
 
+  // TODO: Once other types are converted to view types, the doLoad protocol
+  // will be removed.
   bool doLoad(size_t outerOffset, exec_in_t& results) const {
     if (!isSet(outerOffset)) {
       return false;
     }
-    vector_size_t offset = decoded_.decodedIndex(outerOffset);
-    const size_t offsetStart = offsets_[offset];
-    const size_t offsetEnd = offsetStart + lengths_[offset];
-
-    results.reserve(results.size() + offsetEnd - offsetStart);
-
-    for (size_t i = offsetStart; i < offsetEnd; ++i) {
-      exec_in_child_t childval{};
-      if (childReader_.doLoad(i, childval)) {
-        results.append(std::move(childval));
-      } else {
-        results.appendNullable();
-      }
-    }
-
+    results = (*this)[outerOffset];
     return true;
   }
 
@@ -470,10 +342,9 @@ struct VectorReader<Array<V>> {
     return !decoded_.isNullAt(offset);
   }
 
-  exec_in_t& operator[](size_t offset) const {
-    returnval_.clear();
-    doLoad(offset, returnval_);
-    return returnval_;
+  exec_in_t operator[](size_t offset) const {
+    auto index = decoder_.index(offset);
+    return ArrayView{&childReader_, offsets_[index], lengths_[index]};
   }
 
   DecodedVector decoder_;
@@ -482,7 +353,6 @@ struct VectorReader<Array<V>> {
   const vector_size_t* offsets_;
   const vector_size_t* lengths_;
   VectorReader<V> childReader_;
-  mutable exec_in_t returnval_;
 };
 
 template <typename V>
@@ -552,6 +422,7 @@ struct VectorWriter<Array<V>> {
     m_.clear();
     childWriter_.reset();
   }
+
   vector_t* vector_ = nullptr;
   exec_out_t m_{};
 

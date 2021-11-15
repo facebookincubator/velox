@@ -18,12 +18,16 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/Hash.h"
+#include "velox/functions/prestosql/HyperLogLogFunctions.h"
 #include "velox/functions/prestosql/JsonExtractScalar.h"
 #include "velox/functions/prestosql/Rand.h"
 #include "velox/functions/prestosql/RegisterArithmetic.h"
 #include "velox/functions/prestosql/RegisterCheckedArithmetic.h"
 #include "velox/functions/prestosql/RegisterComparisons.h"
+#include "velox/functions/prestosql/SplitPart.h"
 #include "velox/functions/prestosql/StringFunctions.h"
+#include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::functions {
 
@@ -35,6 +39,7 @@ void registerFunctions() {
   // Register string functions.
   registerFunction<ChrFunction, Varchar, int64_t>({"chr"});
   registerFunction<CodePointFunction, int32_t, Varchar>({"codepoint"});
+  registerFunction<LengthFunction, int64_t, Varchar>({"length"});
 
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t>({"substr"});
   registerFunction<SubstrFunction, Varchar, Varchar, int64_t, int64_t>(
@@ -42,6 +47,9 @@ void registerFunctions() {
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t>({"substr"});
   registerFunction<SubstrFunction, Varchar, Varchar, int32_t, int32_t>(
       {"substr"});
+
+  registerFunction<SplitPart, Varchar, Varchar, Varchar, int64_t>(
+      {"split_part"});
 
   registerFunction<TrimFunction, Varchar, Varchar>({"trim"});
   registerFunction<LTrimFunction, Varchar, Varchar>({"ltrim"});
@@ -60,6 +68,10 @@ void registerFunctions() {
 
   registerFunction<RandFunction, double>({"rand"});
 
+  registerFunction<udf_pad<true>, Varchar, Varchar, int64_t, Varchar>({"lpad"});
+  registerFunction<udf_pad<false>, Varchar, Varchar, int64_t, Varchar>(
+      {"rpad"});
+
   // Date time functions.
   registerFunction<ToUnixtimeFunction, double, Timestamp>(
       {"to_unixtime", "to_unix_timestamp"});
@@ -77,6 +89,32 @@ void registerFunctions() {
   registerFunction<MillisecondFunction, int64_t, Timestamp>({"millisecond"});
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {"date_trunc"});
+  registerFunction<
+      ParseDateTimeFunction,
+      TimestampWithTimezone,
+      Varchar,
+      Varchar>({"parse_datetime"});
+
+  registerFunction<CardinalityFunction, int64_t, HyperLogLog>({"cardinality"});
+  registerFunction<EmptyApproxSetFunction, HyperLogLog>({"empty_approx_set"});
+  registerFunction<EmptyApproxSetWithMaxErrorFunction, HyperLogLog, double>(
+      {"empty_approx_set"});
+
+  // Url Functions.
+  registerFunction<UrlExtractHostFunction, Varchar, Varchar>(
+      {"url_extract_host"});
+  registerFunction<UrlExtractFragmentFunction, Varchar, Varchar>(
+      {"url_extract_fragment"});
+  registerFunction<UrlExtractPathFunction, Varchar, Varchar>(
+      {"url_extract_path"});
+  registerFunction<UrlExtractParameterFunction, Varchar, Varchar, Varchar>(
+      {"url_extract_parameter"});
+  registerFunction<UrlExtractProtocolFunction, Varchar, Varchar>(
+      {"url_extract_protocol"});
+  registerFunction<UrlExtractPortFunction, int64_t, Varchar>(
+      {"url_extract_port"});
+  registerFunction<UrlExtractQueryFunction, Varchar, Varchar>(
+      {"url_extract_query"});
 
   registerArithmeticFunctions();
   registerCheckedArithmeticFunctions();

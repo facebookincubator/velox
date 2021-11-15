@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_subdirectory(json)
+add_subdirectory(hyperloglog)
 
 add_library(
   velox_functions_prestosql OBJECT
   ArrayConstructor.cpp
   ArrayContains.cpp
   ArrayDistinct.cpp
+  ArrayDuplicates.cpp
   ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   Cardinality.cpp
@@ -26,8 +28,8 @@ add_library(
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
+  GreatestLeast.cpp
   InPredicate.cpp
-  Length.cpp
   Map.cpp
   MapConcat.cpp
   MapEntries.cpp
@@ -44,15 +46,15 @@ add_library(
   Subscript.cpp
   ToUtf8.cpp
   Transform.cpp
+  URLFunctions.cpp
   VectorArithmetic.cpp
   VectorFunctions.cpp
-  WidthBucketArray.cpp
-  GreatestLeast.cpp)
+  WidthBucketArray.cpp)
 
 target_link_libraries(
   velox_functions_prestosql
-  velox_exec
   velox_functions_json
+  velox_functions_hyperloglog
   velox_functions_lib
   velox_expression
   md5
@@ -60,6 +62,10 @@ target_link_libraries(
 
 set_property(TARGET velox_functions_prestosql PROPERTY JOB_POOL_COMPILE
                                                        high_memory_pool)
+
+if(${VELOX_ENABLE_AGGREGATES})
+  add_subdirectory(aggregates)
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

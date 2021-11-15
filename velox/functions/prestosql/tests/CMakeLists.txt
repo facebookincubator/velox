@@ -24,17 +24,20 @@ add_executable(
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
   ArrayDistinctTest.cpp
+  ArrayDuplicatesTest.cpp
   ArrayExceptTest.cpp
   ArrayFilterTest.cpp
   ArrayIntersectTest.cpp
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
+  BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
   CoalesceTest.cpp
   ComparisonsTest.cpp
   DateTimeFunctionsTest.cpp
   ElementAtTest.cpp
+  HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
   JsonExtractScalarTest.cpp
   MapConcatTest.cpp
@@ -49,9 +52,9 @@ add_executable(
   SplitTest.cpp
   StringFunctionsTest.cpp
   TransformTest.cpp
+  URLFunctionsTest.cpp
   WidthBucketArrayTest.cpp
-  GreatestLeastTest.cpp
-  BitwiseTest.cpp)
+  GreatestLeastTest.cpp)
 
 add_test(velox_functions_test velox_functions_test)
 

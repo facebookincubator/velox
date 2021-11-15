@@ -458,6 +458,44 @@ FOLLY_ALWAYS_INLINE bool isAsciiWhiteSpace(char ch) {
   return ch == '\t' || ch == '\n' || ch == '\r' || ch == ' ';
 }
 
+template <typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE bool splitPart(
+    TOutString& output,
+    const TInString& input,
+    const TInString& delimiter,
+    const int64_t& index) {
+  std::string_view delim = std::string_view(delimiter.data(), delimiter.size());
+  std::string_view inputSv = std::string_view(input.data(), input.size());
+  int64_t iteration = 1;
+  size_t curPos = 0;
+  if (delim.size() == 0) {
+    if (index == 1) {
+      output.setNoCopy(StringView(input.data(), input.size()));
+      return true;
+    }
+    return false;
+  }
+  while (curPos <= inputSv.size()) {
+    size_t start = curPos;
+    curPos = inputSv.find(delim, curPos);
+    if (iteration == index) {
+      size_t end = curPos;
+      if (end == std::string_view::npos) {
+        end = inputSv.size();
+      }
+      output.setNoCopy(StringView(input.data() + start, end - start));
+      return true;
+    }
+
+    if (curPos == std::string_view::npos) {
+      return false;
+    }
+    curPos += delim.size();
+    iteration++;
+  }
+  return false;
+}
+
 template <
     bool leftTrim,
     bool rightTrim,
@@ -484,7 +522,7 @@ FOLLY_ALWAYS_INLINE void trimAsciiWhiteSpace(
   auto start = curPos;
   curPos = input.end() - 1;
   if constexpr (rightTrim) {
-    while (curPos > start && isAsciiWhiteSpace(*curPos)) {
+    while (curPos >= start && isAsciiWhiteSpace(*curPos)) {
       curPos--;
     }
   }
@@ -568,5 +606,76 @@ FOLLY_ALWAYS_INLINE void reverse(TOutString& output, const TInString& input) {
   } else {
     reverseUnicode(output.data(), input.data(), inputSize);
   }
+}
+
+template <bool lpad, bool isAscii, typename TOutString, typename TInString>
+FOLLY_ALWAYS_INLINE void pad(
+    TOutString& output,
+    const TInString& string,
+    const int64_t size,
+    const TInString& padString) {
+  VELOX_USER_CHECK(
+      size >= 0 && size <= std::numeric_limits<int32_t>::max(),
+      "size must be in the range [0..{})",
+      std::numeric_limits<int32_t>::max());
+  VELOX_USER_CHECK(padString.size() > 0, "padString must not be empty");
+
+  int64_t stringCharLength = length<isAscii>(string);
+  // If string has at most size characters, truncate it if necessary
+  // and return it as the result.
+  if (UNLIKELY(stringCharLength >= size)) {
+    size_t prefixByteSize =
+        stringCore::getByteRange<isAscii>(string.data(), 1, size).second;
+    output.resize(prefixByteSize);
+    if (LIKELY(prefixByteSize > 0)) {
+      std::memcpy(output.data(), string.data(), prefixByteSize);
+    }
+    return;
+  }
+
+  int64_t padStringCharLength = length<isAscii>(padString);
+  // How many characters do we need to add to string.
+  int64_t fullPaddingCharLength = size - stringCharLength;
+  // How many full copies of padString need to be added.
+  int64_t fullPadCopies = fullPaddingCharLength / padStringCharLength;
+  // If the length of padString does not evenly divide the length of the
+  // padding we need to add, how long of a prefix of padString needs to be
+  // added at the end of the padding.  Will be 0 if it is evenly divisible.
+  size_t padPrefixByteLength =
+      stringCore::getByteRange<isAscii>(
+          padString.data(), 1, fullPaddingCharLength % padStringCharLength)
+          .second;
+  int64_t fullPaddingByteLength =
+      padString.size() * fullPadCopies + padPrefixByteLength;
+  // The final size of the output string in bytes.
+  int64_t outputByteLength = string.size() + fullPaddingByteLength;
+  // What byte index in the ouptut to start writing the padding at.
+  int64_t paddingOffset;
+
+  output.resize(outputByteLength);
+
+  if constexpr (lpad) {
+    paddingOffset = 0;
+    // Copy string after the padding.
+    std::memcpy(
+        output.data() + fullPaddingByteLength, string.data(), string.size());
+  } else {
+    paddingOffset = string.size();
+    // Copy string at the beginning of the output.
+    std::memcpy(output.data(), string.data(), string.size());
+  }
+
+  for (int i = 0; i < fullPadCopies; i++) {
+    std::memcpy(
+        output.data() + paddingOffset + i * padString.size(),
+        padString.data(),
+        padString.size());
+  }
+
+  // Add the final prefix of padString to the padding in output (if necessary).
+  std::memcpy(
+      output.data() + paddingOffset + fullPadCopies * padString.size(),
+      padString.data(),
+      padPrefixByteLength);
 }
 } // namespace facebook::velox::functions::stringImpl

@@ -46,9 +46,7 @@ class GreatestLeastTest : public functions::test::FunctionBaseTest {
     if (stringBuffersExpectedCount.has_value()) {
       ASSERT_EQ(
           *stringBuffersExpectedCount,
-          result->template asFlatVector<StringView>()
-              ->getStringBuffers()
-              .size());
+          result->template asFlatVector<StringView>()->stringBuffers().size());
     }
   }
 };
@@ -97,26 +95,18 @@ TEST_F(GreatestLeastTest, greatestBigInt) {
 
 TEST_F(GreatestLeastTest, greatestVarchar) {
   runTest<StringView>(
-      "greatest(c0)",
-      {{StringView("a"), StringView("b"), StringView("c")}},
-      {StringView("a"), StringView("b"), StringView("c")});
+      "greatest(c0)", {{"a"_sv, "b"_sv, "c"_sv}}, {"a"_sv, "b"_sv, "c"_sv});
 
   runTest<StringView>(
-      "greatest(c0, 'aaa')",
-      {{StringView(""), StringView("abb")}},
-      {StringView("aaa"), StringView("abb")});
+      "greatest(c0, 'aaa')", {{""_sv, "abb"_sv}}, {"aaa"_sv, "abb"_sv});
 }
 
 TEST_F(GreatestLeastTest, leasstVarchar) {
   runTest<StringView>(
-      "least(c0)",
-      {{StringView("a"), StringView("b"), StringView("c")}},
-      {StringView("a"), StringView("b"), StringView("c")});
+      "least(c0)", {{"a"_sv, "b"_sv, "c"_sv}}, {"a"_sv, "b"_sv, "c"_sv});
 
   runTest<StringView>(
-      "least(c0, 'aaa')",
-      {{StringView(""), StringView("abb")}},
-      {StringView(""), StringView("aaa")});
+      "least(c0, 'aaa')", {{""_sv, "abb"_sv}}, {""_sv, "aaa"_sv});
 }
 
 TEST_F(GreatestLeastTest, greatestTimeStamp) {
@@ -158,15 +148,15 @@ TEST_F(GreatestLeastTest, leastDate) {
 TEST_F(GreatestLeastTest, stringBuffersMoved) {
   runTest<StringView>(
       "least(c0, c1)",
-      {{StringView("aaaaaaaaaaaaaa"), StringView("bbbbbbbbbbbbbb")},
-       {StringView("cccccccccccccc"), StringView("dddddddddddddd")}},
-      {StringView("aaaaaaaaaaaaaa"), StringView("bbbbbbbbbbbbbb")},
+      {{"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
+       {"cccccccccccccc"_sv, "dddddddddddddd"_sv}},
+      {"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
       1);
 
   runTest<StringView>(
       "least(c0, c1, '')",
-      {{StringView("aaaaaaaaaaaaaa"), StringView("bbbbbbbbbbbbbb")},
-       {StringView("cccccccccccccc"), StringView("dddddddddddddd")}},
-      {StringView(""), StringView("")},
+      {{"aaaaaaaaaaaaaa"_sv, "bbbbbbbbbbbbbb"_sv},
+       {"cccccccccccccc"_sv, "dddddddddddddd"_sv}},
+      {""_sv, ""_sv},
       0);
 }

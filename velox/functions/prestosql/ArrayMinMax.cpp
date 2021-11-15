@@ -21,22 +21,6 @@
 namespace facebook::velox::functions {
 namespace {
 
-template <typename T>
-class Min {
- public:
-  bool operator()(const T& arg1, const T& arg2) const {
-    return arg1 < arg2;
-  }
-};
-
-template <typename T>
-class Max {
- public:
-  bool operator()(const T& arg1, const T& arg2) const {
-    return arg1 > arg2;
-  }
-};
-
 template <template <typename> class F, TypeKind kind>
 VectorPtr applyTyped(
     const SelectivityVector& rows,
@@ -177,11 +161,11 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_min,
     signatures(),
-    std::make_unique<ArrayMinMaxFunction<Min>>());
+    std::make_unique<ArrayMinMaxFunction<std::less>>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_array_max,
     signatures(),
-    std::make_unique<ArrayMinMaxFunction<Max>>());
+    std::make_unique<ArrayMinMaxFunction<std::greater>>());
 
 } // namespace facebook::velox::functions

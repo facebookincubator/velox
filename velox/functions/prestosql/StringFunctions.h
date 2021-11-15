@@ -270,4 +270,52 @@ struct LTrimFunction : public TrimFunctionBase<T, true, false> {};
 template <typename T>
 struct RTrimFunction : public TrimFunctionBase<T, false, true> {};
 
+/// Returns number of characters in the specified string.
+template <typename T>
+struct LengthFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const StringView& input) {
+    result = stringImpl::length<false>(input);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callAscii(int64_t& result, const StringView& input) {
+    result = stringImpl::length<true>(input);
+    return true;
+  }
+};
+
+/// Pad functions
+/// lpad(string, size, padString) → varchar
+///     Left pads string to size characters with padString.  If size is
+///     less than the length of string, the result is truncated to size
+///     characters.  size must not be negative and padString must be non-empty.
+/// rpad(string, size, padString) → varchar
+///     Right pads string to size characters with padString.  If size is
+///     less than the length of string, the result is truncated to size
+///     characters.  size must not be negative and padString must be non-empty.
+template <bool lpad>
+VELOX_UDF_BEGIN(pad)
+// ASCII input always produces ASCII result.
+static constexpr bool is_default_ascii_behavior = true;
+
+FOLLY_ALWAYS_INLINE bool call(
+    out_type<Varchar>& result,
+    const arg_type<Varchar>& string,
+    const arg_type<int64_t>& size,
+    const arg_type<Varchar>& padString) {
+  stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, padString);
+  return true;
+}
+
+FOLLY_ALWAYS_INLINE bool callAscii(
+    out_type<Varchar>& result,
+    const arg_type<Varchar>& string,
+    const arg_type<int64_t>& size,
+    const arg_type<Varchar>& padString) {
+  stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, padString);
+  return true;
+}
+VELOX_UDF_END();
 } // namespace facebook::velox::functions
