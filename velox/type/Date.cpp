@@ -25,13 +25,9 @@ void parseTo(folly::StringPiece in, Date& out) {
 
 std::string Date::toString() const {
   // Find the number of seconds for the days_;
-  int32_t daySeconds;
-  if (__builtin_mul_overflow(days_, 86400, &daySeconds)) {
-    VELOX_FAIL("Can't convert days to date: {}", days_)
-  }
-
-  const time_t daySecondsForGmtime = daySeconds;
-  auto tmValue = gmtime(&daySecondsForGmtime);
+  // Casting 86400 to int64 to handle overflows gracefully.
+  int64_t daySeconds = days_ * (int64_t)(86400);
+  auto tmValue = gmtime((const time_t*)&daySeconds);
   if (!tmValue) {
     VELOX_FAIL("Can't convert days to dates: {}", days_);
   }

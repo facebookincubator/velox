@@ -132,8 +132,13 @@ TEST(Type, DateToString) {
   Date wayBeforeEpoch(-18262);
   EXPECT_EQ(wayBeforeEpoch.toString(), "1920-01-02");
 
+  // Trying a very large -integer for boundary checks. Such values are tested in ExpressionFuzzer.
+  // Since we use int64 for the intermediate conversion of days to ms, the large -ve value remains
+  // valid. However, gmtime uses int32 for the number of years, so the eventual results might
+  // look like garbage. However, they are consistent with presto java so keeping the same
+  // implementation.
   Date dateOverflow(-1855961014);
-  EXPECT_THROW(dateOverflow.toString(), VeloxRuntimeError);
+  EXPECT_EQ(dateOverflow.toString(), "-5079479-05-03");
 }
 
 TEST(Type, DateComparison) {
