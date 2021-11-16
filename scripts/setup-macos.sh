@@ -112,7 +112,7 @@ function install_build_prerequisites {
       brew extract "--version=${ver}" "${pkg}" "${tap}"
       brew install "${tap}/${pkg}@${ver}"
     else
-      brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula $pkg
+      brew install --formula "${pkg}" && echo "Installation of ${pkg} is successful" || brew upgrade --formula "$pkg"
     fi
   done
 
