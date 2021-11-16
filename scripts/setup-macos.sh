@@ -102,7 +102,6 @@ function update_brew {
 function install_build_prerequisites {
   for pkg in ${MACOS_DEPS}
   do
-    echo $pkg
     if [[ "${pkg}" =~ ([0-9a-z-]*):([0-9](\.[0-9\])*) ]];
     then
       pkg=${BASH_REMATCH[1]}
