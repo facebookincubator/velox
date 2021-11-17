@@ -252,7 +252,9 @@ struct MillisecondFunction {
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& /*date*/) {
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Date>& /*date*/) {
     // Dates do not have millisecond granularity.
     result = 0;
     return true;
