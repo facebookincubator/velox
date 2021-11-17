@@ -81,7 +81,7 @@ std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
 }
 
 FOLLY_ALWAYS_INLINE
-std::tm getDateTime(Date date) {
+std::tm getDateTm(Date date) {
   int64_t seconds = date.days() * kSecondsInDay;
   std::tm dateTime;
   gmtime_r((const time_t*)&seconds, &dateTime);
@@ -114,7 +114,7 @@ struct YearFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1900 + getDateTime(date).tm_year;
+    result = 1900 + getDateTm(date).tm_year;
     return true;
   }
 };
@@ -131,7 +131,7 @@ struct MonthFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1 + getDateTime(date).tm_mon;
+    result = 1 + getDateTm(date).tm_mon;
     return true;
   }
 };
@@ -148,7 +148,7 @@ struct DayFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_mday;
+    result = getDateTm(date).tm_mday;
     return true;
   }
 };
@@ -166,8 +166,8 @@ struct DayOfWeekFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    std::tm dateTime = getDateTime(date);
-    result = dateTime.tm_wday == 0 ? 7 : dateTime.tm_wday;
+    std::tm dateTm = getDateTm(date);
+    result = dateTm.tm_wday == 0 ? 7 : dateTm.tm_wday;
     return true;
   }
 };
@@ -184,7 +184,7 @@ struct DayOfYearFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1 + getDateTime(date).tm_yday;
+    result = 1 + getDateTm(date).tm_yday;
     return true;
   }
 };
@@ -201,7 +201,7 @@ struct HourFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_hour;
+    result = getDateTm(date).tm_hour;
     return true;
   }
 };
@@ -218,7 +218,7 @@ struct MinuteFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_min;
+    result = getDateTm(date).tm_min;
     return true;
   }
 };
@@ -235,7 +235,7 @@ struct SecondFunction {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTime(date).tm_sec;
+    result = getDateTm(date).tm_sec;
     return true;
   }
 };
@@ -382,7 +382,7 @@ struct DateTruncFunction {
       VELOX_USER_FAIL("{} is not a valid DATE field", unitString);
     }
 
-    auto dateTm = getDateTime(date);
+    auto dateTm = getDateTm(date);
     fixTmForTruncation(dateTm, unit);
 
     result = Date(timegm(&dateTm) / kSecondsInDay);
