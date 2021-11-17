@@ -75,17 +75,17 @@ getSeconds(Timestamp timestamp, const date::time_zone* timeZone) {
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
   int64_t seconds = getSeconds(timestamp, timeZone);
-  std::tm dateTm;
-  gmtime_r((const time_t*)&seconds, &dateTm);
-  return dateTm;
+  std::tm dateTime;
+  gmtime_r((const time_t*)&seconds, &dateTime);
+  return dateTime;
 }
 
 FOLLY_ALWAYS_INLINE
 std::tm getDateTm(Date date) {
   int64_t seconds = date.days() * kSecondsInDay;
-  std::tm dateTime;
-  gmtime_r((const time_t*)&seconds, &dateTime);
-  return dateTime;
+  std::tm dateTm;
+  gmtime_r((const time_t*)&seconds, &dateTm);
+  return dateTm;
 }
 
 template <typename T>
