@@ -75,9 +75,9 @@ getSeconds(Timestamp timestamp, const date::time_zone* timeZone) {
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
   int64_t seconds = getSeconds(timestamp, timeZone);
-  std::tm dateTime;
-  gmtime_r((const time_t*)&seconds, &dateTime);
-  return dateTime;
+  std::tm dateTm;
+  gmtime_r((const time_t*)&seconds, &dateTm);
+  return dateTm;
 }
 
 FOLLY_ALWAYS_INLINE
