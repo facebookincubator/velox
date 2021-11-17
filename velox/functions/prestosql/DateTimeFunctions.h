@@ -324,7 +324,8 @@ struct DateTruncFunction {
   }
 
   FOLLY_ALWAYS_INLINE void fixTmForTruncation(
-      std::tm& tmValue, const DateTimeUnit& unit) {
+      std::tm& tmValue,
+      const DateTimeUnit& unit) {
     switch (unit) {
       case DateTimeUnit::kYear:
         tmValue.tm_mon = 0;
@@ -384,7 +385,7 @@ struct DateTruncFunction {
     auto dateTm = getDateTime(date);
     fixTmForTruncation(dateTm, unit);
 
-    result = Date(timegm(&dateTm)/kSecondsInDay);
+    result = Date(timegm(&dateTm) / kSecondsInDay);
     return true;
   }
 };
