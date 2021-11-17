@@ -99,6 +99,8 @@ void registerFunctions() {
   registerFunction<MillisecondFunction, int64_t, Date>({"millisecond"});
   registerFunction<DateTruncFunction, Timestamp, Varchar, Timestamp>(
       {"date_trunc"});
+  registerFunction<DateTruncFunction, Date, Varchar, Date>(
+      {"date_trunc"});
   registerFunction<
       ParseDateTimeFunction,
       TimestampWithTimezone,

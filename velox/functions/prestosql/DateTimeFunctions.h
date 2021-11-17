@@ -314,6 +314,39 @@ struct DateTruncFunction {
     }
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Date>* /*date*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE void fixTmForTruncation(
+      std::tm& tmValue, const DateTimeUnit& unit) {
+    switch (unit) {
+      case DateTimeUnit::kYear:
+        tmValue.tm_mon = 0;
+        tmValue.tm_yday = 0;
+        FMT_FALLTHROUGH;
+      case DateTimeUnit::kMonth:
+        tmValue.tm_mday = 1;
+        FMT_FALLTHROUGH;
+      case DateTimeUnit::kDay:
+        tmValue.tm_hour = 0;
+        FMT_FALLTHROUGH;
+      case DateTimeUnit::kHour:
+        tmValue.tm_min = 0;
+        FMT_FALLTHROUGH;
+      case DateTimeUnit::kMinute:
+        tmValue.tm_sec = 0;
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Timestamp>& result,
       const arg_type<Varchar>& unitString,
@@ -327,31 +360,31 @@ struct DateTruncFunction {
     }
 
     auto dateTime = getDateTime(timestamp, timeZone_);
-    switch (unit) {
-      case DateTimeUnit::kYear:
-        dateTime.tm_mon = 0;
-        dateTime.tm_yday = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kMonth:
-        dateTime.tm_mday = 1;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kDay:
-        dateTime.tm_hour = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kHour:
-        dateTime.tm_min = 0;
-        FMT_FALLTHROUGH;
-      case DateTimeUnit::kMinute:
-        dateTime.tm_sec = 0;
-        break;
-      default:
-        VELOX_UNREACHABLE();
-    }
+    fixTmForTruncation(dateTime, unit);
 
     result = Timestamp(timegm(&dateTime), 0);
     if (timeZone_ != nullptr) {
       result.toTimezone(*timeZone_);
     }
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Date>& result,
+      const arg_type<Varchar>& unitString,
+      const arg_type<Date>& date) {
+    const auto unit = unit_.has_value()
+        ? unit_.value()
+        : fromDateTimeUnitString(unitString, true /*throwIfInvalid*/).value();
+    if (unit == DateTimeUnit::kSecond || unit == DateTimeUnit::kMinute ||
+        unit == DateTimeUnit::kHour) {
+      VELOX_USER_FAIL("{} is not a valid DATE field", unitString);
+    }
+
+    auto dateTm = getDateTime(date);
+    fixTmForTruncation(dateTm, unit);
+
+    result = Date(timegm(&dateTm)/kSecondsInDay);
     return true;
   }
 };

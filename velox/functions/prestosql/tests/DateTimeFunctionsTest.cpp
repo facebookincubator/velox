@@ -529,6 +529,37 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
       dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
 }
 
+TEST_F(DateTimeFunctionsTest, dateTruncDate) {
+  const auto dateTrunc = [&](const std::string& unit,
+                             std::optional<Date> date) {
+    return evaluateOnce<Date>(
+        fmt::format("date_trunc('{}', c0)", unit), date);
+  };
+
+ EXPECT_EQ(std::nullopt, dateTrunc("year", std::nullopt));
+ EXPECT_THROW(dateTrunc("second", Date(0)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("minute", Date(0)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("hour", Date(0)), VeloxUserError);
+
+ EXPECT_EQ(Date(0), dateTrunc("day", Date(0)));
+
+ // Date(18297) is 2020-02-04
+ EXPECT_EQ(Date(18297), dateTrunc("day", Date(18297)));
+ EXPECT_EQ(Date(18293), dateTrunc("month", Date(18297)));
+ EXPECT_EQ(Date(18262), dateTrunc("year", Date(18297)));
+ EXPECT_THROW(dateTrunc("second", Date(18297)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("minute", Date(18297)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("hour", Date(18297)), VeloxUserError);
+
+ // Date(-18297) is 1919-11-27
+ EXPECT_EQ(Date(-18297), dateTrunc("day", Date(-18297)));
+ EXPECT_EQ(Date(-18324), dateTrunc("month", Date(-18297)));
+ EXPECT_EQ(Date(-18628), dateTrunc("year", Date(-18297)));
+ EXPECT_THROW(dateTrunc("second", Date(-18297)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("minute", Date(-18297)), VeloxUserError);
+ EXPECT_THROW(dateTrunc("hour", Date(-18297)), VeloxUserError);
+}
+
 TEST_F(DateTimeFunctionsTest, parseDatetime) {
   // Check null behavior.
   EXPECT_EQ(std::nullopt, parseDatetime("1970-01-01", std::nullopt));
