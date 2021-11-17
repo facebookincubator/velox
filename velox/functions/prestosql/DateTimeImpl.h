@@ -22,7 +22,7 @@ namespace facebook::velox::functions {
 namespace {
 constexpr double kNanosecondsInSecond = 1'000'000'000;
 constexpr int64_t kNanosecondsInMilliseconds = 1'000'000;
-constexpr int64_t KSecondsInDay = 86'400;
+constexpr int64_t kSecondsInDay = 86'400;
 } // namespace
 
 FOLLY_ALWAYS_INLINE double toUnixtime(const Timestamp& timestamp) {

@@ -82,7 +82,7 @@ std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
 
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Date date) {
-  int64_t seconds = date.days() * KSecondsInDay;
+  int64_t seconds = date.days() * kSecondsInDay;
   std::tm dateTime;
   gmtime_r((const time_t*)&seconds, &dateTime);
   return dateTime;
