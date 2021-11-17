@@ -536,11 +536,13 @@ TEST_F(DateTimeFunctionsTest, dateTruncDate) {
   };
 
   EXPECT_EQ(std::nullopt, dateTrunc("year", std::nullopt));
+
+  EXPECT_EQ(Date(0), dateTrunc("day", Date(0)));
+  EXPECT_EQ(Date(0), dateTrunc("year", Date(0)));
+  EXPECT_EQ(Date(0), dateTrunc("month", Date(0)));
   EXPECT_THROW(dateTrunc("second", Date(0)), VeloxUserError);
   EXPECT_THROW(dateTrunc("minute", Date(0)), VeloxUserError);
   EXPECT_THROW(dateTrunc("hour", Date(0)), VeloxUserError);
-
-  EXPECT_EQ(Date(0), dateTrunc("day", Date(0)));
 
   // Date(18297) is 2020-02-04
   EXPECT_EQ(Date(18297), dateTrunc("day", Date(18297)));
