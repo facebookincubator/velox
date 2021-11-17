@@ -83,9 +83,9 @@ std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Date date) {
   int64_t seconds = date.days() * kSecondsInDay;
-  std::tm dateTm;
-  gmtime_r((const time_t*)&seconds, &dateTm);
-  return dateTm;
+  std::tm dateTime;
+  gmtime_r((const time_t*)&seconds, &dateTime);
+  return dateTime;
 }
 
 template <typename T>
