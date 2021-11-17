@@ -80,6 +80,14 @@ std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
   return dateTime;
 }
 
+FOLLY_ALWAYS_INLINE
+std::tm getDateTime(Date date) {
+  int64_t seconds = date.days() * KSecondsInDay;
+  std::tm dateTime;
+  gmtime_r((const time_t*)&seconds, &dateTime);
+  return dateTime;
+}
+
 template <typename T>
 struct InitSessionTimezone {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -104,6 +112,11 @@ struct YearFunction : public InitSessionTimezone<T> {
     result = 1900 + getDateTime(timestamp, this->timeZone_).tm_year;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = 1900 + getDateTime(date).tm_year;
+    return true;
+  }
 };
 
 template <typename T>
@@ -116,6 +129,11 @@ struct MonthFunction : public InitSessionTimezone<T> {
     result = 1 + getDateTime(timestamp, this->timeZone_).tm_mon;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = 1 + getDateTime(date).tm_mon;
+    return true;
+  }
 };
 
 template <typename T>
@@ -126,6 +144,11 @@ struct DayFunction : public InitSessionTimezone<T> {
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_mday;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_mday;
     return true;
   }
 };
@@ -141,6 +164,12 @@ struct DayOfWeekFunction : public InitSessionTimezone<T> {
     result = dateTime.tm_wday == 0 ? 7 : dateTime.tm_wday;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    std::tm dateTime = getDateTime(date);
+    result = dateTime.tm_wday == 0 ? 7 : dateTime.tm_wday;
+    return true;
+  }
 };
 
 template <typename T>
@@ -151,6 +180,11 @@ struct DayOfYearFunction : public InitSessionTimezone<T> {
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = 1 + getDateTime(timestamp, this->timeZone_).tm_yday;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = 1 + getDateTime(date).tm_yday;
     return true;
   }
 };
@@ -165,6 +199,11 @@ struct HourFunction : public InitSessionTimezone<T> {
     result = getDateTime(timestamp, this->timeZone_).tm_hour;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_hour;
+    return true;
+  }
 };
 
 template <typename T>
@@ -175,6 +214,11 @@ struct MinuteFunction : public InitSessionTimezone<T> {
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = getDateTime(timestamp, this->timeZone_).tm_min;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_min;
     return true;
   }
 };
@@ -189,6 +233,11 @@ struct SecondFunction {
     result = getDateTime(timestamp, nullptr).tm_sec;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_sec;
+    return true;
+  }
 };
 
 template <typename T>
@@ -199,6 +248,12 @@ struct MillisecondFunction {
       int64_t& result,
       const arg_type<Timestamp>& timestamp) {
     result = timestamp.getNanos() / kNanosecondsInMilliseconds;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    // Dates do not have millisecond granularity.
+    result = 0;
     return true;
   }
 };
