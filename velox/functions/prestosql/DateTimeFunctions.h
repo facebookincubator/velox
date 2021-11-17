@@ -50,6 +50,7 @@ struct FromUnixtimeFunction {
 };
 
 namespace {
+constexpr int64_t kSecondsInDay = 86'400;
 
 FOLLY_ALWAYS_INLINE const date::time_zone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
@@ -251,7 +252,7 @@ struct MillisecondFunction {
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& /*date*/) {
     // Dates do not have millisecond granularity.
     result = 0;
     return true;
@@ -315,7 +316,7 @@ struct DateTruncFunction {
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
-      const core::QueryConfig& config,
+      const core::QueryConfig& /*config*/,
       const arg_type<Varchar>* unitString,
       const arg_type<Date>* /*date*/) {
     if (unitString != nullptr) {
