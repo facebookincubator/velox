@@ -33,13 +33,10 @@ Unit        Example Truncated Value
 
 The above examples use the timestamp ``2001-08-22 03:04:05.321`` as the input.
 
-.. function:: date_trunc(unit, timestamp) -> timestamp
+.. function:: date_trunc(unit, x) -> x
 
-    Returns ``timestamp`` truncated to ``unit``.
+    Returns ``x`` truncated to ``unit``. The supported types for ``x`` are TIMESTAMP and DATE.
 
-.. function:: date_trunc(unit, date) -> date
-
-    Returns ``date`` truncated to ``unit``.
 
 Java Date Functions
 -------------------

@@ -81,7 +81,7 @@ std::tm getDateTime(Timestamp timestamp, const date::time_zone* timeZone) {
 }
 
 FOLLY_ALWAYS_INLINE
-std::tm getDateTm(Date date) {
+std::tm getDateTime(Date date) {
   int64_t seconds = date.days() * kSecondsInDay;
   std::tm dateTm;
   gmtime_r((const time_t*)&seconds, &dateTm);
@@ -114,7 +114,7 @@ struct YearFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1900 + getDateTm(date).tm_year;
+    result = 1900 + getDateTime(date).tm_year;
     return true;
   }
 };
@@ -131,7 +131,7 @@ struct MonthFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1 + getDateTm(date).tm_mon;
+    result = 1 + getDateTime(date).tm_mon;
     return true;
   }
 };
@@ -148,7 +148,7 @@ struct DayFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTm(date).tm_mday;
+    result = getDateTime(date).tm_mday;
     return true;
   }
 };
@@ -166,7 +166,7 @@ struct DayOfWeekFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    std::tm dateTm = getDateTm(date);
+    std::tm dateTm = getDateTime(date);
     result = dateTm.tm_wday == 0 ? 7 : dateTm.tm_wday;
     return true;
   }
@@ -184,7 +184,7 @@ struct DayOfYearFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = 1 + getDateTm(date).tm_yday;
+    result = 1 + getDateTime(date).tm_yday;
     return true;
   }
 };
@@ -201,7 +201,7 @@ struct HourFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTm(date).tm_hour;
+    result = getDateTime(date).tm_hour;
     return true;
   }
 };
@@ -218,7 +218,7 @@ struct MinuteFunction : public InitSessionTimezone<T> {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTm(date).tm_min;
+    result = getDateTime(date).tm_min;
     return true;
   }
 };
@@ -235,7 +235,7 @@ struct SecondFunction {
   }
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
-    result = getDateTm(date).tm_sec;
+    result = getDateTime(date).tm_sec;
     return true;
   }
 };
@@ -323,25 +323,25 @@ struct DateTruncFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE void fixTmForTruncation(
-      std::tm& tmValue,
+  FOLLY_ALWAYS_INLINE void adjustDateTime(
+      std::tm& dateTime,
       const DateTimeUnit& unit) {
     switch (unit) {
       case DateTimeUnit::kYear:
-        tmValue.tm_mon = 0;
-        tmValue.tm_yday = 0;
+        dateTime.tm_mon = 0;
+        dateTime.tm_yday = 0;
         FMT_FALLTHROUGH;
       case DateTimeUnit::kMonth:
-        tmValue.tm_mday = 1;
+        dateTime.tm_mday = 1;
         FMT_FALLTHROUGH;
       case DateTimeUnit::kDay:
-        tmValue.tm_hour = 0;
+        dateTime.tm_hour = 0;
         FMT_FALLTHROUGH;
       case DateTimeUnit::kHour:
-        tmValue.tm_min = 0;
+        dateTime.tm_min = 0;
         FMT_FALLTHROUGH;
       case DateTimeUnit::kMinute:
-        tmValue.tm_sec = 0;
+        dateTime.tm_sec = 0;
         break;
       default:
         VELOX_UNREACHABLE();
@@ -361,7 +361,7 @@ struct DateTruncFunction {
     }
 
     auto dateTime = getDateTime(timestamp, timeZone_);
-    fixTmForTruncation(dateTime, unit);
+    adjustDateTime(dateTime, unit);
 
     result = Timestamp(timegm(&dateTime), 0);
     if (timeZone_ != nullptr) {
@@ -382,10 +382,15 @@ struct DateTruncFunction {
       VELOX_USER_FAIL("{} is not a valid DATE field", unitString);
     }
 
-    auto dateTm = getDateTm(date);
-    fixTmForTruncation(dateTm, unit);
+    if (unit == DateTimeUnit::kDay) {
+      result = Date(date.days());
+      return true;
+    }
 
-    result = Date(timegm(&dateTm) / kSecondsInDay);
+    auto dateTime = getDateTime(date);
+    adjustDateTime(dateTime, unit);
+
+    result = Date(timegm(&dateTime) / kSecondsInDay);
     return true;
   }
 };
