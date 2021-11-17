@@ -50,7 +50,7 @@ struct FromUnixtimeFunction {
 };
 
 namespace {
-constexpr int64_t kSecondsInDay = 86'400;
+inline constexpr int64_t kSecondsInDay = 86'400;
 
 FOLLY_ALWAYS_INLINE const date::time_zone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {
