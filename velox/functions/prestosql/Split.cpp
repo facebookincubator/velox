@@ -247,6 +247,15 @@ class SplitFunction : public exec::VectorFunction {
     // Note, that the rest of the string can be empty - we still add it.
     arrayRef.emplace_back(StringView(sinput.data(), sinput.size()));
   }
+
+ public:
+  bool propagateStringEncodingFromAllInputs() const override {
+    return true;
+  }
+
+  bool ensureStringEncodingSetAtAllInputs() const override {
+    return true;
+  }
 };
 
 } // namespace
