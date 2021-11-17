@@ -67,9 +67,9 @@ TEST_F(AssignUniqueIdTest, multiBatch) {
     input.push_back(makeRowVector({column}));
   }
 
-  auto plan = PlanBuilder().values(input, true).assignUniqueId().planNode();
+  auto plan = PlanBuilder().values(input).assignUniqueId().planNode();
 
-  verifyUniqueId(plan, input, 1000);
+  verifyUniqueId(plan, input);
 }
 
 TEST_F(AssignUniqueIdTest, exceedRequestLimit) {
