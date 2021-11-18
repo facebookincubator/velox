@@ -99,8 +99,8 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 <p>The above examples use the timestamp <code class="docutils literal notranslate"><span class="pre">2001-08-22</span> <span class="pre">03:04:05.321</span></code> as the input.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="date_trunc">
-<span class="sig-name descname"><span class="pre">date_trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#date_trunc" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">timestamp</span></code> truncated to <code class="docutils literal notranslate"><span class="pre">unit</span></code>.</p>
+<span class="sig-name descname"><span class="pre">date_trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#date_trunc" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> truncated to <code class="docutils literal notranslate"><span class="pre">unit</span></code>. The supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are TIMESTAMP and DATE.</p>
 </dd></dl>
 
 </section>
@@ -118,78 +118,79 @@ pattern format.</p>
 </section>
 <section id="convenience-extraction-functions">
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this headline">¶</a></h2>
+<p>These functions are supported for TIMESTAMP and DATE values.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="day">
-<span class="sig-name descname"><span class="pre">day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the day of the month from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the day of the month from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="day_of_month">
-<span class="sig-name descname"><span class="pre">day_of_month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_month" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">day_of_month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_month" title="Permalink to this definition">¶</a></dt>
 <dd><p>This is an alias for <a class="reference internal" href="#day" title="day"><code class="xref py py-func docutils literal notranslate"><span class="pre">day()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="day_of_week">
-<span class="sig-name descname"><span class="pre">day_of_week</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_week" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the ISO day of the week from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.
+<span class="sig-name descname"><span class="pre">day_of_week</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_week" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the ISO day of the week from <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 The value ranges from <code class="docutils literal notranslate"><span class="pre">1</span></code> (Monday) to <code class="docutils literal notranslate"><span class="pre">7</span></code> (Sunday).</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="day_of_year">
-<span class="sig-name descname"><span class="pre">day_of_year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_year" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the day of the year from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.
+<span class="sig-name descname"><span class="pre">day_of_year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day_of_year" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the day of the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>.
 The value ranges from <code class="docutils literal notranslate"><span class="pre">1</span></code> to <code class="docutils literal notranslate"><span class="pre">366</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="dow">
-<span class="sig-name descname"><span class="pre">dow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#dow" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">dow</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#dow" title="Permalink to this definition">¶</a></dt>
 <dd><p>This is an alias for <a class="reference internal" href="#day_of_week" title="day_of_week"><code class="xref py py-func docutils literal notranslate"><span class="pre">day_of_week()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="doy">
-<span class="sig-name descname"><span class="pre">doy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#doy" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">doy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#doy" title="Permalink to this definition">¶</a></dt>
 <dd><p>This is an alias for <a class="reference internal" href="#day_of_year" title="day_of_year"><code class="xref py py-func docutils literal notranslate"><span class="pre">day_of_year()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="hour">
-<span class="sig-name descname"><span class="pre">hour</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#hour" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the hour of the day from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>. The value ranges from 0 to 23.</p>
+<span class="sig-name descname"><span class="pre">hour</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#hour" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the hour of the day from <code class="docutils literal notranslate"><span class="pre">x</span></code>. The value ranges from 0 to 23.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="millisecond">
-<span class="sig-name descname"><span class="pre">millisecond</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int64</span></span></span><a class="headerlink" href="#millisecond" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the millisecond of the second from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">millisecond</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int64</span></span></span><a class="headerlink" href="#millisecond" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the millisecond of the second from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="minute">
-<span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#minute" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the minute of the hour from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">minute</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#minute" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the minute of the hour from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="month">
-<span class="sig-name descname"><span class="pre">month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#month" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the month of the year from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">month</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#month" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the month of the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="second">
-<span class="sig-name descname"><span class="pre">second</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#second" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the second of the minute from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">second</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#second" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the second of the minute from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="year">
-<span class="sig-name descname"><span class="pre">year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#year" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns the year from <code class="docutils literal notranslate"><span class="pre">timestamp</span></code>.</p>
+<span class="sig-name descname"><span class="pre">year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#year" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the year from <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
 </dd></dl>
 
 </section>
