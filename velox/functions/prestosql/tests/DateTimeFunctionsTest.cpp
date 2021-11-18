@@ -227,6 +227,20 @@ TEST_F(DateTimeFunctionsTest, quarter) {
   EXPECT_EQ(3, quarter(Timestamp(998423705, 321000000)));
 }
 
+TEST_F(DateTimeFunctionsTest, quarterDate) {
+  const auto quarter = [&](std::optional<Date> date) {
+    return evaluateOnce<int64_t>("quarter(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, quarter(std::nullopt));
+  EXPECT_EQ(1, quarter(Date(0)));
+  EXPECT_EQ(4, quarter(Date(-1)));
+  EXPECT_EQ(4, quarter(Date(-40)));
+  EXPECT_EQ(2, quarter(Date(110)));
+  EXPECT_EQ(3, quarter(Date(200)));
+  EXPECT_EQ(1, quarter(Date(18262)));
+  EXPECT_EQ(1, quarter(Date(-18262)));
+}
+
 TEST_F(DateTimeFunctionsTest, month) {
   const auto month = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int64_t>("month(c0)", date);

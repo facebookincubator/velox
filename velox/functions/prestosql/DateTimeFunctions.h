@@ -131,6 +131,11 @@ struct QuarterFunction : public InitSessionTimezone<T> {
     result = getDateTime(timestamp, this->timeZone_).tm_mon / 3 + 1;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
+    result = getDateTime(date).tm_mon / 3 + 1;
+    return true;
+  }
 };
 
 template <typename T>
