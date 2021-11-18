@@ -539,6 +539,9 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
       Timestamp(996649200, 0),
       dateTrunc("month", Timestamp(998'474'645, 321'001'234)));
   EXPECT_EQ(
+      Timestamp(993970800, 0),
+      dateTrunc("quarter", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
       Timestamp(978336000, 0),
       dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
 
@@ -563,6 +566,9 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
       Timestamp(996604200, 0),
       dateTrunc("month", Timestamp(998'474'645, 321'001'234)));
   EXPECT_EQ(
+      Timestamp(993925800, 0),
+      dateTrunc("quarter", Timestamp(998'474'645, 321'001'234)));
+  EXPECT_EQ(
       Timestamp(978287400, 0),
       dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
 }
@@ -577,6 +583,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncDate) {
 
   EXPECT_EQ(Date(0), dateTrunc("day", Date(0)));
   EXPECT_EQ(Date(0), dateTrunc("year", Date(0)));
+  EXPECT_EQ(Date(0), dateTrunc("quarter", Date(0)));
   EXPECT_EQ(Date(0), dateTrunc("month", Date(0)));
   EXPECT_THROW(dateTrunc("second", Date(0)), VeloxUserError);
   EXPECT_THROW(dateTrunc("minute", Date(0)), VeloxUserError);
@@ -585,6 +592,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncDate) {
   // Date(18297) is 2020-02-04
   EXPECT_EQ(Date(18297), dateTrunc("day", Date(18297)));
   EXPECT_EQ(Date(18293), dateTrunc("month", Date(18297)));
+  EXPECT_EQ(Date(18262), dateTrunc("quarter", Date(18297)));
   EXPECT_EQ(Date(18262), dateTrunc("year", Date(18297)));
   EXPECT_THROW(dateTrunc("second", Date(18297)), VeloxUserError);
   EXPECT_THROW(dateTrunc("minute", Date(18297)), VeloxUserError);
@@ -593,6 +601,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncDate) {
   // Date(-18297) is 1919-11-27
   EXPECT_EQ(Date(-18297), dateTrunc("day", Date(-18297)));
   EXPECT_EQ(Date(-18324), dateTrunc("month", Date(-18297)));
+  EXPECT_EQ(Date(-18355), dateTrunc("quarter", Date(-18297)));
   EXPECT_EQ(Date(-18628), dateTrunc("year", Date(-18297)));
   EXPECT_THROW(dateTrunc("second", Date(-18297)), VeloxUserError);
   EXPECT_THROW(dateTrunc("minute", Date(-18297)), VeloxUserError);
