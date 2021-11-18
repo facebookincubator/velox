@@ -122,6 +122,18 @@ struct YearFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
+struct QuarterFunction : public InitSessionTimezone<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getDateTime(timestamp, this->timeZone_).tm_mon / 3 + 1;
+    return true;
+  }
+};
+
+template <typename T>
 struct MonthFunction : public InitSessionTimezone<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 

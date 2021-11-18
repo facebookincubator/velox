@@ -204,6 +204,29 @@ TEST_F(DateTimeFunctionsTest, yearDate) {
   EXPECT_EQ(1920, year(Date(-18262)));
 }
 
+TEST_F(DateTimeFunctionsTest, quarter) {
+  const auto quarter = [&](std::optional<Timestamp> date) {
+    return evaluateOnce<int64_t>("quarter(c0)", date);
+  };
+  EXPECT_EQ(std::nullopt, quarter(std::nullopt));
+  EXPECT_EQ(1, quarter(Timestamp(0, 0)));
+  EXPECT_EQ(4, quarter(Timestamp(-1, 9000)));
+  EXPECT_EQ(4, quarter(Timestamp(4000000000, 0)));
+  EXPECT_EQ(4, quarter(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(2, quarter(Timestamp(990000000, 321000000)));
+  EXPECT_EQ(3, quarter(Timestamp(998423705, 321000000)));
+
+  setQueryTimeZone("Pacific/Apia");
+
+  EXPECT_EQ(std::nullopt, quarter(std::nullopt));
+  EXPECT_EQ(4, quarter(Timestamp(0, 0)));
+  EXPECT_EQ(4, quarter(Timestamp(-1, 12300000000)));
+  EXPECT_EQ(4, quarter(Timestamp(4000000000, 0)));
+  EXPECT_EQ(4, quarter(Timestamp(4000000000, 123000000)));
+  EXPECT_EQ(2, quarter(Timestamp(990000000, 321000000)));
+  EXPECT_EQ(3, quarter(Timestamp(998423705, 321000000)));
+}
+
 TEST_F(DateTimeFunctionsTest, month) {
   const auto month = [&](std::optional<Timestamp> date) {
     return evaluateOnce<int64_t>("month(c0)", date);

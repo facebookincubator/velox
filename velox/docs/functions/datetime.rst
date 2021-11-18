@@ -97,6 +97,10 @@ These functions are supported for TIMESTAMP and DATE values.
 
     Returns the month of the year from ``x``.
 
+.. function:: quarter(x) -> bigint
+
+    Returns the quarter of the year from ``x``. The value ranges from ``1`` to ``4``.
+
 .. function:: second(x) -> bigint
 
     Returns the second of the minute from ``x``.
