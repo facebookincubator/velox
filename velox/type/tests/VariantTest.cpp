@@ -18,6 +18,21 @@
 
 using namespace facebook::velox;
 
+TEST(Variant, ArrayInferType) {
+  EXPECT_EQ(*ARRAY(UNKNOWN()), *variant(TypeKind::ARRAY).inferType());
+  EXPECT_EQ(*ARRAY(UNKNOWN()), *variant::array({}).inferType());
+  EXPECT_EQ(
+      *ARRAY(BIGINT()),
+      *variant::array({variant(TypeKind::BIGINT)}).inferType());
+  EXPECT_EQ(
+      *ARRAY(VARCHAR()),
+      *variant::array({variant(TypeKind::VARCHAR)}).inferType());
+  EXPECT_EQ(
+      *ARRAY(ARRAY(DOUBLE())),
+      *variant::array({variant::array({variant(TypeKind::DOUBLE)})})
+           .inferType());
+}
+
 struct Foo {};
 
 struct Bar {};
