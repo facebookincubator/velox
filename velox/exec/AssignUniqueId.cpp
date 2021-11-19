@@ -83,11 +83,12 @@ void AssignUniqueId::generateIdColumn(vector_size_t size) {
       requestRowIds();
     }
 
-    auto end = std::min(size, (int32_t)(start + kRowIdsPerRequest));
+    auto batchSize = std::min(
+        {maxRowIdCounterValue_ - rowIdCounter_ + 1, kRowIdsPerRequest});
+    auto end = (int32_t)std::min({(int64_t)size, start + batchSize});
     VELOX_CHECK_EQ((rowIdCounter_ + end - 1) & uniqueValueMask_, 0);
     std::iota(
         rawResults + start, rawResults + end, uniqueValueMask_ | rowIdCounter_);
-    rowIdCounter_ += end;
     start = end;
   }
 }
@@ -96,7 +97,5 @@ void AssignUniqueId::requestRowIds() {
   rowIdCounter_ = rowIdPool_->fetch_add(kRowIdsPerRequest);
   maxRowIdCounterValue_ =
       std::min({rowIdCounter_ + kRowIdsPerRequest, kMaxRowId});
-  VELOX_CHECK_LT(
-      maxRowIdCounterValue_, kMaxRowId, "Unique row id exceeds the limit");
 }
 } // namespace facebook::velox::exec

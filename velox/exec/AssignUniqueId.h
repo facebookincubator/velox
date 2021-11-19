@@ -50,6 +50,7 @@ class AssignUniqueId : public Operator {
 
  private:
   void generateIdColumn(vector_size_t size);
+
   void requestRowIds();
 
   const int64_t kRowIdsPerRequest = 1L << 20;
