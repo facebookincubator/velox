@@ -83,12 +83,13 @@ void AssignUniqueId::generateIdColumn(vector_size_t size) {
       requestRowIds();
     }
 
-    auto batchSize = std::min(
-        {maxRowIdCounterValue_ - rowIdCounter_ + 1, kRowIdsPerRequest});
-    auto end = (int32_t)std::min({(int64_t)size, start + batchSize});
+    auto batchSize =
+        std::min(maxRowIdCounterValue_ - rowIdCounter_ + 1, kRowIdsPerRequest);
+    auto end = (int32_t)std::min((int64_t)size, start + batchSize);
     VELOX_CHECK_EQ((rowIdCounter_ + end - 1) & uniqueValueMask_, 0);
     std::iota(
         rawResults + start, rawResults + end, uniqueValueMask_ | rowIdCounter_);
+    rowIdCounter_ += end;
     start = end;
   }
 }
@@ -96,6 +97,6 @@ void AssignUniqueId::generateIdColumn(vector_size_t size) {
 void AssignUniqueId::requestRowIds() {
   rowIdCounter_ = rowIdPool_->fetch_add(kRowIdsPerRequest);
   maxRowIdCounterValue_ =
-      std::min({rowIdCounter_ + kRowIdsPerRequest, kMaxRowId});
+      std::min(rowIdCounter_ + kRowIdsPerRequest, kMaxRowId);
 }
 } // namespace facebook::velox::exec

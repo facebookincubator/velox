@@ -1293,7 +1293,7 @@ class AssignUniqueIdNode : public PlanNode {
     return taskUniqueId_;
   }
 
-  const std::shared_ptr<std::atomic_int64_t> uniqueIdCounter() const {
+  const std::shared_ptr<std::atomic_int64_t>& uniqueIdCounter() const {
     return uniqueIdCounter_;
   };
 
