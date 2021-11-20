@@ -217,7 +217,9 @@ referencing input strings. To do that they must define a reuse_strings_from_arg
 member variable and initialize it to the index of the argument whose strings
 are being re-used in the result. This will allow the engine to add a reference
 to input string buffers to the result vector and ensure that these buffers will
-not go away prematurely.</p>
+not go away prematurely. The output types can be scalar strings (varchar and
+varbinaries), but also complex types containing strings, such as arrays, maps,
+and rows.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Results refer to strings in the first argument.</span>
 <span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">reuse_strings_from_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
