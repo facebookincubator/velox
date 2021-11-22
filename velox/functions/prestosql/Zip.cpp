@@ -88,21 +88,18 @@ class ZipFunction : public exec::VectorFunction {
 
     // Determine what the size of the resultant elements will be so we can
     // reserve enough space.
-    auto getMaxArraySize = [&](vector_size_t row) -> vector_size_t {
-      vector_size_t maxSize = 0;
-      for (int i = 0; i < numInputArrays; i++) {
-        maxSize = std::max(maxSize, rawSizes[i][indices[i][row]]);
-      }
-      return maxSize;
-    };
 
     BufferPtr resultArraySizesBuffer = allocateSizes(rows.end(), pool);
     auto rawResultArraySizes =
         resultArraySizesBuffer->asMutable<vector_size_t>();
+    for (int i = 0; i < numInputArrays; i++) {
+      rows.applyToSelected([&](auto row) {
+        rawResultArraySizes[row] = std::max(rawResultArraySizes[row], rawSizes[i][indices[i][row]]);
+      });
+    }
+
     rows.applyToSelected([&](auto row) {
-      auto maxSize = getMaxArraySize(row);
-      resultElementsSize += maxSize;
-      rawResultArraySizes[row] = maxSize;
+      resultElementsSize += rawResultArraySizes[row];
     });
 
     // Create individual result vectors for each input Array vector.
