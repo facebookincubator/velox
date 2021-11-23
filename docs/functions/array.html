@@ -200,6 +200,15 @@ Throws if the element is not present in the array. Corresponds to SQL subscript 
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="zip">
+<span class="sig-name descname"><span class="pre">zip</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">array(T)</span></em>, <em class="sig-param"><span class="pre">array(U)</span></em>, <em class="sig-param"><span class="pre">..)</span> <span class="pre">-&gt;</span> <span class="pre">array(row(T</span></em>, <em class="sig-param"><span class="pre">U</span></em>, <em class="sig-param"><span class="pre">...)</span></em><span class="sig-paren">)</span><a class="headerlink" href="#zip" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the merge of the given arrays, element-wise into a single array of rows.
+The M-th element of the N-th argument will be the N-th field of the M-th output element.
+If the arguments have an uneven length, missing values are filled with <code class="docutils literal notranslate"><span class="pre">NULL</span></code></p>
+<p>SELECT zip(ARRAY[1, 2], ARRAY[‘1b’, null, ‘3b’]); – [ROW(1, ‘1b’), ROW(2, null), ROW(null, ‘3b’)]</p>
+</dd></dl>
+
 </section>
 
 
