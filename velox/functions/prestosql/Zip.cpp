@@ -94,13 +94,13 @@ class ZipFunction : public exec::VectorFunction {
         resultArraySizesBuffer->asMutable<vector_size_t>();
     for (int i = 0; i < numInputArrays; i++) {
       rows.applyToSelected([&](auto row) {
-        rawResultArraySizes[row] = std::max(rawResultArraySizes[row], rawSizes[i][indices[i][row]]);
+        rawResultArraySizes[row] =
+            std::max(rawResultArraySizes[row], rawSizes[i][indices[i][row]]);
       });
     }
 
-    rows.applyToSelected([&](auto row) {
-      resultElementsSize += rawResultArraySizes[row];
-    });
+    rows.applyToSelected(
+        [&](auto row) { resultElementsSize += rawResultArraySizes[row]; });
 
     // Create individual result vectors for each input Array vector.
 
