@@ -27,3 +27,14 @@ add_executable(velox_example_opaque_type OpaqueType.cpp)
 
 target_link_libraries(velox_example_opaque_type velox_type velox_vector
                       velox_expression velox_memory)
+
+add_executable(velox_example_simple_query SimpleQuery.cpp)
+
+target_link_libraries(
+  velox_example_simple_query
+  velox_type
+  velox_vector
+  velox_memory
+  velox_expression
+  velox_exec
+  velox_functions_prestosql)
