@@ -51,6 +51,7 @@ void registerVectorFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_max, "array_max");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_min, "array_min");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_cardinality, "cardinality");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_slice, "slice");
 
