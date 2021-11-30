@@ -368,6 +368,13 @@ class ExprSet {
       const SelectivityVector& rows,
       EvalCtx* ctx,
       std::vector<VectorPtr>* result) {
+    if (result) {
+      for (auto& vector : *result) {
+        if (vector) {
+          vector->clear();
+        }
+      }
+    }
     eval(0, exprs_.size(), true, rows, ctx, result);
   }
 
