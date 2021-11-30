@@ -19,12 +19,15 @@
 
 namespace facebook::velox::functions {
 
+VectorPtr emptyVectorPtr;
 bool prepareFlatResultsVector(
     VectorPtr* result,
     const SelectivityVector& rows,
     exec::EvalCtx* context,
-    VectorPtr& argToReuse) {
-  if (!*result && BaseVector::isReusableFlatVector(argToReuse)) {
+    VectorPtr& argToReuse = emptyVectorPtr) {
+  // TODO: Re-enable after a better holistic clear reuse approach is added.
+  if (false && !*result && argToReuse &&
+      BaseVector::isReusableFlatVector(argToReuse)) {
     // Move input vector to result
     VELOX_CHECK(
         VectorEncoding::isFlat(argToReuse.get()->encoding()) &&
@@ -39,5 +42,4 @@ bool prepareFlatResultsVector(
   VELOX_CHECK(VectorEncoding::isFlat((*result).get()->encoding()));
   return false;
 }
-
 } // namespace facebook::velox::functions

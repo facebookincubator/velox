@@ -23,7 +23,7 @@ namespace facebook::velox::functions {
 
 /// Helper function that prepares a string result vector and initializes it.
 /// It will use the input argToReuse vector instead of creating new one when
-/// possible. Returns true if argToReuse vector was moved to results
+/// possible. Returns true if argToReuse vector was moved to results.
 bool prepareFlatResultsVector(
     VectorPtr* result,
     const SelectivityVector& rows,
