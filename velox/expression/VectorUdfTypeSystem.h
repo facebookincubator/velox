@@ -819,12 +819,13 @@ struct VectorWriter<
   size_t offset_ = 0;
 };
 
-template <typename T>
-struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>> {
-  using vector_t = typename TypeToFlatVector<T>::type;
+template <>
+struct VectorWriter<bool> {
+  using vector_t = typename TypeToFlatVector<bool>::type;
 
   void init(vector_t& vector) {
     vector_ = &vector;
+    rawValues_ = vector_->mutableRawValues<uint64_t>();
   }
 
   void ensureSize(size_t size) {
@@ -841,7 +842,7 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>> {
   }
 
   void copyCommit(const bool& data) {
-    vector_->set(offset_, data);
+    bits::setBit(reinterpret_cast<uint64_t*>(rawValues_), offset_, data);
   }
 
   void commitNull() {
@@ -868,6 +869,7 @@ struct VectorWriter<T, std::enable_if_t<std::is_same_v<T, bool>>> {
   bool proxy_;
   vector_t* vector_;
   size_t offset_ = 0;
+  uint64_t* rawValues_;
 };
 
 template <typename T>
