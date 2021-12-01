@@ -26346,7 +26346,7 @@ public:
 #define SNAPPY_VERSION \
     ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
 
-namespace snappy {
+namespace duckdb_snappy {
 
 using int8 = std::int8_t;
 using uint8 = std::uint8_t;
@@ -26368,7 +26368,7 @@ struct iovec {
 };
 #endif  // !HAVE_SYS_UIO_H
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 #endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
 
@@ -26376,7 +26376,7 @@ struct iovec {
 // LICENSE_CHANGE_END
 
 
-namespace snappy {
+namespace duckdb_snappy {
   class Source;
   class Sink;
 
@@ -26516,7 +26516,7 @@ namespace snappy {
   // unspecified prefix of *compressed.
   bool IsValidCompressed(Source* compressed);
 
-}  // end namespace snappy
+}  // end namespace duckdb_snappy
 
 #endif  // THIRD_PARTY_SNAPPY_SNAPPY_H__
 
@@ -28129,7 +28129,7 @@ void ColumnReader::PreparePage(idx_t compressed_page_size, idx_t uncompressed_pa
 		break;
 	}
 	case CompressionCodec::SNAPPY: {
-		auto res = snappy::RawUncompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr);
+		auto res = duckdb_snappy::RawUncompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr);
 		if (!res) {
 			throw std::runtime_error("Decompression failure");
 		}
@@ -30726,9 +30726,9 @@ void ParquetWriter::Flush(ChunkCollection &buffer) {
 			compressed_data = temp_writer.blob.data.get();
 			break;
 		case CompressionCodec::SNAPPY: {
-			compressed_size = snappy::MaxCompressedLength(temp_writer.blob.size);
+			compressed_size = duckdb_snappy::MaxCompressedLength(temp_writer.blob.size);
 			compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
-			snappy::RawCompress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size,
+			duckdb_snappy::RawCompress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size,
 			                    (char *)compressed_buf.get(), &compressed_size);
 			compressed_data = compressed_buf.get();
 			break;
@@ -30866,7 +30866,7 @@ void ParquetWriter::Finalize() {
 
 #include <stddef.h>
 
-namespace snappy {
+namespace duckdb_snappy {
 
 // A Sink is an interface that consumes a sequence of bytes.
 class Sink {
@@ -31012,7 +31012,7 @@ class UncheckedByteArraySink : public Sink {
   char* dest_;
 };
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 #endif  // THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
 
@@ -31020,7 +31020,7 @@ class UncheckedByteArraySink : public Sink {
 // LICENSE_CHANGE_END
 
 
-namespace snappy {
+namespace duckdb_snappy {
 
 Source::~Source() { }
 
@@ -31091,7 +31091,7 @@ char* UncheckedByteArraySink::GetAppendBufferVariable(
   return dest_;
 }
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 
 // LICENSE_CHANGE_END
@@ -31253,7 +31253,7 @@ char* UncheckedByteArraySink::GetAppendBufferVariable(
 #define DECLARE_bool(flag_name) \
   extern bool FLAGS_ ## flag_name
 
-namespace snappy {
+namespace duckdb_snappy {
 
 //static const uint32 kuint32max = static_cast<uint32>(0xFFFFFFFF);
 //static const int64 kint64max = static_cast<int64>(0x7FFFFFFFFFFFFFFFLL);
@@ -31643,7 +31643,7 @@ inline char* string_as_array(string* str) {
   return str->empty() ? NULL : &*str->begin();
 }
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 #endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
 
@@ -31651,7 +31651,7 @@ inline char* string_as_array(string* str) {
 // LICENSE_CHANGE_END
 
 
-namespace snappy {
+namespace duckdb_snappy {
 
 void Varint::Append32(string* s, uint32 value) {
   char buf[Varint::kMax32];
@@ -31659,7 +31659,7 @@ void Varint::Append32(string* s, uint32 value) {
   s->append(buf, p - buf);
 }
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 
 // LICENSE_CHANGE_END
@@ -31739,7 +31739,7 @@ void Varint::Append32(string* s, uint32 value) {
 
 
 
-namespace snappy {
+namespace duckdb_snappy {
 namespace internal {
 
 // Working memory performs a single allocation to hold all scratch space
@@ -31950,7 +31950,7 @@ static const int kMaxHashTableBits = 14;
 static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
 
 
-}  // end namespace snappy
+}  // end namespace duckdb_snappy
 
 #endif  // THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
 
@@ -32003,7 +32003,7 @@ static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
 #include <string>
 #include <vector>
 
-namespace snappy {
+namespace duckdb_snappy {
 
 using internal::COPY_1_BYTE_OFFSET;
 using internal::COPY_2_BYTE_OFFSET;
@@ -33588,7 +33588,7 @@ bool Uncompress(Source* compressed, Sink* uncompressed) {
   }
 }
 
-}  // namespace snappy
+}  // namespace duckdb_snappy
 
 
 // LICENSE_CHANGE_END
