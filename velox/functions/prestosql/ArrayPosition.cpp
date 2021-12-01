@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <deque>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/vector/DecodedVector.h"
@@ -21,7 +20,10 @@
 namespace facebook::velox::functions {
 namespace {
 
-template <TypeKind kind>
+// Find the index of the first match for primitive types.
+template <
+    TypeKind kind,
+    typename std::enable_if<TypeTraits<kind>::isPrimitiveType, int>::type = 0>
 void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -41,18 +43,24 @@ void applyTypedFirstMatch(
 
     auto search = searchDecoded.valueAt<T>(row);
 
-    for (auto i = 0; i < size; i++) {
+    int i;
+    for (i = 0; i < size; i++) {
       if (!elementsDecoded.isNullAt(offset + i) &&
           elementsDecoded.valueAt<T>(offset + i) == search) {
         flatResult.set(row, i + 1);
-        return;
+        break;
       }
     }
-    flatResult.set(row, 0);
+    if (i == size)
+      flatResult.set(row, 0);
   });
 }
 
-void applyComplexTypeFirstMatch(
+// Find the index of the first match for complex types.
+template <
+    TypeKind kind,
+    typename std::enable_if<!TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
@@ -73,51 +81,23 @@ void applyComplexTypeFirstMatch(
     auto offset = rawOffsets[indices[row]];
     auto searchIndex = searchIndices[row];
 
-    for (auto i = 0; i < size; i++) {
+    int i;
+    for (i = 0; i < size; i++) {
       if (!elementsBase->isNullAt(offset + i) &&
           elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
         flatResult.set(row, i + 1);
-        return;
+        break;
       }
     }
-    flatResult.set(row, 0);
+    if (i == size)
+      flatResult.set(row, 0);
   });
 }
 
-template <>
-void applyTypedFirstMatch<TypeKind::ARRAY>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeFirstMatch(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
-}
-
-template <>
-void applyTypedFirstMatch<TypeKind::MAP>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeFirstMatch(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
-}
-
-template <>
-void applyTypedFirstMatch<TypeKind::ROW>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeFirstMatch(
-      rows, arrayDecoded, elementsDecoded, searchDecoded, flatResult);
-}
-
-template <TypeKind kind>
+// Find the index of the instance-th match for primitive types.
+template <
+    TypeKind kind,
+    typename std::enable_if<TypeTraits<kind>::isPrimitiveType, int>::type = 0>
 void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
@@ -148,21 +128,27 @@ void applyTypedWithInstance(
     int step = instance > 0 ? 1 : -1;
     instance = std::abs(instance);
 
-    for (auto i = startIndex; i != endIndex; i += step) {
+    int i;
+    for (i = startIndex; i != endIndex; i += step) {
       if (!elementsDecoded.isNullAt(offset + i) &&
           elementsDecoded.valueAt<T>(offset + i) == search) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
-          return;
+          break;
         }
       }
     }
-    flatResult.set(row, 0);
+    if (i == endIndex)
+      flatResult.set(row, 0);
   });
 }
 
-void applyComplexTypeWithInstance(
+// Find the index of the instance-th match for complex types.
+template <
+    TypeKind kind,
+    typename std::enable_if<!TypeTraits<kind>::isPrimitiveType, int>::type = 0>
+void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
@@ -195,69 +181,20 @@ void applyComplexTypeWithInstance(
     int step = instance > 0 ? 1 : -1;
     instance = std::abs(instance);
 
-    for (auto i = startIndex; i != endIndex; i += step) {
+    int i;
+    for (i = startIndex; i != endIndex; i += step) {
       if (!elementsBase->isNullAt(offset + i) &&
           elementsBase->equalValueAt(searchBase, offset + i, searchIndex)) {
         --instance;
         if (instance == 0) {
           flatResult.set(row, i + 1);
-          return;
+          break;
         }
       }
     }
-    flatResult.set(row, 0);
+    if (i == endIndex)
+      flatResult.set(row, 0);
   });
-}
-
-template <>
-void applyTypedWithInstance<TypeKind::ARRAY>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    const DecodedVector& instanceDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeWithInstance(
-      rows,
-      arrayDecoded,
-      elementsDecoded,
-      searchDecoded,
-      instanceDecoded,
-      flatResult);
-}
-
-template <>
-void applyTypedWithInstance<TypeKind::MAP>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    const DecodedVector& instanceDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeWithInstance(
-      rows,
-      arrayDecoded,
-      elementsDecoded,
-      searchDecoded,
-      instanceDecoded,
-      flatResult);
-}
-
-template <>
-void applyTypedWithInstance<TypeKind::ROW>(
-    const SelectivityVector& rows,
-    DecodedVector& arrayDecoded,
-    const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
-    const DecodedVector& instanceDecoded,
-    FlatVector<int64_t>& flatResult) {
-  applyComplexTypeWithInstance(
-      rows,
-      arrayDecoded,
-      elementsDecoded,
-      searchDecoded,
-      instanceDecoded,
-      flatResult);
 }
 
 class ArrayPositionFunction : public exec::VectorFunction {
