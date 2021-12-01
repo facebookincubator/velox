@@ -69,56 +69,75 @@ types of the arguments must match Velox types as specified in the following
 mapping:</p>
 <table class="docutils align-default">
 <colgroup>
+<col style="width: 14%" />
+<col style="width: 43%" />
 <col style="width: 42%" />
-<col style="width: 58%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Velox Type</p></th>
-<th class="head"><p>C++ Type</p></th>
+<th class="head"><p>C++ Argument Type</p></th>
+<th class="head"><p>C++ Result Type</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>BOOLEAN</p></td>
 <td><p>bool</p></td>
+<td><p>bool</p></td>
 </tr>
 <tr class="row-odd"><td><p>TINYINT</p></td>
+<td><p>int8_t</p></td>
 <td><p>int8_t</p></td>
 </tr>
 <tr class="row-even"><td><p>SMALLINT</p></td>
 <td><p>int16_t</p></td>
+<td><p>int16_t</p></td>
 </tr>
 <tr class="row-odd"><td><p>INTEGER</p></td>
+<td><p>int32_t</p></td>
 <td><p>int32_t</p></td>
 </tr>
 <tr class="row-even"><td><p>BIGINT</p></td>
 <td><p>int64_t</p></td>
+<td><p>int64_t</p></td>
 </tr>
 <tr class="row-odd"><td><p>REAL</p></td>
+<td><p>float</p></td>
 <td><p>float</p></td>
 </tr>
 <tr class="row-even"><td><p>DOUBLE</p></td>
 <td><p>double</p></td>
+<td><p>double</p></td>
 </tr>
 <tr class="row-odd"><td><p>VARCHAR</p></td>
 <td><p>StringView</p></td>
+<td><p>out_type&lt;Varchar&gt;</p></td>
 </tr>
 <tr class="row-even"><td><p>VARBINARY</p></td>
 <td><p>StringView</p></td>
+<td><p>out_type&lt;Varbinary&gt;</p></td>
 </tr>
 <tr class="row-odd"><td><p>TIMESTAMP</p></td>
 <td><p>Timestamp</p></td>
+<td><p>Timestamp</p></td>
 </tr>
 <tr class="row-even"><td><p>ARRAY</p></td>
-<td><p>ArrayValReader</p></td>
+<td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
+<td><p>out_type&lt;Array&lt;E&gt;&gt;</p></td>
 </tr>
 <tr class="row-odd"><td><p>MAP</p></td>
-<td><p>SlowMapVal</p></td>
+<td><p>arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
+<td><p>out_type&lt;Map&lt;K, V&gt;&gt;</p></td>
 </tr>
 <tr class="row-even"><td><p>ROW</p></td>
-<td><p>RowReader</p></td>
+<td><p>arg_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
+<td><p>out_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
 </tr>
 </tbody>
 </table>
+<p>arg_type and out_type templates are defined by the VELOX_UDF_BEGIN macro. These
+types provide interfaces similar to std::string, std::vector, std::unordered_map
+and std::tuple. The underlying implementations are optimized to read and write
+from and to the columnar representation without extra copying.</p>
 <p>Note: Do not pay too much attention to complex type mappings at the moment.
 They are included here for completeness, but require a whole separate
 discussion.</p>
@@ -369,9 +388,8 @@ Some of the defining features of these functions are:</p>
 <ul class="simple">
 <li><p>take vectors as inputs and produce vectors as a result;</p></li>
 <li><p>have access to vector encodings and metadata;</p></li>
-<li><p>can be defined for generic input types;</p></li>
-<li><p>allow for implementing lambda functions;</p></li>
-<li><p>allow for pre-processing constant inputs and reusing the results across multiple batches, e.g. compile constant regular expressions once per query or thread of execution.</p></li>
+<li><p>can be defined for generic input types, e.g. generic arrays, maps and structs;</p></li>
+<li><p>allow for implementing <a class="reference internal" href="lambda-functions.html"><span class="doc">lambda functions</span></a>;</p></li>
 </ul>
 <p>Vector function interface allows for many optimizations that are not available
 to simple functions. These optimizations often leverage different vector
@@ -383,7 +401,6 @@ examples,</p>
 <li><p><a class="reference internal" href="../functions/array.html#cardinality" title="cardinality"><code class="xref py py-func docutils literal notranslate"><span class="pre">cardinality()</span></code></a> function takes advantage of the ArrayVector and MapVector representations and simply returns the “sizes” buffer of the input vector.</p></li>
 <li><p><code class="xref py py-func docutils literal notranslate"><span class="pre">is_null()</span></code> function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.</p></li>
 <li><p><a class="reference internal" href="../functions/array.html#element_at" title="element_at"><code class="xref py py-func docutils literal notranslate"><span class="pre">element_at()</span></code></a> function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.</p></li>
-<li><p><a class="reference internal" href="../functions/string.html#id3" title="substr"><code class="xref py py-func docutils literal notranslate"><span class="pre">substr()</span></code></a> function can avoid copying strings by returning StringViews that point to the string buffers in the input vector.</p></li>
 </ul>
 <p>To define a vector function, make a subclass of f4d::exec::VectorFunction and
 implement the “apply” method.</p>
@@ -457,8 +474,14 @@ case, the function must override isDeterministic method to return false.</p>
 <span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
-<p>Note that DecodedVector can be used to get a flat vector-like interface to any
-vector.</p>
+<p>Note that <a class="reference internal" href="dictionary-encoding.html#decoded-vector"><span class="std std-ref">DecodedVector</span></a> can be used to get a flat vector-like interface to any
+vector. A helper class exec::DecodedArgs can be used to decode multiple arguments.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exec</span><span class="o">::</span><span class="n">DecodedArgs</span><span class="w"> </span><span class="nf">decodedArgs</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">);</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">firstArg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decodedArgs</span><span class="p">.</span><span class="n">at</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">secondArg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">decodedArgs</span><span class="p">.</span><span class="n">at</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
 </section>
 <section id="result-vector">
 <h3>Result vector<a class="headerlink" href="#result-vector" title="Permalink to this headline">¶</a></h3>
