@@ -219,7 +219,11 @@ find_package(ZLIB)
 find_library(SNAPPY snappy)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  if(NOT CMAKE_PREFIX_PATH MATCHES ".*\/icu4c.*")
+    # icu4c is not found in CMAKE_PREFIX_PATH
+    # defaults to "/usr/local/opt/icu4c" for MacOS
+    set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  endif()
   find_package(ICU REQUIRED)
   include_directories(${ICU_INCLUDE_DIRS})
   link_directories("${ICU_INCLUDE_DIRS}/../lib")
