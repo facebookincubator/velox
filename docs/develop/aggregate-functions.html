@@ -144,7 +144,7 @@ the type of the intermediate result and the type of the final result.</p>
 </li>
 </ul>
 <p>Fixed-width part of the accumulator is stored in the row. Variable-width
-part (if exists) is allocated using HashStringAllocator and a pointer is
+part (if exists) is allocated using <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> and a pointer is
 stored in the fixed-width part.</p>
 <p>A row is a contiguous byte buffer. Given N aggregates, first N / 8 bytes
 store the null flags, one bit per aggregate, followed by fixed-width
@@ -480,11 +480,11 @@ and final results.</p>
 <section id="documentation">
 <h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
 <p>Finally, document the new function by adding an entry to velox/docs/functions/aggregate.rst</p>
-<p>You can see the documentation for all functions at <a class="reference external" href="https://fburl.com/velox-doc">https://fburl.com/velox-doc</a> and read about how documentation is generated at <a class="reference external" href="https://github.com/facebookexternal/velox/tree/master/velox/docs#velox-documentation">https://github.com/facebookexternal/velox/tree/master/velox/docs#velox-documentation</a></p>
+<p>You can see the documentation for all functions at <a class="reference internal" href="../functions/aggregate.html"><span class="doc">Aggregate Functions</span></a> and read about how documentation is generated at <a class="reference external" href="https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation">https://github.com/facebookincubator/velox/tree/main/velox/docs#velox-documentation</a></p>
 </section>
 <section id="accumulator">
 <h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this headline">¶</a></h2>
-<p>Variable-width accumulators need to use HashStringAllocator to allocate memory. An instance of the allocator is available in the base class: <em>f4d::exec::Aggregate::allocator_</em>.</p>
+<p>Variable-width accumulators need to use <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> to allocate memory. An instance of the allocator is available in the base class: <em>f4d::exec::Aggregate::allocator_</em>.</p>
 <p>Sometimes you’ll need to create a custom accumulator. Sometimes one of the existing accumulators would do the jobs.</p>
 <p>SingleValueAccumulator used by <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions can be used to store a single value of variable-width type, e.g. string, array, map or struct.</p>
 <p>ValueList accumulator used by <a class="reference internal" href="../functions/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a list of values. This is an append-only accumulator.</p>
@@ -502,7 +502,7 @@ and final results.</p>
 </section>
 <section id="end-to-end-testing">
 <h2>End-to-End Testing<a class="headerlink" href="#end-to-end-testing" title="Permalink to this headline">¶</a></h2>
-<p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveQueries.java in presto_cpp repo to add a query that uses the new function.</p>
+<p>To confirm that aggregate function works end to end as part of query, update testAggregations() test in TestHiveAggregationQueries.java in presto_cpp repo to add a query that uses the new function.</p>
 <div class="highlight-java notranslate"><div class="highlight"><pre><span></span><span class="n">assertQuery</span><span class="p">(</span><span class="s">&quot;SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1&quot;</span><span class="p">);</span>
 </pre></div>
 </div>
