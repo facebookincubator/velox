@@ -64,9 +64,10 @@ jobs:
           command: |
             set -xu
             if [[ ! -e ~/deps ]]; then
+              export PATH=~/deps/bin:${PATH}
               mkdir ~/deps ~/deps-src
               curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C ~/deps
-              PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
+              DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
               # Calculate the prefix path before we delete brew's repos and taps.
               echo "$(pwd)/deps;$(brew --prefix openssl@1.1);$(brew --prefix icu4c)" > ~/deps/PREFIX_PATH
               rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
