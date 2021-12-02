@@ -67,6 +67,8 @@ jobs:
               mkdir ~/deps ~/deps-src
               curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C ~/deps
               PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
+              # Calculate the prefix path before we delete brew's repos and taps.
+              echo "$(pwd)/deps;$(brew --prefix openssl@1.1);$(brew --prefix icu4c)" > ~/deps/PREFIX_PATH
               rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
             fi
       - save_cache:
@@ -88,7 +90,7 @@ jobs:
             mkdir -p .ccache
             export CCACHE_DIR=$(pwd)/.ccache
             ccache -sz -M 5Gi
-            cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=$(cat ~/deps/PREFIX_PATH) -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             ninja -C _build/debug
             ccache -s
           no_output_timeout: 1h
