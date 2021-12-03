@@ -71,7 +71,7 @@ class HashJoinTest : public HiveConnectorTestBase {
 
   // This function sets up a hashJoin between tables with different schema.
   // For the purpose of simplicity, it is assumed that the key columns
-  // `numJoinKeys` appear at the beginning of the table.
+  // `numJoinKeys` appear at the beginning of the tables.
   void testJoinTablesDifferentSchemas(
       const std::vector<TypePtr>& leftColTypes,
       const std::vector<TypePtr>& rightColTypes,
@@ -249,7 +249,7 @@ TEST_F(HashJoinTest, filter) {
 TEST_F(HashJoinTest, filterOrder) {
   // In this join, the tables have different schema. The filter predicate uses
   // a column from the right table before the left and the corresponding
-  // columns at the same channel number have different types. This has been
+  // columns at the same channel number(1) have different types. This has been
   // a source of errors in the join logic.
   testJoinTablesDifferentSchemas(
       {BIGINT(), VARCHAR(), BIGINT()},
