@@ -129,6 +129,7 @@ void HashProbe::initializeFilter(
   std::vector<std::shared_ptr<const core::ITypedExpr>> filters = {filter};
   filter_ =
       std::make_unique<ExprSet>(std::move(filters), operatorCtx_->execCtx());
+
   ChannelIndex filterChannel = 0;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
