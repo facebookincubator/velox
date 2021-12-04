@@ -1,0 +1,371 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Aggregations &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Joins" href="joins.html" />
+    <link rel="prev" title="Arena Allocation" href="arena.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregations</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="aggregations">
+<h1>Aggregations<a class="headerlink" href="#aggregations" title="Permalink to this headline">¶</a></h1>
+<p>This article discusses aggregation-related optimizations in Velox. We go through
+the different techniques and provide examples and define the conditions for the
+application of each.</p>
+<p>Velox supports partial and final aggregations with zero, one or multiple
+grouping keys and zero, one or multiple aggregate functions.</p>
+<p><a class="reference internal" href="../functions/aggregate.html"><span class="doc">Aggregate Functions</span></a> section of the documentation
+lists all available aggregate functions and <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
+function?</span></a> guide explains how to add more.</p>
+<p>Use AggregationNode to insert an aggregation into the query plan. Specify
+aggregation step (partial, intermediate, final, or single), grouping keys and
+aggregate functions. You may also specify boolean columns to mask out rows for
+some or all aggregations. Grouping keys must refer to input columns and cannot
+contain expressions. To compute aggregations over expressions add ProjectNode
+just before the AggregationNode.</p>
+<p>Here are examples of aggregation query plans:</p>
+<p>Group-by with a single grouping key and single aggregate function:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {a}, aggregates = {sum(b)}</p></li>
+</ul>
+<p>Group-by with a single grouping key and an aggregate function applied to an
+expression:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span> <span class="o">*</span> <span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><dl class="simple">
+<dt>AggregationNode: groupingKeys = {a}, aggregates = {sum(d)}</dt><dd><ul>
+<li><p>ProjectNode: a, d := b * c</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+<p>Group-by with multiple grouping keys and multiple aggregates:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">),</span> <span class="k">avg</span><span class="p">(</span><span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {sum(c), avg(c)}</p></li>
+</ul>
+<p>Distinct aggregation:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">DISTINCT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="k">FROM</span> <span class="n">t</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {}</p></li>
+</ul>
+<p>Aggregation with a mask:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span> <span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="n">filter</span> <span class="p">(</span><span class="k">where</span> <span class="k">c</span> <span class="o">&gt;</span> <span class="mi">10</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><dl class="simple">
+<dt>AggregationNode: groupingKeys = {a}, aggregates = {sum(b, mask: d)}</dt><dd><ul>
+<li><p>ProjectNode: a, b, d := c &gt; 10</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+<p>Global aggregation:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">sum</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="k">avg</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p>AggregationNode: groupingKeys = {}, aggregates = {sum(a), avg(b)}</p></li>
+</ul>
+<section id="hashaggregation-operator">
+<h2>HashAggregation Operator<a class="headerlink" href="#hashaggregation-operator" title="Permalink to this headline">¶</a></h2>
+<p>AggregationNode is translated to the HashAggregation operator for execution.
+Distinct aggregations, e.g. aggregations with no aggregates, run in streaming
+mode. For each batch of input rows, the operator determines a set of new
+grouping key values and returns these as results. Aggregations with one or more
+aggregate functions need to process all input before producing the results.</p>
+</section>
+<section id="push-down-into-table-scan">
+<h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Permalink to this headline">¶</a></h2>
+<p>HashAggregation operator supports pushing down aggregations into table scan.
+Pushdown is enabled when all of the following conditions are met:
+* the aggregation function takes a single argument,
+* the argument is a column read directly from the table without any transformations,
+* that column is not used anywhere else in the query.</p>
+<p>For example, pushdown is possible in the following query:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<p>Pushdown is also possible if the data is filtered using columns other than the
+column that is the input to the aggregation function. For example, pushdown is
+enabled in the following query:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+<span class="k">FROM</span> <span class="n">t</span>
+<span class="k">WHERE</span> <span class="n">a</span> <span class="o">&gt;</span> <span class="mi">100</span>
+<span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<p>In these queries, TableScan operator produces “b” column as a LazyVector
+and “sum” aggregate function loads this vector using ValueHook, e.g. each value
+is read from the file and passed directly to “sum” aggregate which adds it to
+the accumulator. No intermediate vector is produced in this case.</p>
+<p>The following aggregate functions support pushdown: <a class="reference internal" href="../functions/aggregate.html#sum" title="sum"><code class="xref py py-func docutils literal notranslate"><span class="pre">sum()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>,
+<a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bitwise_and_agg" title="bitwise_and_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_and_agg()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bitwise_or_agg" title="bitwise_or_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">bitwise_or_agg()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#bool_and" title="bool_and"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_and()</span></code></a>,
+<a class="reference internal" href="../functions/aggregate.html#bool_or" title="bool_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">bool_or()</span></code></a>.</p>
+</section>
+<section id="adaptive-array-based-aggregation">
+<h2>Adaptive Array-Based Aggregation<a class="headerlink" href="#adaptive-array-based-aggregation" title="Permalink to this headline">¶</a></h2>
+<p>HashAggregation operator stores aggregated data in rows. Each row corresponds to
+a unique combination of grouping key values. Global aggregations store data in
+a single row. Check out the Memory Layout section of <a class="reference internal" href="aggregate-functions.html"><span class="doc">How to add an aggregate
+function?</span></a> guide for details.</p>
+<p>Data rows are organized into a hash table which can be in either hash, array or
+normalized key mode.</p>
+<section id="hash-mode">
+<h3>Hash mode<a class="headerlink" href="#hash-mode" title="Permalink to this headline">¶</a></h3>
+<p>In hash mode, the processing of incoming rows consists of the following steps:</p>
+<ul class="simple">
+<li><p>calculate a hash of the grouping keys,</p></li>
+<li><p>use that hash to look up one or more possibly matching entries in the hash table,</p></li>
+<li><p>compare the grouping keys to identify the single matching entry or determine that no such entry exists,</p></li>
+<li><p>insert a new entry if a matching entry doesn’t exist,</p></li>
+<li><p>update the accumulators of an existing or newly created entry.</p></li>
+</ul>
+</section>
+<section id="array-mode">
+<h3>Array mode<a class="headerlink" href="#array-mode" title="Permalink to this headline">¶</a></h3>
+<p>In array mode, there is an array of pointers to data rows. The grouping key
+values of the incoming rows are mapped to a single integer which is used as an
+index into the array. Entries with no matching grouping keys store nullptr.</p>
+<p>Consider SELECT a, sum(b) FROM t GROUP BY 1 query over the following data:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>a</p></th>
+<th class="head"><p>b</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>10</p></td>
+</tr>
+<tr class="row-odd"><td><p>7</p></td>
+<td><p>12</p></td>
+</tr>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>4</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>128</p></td>
+</tr>
+<tr class="row-even"><td><p>10</p></td>
+<td><p>-29</p></td>
+</tr>
+<tr class="row-odd"><td><p>7</p></td>
+<td><p>3</p></td>
+</tr>
+</tbody>
+</table>
+<p>There is a single grouping key, a, with values from a small integer range:
+[1, 10]. In array mode, hash table allocates an array of size 10 and maps
+grouping key values to an index into an array using a simple formula: index =
+a - 1.</p>
+<p>Initially, the array is filled with nulls: [null, null, … null]. As rows are processed entries get populated.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 43%" />
+<col style="width: 57%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p>After adding the first row {1, 10}:</p></td>
+<td><p>[10, null, null, null, null, null, null, null, null, null]</p></td>
+</tr>
+<tr class="row-even"><td><p>After adding the second row {7, 12}:</p></td>
+<td><p>[10, null, null, null, null, null, 12, null, null, null]</p></td>
+</tr>
+<tr class="row-odd"><td><p>After adding the third row {1, 4}:</p></td>
+<td><p>[14, null, null, null, null, null, 12, null, null, null]</p></td>
+</tr>
+<tr class="row-even"><td><p>After adding the 4th row {4, 128}</p></td>
+<td><p>[10, null, null, 128, null, null, 12, null, null, null]</p></td>
+</tr>
+<tr class="row-odd"><td><p>After adding the 5th row {10, -29}:</p></td>
+<td><p>[10, null, null, null, null, null, 12, null, null, -29]</p></td>
+</tr>
+<tr class="row-even"><td><p>After adding the last row {7, 3}:</p></td>
+<td><p>[10, null, null, null, null, null, 15, null, null, -29]</p></td>
+</tr>
+</tbody>
+</table>
+<p>Compared with hash mode, array mode is very efficient as it doesn’t require
+computing the hash and comparing the incoming grouping keys with hash table
+entries. Unlike hash mode which can be used for any aggregation, array mode
+applies only when the values of the grouping keys can be mapped to a relatively
+small integer range. For example, this is the case when there is a single
+grouping key of integer type and the difference between minimum and maximum
+values is relatively small. In this case, the mapping formula is simple: <code class="docutils literal notranslate"><span class="pre">index</span>
+<span class="pre">=</span> <span class="pre">value</span> <span class="pre">-</span> <span class="pre">min</span></code>.</p>
+<p>Array mode also applies when there are two or more grouping keys and the
+multiple of their value ranges is still small. For example, GROUP BY a, b
+with “a” values from [10, 50] range and “b” values from [1000, 1050] range
+allows for array mode with array size equal to 40 * 50 = 200 and mapping
+formula: <code class="docutils literal notranslate"><span class="pre">index</span> <span class="pre">=</span> <span class="pre">(a</span> <span class="pre">-</span> <span class="pre">10)</span> <span class="pre">+</span> <span class="pre">(b</span> <span class="pre">-</span> <span class="pre">1000)</span> <span class="pre">*</span> <span class="pre">40</span></code>.</p>
+<p>Furthermore, array mode applies when the number of unique values for a grouping
+key is small. In this case, each unique value can be assigned an ordinal number
+starting from 1 (0 is reserved for null value) and that number can be used as
+an index into the array.</p>
+<p>Array mode also applies to a mix of grouping keys with small value ranges and
+small number of unique values as long as the product of value range sizes and
+number of unique values doesn’t exceed maximum value allowed for the array
+mode.</p>
+<p>Array mode supports arrays up to 2M entries.</p>
+<p>Array mode trivially applies to grouping keys of type boolean since there are
+only 3 possible values: null, false, true. These are mapped to 0, 1, 2
+respectively.</p>
+<p>Grouping keys that are short strings, up to 7 bytes, are mapped to 64-bit
+integers by padding with leading zeros and placing 1 in the first bit before
+the string bytes, e.g. 00…01&lt;string bytes&gt;. If the resulting numbers fit in a
+small range or if there is a small number of unique values, array mode is used.
+Otherwise, the resulting number could be used in normalized key mode.</p>
+<p>The integer values used to represent the grouping key values are referred to as
+value IDs.</p>
+</section>
+<section id="normalized-key-mode">
+<h3>Normalized Key Mode<a class="headerlink" href="#normalized-key-mode" title="Permalink to this headline">¶</a></h3>
+<p>In normalized key mode, multiple grouping key values are mapped to a single
+64-bit integer and the processing continues as in hash mode with a single
+64-bit integer grouping key. This mode is less efficient than array mode, but
+is more efficient then hash mode because hashing and comparing a single 64-bit
+integer value is faster than hashing and comparing multiple values.</p>
+</section>
+<section id="adaptivity">
+<h3>Adaptivity<a class="headerlink" href="#adaptivity" title="Permalink to this headline">¶</a></h3>
+<p>Hash table mode is decided adaptively starting with array mode and switching to
+normalized key or hash mode if the new values of the grouping keys require
+that. When switching modes the hash table needs to be re-organized. Once in
+hash mode, the hash table stays in that mode for the rest of the query
+processing.</p>
+<p>For each grouping key, HashAggregation operator creates an instance of
+VectorHasher to analyze and accumulate statistics about that key. VectorHasher
+stores minimum and maximum values of the key. If the range grows too large,
+VectorHasher switches to tracking the set of unique values. If the number of
+unique values exceeds 100K, VectorHasher stops tracking these and the hash
+table switches to normalized key or hash mode.</p>
+<p>Array and normalized key modes are supported only for grouping keys of the
+following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="../index.html">Table of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Aggregations</a><ul>
+<li><a class="reference internal" href="#hashaggregation-operator">HashAggregation Operator</a></li>
+<li><a class="reference internal" href="#push-down-into-table-scan">Push-Down into Table Scan</a></li>
+<li><a class="reference internal" href="#adaptive-array-based-aggregation">Adaptive Array-Based Aggregation</a><ul>
+<li><a class="reference internal" href="#hash-mode">Hash mode</a></li>
+<li><a class="reference internal" href="#array-mode">Array mode</a></li>
+<li><a class="reference internal" href="#normalized-key-mode">Normalized Key Mode</a></li>
+<li><a class="reference internal" href="#adaptivity">Adaptivity</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="arena.html"
+                        title="previous chapter">Arena Allocation</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="joins.html"
+                        title="next chapter">Joins</a></p>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/aggregations.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="joins.html" title="Joins"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="arena.html" title="Arena Allocation"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Aggregations</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+    </div>
+  </body>
+</html>

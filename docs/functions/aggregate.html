@@ -207,6 +207,24 @@ zero and one and must be constant for all input rows.</p>
 <section id="statistical-aggregate-functions">
 <h2>Statistical Aggregate Functions<a class="headerlink" href="#statistical-aggregate-functions" title="Permalink to this headline">¶</a></h2>
 <dl class="py function">
+<dt class="sig sig-object py" id="corr">
+<span class="sig-name descname"><span class="pre">corr</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#corr" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns correlation coefficient of input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="covar_pop">
+<span class="sig-name descname"><span class="pre">covar_pop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#covar_pop" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the population covariance of input values.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="covar_samp">
+<span class="sig-name descname"><span class="pre">covar_samp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#covar_samp" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sample covariance of input values.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="stddev">
 <span class="sig-name descname"><span class="pre">stddev</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#stddev" title="Permalink to this definition">¶</a></dt>
 <dd><p>This is an alias for stddev_samp().</p>
