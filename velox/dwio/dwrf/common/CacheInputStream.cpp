@@ -16,6 +16,10 @@
 
 #include "velox/dwio/dwrf/common/CacheInputStream.h"
 #include <folly/executors/QueuedImmediateExecutor.h>
+#include "velox/common/time/Timer.h"
+#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+
+DECLARE_int32(cache_load_quantum);
 
 namespace facebook::velox::dwrf {
 
@@ -24,7 +28,7 @@ using velox::cache::TrackingId;
 using velox::memory::MappedMemory;
 
 CacheInputStream::CacheInputStream(
-    cache::AsyncDataCache* cache,
+    CachedBufferedInput* bufferedInput,
     dwio::common::IoStatistics* ioStats,
     const dwio::common::Region& region,
     dwio::common::InputStream& input,
@@ -32,14 +36,16 @@ CacheInputStream::CacheInputStream(
     std::shared_ptr<ScanTracker> tracker,
     TrackingId trackingId,
     uint64_t groupId)
-    : cache_(cache),
+    : bufferedInput_(bufferedInput),
+      cache_(bufferedInput_->cache()),
       ioStats_(ioStats),
       input_(input),
       region_(region),
       fileNum_(fileNum),
       tracker_(std::move(tracker)),
       trackingId_(trackingId),
-      groupId_(groupId) {}
+      groupId_(groupId),
+      loadQuantum_(FLAGS_cache_load_quantum) {}
 
 bool CacheInputStream::Next(const void** buffer, int32_t* size) {
   if (position_ >= region_.length) {
@@ -56,7 +62,7 @@ bool CacheInputStream::Next(const void** buffer, int32_t* size) {
   offsetInRun_ += *size;
   position_ += *size;
   if (tracker_) {
-    tracker_->recordRead(trackingId_, *size, groupId_);
+    tracker_->recordRead(trackingId_, *size, fileNum_, groupId_);
   }
   return true;
 }
@@ -125,6 +131,12 @@ std::vector<folly::Range<char*>> makeRanges(
 } // namespace
 
 void CacheInputStream::loadSync(dwio::common::Region region) {
+  // rawBytesRead is the number of bytes touched. Whether they come
+  // from disk, ssd or memory is itemized in different counters. A
+  // coalesced red from InputStream removes itself from this count
+  // so as not to double count when the individual parts are
+  // hit.
+  ioStats_->incRawBytesRead(region.length);
   do {
     folly::SemiFuture<bool> wait(false);
     cache::RawFileCacheKey key{fileNum_, region.offset};
@@ -133,13 +145,48 @@ void CacheInputStream::loadSync(dwio::common::Region region) {
     if (pin_.empty()) {
       VELOX_CHECK(wait.valid());
       auto& exec = folly::QueuedImmediateExecutor::instance();
-      std::move(wait).via(&exec).wait();
+      uint64_t usec = 0;
+      {
+        MicrosecondTimer timer(&usec);
+        std::move(wait).via(&exec).wait();
+      }
+      ioStats_->queryThreadIoLatency().increment(usec);
       continue;
     }
     if (pin_.entry()->isExclusive()) {
+      pin_.entry()->setGroupId(groupId_);
+      pin_.entry()->setTrackingId(trackingId_);
+      auto ssdCache = cache_->ssdCache();
+
+      if (ssdCache) {
+        auto& file = ssdCache->file(fileNum_);
+        auto ssdPin =
+            file.find(cache::RawFileCacheKey{fileNum_, region.offset});
+        if (!ssdPin.empty()) {
+          uint64_t usec = 0;
+          {
+            MicrosecondTimer timer(&usec);
+            file.load(ssdPin.run(), *pin_.entry());
+          }
+          ioStats_->ssdRead().increment(pin_.entry()->size());
+          ioStats_->queryThreadIoLatency().increment(usec);
+          pin_.entry()->setValid(true);
+          pin_.entry()->setExclusiveToShared();
+          return;
+        }
+      }
       auto ranges = makeRanges(pin_.entry(), region.length);
-      input_.read(ranges, region.offset, dwio::common::LogType::FILE);
+      uint64_t usec = 0;
+      {
+        MicrosecondTimer timer(&usec);
+        input_.read(ranges, region.offset, dwio::common::LogType::FILE);
+      }
+      // Already incremented at on entry, so revert the increment by read()
+      // above.
+      ioStats_->incRawBytesRead(-region.length);
+
       ioStats_->read().increment(region.length);
+      ioStats_->queryThreadIoLatency().increment(usec);
       pin_.entry()->setValid(true);
       pin_.entry()->setExclusiveToShared();
     } else {
@@ -148,7 +195,12 @@ void CacheInputStream::loadSync(dwio::common::Region region) {
           ioStats_->ramHit().increment(pin_.entry()->size());
         }
       } else {
-        pin_.entry()->ensureLoaded(true);
+        uint64_t usec = 0;
+        {
+          MicrosecondTimer timer(&usec);
+          pin_.entry()->ensureLoaded(true);
+        }
+        ioStats_->queryThreadIoLatency().increment(usec);
       }
     }
   } while (pin_.empty());
@@ -157,6 +209,19 @@ void CacheInputStream::loadSync(dwio::common::Region region) {
 void CacheInputStream::loadPosition() {
   auto offset = region_.offset;
   if (pin_.empty()) {
+    auto load = bufferedInput_->fusedLoad(this);
+    if (load) {
+      folly::SemiFuture<bool> waitFuture(false);
+      uint64_t usec = 0;
+      {
+        MicrosecondTimer timer(&usec);
+        if (!load->loadOrFuture(&waitFuture)) {
+          auto& exec = folly::QueuedImmediateExecutor::instance();
+          std::move(waitFuture).via(&exec).wait();
+        }
+      }
+      ioStats_->queryThreadIoLatency().increment(usec);
+    }
     auto loadRegion = region_;
     // Quantize position to previous multiple of 'loadQuantum_'.
     loadRegion.offset += (position_ / loadQuantum_) * loadQuantum_;

@@ -130,7 +130,7 @@ void HashAggregation::addInput(RowVectorPtr input) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
   }
-  groupingSet_->addInput(input_, mayPushdown_);
+  groupingSet_->addInput(input_, mayPushdown_, 0);
   if (isPartialOutput_ &&
       groupingSet_->allocatedBytes() > maxPartialAggregationMemoryUsage_) {
     partialFull_ = true;

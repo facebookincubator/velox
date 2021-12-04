@@ -509,4 +509,75 @@ struct ParseDateTimeFunction {
   }
 };
 
+template <typename T>
+struct DateFormatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* timeZone_ = nullptr;
+  std::optional<std::string> format_;
+  bool isYMD_ = false;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    timeZone_ = getTimeZoneFromConfig(config);
+    if (formatString != nullptr) {
+      std::string str(formatString->data(), formatString->size());
+      VELOX_CHECK_EQ(str, "%Y-%m-%d");
+      isYMD_ = true;
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    auto dateTime = getDateTime(timestamp, timeZone_);
+
+    if (isYMD_) {
+      auto str = fmt::format(
+          "{:02d}-{:02d}-{:02d}",
+          dateTime.tm_year,
+          dateTime.tm_mon,
+          dateTime.tm_mday);
+      result.reserve(str.size());
+      result.resize(str.size());
+      memcpy(result.data(), str.data(), str.size());
+      return true;
+    }
+    VELOX_FAIL("date_format only defined for %y-%m-%d");
+  }
+};
+
+template <typename T>
+struct DateDiffFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::optional<DateTimeUnit> unit_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* unitString,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Timestamp>* /*timestamp*/) {
+    if (unitString != nullptr) {
+      unit_ = fromDateTimeUnitString(*unitString, false /*throwIfInvalid*/);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<Varchar>& /*unitString*/,
+      const arg_type<Timestamp>& before,
+      const arg_type<Timestamp>& after) {
+    VELOX_CHECK(
+        unit_.has_value() && unit_.value() == DateTimeUnit::kDay,
+        "date_diff is only defined for unit of day");
+    result =
+        (after.toMicros() - before.toMicros()) / (24 * 60 * 60 * 1'000'000LL);
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions

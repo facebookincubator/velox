@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/FilterProject.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 
@@ -72,6 +73,17 @@ FilterProject::FilterProject(
   }
   numExprs_ = allExprs.size();
   exprs_ = makeExprSetFromFlag(std::move(allExprs), operatorCtx_->execCtx());
+  std::stringstream label;
+  label << "FilterProject: ";
+  for (auto i = 0; i < numExprs_; ++i) {
+    label << exprs_->expr(i)->toString() << " ";
+  }
+  traceLabel_ = label.str();
+  auto labelSize = traceLabel_.size();
+  if (labelSize > 70) {
+    traceLabel_.resize(70);
+    traceLabel_ += fmt::format("... ({} chars total)", labelSize);
+  }
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
@@ -113,6 +125,7 @@ RowVectorPtr FilterProject::getOutput() {
     clearNonReusableOutput();
     return nullptr;
   }
+  process::TraceContext trace(traceLabel_, true);
   vector_size_t size = input_->size();
   LocalSelectivityVector localRows(operatorCtx_->execCtx(), size);
   auto* rows = localRows.get();

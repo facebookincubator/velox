@@ -82,6 +82,8 @@ LocalReadFile::LocalReadFile(std::string_view path) {
   }
 }
 
+LocalReadFile::LocalReadFile(int32_t fd) : fd_(fd) {}
+
 void LocalReadFile::preadInternal(uint64_t offset, uint64_t length, char* pos)
     const {
   bytesRead_ += length;

@@ -56,7 +56,14 @@ class ScanSpec {
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
   common::Filter* filter() const {
+    if (localFilter_) {
+      return localFilter_.get();
+    }
     return filter_.get();
+  }
+
+  void setLocalFilter(std::unique_ptr<Filter> localFilter) {
+    localFilter_ = std::move(localFilter);
   }
 
   // Sets 'filter_'. May be used at initialization or when adding a
@@ -279,6 +286,7 @@ class ScanSpec {
   // returned as flat.
   bool makeFlat_ = false;
   std::unique_ptr<common::Filter> filter_;
+  std::unique_ptr<common::Filter> localFilter_;
   SelectivityInfo selectivity_;
   // Sort children by filtering efficiency.
   bool enableFilterReorder_ = true;

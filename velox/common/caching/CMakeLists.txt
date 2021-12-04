@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_caching DataCache.cpp FileIds.cpp StringIdMap.cpp
-                          AsyncDataCache.cpp ScanTracker.cpp)
-target_link_libraries(velox_caching velox_memory velox_exception glog::glog
-                      ${FOLLY_WITH_DEPENDENCIES})
+add_library(
+  velox_caching
+  DataCache.cpp
+  FileIds.cpp
+  StringIdMap.cpp
+  AsyncDataCache.cpp
+  ScanTracker.cpp
+  GroupTracker.cpp
+  SsdCache.cpp)
+
+target_link_libraries(velox_caching velox_memory velox_exception velox_file
+                      ${GLOG} ${FOLLY_WITH_DEPENDENCIES})
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

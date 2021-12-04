@@ -31,7 +31,7 @@ struct HashLookup {
     rows.resize(size);
     hashes.resize(size);
     hits.resize(size);
-    std::fill(hits.begin(), hits.end(), nullptr);
+    std::fill(&hits[0], &hits[hits.size()], nullptr);
     newGroups.clear();
   }
 

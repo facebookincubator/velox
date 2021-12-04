@@ -390,7 +390,7 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
       continue;
     }
 
-    VELOX_DCHECK(sourceRows[i] == nextRow);
+    VELOX_CHECK(sourceRows[i] == nextRow);
     typedDestValues[rowIndex] = typedSourceValues[i];
     if (moveNulls && rowIndex != i) {
       bits::setBit(

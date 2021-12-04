@@ -229,6 +229,10 @@ class SimpleVector : public BaseVector {
 
   std::string toString(vector_size_t index) const override {
     std::stringstream out;
+    if (index >= BaseVector::length_) {
+      out << "[***index " << index << " >= size " << BaseVector::length_ << "]";
+      return out.str();
+    }
     if (isNullAt(index)) {
       out << "null";
     } else {

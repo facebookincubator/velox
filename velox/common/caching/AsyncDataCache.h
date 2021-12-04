@@ -22,13 +22,18 @@
 #include <folly/futures/SharedPromise.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/SelectivityInfo.h"
+#include "velox/common/caching/GroupTracker.h"
+#include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/StringIdMap.h"
+#include "velox/common/file/File.h"
 #include "velox/common/memory/MappedMemory.h"
 
 namespace facebook::velox::cache {
 
 class AsyncDataCache;
 class CacheShard;
+class SsdCache;
+class SsdFile;
 
 // Type for tracking last access. This is based on CPU clock and
 // scaled to be around 1ms resolution. This can wrap around and is
@@ -57,6 +62,11 @@ struct AccessStats {
     return (now - lastUse) / (1 + numUses);
   }
 
+  void reset() {
+    lastUse = accessTime();
+    numUses = 0;
+  }
+
   // Updates the last access.
   void touch() {
     lastUse = accessTime();
@@ -64,7 +74,7 @@ struct AccessStats {
   }
 };
 
-// Owning reference to a file number and an offset.
+// Owning reference to a file id and an offset.
 struct FileCacheKey {
   StringIdLease fileNum;
   uint64_t offset;
@@ -156,11 +166,7 @@ class AsyncDataCacheEntry {
   }
 
   // Call this after loading the data and before releasing the pin.
-  void setValid(bool success = true) {
-    VELOX_CHECK_NE(0, numPins_);
-    dataValid_ = success;
-    load_.reset();
-  }
+  void setValid(bool success = true);
 
   void touch() {
     accessStats_.touch();
@@ -216,6 +222,19 @@ class AsyncDataCacheEntry {
 
   void setExclusiveToShared();
 
+  void setSsdFile(SsdFile* FOLLY_NULLABLE file, uint64_t offset) {
+    ssdFile_ = file;
+    ssdOffset_ = offset;
+  }
+
+  void setTrackingId(TrackingId id) {
+    trackingId_ = id;
+  }
+
+  void setGroupId(uint64_t groupId) {
+    groupId_ = groupId;
+  }
+
  private:
   void release();
   void addReference();
@@ -268,6 +287,18 @@ class AsyncDataCacheEntry {
   // mutex. If set, 'this' is pinned for either exclusive or shared.
   std::shared_ptr<FusedLoad> load_;
 
+  // Group id. Used for deciding if 'this' should be written to SSD.
+  uint64_t groupId_{0};
+
+  // Tracking id. Used for deciding if this should be written to SSD.
+  TrackingId trackingId_;
+
+  // SSD file from which this was loaded or nullptr if not backed by SSD.
+  SsdFile* FOLLY_NULLABLE ssdFile_{nullptr};
+
+  // Offset in 'ssdFile_'.
+  uint64_t ssdOffset_{0};
+
   friend class CacheShard;
   friend class CachePin;
 };
@@ -310,6 +341,15 @@ class CachePin {
   }
   AsyncDataCacheEntry* FOLLY_NULLABLE entry() const {
     return entry_;
+  }
+
+  bool operator<(const CachePin& other) const {
+    auto id1 = entry_->key_.fileNum.id();
+    auto id2 = other.entry_->key_.fileNum.id();
+    if (id1 == id2) {
+      return entry_->offset() < other.entry_->offset();
+    }
+    return id1 < id2;
   }
 
  private:
@@ -370,6 +410,7 @@ class FusedLoad : public std::enable_shared_from_this<FusedLoad> {
     std::lock_guard<std::mutex> l(mutex_);
     for (auto& pin : pins_) {
       pin.entry()->setExclusiveToShared();
+      VELOX_CHECK(pin.entry()->key().fileNum.hasValue());
     }
   }
 
@@ -393,6 +434,20 @@ class FusedLoad : public std::enable_shared_from_this<FusedLoad> {
   // Used for testing and server status.
   static int32_t numFusedLoads() {
     return numFusedLoads_;
+  }
+
+  // Makes cache entries for the ranges to load if there are no pins
+  // yet. Returns true if pins were made and should be
+  // loaded. Implementations can make a FusedLoad activated ofor on
+  // first access of a correlated sparsely loaded set of
+  // columns. There the cache entries for all will be made on first
+  // access.
+  virtual bool makePins() {
+    VELOX_UNSUPPORTED("FusedLoad requires pins to be supplied");
+  }
+
+  virtual std::string toString() const {
+    return "<FusedLoad>";
   }
 
  protected:
@@ -499,6 +554,8 @@ class CacheShard {
       uint64_t size,
       folly::SemiFuture<bool>* FOLLY_NULLABLE readyFuture);
 
+  bool exists(RawFileCacheKey key);
+
   AsyncDataCache* FOLLY_NONNULL cache() {
     return cache_;
   }
@@ -518,6 +575,8 @@ class CacheShard {
 
   // Adds the stats of 'this' to 'stats'.
   void updateStats(CacheStats& stats);
+
+  void getSsdSaveable(std::vector<CachePin>& pins);
 
  private:
   static constexpr int32_t kNoThreshold = std::numeric_limits<int32_t>::max();
@@ -572,7 +631,8 @@ class AsyncDataCache : public memory::MappedMemory,
  public:
   AsyncDataCache(
       std::unique_ptr<memory::MappedMemory> mappedMemory,
-      uint64_t maxBytes);
+      uint64_t maxBytes,
+      std::unique_ptr<SsdCache> ssdCache = nullptr);
 
   // Finds or creates a cache entry corresponding to 'key'. The entry
   // is returned in 'pin'. If the entry is new, it is pinned in
@@ -589,6 +649,9 @@ class AsyncDataCache : public memory::MappedMemory,
       RawFileCacheKey key,
       uint64_t size,
       folly::SemiFuture<bool>* FOLLY_NULLABLE waitFuture = nullptr);
+
+  // Returns true if there is an entry for 'key'. Updates access time.
+  bool exists(RawFileCacheKey key);
 
   bool allocate(
       memory::MachinePageCount numPages,
@@ -645,6 +708,24 @@ class AsyncDataCache : public memory::MappedMemory,
     return maxBytes_;
   }
 
+  SsdCache* FOLLY_NULLABLE ssdCache() const {
+    return ssdCache_.get();
+  }
+
+  void incrementNew(uint64_t size);
+
+  void possibleSsdSave(uint64_t bytes);
+
+  void setVerifyHook(std::function<void(const AsyncDataCacheEntry&)> hook) {
+    verifyHook_ = hook;
+  }
+  const auto& verifyHook() const {
+    return verifyHook_;
+  }
+
+  // Drops all unpinned entries. Pins stay valid.
+  void clear();
+
  private:
   static constexpr int32_t kNumShards = 4; // Must be power of 2.
   static constexpr int32_t kShardMask = kNumShards - 1;
@@ -654,6 +735,7 @@ class AsyncDataCache : public memory::MappedMemory,
       std::function<bool()> allocate);
 
   std::unique_ptr<memory::MappedMemory> mappedMemory_;
+  std::unique_ptr<SsdCache> ssdCache_;
   std::vector<std::unique_ptr<CacheShard>> shards_;
   int32_t shardCounter_{};
   std::atomic<memory::MachinePageCount> cachedPages_{0};
@@ -661,7 +743,20 @@ class AsyncDataCache : public memory::MappedMemory,
   // but not yet hit for the first time.
   std::atomic<memory::MachinePageCount> prefetchPages_{0};
   uint64_t maxBytes_;
+
+  // Approximate counter of bytes allocated to cover misses. When this
+  // exceeds 'nextSsdScoreSize_' we update the SSD admission criteria.
+  uint64_t newBytes_{0};
+
+  // 'newBytes_' value after which SSD admission should be reconsidered.
+  uint64_t nextSsdScoreSize_{};
+
+  // Approximate counter tracking new entries that could be saved to SSD.
+  uint64_t ssdSaveable_{0};
+
   CacheStats stats_;
+
+  std::function<void(const AsyncDataCacheEntry&)> verifyHook_;
 };
 
 // Samples a set of values T from 'numSamples' calls of
