@@ -212,37 +212,37 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
   // columns at the same channel number(1) have different types. This has been
   // a source of errors in the join logic.
 
-    auto leftType = makeRowType({BIGINT(), VARCHAR(), BIGINT()}, "t_");
-    auto rightType = makeRowType({BIGINT(), REAL(), BIGINT()}, "u_");
+  auto leftType = makeRowType({BIGINT(), VARCHAR(), BIGINT()}, "t_");
+  auto rightType = makeRowType({BIGINT(), REAL(), BIGINT()}, "u_");
 
-    auto leftBatch = std::dynamic_pointer_cast<RowVector>(
-        BatchMaker::createBatch(leftType, 100, *pool_));
-    auto rightBatch = std::dynamic_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rightType, 100, *pool_));
+  auto leftBatch = std::dynamic_pointer_cast<RowVector>(
+      BatchMaker::createBatch(leftType, 100, *pool_));
+  auto rightBatch = std::dynamic_pointer_cast<RowVector>(
+      BatchMaker::createBatch(rightType, 100, *pool_));
 
-    std::string referenceQuery = "SELECT t_k0 * t_k2/2 FROM "
-        "  t, u "
-        "  WHERE t_k0 = u_k0 AND "
-        "  u_k2 > 10 AND ltrim(t_k1) = 'abcd%'";
-    // In this hash join the 2 tables have a common key which is the
-    // first channel in both tables. The output table has a single channel.
-    CursorParameters params;
-    params.planNode =
-        PlanBuilder()
-            .values({leftBatch}, true)
-            .hashJoin(
-                allChannels(1),
-                allChannels(1),
-                PlanBuilder().values({rightBatch}, true).planNode(),
-                "u_k2 > 10 AND ltrim(t_k1) = 'abcd%'",
-                allChannels(1))
-            .planNode();
-    params.maxDrivers = 1;
+  std::string referenceQuery =
+      "SELECT t_k0 * t_k2/2 FROM "
+      "  t, u "
+      "  WHERE t_k0 = u_k0 AND "
+      "  u_k2 > 10 AND ltrim(t_k1) = 'abcd%'";
+  // In this hash join the 2 tables have a common key which is the
+  // first channel in both tables. The output table has a single channel.
+  CursorParameters params;
+  params.planNode = PlanBuilder()
+                        .values({leftBatch}, true)
+                        .hashJoin(
+                            allChannels(1),
+                            allChannels(1),
+                            PlanBuilder().values({rightBatch}, true).planNode(),
+                            "u_k2 > 10 AND ltrim(t_k1) = 'abcd%'",
+                            allChannels(1))
+                        .planNode();
+  params.maxDrivers = 1;
 
-    createDuckDbTable("t", {leftBatch});
-    createDuckDbTable("u", {rightBatch});
-    ::assertQuery(
-        params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
+  createDuckDbTable("t", {leftBatch});
+  createDuckDbTable("u", {rightBatch});
+  ::assertQuery(
+      params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
 }
 
 TEST_F(HashJoinTest, memory) {
