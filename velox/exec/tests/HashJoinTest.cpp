@@ -69,46 +69,6 @@ class HashJoinTest : public HiveConnectorTestBase {
         params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
   }
 
-  // This function sets up a hashJoin between tables with different schema.
-  // For the purpose of simplicity, it is assumed that the key columns
-  // `numJoinKeys` appear at the beginning of the tables.
-  void testJoinTablesDifferentSchemas(
-      const std::vector<TypePtr>& leftColTypes,
-      const std::vector<TypePtr>& rightColTypes,
-      int32_t numJoinKeys,
-      int32_t numOutputCols,
-      int32_t numThreads,
-      int32_t leftSize,
-      int32_t rightSize,
-      const std::string& referenceQuery,
-      const std::string& filter = "") {
-    auto leftType = makeRowType(leftColTypes, "t_");
-    auto rightType = makeRowType(rightColTypes, "u_");
-
-    auto leftBatch = std::dynamic_pointer_cast<RowVector>(
-        BatchMaker::createBatch(leftType, leftSize, *pool_));
-    auto rightBatch = std::dynamic_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rightType, rightSize, *pool_));
-
-    CursorParameters params;
-    params.planNode =
-        PlanBuilder()
-            .values({leftBatch}, true)
-            .hashJoin(
-                allChannels(numJoinKeys),
-                allChannels(numJoinKeys),
-                PlanBuilder().values({rightBatch}, true).planNode(),
-                filter,
-                allChannels(numOutputCols))
-            .planNode();
-    params.maxDrivers = numThreads;
-
-    createDuckDbTable("t", {leftBatch});
-    createDuckDbTable("u", {rightBatch});
-    ::assertQuery(
-        params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
-  }
-
   static RowTypePtr makeRowType(
       const std::vector<TypePtr>& keyTypes,
       const std::string& namePrefix) {
@@ -246,26 +206,43 @@ TEST_F(HashJoinTest, filter) {
       "((t_k0 % 100) + (u_k0 % 100)) % 40 < 20");
 }
 
-TEST_F(HashJoinTest, filterOrder) {
+TEST_F(HashJoinTest, joinSidesDifferentSchema) {
   // In this join, the tables have different schema. The filter predicate uses
   // a column from the right table before the left and the corresponding
   // columns at the same channel number(1) have different types. This has been
   // a source of errors in the join logic.
-  testJoinTablesDifferentSchemas(
-      {BIGINT(), VARCHAR(), BIGINT()},
-      {BIGINT(), REAL(), REAL()},
-      1,
-      1,
-      1,
-      16000,
-      15000,
-      "SELECT t_k0 * t_k2/2 FROM "
-      "  t, u "
-      "  WHERE t_k0 = u_k0 AND "
-      "((u_k2 > 10 AND ltrim(t_k1) = 'abcd%')"
-      "or (u_k2 > 100 AND ltrim(t_k1) = 'efgh%'))",
-      "((u_k2 > 10.0 AND ltrim(t_k1) = 'abcd%')"
-      "or (u_k2 > 100.0 AND ltrim(t_k1) = 'efgh%'))");
+
+    auto leftType = makeRowType({BIGINT(), VARCHAR(), BIGINT()}, "t_");
+    auto rightType = makeRowType({BIGINT(), REAL(), BIGINT()}, "u_");
+
+    auto leftBatch = std::dynamic_pointer_cast<RowVector>(
+        BatchMaker::createBatch(leftType, 100, *pool_));
+    auto rightBatch = std::dynamic_pointer_cast<RowVector>(
+        BatchMaker::createBatch(rightType, 100, *pool_));
+
+    std::string referenceQuery = "SELECT t_k0 * t_k2/2 FROM "
+        "  t, u "
+        "  WHERE t_k0 = u_k0 AND "
+        "  u_k2 > 10 AND ltrim(t_k1) = 'abcd%'";
+    // In this hash join the 2 tables have a common key which is the
+    // first channel in both tables. The output table has a single channel.
+    CursorParameters params;
+    params.planNode =
+        PlanBuilder()
+            .values({leftBatch}, true)
+            .hashJoin(
+                allChannels(1),
+                allChannels(1),
+                PlanBuilder().values({rightBatch}, true).planNode(),
+                "u_k2 > 10 AND ltrim(t_k1) = 'abcd%'",
+                allChannels(1))
+            .planNode();
+    params.maxDrivers = 1;
+
+    createDuckDbTable("t", {leftBatch});
+    createDuckDbTable("u", {rightBatch});
+    ::assertQuery(
+        params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
 }
 
 TEST_F(HashJoinTest, memory) {
