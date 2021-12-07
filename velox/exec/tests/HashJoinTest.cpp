@@ -223,7 +223,7 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
   createDuckDbTable("u", {rightBatch});
 
   std::string referenceQuery =
-      "SELECT t_k0 FROM "
+      "SELECT t_k0 * t_k2/2 FROM "
       "  t, u "
       "  WHERE t_k0 = u_k0 AND "
       "  u_k2 > 10 AND ltrim(t_k1) = 'a%'";
@@ -237,7 +237,8 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
                             {0},
                             PlanBuilder().values({rightBatch}).planNode(),
                             "u_k2 > 10 AND ltrim(t_k1) = 'a%'",
-                            {0})
+                            {0, 2})
+                        .project({"t_k0 * t_k2/2"}, {"k1"})
                         .planNode();
 
   ::assertQuery(
