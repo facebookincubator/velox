@@ -218,29 +218,28 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
 
   auto stringViewGenerator = [](size_t row) {
     switch (row % 4) {
-      case 0 : return StringView(std::string("aaa"));
-      case 1 : return StringView(std::string("bbb"));
-      case 2 : return StringView(std::string("ccc"));
-      case 3 : return StringView(std::string("ddd"));
-      default : return StringView(std::string("eee"));
+      case 0:
+        return StringView(std::string("aaa"));
+      case 1:
+        return StringView(std::string("bbb"));
+      case 2:
+        return StringView(std::string("ccc"));
+      case 3:
+        return StringView(std::string("ddd"));
+      default:
+        return StringView(std::string("eee"));
     }
   };
-  auto leftVectors =
-           makeRowVector({
-      makeFlatVector<int32_t>(
-              batchSize, [](auto row) { return row; }),
-      makeFlatVector<StringView>(
-              batchSize, stringViewGenerator),
+  auto leftVectors = makeRowVector({
+      makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
+      makeFlatVector<StringView>(batchSize, stringViewGenerator),
       makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
   });
-  auto rightVectors =
-           makeRowVector({
-               makeFlatVector<int32_t>(
-              batchSize, [](auto row) { return row; }),
-               makeFlatVector<double>(
-              batchSize, [](auto row) { return row * 5.0; }),
-               makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
-           });
+  auto rightVectors = makeRowVector({
+      makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
+      makeFlatVector<double>(batchSize, [](auto row) { return row * 5.0; }),
+      makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
+  });
   createDuckDbTable("t", {leftVectors});
   createDuckDbTable("u", {rightVectors});
 
@@ -251,17 +250,21 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
       "  u.c2 > 10 AND ltrim(t.c1) = 'a%'";
   // In this hash join the 2 tables have a common key which is the
   // first channel in both tables.
-  auto planNode = PlanBuilder()
-                        .values({leftVectors}).project({"c0", "c1", "c2"}, {"t_c0", "t_c1", "t_c2"})
-                        .hashJoin(
-                            {0},
-                            {0},
-                            PlanBuilder().values({rightVectors}).
-                                    project({"c0", "c1", "c2"}, {"u_c0", "u_c1", "u_c2"}).planNode(),
-                            "u_c2 > 10 AND ltrim(t_c1) = 'a%'",
-                            {0, 2})
-                        .project({"t_c0 * t_c2/2"}, {"c0"})
-                        .planNode();
+  auto planNode =
+      PlanBuilder()
+          .values({leftVectors})
+          .project({"c0", "c1", "c2"}, {"t_c0", "t_c1", "t_c2"})
+          .hashJoin(
+              {0},
+              {0},
+              PlanBuilder()
+                  .values({rightVectors})
+                  .project({"c0", "c1", "c2"}, {"u_c0", "u_c1", "u_c2"})
+                  .planNode(),
+              "u_c2 > 10 AND ltrim(t_c1) = 'a%'",
+              {0, 2})
+          .project({"t_c0 * t_c2/2"}, {"c0"})
+          .planNode();
 
   ::assertQuery(planNode, referenceQuery, duckDbQueryRunner_);
 }
