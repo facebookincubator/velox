@@ -219,28 +219,27 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
       BatchMaker::createBatch(leftType, 100, *pool_));
   auto rightBatch = std::dynamic_pointer_cast<RowVector>(
       BatchMaker::createBatch(rightType, 100, *pool_));
+  createDuckDbTable("t", {leftBatch});
+  createDuckDbTable("u", {rightBatch});
 
   std::string referenceQuery =
-      "SELECT t_k0 * t_k2/2 FROM "
+      "SELECT t_k0 FROM "
       "  t, u "
       "  WHERE t_k0 = u_k0 AND "
-      "  u_k2 > 10 AND ltrim(t_k1) = 'abcd%'";
+      "  u_k2 > 10 AND ltrim(t_k1) = 'a%'";
   // In this hash join the 2 tables have a common key which is the
   // first channel in both tables. The output table has a single channel.
   CursorParameters params;
   params.planNode = PlanBuilder()
                         .values({leftBatch}, true)
                         .hashJoin(
-                            allChannels(1),
-                            allChannels(1),
-                            PlanBuilder().values({rightBatch}, true).planNode(),
-                            "u_k2 > 10 AND ltrim(t_k1) = 'abcd%'",
-                            allChannels(1))
+                            {0},
+                            {0},
+                            PlanBuilder().values({rightBatch}).planNode(),
+                            "u_k2 > 10 AND ltrim(t_k1) = 'a%'",
+                            {0})
                         .planNode();
-  params.maxDrivers = 1;
 
-  createDuckDbTable("t", {leftBatch});
-  createDuckDbTable("u", {rightBatch});
   ::assertQuery(
       params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
 }
