@@ -207,42 +207,63 @@ TEST_F(HashJoinTest, filter) {
 }
 
 TEST_F(HashJoinTest, joinSidesDifferentSchema) {
-  // In this join, the tables have different schema. The filter predicate uses
-  // a column from the right table before the left and the corresponding
+  // In this join, the tables have different schema. LHS table t has schema
+  // {INTEGER, VARCHAR, INTEGER}. RHS table u has schema {INTEGER, REAL,
+  // INTEGER}. The filter predicate uses
+  // a column from the right table  before the left and the corresponding
   // columns at the same channel number(1) have different types. This has been
-  // a source of errors in the join logic.
+  // a source of crashes in the join logic.
 
-  auto leftType = makeRowType({BIGINT(), VARCHAR(), BIGINT()}, "t_");
-  auto rightType = makeRowType({BIGINT(), REAL(), BIGINT()}, "u_");
+  size_t batchSize = 100;
 
-  auto leftBatch = std::dynamic_pointer_cast<RowVector>(
-      BatchMaker::createBatch(leftType, 100, *pool_));
-  auto rightBatch = std::dynamic_pointer_cast<RowVector>(
-      BatchMaker::createBatch(rightType, 100, *pool_));
-  createDuckDbTable("t", {leftBatch});
-  createDuckDbTable("u", {rightBatch});
+  auto stringViewGenerator = [](size_t row) {
+    switch (row % 4) {
+      case 0 : return StringView(std::string("aaa"));
+      case 1 : return StringView(std::string("bbb"));
+      case 2 : return StringView(std::string("ccc"));
+      case 3 : return StringView(std::string("ddd"));
+      default : return StringView(std::string("eee"));
+    }
+  };
+  auto leftVectors =
+           makeRowVector({
+      makeFlatVector<int32_t>(
+              batchSize, [](auto row) { return row; }),
+      makeFlatVector<StringView>(
+              batchSize, stringViewGenerator),
+      makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
+  });
+  auto rightVectors =
+           makeRowVector({
+               makeFlatVector<int32_t>(
+              batchSize, [](auto row) { return row; }),
+               makeFlatVector<double>(
+              batchSize, [](auto row) { return row * 5.0; }),
+               makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
+           });
+  createDuckDbTable("t", {leftVectors});
+  createDuckDbTable("u", {rightVectors});
 
   std::string referenceQuery =
-      "SELECT t_k0 * t_k2/2 FROM "
+      "SELECT t.c0 * t.c2/2 FROM "
       "  t, u "
-      "  WHERE t_k0 = u_k0 AND "
-      "  u_k2 > 10 AND ltrim(t_k1) = 'a%'";
+      "  WHERE t.c0 = u.c0 AND "
+      "  u.c2 > 10 AND ltrim(t.c1) = 'a%'";
   // In this hash join the 2 tables have a common key which is the
-  // first channel in both tables. The output table has a single channel.
-  CursorParameters params;
-  params.planNode = PlanBuilder()
-                        .values({leftBatch}, true)
+  // first channel in both tables.
+  auto planNode = PlanBuilder()
+                        .values({leftVectors}).project({"c0", "c1", "c2"}, {"t_c0", "t_c1", "t_c2"})
                         .hashJoin(
                             {0},
                             {0},
-                            PlanBuilder().values({rightBatch}).planNode(),
-                            "u_k2 > 10 AND ltrim(t_k1) = 'a%'",
+                            PlanBuilder().values({rightVectors}).
+                                    project({"c0", "c1", "c2"}, {"u_c0", "u_c1", "u_c2"}).planNode(),
+                            "u_c2 > 10 AND ltrim(t_c1) = 'a%'",
                             {0, 2})
-                        .project({"t_k0 * t_k2/2"}, {"k1"})
+                        .project({"t_c0 * t_c2/2"}, {"c0"})
                         .planNode();
 
-  ::assertQuery(
-      params, [](auto*) {}, referenceQuery, duckDbQueryRunner_);
+  ::assertQuery(planNode, referenceQuery, duckDbQueryRunner_);
 }
 
 TEST_F(HashJoinTest, memory) {
