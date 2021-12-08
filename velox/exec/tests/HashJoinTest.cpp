@@ -216,23 +216,11 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
 
   size_t batchSize = 100;
 
-  auto stringViewGenerator = [](size_t row) {
-    switch (row % 4) {
-      case 0:
-        return StringView(std::string("aaa"));
-      case 1:
-        return StringView(std::string("bbb"));
-      case 2:
-        return StringView(std::string("ccc"));
-      case 3:
-        return StringView(std::string("ddd"));
-      default:
-        return StringView(std::string("eee"));
-    }
-  };
+  std::vector<std::string> stringVector = {"aaa", "bbb", "ccc", "ddd", "eee"};
   auto leftVectors = makeRowVector({
       makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
-      makeFlatVector<StringView>(batchSize, stringViewGenerator),
+      makeFlatVector<StringView>(batchSize,
+                                 [&](auto row) { return StringView(stringVector[row % stringVector.size()]); }),
       makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
   });
   auto rightVectors = makeRowVector({
@@ -263,7 +251,7 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
                   .planNode(),
               "u_c2 > 10 AND ltrim(t_c1) = 'a%'",
               {0, 2})
-          .project({"t_c0 * t_c2/2"}, {"c0"})
+          .project({"t_c0 * t_c2/2"})
           .planNode();
 
   ::assertQuery(planNode, referenceQuery, duckDbQueryRunner_);
