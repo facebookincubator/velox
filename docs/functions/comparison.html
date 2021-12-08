@@ -43,13 +43,50 @@
             
   <section id="comparison-functions">
 <h1>Comparison Functions<a class="headerlink" href="#comparison-functions" title="Permalink to this headline">¶</a></h1>
+<p>Like most other Presto functions, these functions return null if any argument
+is null. These functions support all scalar input types. All arguments must be
+of the same type.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="eq">
+<span class="sig-name descname"><span class="pre">eq</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#eq" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is equal to y.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gt">
+<span class="sig-name descname"><span class="pre">gt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#gt" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is greater than y.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="gte">
+<span class="sig-name descname"><span class="pre">gte</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#gte" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is greater than or equal to y.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="lt">
+<span class="sig-name descname"><span class="pre">lt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lt" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is less than y.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="lte">
+<span class="sig-name descname"><span class="pre">lte</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#lte" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is less than or equal to y.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="neq">
+<span class="sig-name descname"><span class="pre">neq</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#neq" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns true if x is not equal to y.</p>
+</dd></dl>
+
 <section id="greatest-and-least">
 <h2>GREATEST and LEAST<a class="headerlink" href="#greatest-and-least" title="Permalink to this headline">¶</a></h2>
-<p>These functions are not in the SQL standard, but are a common extension.
-Like most other functions in Presto, they return null if any argument is null.
-Note that in some other databases, such as PostgreSQL, they only return null
-if all arguments are null.
-The following types are supported: DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE</p>
+<p>Like most other Presto functions, these functions return null if any argument
+is null.</p>
+<p>The following types are supported: DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="least">
 <span class="sig-name descname"><span class="pre">least</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">value1</span></em>, <em class="sig-param"><span class="pre">value2</span></em>, <em class="sig-param"><span class="pre">...</span></em>, <em class="sig-param"><span class="pre">valueN</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">input]</span></span></span><a class="headerlink" href="#least" title="Permalink to this definition">¶</a></dt>
