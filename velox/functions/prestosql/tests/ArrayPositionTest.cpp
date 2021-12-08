@@ -66,14 +66,15 @@ class ArrayPositionTest : public FunctionBaseTest {
         wrapInDictionary(indices, newSize, expectedVector);
 
     FlatVectorPtr<T> searchVector;
-    if (search.has_value())
+    if (search.has_value()) {
       searchVector =
           makeFlatVector<T>(size, [&](auto row) { return search.value(); });
-    else
+    } else {
       searchVector = makeFlatVector<T>(
           size,
           [&](auto row) { return search.value(); },
           [](auto row) { return true; });
+    }
 
     // Encode search vector using a different instance of indices
     // to prevent peeling.
@@ -143,14 +144,15 @@ class ArrayPositionTest : public FunctionBaseTest {
         wrapInDictionary(indices, newSize, expectedVector);
 
     FlatVectorPtr<T> searchVector;
-    if (search.has_value())
+    if (search.has_value()) {
       searchVector =
           makeFlatVector<T>(size, [&](auto row) { return search.value(); });
-    else
+    } else {
       searchVector = makeFlatVector<T>(
           size,
           [&](auto row) { return search.value(); },
           [](auto row) { return true; });
+    }
 
     // Encode search and instance vectors using a different instance of indices
     // to prevent peeling.
