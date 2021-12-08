@@ -28,7 +28,7 @@ void applyTypedFirstMatch(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
+    const DecodedVector& searchDecoded,
     FlatVector<int64_t>& flatResult) {
   using T = typename TypeTraits<kind>::NativeType;
 
@@ -102,7 +102,7 @@ void applyTypedWithInstance(
     const SelectivityVector& rows,
     DecodedVector& arrayDecoded,
     const DecodedVector& elementsDecoded,
-    DecodedVector& searchDecoded,
+    const DecodedVector& searchDecoded,
     const DecodedVector& instanceDecoded,
     FlatVector<int64_t>& flatResult) {
   using T = typename TypeTraits<kind>::NativeType;

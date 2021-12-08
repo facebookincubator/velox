@@ -236,14 +236,12 @@ class FunctionBaseTest : public testing::Test {
     vector_size_t size = data.size();
     BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool());
     BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool());
-    BufferPtr nulls = AlignedBuffer::allocate<uint64_t>(size, pool());
 
     auto rawOffsets = offsets->asMutable<vector_size_t>();
     auto rawSizes = sizes->asMutable<vector_size_t>();
-    auto rawNulls = nulls->asMutable<uint64_t>();
 
     // Flatten the outermost layer of std::vector of the input, and populate
-    // the sizes, offsets, and nulls for the top-level array vector.
+    // the sizes and offsets for the top-level array vector.
     std::vector<std::optional<std::vector<std::optional<T>>>> flattenedData;
     vector_size_t i = 0;
     for (const auto& vector : data) {
@@ -251,7 +249,6 @@ class FunctionBaseTest : public testing::Test {
 
       rawSizes[i] = vector.size();
       rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
-      bits::setBit(rawNulls, i, true);
 
       ++i;
     }
@@ -263,7 +260,7 @@ class FunctionBaseTest : public testing::Test {
     return std::make_shared<ArrayVector>(
         pool(),
         ARRAY(ARRAY(CppToType<T>::create())),
-        nulls,
+        BufferPtr(nullptr),
         size,
         offsets,
         sizes,
@@ -291,14 +288,12 @@ class FunctionBaseTest : public testing::Test {
     vector_size_t size = data.size();
     BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool());
     BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool());
-    BufferPtr nulls = AlignedBuffer::allocate<uint64_t>(size, pool());
 
     auto rawOffsets = offsets->asMutable<vector_size_t>();
     auto rawSizes = sizes->asMutable<vector_size_t>();
-    auto rawNulls = nulls->asMutable<uint64_t>();
 
-    // Flatten the outermost std::vector of the input and populate the sizes,
-    // offsets, and nulls for the top-level array vector.
+    // Flatten the outermost std::vector of the input and populate the sizes and
+    // offsets for the top-level array vector.
     std::vector<std::vector<std::pair<TKey, std::optional<TValue>>>>
         flattenedData;
     vector_size_t i = 0;
@@ -307,7 +302,6 @@ class FunctionBaseTest : public testing::Test {
 
       rawSizes[i] = vector.size();
       rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
-      bits::setBit(rawNulls, i, true);
 
       ++i;
     }
@@ -319,7 +313,7 @@ class FunctionBaseTest : public testing::Test {
     return std::make_shared<ArrayVector>(
         pool(),
         ARRAY(MAP(CppToType<TKey>::create(), CppToType<TValue>::create())),
-        nulls,
+        BufferPtr(nullptr),
         size,
         offsets,
         sizes,
