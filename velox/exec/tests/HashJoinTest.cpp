@@ -219,8 +219,11 @@ TEST_F(HashJoinTest, joinSidesDifferentSchema) {
   std::vector<std::string> stringVector = {"aaa", "bbb", "ccc", "ddd", "eee"};
   auto leftVectors = makeRowVector({
       makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
-      makeFlatVector<StringView>(batchSize,
-                                 [&](auto row) { return StringView(stringVector[row % stringVector.size()]); }),
+      makeFlatVector<StringView>(
+          batchSize,
+          [&](auto row) {
+            return StringView(stringVector[row % stringVector.size()]);
+          }),
       makeFlatVector<int32_t>(batchSize, [](auto row) { return row; }),
   });
   auto rightVectors = makeRowVector({
