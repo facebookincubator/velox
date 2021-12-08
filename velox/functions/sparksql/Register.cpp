@@ -68,6 +68,9 @@ void registerFunctions(const std::string& prefix) {
   registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {prefix + "get_json_object"});
 
+  registerFunction<ToUnixtimeFunction, double, Timestamp>(
+      {"to_unix_timestamp"});
+
   // Register string functions.
   registerFunction<udf_chr, Varchar, int64_t>();
   registerFunction<udf_ascii, int32_t, Varchar>();
