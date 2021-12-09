@@ -505,7 +505,9 @@ struct VectorWriter<Row<T...>> {
 
   void init(vector_t& vector) {
     vector_ = &vector;
+    // Insure that children vectors are at least of same size as top row vector.
     initVectorWritersInternal<0, T...>();
+    resizeVectorWritersInternal<0>(vector_->size());
   }
 
   exec_out_t& current() {
@@ -520,8 +522,7 @@ struct VectorWriter<Row<T...>> {
   void ensureSize(size_t size) {
     if (size != vector_->size()) {
       vector_->resize(size);
-      resizeVectorWritersInternal<0>(size);
-      init(*vector_);
+      resizeVectorWritersInternal<0>(vector_->size());
     }
   }
 
