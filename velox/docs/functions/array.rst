@@ -10,6 +10,16 @@ Array Functions
         SELECT array_intersect(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
         SELECT array_intersect(ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]); -- [1, NULL]
 
+.. function:: array_intersect(array(array(E))) -> array(E)
+
+    Returns an array of the elements in the intersection of all arrays in the given array, without duplicates.
+    E must be coercible to double. Returns bigint if E is coercible to bigint. Otherwise, returns double. ::
+
+        SELECT array_intersect(ARRAY[ ARRAY [1, 2, 3], ARRAY[4, 5, 6]]); -- []
+        SELECT array_intersect(ARRAY[ ARRAY [1, 2, 2], ARRAY[0, 1, 1, 2], ARRAY[1, 1, 2, 3]]); -- [1, 2]
+        SELECT array_intersect(ARRAY[ ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]]); -- [1, NULL]
+
+
 .. function:: array_except(array(E) x, array(E) y) -> array(E)
 
     Returns an array of the elements in array ``x`` but not in array ``y``, without duplicates. ::
