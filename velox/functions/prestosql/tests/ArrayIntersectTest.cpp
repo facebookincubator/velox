@@ -118,6 +118,39 @@ class ArrayIntersectTest : public FunctionBaseTest {
     testExpr(expected, "array_intersect(C0, C1)", {array1, array2});
     testExpr(expected, "array_intersect(C1, C0)", {array1, array2});
   }
+
+  VectorPtr createArrayVector(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      VectorPtr elementVector) {
+    BufferPtr offsetsBuffer = allocateOffsets(offsets.size(), pool());
+    BufferPtr sizesBuffer = allocateSizes(sizes.size(), pool());
+    BufferPtr nullBuffer =
+        AlignedBuffer::allocate<bool>(sizes.size(), pool(), bits::kNotNull);
+    auto rawOffsets = offsetsBuffer->asMutable<vector_size_t>();
+    auto rawSizes = sizesBuffer->asMutable<vector_size_t>();
+    auto rawNull = nullBuffer->asMutable<uint64_t>();
+
+    for (int i = 0; i < offsets.size(); i++) {
+      rawOffsets[i] = offsets[i];
+    }
+
+    for (int i = 0; i < sizes.size(); i++) {
+      rawSizes[i] = sizes[i];
+      if (sizes[i] == 0) {
+        bits::setNull(rawNull, i, true);
+      }
+    }
+
+    return std::make_shared<ArrayVector>(
+        pool(),
+        ARRAY(elementVector->type()),
+        nullBuffer,
+        offsets.size(),
+        offsetsBuffer,
+        sizesBuffer,
+        elementVector);
+  }
 };
 
 } // namespace
@@ -277,4 +310,88 @@ TEST_F(ArrayIntersectTest, wrongTypes) {
       std::invalid_argument);
 
   EXPECT_NO_THROW(testExpr(expected, "array_intersect(C0, C0)", {array1}));
+}
+
+TEST_F(ArrayIntersectTest, arrayOfBigintArrays) {
+  auto baseVector = makeNullableArrayVector<int64_t>(
+      {// 1st row: two sets with some overlap
+       {1, 2, 3},
+       {2, 3},
+       // 2nd row: three sets with some overlap and duplicates
+       {3, 3, 5, 6},
+       {4, 4, 5, 5, 6},
+       {6, 6, 7},
+       // 3rd row: two sets with no overlap but duplicates
+       {5, 5},
+       {6, 6},
+       // 4th row: three sets with null and non-null overlap
+       {1, 2, std::nullopt, std::nullopt},
+       {2, std::nullopt},
+       {2, 3, std::nullopt},
+       // 5th row: two sets with null overlap and duplicates
+       {1, 2, std::nullopt},
+       {std::nullopt, std::nullopt},
+       // 6th row: single set with non-null duplicates and nulls
+       {1, 2, 2, std::nullopt, std::nullopt},
+       // 7th row: single set with pure nulls
+       {std::nullopt, std::nullopt}});
+
+  std::vector<vector_size_t> sizes = {2, 3, 2, 3, 2, 1, 1};
+  // offsets array is cumulative sums starting from Offset 0
+  std::vector<vector_size_t> offsets(sizes.size()-1);
+  std::partial_sum(sizes.begin(), sizes.end(), offsets.begin(), std::plus<>());
+  offsets.emplace(offsets.begin(), 0);
+
+  // Create an array of array vector using above base vector
+  auto arrayOfArrays = createArrayVector(offsets, sizes, baseVector);
+
+  auto expected = makeNullableArrayVector<int64_t>(
+      {{2, 3},
+       {6},
+       {},
+       {std::nullopt, 2},
+       {std::nullopt},
+       {1, 2, 2, std::nullopt, std::nullopt},
+       {std::nullopt, std::nullopt}});
+
+  auto actual = evaluate<ArrayVector>(
+      "array_intersect(c0)", makeRowVector({arrayOfArrays}));
+
+  assertEqualVectors(expected, actual);
+}
+
+TEST_F(ArrayIntersectTest, arrayOfDoubleArrays) {
+  auto baseVector = makeNullableArrayVector<double>(
+      {// 1st row: two sets with some overlap
+       {1.5, 2.5, 3.0, std::nullopt},
+       {std::nullopt, 2.5, 3.0},
+       // 2nd row: three sets with some overlap and duplicates
+       {3.0, 3.0, -10.5, 1000000000.0, std::nullopt},
+       {4.0, 4.0, std::nullopt, -10.5, -10.5, 1000000000.0},
+       {-10.5, std::nullopt, 1000000000.0, 1000000000.0},
+       // 3rd row: two sets with no overlap but duplicates
+       {5.0, 5.0},
+       {5.0000001, 5.0000001},
+       // 4th row: single set with non-null duplicates and nulls
+       {1.0, 0.0, -1.0, 0.0, std::nullopt, std::nullopt}});
+
+  std::vector<vector_size_t> sizes = {2, 3, 2, 1};
+  // offsets array is cumulative sums starting from Offset 0
+  std::vector<vector_size_t> offsets(sizes.size() - 1);
+  std::partial_sum(sizes.begin(), sizes.end(), offsets.begin(), std::plus<>());
+  offsets.emplace(offsets.begin(), 0);
+
+  // Create an array of array vector using above base vector
+  auto arrayOfArrays = createArrayVector(offsets, sizes, baseVector);
+
+  auto expected = makeNullableArrayVector<double>(
+      {{std::nullopt, 2.5, 3.0},
+       {std::nullopt, -10.5, 1000000000.0},
+       {},
+       {1.0, 0.0, -1.0, 0.0, std::nullopt, std::nullopt}});
+
+  auto actual = evaluate<ArrayVector>(
+      "array_intersect(c0)", makeRowVector({arrayOfArrays}));
+
+  assertEqualVectors(expected, actual);
 }
