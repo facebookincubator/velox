@@ -233,7 +233,9 @@ class MinAggregate : public MinMaxAggregate<T, ResultType> {
 class NonNumericMinMaxAggregateBase : public exec::Aggregate {
  public:
   explicit NonNumericMinMaxAggregateBase(const TypePtr& resultType)
-      : exec::Aggregate(resultType) {}
+      : exec::Aggregate(
+            resultType /*intermediate type is the same as result type*/,
+            resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(SingleValueAccumulator);

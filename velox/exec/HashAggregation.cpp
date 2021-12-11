@@ -98,7 +98,9 @@ HashAggregation::HashAggregation(
 
   // Check that aggregate result type match the output type
   for (auto i = 0; i < aggregates.size(); i++) {
-    const auto& aggResultType = aggregates[i]->resultType();
+    const auto& aggResultType = isPartialOutput_
+        ? aggregates[i]->intermediateType()
+        : aggregates[i]->resultType();
     const auto& expectedType = outputType_->childAt(numHashers + i);
     VELOX_CHECK(
         aggResultType->kindEquals(expectedType),

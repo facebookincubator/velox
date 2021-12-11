@@ -234,7 +234,8 @@ class AggregateTypeResolver {
     auto aggregate =
         exec::Aggregate::create(functionName, step_, types, UNKNOWN());
     if (aggregate) {
-      return aggregate->resultType();
+      return exec::isPartialOutput(step_) ? aggregate->intermediateType()
+                                          : aggregate->resultType();
     }
     return nullptr;
   }

@@ -21,6 +21,7 @@
 #include "velox/functions/prestosql/hyperloglog/DenseHll.h"
 #include "velox/functions/prestosql/hyperloglog/HllUtils.h"
 #include "velox/functions/prestosql/hyperloglog/SparseHll.h"
+#include "velox/type/Type.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -113,7 +114,7 @@ class ApproxDistinctAggregate : public exec::Aggregate {
       const TypePtr& resultType,
       bool hllAsFinalResult,
       bool hllAsRawInput)
-      : exec::Aggregate(resultType),
+      : exec::Aggregate(VARBINARY(), resultType),
         hllAsFinalResult_{hllAsFinalResult},
         hllAsRawInput_{hllAsRawInput} {}
 

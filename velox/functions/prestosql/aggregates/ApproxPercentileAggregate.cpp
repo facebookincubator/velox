@@ -204,7 +204,7 @@ template <typename T>
 class ApproxPercentileAggregate : public exec::Aggregate {
  public:
   ApproxPercentileAggregate(bool hasWeight, const TypePtr& resultType)
-      : exec::Aggregate(resultType), hasWeight_{hasWeight} {}
+      : exec::Aggregate(VARBINARY(), resultType), hasWeight_{hasWeight} {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TDigestAccumulator);
@@ -497,10 +497,9 @@ bool registerApproxPercentile(const std::string& name) {
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
         auto isRawInput = exec::isRawInput(step);
-        auto isPartialOutput = exec::isPartialOutput(step);
         auto hasWeight = argTypes.size() == 3;
 
-        TypePtr type = isRawInput ? argTypes[0] : resultType;
+        TypePtr aggResultType = isRawInput ? argTypes[0] : resultType;
 
         if (isRawInput) {
           VELOX_USER_CHECK_GE(
@@ -536,13 +535,10 @@ bool registerApproxPercentile(const std::string& name) {
 
         if (step == core::AggregationNode::Step::kIntermediate) {
           return std::make_unique<ApproxPercentileAggregate<double>>(
-              false, VARBINARY());
+              false, aggResultType);
         }
 
-        auto aggResultType =
-            isPartialOutput ? VARBINARY() : (isRawInput ? type : resultType);
-
-        switch (type->kind()) {
+        switch (aggResultType->kind()) {
           case TypeKind::TINYINT:
             return std::make_unique<ApproxPercentileAggregate<int8_t>>(
                 hasWeight, aggResultType);
@@ -565,7 +561,7 @@ bool registerApproxPercentile(const std::string& name) {
             VELOX_USER_FAIL(
                 "Unsupported input type for {} aggregation {}",
                 name,
-                type->toString());
+                aggResultType->toString());
         }
       });
   return true;

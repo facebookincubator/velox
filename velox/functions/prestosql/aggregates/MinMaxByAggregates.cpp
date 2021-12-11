@@ -32,8 +32,12 @@ namespace {
 template <typename T, typename U>
 class MinMaxByAggregate : public exec::Aggregate {
  public:
-  MinMaxByAggregate(TypePtr resultType, U initialValue)
-      : exec::Aggregate(resultType), initialValue_(initialValue) {}
+  MinMaxByAggregate(
+      TypePtr intermediateType,
+      TypePtr resultType,
+      U initialValue)
+      : exec::Aggregate(intermediateType, resultType),
+        initialValue_(initialValue) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(T) + sizeof(U) + sizeof(bool);
@@ -333,8 +337,11 @@ class MinMaxByAggregate : public exec::Aggregate {
 template <typename T, typename U>
 class MaxByAggregate : public MinMaxByAggregate<T, U> {
  public:
-  explicit MaxByAggregate(TypePtr resultType)
-      : MinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::min()) {}
+  explicit MaxByAggregate(TypePtr intermediateType, TypePtr resultType)
+      : MinMaxByAggregate<T, U>(
+            intermediateType,
+            resultType,
+            std::numeric_limits<U>::min()) {}
 
   void addRawInput(
       char** groups,
@@ -384,8 +391,11 @@ class MaxByAggregate : public MinMaxByAggregate<T, U> {
 template <typename T, typename U>
 class MinByAggregate : public MinMaxByAggregate<T, U> {
  public:
-  explicit MinByAggregate(TypePtr resultType)
-      : MinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::max()) {}
+  explicit MinByAggregate(TypePtr intermediateType, TypePtr resultType)
+      : MinMaxByAggregate<T, U>(
+            intermediateType,
+            resultType,
+            std::numeric_limits<U>::max()) {}
 
   void addRawInput(
       char** groups,
@@ -434,22 +444,23 @@ class MinByAggregate : public MinMaxByAggregate<T, U> {
 
 template <template <typename U, typename V> class T, typename W>
 std::unique_ptr<exec::Aggregate> create(
+    TypePtr intermediateType,
     TypePtr resultType,
     TypeKind compareType,
     const std::string& errorMessage) {
   switch (compareType) {
     case TypeKind::TINYINT:
-      return std::make_unique<T<W, int8_t>>(resultType);
+      return std::make_unique<T<W, int8_t>>(intermediateType, resultType);
     case TypeKind::SMALLINT:
-      return std::make_unique<T<W, int16_t>>(resultType);
+      return std::make_unique<T<W, int16_t>>(intermediateType, resultType);
     case TypeKind::INTEGER:
-      return std::make_unique<T<W, int32_t>>(resultType);
+      return std::make_unique<T<W, int32_t>>(intermediateType, resultType);
     case TypeKind::BIGINT:
-      return std::make_unique<T<W, int64_t>>(resultType);
+      return std::make_unique<T<W, int64_t>>(intermediateType, resultType);
     case TypeKind::REAL:
-      return std::make_unique<T<W, float>>(resultType);
+      return std::make_unique<T<W, float>>(intermediateType, resultType);
     case TypeKind::DOUBLE:
-      return std::make_unique<T<W, double>>(resultType);
+      return std::make_unique<T<W, double>>(intermediateType, resultType);
     default:
       VELOX_FAIL("{}", errorMessage);
       return nullptr;
@@ -499,29 +510,46 @@ bool registerMinMaxByAggregate(const std::string& name) {
             mapAggregationStepToName(step),
             valueType->kindName(),
             compareType->kindName());
-        auto resultType = exec::isPartialOutput(step)
-            ? ROW({"v", "c"}, {argTypes[0], argTypes[1]})
-            : argTypes[0]->childAt(0);
+        auto intermediateType = ROW({"v", "c"}, {valueType, compareType});
+        auto resultType = valueType;
 
         switch (valueType->kind()) {
           case TypeKind::TINYINT:
             return create<T, int8_t>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           case TypeKind::SMALLINT:
             return create<T, int16_t>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           case TypeKind::INTEGER:
             return create<T, int32_t>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           case TypeKind::BIGINT:
             return create<T, int64_t>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           case TypeKind::REAL:
             return create<T, float>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           case TypeKind::DOUBLE:
             return create<T, double>(
-                resultType, compareType->kind(), errorMessage);
+                intermediateType,
+                resultType,
+                compareType->kind(),
+                errorMessage);
           default:
             VELOX_FAIL(errorMessage);
         }

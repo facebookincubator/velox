@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Aggregate.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -34,7 +35,8 @@ struct SumCount {
 template <typename T>
 class AverageAggregate : public exec::Aggregate {
  public:
-  explicit AverageAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
+  explicit AverageAggregate(TypePtr resultType)
+      : exec::Aggregate(ROW({DOUBLE(), BIGINT()}), resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(SumCount);

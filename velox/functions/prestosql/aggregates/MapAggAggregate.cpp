@@ -29,7 +29,10 @@ struct MapAccumulator {
 // https://prestodb.io/docs/current/functions/aggregate.html
 class MapAggAggregate : public exec::Aggregate {
  public:
-  explicit MapAggAggregate(TypePtr resultType) : Aggregate(resultType) {}
+  explicit MapAggAggregate(TypePtr resultType)
+      : Aggregate(
+            resultType /*intermediate type is the same as result type*/,
+            resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(MapAccumulator);

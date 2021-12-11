@@ -405,7 +405,8 @@ the aggregate function.
         auto aggregate =
             exec::Aggregate::create(functionName, step_, types, UNKNOWN());
         if (aggregate) {
-          return aggregate->resultType();
+          return exec::isPartialOutput(step_) ? aggregate->intermediateType()
+                                          : aggregate->resultType();
         }
         return nullptr;
       }
@@ -478,4 +479,3 @@ To confirm that aggregate function works end to end as part of query, update tes
 .. code-block:: java
 
     assertQuery("SELECT orderkey, array_agg(linenumber) FROM lineitem GROUP BY 1");
-

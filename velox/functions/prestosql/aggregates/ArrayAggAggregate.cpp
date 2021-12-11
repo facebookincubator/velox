@@ -27,7 +27,10 @@ struct ArrayAccumulator {
 
 class ArrayAggAggregate : public exec::Aggregate {
  public:
-  explicit ArrayAggAggregate(TypePtr resultType) : Aggregate(resultType) {}
+  explicit ArrayAggAggregate(TypePtr resultType)
+      : Aggregate(
+            resultType /*intermediate type is the same as result type*/,
+            resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(ArrayAccumulator);

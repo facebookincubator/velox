@@ -16,6 +16,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -135,7 +136,7 @@ template <typename T, typename TResultAccessor>
 class VarianceAggregate : public exec::Aggregate {
  public:
   explicit VarianceAggregate(TypePtr resultType)
-      : exec::Aggregate(resultType) {}
+      : exec::Aggregate(ROW({BIGINT(), DOUBLE(), DOUBLE()}), resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(VarianceAccumulator);

@@ -24,7 +24,7 @@ namespace facebook::velox::aggregate {
 
 class CountIfAggregate : public exec::Aggregate {
  public:
-  explicit CountIfAggregate() : exec::Aggregate(BIGINT()) {}
+  explicit CountIfAggregate() : exec::Aggregate(BIGINT(), BIGINT()) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(int64_t);

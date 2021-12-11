@@ -34,10 +34,15 @@ bool isPartialOutput(core::AggregationNode::Step step);
 
 class Aggregate {
  protected:
-  explicit Aggregate(TypePtr resultType) : resultType_(resultType) {}
+  explicit Aggregate(TypePtr intermediateType, TypePtr resultType)
+      : intermediateType_(intermediateType), resultType_(resultType) {}
 
  public:
   virtual ~Aggregate() {}
+
+  TypePtr intermediateType() const {
+    return intermediateType_;
+  }
 
   TypePtr resultType() const {
     return resultType_;
@@ -249,6 +254,7 @@ class Aggregate {
     }
   }
 
+  const TypePtr intermediateType_;
   const TypePtr resultType_;
 
   // Byte position of null flag in group row.

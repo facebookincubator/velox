@@ -137,7 +137,9 @@ class ArbitraryAggregate : public SimpleNumericAggregate<T, T, T> {
 class NonNumericArbitrary : public exec::Aggregate {
  public:
   explicit NonNumericArbitrary(const TypePtr& resultType)
-      : exec::Aggregate(resultType) {}
+      : exec::Aggregate(
+            resultType /*intermediate type is the same as result type*/,
+            resultType) {}
 
   // We use singleValueAccumulator to save the results for each group. This
   // struct will allow us to save variable-width value.

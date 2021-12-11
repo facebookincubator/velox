@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -287,8 +288,8 @@ template <
     typename TResultAccessor>
 class CovarianceAggregate : public exec::Aggregate {
  public:
-  explicit CovarianceAggregate(TypePtr resultType)
-      : exec::Aggregate(resultType) {}
+  explicit CovarianceAggregate(TypePtr intermediateType, TypePtr resultType)
+      : exec::Aggregate(intermediateType, resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TAccumulator);
@@ -472,6 +473,8 @@ bool registerCovarianceAggregate(const std::string& name) {
         auto rawInputType = exec::isRawInput(step)
             ? argTypes[0]
             : (exec::isPartialOutput(step) ? DOUBLE() : resultType);
+        auto intermediateType = exec::SignatureBinder::tryResolveType(
+            exec::parseTypeSignature(TIntermediateResult::type()), {});
         switch (rawInputType->kind()) {
           case TypeKind::DOUBLE:
             return std::make_unique<CovarianceAggregate<
@@ -479,14 +482,14 @@ bool registerCovarianceAggregate(const std::string& name) {
                 TAccumulator,
                 TIntermediateInput,
                 TIntermediateResult,
-                TResultAccessor>>(resultType);
+                TResultAccessor>>(intermediateType, resultType);
           case TypeKind::REAL:
             return std::make_unique<CovarianceAggregate<
                 float,
                 TAccumulator,
                 TIntermediateInput,
                 TIntermediateResult,
-                TResultAccessor>>(resultType);
+                TResultAccessor>>(intermediateType, resultType);
           default:
             VELOX_UNSUPPORTED(
                 "Unsupported raw input type: {}. Expected DOUBLE or REAL.",
