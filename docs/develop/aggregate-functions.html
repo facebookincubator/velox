@@ -160,26 +160,26 @@ accumulators.</p>
 <li><p>Figure out what are the input, intermediate and final types.</p></li>
 <li><p>Figure out what are partial and final calculations.</p></li>
 <li><p>Design the accumulator.</p></li>
-<li><p>Create a new class that extends f4d::exec::Aggregate base class (see velox/exec/Aggregate.h) and implement virtual methods.</p></li>
+<li><p>Create a new class that extends velox::exec::Aggregate base class (see velox/exec/Aggregate.h) and implement virtual methods.</p></li>
 </ul>
 </dd>
 </dl>
 </li>
-<li><p>Register the new function using exec::AggregateFunctions().Register(…) method.</p></li>
+<li><p>Register the new function using exec::registerAggregateFunction(…).</p></li>
 <li><p>Add tests.</p></li>
 <li><p>Write documentation.</p></li>
 </ul>
 </section>
 <section id="accumulator-size">
 <h2>Accumulator size<a class="headerlink" href="#accumulator-size" title="Permalink to this headline">¶</a></h2>
-<p>The implementation of the f4d::exec::Aggregate interface can start with <em>accumulatorFixedWidthSize()</em> method.</p>
+<p>The implementation of the velox::exec::Aggregate interface can start with <em>accumulatorFixedWidthSize()</em> method.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Returns the fixed number of bytes the accumulator takes on a group</span>
 <span class="c1">// row. Variable width accumulators will reference the variable</span>
 <span class="c1">// width part of the state from the fixed part.</span>
 <span class="k">virtual</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="nf">accumulatorFixedWidthSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
-<p>The HashAggregation operator uses this method during initialization to calculate the total size of the row and figure out offsets at which different aggregates will be storing their data. The operator then calls f4d::exec::Aggregate::setOffsets method for each aggregate to specify the location of the accumulator.</p>
+<p>The HashAggregation operator uses this method during initialization to calculate the total size of the row and figure out offsets at which different aggregates will be storing their data. The operator then calls velox::exec::Aggregate::setOffsets method for each aggregate to specify the location of the accumulator.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Sets the offset and null indicator position of &#39;this&#39;.</span>
 <span class="c1">// @param offset Offset in bytes from the start of the row of the accumulator</span>
 <span class="c1">// @param nullByte Offset in bytes from the start of the row of the null flag</span>
@@ -329,69 +329,105 @@ accumulators.</p>
 </section>
 <section id="factory-function">
 <h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this headline">¶</a></h2>
-<p>We can now write a factory function that creates an instance of the new aggregation function and register it using exec::AggregateFunctions().Register(…) method.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">FB_ANONYMOUS_VARIABLE</span><span class="p">(</span><span class="n">g_AggregateFunction</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">    </span><span class="n">registerApproxPercentile</span><span class="p">(</span><span class="n">kApproxPercentile</span><span class="p">);</span><span class="w"></span>
-</pre></div>
-</div>
-<p>HashAggregation operator uses this function to create an instance of the aggregate function. New instance is created for each thread of execution. When partial aggregation runs on 5 threads, it uses 5 instances of each aggregate function.</p>
-<p>Factory function takes core::AggregationNode::Step (partial/final/intermediate/single) which tells what type of input to expect, input type and result type.</p>
+<p>We can now write a factory function that creates an instance of the new
+aggregation function and register it by calling exec::registerAggregateFunction
+(…) and specifying function name and signatures.</p>
+<p>HashAggregation operator uses this function to create an instance of the
+aggregate function. A new instance is created for each thread of execution. When
+partial aggregation runs on 5 threads, it uses 5 instances of each aggregate
+function.</p>
+<p>Factory function takes core::AggregationNode::Step
+(partial/final/intermediate/single) which tells what type of input to expect,
+input type and result type.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">registerApproxPercentile</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctions</span><span class="p">().</span><span class="n">Register</span><span class="p">(</span><span class="w"></span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignature</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="p">...</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">exec</span><span class="o">::</span><span class="n">registerAggregateFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">      </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">signatures</span><span class="p">),</span><span class="w"></span>
 <span class="w">      </span><span class="p">[</span><span class="n">name</span><span class="p">](</span><span class="w"></span>
 <span class="w">          </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span><span class="w"></span>
 <span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span><span class="w"></span>
 <span class="w">          </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">isRawInput</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">);</span><span class="w"></span>
-<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">isPartialOutput</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isPartialOutput</span><span class="p">(</span><span class="n">step</span><span class="p">);</span><span class="w"></span>
-<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">hasWeight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w"></span>
-
-<span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">isRawInput</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span><span class="w"></span>
-
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">isRawInput</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="o">&lt;</span><span class="p">...</span><span class="n">Check</span><span class="w"> </span><span class="n">raw</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="n">types</span><span class="p">...</span><span class="o">&gt;</span><span class="w"></span>
-<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="o">&lt;</span><span class="p">...</span><span class="n">Check</span><span class="w"> </span><span class="n">intermediate</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="n">types</span><span class="p">...</span><span class="o">&gt;</span><span class="w"></span>
-<span class="w">        </span><span class="p">}</span><span class="w"></span>
-
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">step</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="o">::</span><span class="n">kIntermediate</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
 <span class="w">              </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="n">VARBINARY</span><span class="p">());</span><span class="w"></span>
 <span class="w">        </span><span class="p">}</span><span class="w"></span>
 
-<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">aggResultType</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">            </span><span class="n">isPartialOutput</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">VARBINARY</span><span class="p">()</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="n">isRawInput</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nl">type</span> <span class="p">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
+<span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">hasWeight</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w"></span>
+<span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span><span class="w"></span>
 
 <span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">kind</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="nl">BIGINT</span><span class="p">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">                </span><span class="n">isRawInput</span><span class="p">,</span><span class="w"> </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">aggResultType</span><span class="p">);</span><span class="w"></span>
+<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
 <span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="nl">DOUBLE</span><span class="p">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
-<span class="w">                </span><span class="n">isRawInput</span><span class="p">,</span><span class="w"> </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">aggResultType</span><span class="p">);</span><span class="w"></span>
+<span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
 <span class="w">          </span><span class="p">...</span><span class="w"></span>
 <span class="w">        </span><span class="p">}</span><span class="w"></span>
 <span class="w">      </span><span class="p">});</span><span class="w"></span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
+
+<span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">FB_ANONYMOUS_VARIABLE</span><span class="p">(</span><span class="n">g_AggregateFunction</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
+<span class="w">    </span><span class="n">registerApproxPercentile</span><span class="p">(</span><span class="n">kApproxPercentile</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Use FunctionSignatureBuilder to create FunctionSignature instances which
+describe supported signatures. Each signature includes zero or more input
+types, an intermediate result type and final result type.</p>
+<p>FunctionSignatureBuilder and FunctionSignature support Java-like
+generics, variable number of arguments and lambdas. See more in
+<a class="reference internal" href="scalar-functions.html#function-signature"><span class="std std-ref">Function signature</span></a> section of the <a class="reference internal" href="scalar-functions.html"><span class="doc">How to add a scalar function?</span></a> guide.</p>
+<p>Here is an example of signatures for the <a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> function. This
+functions takes value argument of a numeric type, an optional weight argument
+of type INTEGER, and a percentage argument of type DOUBLE. The intermediate
+type does not depend on the input types and is always VARBINARY. The final
+result type is the same as input value type.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">inputType</span> <span class="p">:</span><span class="w"></span>
+<span class="w">       </span><span class="p">{</span><span class="s">&quot;tinyint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;smallint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;integer&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bigint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;real&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;double&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// (x, double percentage) -&gt; varbinary -&gt; x</span>
+<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// (x, integer weight, double percentage) -&gt; varbinary -&gt; x</span>
+<span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">intermediateType</span><span class="p">(</span><span class="s">&quot;varbinary&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="n">inputType</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;bigint&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;double&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">                             </span><span class="p">.</span><span class="n">build</span><span class="p">());</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
 <section id="testing">
 <h2>Testing<a class="headerlink" href="#testing" title="Permalink to this headline">¶</a></h2>
-<p>It is time to put all the pieces together and test how well the new function works.</p>
-<p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a base class for the test.</p>
-<p>If the new aggregate function is supported by DuckDB, you can use DuckDB to check results. In this case you write a query plan with an aggregation node that uses the new function and compare the results of that plan with SQL query that runs on DuckDB.</p>
+<p>It is time to put all the pieces together and test how well the new function
+works.</p>
+<p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
+base class for the test.</p>
+<p>If the new aggregate function is supported by DuckDB, you can use DuckDB to
+check results. In this case you write a query plan with an aggregation node
+that uses the new function and compare the results of that plan with SQL query
+that runs on DuckDB.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">agg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
 <span class="w">          </span><span class="p">.</span><span class="n">values</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span><span class="w"></span>
 <span class="w">          </span><span class="p">.</span><span class="n">partialAggregation</span><span class="p">({</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">})</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">({</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(a0)&quot;</span><span class="p">})</span><span class="w"></span>
+<span class="w">          </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">()</span><span class="w"></span>
 <span class="w">          </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
 <span class="n">assertQuery</span><span class="p">(</span><span class="n">agg</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p>If the new function is not supported by DuckDB, you need to specify the expected results manually.</p>
+<p>If the new function is not supported by DuckDB, you need to specify the expected
+results manually.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">testGroupByAgg</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">keys</span><span class="p">,</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"></span>
@@ -412,70 +448,37 @@ accumulators.</p>
 <span class="w">           </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">rowVector</span><span class="p">})</span><span class="w"></span>
 <span class="w">           </span><span class="p">.</span><span class="n">partialAggregation</span><span class="p">(</span><span class="w"></span>
 <span class="w">               </span><span class="p">{</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">fmt</span><span class="o">::</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;approx_percentile(c1, {})&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)})</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">(</span><span class="w"></span>
-<span class="w">               </span><span class="p">{</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;approx_percentile(a0)&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">values</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()})</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">()</span><span class="w"></span>
 <span class="w">           </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
 
 <span class="w">  </span><span class="n">assertQuery</span><span class="p">(</span><span class="n">op</span><span class="p">,</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
 </pre></div>
 </div>
-</section>
-<section id="known-limitations">
-<h2>Known Limitations<a class="headerlink" href="#known-limitations" title="Permalink to this headline">¶</a></h2>
 <p>As shown in the example above, you can use PlanBuilder to create aggregation plan nodes.</p>
 <ul class="simple">
 <li><p>partialAggregation() creates plan node for a partial aggregation</p></li>
 <li><p>finalAggregation() creates plan node for a final aggregation</p></li>
 <li><p>singleAggregation() creates plan node for a single agg</p></li>
 </ul>
-<p>Each of these methods takes a list of grouping keys (as indices into the input RowVector)
-and a list of aggregate functions (as SQL strings). Testing framework parses SQL strings
-for the aggregate functions and infers the types of the results. It does so by calling
-exec::Aggregate::create() to create an instance of the aggregate function. It passes
-input types, aggregation step (partial/intermediate/fina/single) and bogus result type
-(UNKNOWN). It then uses Aggregate::resultType() getter to get the actual result type of
-the aggregate function.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">resolveType</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">ITypedExpr</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">inputs</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">CallExpr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">expr</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">types</span><span class="p">;</span><span class="w"></span>
-<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">input</span> <span class="p">:</span><span class="w"> </span><span class="n">inputs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="n">types</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">input</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">());</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
-<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">functionName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="o">-&gt;</span><span class="n">getFunctionName</span><span class="p">();</span><span class="w"></span>
-
-<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">aggregate</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">functionName</span><span class="p">,</span><span class="w"> </span><span class="n">step_</span><span class="p">,</span><span class="w"> </span><span class="n">types</span><span class="p">,</span><span class="w"> </span><span class="n">UNKNOWN</span><span class="p">());</span><span class="w"></span>
-<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">aggregate</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">aggregate</span><span class="o">-&gt;</span><span class="n">resultType</span><span class="p">();</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
-</pre></div>
-</div>
-<p>This works for most aggregate functions, but some aggregate functions cannot
-infer return type from input types alone.</p>
-<p>For example, <a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> supports multiple raw input types:
-integers and floating point numbers. The type of the intermediate results for
-<a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> is always VARBINARY (serialized T-Digest sketch),
-regardless of the raw input type. The type of the final results is the same
-as the type of the raw input. Therefore, final <a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a>
-aggregation receives VARBINARY type as input and returns any of the supported
-input types. This function cannot infer the result type from just the input types.</p>
-<p>As a workaround, PlanBuilder::finalAggregation() takes an option parameter
-that specifies the result type of the aggregate function.
-For example,</p>
+<p>partialAggregation() and singleAggregation() methods take a list of grouping
+keys (as indices into the input RowVector) and a list of aggregate functions
+(as SQL strings). Testing framework parses SQL strings for the aggregate
+functions and infers the types of the results using signatures stored in the
+registry.</p>
+<p>finalAggregation() method doesn’t take any parameters and infers grouping keys
+and aggregate functions from the preceding partial aggregation.</p>
+<p>When building a plan that includes final aggregation without the corresponding
+partial aggregation, use finalAggregation() variant that takes grouping keys,
+aggregate functions and aggregate functions result types.</p>
+<p>For example,</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
 <span class="w">    </span><span class="p">...</span><span class="w"></span>
 <span class="w">    </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">({</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;approx_percentile(a0)&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">DOUBLE</span><span class="p">()})</span><span class="w"></span>
 </pre></div>
 </div>
-<p>creates an approx_percentile aggregate with DOUBLE as return type.</p>
-<p>A proper solution would be to modify the function registry to add a separate
-type resolution function for each aggregate function. That function would take
-aggregate function name and raw input types and return the types of the intermediate
-and final results.</p>
+<p>creates a final aggregation using an approx_percentile aggregate function with
+DOUBLE result type.</p>
 </section>
 <section id="documentation">
 <h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
@@ -484,7 +487,7 @@ and final results.</p>
 </section>
 <section id="accumulator">
 <h2>Accumulator<a class="headerlink" href="#accumulator" title="Permalink to this headline">¶</a></h2>
-<p>Variable-width accumulators need to use <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> to allocate memory. An instance of the allocator is available in the base class: <em>f4d::exec::Aggregate::allocator_</em>.</p>
+<p>Variable-width accumulators need to use <a class="reference internal" href="arena.html"><span class="doc">HashStringAllocator</span></a> to allocate memory. An instance of the allocator is available in the base class: <em>velox::exec::Aggregate::allocator_</em>.</p>
 <p>Sometimes you’ll need to create a custom accumulator. Sometimes one of the existing accumulators would do the jobs.</p>
 <p>SingleValueAccumulator used by <a class="reference internal" href="../functions/aggregate.html#min" title="min"><code class="xref py py-func docutils literal notranslate"><span class="pre">min()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max" title="max"><code class="xref py py-func docutils literal notranslate"><span class="pre">max()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a> functions can be used to store a single value of variable-width type, e.g. string, array, map or struct.</p>
 <p>ValueList accumulator used by <a class="reference internal" href="../functions/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> accumulates a list of values. This is an append-only accumulator.</p>
@@ -527,7 +530,6 @@ and final results.</p>
 <li><a class="reference internal" href="#global-aggregation">Global aggregation</a></li>
 <li><a class="reference internal" href="#factory-function">Factory function</a></li>
 <li><a class="reference internal" href="#testing">Testing</a></li>
-<li><a class="reference internal" href="#known-limitations">Known Limitations</a></li>
 <li><a class="reference internal" href="#documentation">Documentation</a></li>
 <li><a class="reference internal" href="#accumulator">Accumulator</a></li>
 <li><a class="reference internal" href="#end-to-end-testing">End-to-End Testing</a></li>
