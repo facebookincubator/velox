@@ -16,12 +16,7 @@ workflows:
   version: 2
   dist-compile:
     jobs:
-      - linux-build
-      - linux-build-options
-      - linux-parquet-s3-build
       - macos-build
-      - format-check
-      - header-check
 
   # Daily documentation update
   nightly:
@@ -51,6 +46,59 @@ executors:
       - image : prestocpp/velox-circleci:mikesh-20210928
 
 jobs:
+  macos-build-asan:
+    macos:
+      xcode: "11.7.0"
+    steps:
+      - checkout
+      - restore_cache:
+          name: "Restore Dependency Cache"
+          key: velox-circleci-macos-asan-deps-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+      - run:
+          name: "Install dependencies"
+          command: |
+            set -xu
+            if [[ ! -e ~/deps ]]; then
+              mkdir ~/deps ~/deps-src
+              curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C ~/deps
+              PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
+              rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
+            fi
+      - save_cache:
+          name: "Save Dependency Cache"
+          key: velox-circleci-macos-asan-deps-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          paths:
+            - ~/deps
+      - run:
+          name: "Calculate merge-base date for CCache"
+          command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+      - restore_cache:
+          name: "Restore CCache cache"
+          keys:
+            - velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
+      - run:
+          name: "Build on MacOS with address sanitizer"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            mkdir -p .ccache
+            export CCACHE_DIR=$(pwd)/.ccache
+            ccache -sz -M 5Gi
+            cmake -B _build/debug -DCMAKE_CXX_FLAGS=-fsanitize=address -DVELOX_CODEGEN_SUPPORT=OFF -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            ninja -C _build/debug
+            ccache -s
+          no_output_timeout: 1h
+      - save_cache:
+          name: "Save CCache cache"
+          key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
+          paths:
+            - .ccache/
+      - run:
+          name: "Run Unit Tests with asan"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            make unittestonly NUM_THREADS=16 BUILD_DIR=debug
+          no_output_timeout: 1h
+
   macos-build:
     macos:
       xcode: "11.7.0"
@@ -88,7 +136,7 @@ jobs:
             mkdir -p .ccache
             export CCACHE_DIR=$(pwd)/.ccache
             ccache -sz -M 5Gi
-            cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DVELOX_CODEGEN_SUPPORT=OFF -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             ninja -C _build/debug
             ccache -s
           no_output_timeout: 1h
@@ -97,6 +145,12 @@ jobs:
           key: velox-ccache-{{ arch }}-{{ checksum "merge-base-date" }}
           paths:
             - .ccache/
+      - run:
+          name: "Run Unit Tests"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            make unittestonly NUM_THREADS=16 BUILD_DIR=debug
+          no_output_timeout: 1h
 
   linux-build:
     executor: build
