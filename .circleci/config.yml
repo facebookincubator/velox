@@ -18,7 +18,7 @@ workflows:
     jobs:
       - linux-build
       - linux-build-options
-      - linux-adapters-build
+      - linux-parquet-s3-build
       - macos-build
       - format-check
       - header-check
@@ -183,7 +183,7 @@ jobs:
           paths:
             - .ccache/
 
-  linux-adapters-build:
+  linux-parquet-s3-build:
     executor: build
     steps:
       - checkout
