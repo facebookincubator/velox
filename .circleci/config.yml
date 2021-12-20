@@ -129,7 +129,7 @@ jobs:
       - run:
           name: "Run Unit Tests"
           command: |
-            make unittest NUM_THREADS=16
+            make unittestonly BUILD_DIR=debug NUM_THREADS=16
           no_output_timeout: 1h
       - run:
           name: "Run Fuzzer Tests"
@@ -229,7 +229,7 @@ jobs:
           name: "Run Unit Tests"
           command: |
             export PATH=~/adapter-deps/install/bin:${PATH}
-            make unittestrel VELOX_ENABLE_ADAPTERS=ON AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16
+            make unittestonly BUILD_DIR=release NUM_THREADS=16
           no_output_timeout: 1h
 
   format-check:
