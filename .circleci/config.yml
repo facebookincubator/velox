@@ -129,7 +129,7 @@ jobs:
       - run:
           name: "Run Unit Tests"
           command: |
-            ctest --test-dir=_build/debug -j 16 -VV --output-on-failure
+            ctest --test-dir _build/debug -j 16 -VV --output-on-failure
           no_output_timeout: 1h
       - run:
           name: "Run Fuzzer Tests"
@@ -229,7 +229,7 @@ jobs:
           name: "Run Unit Tests"
           command: |
             export PATH=~/adapter-deps/install/bin:${PATH}
-            ctest --test-dir=_build/release -j 16 -VV --output-on-failure
+            ctest --test-dir _build/release -j 16 -VV --output-on-failure
           no_output_timeout: 1h
 
   format-check:
