@@ -129,7 +129,7 @@ jobs:
       - run:
           name: "Run Unit Tests"
           command: |
-            ctest --test-dir _build/debug -j 16 -VV --output-on-failure
+            cd _build/debug && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
       - run:
           name: "Run Fuzzer Tests"
@@ -215,6 +215,7 @@ jobs:
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
             source /opt/rh/gcc-toolset-9/enable
+            cmake --version
             make release EXTRA_CMAKE_FLAGS=" -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_S3=ON " AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=16
             ccache -s
           no_output_timeout: 1h
@@ -229,7 +230,7 @@ jobs:
           name: "Run Unit Tests"
           command: |
             export PATH=~/adapter-deps/install/bin:${PATH}
-            ctest --test-dir _build/release -j 16 -VV --output-on-failure
+            cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
 
   format-check:
