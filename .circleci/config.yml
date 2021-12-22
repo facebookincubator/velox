@@ -96,7 +96,7 @@ jobs:
           name: "Run Unit Tests with asan"
           command: |
             export PATH=~/deps/bin:${PATH}
-            make unittestonly NUM_THREADS=16 BUILD_DIR=debug
+            cd _build/debug && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
 
   macos-build:
@@ -149,7 +149,7 @@ jobs:
           name: "Run Unit Tests"
           command: |
             export PATH=~/deps/bin:${PATH}
-            make unittestonly NUM_THREADS=16 BUILD_DIR=debug
+            cd _build/debug && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
 
   linux-build:
