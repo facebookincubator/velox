@@ -33,7 +33,8 @@ add_executable(
   SumTest.cpp
   MapAggTest.cpp
   ValueListTest.cpp
-  VarianceAggregationTest.cpp)
+  VarianceAggregationTest.cpp
+  PrestoHasherTest.cpp)
 
 add_test(
   NAME velox_aggregates_test

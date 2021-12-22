@@ -11,17 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_aggregates_pushdown_benchmarks PushdownBenchmark.cpp)
+set(BENCHMARK_DEPENDENCIES
+    velox_aggregates
+    velox_hive_connector
+    velox_functions_lib
+    velox_exec_test_util
+    velox_functions_prestosql
+    velox_dwio_common_exception
+    velox_vector_fuzzer
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${FOLLY_BENCHMARK}
+    ${GTEST_BOTH_LIBRARIES}
+    ${GFLAGS_LIBRARIES})
 
-target_link_libraries(
-  velox_aggregates_pushdown_benchmarks
-  velox_aggregates
-  velox_hive_connector
-  velox_functions_lib
-  velox_exec_test_util
-  velox_functions_prestosql
-  velox_dwio_common_exception
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${FOLLY_BENCHMARK}
-  ${GTEST_BOTH_LIBRARIES}
-  ${GFLAGS_LIBRARIES})
+add_executable(velox_aggregates_pushdown_benchmarks PushdownBenchmark.cpp)
+target_link_libraries(velox_aggregates_pushdown_benchmarks
+                      ${BENCHMARK_DEPENDENCIES})
+
+add_executable(velox_aggregates_dispatch_benchmarks DispatchBenchmark.cpp)
+target_link_libraries(velox_aggregates_dispatch_benchmarks
+                      ${BENCHMARK_DEPENDENCIES})
