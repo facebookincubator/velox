@@ -368,16 +368,154 @@ as much as possible to allow for faster compilation in codegen.</p>
 </section>
 <section id="complex-types">
 <h3>Complex Types<a class="headerlink" href="#complex-types" title="Permalink to this headline">¶</a></h3>
-<p>Although it is possible to define simple functions that operate on complex
-types, e.g. arrays, maps and structs, it is generally not recommended to do
-so. These functions are inefficient because they require each value to be
-converted from a compact columnar representation into an STL container
-(std::vector, std::map, std::tuple). Also, it is not possible to define
-functions that accept generic arrays, maps or structs (e.g. map_keys,
-map_values, array_distinct, array_sort) as registerFunction requires all the
-signatures to be enumerated explicitly.</p>
-<p>Given this recommendation, we will not discuss how to define a simple function
-with complex type inputs or results.</p>
+<section id="complex-types-as-inputs">
+<h4>Complex types as inputs:<a class="headerlink" href="#complex-types-as-inputs" title="Permalink to this headline">¶</a></h4>
+<p>Input complex types are represented in the simple function interface using light-weight lazy
+access abstractions that enable efficient direct access to the underlying data in Velox
+vectors.
+As mentioned earlier, the helper alias arg_type can be used in the function signature to
+map Velox types to the corresponding input types. The table below shows the actual types that are
+used to represent inputs of different complex types.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 9%" />
+<col style="width: 28%" />
+<col style="width: 62%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<th class="head"><p>C++ Argument Type</p></th>
+<th class="head"><p>C++ Actual Argument Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ARRAY</p></td>
+<td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
+<td><p>ArrayView&lt;VectorOptionalValueAccessor&lt;VectorReader&lt;E&gt;&gt;&gt;&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>MAP</p></td>
+<td><p>arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
+<td><p>MapView&lt;arg_type&lt;K&gt;, VectorOptionalValueAccessor&lt;VectorReader&lt;V&gt;&gt;&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>ROW</p></td>
+<td><p>arg_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
+<td><p>RowView&lt;VectorOptionalValueAccessor&lt;arg_type&lt;T1&gt;&gt;…&gt;&gt;</p></td>
+</tr>
+</tbody>
+</table>
+<p>The view types are designed to have interfaces similar to those of std::containers, in fact in most cases
+they can be used as a drop in replacement. The table below shows the mapping between the Velox type and
+the corresponding std type. For example: a <em>Map&lt;Row&lt;int, int&gt;, Array&lt;float&gt;&gt;</em> corresponds to const
+<em>std::map&lt;std:::tuple&lt;int, int&gt;, std::vector&lt;float&gt;&gt;</em>.</p>
+<p>All views types are cheap to copy objects, for example the size of ArrayView is 16 bytes at max.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 78%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Lazy Input</p></th>
+<th class="head"><p>Type  std Similar Object</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>ArrayView</p></td>
+<td><p>const std::vector&lt;std::optional&lt;V&gt;&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>MapView</p></td>
+<td><p>const std::map&lt;K, std::optional&lt;V&gt;&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>RowView</p></td>
+<td><p>const std::tuple&lt;std::optional&lt;T1&gt;…&gt;</p></td>
+</tr>
+</tbody>
+</table>
+<p><strong>1- VectorOptionalValueAccessor&lt;VectorReader&lt;E&gt;&gt;</strong>:</p>
+<p>VectorOptionalValueAccessor is an <em>std::optional</em> like object that provides lazy access to the nullity and
+value of the underlying Velox vector at a specific index. Currently, it is used to represent elements of input arrays
+and values in the input maps. Note that keys in the map are assumed to be not nullable in Velox.</p>
+<p>The object supports the following methods:</p>
+<ul class="simple">
+<li><p>arg_type&lt;E&gt; value()      : unchecked access to the underlying value.</p></li>
+<li><p>arg_type&lt;E&gt; operator <a href="#id1"><span class="problematic" id="id2">*</span></a>() : unchecked access to the underlying value.</p></li>
+<li><p>bool has_value()         : return true if the value is true.</p></li>
+</ul>
+<p>The nullity and the value accesses are decoupled, and hence if someone knows inputs are null-free,
+accessing the value does not have the overhead of checking the nullity. So is checking the nullity.
+Note that, unlike std::container, the return type category is a value and not a reference.</p>
+<p><strong>2- ArrayView&lt;T&gt;</strong>:</p>
+<p>ArrayView have an interface similar to that of const <em>std::vector&lt;std::optional&lt;V&gt;&gt;</em>, the code
+bellow shows the function array_sum, a range loop is used to iterate over the values.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">array_sum</span><span class="p">)</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">element</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="p">(</span><span class="n">element</span><span class="p">.</span><span class="n">has_value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">element</span><span class="p">.</span><span class="n">value</span><span class="p">();</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>ArrayView supports the following:</p>
+<ul class="simple">
+<li><p>size_t size() : return the number of elements in the array.</p></li>
+<li><p>VectorOptionalValueAccessor&lt;arg_type&lt;T&gt;&gt; operator[](size_t index) : access element at index.</p></li>
+<li><p>ArrayView&lt;T&gt;::Iterator begin() : iterator to the first element.</p></li>
+<li><p>ArrayView&lt;T&gt;::Iterator end() : iterator indicating end of iteration.</p></li>
+<li><p>bool mayHaveNulls() : Constant time check on the underlying vector nullity. When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
+<li><p>ArrayView&lt;T&gt;::SkipNullsContainer SkipNulls() : return an iterable container that provides direct access to non-null values in the underlying array. For example, the function above can be written as:</p></li>
+</ul>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">array_sum</span><span class="p">)</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">value</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">      </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The skipNulls iterator will do check the nullity at each index and skip nulls, a more performant implementation
+would skip reading the nullity when mayHaveNulls() is false.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">array_sum</span><span class="p">)</span><span class="w"></span>
+<span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="k">if</span><span class="p">(</span><span class="n">array</span><span class="p">.</span><span class="n">mayHaveNulls</span><span class="p">()){</span><span class="w"></span>
+<span class="w">     </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">value</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w"></span>
+<span class="w">     </span><span class="p">}</span><span class="w"></span>
+<span class="w">     </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="c1">// no nulls, skip reading nullity.</span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">element</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">     </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">element</span><span class="p">.</span><span class="n">value</span><span class="p">();</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Note: operator[], iterator de-referencing, and iterator pointer de-referencing have return type of value category and
+results in temporaries. Hence those can bound to const references or value variables but not normal references.</p>
+</section>
+<section id="limitations">
+<h4>Limitations:<a class="headerlink" href="#limitations" title="Permalink to this headline">¶</a></h4>
+<p>1. It is not possible to define functions that accept generic arrays,
+maps or structs (e.g. map_keys, map_values, array_distinct, array_sort) as
+it requires a generic representation for the input type that is still not
+supported.</p>
+<p>2. Output complex types now are double materialized; first in the simple functions when they
+are created and then when they are copied again to the Velox vector. Some work is planned to
+avoid that by using writer proxies that write directly to Velox vectors. This section will
+be updated once the new writer interfaces are completed.</p>
+</section>
 </section>
 </section>
 <section id="vector-functions">
@@ -657,8 +795,8 @@ instead of the explicit try-catch block above:</p>
 wraps the “call” and “callNullable” methods in a try-catch and reports errors
 using context-&gt;setError.</p>
 </section>
-<section id="id1">
-<h3>Registration<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h3>
+<section id="id3">
+<h3>Registration<a class="headerlink" href="#id3" title="Permalink to this headline">¶</a></h3>
 <p>Use f4d::exec::registerVectorFunction to register a stateless vector function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
@@ -708,7 +846,7 @@ once and reuse it for all the batches of data.</p>
 </div>
 </section>
 <section id="function-signature">
-<span id="id2"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
+<span id="id4"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
 <p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
 instances. FunctionSignatureBuilder and FunctionSignature support Java-like
 generics, variable number of arguments and lambdas. Here are some examples.</p>
@@ -877,7 +1015,11 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#access-to-session-properties-and-constant-inputs">Access to Session Properties and Constant Inputs</a></li>
 <li><a class="reference internal" href="#registration">Registration</a></li>
 <li><a class="reference internal" href="#codegen">Codegen</a></li>
-<li><a class="reference internal" href="#complex-types">Complex Types</a></li>
+<li><a class="reference internal" href="#complex-types">Complex Types</a><ul>
+<li><a class="reference internal" href="#complex-types-as-inputs">Complex types as inputs:</a></li>
+<li><a class="reference internal" href="#limitations">Limitations:</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li><a class="reference internal" href="#vector-functions">Vector Functions</a><ul>
@@ -886,7 +1028,7 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#result-vector">Result vector</a></li>
 <li><a class="reference internal" href="#simple-implementation">Simple implementation</a></li>
 <li><a class="reference internal" href="#try-expression-support">TRY expression support</a></li>
-<li><a class="reference internal" href="#id1">Registration</a></li>
+<li><a class="reference internal" href="#id3">Registration</a></li>
 <li><a class="reference internal" href="#function-signature">Function signature</a></li>
 </ul>
 </li>
