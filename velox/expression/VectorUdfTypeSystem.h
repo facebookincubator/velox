@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include "velox/core/CoreTypeSystem.h"
+#include "velox/expression/ComplexProxyTypes.h"
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VariadicView.h"
@@ -60,6 +61,11 @@ template <typename V>
 struct resolver<Array<V>> {
   using in_type = ArrayView<V>;
   using out_type = core::ArrayValWriter<typename resolver<V>::out_type>;
+};
+
+template <typename V>
+struct resolver<ArrayProxyT<V>> {
+  using out_type = ArrayProxy<V>;
 };
 
 template <>
@@ -375,6 +381,7 @@ struct VectorWriter<Array<V>> {
     }
   }
 
+  // TODO: deprecate this once all proxies introduced.
   void copyCommit(const exec_out_t& data) {
     vector_size_t childSize = childWriter_.vector().size();
     childWriter_.ensureSize(childSize + data.size());
@@ -419,6 +426,80 @@ struct VectorWriter<Array<V>> {
 
   VectorWriter<V> childWriter_;
   size_t offset_ = 0;
+};
+
+// A new temporary writer, to be used when the user want a proxy interface for
+// the output. Will eventually replace VectorWriter<Array>>.
+template <typename V>
+struct VectorWriter<ArrayProxyT<V>> {
+  using vector_t = typename TypeToFlatVector<Array<V>>::type;
+  using child_vector_t = typename TypeToFlatVector<V>::type;
+  using exec_out_t = ArrayProxy<V>;
+
+  void init(vector_t& vector) {
+    arrayVector_ = &vector;
+    childWriter_.init(static_cast<child_vector_t&>(*vector.elements().get()));
+  }
+
+  VectorWriter() {}
+
+  exec_out_t& current() {
+    proxy_.setUp(&childWriter_, currentValueOffset_);
+    return proxy_;
+  }
+
+  vector_t& vector() {
+    return *arrayVector_;
+  }
+
+  void ensureSize(size_t size) {
+    if (size > arrayVector_->size()) {
+      arrayVector_->resize(size);
+      init(*arrayVector_);
+    }
+  }
+
+  void commit() {
+    proxy_.finalize();
+    arrayVector_->setOffsetAndSize(
+        index_, currentValueOffset_, proxy_.getLength());
+    // Next array will be written at the new offset.
+    currentValueOffset_ += proxy_.getLength();
+    arrayVector_->setNull(index_, false);
+  }
+
+  void commitNull() {
+    arrayVector_->setNull(index_, true);
+  }
+
+  void commit(bool isSet) {
+    if (LIKELY(isSet)) {
+      commit();
+    } else {
+      commitNull();
+    }
+  }
+
+  // Set the index being written.
+  void setOffset(int32_t offset) {
+    index_ = offset;
+  }
+
+  void reset() {
+    currentValueOffset_ = 0;
+  }
+
+  vector_t* arrayVector_ = nullptr;
+
+  exec_out_t proxy_;
+
+  VectorWriter<V> childWriter_;
+
+  // The index being written int the array vector.
+  size_t index_ = 0;
+
+  // The offset of the current array being written in the child vector.
+  size_t currentValueOffset_ = 0;
 };
 
 template <typename... T>

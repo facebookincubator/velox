@@ -1300,6 +1300,18 @@ struct Array {
   Array() {}
 };
 
+template <typename ELEMENT>
+struct ArrayProxyT {
+  using element_type = ELEMENT;
+
+  static_assert(
+      !isVariadicType<element_type>::value,
+      "Array elements cannot be Variadic");
+
+ private:
+  ArrayProxyT() {}
+};
+
 template <typename... T>
 struct Row {
   template <size_t idx>
@@ -1422,6 +1434,13 @@ struct CppToType<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
 
 template <typename ELEMENT>
 struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
+  static auto create() {
+    return ARRAY(CppToType<ELEMENT>::create());
+  }
+};
+
+template <typename ELEMENT>
+struct CppToType<ArrayProxyT<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
   static auto create() {
     return ARRAY(CppToType<ELEMENT>::create());
   }
