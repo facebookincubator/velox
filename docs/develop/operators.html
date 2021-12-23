@@ -44,18 +44,19 @@
   <section id="plan-nodes-and-operators">
 <h1>Plan Nodes and Operators<a class="headerlink" href="#plan-nodes-and-operators" title="Permalink to this headline">¶</a></h1>
 <p>Velox query plan is a tree of PlanNode’s. Each PlanNode has zero or more child
-PlanNodes. To execute a query plan, Velox converts it into a set of pipelines.
-Each pipeline is made of a linear sequence of operators. Each pipeline
-corresponds to a linear sub-tree of the plan that starts at the leaf node and
-goes all the way to the first node that has 2 or more children.</p>
+PlanNode’s. To execute a query plan, Velox converts it into a set of pipelines.
+Each pipeline is made of a linear sequence of operators that corresponds to a
+linear sub-tree of the plan. The plan tree is broken down into a set of linear
+sub-trees by disconnecting all but one child node from each node that has two
+or more children.</p>
 <a class="reference internal image-reference" href="../_images/local-planner.png"><img alt="../_images/local-planner.png" class="align-center" src="../_images/local-planner.png" style="width: 400px;" /></a>
 <p>The conversion of plan nodes to operators is mostly one-to-one. Some exceptions are:</p>
 <ul class="simple">
 <li><p>Filter node followed by Project node is converted into a single operator FilterProject</p></li>
-<li><p>Nodes with 2 or more children are converted to multiple operators, e.g. HashJoin node is converted to a pair of operators: HashProbe and HashBuild.</p></li>
+<li><p>Nodes with two or more child nodes are converted to multiple operators, e.g. HashJoin node is converted to a pair of operators: HashProbe and HashBuild.</p></li>
 </ul>
 <p>Operators corresponding to leaf nodes are called source operators. Only a subset
-of plan nodes can be located at the leaves of the plan tree. There are:</p>
+of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <ul class="simple">
 <li><p>TableScanNode</p></li>
 <li><p>ValuesNode</p></li>
@@ -66,9 +67,9 @@ of plan nodes can be located at the leaves of the plan tree. There are:</p>
 <p>Here is a list of supported plan nodes and corresponding operators.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 22%" />
-<col style="width: 49%" />
-<col style="width: 29%" />
+<col style="width: 26%" />
+<col style="width: 46%" />
+<col style="width: 27%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Plan Node</p></th>
@@ -93,67 +94,71 @@ of plan nodes can be located at the leaves of the plan tree. There are:</p>
 <td><p>HashAggregation</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>HashJoinNode</p></td>
+<tr class="row-even"><td><p>StreamingAggregationNode</p></td>
+<td><p>StreamingAggregation</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>HashJoinNode</p></td>
 <td><p>HashProbe and HashBuild</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>MergeJoinNode</p></td>
+<tr class="row-even"><td><p>MergeJoinNode</p></td>
 <td><p>MergeJoin</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>CrossJoinNode</p></td>
+<tr class="row-odd"><td><p>CrossJoinNode</p></td>
 <td><p>CrossJoinProbe and CrossJoinBuild</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>OrderByNode</p></td>
+<tr class="row-even"><td><p>OrderByNode</p></td>
 <td><p>OrderBy</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>TopNNode</p></td>
+<tr class="row-odd"><td><p>TopNNode</p></td>
 <td><p>TopN</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>LimitNode</p></td>
+<tr class="row-even"><td><p>LimitNode</p></td>
 <td><p>Limit</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>UnnestNode</p></td>
+<tr class="row-odd"><td><p>UnnestNode</p></td>
 <td><p>Unnest</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>TableWriteNode</p></td>
+<tr class="row-even"><td><p>TableWriteNode</p></td>
 <td><p>TableWrite</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>PartitionedOutputNode</p></td>
+<tr class="row-odd"><td><p>PartitionedOutputNode</p></td>
 <td><p>PartitionedOutput</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>ExchangeNode</p></td>
+<tr class="row-even"><td><p>ExchangeNode</p></td>
 <td><p>Exchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>MergeExchangeNode</p></td>
+<tr class="row-odd"><td><p>MergeExchangeNode</p></td>
 <td><p>MergeExchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-odd"><td><p>ValuesNode</p></td>
+<tr class="row-even"><td><p>ValuesNode</p></td>
 <td><p>Values</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>LocalMergeNode</p></td>
+<tr class="row-odd"><td><p>LocalMergeNode</p></td>
 <td><p>LocalMerge</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>LocalPartitionNode</p></td>
+<tr class="row-even"><td><p>LocalPartitionNode</p></td>
 <td><p>LocalPartition and LocalExchangeSourceOperator</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>EnforceSingleRowNode</p></td>
+<tr class="row-odd"><td><p>EnforceSingleRowNode</p></td>
 <td><p>EnforceSingleRow</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>AssignUniqueIdNode</p></td>
+<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
 <td><p>AssignUniqueId</p></td>
 <td></td>
 </tr>
@@ -234,10 +239,14 @@ input columns.</p>
 </tbody>
 </table>
 </section>
-<section id="aggregationnode">
-<h3>AggregationNode<a class="headerlink" href="#aggregationnode" title="Permalink to this headline">¶</a></h3>
+<section id="aggregationnode-and-streamingaggregationnode">
+<h3>AggregationNode and StreamingAggregationNode<a class="headerlink" href="#aggregationnode-and-streamingaggregationnode" title="Permalink to this headline">¶</a></h3>
 <p>The aggregate operation groups input data on a set of grouping keys, calculating
 each measure for each combination of the grouping keys.</p>
+<p>StreamingAggregationNode represents an implementation that assumes that input is
+pre-grouped on the grouping keys, e.g. all rows with a given combination of
+values of the grouping keys appear together one after another. The input is not
+assumed to be sorted on the grouping keys.</p>
 <table class="colwidths-given docutils align-left">
 <colgroup>
 <col style="width: 25%" />
@@ -737,7 +746,7 @@ ALL.</p>
 <li><a class="reference internal" href="#tablescannode">TableScanNode</a></li>
 <li><a class="reference internal" href="#filternode">FilterNode</a></li>
 <li><a class="reference internal" href="#projectnode">ProjectNode</a></li>
-<li><a class="reference internal" href="#aggregationnode">AggregationNode</a></li>
+<li><a class="reference internal" href="#aggregationnode-and-streamingaggregationnode">AggregationNode and StreamingAggregationNode</a></li>
 <li><a class="reference internal" href="#hashjoinnode-and-mergejoinnode">HashJoinNode and MergeJoinNode</a></li>
 <li><a class="reference internal" href="#crossjoinnode">CrossJoinNode</a></li>
 <li><a class="reference internal" href="#orderbynode">OrderByNode</a></li>
