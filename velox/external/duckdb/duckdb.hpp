@@ -11,8 +11,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #pragma once
 #define DUCKDB_AMALGAMATION 1
 #define DUCKDB_AMALGAMATION_EXTENDED 1
-#define DUCKDB_SOURCE_ID "ca857a99c"
-#define DUCKDB_VERSION "0.3.2-dev710"
+#define DUCKDB_SOURCE_ID "e402b82d2"
+#define DUCKDB_VERSION "0.3.2-dev781"
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
@@ -9869,6 +9869,7 @@ class DataChunk;
 class PhysicalOperator;
 class PipelineExecutor;
 class OperatorState;
+class QueryProfiler;
 class ThreadContext;
 class Task;
 
@@ -9968,6 +9969,8 @@ private:
 	vector<pair<ExceptionType, string>> exceptions;
 	//! List of events
 	vector<shared_ptr<Event>> events;
+	//! The query profiler
+	shared_ptr<QueryProfiler> profiler;
 
 	//! The amount of completed pipelines of the query
 	atomic<idx_t> completed_pipelines;
@@ -17117,7 +17120,7 @@ public:
 	DUCKDB_API ~ClientContext();
 
 	//! Query profiler
-	unique_ptr<QueryProfiler> profiler;
+	shared_ptr<QueryProfiler> profiler;
 	//! QueryProfiler History
 	unique_ptr<QueryProfilerHistory> query_profiler_history;
 	//! The database that this client is connected to
@@ -19717,17 +19720,28 @@ class ObjectCacheEntry {
 public:
 	virtual ~ObjectCacheEntry() {
 	}
+
+	virtual string GetObjectType() = 0;
 };
 
 class ObjectCache {
 public:
-	shared_ptr<ObjectCacheEntry> Get(string key) {
+	shared_ptr<ObjectCacheEntry> GetObject(const string &key) {
 		lock_guard<mutex> glock(lock);
 		auto entry = cache.find(key);
 		if (entry == cache.end()) {
 			return nullptr;
 		}
 		return entry->second;
+	}
+
+	template <class T>
+	shared_ptr<T> Get(const string &key) {
+		shared_ptr<ObjectCacheEntry> object = GetObject(key);
+		if (!object || object->GetObjectType() != T::ObjectType()) {
+			return nullptr;
+		}
+		return std::static_pointer_cast<T, ObjectCacheEntry>(object);
 	}
 
 	void Put(string key, shared_ptr<ObjectCacheEntry> value) {

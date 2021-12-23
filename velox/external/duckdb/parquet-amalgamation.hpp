@@ -267,23 +267,21 @@ public:
  * under the License.
  */
 
+#ifndef THRIFT_CONFIG_H
+#define THRIFT_CONFIG_H
+
+
 #ifdef _WIN32
-//#include <thrift/windows/config.h>
+#if defined(_M_IX86) || defined(_M_X64)
+#define ARITHMETIC_RIGHT_SHIFT 1
+#define SIGNED_RIGHT_SHIFT_IS 1
+#endif
 #else
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-#define SIGNED_RIGHT_SHIFT_IS  1		
-#define ARITHMETIC_RIGHT_SHIFT 1 
-
-
-// LICENSE_CHANGE_END
-
+#define SIGNED_RIGHT_SHIFT_IS  1
+#define ARITHMETIC_RIGHT_SHIFT 1
 #endif
 
+#endif
 
 // LICENSE_CHANGE_END
 
@@ -5398,7 +5396,7 @@ public:
   void setContainerSizeLimit(int32_t container_limit) { container_limit_ = container_limit; }
 
   std::shared_ptr<TProtocol> getProtocol(std::shared_ptr<TTransport> trans) override {
-    std::shared_ptr<Transport_> specific_trans = std::dynamic_pointer_cast<Transport_>(trans);
+    std::shared_ptr<Transport_> specific_trans = std::static_pointer_cast<Transport_>(trans);
     TProtocol* prot;
     if (specific_trans) {
       prot = new TCompactProtocolT<Transport_>(specific_trans, string_limit_, container_limit_);
@@ -5447,8 +5445,6 @@ typedef TCompactProtocolFactoryT<TTransport> TCompactProtocolFactory;
 #define _THRIFT_PROTOCOL_TCOMPACTPROTOCOL_TCC_ 1
 
 #include <limits>
-
-
 
 /*
  * TCompactProtocol::i*ToZigzag depend on the fact that the right shift
@@ -7059,8 +7055,22 @@ private:
 } // namespace duckdb
 
 
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// parquet_rle_bp_decoder.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
 
 namespace duckdb {
+
 class RleBpDecoder {
 public:
 	/// Create a decoder object. buffer/buffer_len is the decoded data.
@@ -7106,6 +7116,17 @@ public:
 		if (values_read != batch_size) {
 			throw std::runtime_error("RLE decode did not find enough values");
 		}
+	}
+
+	static uint8_t ComputeBitWidth(idx_t val) {
+		if (val == 0) {
+			return 0;
+		}
+		uint8_t ret = 1;
+		while (((idx_t)(1 << ret) - 1) < val) {
+			ret++;
+		}
+		return ret;
 	}
 
 private:
@@ -7397,6 +7418,15 @@ public:
 
 	//! read time
 	time_t read_time;
+
+public:
+	static string ObjectType() {
+		return "parquet_metadata";
+	}
+
+	string GetObjectType() override {
+		return ObjectType();
+	}
 };
 } // namespace duckdb
 
@@ -7523,6 +7553,89 @@ private:
 #endif
 
 
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// column_writer.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+#include "duckdb.hpp"
+
+
+namespace duckdb {
+class BufferedSerializer;
+class ParquetWriter;
+class ColumnWriterPageState;
+
+class ColumnWriterState {
+public:
+	virtual ~ColumnWriterState();
+
+	vector<uint16_t> definition_levels;
+	vector<uint16_t> repetition_levels;
+	vector<bool> is_empty;
+};
+
+class ColumnWriter {
+	//! We limit the uncompressed page size to 100MB
+	// The max size in Parquet is 2GB, but we choose a more conservative limit
+	static constexpr const idx_t MAX_UNCOMPRESSED_PAGE_SIZE = 100000000;
+
+public:
+	ColumnWriter(ParquetWriter &writer, idx_t schema_idx, idx_t max_repeat, idx_t max_define);
+	virtual ~ColumnWriter();
+
+	ParquetWriter &writer;
+	idx_t schema_idx;
+	idx_t max_repeat;
+	idx_t max_define;
+
+public:
+	//! Create the column writer for a specific type recursively
+	static unique_ptr<ColumnWriter> CreateWriterRecursive(vector<duckdb_parquet::format::SchemaElement> &schemas,
+	                                                      ParquetWriter &writer, const LogicalType &type,
+	                                                      const string &name, idx_t max_repeat = 0,
+	                                                      idx_t max_define = 1);
+
+	virtual unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group,
+	                                                           vector<string> schema_path);
+	virtual void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count);
+
+	virtual void BeginWrite(ColumnWriterState &state);
+	virtual void Write(ColumnWriterState &state, Vector &vector, idx_t count);
+	virtual void FinalizeWrite(ColumnWriterState &state);
+
+protected:
+	void HandleDefineLevels(ColumnWriterState &state, ColumnWriterState *parent, ValidityMask &validity, idx_t count,
+	                        uint16_t define_value, uint16_t null_value);
+	void HandleRepeatLevels(ColumnWriterState &state_p, ColumnWriterState *parent, idx_t count, idx_t max_repeat);
+
+	void WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t start_offset,
+	                 idx_t count);
+
+	void NextPage(ColumnWriterState &state_p);
+	void FlushPage(ColumnWriterState &state_p);
+
+	//! Retrieves the row size of a vector at the specified location. Only used for scalar types.
+	virtual idx_t GetRowSize(Vector &vector, idx_t index) = 0;
+	//! Writes a (subset of a) vector to the specified serializer. Only used for scalar types.
+	virtual void WriteVector(Serializer &temp_writer, ColumnWriterPageState *page_state, Vector &vector,
+	                         idx_t chunk_start, idx_t chunk_end) = 0;
+	//! Initialize the writer for a specific page. Only used for scalar types.
+	virtual unique_ptr<ColumnWriterPageState> InitializePageState();
+	//! Flushes the writer for a specific page. Only used for scalar types.
+	virtual void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state);
+
+	void CompressPage(BufferedSerializer &temp_writer, size_t &compressed_size, data_ptr_t &compressed_data,
+	                  unique_ptr<data_t[]> &compressed_buf);
+};
+
+} // namespace duckdb
+
 
 
 namespace duckdb {
@@ -7530,6 +7643,10 @@ class FileSystem;
 class FileOpener;
 
 class ParquetWriter {
+	friend class ColumnWriter;
+	friend class ListColumnWriter;
+	friend class StructColumnWriter;
+
 public:
 	ParquetWriter(FileSystem &fs, string file_name, FileOpener *file_opener, vector<LogicalType> types,
 	              vector<string> names, duckdb_parquet::format::CompressionCodec::type codec);
@@ -7537,6 +7654,10 @@ public:
 public:
 	void Flush(ChunkCollection &buffer);
 	void Finalize();
+
+	static duckdb_parquet::format::Type::type DuckDBTypeToParquetType(const LogicalType &duckdb_type);
+	static bool DuckDBTypeToConvertedType(const LogicalType &duckdb_type,
+	                                      duckdb_parquet::format::ConvertedType::type &result);
 
 private:
 	string file_name;
@@ -7548,6 +7669,8 @@ private:
 	shared_ptr<duckdb_apache::thrift::protocol::TProtocol> protocol;
 	duckdb_parquet::format::FileMetaData file_meta_data;
 	std::mutex lock;
+
+	vector<unique_ptr<ColumnWriter>> column_writers;
 };
 
 } // namespace duckdb
