@@ -13,4 +13,6 @@ add_subdirectory(tpch)
 
 add_library(duckdb duckdb.cpp parquet-amalgamation.cpp)
 
+add_compile_definitions(DISABLE_DUCKDB_REMOTE_INSTALL)
+
 set_property(TARGET duckdb PROPERTY JOB_POOL_COMPILE high_memory_pool)
