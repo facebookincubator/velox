@@ -21,6 +21,33 @@
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 
 namespace facebook::velox {
+namespace {
+// Function that creates array with values 0...n-1.
+// Used all possible functions in the array proxy interface.
+template <typename T>
+struct Func {
+  template <typename TOut>
+  bool call(TOut& out, const int64_t& n) {
+    for (int i = 0; i < n; i++) {
+      switch (i % 4) {
+        case 0:
+          out.add_item() = i;
+          break;
+        case 1:
+          out.push_back(i);
+          break;
+        case 2:
+          out.add_null();
+          break;
+        case 3:
+          out.resize(out.size() + 1);
+          out[out.size() - 1] = i;
+          break;
+      }
+    }
+    return true;
+  }
+};
 
 class ArrayProxyTest : public functions::test::FunctionBaseTest {
  public:
@@ -32,9 +59,42 @@ class ArrayProxyTest : public functions::test::FunctionBaseTest {
         SelectivityVector(size_), arrayType, this->execCtx_.pool(), &result);
     return result;
   }
+
+  template <typename T>
+  void testE2E() {
+    registerFunction<Func, ArrayProxyT<T>, int64_t>({"func"});
+
+    auto result = evaluate(
+        "func(c0)",
+        makeRowVector(
+            {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
+
+    std::vector<std::vector<std::optional<T>>> expected;
+    for (auto i = 1; i <= 10; i++) {
+      expected.push_back({});
+      auto& currentExpected = expected[expected.size() - 1];
+      for (auto j = 0; j < i; j++) {
+        switch (j % 4) {
+          case 0:
+            currentExpected.push_back(j);
+            break;
+          case 1:
+            currentExpected.push_back(j);
+            break;
+          case 2:
+            currentExpected.push_back(std::nullopt);
+            break;
+          case 3:
+            currentExpected.push_back(j);
+            break;
+        }
+      }
+    }
+    assertEqualVectors(result, makeNullableArrayVector(expected));
+  };
 };
 
-TEST_F(ArrayProxyTest, intArrayAddNull) {
+TEST_F(ArrayProxyTest, ArrayAddNull) {
   auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
 
   exec::VectorWriter<ArrayProxyT<int64_t>> writer;
@@ -42,9 +102,9 @@ TEST_F(ArrayProxyTest, intArrayAddNull) {
   writer.setOffset(0);
 
   auto& proxy = writer.current();
-  proxy.addNull();
-  proxy.addNull();
-  proxy.addNull();
+  proxy.add_null();
+  proxy.add_null();
+  proxy.add_null();
   writer.commit();
 
   auto expected = std::vector<std::vector<std::optional<int64_t>>>{
@@ -70,7 +130,7 @@ TEST_F(ArrayProxyTest, intArrayPushBackNull) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-TEST_F(ArrayProxyTest, intEmptyArray) {
+TEST_F(ArrayProxyTest, EmptyArray) {
   auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
 
   exec::VectorWriter<ArrayProxyT<int64_t>> writer;
@@ -84,7 +144,7 @@ TEST_F(ArrayProxyTest, intEmptyArray) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-TEST_F(ArrayProxyTest, intPushBack) {
+TEST_F(ArrayProxyTest, PushBack) {
   auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
 
   exec::VectorWriter<ArrayProxyT<int64_t>> writer;
@@ -101,7 +161,7 @@ TEST_F(ArrayProxyTest, intPushBack) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-TEST_F(ArrayProxyTest, intAddItem) {
+TEST_F(ArrayProxyTest, AddItem) {
   auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
 
   exec::VectorWriter<ArrayProxyT<int64_t>> writer;
@@ -109,17 +169,17 @@ TEST_F(ArrayProxyTest, intAddItem) {
   writer.setOffset(0);
   auto& arrayProxy = writer.current();
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 1;
   }
 
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 2;
   }
 
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 3;
   }
 
@@ -129,7 +189,26 @@ TEST_F(ArrayProxyTest, intAddItem) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-TEST_F(ArrayProxyTest, intMultipleRows) {
+TEST_F(ArrayProxyTest, Subscript) {
+  auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
+
+  exec::VectorWriter<ArrayProxyT<int64_t>> writer;
+  writer.init(*result.get()->as<ArrayVector>());
+  writer.setOffset(0);
+  auto& arrayProxy = writer.current();
+  arrayProxy.resize(3);
+  arrayProxy[0] = std::nullopt;
+  arrayProxy[1] = 2;
+  arrayProxy[2] = 3;
+
+  writer.commit();
+
+  auto expected =
+      std::vector<std::vector<std::optional<int64_t>>>{{std::nullopt, 2, 3}};
+  assertEqualVectors(result, makeNullableArrayVector(expected));
+}
+
+TEST_F(ArrayProxyTest, MultipleRows) {
   auto expected = std::vector<std::vector<std::optional<int64_t>>>{
       {1, 2, 3},
       {},
@@ -157,32 +236,13 @@ TEST_F(ArrayProxyTest, intMultipleRows) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-// Fucntion that creates array with values 0...n-1.
-template <typename T>
-struct Func {
-  bool call(exec::ArrayProxy<int64_t>& out, const int64_t& n) {
-    for (int i = 0; i < n; i++) {
-      out.push_back(i);
-    }
-    return true;
-  }
-};
-
-TEST_F(ArrayProxyTest, intE2E) {
-  registerFunction<Func, ArrayProxyT<int64_t>, int64_t>({"build_array"});
-  auto result = evaluate(
-      "build_array(c0)",
-      makeRowVector(
-          {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})}));
-
-  std::vector<std::vector<std::optional<int64_t>>> expected;
-  for (auto i = 1; i <= 10; i++) {
-    expected.push_back({});
-    for (auto j = 0; j < i; j++) {
-      expected[expected.size() - 1].push_back(j);
-    }
-  }
-  assertEqualVectors(result, makeNullableArrayVector(expected));
+TEST_F(ArrayProxyTest, E2E) {
+  testE2E<int8_t>();
+  testE2E<int16_t>();
+  testE2E<int32_t>();
+  testE2E<int64_t>();
+  testE2E<float>();
+  testE2E<double>();
 }
-
+} // namespace
 } // namespace facebook::velox

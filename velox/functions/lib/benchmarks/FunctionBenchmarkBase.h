@@ -46,6 +46,16 @@ class FunctionBenchmarkBase {
     return results[0];
   }
 
+  VectorPtr evaluate(
+      exec::ExprSet& exprSet,
+      const RowVectorPtr& data,
+      std::vector<VectorPtr>& results) {
+    SelectivityVector rows(data->size());
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, data.get());
+    exprSet.eval(rows, &evalCtx, &results);
+    return results[0];
+  }
+
   facebook::velox::test::VectorMaker& maker() {
     return vectorMaker_;
   }
