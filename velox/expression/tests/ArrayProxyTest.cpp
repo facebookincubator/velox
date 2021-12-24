@@ -42,9 +42,9 @@ TEST_F(ArrayProxyTest, intArrayAddNull) {
   writer.setOffset(0);
 
   auto& proxy = writer.current();
-  proxy.addNull();
-  proxy.addNull();
-  proxy.addNull();
+  proxy.add_null();
+  proxy.add_null();
+  proxy.add_null();
   writer.commit();
 
   auto expected = std::vector<std::vector<std::optional<int64_t>>>{
@@ -109,23 +109,42 @@ TEST_F(ArrayProxyTest, intAddItem) {
   writer.setOffset(0);
   auto& arrayProxy = writer.current();
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 1;
   }
 
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 2;
   }
 
   {
-    auto& intProxy = arrayProxy.addItem();
+    auto& intProxy = arrayProxy.add_item();
     intProxy = 3;
   }
 
   writer.commit();
 
   auto expected = std::vector<std::vector<std::optional<int64_t>>>{{1, 2, 3}};
+  assertEqualVectors(result, makeNullableArrayVector(expected));
+}
+
+TEST_F(ArrayProxyTest, intSubscript) {
+  auto result = prepareResult(std::make_shared<ArrayType>(ArrayType(BIGINT())));
+
+  exec::VectorWriter<ArrayProxyT<int64_t>> writer;
+  writer.init(*result.get()->as<ArrayVector>());
+  writer.setOffset(0);
+  auto& arrayProxy = writer.current();
+  arrayProxy.resize(3);
+  arrayProxy[0] = std::nullopt;
+  arrayProxy[1] = 2;
+  arrayProxy[2] = 3;
+
+  writer.commit();
+
+  auto expected =
+      std::vector<std::vector<std::optional<int64_t>>>{{std::nullopt, 2, 3}};
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
@@ -157,7 +176,7 @@ TEST_F(ArrayProxyTest, intMultipleRows) {
   assertEqualVectors(result, makeNullableArrayVector(expected));
 }
 
-// Fucntion that creates array with values 0...n-1.
+// Function that creates array with values 0...n-1.
 template <typename T>
 struct Func {
   bool call(exec::ArrayProxy<int64_t>& out, const int64_t& n) {

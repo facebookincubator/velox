@@ -119,7 +119,7 @@ struct VectorWriter {
 
   VectorWriter() {}
 
-  exec_out_t& current() {
+  FOLLY_ALWAYS_INLINE exec_out_t& current() {
     return data_[offset_];
   }
 
@@ -144,11 +144,11 @@ struct VectorWriter {
     }
   }
 
-  void setOffset(int32_t offset) {
+  FOLLY_ALWAYS_INLINE void setOffset(int32_t offset) {
     offset_ = offset;
   }
 
-  vector_t& vector() {
+  FOLLY_ALWAYS_INLINE vector_t& vector() {
     return *vector_;
   }
 
@@ -452,6 +452,7 @@ struct VectorWriter<ArrayProxyT<V>> {
     return *arrayVector_;
   }
 
+  // Make sure the vector can be written for size x.
   void ensureSize(size_t size) {
     if (size > arrayVector_->size()) {
       arrayVector_->resize(size);
@@ -459,15 +460,16 @@ struct VectorWriter<ArrayProxyT<V>> {
     }
   }
 
+  // Commit a not null value.
   void commit() {
     proxy_.finalize();
-    arrayVector_->setOffsetAndSize(
-        index_, currentValueOffset_, proxy_.getLength());
+    arrayVector_->setOffsetAndSize(index_, currentValueOffset_, proxy_.size());
     // Next array will be written at the new offset.
-    currentValueOffset_ += proxy_.getLength();
+    currentValueOffset_ += proxy_.size();
     arrayVector_->setNull(index_, false);
   }
 
+  // Commit a null value.
   void commitNull() {
     arrayVector_->setNull(index_, true);
   }
@@ -495,7 +497,7 @@ struct VectorWriter<ArrayProxyT<V>> {
 
   VectorWriter<V> childWriter_;
 
-  // The index being written int the array vector.
+  // The index being written in the array vector.
   size_t index_ = 0;
 
   // The offset of the current array being written in the child vector.
