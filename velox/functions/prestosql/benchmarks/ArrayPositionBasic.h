@@ -37,67 +37,24 @@ void applyTypedFirstMatch(
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
 
-  if (elementsDecoded.isIdentityMapping() && !elementsDecoded.mayHaveNulls() &&
-      searchDecoded.isConstantMapping()) {
-    if constexpr (std::is_same_v<bool, T>) {
-      auto rawElements = elementsDecoded.values<uint64_t>();
+  rows.applyToSelected([&](auto row) {
+    auto size = rawSizes[indices[row]];
+    auto offset = rawOffsets[indices[row]];
 
-      auto search = bits::isBitSet(searchDecoded.values<uint64_t>(), 0);
+    auto search = searchDecoded.valueAt<T>(row);
 
-      rows.applyToSelected([&](auto row) {
-        auto size = rawSizes[indices[row]];
-        auto offset = rawOffsets[indices[row]];
-
-        int i;
-        for (i = 0; i < size; i++) {
-          if (bits::isBitSet(rawElements, offset + i) == search) {
-            flatResult.set(row, i + 1);
-            break;
-          }
-        }
-        if (i == size)
-          flatResult.set(row, 0);
-      });
-    } else {
-      auto rawElements = elementsDecoded.values<T>();
-
-      auto search = searchDecoded.valueAt<T>(0);
-
-      rows.applyToSelected([&](auto row) {
-        auto size = rawSizes[indices[row]];
-        auto offset = rawOffsets[indices[row]];
-
-        int i;
-        for (i = 0; i < size; i++) {
-          if (rawElements[offset + i] == search) {
-            flatResult.set(row, i + 1);
-            break;
-          }
-        }
-        if (i == size)
-          flatResult.set(row, 0);
-      });
+    int i;
+    for (i = 0; i < size; i++) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsDecoded.valueAt<T>(offset + i) == search) {
+        flatResult.set(row, i + 1);
+        break;
+      }
     }
-  } else {
-    rows.applyToSelected([&](auto row) {
-      auto size = rawSizes[indices[row]];
-      auto offset = rawOffsets[indices[row]];
-
-      auto search = searchDecoded.valueAt<T>(row);
-
-      int i;
-      for (i = 0; i < size; i++) {
-        if (!elementsDecoded.isNullAt(offset + i) &&
-            elementsDecoded.valueAt<T>(offset + i) == search) {
-          flatResult.set(row, i + 1);
-          break;
-        }
-      }
-      if (i == size) {
-        flatResult.set(row, 0);
-      }
-    });
-  }
+    if (i == size) {
+      flatResult.set(row, 0);
+    }
+  });
 }
 
 // Find the index of the first match for complex types.
@@ -157,105 +114,37 @@ void applyTypedWithInstance(
   auto rawOffsets = baseArray->rawOffsets();
   auto indices = arrayDecoded.indices();
 
-  if (elementsDecoded.isIdentityMapping() && !elementsDecoded.mayHaveNulls() &&
-      searchDecoded.isConstantMapping() &&
-      instanceDecoded.isConstantMapping()) {
-    auto instance = instanceDecoded.valueAt<int64_t>(0);
+  rows.applyToSelected([&](auto row) {
+    auto size = rawSizes[indices[row]];
+    auto offset = rawOffsets[indices[row]];
+    auto search = searchDecoded.valueAt<T>(row);
+
+    auto instance = instanceDecoded.valueAt<int64_t>(row);
     VELOX_USER_CHECK_NE(
         instance,
         0,
         "array_position cannot take a 0-valued instance argument.");
 
-    if constexpr (std::is_same_v<bool, T>) {
-      auto rawElements = elementsDecoded.values<uint64_t>();
+    int startIndex = instance > 0 ? 0 : size - 1;
+    int endIndex = instance > 0 ? size : -1;
+    int step = instance > 0 ? 1 : -1;
+    instance = std::abs(instance);
 
-      auto search = bits::isBitSet(searchDecoded.values<uint64_t>(), 0);
-
-      rows.applyToSelected([&](auto row) {
-        auto size = rawSizes[indices[row]];
-        auto offset = rawOffsets[indices[row]];
-
-        int startIndex = instance > 0 ? 0 : size - 1;
-        int endIndex = instance > 0 ? size : -1;
-        int step = instance > 0 ? 1 : -1;
-        instance = std::abs(instance);
-
-        int i;
-        for (i = startIndex; i != endIndex; i += step) {
-          if (bits::isBitSet(rawElements, offset + i) == search) {
-            --instance;
-            if (instance == 0) {
-              flatResult.set(row, i + 1);
-              break;
-            }
-          }
+    int i;
+    for (i = startIndex; i != endIndex; i += step) {
+      if (!elementsDecoded.isNullAt(offset + i) &&
+          elementsDecoded.valueAt<T>(offset + i) == search) {
+        --instance;
+        if (instance == 0) {
+          flatResult.set(row, i + 1);
+          break;
         }
-        if (i == endIndex) {
-          flatResult.set(row, 0);
-        }
-      });
-    } else {
-      auto rawElements = elementsDecoded.values<T>();
-
-      auto search = searchDecoded.valueAt<T>(0);
-
-      rows.applyToSelected([&](auto row) {
-        auto size = rawSizes[indices[row]];
-        auto offset = rawOffsets[indices[row]];
-
-        int startIndex = instance > 0 ? 0 : size - 1;
-        int endIndex = instance > 0 ? size : -1;
-        int step = instance > 0 ? 1 : -1;
-        instance = std::abs(instance);
-
-        int i;
-        for (i = startIndex; i != endIndex; i += step) {
-          if (rawElements[offset + i] == search) {
-            --instance;
-            if (instance == 0) {
-              flatResult.set(row, i + 1);
-              break;
-            }
-          }
-        }
-        if (i == endIndex) {
-          flatResult.set(row, 0);
-        }
-      });
+      }
     }
-  } else {
-    rows.applyToSelected([&](auto row) {
-      auto size = rawSizes[indices[row]];
-      auto offset = rawOffsets[indices[row]];
-      auto search = searchDecoded.valueAt<T>(row);
-
-      auto instance = instanceDecoded.valueAt<int64_t>(row);
-      VELOX_USER_CHECK_NE(
-          instance,
-          0,
-          "array_position cannot take a 0-valued instance argument.");
-
-      int startIndex = instance > 0 ? 0 : size - 1;
-      int endIndex = instance > 0 ? size : -1;
-      int step = instance > 0 ? 1 : -1;
-      instance = std::abs(instance);
-
-      int i;
-      for (i = startIndex; i != endIndex; i += step) {
-        if (!elementsDecoded.isNullAt(offset + i) &&
-            elementsDecoded.valueAt<T>(offset + i) == search) {
-          --instance;
-          if (instance == 0) {
-            flatResult.set(row, i + 1);
-            break;
-          }
-        }
-      }
-      if (i == endIndex) {
-        flatResult.set(row, 0);
-      }
-    });
-  }
+    if (i == endIndex) {
+      flatResult.set(row, 0);
+    }
+  });
 }
 
 // Find the index of the instance-th match for complex types.
@@ -312,7 +201,7 @@ void applyTypedWithInstance(
   });
 }
 
-class ArrayPositionFunction : public exec::VectorFunction {
+class ArrayPositionFunctionBasic : public exec::VectorFunction {
  public:
   void apply(
       const SelectivityVector& rows,
@@ -382,10 +271,5 @@ class ArrayPositionFunction : public exec::VectorFunction {
 };
 
 } // namespace
-
-VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_array_position,
-    ArrayPositionFunction::signatures(),
-    std::make_unique<ArrayPositionFunction>());
 
 } // namespace facebook::velox::functions
