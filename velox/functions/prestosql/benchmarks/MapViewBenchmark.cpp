@@ -244,9 +244,9 @@ struct NestedMapSumStructBind {
   }
 };
 
-class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
+class MapViewBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
-  MapInputBenchmark() : FunctionBenchmarkBase() {
+  MapViewBenchmark() : FunctionBenchmarkBase() {
     functions::prestosql::registerMapFunctions();
     functions::prestosql::registerArrayFunctions();
 
@@ -403,38 +403,38 @@ class MapInputBenchmark : public functions::test::FunctionBenchmarkBase {
 };
 
 BENCHMARK(mapSumVectorFunction) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.run("map_sum_vector");
 }
 
 BENCHMARK_RELATIVE(mapSumSimpleFunction) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.run("map_sum_simple");
 }
 
 BENCHMARK(nestedMapSumVectorFunction) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.runNested("nested_map_sum_vector");
 }
 
 BENCHMARK_RELATIVE(nestedMapSumSimpleFunction) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.runNested("nested_map_sum_simple");
 }
 
 BENCHMARK_RELATIVE(nestedMapSumSimpleFunctionStructBind) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.runNested("nested_map_sum_simple_struct_bind");
 }
 
 BENCHMARK_RELATIVE(nestedMapSumVectorFunctionMapView) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   benchmark.runNested("nested_map_sum_vector_mapview");
 }
 } // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
-  MapInputBenchmark benchmark;
+  MapViewBenchmark benchmark;
   if (benchmark.testMapSum() && benchmark.testNestedMapSum()) {
     folly::runBenchmarks();
   } else {
