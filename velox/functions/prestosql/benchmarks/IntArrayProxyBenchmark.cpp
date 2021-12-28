@@ -18,7 +18,7 @@
 #include <folly/init/Init.h>
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
-#define WITH_NULLS true
+#define WITH_NULLS false
 
 // Benchmark a function that constructs an array of size n with values 0...n.
 namespace facebook::velox::exec {
