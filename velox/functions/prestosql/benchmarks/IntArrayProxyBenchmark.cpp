@@ -206,6 +206,25 @@ class ArrayProxyBenchmark : public functions::test::FunctionBenchmarkBase {
     folly::doNotOptimizeAway(cnt);
   }
 
+  size_t runStdRef() {
+    for (auto k = 0; k < 100; k++) {
+      std::vector<std::vector<std::optional<int>>> arrayVector;
+      for (auto i = 0; i < 1000; i++) {
+        arrayVector.push_back({});
+        auto current = arrayVector[arrayVector.size() - 1];
+        for (int j = 0; j < i; j++) {
+          if (WITH_NULLS && i % 5) {
+            current.push_back(std::nullopt);
+          } else {
+            current.push_back(j);
+          }
+        }
+      }
+      folly::doNotOptimizeAway(arrayVector);
+    }
+    return totalItemsCount;
+  }
+
   bool
   hasSameResults(ExprSet& expr1, ExprSet& expr2, const RowVectorPtr& input) {
     auto result1 = evaluate(expr1, input);
@@ -272,6 +291,11 @@ BENCHMARK_MULTI(SimpleGeneral) {
 BENCHMARK_MULTI(SimpleOld) {
   ArrayProxyBenchmark benchmark;
   return benchmark.run("simple_old");
+}
+
+BENCHMARK_MULTI(NestedSTDVectorPushBack) {
+  ArrayProxyBenchmark benchmark;
+  return benchmark.runStdRef();
 }
 } // namespace facebook::velox::exec
 
