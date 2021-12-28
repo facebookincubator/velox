@@ -112,15 +112,6 @@ class ArrayProxy {
     // Note: no need to commit the null item.
   }
 
-  // Should be called by the user (VectorWriter) when writing is done to commit
-  // last item if needed.
-  void finalize() {
-    commitMostRecentChildItem();
-    // Downsize to the actual size used in the underlying vector.
-    // Some writer's logic depend on the previous size to append data.
-    childWriter_->vector().resize(valuesOffset_ + length_);
-  }
-
   vector_size_t size() {
     return length_;
   }
@@ -170,7 +161,7 @@ class ArrayProxy {
   FOLLY_ALWAYS_INLINE void reserve(vector_size_t size) {
     if (UNLIKELY(size > capacity_)) {
       while (capacity_ < size) {
-        capacity_ = 1.5 * capacity_ + 1;
+        capacity_ = 2 * capacity_ + 1;
       }
       childWriter_->ensureSize(valuesOffset_ + capacity_);
     }
@@ -183,6 +174,15 @@ class ArrayProxy {
         needCommit_ = false;
       }
     }
+  }
+
+  // Should be called by the user (VectorWriter) when writing is done to commit
+  // last item if needed.
+  void finalize() {
+    commitMostRecentChildItem();
+    // Downsize to the actual size used in the underlying vector.
+    // Some writer's logic depend on the previous size to append data.
+    childWriter_->vector().resize(valuesOffset_ + length_);
   }
 
   // Prepare the proxy for a new element.

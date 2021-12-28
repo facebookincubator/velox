@@ -52,7 +52,7 @@ class VectorFunctionImpl : public exec::VectorFunction {
       rows.applyToSelected([&](vector_size_t row) {
         totalSize += decoded_->valueAt<int64_t>(row);
       });
-      elementsFlat->resize(totalSize);
+      elementsFlat->resize(totalSize, false);
     }
 
     rows.applyToSelected([&](vector_size_t row) {
@@ -63,7 +63,7 @@ class VectorFunctionImpl : public exec::VectorFunction {
 
       if constexpr (!optimizeResize) {
         totalSize += length;
-        elementsFlat->resize(totalSize);
+        elementsFlat->resize(totalSize, false);
       }
 
       for (auto i = 0; i < length; i++) {
