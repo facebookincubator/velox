@@ -149,7 +149,7 @@ class ArrayProxy {
 
   typename std::enable_if<provide_std_interface>::type FOLLY_ALWAYS_INLINE
   push_back(const std::optional<element_t>& value) {
-    if (value) {
+    if (value.has_value()) {
       push_back(*value);
     } else {
       add_null();
