@@ -439,7 +439,7 @@ TEST_F(VectorHasherTest, dateIds) {
 
   hasher = exec::VectorHasher::create(DATE(), 1);
   hasher->enableValueIds(1, 100000);
-  // We add values that are over 100K distinct and with max - min > int64_t max.
+  // We add values that are over 100K distinct and with max - min > int32_t max.
   EXPECT_TRUE(hasher->computeValueIds(*vector, rows, hashes));
   // null is still 0.
   EXPECT_EQ(hashes[0], 0);
