@@ -45,6 +45,11 @@ class UniqueValue {
     }
   }
 
+  explicit UniqueValue(Date value) {
+    size_ = sizeof(Date);
+    data_ = value.days();
+  }
+
   uint32_t size() const {
     return size_;
   }
@@ -253,6 +258,7 @@ class VectorHasher {
       case TypeKind::BIGINT:
       case TypeKind::VARCHAR:
       case TypeKind::VARBINARY:
+      case TypeKind::DATE:
         return true;
       default:
         return false;
@@ -276,6 +282,21 @@ class VectorHasher {
     int64_t word =
         bits::loadPartialWord(reinterpret_cast<const uint8_t*>(data), size);
     return size == 0 ? word : word + (1L << (size * 8));
+  }
+
+  template <typename T>
+  inline int64_t hashData(T value) const {
+    return value;
+  }
+
+  template <>
+  inline int64_t hashData(Date value) const {
+    return value.days();
+  }
+
+  template <>
+  inline int64_t hashData(bool value) const {
+    return value ? 2 : 1;
   }
 
   template <TypeKind Kind>
@@ -311,7 +332,8 @@ class VectorHasher {
         if (id == kUnmappable) {
           return false;
         }
-        result[i] = multiplier_ == 1 ? id : result[i] + multiplier_ * id;
+        result[i] =
+            multiplier_ == 1 ? hashData(id) : result[i] + multiplier_ * id;
       }
     }
     return true;
@@ -343,7 +365,7 @@ class VectorHasher {
 
   template <typename T>
   void analyzeValue(T value) {
-    auto normalized = static_cast<int64_t>(value);
+    auto normalized = hashData(value);
     if (!rangeOverflow_) {
       updateRange(normalized);
     }
@@ -383,11 +405,11 @@ class VectorHasher {
 
     bool inRange = true;
     rows.template testSelected([&](vector_size_t row) {
-      if (values[row] > max_ || values[row] < min_) {
+      if (hashData(values[row]) > max_ || hashData(values[row]) < min_) {
         inRange = false;
         return false;
       }
-      auto hash = values[row] - min_ + 1;
+      auto hash = hashData(values[row]) - min_ + 1;
       result[row] = multiplier_ == 1 ? hash : result[row] + multiplier_ * hash;
       return true;
     });
@@ -398,18 +420,19 @@ class VectorHasher {
   template <typename T>
   uint64_t valueId(T value) {
     if (isRange_) {
-      if (value > max_ || value < min_) {
+      if (hashData(value) > max_ || hashData(value) < min_) {
         return kUnmappable;
       }
-      return value - min_ + 1;
+      return hashData(value) - min_ + 1;
     }
+
     UniqueValue unique(value);
     unique.setId(uniqueValues_.size() + 1);
     auto pair = uniqueValues_.insert(unique);
     if (!pair.second) {
       return pair.first->id();
     }
-    updateRange(value);
+    updateRange(hashData(value));
     if (uniqueValues_.size() >= rangeSize_) {
       return kUnmappable;
     }
@@ -419,10 +442,10 @@ class VectorHasher {
   template <typename T>
   uint64_t lookupValueId(T value) const {
     if (isRange_) {
-      if (value > max_ || value < min_) {
+      if (hashData(value) > max_ || hashData(value) < min_) {
         return kUnmappable;
       }
-      return value - min_ + 1;
+      return hashData(value) - min_ + 1;
     }
     UniqueValue unique(value);
     auto iter = uniqueValues_.find(unique);
