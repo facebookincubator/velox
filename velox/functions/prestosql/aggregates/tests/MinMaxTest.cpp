@@ -285,10 +285,10 @@ TEST_F(MinMaxTest, minMaxDate) {
 
   auto agg = PlanBuilder()
                  .values(vectors)
-                 .partialAggregation({}, {"min(c0)"})
+                 .partialAggregation({}, {"min(c0)", "max(c0)"})
                  .finalAggregation()
                  .planNode();
-  assertQuery(agg, "SELECT min(c0) from tmp");
+  assertQuery(agg, "SELECT min(c0), max(c0) from tmp");
 }
 
 TEST_F(MinMaxTest, initialValue) {
