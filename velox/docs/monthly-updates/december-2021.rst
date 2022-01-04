@@ -29,11 +29,6 @@ Presto Functions
 * Add support for 'timestamp with timezone' in :func:`to_unixtime` function.
 
 
-Spark Functions
-----------------
-* Add :func:`sort_array`, :func:`array_sort` functions.
-
-
 Credits
 -------
 Aditi Pandit, Alex Hornby, Amit Dutta, Andres Suarez, Andrew Gallagher,
