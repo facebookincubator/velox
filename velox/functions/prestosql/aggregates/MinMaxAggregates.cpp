@@ -481,13 +481,13 @@ std::unique_ptr<exec::Aggregate> createMinMaxTimestampAggregate(
   }
 }
 
-template <typename TInput, template <typename U, typename V> class TNumeric>
+template <template <typename U, typename V> class TNumeric>
 std::unique_ptr<exec::Aggregate> createMinMaxDateAggregate(
     const std::string& name,
     const TypePtr& resultType) {
   switch (resultType->kind()) {
     case TypeKind::DATE:
-      return std::make_unique<TNumeric<TInput, Date>>(resultType);
+      return std::make_unique<TNumeric<Date, Date>>(resultType);
     default:
       VELOX_FAIL(
           "Unknown result type for {} aggregation with date input type: {}",
@@ -573,7 +573,7 @@ bool registerMinMaxAggregate(const std::string& name) {
             return createMinMaxTimestampAggregate<Timestamp, TNumeric>(
                 name, resultType);
           case TypeKind::DATE:
-            return createMinMaxDateAggregate<Date, TNumeric>(name, resultType);
+            return createMinMaxDateAggregate<TNumeric>(name, resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
