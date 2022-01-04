@@ -6,29 +6,27 @@ Documentation
 -------------
 
 * Add :doc:`Aggregation-related optimizations <../develop/aggregations>` guide.
-* Add :doc:`json_extract_scalar <../functions/json>` function.
-* Update :doc:`Mathematical Functions <../functions/math>`.
-* Update :doc:`Comparison Functions <../functions/comparison>`.
-* Update :doc:`How to add an aggregate function? <../develop/aggregate-functions>` guide with new registry.
-* Update :doc:`How to add a scalar function? <../develop/scalar-functions>` guide with complex types.
+* Add missing documentation for :func:`json_extract_scalar` function.
+* Add documentation for missing functions in :doc:`Mathematical Functions <../functions/math>` and :doc:`Comparison Functions <../functions/comparison>`.
+* Update :doc:`How to add an aggregate function? <../develop/aggregate-functions>` guide to reflect changes to the function registry.
+* Update :doc:`How to add a scalar function? <../develop/scalar-functions>` guide to describe how to write functions with complex types inputs and results.
 
 
 Core Library
 ------------
 
-* Fix a bug in HashJoin filter to enable TPC-H query 19.
 * Add support for partition key aliases to Hive Connector.
 * Add support for conversions between Velox string and Arrow string.
-* Add support for 'timestamp with timezone'.
-* Add support for masks to StreamingAggregation operator.
-* Add support for SSD-file data cache.
-* Other bug-fixes and code improvements.
+* Add support for 'timestamp with timezone' in :func:`to_unixtime` function.
+* Add support for :ref:`StreamingAggregation <AggregationNode and StreamingAggregationNode>` operator.
+* Fix a bug in HashJoin filter to enable TPC-H query 19.
 
 Presto Functions
 ----------------
 
 * Add :func:`corr`, :func:`covar_samp`, :func:`covar_pop`, :func:`every` aggregate functions.
 * Add :func:`sort_array`, :func:`array_sort`, :func:`array_position` array functions.
+* Add :func:`from_base` function.
 
 Credits
 -------
