@@ -148,3 +148,21 @@ TEST_F(S3FileSystemTest, fileHandle) {
   auto fileHandle = factory.generate(s3File);
   readData(fileHandle->file.get());
 }
+
+TEST_F(S3FileSystemTest, invalidCredentialsConfig) {
+  const std::unordered_map<std::string, std::string> config(
+      {{"hive.s3.use-instance-credentials", "true"},
+       {"hive.s3.iam-role", "dummy-iam-role"}});
+  auto hiveConfig = std::make_shared<const core::MemConfig>(std::move(config));
+  filesystems::S3FileSystem s3fs(hiveConfig);
+  // Both instance credentials and iam-role cannot be specified
+  try {
+    s3fs.initializeClient();
+    FAIL() << "Expected VeloxException";
+  } catch (VeloxException const& err) {
+    EXPECT_EQ(
+        err.message(),
+        std::string(
+            "Invalid configuration: either use instance credentials or specify an iam role"));
+  }
+}
