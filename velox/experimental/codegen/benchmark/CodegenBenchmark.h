@@ -123,7 +123,7 @@ class CodegenBenchmark : public CodegenTestCore {
 
   CodegenBenchmark() {
     CodegenTestCore::init();
-    queryCtx = core::QueryCtx::createForTest();
+    queryCtx = std::make_shared<core::QueryCtx>();
     pool = memory::getDefaultScopedMemoryPool();
     execCtx = std::make_unique<core::ExecCtx>(pool.get(), queryCtx_.get());
   }
@@ -270,6 +270,7 @@ class CodegenBenchmark : public CodegenTestCore {
       info.referenceResults = runQuery(
           info.refPlanNodes,
           this->benchmarkInfos[benchmarkIndex].referenceTaskCursors);
+      Driver::testingJoinAndReinitializeExecutor();
       return numberIteration;
     };
 
@@ -279,6 +280,7 @@ class CodegenBenchmark : public CodegenTestCore {
       info.compiledResults.clear();
       info.compiledResults =
           runQuery(info.compiledPlanNodes, info.compiledTaskCursors);
+      Driver::testingJoinAndReinitializeExecutor();
       return numberIteration;
     };
 

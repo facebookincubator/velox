@@ -24,6 +24,11 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
+DEFINE_int32(
+    velox_num_query_threads,
+    std::thread::hardware_concurrency(),
+    "Process-wide number of query execution threads");
+
 namespace facebook::velox::exec {
 namespace {
 // Basic implementation of the connector::ExpressionEvaluator interface.
@@ -184,15 +189,44 @@ class CancelGuard {
 };
 } // namespace
 
+static std::unique_ptr<folly::CPUThreadPoolExecutor>& getExecutor() {
+  static std::unique_ptr<folly::CPUThreadPoolExecutor> executor;
+  return executor;
+}
+
+// static
+folly::CPUThreadPoolExecutor* Driver::executor(int32_t threads) {
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> l(mutex);
+  if (!getExecutor().get()) {
+    auto numThreads = threads > 0 ? threads : FLAGS_velox_num_query_threads;
+    auto queue = std::make_unique<
+        folly::UnboundedBlockingQueue<folly::CPUThreadPoolExecutor::CPUTask>>();
+    getExecutor().reset(new folly::CPUThreadPoolExecutor(
+        numThreads,
+        std::move(queue),
+        std::make_shared<folly::NamedThreadFactory>("velox_query")));
+  }
+  return getExecutor().get();
+}
+
+// static
+void Driver::testingJoinAndReinitializeExecutor(int32_t threads) {
+  executor()->join();
+  getExecutor().reset();
+  executor(threads);
+}
+
 // static
 void Driver::enqueue(std::shared_ptr<Driver> driver) {
   // This is expected to be called inside the Driver's Tasks's mutex.
   driver->enqueueInternal();
   auto& task = driver->task_;
-  if (!task) {
-    return;
+  auto executor = task ? task->queryCtx()->executor() : nullptr;
+  if (!executor) {
+    executor = Driver::executor();
   }
-  task->queryCtx()->executor()->add([driver]() { Driver::run(driver); });
+  executor->add([driver]() { Driver::run(driver); });
 }
 
 Driver::Driver(
