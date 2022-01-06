@@ -22,6 +22,16 @@
 
 namespace facebook::velox::connector::hive {
 
+struct SortingColumn {
+  const std::string column;
+  const bool ascending{true};
+
+  SortingColumn(const std::string& _column, bool _ascending)
+      : column(_column), ascending(_ascending) {}
+};
+
+enum class BucketFunction { kNative, kHive };
+
 struct HiveConnectorSplit : public connector::ConnectorSplit {
   const std::string filePath;
   dwio::common::FileFormat fileFormat;
@@ -29,7 +39,11 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
   const uint64_t length;
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
-  std::optional<int32_t> tableBucketNumber;
+  const std::optional<int32_t> tableBucketNumber;
+  const std::vector<std::string> bucketedBy;
+  const std::optional<int32_t> bucketCount;
+  const std::optional<BucketFunction> bucketFunction;
+  const std::vector<SortingColumn> sortedBy;
 
   HiveConnectorSplit(
       const std::string& connectorId,
@@ -39,14 +53,22 @@ struct HiveConnectorSplit : public connector::ConnectorSplit {
       uint64_t _length = std::numeric_limits<uint64_t>::max(),
       const std::unordered_map<std::string, std::optional<std::string>>&
           _partitionKeys = {},
-      std::optional<int32_t> _tableBucketNumber = std::nullopt)
+      std::optional<int32_t> _tableBucketNumber = std::nullopt,
+      const std::vector<std::string>& _bucketedBy = {},
+      std::optional<int32_t> _bucketCount = std::nullopt,
+      std::optional<BucketFunction> _bucketFunction = std::nullopt,
+      const std::vector<SortingColumn>& _sortedBy = {})
       : ConnectorSplit(connectorId),
         filePath(_filePath),
         fileFormat(_fileFormat),
         start(_start),
         length(_length),
         partitionKeys(_partitionKeys),
-        tableBucketNumber(_tableBucketNumber) {}
+        tableBucketNumber(_tableBucketNumber),
+        bucketedBy(std::move(_bucketedBy)),
+        bucketCount(_bucketCount),
+        bucketFunction(_bucketFunction),
+        sortedBy(_sortedBy) {}
 
   std::string toString() const override {
     if (tableBucketNumber.has_value()) {
