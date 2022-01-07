@@ -135,21 +135,65 @@ class S3ReadFile final : public ReadFile {
 
 namespace filesystems {
 
-namespace S3Config {
-namespace {
-constexpr char const* kPathAccessStyle{"hive.s3.path-style-access"};
-constexpr char const* kEndpoint{"hive.s3.endpoint"};
-constexpr char const* kSecretKey{"hive.s3.aws-secret-key"};
-constexpr char const* kAccessKey{"hive.s3.aws-access-key"};
-constexpr char const* kSSLEnabled{"hive.s3.ssl.enabled"};
-constexpr char const* kUseInstanceCredentials{
-    "hive.s3.use-instance-credentials"};
-} // namespace
-} // namespace S3Config
+class S3Config {
+ public:
+  S3Config(const Config* config) {
+    // Default is to use virtual addressing.
+    // Hence, path-style-access is false.
+    useVirtualAddressing_ = !config->get("hive.s3.path-style-access", false);
+
+    // Default is to use SSL.
+    sslEnabled_ = config->get("hive.s3.ssl.enabled", true);
+
+    useInstanceCredentials_ =
+        config->get("hive.s3.use-instance-credentials", false);
+
+    endpoint_ = config->get("hive.s3.endpoint", std::string(""));
+
+    accessKey_ = config->get("hive.s3.aws-access-key", std::string(""));
+
+    secretKey_ = config->get("hive.s3.aws-secret-key", std::string(""));
+  }
+  // Virtual addressing is used for AWS S3 and is the default.
+  // Path access style is used for some on-prem systems like Minio.
+  bool useVirtualAddressing() const {
+    return useVirtualAddressing_;
+  }
+  bool useSSL() const {
+    return sslEnabled_;
+  }
+  bool useInstanceCredentials() const {
+    return useInstanceCredentials_;
+  }
+  bool hasAccessKey() const {
+    return !accessKey_.empty();
+  }
+  bool hasSecretKey() const {
+    return !secretKey_.empty();
+  }
+
+  std::string endpoint() const {
+    return endpoint_;
+  }
+  std::string accessKey() const {
+    return accessKey_;
+  }
+  std::string secretKey() const {
+    return secretKey_;
+  }
+
+ private:
+  bool useVirtualAddressing_;
+  bool sslEnabled_;
+  bool useInstanceCredentials_;
+  std::string endpoint_;
+  std::string accessKey_;
+  std::string secretKey_;
+};
 
 class S3FileSystem::Impl {
  public:
-  Impl(const Config* config) : config_(config) {
+  Impl(const Config* config) : s3Config_(config) {
     const size_t origCount = initCounter_++;
     if (origCount == 0) {
       Aws::SDKOptions awsOptions;
@@ -186,31 +230,19 @@ class S3FileSystem::Impl {
   void initializeClient() {
     Aws::Client::ClientConfiguration clientConfig;
 
-    const std::string endpoint =
-        config_->get(S3Config::kEndpoint, std::string(""));
-    clientConfig.endpointOverride = endpoint;
+    clientConfig.endpointOverride = s3Config_.endpoint();
 
-    // Default is to use SSL.
-    const auto useSSL = config_->get(S3Config::kSSLEnabled, true);
-    if (useSSL) {
+    if (s3Config_.useSSL()) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
     }
 
-    // Virtual addressing is used for S3 on AWS and is the default.
-    // Path access style is used for some on-prem systems like Minio.
-    const bool useVirtualAddressing =
-        !config_->get(S3Config::kPathAccessStyle, false);
-
-    const auto accessKey = config_->get(S3Config::kAccessKey, std::string(""));
-    const auto secretKey = config_->get(S3Config::kSecretKey, std::string(""));
-    const auto useInstanceCred =
-        config_->get(S3Config::kUseInstanceCredentials, std::string(""));
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
-    if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
-      credentialsProvider =
-          getAccessSecretCredentialProvider(accessKey, secretKey);
+    if (s3Config_.hasAccessKey() && s3Config_.hasSecretKey() &&
+        !s3Config_.useInstanceCredentials()) {
+      credentialsProvider = getAccessSecretCredentialProvider(
+          s3Config_.accessKey(), s3Config_.secretKey());
     } else {
       credentialsProvider = getDefaultCredentialProvider();
     }
@@ -219,7 +251,7 @@ class S3FileSystem::Impl {
         credentialsProvider,
         clientConfig,
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-        useVirtualAddressing);
+        s3Config_.useVirtualAddressing());
   }
 
   // Make it clear that the S3FileSystem instance owns the S3Client.
@@ -230,7 +262,7 @@ class S3FileSystem::Impl {
   }
 
  private:
-  const Config* config_;
+  const S3Config s3Config_;
   std::shared_ptr<Aws::S3::S3Client> client_;
   static std::atomic<size_t> initCounter_;
 };
