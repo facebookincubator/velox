@@ -244,3 +244,34 @@ TEST_F(CrossJoinTest, parallelism) {
 
   OperatorTestBase::assertQuery(params, "VALUES (30), (30), (30), (30), (30)");
 }
+
+TEST_F(CrossJoinTest, parallelism2) {
+  // Setup 5 threads for build and probe. Each build thread gets 3 identical
+  // rows of input from the Values operator. The hashAgg operation results in
+  // a single row from these. The build thread that finishes last
+  // combines data from all other threads making it 1x5=5 rows and puts them
+  // into the CrossJoinBridge. All probe threads get 2 identical rows of input
+  // from the Values operator and join them with 5 rows of build side data from
+  // the bridge. Each probe thread is expected to produce 10 rows.
+
+  auto left = {makeRowVector({sequence<int32_t>(2)})};
+  auto right = {makeRowVector({sequence<int32_t>(3)})};
+
+  for (int i = 0; i < 10; i++) {
+    CursorParameters params;
+    params.maxDrivers = 5;
+    params.planNode = PlanBuilder(10)
+                          .values({left}, true)
+                          .crossJoin(
+                              PlanBuilder()
+                                  .values({right}, true)
+                                  .partialAggregation({}, {"min(1)"})
+                                  .planNode(),
+                              {1})
+                          .partialAggregation({}, {"count(1)"})
+                          .planNode();
+
+    OperatorTestBase::assertQuery(
+        params, "VALUES (10), (10), (10), (10), (10)");
+  }
+}
