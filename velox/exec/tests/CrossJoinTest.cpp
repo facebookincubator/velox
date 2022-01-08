@@ -273,7 +273,6 @@ TEST_F(CrossJoinTest, parallelism2) {
                           .partialAggregation({}, {"count(1)"})
                           .planNode();
 
-    OperatorTestBase::assertQuery(
-        params, "VALUES (2), (2), (2), (2), (2)");
+    OperatorTestBase::assertQuery(params, "VALUES (2), (2), (2), (2), (2)");
   }
 }
