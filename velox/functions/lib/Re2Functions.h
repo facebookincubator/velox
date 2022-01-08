@@ -15,10 +15,13 @@
  */
 #pragma once
 
+#include <re2/re2.h>
 #include <memory>
 #include <vector>
 
 #include "velox/expression/VectorFunction.h"
+#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/functions/Udf.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::functions {
@@ -102,5 +105,96 @@ std::shared_ptr<exec::VectorFunction> makeRe2ExtractAll(
     const std::vector<exec::VectorFunctionArg>& inputArgs);
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractAllSignatures();
+
+/// regexp_replace(string, pattern, replacement) -> string
+/// regexp_replace(string, pattern) -> string
+///
+/// If string has substrings that match the given pattern, return a new string
+/// that has all the matched substrings replaced with the given replacement
+/// sequence or removed if no replacement sequence is provided. pattern will
+/// be parsed using the RE2 pattern syntax, a subset of PCRE. If pattern is
+/// invalid for RE2, this function throws an exception. replacement is a string
+/// that may contain references to the named or numbered capturing groups in the
+/// pattern. If referenced capturing group names in replacement are invalid for
+/// RE2, this function throws an exception.
+using PrepareRegexpReplacePattern = std::string (*)(const StringView&);
+using PrepareRegexpReplaceReplacement =
+    std::string (*)(const RE2&, const StringView&);
+
+template <
+    typename T,
+    PrepareRegexpReplacePattern P,
+    PrepareRegexpReplaceReplacement R>
+struct Re2RegexpReplace {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  std::string processedPattern_;
+  std::string processedReplacement_;
+  std::string result_;
+  std::optional<RE2> re_;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& /*config*/,
+      const arg_type<Varchar>* /*string*/,
+      const arg_type<Varchar>* pattern,
+      const arg_type<Varchar>* replacement) {
+    VELOX_USER_CHECK(
+        pattern != nullptr, "Pattern of regexp_replace must be constant.");
+    VELOX_USER_CHECK(
+        replacement != nullptr,
+        "Replacement sequence of regexp_replace must be constant.");
+
+    processedPattern_ = P(*pattern);
+
+    re_.emplace(re2::StringPiece{processedPattern_}, RE2::Quiet);
+    if (UNLIKELY(!re_.has_value())) {
+      VELOX_FAIL("Failed to create an RE2 object for regexp_replace.")
+    } else if (UNLIKELY(!re_->ok())) {
+      VELOX_USER_FAIL("Invalid regular expression:{}.", re_->error());
+    }
+
+    processedReplacement_ = R(*re_, *replacement);
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* string,
+      const arg_type<Varchar>* pattern) {
+    auto emptyReplacement = StringView{};
+
+    initialize(config, string, pattern, &emptyReplacement);
+  }
+
+  FOLLY_ALWAYS_INLINE bool doRe2Replace(
+      out_type<Varchar>& out,
+      const arg_type<Varchar>& string) {
+    result_.clear();
+    result_.append(string.data(), string.size());
+
+    RE2::GlobalReplace(&result_, *re_, re2::StringPiece{processedReplacement_});
+
+    out.resize(result_.size());
+    if (!result_.empty()) {
+      std::memcpy(out.data(), result_.data(), result_.size());
+    }
+
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& /*pattern*/,
+      const arg_type<Varchar>& /*replacement*/) {
+    return doRe2Replace(out, string);
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& out,
+      const arg_type<Varchar>& string,
+      const arg_type<Varchar>& /*pattern*/) {
+    return doRe2Replace(out, string);
+  }
+};
 
 } // namespace facebook::velox::functions
