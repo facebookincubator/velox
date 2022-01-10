@@ -22,7 +22,6 @@
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 
 #include <aws/core/Aws.h>
@@ -144,27 +143,25 @@ class S3Config {
   bool useVirtualAddressing() const {
     return !config_->get("hive.s3.path-style-access", false);
   }
+
   bool useSSL() const {
     return config_->get("hive.s3.ssl.enabled", true);
   }
+
   bool useInstanceCredentials() const {
     return config_->get("hive.s3.use-instance-credentials", false);
-  }
-  bool hasAccessKey() const {
-    return config_->isValueExists("hive.s3.aws-access-key");
-  }
-  bool hasSecretKey() const {
-    return config_->isValueExists("hive.s3.aws-secret-key");
   }
 
   std::string endpoint() const {
     return config_->get("hive.s3.endpoint", std::string(""));
   }
-  std::string accessKey() const {
-    return config_->get("hive.s3.aws-access-key", std::string(""));
+
+  folly::Optional<std::string> accessKey() const {
+    return config_->get("hive.s3.aws-access-key");
   }
-  std::string secretKey() const {
-    return config_->get("hive.s3.aws-secret-key", std::string(""));
+
+  folly::Optional<std::string> secretKey() const {
+    return config_->get("hive.s3.aws-secret-key");
   }
 
  private:
@@ -219,10 +216,12 @@ class S3FileSystem::Impl {
     }
 
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
-    if (s3Config_.hasAccessKey() && s3Config_.hasSecretKey() &&
+    auto accessKey = s3Config_.accessKey();
+    auto secretKey = s3Config_.secretKey();
+    if (accessKey.hasValue() && secretKey.hasValue() &&
         !s3Config_.useInstanceCredentials()) {
       credentialsProvider = getAccessSecretCredentialProvider(
-          s3Config_.accessKey(), s3Config_.secretKey());
+          accessKey.value(), secretKey.value());
     } else {
       credentialsProvider = getDefaultCredentialProvider();
     }
