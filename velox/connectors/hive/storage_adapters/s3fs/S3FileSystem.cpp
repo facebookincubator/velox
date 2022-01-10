@@ -56,7 +56,10 @@ class S3ReadFile final : public ReadFile {
 
     auto outcome = client_->HeadObject(request);
     VELOX_CHECK_AWS_OUTCOME(
-        outcome, "Failed to initialize S3 file", bucket_, key_);
+        outcome,
+        "Failed to get metadata for S3 object",
+        bucket_.c_str(),
+        key_.c_str());
     length_ = outcome.GetResult().GetContentLength();
     VELOX_CHECK_GE(length_, 0);
   }
@@ -119,7 +122,7 @@ class S3ReadFile final : public ReadFile {
     // Reference: ARROW-8692
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(
-        outcome, "Failure in S3ReadFile::preadInternal", bucket_, key_);
+        outcome, "Failed to get S3 object", bucket_.c_str(), key_.c_str());
 
     result = std::move(outcome).GetResultWithOwnership();
     auto& stream = result.GetBody();
