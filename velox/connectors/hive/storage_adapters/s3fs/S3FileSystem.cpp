@@ -137,58 +137,38 @@ namespace filesystems {
 
 class S3Config {
  public:
-  S3Config(const Config* config) {
-    // Default is to use virtual addressing.
-    // Hence, path-style-access is false.
-    useVirtualAddressing_ = !config->get("hive.s3.path-style-access", false);
+  S3Config(const Config* config) : config_(config) {}
 
-    // Default is to use SSL.
-    sslEnabled_ = config->get("hive.s3.ssl.enabled", true);
-
-    useInstanceCredentials_ =
-        config->get("hive.s3.use-instance-credentials", false);
-
-    endpoint_ = config->get("hive.s3.endpoint", std::string(""));
-
-    accessKey_ = config->get("hive.s3.aws-access-key", std::string(""));
-
-    secretKey_ = config->get("hive.s3.aws-secret-key", std::string(""));
-  }
-  // Virtual addressing is used for AWS S3 and is the default.
-  // Path access style is used for some on-prem systems like Minio.
+  // Virtual addressing is used for AWS S3 and is the default (path-style-access
+  // is false). Path access style is used for some on-prem systems like Minio.
   bool useVirtualAddressing() const {
-    return useVirtualAddressing_;
+    return !config_->get("hive.s3.path-style-access", false);
   }
   bool useSSL() const {
-    return sslEnabled_;
+    return config_->get("hive.s3.ssl.enabled", true);
   }
   bool useInstanceCredentials() const {
-    return useInstanceCredentials_;
+    return config_->get("hive.s3.use-instance-credentials", false);
   }
   bool hasAccessKey() const {
-    return !accessKey_.empty();
+    return config_->isValueExists("hive.s3.aws-access-key");
   }
   bool hasSecretKey() const {
-    return !secretKey_.empty();
+    return config_->isValueExists("hive.s3.aws-secret-key");
   }
 
   std::string endpoint() const {
-    return endpoint_;
+    return config_->get("hive.s3.endpoint", std::string(""));
   }
   std::string accessKey() const {
-    return accessKey_;
+    return config_->get("hive.s3.aws-access-key", std::string(""));
   }
   std::string secretKey() const {
-    return secretKey_;
+    return config_->get("hive.s3.aws-secret-key", std::string(""));
   }
 
  private:
-  bool useVirtualAddressing_;
-  bool sslEnabled_;
-  bool useInstanceCredentials_;
-  std::string endpoint_;
-  std::string accessKey_;
-  std::string secretKey_;
+  const Config* config_;
 };
 
 class S3FileSystem::Impl {
