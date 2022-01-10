@@ -47,10 +47,6 @@ class MinioServer {
     return tempPath_->path;
   }
 
-  std::string endpoint() const {
-    return connectionString_;
-  }
-
   std::shared_ptr<const Config> hiveConfig() const {
     const std::unordered_map<std::string, std::string> config({
         {"hive.s3.aws-access-key", accessKey_},

@@ -112,17 +112,7 @@ TEST_F(S3FileSystemTest, missingFile) {
   auto hiveConfig = minioServer_->hiveConfig();
   filesystems::S3FileSystem s3fs(hiveConfig);
   s3fs.initializeClient();
-  try {
-    s3fs.openFileForRead(s3File);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException err) {
-    EXPECT_EQ(
-        err.message(),
-        std::string(
-            "Failed to initialize S3 file with bucket 'data1' and key 'i-do-not-exist.txt' due to 16:No response body."));
-  } catch (...) {
-    FAIL() << "Expected VeloxException";
-  }
+  EXPECT_THROW(s3fs.openFileForRead(s3File), VeloxException);
 }
 
 TEST_F(S3FileSystemTest, viaRegistry) {
@@ -157,34 +147,4 @@ TEST_F(S3FileSystemTest, fileHandle) {
       std::make_unique<FileHandleGenerator>(hiveConfig));
   auto fileHandle = factory.generate(s3File);
   readData(fileHandle->file.get());
-}
-
-TEST_F(S3FileSystemTest, invalidAccessKeySecretKeyCredentials) {
-  const std::unordered_map<std::string, std::string> config({
-      {"hive.s3.aws-access-key", "dummy-key"},
-      {"hive.s3.aws-secret-key", "dummy-key"},
-      {"hive.s3.endpoint", minioServer_->endpoint()},
-      {"hive.s3.ssl.enabled", "false"},
-      {"hive.s3.path-style-access", "true"},
-  });
-
-  const char* bucketName = "data1";
-  const char* file = "i-do-not-exist.txt";
-  const std::string s3File = s3URI(bucketName) + "/" + file;
-  addBucket(bucketName);
-  auto hiveConfig = std::make_shared<const core::MemConfig>(std::move(config));
-  filesystems::S3FileSystem s3fs(hiveConfig);
-  s3fs.initializeClient();
-  // Minio credentials are wrong and this should throw
-  try {
-    s3fs.openFileForRead(s3File);
-    FAIL() << "Expected VeloxException";
-  } catch (VeloxException err) {
-    EXPECT_EQ(
-        err.message(),
-        std::string(
-            "Failed to initialize S3 file with bucket 'data1' and key 'i-do-not-exist.txt' due to 15:No response body."));
-  } catch (...) {
-    FAIL() << "Expected VeloxException";
-  }
 }
