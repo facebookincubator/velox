@@ -144,15 +144,19 @@ class S3Config {
   bool useVirtualAddressing() const {
     return !config_->get("hive.s3.path-style-access", false);
   }
+
   bool useSSL() const {
     return config_->get("hive.s3.ssl.enabled", true);
   }
+
   bool useInstanceCredentials() const {
     return config_->get("hive.s3.use-instance-credentials", false);
   }
+
   bool hasAccessKey() const {
     return config_->isValueExists("hive.s3.aws-access-key");
   }
+
   bool hasSecretKey() const {
     return config_->isValueExists("hive.s3.aws-secret-key");
   }
@@ -160,9 +164,11 @@ class S3Config {
   std::string endpoint() const {
     return config_->get("hive.s3.endpoint", std::string(""));
   }
+
   std::string accessKey() const {
     return config_->get("hive.s3.aws-access-key", std::string(""));
   }
+
   std::string secretKey() const {
     return config_->get("hive.s3.aws-secret-key", std::string(""));
   }
