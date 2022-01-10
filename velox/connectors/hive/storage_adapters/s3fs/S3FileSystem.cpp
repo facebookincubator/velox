@@ -156,12 +156,18 @@ class S3Config {
     return config_->get("hive.s3.endpoint", std::string(""));
   }
 
-  folly::Optional<std::string> accessKey() const {
-    return config_->get("hive.s3.aws-access-key");
+  std::optional<std::string> accessKey() const {
+    if (config_->isValueExists("hive.s3.aws-access-key")) {
+      return config_->get("hive.s3.aws-access-key").value();
+    }
+    return {};
   }
 
-  folly::Optional<std::string> secretKey() const {
-    return config_->get("hive.s3.aws-secret-key");
+  std::optional<std::string> secretKey() const {
+    if (config_->isValueExists("hive.s3.aws-secret-key")) {
+      return config_->get("hive.s3.aws-secret-key").value();
+    }
+    return {};
   }
 
  private:
@@ -218,7 +224,7 @@ class S3FileSystem::Impl {
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
     auto accessKey = s3Config_.accessKey();
     auto secretKey = s3Config_.secretKey();
-    if (accessKey.hasValue() && secretKey.hasValue() &&
+    if (accessKey.has_value() && secretKey.has_value() &&
         !s3Config_.useInstanceCredentials()) {
       credentialsProvider = getAccessSecretCredentialProvider(
           accessKey.value(), secretKey.value());
