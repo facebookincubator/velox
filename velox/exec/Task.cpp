@@ -15,6 +15,8 @@
  */
 #include "velox/exec/Task.h"
 #include "velox/codegen/Codegen.h"
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/Exchange.h"
@@ -26,7 +28,13 @@
 #include "velox/experimental/codegen/CodegenLogger.h"
 #endif
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 namespace facebook::velox::exec {
+
+static void checkTraceCommand();
 
 Task::Task(
     const std::string& taskId,
@@ -35,15 +43,17 @@ Task::Task(
     std::shared_ptr<core::QueryCtx> queryCtx,
     ConsumerSupplier consumerSupplier,
     std::function<void(std::exception_ptr)> onError)
-    : taskId_(taskId),
+    : pool_(queryCtx->pool()->addScopedChild("task_root")),
+      taskId_(taskId),
       planNode_(planNode),
       destination_(destination),
       queryCtx_(std::move(queryCtx)),
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
-      pool_(queryCtx_->pool()->addScopedChild("task_root")),
       bufferManager_(
-          PartitionedOutputBufferManager::getInstance(queryCtx_->host())) {}
+          PartitionedOutputBufferManager::getInstance(queryCtx_->host())) {
+  checkTraceCommand();
+}
 
 Task::~Task() {
   try {
@@ -206,7 +216,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       return;
     }
   }
-  VELOX_FAIL("Trying to delete a Driver twice from its Task");
+  LOG(INFO) << "Trying to delete a Driver twice from Task :" << self->taskId();
 }
 
 void Task::setMaxSplitSequenceId(
@@ -770,6 +780,86 @@ Task::getLocalExchangeSources(const core::PlanNodeId& planNodeId) {
       "Incorrect local exchange ID: {}",
       planNodeId);
   return it->second.sources;
+}
+
+void doCommand(std::string command) {
+  auto cache =
+      dynamic_cast<cache::AsyncDataCache*>(memory::MappedMemory::getInstance());
+  if (command == "dropram") {
+    if (!cache) {
+      LOG(ERROR) << "No cache to drop";
+      return;
+    }
+    LOG(INFO) << "VELOXCMD: Dropping RAM cache";
+    cache->clear();
+    return;
+  }
+  if (command == "dropssd") {
+    if (!cache) {
+      LOG(ERROR) << "VELOXCMD: No cache to drop";
+      return;
+    }
+
+    LOG(INFO) << "VELOXCMD: Dropping SSD and RAM cache";
+    if (cache->ssdCache()) {
+      cache->ssdCache()->clear();
+    }
+    cache->clear();
+    return;
+  }
+
+  if (command == "status") {
+    LOG(INFO) << "VELOXCMD: " << process::TraceContext::statusLine();
+    return;
+  }
+  auto equals = strchr(command.c_str(), '=');
+  if (equals) {
+    int32_t equalsOffset = equals - command.c_str();
+    std::string flag(command.data(), equalsOffset);
+    std::string value(
+        command.data() + equalsOffset + 1, command.size() - equalsOffset);
+    LOG(INFO) << "VELOXCMD set " << flag << "=" << value << ": "
+              << gflags::SetCommandLineOption(flag.c_str(), value.c_str());
+    return;
+  }
+  LOG(ERROR) << "VELOXCMD: Did not understand veloxcmd.txt: " << command;
+}
+
+static void checkTraceCommand() {
+  constexpr auto kCmdFile = "/tmp/veloxcmd.txt";
+  static std::mutex mutex;
+  static bool firstTime = true;
+  static std::chrono::steady_clock::time_point lastTime;
+  auto now = std::chrono::steady_clock::now();
+  if (firstTime ||
+      std::chrono::duration_cast<std::chrono::microseconds>(now - lastTime)
+              .count() > 1000000) {
+    std::lock_guard<std::mutex> l(mutex);
+    lastTime = now;
+    firstTime = false;
+    int32_t fd = open(kCmdFile, O_RDWR);
+    if (fd < 0) {
+      return;
+    }
+    static char buffer[10000] = {};
+    int32_t length = read(fd, buffer, sizeof(buffer));
+    close(fd);
+    if (unlink(kCmdFile) < 0) {
+      LOG(ERROR) << "VELOXCMD: Failed to rm " << kCmdFile << " with " << buffer
+                 << " - no action taken";
+      return;
+    }
+    int32_t start = 0;
+    for (auto i = 0; i < length; ++i) {
+      if (buffer[i] == ';') {
+        doCommand(std::string(buffer + start, i - start));
+        start = i + 1;
+      }
+    }
+    if (length - start > 0) {
+      doCommand(std::string(buffer + start, length - start));
+    }
+  }
 }
 
 StopReason Task::enter(ThreadState& state) {

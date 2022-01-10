@@ -68,6 +68,8 @@ class HashProbe : public Operator {
   // 'rowNumberMapping_'. Returns the number of passing rows.
   vector_size_t evalFilter(vector_size_t numRows);
 
+  void ensureLoadedIfNotAtEnd(ChannelIndex channel);
+
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const uint32_t outputBatchSize_;
 

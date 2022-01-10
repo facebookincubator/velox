@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/common/caching/DataCache.h"
+#include "velox/common/caching/GroupTracker.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/core/Context.h"
 #include "velox/vector/ComplexVector.h"
@@ -117,6 +118,14 @@ class DataSource {
   virtual uint64_t getCompletedRows() = 0;
 
   virtual std::unordered_map<std::string, int64_t> runtimeStats() = 0;
+
+  // Returns true if 'this' has initiated all the prefetch this will
+  // initiate. This means that the caller should schedule next splits
+  // to prefetch in the background. false if the source does not
+  // prefetch.
+  virtual bool isPrefetchComplete() {
+    return false;
+  }
 
   // Returns a connector dependent row size if available. This can be
   // called after addSplit().  This estimates uncompressed data
@@ -237,7 +246,8 @@ class Connector {
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
   static std::shared_ptr<cache::ScanTracker> getTracker(
-      const std::string& scanId);
+      const std::string& scanId,
+      cache::FileGroupStats* FOLLY_NULLABLE groupStats = nullptr);
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

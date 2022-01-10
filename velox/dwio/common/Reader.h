@@ -69,6 +69,13 @@ class RowReader {
    * @return estimated row size
    */
   virtual size_t estimatedRowSize() const = 0;
+
+  // Returns true if all expected IO for the range of 'this' is
+  // underway. This means that it is useful to start preloading more
+  // splits.
+  virtual bool allPrefetchIssued() const {
+    return false;
+  }
 };
 
 /**

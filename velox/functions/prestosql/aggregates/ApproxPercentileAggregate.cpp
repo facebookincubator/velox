@@ -454,7 +454,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     decodedPercentile_.decode(*args[argIndex++], rows, true);
 
     // TODO Add support for accuracy parameter
-    VELOX_CHECK_EQ(argIndex, args.size());
+    // VELOX_CHECK_EQ(argIndex, args.size());
   }
 
   void checkSetPercentile() {
@@ -515,13 +515,17 @@ bool registerApproxPercentile(const std::string& name) {
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
         auto isRawInput = exec::isRawInput(step);
-        auto hasWeight = argTypes.size() == 3;
+        auto isPartialOutput = exec::isPartialOutput(step);
+        auto hasWeight =
+            argTypes.size() >= 3 && argTypes[1]->kind() == TypeKind::BIGINT;
+        auto pctIndex = hasWeight ? 2 : 1;
+        TypePtr type = isRawInput ? argTypes[0] : resultType;
 
         if (isRawInput) {
           VELOX_USER_CHECK_GE(
-              argTypes.size(), 2, "{} takes 2 or 3 arguments", name);
+              argTypes.size(), 2, "{} takes 2 - 4 arguments", name);
           VELOX_USER_CHECK_LE(
-              argTypes.size(), 3, "{} takes 2 or 3 arguments", name);
+              argTypes.size(), 4, "{} takes 2 - 4 arguments", name);
 
           if (hasWeight) {
             VELOX_USER_CHECK_EQ(
@@ -532,7 +536,7 @@ bool registerApproxPercentile(const std::string& name) {
           }
 
           VELOX_USER_CHECK_EQ(
-              argTypes.back()->kind(),
+              argTypes[pctIndex]->kind(),
               TypeKind::DOUBLE,
               "The type of the percentile argument of {} must be DOUBLE",
               name);
@@ -554,7 +558,6 @@ bool registerApproxPercentile(const std::string& name) {
               false, VARBINARY());
         }
 
-        TypePtr type = isRawInput ? argTypes[0] : resultType;
 
         switch (type->kind()) {
           case TypeKind::TINYINT:

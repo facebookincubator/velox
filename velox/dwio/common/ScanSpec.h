@@ -56,13 +56,29 @@ class ScanSpec {
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
   common::Filter* filter() const {
+    if (localFilter_) {
+      return localFilter_.get();
+    }
     return filter_.get();
+  }
+
+  void setLocalFilter(std::unique_ptr<Filter> localFilter) {
+    localFilter_ = std::move(localFilter);
   }
 
   // Sets 'filter_'. May be used at initialization or when adding a
   // pushed down filter, e.g. top k cutoff.
   void setFilter(std::unique_ptr<Filter> filter) {
     filter_ = std::move(filter);
+    localFilter_ = nullptr;
+  }
+
+  void specializeFilter(
+      const TypePtr& type,
+      const dwio::common::ColumnStatistics* stats);
+
+  void clearSpecializedFilter() {
+    localFilter_ = nullptr;
   }
 
   // Returns a constant vector if 'this' corresponds to a partitioning
@@ -279,6 +295,7 @@ class ScanSpec {
   // returned as flat.
   bool makeFlat_ = false;
   std::unique_ptr<common::Filter> filter_;
+  std::unique_ptr<common::Filter> localFilter_;
   SelectivityInfo selectivity_;
   // Sort children by filtering efficiency.
   bool enableFilterReorder_ = true;

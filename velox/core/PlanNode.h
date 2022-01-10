@@ -127,7 +127,7 @@ class PlanNode {
     addIndentation();
     stream << "->" << name();
     if (detailed) {
-      stream << "[";
+      stream << "[ id=" << id_ << " ";
       addDetails(stream);
       stream << "]";
     }

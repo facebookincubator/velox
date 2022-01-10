@@ -203,6 +203,7 @@ BlockingReason PartitionedOutputBuffer::enqueue(
     if (broadcast_) {
       std::shared_ptr<VectorStreamGroup> shared = std::move(data);
       for (auto& buffer : buffers_) {
+        VELOX_CHECK(buffer, "Null broadcast destination buffer");
         buffer->enqueue(shared);
         dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
       }

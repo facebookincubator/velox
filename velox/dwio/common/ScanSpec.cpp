@@ -289,6 +289,51 @@ bool testFilter(
   return true;
 }
 
+void ScanSpec::specializeFilter(
+    const TypePtr& type,
+    const dwio::common::ColumnStatistics* stats) {
+  switch (type->kind()) {
+    case TypeKind::BIGINT:
+    case TypeKind::INTEGER:
+    case TypeKind::SMALLINT:
+    case TypeKind::TINYINT: {
+      auto intStats =
+          dynamic_cast<const dwio::common::IntegerColumnStatistics*>(stats);
+      if (!intStats) {
+        localFilter_ = nullptr;
+        return;
+      }
+      if (intStats->getMinimum().has_value() &&
+          intStats->getMaximum().has_value()) {
+        localFilter_ = filter_->filterForRange(
+            intStats->getMinimum().value(), intStats->getMaximum().value());
+        return;
+      }
+
+      // only min value
+      if (intStats->getMinimum().has_value()) {
+        localFilter_ = filter_->filterForRange(
+            intStats->getMinimum().value(),
+            std::numeric_limits<int64_t>::max());
+        return;
+      }
+
+      // only max value
+      if (intStats->getMaximum().has_value()) {
+        localFilter_ = filter_->filterForRange(
+            std::numeric_limits<int64_t>::min(),
+            intStats->getMaximum().value());
+        return;
+      }
+      localFilter_ = nullptr;
+      break;
+    }
+    default:
+      localFilter_ = nullptr;
+      break;
+  }
+}
+
 ScanSpec& ScanSpec::getChildByChannel(ChannelIndex channel) {
   for (auto& child : children_) {
     if (child->channel_ == channel) {

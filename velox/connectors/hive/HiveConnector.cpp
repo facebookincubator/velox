@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HiveConnector.h"
-
-#include <memory>
+#include <velox/dwio/dwrf/reader/SelectiveColumnReader.h>
+#include "velox/common/process/TraceContext.h"
 
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
@@ -250,6 +250,7 @@ bool testFilters(
   const auto& rowType = reader->rowType();
   for (const auto& child : scanSpec->children()) {
     if (child->filter()) {
+      child->clearSpecializedFilter();
       const auto& name = child->fieldName();
       if (!rowType->containsChild(name)) {
         // Column is missing. Most likely due to schema evolution.
@@ -362,9 +363,13 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       readerOpts_.setDataCacheConfig(std::move(dataCacheConfig));
     }
     readerOpts_.getDataCacheConfig()->filenum = fileHandle_->uuid.id();
+    cache::FileGroupStats* groupStats = asyncCache->ssdCache()
+        ? &asyncCache->ssdCache()->groupStats()
+        : nullptr;
+    auto tracker = Connector::getTracker(scanId_, groupStats);
     bufferedInputFactory_ = std::make_unique<dwrf::CachedBufferedInputFactory>(
         (asyncCache),
-        Connector::getTracker(scanId_),
+        std::move(tracker),
         fileHandle_->groupId.id(),
         [factory = fileHandleFactory_,
          path = split_->filePath,
@@ -390,14 +395,15 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // We run with the default BufferedInputFactory and no DataCacheConfig if
   // there is no DataCache and the MappedMemory is not an AsyncDataCache.
-  reader_ = dwio::common::getReaderFactory(readerOpts_.getFileFormat())
-                ->createReader(
-                    std::make_unique<dwio::common::ReadFileInputStream>(
-                        fileHandle_->file.get(),
-                        dwio::common::MetricsLog::voidLog(),
-                        ioStats_.get()),
-                    readerOpts_);
-
+  auto uniqueReader =
+      dwio::common::getReaderFactory(readerOpts_.getFileFormat())
+          ->createReader(
+              std::make_unique<dwio::common::ReadFileInputStream>(
+                  fileHandle_->file.get(),
+                  dwio::common::MetricsLog::voidLog(),
+                  ioStats_.get()),
+              readerOpts_);
+  reader_.reset(uniqueReader.release());
   emptySplit_ = false;
   if (reader_->numberOfRows() == 0) {
     emptySplit_ = true;
@@ -492,6 +498,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
   // column, e.g. rand() < 0.1. Evaluate that conjunct first, then scan only
   // rows that passed.
 
+  process::TraceContext trace(fmt::format("Scan: {}", split_->filePath), true);
   auto rowsScanned = rowReader_->next(size, output_);
   completedRows_ += rowsScanned;
 
@@ -580,15 +587,18 @@ void HiveDataSource::setPartitionValue(
 
 std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {
   auto res = runtimeStats_.toMap();
-  res.insert(
-      {{"numPrefetch", ioStats_->prefetch().count()},
-       {"prefetchBytes", ioStats_->prefetch().bytes()},
-       {"numStorageRead", ioStats_->read().count()},
-       {"storageReadBytes", ioStats_->read().bytes()},
-       {"numLocalRead", ioStats_->ssdRead().count()},
-       {"localReadBytes", ioStats_->ssdRead().bytes()},
-       {"numRamRead", ioStats_->ramHit().count()},
-       {"ramReadBytes", ioStats_->ramHit().bytes()}});
+  if (auto asyncCache = dynamic_cast<cache::AsyncDataCache*>(mappedMemory_)) {
+    res.insert(
+        {{"numPrefetch", ioStats_->prefetch().count()},
+         {"prefetchBytes", ioStats_->prefetch().bytes()},
+         {"numStorageRead", ioStats_->read().count()},
+         {"storageReadBytes", ioStats_->read().bytes()},
+         {"numLocalRead", ioStats_->ssdRead().count()},
+         {"localReadBytes", ioStats_->ssdRead().bytes()},
+         {"numRamRead", ioStats_->ramHit().count()},
+         {"ramReadBytes", ioStats_->ramHit().bytes()},
+         {"ioWait", ioStats_->queryThreadIoLatency().bytes()}});
+  }
   return res;
 }
 

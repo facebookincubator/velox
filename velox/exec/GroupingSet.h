@@ -35,7 +35,7 @@ class GroupingSet {
       bool isRawInput,
       OperatorCtx* driverCtx);
 
-  void addInput(const RowVectorPtr& input, bool mayPushdown);
+  void addInput(const RowVectorPtr& input, bool mayPushdown, int32_t level);
 
   bool getOutput(
       int32_t batchSize,
@@ -88,6 +88,7 @@ class GroupingSet {
   HashStringAllocator stringAllocator_;
   AllocationPool rows_;
   const bool isAdaptive_;
+  core::ExecCtx& execCtx_;
 };
 
 } // namespace facebook::velox::exec

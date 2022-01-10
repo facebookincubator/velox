@@ -39,6 +39,11 @@ void ConstantExpr::evalSpecialForm(
     vector->setAllIsAscii(isAscii);
     needToSetIsAscii_ = false;
   }
+  if (sharedSubexprValues_.unique() && !*result) {
+    sharedSubexprValues_->resize(rows.end());
+    *result = sharedSubexprValues_;
+    return;
+  }
 
   if (sharedSubexprValues_.unique()) {
     sharedSubexprValues_->resize(rows.end());

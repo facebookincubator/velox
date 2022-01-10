@@ -277,6 +277,26 @@ void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
     }
 
     lazyVector->load(rowSet, nullptr);
+    // If we have anything except a single level of dictionary, we
+    // collapse this to a single level of dictionary. The reason is
+    // that the inner levels of dictionary will reference rows that
+    // are not loaded, since the load was done for only the rows that
+    // are reachable from 'field'.
+    if (field->encoding() != VectorEncoding::Simple::DICTIONARY ||
+        lazyVector != field->valueVector().get()) {
+      BufferPtr indices =
+          AlignedBuffer::allocate<vector_size_t>(field->size(), field->pool());
+      std::memcpy(
+          indices->asMutable<vector_size_t>(),
+          decoded->indices(),
+          sizeof(vector_size_t) * field->size());
+      const_cast<RowVector*>(row_)->childAt(index) =
+          BaseVector::wrapInDictionary(
+              BufferPtr(nullptr),
+              std::move(indices),
+              field->size(),
+              lazyVector->loadedVectorShared());
+    }
   }
 
   // An explicit call to loadedVector() is necessary to allow for proper

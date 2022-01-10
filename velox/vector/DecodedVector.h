@@ -268,6 +268,7 @@ class DecodedVector {
 
   // Used as 'nulls_' for a null constant vector.
   static uint64_t constantNullMask_;
+  const BaseVector* debugSourceVector_{nullptr};
 };
 
 template <>

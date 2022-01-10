@@ -213,8 +213,10 @@ ReaderBase::ReaderBase(
     const std::string tailKey = TailKey(dataCacheConfig->filenum);
     dataCacheConfig->cache->put(tailKey, {tail.get(), tailSize});
   }
+
   if (input_->shouldPrefetchStripes()) {
     auto numStripes = getFooter().stripes_size();
+    input_->setNumStripes(numStripes);
     for (auto i = 0; i < numStripes; i++) {
       const auto& stripe = getFooter().stripes(i);
       input_->enqueue(

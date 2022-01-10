@@ -19,6 +19,7 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
@@ -284,6 +285,9 @@ StopReason Driver::runInternal(
         "queuedWallNanos",
         (getCurrentTimeMicro() - queueTimeStartMicros_) * 1'000);
   }
+  process::TraceContext trace(
+      fmt::format("driver {}", self->ctx_->task->taskId()), true);
+
   // Get 'task_' into a local because this could be unhooked from it on another
   // thread.
   auto task = task_;
@@ -516,6 +520,9 @@ void Driver::close() {
 }
 
 bool Driver::terminate() {
+  if (!task_) {
+    return false;
+  }
   auto stop = task_->enterForTerminate(state_);
   if (stop == StopReason::kTerminate) {
     close();

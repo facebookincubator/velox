@@ -193,7 +193,7 @@ class HiveDataSource : public DataSource {
   std::shared_ptr<HiveConnectorSplit> split_;
   dwio::common::ReaderOptions readerOpts_;
   dwio::common::RowReaderOptions rowReaderOpts_;
-  std::unique_ptr<dwio::common::Reader> reader_;
+  std::shared_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<dwio::common::RowReader> rowReader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;

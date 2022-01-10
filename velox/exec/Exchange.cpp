@@ -302,6 +302,7 @@ RowVectorPtr Exchange::getOutput() {
         currentPage_->prepareStreamForDeserialize(inputStream_.get());
       }
 
+      result_ = nullptr;
       VectorStreamGroup::read(
           inputStream_.get(), operatorCtx_->pool(), outputType_, &result_);
 
@@ -313,7 +314,7 @@ RowVectorPtr Exchange::getOutput() {
         inputStream_ = nullptr;
       }
 
-      return result_;
+      return std::move(result_);
     }
     bool atEnd = false;
     currentPage_ = exchangeClient_->next(&atEnd, &future_);

@@ -58,7 +58,8 @@ GroupingSet::GroupingSet(
       stringAllocator_(mappedMemory_),
       rows_(mappedMemory_),
       isAdaptive_(
-          operatorCtx->task()->queryCtx()->config().hashAdaptivityEnabled()) {
+          operatorCtx->task()->queryCtx()->config().hashAdaptivityEnabled()),
+      execCtx_(*operatorCtx->execCtx()) {
   for (auto& hasher : hashers_) {
     keyChannels_.push_back(hasher->channel());
   }
@@ -73,9 +74,19 @@ GroupingSet::GroupingSet(
   }
 }
 
-void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
+void GroupingSet::addInput(
+    const RowVectorPtr& input,
+    bool mayPushdown,
+    int32_t level) {
   auto numRows = input->size();
   activeRows_.resize(numRows);
+  if (level > 2) {
+    std::stringstream out;
+    for (auto& h : lookup_->hashers) {
+      out << h->toString();
+    }
+    VELOX_FAIL("ARRGB: hasher does ot adapt to new range: {}", out.str());
+  }
   activeRows_.setAll();
   if (isGlobal_) {
     // global aggregation
@@ -121,7 +132,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
   auto mode = table_->hashMode();
   if (ignoreNullKeys_) {
     // A null in any of the keys disables the row.
-    deselectRowsWithNulls(*input, keyChannels_, activeRows_);
+    deselectRowsWithNulls(*input, keyChannels_, activeRows_, execCtx_);
     for (int32_t i = 0; i < hashers.size(); ++i) {
       auto key = input->loadedChildAt(hashers[i]->channel());
       if (mode != BaseHashTable::HashMode::kHash) {
@@ -155,7 +166,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
     if (table_->hashMode() != BaseHashTable::HashMode::kHash) {
       table_->decideHashMode(input->size());
     }
-    addInput(input, mayPushdown);
+    addInput(input, mayPushdown, level + 1);
     return;
   }
   numAdded_ += lookup_->rows.size();

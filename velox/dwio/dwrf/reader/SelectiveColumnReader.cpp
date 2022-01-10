@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 #include "velox/common/base/Portability.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/dwrf/common/DirectDecoder.h"
 #include "velox/dwio/dwrf/common/FloatingPointDecoder.h"
@@ -28,6 +29,11 @@
 #include "velox/vector/FlatVector.h"
 
 #include <numeric>
+
+DEFINE_bool(
+    enable_specialize_filters,
+    true,
+    "Specialize filters based on row group stats");
 
 namespace facebook::velox::dwrf {
 
@@ -99,6 +105,7 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
   }
 
   ensureRowGroupIndex();
+  scanSpec_->clearSpecializedFilter();
   auto filter = scanSpec_->filter();
 
   std::vector<uint32_t> stridesToSkip;
@@ -108,6 +115,8 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
         buildColumnStatisticsFromProto(entry.statistics(), context);
     if (!testFilter(filter, columnStats.get(), rowGroupSize, type_)) {
       stridesToSkip.push_back(i); // Skipping stride based on column stats.
+    } else {
+      rowGroupStats_[i] = std::move(columnStats);
     }
   }
   return stridesToSkip;
@@ -398,7 +407,7 @@ void SelectiveColumnReader::compactScalarValues(RowSet rows, bool isFinal) {
       continue;
     }
 
-    VELOX_DCHECK(sourceRows[i] == nextRow);
+    VELOX_CHECK(sourceRows[i] == nextRow);
     typedDestValues[rowIndex] = typedSourceValues[i];
     if (moveNulls && rowIndex != i) {
       bits::setBit(
@@ -3956,6 +3965,8 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
     }
   }
 
+  void setRowGroupSpecificFilters();
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<SelectiveColumnReader>> children_;
@@ -3966,6 +3977,7 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
 
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
+  int32_t previousRowGroup_{-1};
 };
 
 SelectiveStructColumnReader::SelectiveStructColumnReader(
@@ -4078,8 +4090,32 @@ void SelectiveStructColumnReader::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
+  setRowGroupSpecificFilters();
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
+}
+
+void SelectiveStructColumnReader::setRowGroupSpecificFilters() {
+  if (!FLAGS_enable_specialize_filters) {
+    return;
+  }
+  auto rowGroup = readOffset_ / rowsPerRowGroup_;
+  if (rowGroup == previousRowGroup_) {
+    return;
+  }
+  previousRowGroup_ = rowGroup;
+  auto& childSpecs = scanSpec_->children();
+  for (auto& childSpec : childSpecs) {
+    if (childSpec->filter()) {
+      auto& reader = children_[childSpec->subscript()];
+      auto rowGroupIndex = readOffset_ / rowsPerRowGroup_;
+      auto stats = reader->rowGroupStats(rowGroupIndex);
+      if (stats &&
+          dynamic_cast<SelectiveIntegerDirectColumnReader*>(reader.get())) {
+        childSpec->specializeFilter(reader->type(), stats);
+      }
+    }
+  }
 }
 
 class ColumnLoader : public velox::VectorLoader {
@@ -4147,7 +4183,7 @@ void ColumnLoader::loadInternal(
     }
     effectiveRows = RowSet(selectedRows);
   }
-
+  process::TraceContext trace(fmt::format("ColumnLoader {}", gettid()), true);
   structReader_->advanceFieldReader(fieldReader_, offset);
   fieldReader_->scanSpec()->setValueHook(hook);
   fieldReader_->read(offset, effectiveRows, incomingNulls);
