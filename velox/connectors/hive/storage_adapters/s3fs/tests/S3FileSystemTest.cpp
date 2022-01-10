@@ -115,7 +115,7 @@ TEST_F(S3FileSystemTest, missingFile) {
   try {
     s3fs.openFileForRead(s3File);
     FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
+  } catch (VeloxException err) {
     EXPECT_EQ(
         err.message(),
         std::string(
@@ -179,7 +179,7 @@ TEST_F(S3FileSystemTest, invalidAccessKeySecretKeyCredentials) {
   try {
     s3fs.openFileForRead(s3File);
     FAIL() << "Expected VeloxException";
-  } catch (VeloxException const& err) {
+  } catch (VeloxException err) {
     EXPECT_EQ(
         err.message(),
         std::string(
