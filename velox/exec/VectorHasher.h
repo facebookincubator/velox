@@ -46,7 +46,8 @@ class UniqueValue {
   }
 
   explicit UniqueValue(Date value) {
-    // The number of valid bytes of Date stored in data_ is int64_t(value.days()).
+    // The number of valid bytes of Date stored in data_ is
+    // int64_t(value.days()).
     size_ = sizeof(int64_t);
     data_ = value.days();
   }
