@@ -26,13 +26,13 @@ class MergeJoinTest : public OperatorTestBase {
   static CursorParameters makeCursorParameters(
       const std::shared_ptr<const core::PlanNode>& planNode,
       uint32_t preferredOutputBatchSize) {
-    auto queryCtx = std::make_shared<core::QueryCtx>();
+    auto queryCtx = core::QueryCtx::createForTest();
     queryCtx->setConfigOverridesUnsafe(
         {{core::QueryConfig::kCreateEmptyFiles, "true"}});
 
     CursorParameters params;
     params.planNode = planNode;
-    params.queryCtx = std::make_shared<core::QueryCtx>();
+    params.queryCtx = core::QueryCtx::createForTest();
     params.queryCtx->setConfigOverridesUnsafe(
         {{core::QueryConfig::kPreferredOutputBatchSize,
           std::to_string(preferredOutputBatchSize)}});
@@ -116,17 +116,18 @@ class MergeJoinTest : public OperatorTestBase {
     createDuckDbTable("t", left);
     createDuckDbTable("u", right);
 
+    // Test INNER join.
     auto plan = PlanBuilder()
                     .values(left)
                     .mergeJoin(
-                        {0},
-                        {0},
+                        {"c0"},
+                        {"u_c0"},
                         PlanBuilder()
                             .values(right)
                             .project({"c0", "c1"}, {"u_c0", "u_c1"})
                             .planNode(),
                         "",
-                        {0, 1, 3},
+                        {"c0", "c1", "u_c1"},
                         core::JoinType::kInner)
                     .planNode();
 
@@ -144,6 +145,36 @@ class MergeJoinTest : public OperatorTestBase {
     assertQuery(
         makeCursorParameters(plan, 10'000),
         "SELECT t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0");
+
+    // Test LEFT join.
+    plan = PlanBuilder()
+               .values(left)
+               .mergeJoin(
+                   {"c0"},
+                   {"u_c0"},
+                   PlanBuilder()
+                       .values(right)
+                       .project({"c0", "c1"}, {"u_c0", "u_c1"})
+                       .planNode(),
+                   "",
+                   {"c0", "c1", "u_c1"},
+                   core::JoinType::kLeft)
+               .planNode();
+
+    // Use very small output batch size.
+    assertQuery(
+        makeCursorParameters(plan, 16),
+        "SELECT t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0");
+
+    // Use regular output batch size.
+    assertQuery(
+        makeCursorParameters(plan, 1024),
+        "SELECT t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0");
+
+    // Use very large output batch size.
+    assertQuery(
+        makeCursorParameters(plan, 10'000),
+        "SELECT t.c0, t.c1, u.c1 FROM t LEFT JOIN u ON t.c0 = u.c0");
   }
 };
 
@@ -189,11 +220,11 @@ TEST_F(MergeJoinTest, aggregationOverJoin) {
   auto plan = PlanBuilder()
                   .values({left})
                   .mergeJoin(
-                      {0},
-                      {0},
+                      {"t_c0"},
+                      {"u_c0"},
                       PlanBuilder().values({right}).planNode(),
                       "",
-                      {0, 1},
+                      {"t_c0", "u_c0"},
                       core::JoinType::kInner)
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
