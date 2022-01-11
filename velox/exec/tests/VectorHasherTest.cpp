@@ -429,7 +429,7 @@ TEST_F(VectorHasherTest, dateIds) {
   uint64_t numRange;
   uint64_t numDistinct;
   hasher->cardinality(numRange, numDistinct);
-  EXPECT_EQ(numDistinct, 101);
+  EXPECT_EQ(numDistinct, 100);
   EXPECT_GT(numRange, 1001);
 
   dates->set(10, 10000);
