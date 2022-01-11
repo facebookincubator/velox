@@ -58,7 +58,7 @@ class MinioServer {
         {"hive.s3.path-style-access", "true"},
     });
 
-    // Update the default config map with the supplied configUpdate map
+    // Update the default config map with the supplied configOverride map
     for (const auto itr : configOverride) {
       config[itr.first] = itr.second;
     }
