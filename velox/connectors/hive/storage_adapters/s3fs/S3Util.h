@@ -48,11 +48,11 @@ inline void bucketAndKeyFromS3Path(
   key = path.substr(firstSep + 1);
 }
 
-inline std::string s3URI(const char* bucket) {
+inline std::string s3URI(const std::string& bucket) {
   return std::string(kS3Scheme) + bucket;
 }
 
-inline std::string s3URI(const char* bucket, const char* key) {
+inline std::string s3URI(const std::string& bucket, const std::string& key) {
   return s3URI(bucket) + "/" + key;
 }
 
@@ -68,6 +68,7 @@ inline Aws::String awsString(const std::string& s) {
 std::string getErrorStringFromS3Error(
     const Aws::Client::AWSError<Aws::S3::S3Errors>& error);
 
+namespace {
 inline std::string getS3BackendService(
     const Aws::Http::HeaderValueCollection& headers) {
   const auto it = headers.find("server");
@@ -76,6 +77,7 @@ inline std::string getS3BackendService(
   }
   return "Unknown";
 }
+} // namespace
 
 #define VELOX_CHECK_AWS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                                          \
   {                                                                                                            \

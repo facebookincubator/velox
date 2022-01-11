@@ -36,10 +36,11 @@ std::string getErrorStringFromS3Error(
       return "Access denied";
     case Aws::S3::S3Errors::SERVICE_UNAVAILABLE:
       return "Service unavailable";
+    case Aws::S3::S3Errors::NETWORK_CONNECTION:
+      return "Network connection";
     default:
       return "Unknown error";
   }
-  return "Unknown error";
 }
 
 } // namespace facebook::velox
