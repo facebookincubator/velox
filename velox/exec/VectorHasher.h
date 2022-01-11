@@ -47,7 +47,7 @@ class UniqueValue {
 
   explicit UniqueValue(Date value) {
     // The number of valid bytes of Date stored in data_ is
-    // int64_t(value.days()).
+    // (int64_t)value.days().
     size_ = sizeof(int64_t);
     data_ = value.days();
   }
@@ -397,11 +397,12 @@ class VectorHasher {
 
     bool inRange = true;
     rows.template testSelected([&](vector_size_t row) {
-      if (toInt64(values[row]) > max_ || toInt64(values[row]) < min_) {
+      auto int64Value = toInt64(values[row]);
+      if (int64Value > max_ || int64Value < min_) {
         inRange = false;
         return false;
       }
-      auto hash = toInt64(values[row]) - min_ + 1;
+      auto hash = int64Value - min_ + 1;
       result[row] = multiplier_ == 1 ? hash : result[row] + multiplier_ * hash;
       return true;
     });
@@ -411,11 +412,12 @@ class VectorHasher {
 
   template <typename T>
   uint64_t valueId(T value) {
+    auto int64Value = toInt64(value);
     if (isRange_) {
-      if (toInt64(value) > max_ || toInt64(value) < min_) {
+      if (int64Value > max_ || int64Value < min_) {
         return kUnmappable;
       }
-      return toInt64(value) - min_ + 1;
+      return int64Value - min_ + 1;
     }
 
     UniqueValue unique(value);
@@ -424,7 +426,7 @@ class VectorHasher {
     if (!pair.second) {
       return pair.first->id();
     }
-    updateRange(toInt64(value));
+    updateRange(int64Value);
     if (uniqueValues_.size() >= rangeSize_) {
       return kUnmappable;
     }
@@ -433,11 +435,12 @@ class VectorHasher {
 
   template <typename T>
   uint64_t lookupValueId(T value) const {
+    auto int64Value = toInt64(value);
     if (isRange_) {
-      if (toInt64(value) > max_ || toInt64(value) < min_) {
+      if (int64Value > max_ || int64Value < min_) {
         return kUnmappable;
       }
-      return toInt64(value) - min_ + 1;
+      return int64Value - min_ + 1;
     }
     UniqueValue unique(value);
     auto iter = uniqueValues_.find(unique);
