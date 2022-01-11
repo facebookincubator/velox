@@ -47,10 +47,10 @@ class MinioServer {
     return tempPath_->path;
   }
 
-  typedef std::unordered_map<std::string, std::string> map_type;
   std::shared_ptr<const Config> hiveConfig(
-      const map_type configUpdate = map_type()) const {
-    map_type config({
+      const std::unordered_map<std::string, std::string> configOverride = {})
+      const {
+    std::unordered_map<std::string, std::string> config({
         {"hive.s3.aws-access-key", accessKey_},
         {"hive.s3.aws-secret-key", secretKey_},
         {"hive.s3.endpoint", connectionString_},
@@ -59,7 +59,7 @@ class MinioServer {
     });
 
     // Update the default config map with the supplied configUpdate map
-    for (const auto itr : configUpdate) {
+    for (const auto itr : configOverride) {
       config[itr.first] = itr.second;
     }
 
