@@ -304,9 +304,15 @@ class BaseVector {
   }
 
   // Sets the null indicator at 'idx'. 'true' means null.
-  virtual void setNull(vector_size_t idx, bool value) {
+  FOLLY_ALWAYS_INLINE virtual void setNull(vector_size_t idx, bool value) {
     VELOX_DCHECK(idx >= 0 && idx < length_);
-    ensureNulls();
+    if (!nulls_) {
+      if (!value) {
+        return;
+      }
+      allocateNulls();
+    }
+
     bits::setBit(
         nulls_->asMutable<uint64_t>(), idx, bits::kNull ? value : !value);
   }
@@ -337,7 +343,9 @@ class BaseVector {
 
   // Sets the size to 'size' and ensures there is space for the
   // indicated number of nulls and top level values.
-  virtual void resize(vector_size_t newSize);
+  // 'setNotNull' indicates if nulls in range [oldSize, newSize) should be set
+  // to not null.
+  virtual void resize(vector_size_t newSize, bool setNotNull = true);
 
   // Sets the rows of 'this' given by 'rows' to
   // 'source.valueAt(toSourceRow ? toSourceRow[row] : row)', where
@@ -466,6 +474,7 @@ class BaseVector {
   virtual BaseVector* loadedVector() {
     return this;
   }
+
   virtual const BaseVector* loadedVector() const {
     return this;
   }

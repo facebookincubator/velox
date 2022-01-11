@@ -22,13 +22,13 @@
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/http/HttpResponse.h>
 #include <aws/core/utils/logging/ConsoleLogSystem.h>
+#include <aws/identity-management/auth/STSAssumeRoleCredentialsProvider.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
@@ -135,21 +135,61 @@ class S3ReadFile final : public ReadFile {
 
 namespace filesystems {
 
-namespace S3Config {
-namespace {
-constexpr char const* kPathAccessStyle{"hive.s3.path-style-access"};
-constexpr char const* kEndpoint{"hive.s3.endpoint"};
-constexpr char const* kSecretKey{"hive.s3.aws-secret-key"};
-constexpr char const* kAccessKey{"hive.s3.aws-access-key"};
-constexpr char const* kSSLEnabled{"hive.s3.ssl.enabled"};
-constexpr char const* kUseInstanceCredentials{
-    "hive.s3.use-instance-credentials"};
-} // namespace
-} // namespace S3Config
+class S3Config {
+ public:
+  S3Config(const Config* config) : config_(config) {}
+
+  // Virtual addressing is used for AWS S3 and is the default (path-style-access
+  // is false). Path access style is used for some on-prem systems like Minio.
+  bool useVirtualAddressing() const {
+    return !config_->get("hive.s3.path-style-access", false);
+  }
+
+  bool useSSL() const {
+    return config_->get("hive.s3.ssl.enabled", true);
+  }
+
+  bool useInstanceCredentials() const {
+    return config_->get("hive.s3.use-instance-credentials", false);
+  }
+
+  std::string endpoint() const {
+    return config_->get("hive.s3.endpoint", std::string(""));
+  }
+
+  std::optional<std::string> accessKey() const {
+    if (config_->isValueExists("hive.s3.aws-access-key")) {
+      return config_->get("hive.s3.aws-access-key").value();
+    }
+    return {};
+  }
+
+  std::optional<std::string> secretKey() const {
+    if (config_->isValueExists("hive.s3.aws-secret-key")) {
+      return config_->get("hive.s3.aws-secret-key").value();
+    }
+    return {};
+  }
+
+  std::optional<std::string> iamRole() const {
+    if (config_->isValueExists("hive.s3.iam-role")) {
+      return config_->get("hive.s3.iam-role").value();
+    }
+    return {};
+  }
+
+  std::string iamRoleSessionName() const {
+    return config_->get(
+        "hive.s3.iam-role-session-name", std::string("velox-session"));
+  }
+
+ private:
+  const Config* config_;
+};
 
 class S3FileSystem::Impl {
  public:
-  Impl(const Config* config) : config_(config) {
+  Impl(const Config* config) : s3Config_(config) {
     const size_t origCount = initCounter_++;
     if (origCount == 0) {
       Aws::SDKOptions awsOptions;
@@ -167,59 +207,88 @@ class S3FileSystem::Impl {
     }
   }
 
-  // Configure default AWS credentials provider chain.
+  // Configure and return an AWSCredentialsProvider with access key and secret
+  // key.
   std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-  getDefaultCredentialProvider() const {
-    return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
-  }
-
-  // Configure with access and secret keys.
-  std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-  getAccessSecretCredentialProvider(
+  getAccessKeySecretKeyCredentialsProvider(
       const std::string& accessKey,
       const std::string& secretKey) const {
     return std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
-        awsString(accessKey), awsString(secretKey), awsString(""));
+        awsString(accessKey), awsString(secretKey));
+  }
+
+  // Return a default AWSCredentialsProvider.
+  std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
+  getDefaultCredentialsProvider() const {
+    return std::make_shared<Aws::Auth::DefaultAWSCredentialsProviderChain>();
+  }
+
+  // Configure and return an AWSCredentialsProvider with S3 IAM Role.
+  std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
+  getIAMRoleCredentialsProvider(
+      const std::string& s3IAMRole,
+      const std::string& sessionName) const {
+    return std::make_shared<Aws::Auth::STSAssumeRoleCredentialsProvider>(
+        awsString(s3IAMRole), awsString(sessionName));
+  }
+
+  // Return an AWSCredentialsProvider based on the config.
+  std::shared_ptr<Aws::Auth::AWSCredentialsProvider> getCredentialsProvider()
+      const {
+    auto accessKey = s3Config_.accessKey();
+    auto secretKey = s3Config_.secretKey();
+    const auto iamRole = s3Config_.iamRole();
+
+    int keyCount = accessKey.has_value() + secretKey.has_value();
+    // keyCount=0 means both are not specified
+    // keyCount=2 means both are specified
+    // keyCount=1 means only one of them is specified and is an error
+    VELOX_USER_CHECK(
+        (keyCount != 1),
+        "Invalid configuration: both access key and secret key must be specified");
+
+    int configCount = (accessKey.has_value() && secretKey.has_value()) +
+        iamRole.has_value() + s3Config_.useInstanceCredentials();
+    VELOX_USER_CHECK(
+        (configCount <= 1),
+        "Invalid configuration: specify only one among 'access/secret keys', 'use instance credentials', 'IAM role'");
+
+    if (accessKey.has_value() && secretKey.has_value()) {
+      return getAccessKeySecretKeyCredentialsProvider(
+          accessKey.value(), secretKey.value());
+    }
+
+    if (s3Config_.useInstanceCredentials()) {
+      return getDefaultCredentialsProvider();
+    }
+
+    if (iamRole.has_value()) {
+      return getIAMRoleCredentialsProvider(
+          iamRole.value(), s3Config_.iamRoleSessionName());
+    }
+
+    return getDefaultCredentialsProvider();
   }
 
   // Use the input Config parameters and initialize the S3Client.
   void initializeClient() {
     Aws::Client::ClientConfiguration clientConfig;
 
-    const std::string endpoint =
-        config_->get(S3Config::kEndpoint, std::string(""));
-    clientConfig.endpointOverride = endpoint;
+    clientConfig.endpointOverride = s3Config_.endpoint();
 
-    // Default is to use SSL.
-    const auto useSSL = config_->get(S3Config::kSSLEnabled, true);
-    if (useSSL) {
+    if (s3Config_.useSSL()) {
       clientConfig.scheme = Aws::Http::Scheme::HTTPS;
     } else {
       clientConfig.scheme = Aws::Http::Scheme::HTTP;
     }
 
-    // Virtual addressing is used for S3 on AWS and is the default.
-    // Path access style is used for some on-prem systems like Minio.
-    const bool useVirtualAddressing =
-        !config_->get(S3Config::kPathAccessStyle, false);
-
-    const auto accessKey = config_->get(S3Config::kAccessKey, std::string(""));
-    const auto secretKey = config_->get(S3Config::kSecretKey, std::string(""));
-    const auto useInstanceCred =
-        config_->get(S3Config::kUseInstanceCredentials, std::string(""));
-    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentialsProvider;
-    if (!accessKey.empty() && !secretKey.empty() && useInstanceCred != "true") {
-      credentialsProvider =
-          getAccessSecretCredentialProvider(accessKey, secretKey);
-    } else {
-      credentialsProvider = getDefaultCredentialProvider();
-    }
+    auto credentialsProvider = getCredentialsProvider();
 
     client_ = std::make_shared<Aws::S3::S3Client>(
         credentialsProvider,
         clientConfig,
         Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-        useVirtualAddressing);
+        s3Config_.useVirtualAddressing());
   }
 
   // Make it clear that the S3FileSystem instance owns the S3Client.
@@ -230,7 +299,7 @@ class S3FileSystem::Impl {
   }
 
  private:
-  const Config* config_;
+  const S3Config s3Config_;
   std::shared_ptr<Aws::S3::S3Client> client_;
   static std::atomic<size_t> initCounter_;
 };

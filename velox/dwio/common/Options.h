@@ -96,7 +96,8 @@ class RowReaderOptions {
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   velox::common::ScanSpec* scanSpec_ = nullptr;
-  std::unordered_set<uint32_t> flatmapNodeIdAsStruct_;
+  // Node id for map column to a list of keys to be projected as a struct.
+  std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
 
  public:
   RowReaderOptions(const RowReaderOptions& other) {
@@ -236,11 +237,19 @@ class RowReaderOptions {
   }
 
   void setFlatmapNodeIdsAsStruct(
-      std::unordered_set<uint32_t> flatmapNodeIdsAsStruct) {
+      std::unordered_map<uint32_t, std::vector<std::string>>
+          flatmapNodeIdsAsStruct) {
+    VELOX_CHECK(
+        std::all_of(
+            flatmapNodeIdsAsStruct.begin(),
+            flatmapNodeIdsAsStruct.end(),
+            [](const auto& kv) { return !kv.second.empty(); }),
+        "To use struct encoding for flatmap, keys to project must be specified");
     flatmapNodeIdAsStruct_ = std::move(flatmapNodeIdsAsStruct);
   }
 
-  const std::unordered_set<uint32_t>& getMapColumnIdAsStruct() const {
+  const std::unordered_map<uint32_t, std::vector<std::string>>&
+  getMapColumnIdAsStruct() const {
     return flatmapNodeIdAsStruct_;
   }
 };
@@ -301,12 +310,17 @@ class ReaderOptions {
   std::shared_ptr<const velox::RowType> fileSchema;
   uint64_t autoPreloadLength;
   PrefetchMode prefetchMode;
+  int32_t loadQuantum_{kDefaultLoadQuantum};
+  int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   SerDeOptions serDeOptions;
   std::shared_ptr<DataCacheConfig> dataCacheConfig_;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
   velox::dwrf::BufferedInputFactory* bufferedInputFactory_ = nullptr;
 
  public:
+  static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
+  static constexpr int32_t kDefaultCoalesceDistance = 512 << 10; // 512K
+
   ReaderOptions(
       velox::memory::MemoryPool* pool =
           &facebook::velox::memory::getProcessDefaultMemoryManager().getRoot())
@@ -408,6 +422,21 @@ class ReaderOptions {
   }
 
   /**
+   * Modify the load quantum.
+   */
+  ReaderOptions& setLoadQuantum(int32_t quantum) {
+    loadQuantum_ = quantum;
+    return *this;
+  }
+  /**
+   * Modify the maximum load coalesce distance.
+   */
+  ReaderOptions& setMaxCoalesceDistance(int32_t distance) {
+    maxCoalesceDistance_ = distance;
+    return *this;
+  }
+
+  /**
    * Modify the serialization-deserialization options.
    */
   ReaderOptions& setSerDeOptions(const SerDeOptions& sdo) {
@@ -469,6 +498,14 @@ class ReaderOptions {
 
   PrefetchMode getPrefetchMode() const {
     return prefetchMode;
+  }
+
+  int32_t loadQuantum() const {
+    return loadQuantum_;
+  }
+
+  int32_t maxCoalesceDistance() const {
+    return maxCoalesceDistance_;
   }
 
   SerDeOptions& getSerDeOptions() {
