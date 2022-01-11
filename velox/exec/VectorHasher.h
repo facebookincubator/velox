@@ -289,11 +289,6 @@ class VectorHasher {
     return value;
   }
 
-  template <>
-  inline int64_t toInt64(Date value) const {
-    return value.days();
-  }
-
   template <TypeKind Kind>
   bool makeValueIds(const SelectivityVector& rows, uint64_t* result);
 
@@ -515,6 +510,11 @@ class VectorHasher {
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
 };
+
+template <>
+inline int64_t VectorHasher::toInt64(Date value) const {
+    return value.days();
+}
 
 template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
