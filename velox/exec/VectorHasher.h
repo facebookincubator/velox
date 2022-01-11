@@ -513,7 +513,7 @@ class VectorHasher {
 
 template <>
 inline int64_t VectorHasher::toInt64(Date value) const {
-    return value.days();
+  return value.days();
 }
 
 template <>
