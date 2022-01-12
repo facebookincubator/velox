@@ -59,8 +59,8 @@ class MinioServer {
     });
 
     // Update the default config map with the supplied configOverride map
-    for (const auto itr : configOverride) {
-      config[itr.first] = itr.second;
+    for (const auto& [configName, configValue] : configOverride) {
+      config[configName] = configValue;
     }
 
     return std::make_shared<const core::MemConfig>(std::move(config));
