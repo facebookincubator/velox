@@ -115,8 +115,17 @@ std::shared_ptr<Task> assertQuery(
 velox::variant readSingleValue(
     const std::shared_ptr<const core::PlanNode>& plan);
 
+velox::variant readSingleValue(
+    const std::shared_ptr<const core::PlanNode>& plan,
+    std::function<void(exec::Task*)> addSplits);
+
+velox::variant readSingleValue(
+    const CursorParameters& params,
+    std::function<void(exec::Task*)> addSplits);
+
 void assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
 
+std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
 } // namespace facebook::velox::exec::test
