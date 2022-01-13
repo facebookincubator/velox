@@ -124,10 +124,12 @@ aggregate functions need to process all input before producing the results.</p>
 <section id="push-down-into-table-scan">
 <h2>Push-Down into Table Scan<a class="headerlink" href="#push-down-into-table-scan" title="Permalink to this headline">¶</a></h2>
 <p>HashAggregation operator supports pushing down aggregations into table scan.
-Pushdown is enabled when all of the following conditions are met:
-* the aggregation function takes a single argument,
-* the argument is a column read directly from the table without any transformations,
-* that column is not used anywhere else in the query.</p>
+Pushdown is enabled when all of the following conditions are met:</p>
+<ul class="simple">
+<li><p>the aggregation function takes a single argument,</p></li>
+<li><p>the argument is a column read directly from the table without any transformations,</p></li>
+<li><p>that column is not used anywhere else in the query.</p></li>
+</ul>
 <p>For example, pushdown is possible in the following query:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
 </pre></div>
