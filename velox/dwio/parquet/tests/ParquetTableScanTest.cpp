@@ -36,6 +36,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     parquet::registerParquetReaderFactory();
   }
 
+  void TearDown() override {
+    parquet::unregisterParquetReaderFactory();
+    HiveConnectorTestBase::TearDown();
+  }
+
   std::string getExampleFilePath(const std::string& fileName) {
     return facebook::velox::test::getDataFilePath(
         "velox/dwio/parquet/tests", "examples/" + fileName);
@@ -85,4 +90,59 @@ TEST_F(ParquetTableScanTest, basic) {
              .planNode();
 
   assertQuery(plan, {split}, "SELECT min(a), max(b) FROM tmp");
+}
+
+TEST_F(ParquetTableScanTest, tpchQ6) {
+  auto fileNames = {
+      "lineitem1.par", "lineitem2.par", "lineitem3.par", "lineitem4.par"};
+  std::vector<std::string> filePaths;
+  for (const auto& fileName : fileNames) {
+    filePaths.push_back(facebook::velox::test::getDataFilePath(
+        "velox/dwio/parquet/tests", fmt::format("tpch_tiny/{}", fileName)));
+  }
+
+  // TODO: Make sure to specify columns in the same order they appear in the
+  // files. Specifying columns out-of-order breaks filter pushdown and generates
+  // an error: INTERNAL Error: Invalid PhysicalType for GetTypeIdSize
+  auto rowType =
+      ROW({"quantity", "extendedprice", "discount", "shipdate"},
+          {DOUBLE(), DOUBLE(), DOUBLE(), VARCHAR()});
+  auto filters =
+      common::test::SubfieldFiltersBuilder()
+          .add("shipdate", common::test::between("1994-01-01", "1994-12-31"))
+          .add("discount", common::test::betweenDouble(0.05, 0.07))
+          .add("quantity", common::test::lessThanDouble(24.0))
+          .build();
+
+  auto plan = PlanBuilder(10)
+                  .localPartition(
+                      {},
+                      {PlanBuilder()
+                           .tableScan(
+                               rowType,
+                               makeTableHandle(std::move(filters)),
+                               allRegularColumns(rowType))
+                           .project({"extendedprice * discount"})
+                           .partialAggregation({}, {"sum(p0)"})
+                           .planNode()})
+                  .finalAggregation({}, {"sum(a0)"}, {DOUBLE()})
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  params.maxDrivers = 4;
+  params.numResultDrivers = 1;
+
+  bool noMoreSplits = false;
+  auto result = readSingleValue(params, [&](auto* task) {
+    if (!noMoreSplits) {
+      for (const auto& filePath : filePaths) {
+        task->addSplit("0", exec::Split(makeSplit(filePath)));
+      }
+      task->noMoreSplits("0");
+      noMoreSplits = true;
+    }
+  });
+
+  ASSERT_NEAR(1'193'053.2253, result.value<double>(), 0.0001);
 }

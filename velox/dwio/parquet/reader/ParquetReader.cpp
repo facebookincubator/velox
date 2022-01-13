@@ -67,7 +67,54 @@ void toDuckDbFilter(
                   makeValue(type, rangeFilter->upper())));
         }
       }
-    } break;
+      break;
+    }
+
+    case common::FilterKind::kDoubleRange: {
+      auto rangeFilter = static_cast<common::DoubleRange*>(filter);
+      if (!rangeFilter->lowerUnbounded()) {
+        auto expressionType = rangeFilter->lowerExclusive()
+            ? ::duckdb::ExpressionType::COMPARE_GREATERTHAN
+            : ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                expressionType, ::duckdb::Value(rangeFilter->lower())));
+      }
+      if (!rangeFilter->upperUnbounded()) {
+        auto expressionType = rangeFilter->upperExclusive()
+            ? ::duckdb::ExpressionType::COMPARE_LESSTHAN
+            : ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                expressionType, ::duckdb::Value(rangeFilter->upper())));
+      }
+      break;
+    }
+
+    case common::FilterKind::kBytesRange: {
+      auto rangeFilter = static_cast<common::BytesRange*>(filter);
+      if (!rangeFilter->lowerUnbounded()) {
+        auto expressionType = rangeFilter->lowerExclusive()
+            ? ::duckdb::ExpressionType::COMPARE_GREATERTHAN
+            : ::duckdb::ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                expressionType, ::duckdb::Value(rangeFilter->lower())));
+      }
+      if (!rangeFilter->upperUnbounded()) {
+        auto expressionType = rangeFilter->upperExclusive()
+            ? ::duckdb::ExpressionType::COMPARE_LESSTHAN
+            : ::duckdb::ExpressionType::COMPARE_LESSTHANOREQUALTO;
+        filters.PushFilter(
+            colIdx,
+            std::make_unique<::duckdb::ConstantFilter>(
+                expressionType, ::duckdb::Value(rangeFilter->upper())));
+      }
+      break;
+    }
 
     case common::FilterKind::kAlwaysFalse:
     case common::FilterKind::kAlwaysTrue:
@@ -76,9 +123,7 @@ void toDuckDbFilter(
     case common::FilterKind::kBoolValue:
     case common::FilterKind::kBigintValuesUsingHashTable:
     case common::FilterKind::kBigintValuesUsingBitmask:
-    case common::FilterKind::kDoubleRange:
     case common::FilterKind::kFloatRange:
-    case common::FilterKind::kBytesRange:
     case common::FilterKind::kBytesValues:
     case common::FilterKind::kBigintMultiRange:
     case common::FilterKind::kMultiRange:

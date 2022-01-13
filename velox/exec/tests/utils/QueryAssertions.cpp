@@ -640,14 +640,26 @@ std::shared_ptr<Task> assertQuery(
 }
 
 velox::variant readSingleValue(
-    const std::shared_ptr<const core::PlanNode>& plan) {
+    const std::shared_ptr<const core::PlanNode>& plan,
+    std::function<void(exec::Task*)> addSplits) {
   CursorParameters params;
   params.planNode = plan;
-  auto result = readCursor(params, [](Task*) {});
+  return readSingleValue(params, addSplits);
+}
+
+velox::variant readSingleValue(
+    const CursorParameters& params,
+    std::function<void(exec::Task*)> addSplits) {
+  auto result = readCursor(params, addSplits);
 
   EXPECT_EQ(1, result.second.size());
   EXPECT_EQ(1, result.second[0]->size());
   return materialize(result.second[0])[0][0];
+}
+
+velox::variant readSingleValue(
+    const std::shared_ptr<const core::PlanNode>& plan) {
+  return readSingleValue(plan, [](Task*) {});
 }
 
 void assertEqualResults(
