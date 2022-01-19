@@ -31,6 +31,7 @@ add_executable(
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArrayPositionTest.cpp
+  ArrayUnionTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp

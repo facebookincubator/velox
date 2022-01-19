@@ -23,6 +23,7 @@ add_library(
   ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   ArrayPosition.cpp
+  ArrayUnion.cpp
   Cardinality.cpp
   Coalesce.cpp
   ElementAt.cpp
