@@ -92,24 +92,18 @@ TEST_F(ParquetTableScanTest, basic) {
   assertQuery(plan, {split}, "SELECT min(a), max(b) FROM tmp");
 }
 
-TEST_F(ParquetTableScanTest, emptyProjection) {
-  auto data = makeRowVector(
-      {"a", "b"},
-      {
-          makeFlatVector<int64_t>(20, [](auto row) { return row + 1; }),
-          makeFlatVector<double>(20, [](auto row) { return row + 1; }),
-      });
-  createDuckDbTable({data});
-
+TEST_F(ParquetTableScanTest, countStar) {
+  // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
+  // 20 rows
   auto filePath = getExampleFilePath("sample.parquet");
   auto split = makeSplit(filePath);
 
-  // Projection does not have any columns
+  // Output type does not have any columns
   auto rowType = ROW({}, {});
   auto plan = PlanBuilder()
                   .tableScan(rowType)
                   .singleAggregation({}, {"count(0)"})
                   .planNode();
 
-  assertQuery(plan, {split}, "SELECT count(*) FROM tmp");
+  assertQuery(plan, {split}, "SELECT 20");
 }
