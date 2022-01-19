@@ -208,7 +208,7 @@ void PrestoHasher::hash<TypeKind::MAP>(
       auto offset = rawOffsets[indices[row]];
 
       for (int i = 0; i < size; i++) {
-        hash = rawKeyHashes[offset + i] ^ rawValueHashes[offset + i];
+        hash += rawKeyHashes[offset + i] ^ rawValueHashes[offset + i];
       }
     }
     rawHashes[row] = hash;

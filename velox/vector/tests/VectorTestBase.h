@@ -451,6 +451,52 @@ class VectorTestBase {
     return velox::test::VectorMaker::flatten(vector);
   }
 
+  template <typename T>
+  VectorPtr createMapOfArraysVector(
+      std::map<std::optional<T>, std::optional<std::vector<std::optional<T>>>>
+          map) {
+    std::vector<std::optional<T>> keys;
+    std::vector<std::optional<std::vector<std::optional<T>>>> values;
+    for (const auto& [key, value] : map) {
+      keys.push_back(key);
+      values.push_back(value);
+    }
+
+    auto mapValues = makeVectorWithNullArrays(values);
+
+    auto mapKeys = makeNullableFlatVector<T>(keys);
+    auto size = mapKeys->size();
+    auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
+    auto sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
+
+    auto rawOffsets = offsets->template asMutable<vector_size_t>();
+    auto rawSizes = sizes->template asMutable<vector_size_t>();
+
+    // Create a vector of maps with 1 key , 1 value
+    vector_size_t offset = 0;
+    for (vector_size_t i = 0; i < size; i++) {
+      rawSizes[i] = 1;
+      rawOffsets[i] = offset;
+      offset += 1;
+    }
+
+    return std::make_shared<MapVector>(
+        pool_.get(),
+        MAP(BIGINT(), ARRAY(BIGINT())),
+        nullptr,
+        size,
+        offsets,
+        sizes,
+        mapKeys,
+        mapValues);
+  }
+
+  template <typename T>
+  static std::optional<std::vector<std::optional<T>>> Op(
+      std::vector<std::optional<T>> data) {
+    return std::make_optional(data);
+  }
+
   memory::MemoryPool* pool() const {
     return pool_.get();
   }
