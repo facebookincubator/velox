@@ -36,6 +36,11 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
     parquet::registerParquetReaderFactory();
   }
 
+  void TearDown() override {
+    parquet::unregisterParquetReaderFactory();
+    HiveConnectorTestBase::TearDown();
+  }
+
   std::string getExampleFilePath(const std::string& fileName) {
     return facebook::velox::test::getDataFilePath(
         "velox/dwio/parquet/tests", "examples/" + fileName);
