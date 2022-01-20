@@ -21,6 +21,7 @@ add_library(
   DateTimeFunctionsRegistration.cpp
   GeneralFunctionsRegistration.cpp
   HyperLogFunctionsRegistration.cpp
+  IPFunctionsRegistration.cpp
   JsonFunctionsRegistration.cpp
   MapFunctionsRegistration.cpp
   StringFunctionsRegistration.cpp
