@@ -55,8 +55,9 @@ void applyTypedFirstMatch(
             break;
           }
         }
-        if (i == size)
+        if (i == size) {
           flatResult.set(row, 0);
+        }
       });
     } else {
       auto rawElements = elementsDecoded.values<T>();
@@ -74,11 +75,14 @@ void applyTypedFirstMatch(
             break;
           }
         }
-        if (i == size)
+        if (i == size) {
           flatResult.set(row, 0);
+        }
       });
     }
   } else {
+    // Regular path where no assumption is made about the encodings of
+    // searchDecoded and elementsDecoded.
     rows.applyToSelected([&](auto row) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
@@ -224,6 +228,8 @@ void applyTypedWithInstance(
       });
     }
   } else {
+    // Regular path where no assumption is made about the encodings of
+    // searchDecoded and elementsDecoded.
     rows.applyToSelected([&](auto row) {
       auto size = rawSizes[indices[row]];
       auto offset = rawOffsets[indices[row]];
