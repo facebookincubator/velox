@@ -17,6 +17,7 @@
 #pragma once
 #include <iterator>
 #include <optional>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
 #include "velox/vector/TypeAliases.h"
@@ -24,7 +25,6 @@
 namespace facebook::velox::exec {
 template <typename T>
 struct VectorReader;
-
 // Pointer wrapper used to convert r-values to valid return type for operator->.
 template <typename T>
 class PointerWrapper {
@@ -45,17 +45,18 @@ class PointerWrapper {
 
 // Base class for ArrayView::Iterator and MapView::Iterator. The missing parts
 // to be implemented by deriving classes are: operator*() and operator->().
-template <typename T>
+template <typename T, typename TIndex>
 class IndexBasedIterator {
  public:
-  using Iterator = IndexBasedIterator<T>;
+  using Iterator = IndexBasedIterator<T, TIndex>;
   using iterator_category = std::input_iterator_tag;
   using value_type = T;
   using difference_type = int;
   using pointer = PointerWrapper<value_type>;
   using reference = T;
 
-  explicit IndexBasedIterator<value_type>(int64_t index) : index_(index) {}
+  explicit IndexBasedIterator<value_type, TIndex>(int64_t index)
+      : index_(index) {}
 
   bool operator!=(const Iterator& rhs) const {
     return index_ != rhs.index_;
@@ -95,7 +96,7 @@ class IndexBasedIterator {
   }
 
  protected:
-  int64_t index_;
+  TIndex index_;
 };
 
 // Implements an iterator for values that skips nulls and provides direct access
@@ -254,9 +255,10 @@ class VectorOptionalValueAccessor {
     return PointerWrapper(value());
   }
 
- private:
   VectorOptionalValueAccessor<T>(const T* reader, int64_t index)
       : reader_(reader), index_(index) {}
+
+ private:
   const T* reader_;
   // Index of element within the reader.
   int64_t index_;
@@ -387,10 +389,10 @@ class ArrayView {
 
   using Element = VectorOptionalValueAccessor<reader_t>;
 
-  class Iterator : public IndexBasedIterator<Element> {
+  class Iterator : public IndexBasedIterator<Element, vector_size_t> {
    public:
     Iterator(const reader_t* reader, vector_size_t index)
-        : IndexBasedIterator<Element>(index), reader_(reader) {}
+        : IndexBasedIterator<Element, vector_size_t>(index), reader_(reader) {}
 
     PointerWrapper<Element> operator->() const {
       return PointerWrapper(Element{reader_, this->index_});
@@ -525,13 +527,13 @@ class MapView {
     }
   };
 
-  class Iterator : public IndexBasedIterator<Element> {
+  class Iterator : public IndexBasedIterator<Element, vector_size_t> {
    public:
     Iterator(
         const key_reader_t* keyReader,
         const value_reader_t* valueReader,
         vector_size_t index)
-        : IndexBasedIterator<Element>(index),
+        : IndexBasedIterator<Element, vector_size_t>(index),
           keyReader_(keyReader),
           valueReader_(valueReader) {}
 
