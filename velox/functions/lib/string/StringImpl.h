@@ -162,6 +162,107 @@ FOLLY_ALWAYS_INLINE int32_t charToCodePoint(const T& inputString) {
   return codePoint;
 }
 
+template <bool isAscii, typename TInString>
+FOLLY_ALWAYS_INLINE int64_t
+hammingDistance(const TInString& left, const TInString& right) {
+  int64_t distance = 0;
+  int64_t leftPosition = 0;
+  int64_t rightPosition = 0;
+  std::string_view leftSV = std::string_view(left.data(), left.size());
+  std::string_view rightSV = std::string_view(right.data(), right.size());
+
+  while (leftPosition < leftSV.size() && rightPosition < rightSV.size()) {
+    int leftSize, rightSize;
+    auto codePointLeft = isAscii
+        ? leftSV.at(leftPosition)
+        : utf8proc_codepoint(&leftSV.at(leftPosition), leftSize);
+    auto codePointRight = isAscii
+        ? rightSV.at(rightPosition)
+        : utf8proc_codepoint(&rightSV.at(rightPosition), rightSize);
+
+    // if both code points are invalid, the behavior is undefined
+    // the following code skips one byte and continues
+    leftPosition += codePointLeft > 0 ? leftSize : -codePointLeft;
+    rightPosition += codePointRight > 0 ? rightSize : -codePointRight;
+
+    if (codePointLeft != codePointRight) {
+      distance++;
+    }
+  }
+
+  VELOX_USER_CHECK(
+      leftPosition == leftSV.size() && rightPosition == rightSV.size(),
+      "The input strings to hamming_distance function must have the same length");
+
+  return distance;
+}
+
+template <bool isAscii>
+FOLLY_ALWAYS_INLINE void castToCodePoints(
+    std::string_view str,
+    std::vector<int32_t>& codePoints) {
+  for (int index = 0; index < str.size();) {
+    int size = 1;
+    auto codePoint =
+        isAscii ? str.at(index) : utf8proc_codepoint(&str.at(index), size);
+    VELOX_USER_CHECK_GE(
+        codePoint, 0, "Invalid UTF-8 encoding in characters: {}", str.data());
+    index += size;
+    codePoints.push_back(codePoint);
+  }
+}
+
+template <bool isAscii, typename TInString>
+FOLLY_ALWAYS_INLINE int64_t
+levenshteinDistance(const TInString& left, const TInString& right) {
+  std::vector<int32_t> leftCodePoints;
+  std::vector<int32_t> rightCodePoints;
+  castToCodePoints<isAscii>(
+      std::string_view(left.data(), left.size()), leftCodePoints);
+  castToCodePoints<isAscii>(
+      std::string_view(right.data(), right.size()), rightCodePoints);
+
+  if (leftCodePoints.size() < rightCodePoints.size()) {
+    std::swap(leftCodePoints, rightCodePoints);
+  }
+
+  if (rightCodePoints.empty()) {
+    return leftCodePoints.size();
+  }
+
+  VELOX_USER_CHECK_LE(
+      (leftCodePoints.size() * (rightCodePoints.size() - 1)),
+      1000000,
+      "The combined inputs for Levenshtein distance are too large");
+
+  int distances[rightCodePoints.size()];
+  for (int i = 0; i < rightCodePoints.size(); i++) {
+    distances[i] = i + 1;
+  }
+
+  for (int i = 0; i < leftCodePoints.size(); i++) {
+    int leftUpDistance = distances[0];
+    if (leftCodePoints[i] == rightCodePoints[0]) {
+      distances[0] = i;
+    } else {
+      distances[0] = std::min(i, distances[0]) + 1;
+    }
+    for (int j = 1; j < rightCodePoints.size(); j++) {
+      int leftUpDistanceNext = distances[j];
+      if (leftCodePoints[i] == rightCodePoints[j]) {
+        distances[j] = leftUpDistance;
+      } else {
+        distances[j] =
+            std::min(distances[j - 1], std::min(leftUpDistance, distances[j])) +
+            1;
+      }
+      leftUpDistance = leftUpDistanceNext;
+    }
+  }
+
+  return distances[rightCodePoints.size() - 1];
+}
+
 /// Returns the starting position in characters of the Nth instance of the
 /// substring in string. Positions start with 1. If not found, 0 is returned. If
 /// subString is empty result is 1.

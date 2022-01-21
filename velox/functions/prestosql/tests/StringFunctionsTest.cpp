@@ -1835,3 +1835,105 @@ TEST_F(StringFunctionsTest, lpad) {
   EXPECT_EQ("x" + invalidString, lpad(invalidString, 8, "x"));
   EXPECT_EQ(invalidPadString + "abc", lpad("abc", 6, invalidPadString));
 }
+
+TEST_F(StringFunctionsTest, hammingDistance) {
+  const auto hammingDistance = [&](std::optional<std::string> left,
+                                   std::optional<std::string> right) {
+    return evaluateOnce<int64_t>("hamming_distance(c0, c1)", left, right);
+  };
+
+  EXPECT_EQ(hammingDistance("", ""), 0);
+  EXPECT_EQ(hammingDistance("hello", "hello"), 0);
+  EXPECT_EQ(hammingDistance("hello", "jello"), 1);
+  EXPECT_EQ(hammingDistance("like", "hate"), 3);
+  EXPECT_EQ(hammingDistance("hello", "world"), 4);
+  EXPECT_EQ(hammingDistance(std::nullopt, std::nullopt), std::nullopt);
+  EXPECT_EQ(hammingDistance("hello", std::nullopt), std::nullopt);
+  EXPECT_EQ(hammingDistance(std::nullopt, "world"), std::nullopt);
+
+  // Tests for unicode
+  EXPECT_EQ(hammingDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      hammingDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0001"), 0);
+  EXPECT_EQ(hammingDistance("\u0001", "\u0002"), 1);
+
+  // Tests for invalid arguments
+  EXPECT_THROW(hammingDistance("\u0000", "\u0001"), VeloxUserError);
+  EXPECT_THROW(hammingDistance("hello", ""), VeloxUserError);
+  EXPECT_THROW(hammingDistance("", "hello"), VeloxUserError);
+  EXPECT_THROW(hammingDistance("hello", "o"), VeloxUserError);
+  EXPECT_THROW(hammingDistance("h", "hello"), VeloxUserError);
+  EXPECT_THROW(
+      hammingDistance("hello na\u00EFve world", "hello na:ive world"),
+      VeloxUserError);
+  EXPECT_THROW(
+      hammingDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      VeloxUserError);
+};
+
+TEST_F(StringFunctionsTest, levenshteinDistance) {
+  const auto levenshteinDistance = [&](std::optional<std::string> left,
+                                       std::optional<std::string> right) {
+    return evaluateOnce<int64_t>("levenshtein_distance(c0, c1)", left, right);
+  };
+
+  EXPECT_EQ(levenshteinDistance("", ""), 0);
+  EXPECT_EQ(levenshteinDistance("", "hello"), 5);
+  EXPECT_EQ(levenshteinDistance("hello", ""), 5);
+  EXPECT_EQ(levenshteinDistance("hello", "hello"), 0);
+  EXPECT_EQ(levenshteinDistance("hello", "hello world"), 6);
+  EXPECT_EQ(levenshteinDistance("hello world", "hel wold"), 3);
+  EXPECT_EQ(levenshteinDistance("hello world", "hellq wodld"), 2);
+  EXPECT_EQ(levenshteinDistance("helo word", "hello world"), 2);
+  EXPECT_EQ(levenshteinDistance("hello word", "dello world"), 2);
+
+  // Test for non-ASCII
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello naive world"), 1);
+  EXPECT_EQ(
+      levenshteinDistance("hello na\u00EFve world", "hello na:ive world"), 2);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u4EF0,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4F11\u5FF5,\u7231,\u5E0C\u671B",
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B"),
+      1);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5\u5E0C\u671B"),
+      3);
+  EXPECT_EQ(
+      levenshteinDistance(
+          "\u4FE1\u5FF5,\u7231,\u5E0C\u671B", "\u4FE1\u5FF5,love,\u5E0C\u671B"),
+      4);
+
+  // Test for invalid utf-8 characters
+  EXPECT_THROW(
+      levenshteinDistance("hello world", generateInvalidUtf8()),
+      VeloxUserError);
+
+  // Test for maximum length
+  EXPECT_EQ(levenshteinDistance("hello", std::string(100000, 'e')), 99999);
+  EXPECT_EQ(levenshteinDistance(std::string(100000, 'l'), "hello"), 99998);
+  EXPECT_THROW(
+      levenshteinDistance(std::string(1001, 'x'), std::string(1001, 'x')),
+      VeloxUserError);
+  EXPECT_THROW(
+      levenshteinDistance("hello", std::string(500000, 'x')), VeloxUserError);
+  EXPECT_THROW(
+      levenshteinDistance(std::string(500000, 'x'), "hello"), VeloxUserError);
+};

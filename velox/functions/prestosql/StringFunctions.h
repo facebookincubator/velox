@@ -286,6 +286,44 @@ struct LengthFunction {
   }
 };
 
+/// hamming_distance(string, string) -> bigint
+///    Computes the hamming distance between two strings.
+template <typename T>
+struct HammingDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::hammingDistance<false /*isAscii*/>(left, right);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool
+  callAscii(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::hammingDistance<true /*isAscii*/>(left, right);
+    return true;
+  }
+};
+
+/// levenshtein_distance(string, string) -> bigint
+///    Computes the levenshtein distance between two strings.
+template <typename T>
+struct LevenshteinDistanceFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool
+  call(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::levenshteinDistance<false /*isAscii*/>(left, right);
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool
+  callAscii(int64_t& result, const StringView& left, const StringView& right) {
+    result = stringImpl::levenshteinDistance<true /*isAscii*/>(left, right);
+    return true;
+  }
+};
+
 /// Pad functions
 /// lpad(string, size, padString) → varchar
 ///     Left pads string to size characters with padString.  If size is

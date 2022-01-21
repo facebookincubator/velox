@@ -53,6 +53,11 @@ void registerSimpleFunctions() {
   registerFunction<udf_pad<false>, Varchar, Varchar, int64_t, Varchar>(
       {"rpad"});
 
+  registerFunction<HammingDistanceFunction, int64_t, Varchar, Varchar>(
+      {"hamming_distance"});
+  registerFunction<LevenshteinDistanceFunction, int64_t, Varchar, Varchar>(
+      {"levenshtein_distance"});
+
   // Register hash functions.
   registerFunction<XxHash64Function, Varbinary, Varbinary>({"xxhash64"});
   registerFunction<Md5Function, Varbinary, Varbinary>({"md5"});
