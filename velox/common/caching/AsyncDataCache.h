@@ -230,6 +230,8 @@ class AsyncDataCacheEntry {
     groupId_ = groupId;
   }
 
+  std::string toString() const;
+
  private:
   void release();
   void addReference();
