@@ -206,6 +206,17 @@ void RowVector::copy(
   }
 }
 
+void RowVector::resize(vector_size_t size, bool setNotNull) {
+  // setNotNull flag applies to top-level vector only. Do not pass it when
+  // resizing child vectors.
+  for (auto& child : children_) {
+    if (child) {
+      child->resize(size);
+    }
+  }
+  BaseVector::resize(size, setNotNull);
+}
+
 void RowVector::move(vector_size_t source, vector_size_t target) {
   VELOX_CHECK_LT(source, size());
   VELOX_CHECK_LT(target, size());

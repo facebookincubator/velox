@@ -120,6 +120,11 @@ class RowVector : public BaseVector {
     return children_;
   }
 
+  /// Recursively resizes this vector and all its children. setNotNull flag
+  /// applies only to resizing the top-level, e.g. this vector, and doesn't
+  /// apply when resizing child vectors.
+  void resize(vector_size_t size, bool setNotNull = true) override;
+
   void copy(
       const BaseVector* source,
       vector_size_t targetIndex,

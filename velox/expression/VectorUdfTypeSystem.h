@@ -571,7 +571,7 @@ struct VectorWriter<Row<T...>> {
   void ensureSize(size_t size) {
     if (size > vector_->size()) {
       vector_->resize(size, /*setNotNull*/ false);
-      resizeVectorWritersInternal<0>(vector_->size());
+      initVectorWritersInternal<0, T...>();
     }
   }
 

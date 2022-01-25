@@ -880,6 +880,33 @@ TEST_F(VectorTest, row) {
   testMove(baseRow, 5, 23);
 }
 
+// Test recursive resize of a RowVector.
+TEST_F(VectorTest, recursiveRowResize) {
+  auto row = BaseVector::create(
+      ROW({"a", "b"}, {BIGINT(), ROW({"c", "d"}, {DOUBLE(), VARCHAR()})}),
+      10,
+      pool_.get());
+  auto nestedRow = row->as<RowVector>()->childAt(1)->as<RowVector>();
+
+  // Newly created RowVector has the specified size, but all its children have
+  // size 0.
+  ASSERT_EQ(10, row->size());
+  ASSERT_EQ(0, row->as<RowVector>()->childAt(0)->size());
+
+  ASSERT_EQ(0, nestedRow->size());
+  ASSERT_EQ(0, nestedRow->childAt(0)->size());
+  ASSERT_EQ(0, nestedRow->childAt(1)->size());
+
+  row->resize(25);
+
+  ASSERT_EQ(25, row->size());
+  ASSERT_EQ(25, row->as<RowVector>()->childAt(0)->size());
+
+  ASSERT_EQ(25, nestedRow->size());
+  ASSERT_EQ(25, nestedRow->childAt(0)->size());
+  ASSERT_EQ(25, nestedRow->childAt(1)->size());
+}
+
 TEST_F(VectorTest, array) {
   auto baseArray = createArray(vectorSize_, false);
   testCopy(baseArray, numIterations_);
