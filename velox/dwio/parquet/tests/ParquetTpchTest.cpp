@@ -104,30 +104,31 @@ TEST_F(ParquetTpchTest, tpchQ1) {
   const int sourcePlanNodeId = 10;
   static const core::SortOrder kAscNullsLast(true, false);
 
-  const auto stage1 = PlanBuilder(sourcePlanNodeId)
-                          .tableScan(
-                              rowType,
-                              makeTableHandle(std::move(filters)),
-                              allRegularColumns(rowType))
-                          .project(
-                              {"returnflag",
-                               "linestatus",
-                               "quantity",
-                               "extendedprice",
-                               "extendedprice * (1.0 - discount)",
-                               "extendedprice * (1.0 - discount) * (1.0 + tax)",
-                               "discount"})
-                          .partialAggregation(
-                              {0, 1},
-                              {"sum(quantity)",
-                               "sum(extendedprice)",
-                               "sum(p4)",
-                               "sum(p5)",
-                               "avg(quantity)",
-                               "avg(extendedprice)",
-                               "avg(discount)",
-                               "count(0)"})
-                          .planNode();
+  const auto stage1 =
+      PlanBuilder(sourcePlanNodeId)
+          .tableScan(
+              rowType,
+              makeTableHandle(std::move(filters)),
+              allRegularColumns(rowType))
+          .project(
+              {"returnflag",
+               "linestatus",
+               "quantity",
+               "extendedprice",
+               "extendedprice * (1.0 - discount) AS sum_disc_price",
+               "extendedprice * (1.0 - discount) * (1.0 + tax) AS sum_charge",
+               "discount"})
+          .partialAggregation(
+              {0, 1},
+              {"sum(quantity)",
+               "sum(extendedprice)",
+               "sum(sum_disc_price)",
+               "sum(sum_charge)",
+               "avg(quantity)",
+               "avg(extendedprice)",
+               "avg(discount)",
+               "count(0)"})
+          .planNode();
 
   auto plan = PlanBuilder(1)
                   .localPartition({}, {stage1})
