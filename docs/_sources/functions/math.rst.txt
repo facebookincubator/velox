@@ -73,6 +73,10 @@ Mathematical Functions
 
     Returns the additive inverse of x, e.g. the number that, when added to x, yields zero.
 
+.. function:: pi() -> double
+
+    Returns the value of Pi.
+
 .. function:: plus(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
@@ -109,6 +113,10 @@ Mathematical Functions
 .. function:: sqrt(x) -> double
 
     Returns the square root of ``x`` . If ``x`` is negative, ``NaN`` is returned.
+
+.. function:: to_base(x, radix) -> varchar
+
+    Returns the base-``radix`` representation of ``x``. ``radix`` must be between 2 and 36.
 
 .. function:: width_bucket(x, bound1, bound2, n) -> bigint
 

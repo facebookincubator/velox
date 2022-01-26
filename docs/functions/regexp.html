@@ -93,6 +93,29 @@ the entire string by anchoring the pattern using <code class="docutils literal n
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="regexp_replace">
+<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#regexp_replace" title="Permalink to this definition">¶</a></dt>
+<dd><p>Removes every instance of the substring matched by the regular expression
+<code class="docutils literal notranslate"><span class="pre">pattern</span></code> from <code class="docutils literal notranslate"><span class="pre">string</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;\d+[ab] &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;14m&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id1">
+<span class="sig-name descname"><span class="pre">regexp_replace</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">replacement</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#id1" title="Permalink to this definition">¶</a></dt>
+<dd><p>Replaces every instance of the substring matched by the regular expression
+<code class="docutils literal notranslate"><span class="pre">pattern</span></code> in <code class="docutils literal notranslate"><span class="pre">string</span></code> with <code class="docutils literal notranslate"><span class="pre">replacement</span></code>. Capturing groups can be referenced in
+<code class="docutils literal notranslate"><span class="pre">replacement</span></code> using <code class="docutils literal notranslate"><span class="pre">$g</span></code> for a numbered group or <code class="docutils literal notranslate"><span class="pre">${name}</span></code> for a named group. A
+dollar sign (<code class="docutils literal notranslate"><span class="pre">$</span></code>) may be included in the replacement by escaping it with a
+backslash (<code class="docutils literal notranslate"><span class="pre">\$</span></code>):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">regexp_replace</span><span class="p">(</span><span class="s1">&#39;1a 2b 14m&#39;</span><span class="p">,</span> <span class="s1">&#39;(\d+)([ab]) &#39;</span><span class="p">,</span> <span class="s1">&#39;3c$2 &#39;</span><span class="p">);</span> <span class="o">--</span> <span class="s1">&#39;3ca 3cb 14m&#39;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="like">
 <span class="sig-name descname"><span class="pre">like</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pattern</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#like" title="Permalink to this definition">¶</a></dt>
 <dt class="sig sig-object py">
