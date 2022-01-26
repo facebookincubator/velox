@@ -51,6 +51,11 @@ class Aggregate {
   // width part of the state from the fixed part.
   virtual int32_t accumulatorFixedWidthSize() const = 0;
 
+  // Return false if accumulator uses only memory from velox managed memory pool
+  virtual bool accumulatorUsesExternalMemory() const {
+    return false;
+  }
+
   // Returns true if the accumulator never takes more than
   // accumulatorFixedWidthSize() bytes.
   virtual bool isFixedSize() const {
