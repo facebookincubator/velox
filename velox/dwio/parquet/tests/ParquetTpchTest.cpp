@@ -41,7 +41,10 @@ class ParquetTpchTest : public HiveConnectorTestBase {
 
   std::vector<std::string> getLineItemFilePaths() {
     auto fileNames = {
-        "lineitem1.par", "lineitem2.par", "lineitem3.par", "lineitem4.par"};
+        "lineitem1.parquet",
+        "lineitem2.parquet",
+        "lineitem3.parquet",
+        "lineitem4.parquet"};
     std::vector<std::string> filePaths;
     for (const auto& fileName : fileNames) {
       filePaths.push_back(facebook::velox::test::getDataFilePath(
@@ -127,7 +130,7 @@ TEST_F(ParquetTpchTest, tpchQ1) {
                           .planNode();
 
   auto plan = PlanBuilder(1)
-                  .localPartition({0, 1}, {stage1})
+                  .localPartition({}, {stage1})
                   .finalAggregation(
                       {0, 1},
                       {"sum(a0)",
@@ -150,7 +153,7 @@ TEST_F(ParquetTpchTest, tpchQ1) {
                   .planNode();
 
   CursorParameters params;
-  params.planNode = plan;
+  params.planNode = std::move(plan);
   params.maxDrivers = 4;
   params.numResultDrivers = 1;
 
@@ -159,19 +162,24 @@ TEST_F(ParquetTpchTest, tpchQ1) {
     addSplitsToTask(task, noMoreSplits, filePaths, sourcePlanNodeId);
   });
 
-  EXPECT_EQ(1, result.second.size());
-  auto output = materialize(result.second[0]);
-  ASSERT_EQ(10, output[0].size());
-  ASSERT_EQ(std::string("N"), std::string(output[0][0].value<StringView>()));
-  ASSERT_EQ(std::string("O"), std::string(output[0][1].value<StringView>()));
-  ASSERT_NEAR(22'943.0, output[0][2].value<double>(), 0.0001);
-  ASSERT_NEAR(32'085'596.97999, output[0][3].value<double>(), 0.0001);
-  ASSERT_NEAR(30'461'584.92660, output[0][4].value<double>(), 0.0001);
-  ASSERT_NEAR(31'719'382.51849, output[0][5].value<double>(), 0.0001);
-  ASSERT_NEAR(25.86583, output[0][6].value<double>(), 0.0001);
-  ASSERT_NEAR(36'173.16457, output[0][7].value<double>(), 0.0001);
-  ASSERT_NEAR(0.0500, output[0][8].value<double>(), 0.0001);
-  ASSERT_EQ(887, output[0][9].value<int64_t>());
+  std::string duckDbSql = fmt::format(
+      "select returnflag, linestatus, sum(quantity) as sum_qty, sum(extendedprice) as sum_base_price,"
+      "       sum(extendedprice * (1 - discount)) as sum_disc_price,"
+      "       sum(extendedprice * (1 - discount) * (1 + tax)) as sum_charge, avg(quantity) as avg_qty,"
+      "       avg(extendedprice) as avg_price, avg(discount) as avg_disc, count(*) as count_order "
+      "       from  parquet_scan(['{}','{}','{}','{}']) "
+      "       where shipdate >= date '1998-12-01' - interval '90' day and shipdate <= date '1998-12-01'"
+      "       group by returnflag, linestatus order by returnflag, linestatus;",
+      filePaths[0],
+      filePaths[1],
+      filePaths[2],
+      filePaths[3]);
+
+  assertResults(
+      result.second,
+      params.planNode->outputType(),
+      duckDbSql,
+      duckDbQueryRunner_);
 
   const auto& stats = result.first->task()->taskStats();
   // There should be two pipelines
@@ -208,7 +216,7 @@ TEST_F(ParquetTpchTest, tpchQ6) {
                   .planNode();
 
   CursorParameters params;
-  params.planNode = plan;
+  params.planNode = std::move(plan);
   params.maxDrivers = 4;
   params.numResultDrivers = 1;
 
