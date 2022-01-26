@@ -287,6 +287,39 @@ velox::variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
   return velox::variant::row(std::move(values));
 }
 
+std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
+  auto size = vector->size();
+  std::vector<MaterializedRow> rows;
+  rows.reserve(size);
+
+  auto rowType = vector->type()->as<TypeKind::ROW>();
+
+  for (size_t i = 0; i < size; ++i) {
+    auto numColumns = rowType.size();
+    MaterializedRow row;
+    row.reserve(numColumns);
+    for (size_t j = 0; j < numColumns; ++j) {
+      auto typeKind = rowType.childAt(j)->kind();
+      if (vector->childAt(j)->isNullAt(i)) {
+        row.push_back(variant(typeKind));
+      } else if (typeKind == TypeKind::ROW) {
+        row.push_back(rowVariantAt(vector->childAt(j), i));
+      } else if (typeKind == TypeKind::ARRAY) {
+        row.push_back(arrayVariantAt(vector->childAt(j), i));
+      } else if (typeKind == TypeKind::MAP) {
+        row.push_back(mapVariantAt(vector->childAt(j), i));
+      } else {
+        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            variantAt, typeKind, vector->childAt(j), i);
+        row.push_back(value);
+      }
+    }
+    rows.push_back(row);
+  }
+
+  return rows;
+}
+
 MaterializedRow getColumns(
     const MaterializedRow& row,
     const std::vector<uint32_t>& columnIndices) {
@@ -358,39 +391,6 @@ std::string generateUserFriendlyDiff(
 }
 
 } // namespace
-
-std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
-  auto size = vector->size();
-  std::vector<MaterializedRow> rows;
-  rows.reserve(size);
-
-  auto rowType = vector->type()->as<TypeKind::ROW>();
-
-  for (size_t i = 0; i < size; ++i) {
-    auto numColumns = rowType.size();
-    MaterializedRow row;
-    row.reserve(numColumns);
-    for (size_t j = 0; j < numColumns; ++j) {
-      auto typeKind = rowType.childAt(j)->kind();
-      if (vector->childAt(j)->isNullAt(i)) {
-        row.push_back(variant(typeKind));
-      } else if (typeKind == TypeKind::ROW) {
-        row.push_back(rowVariantAt(vector->childAt(j), i));
-      } else if (typeKind == TypeKind::ARRAY) {
-        row.push_back(arrayVariantAt(vector->childAt(j), i));
-      } else if (typeKind == TypeKind::MAP) {
-        row.push_back(mapVariantAt(vector->childAt(j), i));
-      } else {
-        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            variantAt, typeKind, vector->childAt(j), i);
-        row.push_back(value);
-      }
-    }
-    rows.push_back(row);
-  }
-
-  return rows;
-}
 
 void DuckDbQueryRunner::createTable(
     const std::string& name,

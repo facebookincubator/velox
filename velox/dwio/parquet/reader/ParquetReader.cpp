@@ -176,23 +176,6 @@ std::optional<common::Filter*> findFilter(
 
 } // anonymous namespace
 
-common::Filter* getFilter(
-    const std::string& columnName,
-    common::ScanSpec* scanSpec) {
-  auto& childrenSpec = scanSpec->children();
-
-  for (auto& childSpec : childrenSpec) {
-    VELOX_CHECK(
-        !childSpec->extractValues(),
-        "Subfield access is NYI in parquet reader");
-
-    if (childSpec->fieldName() == columnName && childSpec->filter()) {
-      return childSpec->filter();
-    }
-  }
-  return nullptr;
-}
-
 ParquetRowReader::ParquetRowReader(
     std::shared_ptr<::duckdb::ParquetReader> reader,
     const dwio::common::RowReaderOptions& options,

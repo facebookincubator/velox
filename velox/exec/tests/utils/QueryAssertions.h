@@ -126,6 +126,4 @@ velox::variant readSingleValue(
 void assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
-
-std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
 } // namespace facebook::velox::exec::test
