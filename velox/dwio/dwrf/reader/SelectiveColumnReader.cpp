@@ -3995,6 +3995,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
     if (childSpec->isConstant()) {
       continue;
     }
+
     auto childDataType = nodeType_->childByName(childSpec->fieldName());
     auto childRequestedType =
         requestedType_->childByName(childSpec->fieldName());
@@ -4055,6 +4056,9 @@ void SelectiveStructColumnReader::next(
     VectorPtr& result,
     const uint64_t* incomingNulls) {
   VELOX_CHECK(!incomingNulls, "next may only be called for the root reader.");
+  if (result == nullptr) {
+    result = velox::BaseVector::create(type_, numValues, &memoryPool_);
+  }
   if (children_.empty()) {
     // no readers
     // This can be either count(*) query or a query that select only

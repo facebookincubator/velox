@@ -368,7 +368,8 @@ class E2EFilterTest : public testing::Test {
       const std::vector<uint32_t>& hitRows,
       uint64_t& time,
       bool useValueHook,
-      bool skipCheck = false) {
+      bool skipCheck = false,
+      bool preAllocateVector = true) {
     auto input = std::make_unique<MemoryInputStream>(
         sinkPtr_->getData(), sinkPtr_->size());
 
@@ -381,7 +382,9 @@ class E2EFilterTest : public testing::Test {
     auto rowReader = reader->createRowReader(rowReaderOpts);
     runtimeStats_ = dwio::common::RuntimeStatistics();
     auto rowIndex = 0;
-    auto batch = BaseVector::create(rowType_, 1, pool_.get());
+    VectorPtr batch = preAllocateVector
+        ? BaseVector::create(rowType_, 1, pool_.get())
+        : nullptr;
     resetReadBatchSizes();
     while (true) {
       {
@@ -482,20 +485,35 @@ class E2EFilterTest : public testing::Test {
         checkLoadWithHook, kind, batch, columnIndex, child, hitRows, rowIndex);
   }
 
-  void testFilterSpecs(const std::vector<FilterSpec>& filterSpecs) {
+  void testFilterSpecs(
+      const std::vector<FilterSpec>& filterSpecs,
+      bool preAllocateVector) {
     std::vector<uint32_t> hitRows;
     auto filters =
         filterGenerator->makeSubfieldFilters(filterSpecs, batches_, hitRows);
     auto spec = filterGenerator->makeScanSpec(std::move(filters));
     uint64_t timeWithFilter = 0;
-    readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, false);
+    readWithFilter(
+        spec.get(),
+        batches_,
+        hitRows,
+        timeWithFilter,
+        false,
+        false,
+        preAllocateVector);
     std::cout << hitRows.size() << "  in " << timeWithFilter << " us"
               << std::endl;
 
     if (FLAGS_timing_repeats) {
       for (auto i = 0; i < FLAGS_timing_repeats; ++i) {
         readWithFilter(
-            spec.get(), batches_, hitRows, timeWithFilter, false, true);
+            spec.get(),
+            batches_,
+            hitRows,
+            timeWithFilter,
+            false,
+            true,
+            preAllocateVector);
       }
       std::cout << FLAGS_timing_repeats << " repeats in " << timeWithFilter
                 << " us" << std::endl;
@@ -505,11 +523,25 @@ class E2EFilterTest : public testing::Test {
     for (auto& childSpec : spec->children()) {
       childSpec->setExtractValues(false);
     }
-    readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, false);
+    readWithFilter(
+        spec.get(),
+        batches_,
+        hitRows,
+        timeWithFilter,
+        false,
+        false,
+        preAllocateVector);
     std::cout << hitRows.size() << "  lazy vectors in " << timeWithFilter
               << " us" << std::endl;
     timeWithFilter = 0;
-    readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, true);
+    readWithFilter(
+        spec.get(),
+        batches_,
+        hitRows,
+        timeWithFilter,
+        true,
+        false,
+        preAllocateVector);
     std::cout << hitRows.size() << "  lazy vectors with sparse load pushdown "
               << "in " << timeWithFilter << " us" << std::endl;
   }
@@ -533,7 +565,7 @@ class E2EFilterTest : public testing::Test {
     }
     std::cout << ": Testing with row group skip "
               << FilterGenerator::specsToString(specs) << std::endl;
-    testFilterSpecs(specs);
+    testFilterSpecs(specs, true);
     EXPECT_LT(0, runtimeStats_.skippedStrides);
   }
 
@@ -544,7 +576,8 @@ class E2EFilterTest : public testing::Test {
       const std::vector<std::string>& filterable,
       int32_t numCombinations,
       bool tryNoNulls = false,
-      bool tryNoVInts = false) {
+      bool tryNoVInts = false,
+      bool preAllocateVector = true) {
     makeRowType(columns, wrapInStruct);
     filterGenerator = std::make_unique<FilterGenerator>(rowType_);
     for (int32_t noVInts = 0; noVInts < (tryNoVInts ? 2 : 1); ++noVInts) {
@@ -566,7 +599,7 @@ class E2EFilterTest : public testing::Test {
               filterGenerator->makeRandomSpecs(filterable, 125);
           std::cout << i << ": Testing "
                     << FilterGenerator::specsToString(specs) << std::endl;
-          testFilterSpecs(specs);
+          testFilterSpecs(specs, preAllocateVector);
         }
         makeDataset(customize, true);
         testRowGroupSkip(filterable);
@@ -754,4 +787,18 @@ TEST_F(E2EFilterTest, nullCompactRanges) {
       false);
 }
 
+TEST_F(E2EFilterTest, integerDirectDelayVectorAllocation) {
+  testWithTypes(
+      "short_val:smallint,"
+      "int_val:int,"
+      "long_val:bigint,"
+      "long_null:bigint",
+      [&]() { makeAllNulls("long_null"); },
+      true,
+      {"short_val", "int_val", "long_val"},
+      20,
+      true,
+      true,
+      false);
+}
 } // namespace facebook::velox::dwio::dwrf
