@@ -28,7 +28,7 @@ using limits = std::numeric_limits<T>;
 class PrestoHasherTest : public testing::Test,
                          public facebook::velox::test::VectorTestBase {
  protected:
-  static constexpr auto O = Op<int64_t>;
+  static constexpr auto O = makeOptional<int64_t>;
 
   template <typename T>
   void assertHash(
@@ -269,15 +269,8 @@ TEST_F(PrestoHasherTest, arrays) {
 }
 
 TEST_F(PrestoHasherTest, maps) {
-  using p = std::pair<int64_t, double>;
-
   auto mapVectorPair = makeMapVector<int64_t, double>(
-      {{p(1, 17.0),
-        p(2, 36.0),
-        p(3, 8.0),
-        p(4, 28.0),
-        p(5, 24.0),
-        p(6, 32.0)}});
+      {{{1, 17.0}, {2, 36.0}, {3, 8.0}, {4, 28.0}, {5, 24.0}, {6, 32.0}}});
 
   assertHash(mapVectorPair, {-8280251289038521351});
 
@@ -292,19 +285,19 @@ TEST_F(PrestoHasherTest, maps) {
       {9155312661752487122, -6461599496541202183, 5488675304642487510});
 
   auto mapOfArrays = createMapOfArraysVector<int64_t>(
-      {{1, O({1, 2, 3})}, {2, O({4, 5, 6})}, {3, O({7, 8, 9})}});
+      {{{1, O({1, 2, 3})}}, {{2, O({4, 5, 6})}}, {{3, O({7, 8, 9})}}});
   assertHash(
       mapOfArrays,
       {-6691024575166067114, -7912800814947937532, -5636922976001735986});
 
   // map with nulls
   auto mapWithNullArrays = createMapOfArraysVector<int64_t>(
-      {{1, std::nullopt},
-       {2, O({4, 5, std::nullopt})},
-       {std::nullopt, O({7, 8, 9})}});
+      {{{1, std::nullopt}},
+       {{2, O({4, 5, std::nullopt})}},
+       {{std::nullopt, O({7, 8, 9})}}});
   assertHash(
       mapWithNullArrays,
-      {2644717257979355699, 9155312661752487122, 6562918552317873797});
+      {9155312661752487122, 6562918552317873797, 2644717257979355699});
 }
 
 TEST_F(PrestoHasherTest, rows) {

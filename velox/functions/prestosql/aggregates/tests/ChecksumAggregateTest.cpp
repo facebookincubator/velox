@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string/join.hpp>
-#include "velox/exec/AggregationHook.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using facebook::velox::exec::test::PlanBuilder;
 
@@ -24,17 +24,19 @@ namespace facebook::velox::aggregate::test {
 
 class ChecksumAggregateTest : public AggregationTestBase {
  protected:
-  static constexpr auto O = Op<int64_t>;
+  static constexpr auto O = makeOptional<int64_t>;
 
   template <typename T>
   void assertSingleGroupChecksum(
       const std::vector<std::optional<T>>& data,
-      const std::string checksum) {
+      const std::string& checksum) {
     auto inputVector = makeNullableFlatVector<T>(data);
     assertChecksum(inputVector, checksum);
   }
 
-  void assertChecksum(VectorPtr inputVector, const std::string checksum) {
+  void assertChecksum(
+      VectorPtr inputVector,
+      const std::string& expectedChecksum) {
     auto rowVectors = std::vector{makeRowVector({inputVector})};
 
     // DuckDB doesnt have checksum aggregation, so we will just pass in
@@ -47,7 +49,8 @@ class ChecksumAggregateTest : public AggregationTestBase {
                      .project({"to_base64(a0) as c0"})
                      .planNode();
       assertQuery(
-          agg, fmt::format("VALUES (CAST(\'{}\' AS VARBINARY))", checksum));
+          agg,
+          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
     }
 
     {
@@ -57,7 +60,8 @@ class ChecksumAggregateTest : public AggregationTestBase {
                      .project({"to_base64(a0) as c0"})
                      .planNode();
       assertQuery(
-          agg, fmt::format("VALUES (CAST(\'{}\' AS VARBINARY))", checksum));
+          agg,
+          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
     }
 
     {
@@ -69,7 +73,8 @@ class ChecksumAggregateTest : public AggregationTestBase {
                      .project({"to_base64(a0) as c0"})
                      .planNode();
       assertQuery(
-          agg, fmt::format("VALUES (CAST(\'{}\' AS VARBINARY))", checksum));
+          agg,
+          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
     }
   }
 
@@ -77,14 +82,14 @@ class ChecksumAggregateTest : public AggregationTestBase {
   void assertGroupingChecksum(
       const std::vector<std::optional<G>>& groups,
       const std::vector<std::optional<T>>& data,
-      const std::vector<std::string> checksums) {
+      const std::vector<std::string>& expectedChecksums) {
     auto groupVector = makeNullableFlatVector<G>(groups);
     auto dataVector = makeNullableFlatVector<T>(data);
     auto rowVectors = std::vector{makeRowVector({groupVector, dataVector})};
 
     auto expectedResults = std::vector<std::string>();
-    expectedResults.reserve(checksums.size());
-    for (auto& str : checksums) {
+    expectedResults.reserve(expectedChecksums.size());
+    for (auto& str : expectedChecksums) {
       expectedResults.push_back(fmt::format("(\'{}\')", str));
     }
     auto joinedResults = boost::algorithm::join(expectedResults, ",");
@@ -98,7 +103,7 @@ class ChecksumAggregateTest : public AggregationTestBase {
     assertQuery(
         agg,
         fmt::format(
-            "SELECT cast(x as varbinary) "
+            "SELECT cast(x as VARCHAR) "
             "FROM (values {}) t(x);",
             joinedResults));
   }
@@ -222,13 +227,15 @@ TEST_F(ChecksumAggregateTest, maps) {
   assertChecksum(mapVector, "T9pb6QUB4xM=");
 
   auto mapOfArrays = createMapOfArraysVector<int64_t>(
-      {{1, O({1, 2, 3})}, {2, O({4, 5, 6})}, {3, O({7, 8, 9})}});
+      {{{1, O({1, 2, 3})}}, {{2, O({4, 5, 6})}}, {{3, O({7, 8, 9})}}});
 
   assertChecksum(mapOfArrays, "GGEqhJQZMa4=");
 
   // map with nulls
   auto mapWithNullArrays = createMapOfArraysVector<int64_t>(
-      {{1, std::nullopt}, {2, O({4, 5, std::nullopt})}, {3, O({7, 8, 9})}});
+      {{{1, std::nullopt}},
+       {{2, O({4, 5, std::nullopt})}},
+       {{3, O({7, 8, 9})}}});
 
   assertChecksum(mapWithNullArrays, "gwfQ1dI2P68=");
 }
@@ -244,5 +251,36 @@ TEST_F(ChecksumAggregateTest, rows) {
        makeNullableFlatVector<int64_t>({std::nullopt, 4})});
 
   assertChecksum(row, "6jtxEIUj7Hg=");
+}
+
+TEST_F(ChecksumAggregateTest, globalAggregationNoData) {
+  auto row = std::vector{makeRowVector({makeFlatVector<int64_t>(0)})};
+  auto agg = PlanBuilder()
+                 .values(row)
+                 .singleAggregation({}, {"checksum(c0)"})
+                 .planNode();
+  assertQuery(agg, "VALUES (CAST(NULL AS VARCHAR))");
+
+  agg = PlanBuilder()
+            .values(row)
+            .partialAggregation({}, {"checksum(c0)"})
+            .intermediateAggregation()
+            .finalAggregation()
+            .planNode();
+  assertQuery(agg, "VALUES (CAST(NULL AS VARCHAR))");
+}
+
+TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
+  auto timestamp = makeFlatVector<int64_t>(5, [](auto row) { return row; });
+  auto timezone = makeFlatVector<int16_t>(5, [](auto row) { return row % 5; });
+
+  auto timestampWithTzVector = std::make_shared<RowVector>(
+      pool_.get(),
+      TIMESTAMP_WITH_TIME_ZONE(),
+      BufferPtr(nullptr),
+      5,
+      std::vector<VectorPtr>{timestamp, timezone});
+
+  assertChecksum(timestampWithTzVector, "411aYzf4Rog=");
 }
 } // namespace facebook::velox::aggregate::test

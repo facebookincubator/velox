@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "iostream"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/VectorMaker.h"
 
@@ -451,33 +452,44 @@ class VectorTestBase {
     return velox::test::VectorMaker::flatten(vector);
   }
 
+  // Convenience function to create a vector of type Map[K, ARRAY[K]].
+  // Supports null keys, and values and even null elements.
+  // Example:
+  //    createMapOfArraysVector<int64_t>(
+  //      {{{1, std::nullopt}},
+  //       {{2, O({4, 5, std::nullopt})}},
+  //       {{std::nullopt, O({7, 8, 9})}}});
   template <typename T>
   VectorPtr createMapOfArraysVector(
-      std::map<std::optional<T>, std::optional<std::vector<std::optional<T>>>>
-          map) {
+      std::vector<std::map<
+          std::optional<T>,
+          std::optional<std::vector<std::optional<T>>>>> maps) {
+    std::vector<vector_size_t> mapSizes;
     std::vector<std::optional<T>> keys;
     std::vector<std::optional<std::vector<std::optional<T>>>> values;
-    for (const auto& [key, value] : map) {
-      keys.push_back(key);
-      values.push_back(value);
+    for (auto& map : maps) {
+      mapSizes.push_back(map.size());
+      for (const auto& [key, value] : map) {
+        keys.push_back(key);
+        values.push_back(value);
+      }
     }
 
     auto mapValues = makeVectorWithNullArrays(values);
-
     auto mapKeys = makeNullableFlatVector<T>(keys);
-    auto size = mapKeys->size();
+    auto size = mapSizes.size();
+
     auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
     auto sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
 
     auto rawOffsets = offsets->template asMutable<vector_size_t>();
     auto rawSizes = sizes->template asMutable<vector_size_t>();
 
-    // Create a vector of maps with 1 key , 1 value
     vector_size_t offset = 0;
     for (vector_size_t i = 0; i < size; i++) {
-      rawSizes[i] = 1;
+      rawSizes[i] = mapSizes[i];
       rawOffsets[i] = offset;
-      offset += 1;
+      offset += mapSizes[i];
     }
 
     return std::make_shared<MapVector>(
@@ -492,7 +504,7 @@ class VectorTestBase {
   }
 
   template <typename T>
-  static std::optional<std::vector<std::optional<T>>> Op(
+  static std::optional<std::vector<std::optional<T>>> makeOptional(
       std::vector<std::optional<T>> data) {
     return std::make_optional(data);
   }

@@ -25,6 +25,7 @@ add_executable(
   AverageAggregationTest.cpp
   BitwiseAggregationTest.cpp
   BoolAndOrTest.cpp
+  ChecksumAggregateTest.cpp
   CountAggregationTest.cpp
   CountIfAggregationTest.cpp
   CovarianceAggregationTest.cpp
@@ -34,9 +35,7 @@ add_executable(
   SumTest.cpp
   MapAggTest.cpp
   ValueListTest.cpp
-  VarianceAggregationTest.cpp
-  ChecksumAggregateTest.cpp
-  PrestoHasherTest.cpp)
+  VarianceAggregationTest.cpp)
 
 add_test(
   NAME velox_aggregates_test
