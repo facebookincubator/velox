@@ -16,7 +16,55 @@
 
 #pragma once
 
+#include <folly/Hash.h>
 #include "velox/dwio/common/exception/Exception.h"
+
+namespace facebook::velox::dwio::common {
+struct KeyInfo {
+ public:
+  static const KeyInfo NULL_KEY;
+
+  explicit KeyInfo(int64_t intKey)
+      : intKey{std::make_optional<int64_t>(intKey)} {}
+  explicit KeyInfo(const std::string& bytesKey)
+      : bytesKey{std::make_optional<std::string>(bytesKey)} {}
+
+  bool operator==(const KeyInfo& other) const {
+    return intKey == other.intKey && bytesKey == other.bytesKey;
+  }
+
+  std::string toString() const {
+    if (intKey.has_value()) {
+      return folly::to<std::string>(*intKey);
+    } else if (bytesKey.has_value()) {
+      return *bytesKey;
+    } else {
+      return "NULL";
+    }
+  }
+  std::optional<int64_t> intKey;
+  std::optional<std::string> bytesKey;
+
+ private:
+  explicit KeyInfo() {}
+};
+} // namespace facebook::velox::dwio::common
+
+namespace std {
+template <>
+struct hash<facebook::velox::dwio::common::KeyInfo> {
+  std::size_t operator()(
+      const facebook::velox::dwio::common::KeyInfo& keyInfo) const {
+    if (keyInfo.intKey.has_value()) {
+      return folly::Hash{}(*keyInfo.intKey);
+    } else if (keyInfo.bytesKey.has_value()) {
+      return folly::Hash{}(*keyInfo.bytesKey);
+    } else {
+      return 0;
+    }
+  }
+};
+} // namespace std
 
 namespace facebook::velox::dwio::common {
 
@@ -389,6 +437,56 @@ class StringColumnStatistics : public virtual ColumnStatistics {
   std::optional<std::string> min_;
   std::optional<std::string> max_;
   std::optional<uint64_t> length_;
+};
+
+/**
+ * Statistics for (flat) map columns.
+ */
+class MapColumnStatistics : public virtual ColumnStatistics {
+ public:
+  MapColumnStatistics(
+      std::optional<uint64_t> valueCount,
+      std::optional<bool> hasNull,
+      std::optional<uint64_t> rawSize,
+      std::optional<uint64_t> size,
+      std::unordered_map<KeyInfo, std::unique_ptr<ColumnStatistics>>&&
+          entryStatistics)
+      : ColumnStatistics(valueCount, hasNull, rawSize, size),
+        entryStatistics_{std::move(entryStatistics)} {}
+
+  MapColumnStatistics(
+      const ColumnStatistics& colStats,
+      std::unordered_map<KeyInfo, std::unique_ptr<ColumnStatistics>>&&
+          entryStatistics)
+      : ColumnStatistics(colStats),
+        entryStatistics_{std::move(entryStatistics)} {}
+
+  ~MapColumnStatistics() override = default;
+
+  const std::unordered_map<KeyInfo, std::unique_ptr<ColumnStatistics>>&
+  getEntryStatistics() const {
+    return entryStatistics_;
+  }
+
+  std::string toString() const override {
+    std::vector<std::string> values{};
+    for (const auto& entry : entryStatistics_) {
+      auto& stats = *entry.second;
+      values.push_back(fmt::format(
+          "{{ Key: {}, Stats: {},}}",
+          entry.first.toString(),
+          stats.toString()));
+    }
+    std::string repr;
+    folly::join(",", values, repr);
+    return folly::to<std::string>(ColumnStatistics::toString(), repr);
+  }
+
+ protected:
+  MapColumnStatistics() {}
+
+  std::unordered_map<KeyInfo, std::unique_ptr<ColumnStatistics>>
+      entryStatistics_;
 };
 
 class Statistics {

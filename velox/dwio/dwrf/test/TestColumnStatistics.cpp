@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cmath>
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
 using namespace facebook::velox::dwio::common;
@@ -766,3 +767,185 @@ TEST(StatisticsBuilder, initialSize) {
   stats = target2.build();
   EXPECT_EQ(stats->getSize().value(), 100);
 }
+
+proto::KeyInfo createKeyInfo(int64_t key) {
+  proto::KeyInfo keyInfo;
+  keyInfo.set_intkey(key);
+  return keyInfo;
+}
+
+inline bool operator==(
+    const ColumnStatistics& lhs,
+    const ColumnStatistics& rhs) {
+  return (lhs.hasNull() == rhs.hasNull()) &&
+      (lhs.getNumberOfValues() == rhs.getNumberOfValues()) &&
+      (lhs.getRawSize() == rhs.getRawSize());
+}
+
+void checkEntries(
+    const std::vector<ColumnStatistics>& entries,
+    const std::vector<ColumnStatistics>& expectedEntries) {
+  EXPECT_EQ(expectedEntries.size(), entries.size());
+  for (const auto& entry : entries) {
+    EXPECT_NE(
+        std::find_if(
+            expectedEntries.begin(),
+            expectedEntries.end(),
+            [&](const ColumnStatistics& expectedStats) {
+              return expectedStats == entry;
+            }),
+        expectedEntries.end());
+  }
+}
+
+struct TestKeyStats {
+  TestKeyStats(int64_t key, bool hasNull, uint64_t valueCount, uint64_t rawSize)
+      : key{key}, hasNull{hasNull}, valueCount{valueCount}, rawSize{rawSize} {}
+
+  int64_t key;
+  bool hasNull;
+  uint64_t valueCount;
+  uint64_t rawSize;
+};
+
+struct MapStatsAddValueTestCase {
+  explicit MapStatsAddValueTestCase(
+      const std::vector<TestKeyStats>& input,
+      const std::vector<TestKeyStats>& expected)
+      : input{input}, expected{expected} {}
+
+  std::vector<TestKeyStats> input;
+  std::vector<TestKeyStats> expected;
+};
+
+class MapStatisticsBuilderAddValueTest
+    : public ::testing::Test,
+      public ::testing::WithParamInterface<MapStatsAddValueTestCase> {};
+
+TEST_P(MapStatisticsBuilderAddValueTest, addValues) {
+  MapStatisticsBuilder<StatisticsBuilder> mapStatsBuilder{options};
+
+  for (const auto& entry : GetParam().input) {
+    StatisticsBuilder statsBuilder{options};
+    if (entry.hasNull) {
+      statsBuilder.setHasNull();
+    }
+    statsBuilder.increaseValueCount(entry.valueCount);
+    statsBuilder.increaseRawSize(entry.rawSize);
+    mapStatsBuilder.addValues(createKeyInfo(entry.key), statsBuilder);
+  }
+
+  std::vector<ColumnStatistics> expectedEntryStats;
+  for (const auto& entry : GetParam().expected) {
+    StatisticsBuilder statsBuilder{options};
+    if (entry.hasNull) {
+      statsBuilder.setHasNull();
+    }
+    statsBuilder.increaseValueCount(entry.valueCount);
+    statsBuilder.increaseRawSize(entry.rawSize);
+    expectedEntryStats.push_back(statsBuilder);
+  }
+
+  std::vector<ColumnStatistics> entryStats;
+  for (const auto& entry : mapStatsBuilder.getEntryStatistics()) {
+    entryStats.push_back(*entry.second);
+  }
+
+  checkEntries(entryStats, expectedEntryStats);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MapStatisticsBuilderAddValueTestSuite,
+    MapStatisticsBuilderAddValueTest,
+    testing::Values(
+        MapStatsAddValueTestCase{{}, {}},
+        MapStatsAddValueTestCase{
+            {TestKeyStats{1, false, 1, 21}},
+            {TestKeyStats{1, false, 1, 21}}},
+        MapStatsAddValueTestCase{
+            {TestKeyStats{1, false, 1, 21}, TestKeyStats{1, true, 3, 42}},
+            {TestKeyStats{1, true, 4, 63}}},
+        MapStatsAddValueTestCase{
+            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}},
+            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}}},
+        MapStatsAddValueTestCase{
+            {TestKeyStats{1, false, 1, 21},
+             TestKeyStats{2, false, 3, 42},
+             TestKeyStats{2, false, 3, 42},
+             TestKeyStats{1, true, 1, 42}},
+            {TestKeyStats{1, true, 2, 63}, TestKeyStats{2, false, 6, 84}}}));
+
+struct MapStatsMergeTestCase {
+  std::vector<std::vector<TestKeyStats>> inputs;
+  std::vector<TestKeyStats> expected;
+};
+
+class MapStatisticsBuilderMergeTest
+    : public ::testing::Test,
+      public ::testing::WithParamInterface<MapStatsMergeTestCase> {};
+
+TEST_P(MapStatisticsBuilderMergeTest, addValues) {
+  std::vector<std::unique_ptr<MapStatisticsBuilder<StatisticsBuilder>>>
+      mapStatsBuilders;
+
+  for (const auto& input : GetParam().inputs) {
+    std::unique_ptr<MapStatisticsBuilder<StatisticsBuilder>> mapStatsBuilder =
+        std::make_unique<MapStatisticsBuilder<StatisticsBuilder>>(options);
+    for (const auto& entry : input) {
+      StatisticsBuilder statsBuilder{options};
+      if (entry.hasNull) {
+        statsBuilder.setHasNull();
+      }
+      statsBuilder.increaseValueCount(entry.valueCount);
+      statsBuilder.increaseRawSize(entry.rawSize);
+      mapStatsBuilder->addValues(createKeyInfo(entry.key), statsBuilder);
+    }
+    mapStatsBuilders.push_back(std::move(mapStatsBuilder));
+  }
+
+  MapStatisticsBuilder<StatisticsBuilder> aggregateMapStatsBuilder{options};
+  for (const auto& mapStatsBuilder : mapStatsBuilders) {
+    aggregateMapStatsBuilder.merge(*mapStatsBuilder);
+  }
+
+  std::vector<ColumnStatistics> expectedEntryStats;
+  for (const auto& entry : GetParam().expected) {
+    StatisticsBuilder statsBuilder{options};
+    if (entry.hasNull) {
+      statsBuilder.setHasNull();
+    }
+    statsBuilder.increaseValueCount(entry.valueCount);
+    statsBuilder.increaseRawSize(entry.rawSize);
+    expectedEntryStats.push_back(statsBuilder);
+  }
+
+  std::vector<ColumnStatistics> entryStats;
+  for (const auto& entry : aggregateMapStatsBuilder.getEntryStatistics()) {
+    entryStats.push_back(*entry.second);
+  }
+
+  checkEntries(entryStats, expectedEntryStats);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MapStatisticsBuilderMergeTestSuite,
+    MapStatisticsBuilderMergeTest,
+    testing::Values(
+        MapStatsMergeTestCase{{}, {}},
+        MapStatsMergeTestCase{
+            {{TestKeyStats{1, false, 1, 21}}},
+            {TestKeyStats{1, false, 1, 21}}},
+        MapStatsMergeTestCase{
+            {{}, {TestKeyStats{1, false, 1, 21}}},
+            {TestKeyStats{1, false, 1, 21}}},
+        MapStatsMergeTestCase{
+            {{TestKeyStats{1, false, 1, 21}}, {TestKeyStats{1, true, 3, 42}}},
+            {TestKeyStats{1, true, 4, 63}}},
+        MapStatsMergeTestCase{
+            {{TestKeyStats{1, false, 1, 21}}, {TestKeyStats{2, true, 3, 42}}},
+            {TestKeyStats{1, false, 1, 21}, TestKeyStats{2, true, 3, 42}}},
+        MapStatsMergeTestCase{
+            {{TestKeyStats{1, false, 1, 21}, TestKeyStats{2, false, 3, 42}},
+             {TestKeyStats{2, false, 3, 42}},
+             {TestKeyStats{1, true, 1, 42}}},
+            {TestKeyStats{1, true, 2, 63}, TestKeyStats{2, false, 6, 84}}}));

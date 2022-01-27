@@ -58,23 +58,6 @@ static void mergeMax(std::optional<T>& to, const std::optional<T>& from) {
   }
 }
 
-template <typename T>
-static void mergeWithOverflowCheck(
-    std::optional<T>& to,
-    const std::optional<T>& from) {
-  if (to.has_value()) {
-    if (from.has_value()) {
-      auto overflow =
-          __builtin_add_overflow(to.value(), from.value(), &to.value());
-      if (overflow) {
-        to.reset();
-      }
-    } else {
-      to.reset();
-    }
-  }
-}
-
 } // namespace
 
 void StatisticsBuilder::merge(const dwio::common::ColumnStatistics& other) {
@@ -149,6 +132,16 @@ std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
       return std::make_unique<StringStatisticsBuilder>(options);
     case TypeKind::VARBINARY:
       return std::make_unique<BinaryStatisticsBuilder>(options);
+    // NOTE: Right now only flat maps specifically support calling
+    // MapStatisticsBuilder::addValues(). We need to override here if
+    // we want to enable stats for regular maps and then provide the
+    // addValue call sites.
+    // case TypeKind::MAP:
+    //   // For now we only capture general stats for the value
+    //   // column. In the future we can choose to specialize based on
+    //   // value column type.
+    //   return
+    //   std::make_unique<MapStatisticsBuilder<StatisticsBuilder>>(options);
     default:
       return std::make_unique<StatisticsBuilder>(options);
   }
@@ -394,5 +387,4 @@ void BinaryStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
     bStats->set_sum(length_.value());
   }
 }
-
 } // namespace facebook::velox::dwrf

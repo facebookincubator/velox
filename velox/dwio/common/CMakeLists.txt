@@ -29,6 +29,7 @@ add_library(
   Options.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
+  Statistics.cpp
   TypeWithId.cpp)
 
 target_link_libraries(

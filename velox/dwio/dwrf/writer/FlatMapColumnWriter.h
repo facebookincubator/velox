@@ -42,14 +42,18 @@ class ValueStatisticsBuilder {
     return create_(context, root, options);
   }
 
-  void merge(const ColumnWriter& writer) const {
-    statisticsBuilder_->merge(*writer.indexStatsBuilder_);
+  void mergeChildren(const ColumnWriter& writer) const {
     DWIO_ENSURE(
         children_.size() == writer.children_.size(),
         "Value statistics writer children mismatch");
     for (int32_t i = 0; i < children_.size(); ++i) {
       children_[i]->merge(*writer.children_[i]);
     }
+  }
+
+  void merge(const ColumnWriter& writer) const {
+    statisticsBuilder_->merge(*writer.indexStatsBuilder_);
+    mergeChildren(writer);
   }
 
   uint64_t writeFileStats(
@@ -112,7 +116,8 @@ class ValueWriter {
         inMapBuffer_{
             context.getMemoryPool(MemoryUsageCategory::GENERAL),
             inMapSize},
-        ranges_{} {}
+        ranges_{},
+        collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {}
 
   void addOffset(uint64_t offset, uint64_t inMapIndex) {
     if (UNLIKELY(inMapBuffer_[inMapIndex])) {
@@ -148,8 +153,13 @@ class ValueWriter {
     return sequence_;
   }
 
-  void createIndexEntry(const ValueStatisticsBuilder& statsBuilder) {
-    statsBuilder.merge(*columnWriter_);
+  void createIndexEntry(
+      const ValueStatisticsBuilder& valueStatsBuilder,
+      MapStatisticsBuilder<StatisticsBuilder>& mapStatsBuilder) {
+    if (collectMapStats_) {
+      mapStatsBuilder.addValues(keyInfo_, *columnWriter_->indexStatsBuilder_);
+    }
+    valueStatsBuilder.merge(*columnWriter_);
     columnWriter_->createIndexEntry();
   }
 
@@ -177,6 +187,7 @@ class ValueWriter {
   std::unique_ptr<ColumnWriter> columnWriter_;
   dwio::common::DataBuffer<char> inMapBuffer_;
   Ranges ranges_;
+  const bool collectMapStats_;
 };
 
 namespace {

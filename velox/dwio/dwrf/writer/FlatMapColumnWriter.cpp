@@ -33,6 +33,11 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)} {
   auto options = StatisticsBuilderOptions::fromConfig(context.getConfigs());
+  // Override the stats builder specifically for flatmaps.
+  fileStatsBuilder_ =
+      std::make_unique<MapStatisticsBuilder<StatisticsBuilder>>(options);
+  indexStatsBuilder_ =
+      std::make_unique<MapStatisticsBuilder<StatisticsBuilder>>(options);
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(
           dynamic_cast<typename TypeInfo<K>::StatisticsBuilder*>(
@@ -69,8 +74,11 @@ void FlatMapColumnWriter<K>::createIndexEntry() {
   rowsInStrides_.push_back(rowsInCurrentStride_);
   rowsInCurrentStride_ = 0;
 
+  auto& mapStatsBuilder =
+      dynamic_cast<MapStatisticsBuilder<StatisticsBuilder>&>(
+          *fileStatsBuilder_);
   for (auto& pair : valueWriters_) {
-    pair.second.createIndexEntry(*valueFileStatsBuilder_);
+    pair.second.createIndexEntry(*valueFileStatsBuilder_, mapStatsBuilder);
   }
 }
 
@@ -159,10 +167,13 @@ ValueWriter& FlatMapColumnWriter<K>::getValueWriter(
 
   ValueWriter& valueWriter = it->second;
 
+  auto& mapStatsBuilder =
+      dynamic_cast<MapStatisticsBuilder<StatisticsBuilder>&>(
+          *fileStatsBuilder_);
   // Back fill previous strides with not-in-map indication
   for (auto& rows : rowsInStrides_) {
     valueWriter.backfill(rows);
-    valueWriter.createIndexEntry(*valueFileStatsBuilder_);
+    valueWriter.createIndexEntry(*valueFileStatsBuilder_, mapStatsBuilder);
   }
 
   // Back fill current (partial) stride with not-in-map indication

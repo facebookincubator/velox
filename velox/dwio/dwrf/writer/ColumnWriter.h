@@ -225,6 +225,7 @@ class ColumnWriter {
 
   FRIEND_TEST(ColumnWriterTests, LowMemoryModeConfig);
   friend class ValueStatisticsBuilder;
+  friend class ValueWriter;
 };
 
 } // namespace facebook::velox::dwrf
