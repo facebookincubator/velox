@@ -18,6 +18,8 @@
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/type/tests/FilterBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -27,11 +29,21 @@ using namespace facebook::velox::exec::test;
 
 class ParquetTpchTest : public HiveConnectorTestBase {
  protected:
-  using OperatorTestBase::assertQuery;
+  // Setup a duckDB instance for the entire suite and load TPCH data with scale
+  // factor 0.01.
+  static void SetUpTestCase() {
+    if (duckDb_ == nullptr) {
+      duckDb_ = std::make_shared<DuckDbQueryRunner>();
+      constexpr double tpchsf = 0.01;
+      duckDb_->initTPCH(tpchsf);
+    }
+    functions::prestosql::registerAllFunctions();
+  }
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
     parquet::registerParquetReaderFactory();
+    tempDirectory_ = tempDirectory_ = exec::test::TempDirectoryPath::create();
   }
 
   void TearDown() override {
@@ -39,46 +51,82 @@ class ParquetTpchTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  std::vector<std::string> getLineItemFilePaths() {
-    auto fileNames = {
-        "lineitem1.parquet",
-        "lineitem2.parquet",
-        "lineitem3.parquet",
-        "lineitem4.parquet"};
-    std::vector<std::string> filePaths;
-    for (const auto& fileName : fileNames) {
-      filePaths.push_back(facebook::velox::test::getDataFilePath(
-          "velox/dwio/parquet/tests", fmt::format("tpch_tiny/{}", fileName)));
-    }
-    return filePaths;
-  }
+  // For a given file at filePath, add splits equal to numSplits.
+  std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> makeSplits(
+      const std::string& filePath,
+      int64_t numSplits) {
+    LocalReadFile lfs(filePath);
+    const int fileSize = lfs.size();
+    const int splitSize = fileSize / numSplits;
+    std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
 
-  std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
-      const std::string& filePath) {
-    auto split = makeHiveConnectorSplit(filePath);
+    // Add all the splits except the last one.
+    int i = 0;
+    for (; i < numSplits - 1; i++) {
+      auto split = makeHiveConnectorSplit(filePath, i * splitSize, splitSize);
+      split->fileFormat = dwio::common::FileFormat::PARQUET;
+      splits.push_back(std::move(split));
+    }
+    // Add the last split with the remaining as start.
+    auto split = makeHiveConnectorSplit(filePath, i * splitSize);
     split->fileFormat = dwio::common::FileFormat::PARQUET;
-    return split;
+    splits.push_back(std::move(split));
+    return splits;
   }
 
   void addSplitsToTask(
       exec::Task* task,
       bool& noMoreSplits,
       const std::vector<std::string>& filePaths,
-      int sourcePlanNodeId) {
+      int sourcePlanNodeId = 0,
+      int64_t numSplits = 10) {
     if (!noMoreSplits) {
       for (const auto& filePath : filePaths) {
-        task->addSplit(
-            std::to_string(sourcePlanNodeId), exec::Split(makeSplit(filePath)));
+        auto const& splits = makeSplits(filePath, numSplits);
+        for (const auto& split : splits) {
+          task->addSplit(std::to_string(sourcePlanNodeId), exec::Split(split));
+        }
       }
       task->noMoreSplits(std::to_string(sourcePlanNodeId));
       noMoreSplits = true;
     }
   }
+
+  // Write the Lineitem TPCH table to a Parquet file and return the file
+  // location.
+  std::string writeDuckDBTPCHLineitemTableToParquet() {
+    constexpr std::string_view tableName("lineitem");
+    // Lineitem SF=0.01 has about 64K rows
+    // Set the number of rows in a RowGroup so that the generated file contains
+    // multiple RowGroups.
+    constexpr int rowGroupNumRows = 15'000;
+    const auto& filePath =
+        fmt::format("{}/{}.parquet", tempDirectory_->path, tableName);
+    // Convert decimal columns to double and date columns to varchar.
+    const auto& query = fmt::format(
+        "COPY (SELECT l_orderkey as orderkey, l_partkey as partkey, l_suppkey as suppkey, l_linenumber as linenumber, "
+        "l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount, "
+        "l_tax::DOUBLE as tax, l_returnflag as returnflag, l_linestatus as linestatus, "
+        "strftime(l_shipdate, '%Y-%m-%d') as shipdate, strftime(l_receiptdate, '%Y-%m-%d') as receiptdate, "
+        "l_shipinstruct as shipinstruct, l_shipmode as shipmode, l_comment as comment "
+        "FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {})",
+        tableName,
+        filePath,
+        rowGroupNumRows);
+    duckDb_->execute(query);
+    return filePath;
+  }
+
+  static std::shared_ptr<DuckDbQueryRunner> duckDb_;
+  std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
 };
 
-TEST_F(ParquetTpchTest, tpchQ1) {
-  const auto& filePaths = getLineItemFilePaths();
+std::shared_ptr<DuckDbQueryRunner> ParquetTpchTest::duckDb_ = nullptr;
 
+TEST_F(ParquetTpchTest, tpchQ1) {
+  const auto& lineitemFilePath = writeDuckDBTPCHLineitemTableToParquet();
+
+  // TPCH Q1
   auto rowType =
       ROW({"returnflag",
            "linestatus",
@@ -95,13 +143,16 @@ TEST_F(ParquetTpchTest, tpchQ1) {
            DOUBLE(),
            VARCHAR()});
 
-  // date '1998-12-01' - interval '90' day <= shipdate <= '1998-12-01'
+  // shipdate <= '1998-09-02'
   auto filters =
       common::test::SubfieldFiltersBuilder()
-          .add("shipdate", common::test::between("1998-09-02", "1998-12-01"))
+          .add("shipdate", common::test::lessThanOrEqual("1998-09-02"))
           .build();
 
   const int sourcePlanNodeId = 10;
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.numResultDrivers = 1;
   static const core::SortOrder kAscNullsLast(true, false);
 
   const auto stage1 =
@@ -151,45 +202,50 @@ TEST_F(ParquetTpchTest, tpchQ1) {
                        DOUBLE(),
                        BIGINT()})
                   .orderBy({0, 1}, {kAscNullsLast, kAscNullsLast}, false)
+                  // Additional step for double type result verification
+                  .project(
+                      {"returnflag",
+                       "linestatus",
+                       "round(a0, cast(2 as integer))",
+                       "round(a1, cast(2 as integer))",
+                       "round(a2, cast(2 as integer))",
+                       "round(a3, cast(2 as integer))",
+                       "round(a4, cast(2 as integer))",
+                       "round(a5, cast(2 as integer))",
+                       "round(a6, cast(2 as integer))",
+                       "a7"})
                   .planNode();
 
-  CursorParameters params;
   params.planNode = std::move(plan);
-  params.maxDrivers = 4;
-  params.numResultDrivers = 1;
-
   bool noMoreSplits = false;
-  auto result = readCursor(params, [&](auto* task) {
-    addSplitsToTask(task, noMoreSplits, filePaths, sourcePlanNodeId);
-  });
+  auto duckDbSql = duckDb_->GetQuery(1);
+  // Additional step for double type result verification.
+  duckDbSql.pop_back(); // remove new line
+  duckDbSql.pop_back(); // remove semi-colon
+  const auto& duckDBTPCHQ1Rounded = fmt::format(
+      "select l_returnflag, l_linestatus, round(sum_qty, 2), "
+      "round(sum_base_price, 2), round(sum_disc_price, 2), round(sum_charge, 2), "
+      "round(avg_qty, 2), round(avg_price, 2), round(avg_disc, 2),"
+      "count_order from ({})",
+      duckDbSql);
+  auto task = exec::test::assertQuery(
+      params,
+      [&](exec::Task* task) {
+        addSplitsToTask(
+            task, noMoreSplits, {lineitemFilePath}, sourcePlanNodeId);
+      },
+      duckDBTPCHQ1Rounded,
+      *duckDb_);
 
-  std::string duckDbSql = fmt::format(
-      "select returnflag, linestatus, sum(quantity) as sum_qty, sum(extendedprice) as sum_base_price,"
-      "       sum(extendedprice * (1 - discount)) as sum_disc_price,"
-      "       sum(extendedprice * (1 - discount) * (1 + tax)) as sum_charge, avg(quantity) as avg_qty,"
-      "       avg(extendedprice) as avg_price, avg(discount) as avg_disc, count(*) as count_order "
-      "       from  parquet_scan(['{}','{}','{}','{}']) "
-      "       where shipdate >= date '1998-12-01' - interval '90' day and shipdate <= date '1998-12-01'"
-      "       group by returnflag, linestatus order by returnflag, linestatus;",
-      filePaths[0],
-      filePaths[1],
-      filePaths[2],
-      filePaths[3]);
-
-  assertResults(
-      result.second,
-      params.planNode->outputType(),
-      duckDbSql,
-      duckDbQueryRunner_);
-
-  const auto& stats = result.first->task()->taskStats();
-  // There should be two pipelines
+  const auto& stats = task->taskStats();
+  // There should be two pipelines.
   ASSERT_EQ(2, stats.pipelineStats.size());
-  ASSERT_EQ(4, stats.numFinishedSplits);
+  // We used the default of 10 splits per file.
+  ASSERT_EQ(10, stats.numFinishedSplits);
 }
 
 TEST_F(ParquetTpchTest, tpchQ6) {
-  const auto& filePaths = getLineItemFilePaths();
+  const auto& lineitemFilePath = writeDuckDBTPCHLineitemTableToParquet();
 
   auto rowType =
       ROW({"shipdate", "extendedprice", "quantity", "discount"},
@@ -202,10 +258,15 @@ TEST_F(ParquetTpchTest, tpchQ6) {
           .add("quantity", common::test::lessThanDouble(24.0))
           .build();
 
+  const int sourcePlanNodeId = 4;
+  CursorParameters params;
+  params.maxDrivers = 4;
+  params.numResultDrivers = 1;
+
   auto plan = PlanBuilder(10)
                   .localPartition(
                       {},
-                      {PlanBuilder(0)
+                      {PlanBuilder(sourcePlanNodeId)
                            .tableScan(
                                rowType,
                                makeTableHandle(std::move(filters)),
@@ -214,17 +275,30 @@ TEST_F(ParquetTpchTest, tpchQ6) {
                            .partialAggregation({}, {"sum(p0)"})
                            .planNode()})
                   .finalAggregation({}, {"sum(a0)"}, {DOUBLE()})
+                  // Additional step for double type result verification
+                  .project({"round(a0, cast(2 as integer))"})
                   .planNode();
 
-  CursorParameters params;
   params.planNode = std::move(plan);
-  params.maxDrivers = 4;
-  params.numResultDrivers = 1;
-
   bool noMoreSplits = false;
-  auto result = readSingleValue(params, [&](auto* task) {
-    addSplitsToTask(task, noMoreSplits, filePaths, 0);
-  });
+  auto duckDbSql = duckDb_->GetQuery(6);
+  // Additional step for double type result verification.
+  duckDbSql.pop_back(); // remove new line
+  duckDbSql.pop_back(); // remove semi-colon
+  const auto& duckDBTPCHQ6Rounded =
+      fmt::format("select round(revenue, 2) from ({})", duckDbSql);
+  auto task = exec::test::assertQuery(
+      params,
+      [&](exec::Task* task) {
+        addSplitsToTask(
+            task, noMoreSplits, {lineitemFilePath}, sourcePlanNodeId);
+      },
+      duckDBTPCHQ6Rounded,
+      *duckDb_);
 
-  ASSERT_NEAR(1'193'053.2253, result.value<double>(), 0.0001);
+  const auto& stats = task->taskStats();
+  // There should be two pipelines
+  ASSERT_EQ(2, stats.pipelineStats.size());
+  // We used the default of 10 splits
+  ASSERT_EQ(10, stats.numFinishedSplits);
 }

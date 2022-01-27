@@ -18,6 +18,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/external/duckdb/duckdb.hpp"
+#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec::test {
@@ -31,6 +32,8 @@ class DuckDbQueryRunner {
   void createTable(
       const std::string& name,
       const std::vector<RowVectorPtr>& data);
+
+  void execute(const std::string& sql);
 
   std::multiset<MaterializedRow> execute(
       const std::string& sql,
@@ -58,6 +61,12 @@ class DuckDbQueryRunner {
         });
     return allRows;
   }
+
+  std::string GetQuery(int query) {
+    return ::duckdb::TPCHExtension::GetQuery(query);
+  }
+
+  void initTPCH(double sf);
 
  private:
   ::duckdb::DuckDB db_;
@@ -115,15 +124,8 @@ std::shared_ptr<Task> assertQuery(
 velox::variant readSingleValue(
     const std::shared_ptr<const core::PlanNode>& plan);
 
-velox::variant readSingleValue(
-    const std::shared_ptr<const core::PlanNode>& plan,
-    std::function<void(exec::Task*)> addSplits);
-
-velox::variant readSingleValue(
-    const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits);
-
 void assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
+
 } // namespace facebook::velox::exec::test

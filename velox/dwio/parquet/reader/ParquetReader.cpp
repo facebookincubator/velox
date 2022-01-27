@@ -190,7 +190,6 @@ ParquetRowReader::ParquetRowReader(
 
   std::vector<::duckdb::column_t> columnIds;
   columnIds.reserve(rowType_->size());
-
   for (uint64_t i = 0; i < projection.size(); i++) {
     uint64_t columnId = projection[i].column;
     VELOX_CHECK_LT(

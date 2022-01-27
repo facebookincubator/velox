@@ -425,6 +425,23 @@ void DuckDbQueryRunner::createTable(
   }
 }
 
+void DuckDbQueryRunner::initTPCH(double sf) {
+  db_.LoadExtension<::duckdb::TPCHExtension>();
+  ::duckdb::Connection con(db_);
+  const auto& tpchQuery = fmt::format("CALL dbgen(sf={})", sf);
+  auto duckDbResult = con.Query(tpchQuery);
+  ASSERT_TRUE(duckDbResult->success)
+      << "DuckDB query failed to write TPCH data.";
+}
+
+void DuckDbQueryRunner::execute(const std::string& sql) {
+  ::duckdb::Connection con(db_);
+  auto duckDbResult = con.Query(sql);
+  ASSERT_TRUE(duckDbResult->success)
+      << "DuckDB query failed: " << duckDbResult->error << std::endl
+      << sql;
+}
+
 void DuckDbQueryRunner::execute(
     const std::string& sql,
     const std::shared_ptr<const RowType>& resultRowType,
@@ -581,22 +598,7 @@ std::shared_ptr<Task> assertQuery(
     std::optional<std::vector<uint32_t>> sortingKeys) {
   CursorParameters params;
   params.planNode = plan;
-  auto result = readCursor(params, addSplits);
-  if (sortingKeys) {
-    assertResultsOrdered(
-        result.second,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner,
-        sortingKeys.value());
-  } else {
-    assertResults(
-        result.second,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner);
-  }
-  return result.first->task();
+  return assertQuery(params, addSplits, duckDbSql, duckDbQueryRunner);
 }
 
 std::shared_ptr<Task> assertQuery(
@@ -605,14 +607,7 @@ std::shared_ptr<Task> assertQuery(
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys) {
-  auto cursor = std::make_unique<TaskCursor>(params);
-  addSplits(cursor->task().get());
-
-  std::vector<RowVectorPtr> actualResults;
-  while (cursor->moveNext()) {
-    actualResults.push_back(cursor->current());
-    addSplits(cursor->task().get());
-  }
+  auto [cursor, actualResults] = readCursor(params, addSplits);
 
   if (sortingKeys) {
     assertResultsOrdered(
@@ -643,26 +638,14 @@ std::shared_ptr<Task> assertQuery(
 }
 
 velox::variant readSingleValue(
-    const std::shared_ptr<const core::PlanNode>& plan,
-    std::function<void(exec::Task*)> addSplits) {
+    const std::shared_ptr<const core::PlanNode>& plan) {
   CursorParameters params;
   params.planNode = plan;
-  return readSingleValue(params, addSplits);
-}
-
-velox::variant readSingleValue(
-    const CursorParameters& params,
-    std::function<void(exec::Task*)> addSplits) {
-  auto result = readCursor(params, addSplits);
+  auto result = readCursor(params, [](Task*) {});
 
   EXPECT_EQ(1, result.second.size());
   EXPECT_EQ(1, result.second[0]->size());
   return materialize(result.second[0])[0][0];
-}
-
-velox::variant readSingleValue(
-    const std::shared_ptr<const core::PlanNode>& plan) {
-  return readSingleValue(plan, [](Task*) {});
 }
 
 void assertEqualResults(
