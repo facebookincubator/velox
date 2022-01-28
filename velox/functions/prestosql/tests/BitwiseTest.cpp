@@ -131,8 +131,10 @@ TEST_F(BitwiseTest, bitCount) {
   EXPECT_EQ(bitCount<int64_t>(9, 8), 2);
   EXPECT_EQ(bitCount<int64_t>(-7, kMaxBits), 62);
   EXPECT_EQ(bitCount<int64_t>(-7, 8), 6);
-  EXPECT_EQ(bitCount<int64_t>(kMin64, kMaxBits), 64);
+  EXPECT_EQ(bitCount<int64_t>(kMin64, kMaxBits), 1);
   EXPECT_EQ(bitCount<int64_t>(kMax64, kMaxBits), 63);
+  EXPECT_EQ(bitCount<int64_t>(kMax64, 63), 63);
+  EXPECT_EQ(bitCount<int64_t>(7, 2), std::nullopt);
 }
 
 TEST_F(BitwiseTest, bitwiseNot) {
