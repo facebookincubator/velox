@@ -38,7 +38,7 @@ struct BitCountFunction {
       result = std::bitset<kMaxBits>(num).count();
       return true;
     }
-   if (bits <= 1 || bits > kMaxBits) {
+    if (bits <= 1 || bits > kMaxBits) {
       result = 0;
       return false;
     }
