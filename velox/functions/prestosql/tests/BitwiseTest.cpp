@@ -29,6 +29,7 @@ static constexpr auto kMin32 = std::numeric_limits<int32_t>::min();
 static constexpr auto kMax32 = std::numeric_limits<int32_t>::max();
 static constexpr auto kMin64 = std::numeric_limits<int64_t>::min();
 static constexpr auto kMax64 = std::numeric_limits<int64_t>::max();
+static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
 
 class BitwiseTest : public functions::test::FunctionBaseTest {
  protected:
@@ -53,6 +54,11 @@ class BitwiseTest : public functions::test::FunctionBaseTest {
   template <typename T>
   std::optional<int64_t> bitwiseXor(std::optional<T> a, std::optional<T> b) {
     return evaluateOnce<int64_t>("bitwise_xor(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<int64_t> bitCount(std::optional<T> a, std::optional<T> b) {
+    return evaluateOnce<int64_t>("bit_count(c0, c1)", a, b);
   }
 
   template <typename T>
@@ -118,6 +124,15 @@ TEST_F(BitwiseTest, bitwiseAnd) {
   EXPECT_EQ(bitwiseAnd<int64_t>(kMax64, -1), kMax64);
   EXPECT_EQ(bitwiseAnd<int64_t>(kMin64, 1), 0);
   EXPECT_EQ(bitwiseAnd<int64_t>(kMin64, -1), kMin64);
+}
+
+TEST_F(BitwiseTest, bitCount) {
+  EXPECT_EQ(bitCount<int64_t>(9, kMaxBits), 2);
+  EXPECT_EQ(bitCount<int64_t>(9, 8), 2);
+  EXPECT_EQ(bitCount<int64_t>(-7, kMaxBits), 62);
+  EXPECT_EQ(bitCount<int64_t>(-7, 8), 6);
+  EXPECT_EQ(bitCount<int64_t>(kMin64, kMaxBits), 64);
+  EXPECT_EQ(bitCount<int64_t>(kMax64, kMaxBits), 63);
 }
 
 TEST_F(BitwiseTest, bitwiseNot) {

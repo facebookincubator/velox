@@ -19,11 +19,36 @@
 
 namespace facebook::velox::functions {
 
+static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
+
 template <typename T>
 struct BitwiseAndFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput a, TInput b) {
     result = a & b;
+    return true;
+  }
+};
+
+template <typename T>
+struct BitCountFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput num, TInput bits) {
+    if (bits == kMaxBits) {
+      result = std::bitset<kMaxBits>(num).count();
+      return true;
+    }
+    if (bits <=1 || bits > kMaxBits) {
+      // error out
+    }
+    // check if input "a" falls within the limits of max and min that
+    // can be represented with "bits".
+    int64_t lowbitsmask = (1L << bits) - 1;
+    if (num > lowbitsmask || num < ~lowbitsmask)  {
+      // error out
+    }
+    int64_t mask = (1L << bits) - 1;
+    result = std::bitset<kMaxBits>(num & mask).count();
     return true;
   }
 };
