@@ -133,8 +133,16 @@ TEST_F(BitwiseTest, bitCount) {
   EXPECT_EQ(bitCount<int64_t>(-7, 8), 6);
   EXPECT_EQ(bitCount<int64_t>(kMin64, kMaxBits), 1);
   EXPECT_EQ(bitCount<int64_t>(kMax64, kMaxBits), 63);
-  EXPECT_EQ(bitCount<int64_t>(kMax64, 63), 63);
   EXPECT_EQ(bitCount<int64_t>(7, 2), std::nullopt);
+  // bits size must be in range (1,64]
+  EXPECT_EQ(bitCount<int64_t>(7, 1), std::nullopt);
+  EXPECT_EQ(bitCount<int64_t>(7, 65), std::nullopt);
+  // Need a signed bit(MSB) to represent any number.
+  EXPECT_EQ(bitCount<int64_t>(3, 2), std::nullopt);
+  EXPECT_EQ(bitCount<int64_t>(-2, 2), std::nullopt);
+  EXPECT_EQ(bitCount<int64_t>(2, 2), std::nullopt);
+  EXPECT_EQ(bitCount<int64_t>(kMax64, 63), std::nullopt);
+  EXPECT_EQ(bitCount<int64_t>(kMin64, 63), std::nullopt);
 }
 
 TEST_F(BitwiseTest, bitwiseNot) {

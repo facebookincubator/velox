@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/functions/Macros.h"
-
+#include <bitset>
 namespace facebook::velox::functions {
 
 static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
@@ -39,14 +39,12 @@ struct BitCountFunction {
       return true;
     }
     if (bits <= 1 || bits > kMaxBits) {
-      result = 0;
       return false;
     }
     // check if input "num" falls within the limits of max and min that
     // can be represented with "bits".
-    int64_t lowbitsmask = (1L << bits) - 1;
+    int64_t lowbitsmask = (1L << (bits - 1)) - 1;
     if (num > lowbitsmask || num < ~lowbitsmask) {
-      result = 0;
       return false;
     }
     int64_t mask = (1L << bits) - 1;
