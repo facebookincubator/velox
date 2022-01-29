@@ -51,7 +51,7 @@ class ParquetTpchTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  int64_t date(std::string_view string_date) {
+  int64_t date(const std::string_view string_date) const {
     Date date;
     parseTo(string_date, date);
     return date.days();
@@ -60,7 +60,7 @@ class ParquetTpchTest : public HiveConnectorTestBase {
   // For a given file at filePath, add splits equal to numSplits.
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> makeSplits(
       const std::string& filePath,
-      int64_t numSplits) {
+      int64_t numSplits) const {
     LocalReadFile lfs(filePath);
     const int fileSize = lfs.size();
     const int splitSize = fileSize / numSplits;
@@ -85,7 +85,7 @@ class ParquetTpchTest : public HiveConnectorTestBase {
       bool& noMoreSplits,
       const std::vector<std::string>& filePaths,
       int sourcePlanNodeId = 0,
-      int64_t numSplits = 10) {
+      int64_t numSplits = 10) const {
     if (!noMoreSplits) {
       for (const auto& filePath : filePaths) {
         auto const& splits = makeSplits(filePath, numSplits);
@@ -100,7 +100,7 @@ class ParquetTpchTest : public HiveConnectorTestBase {
 
   // Write the Lineitem TPCH table to a Parquet file and return the file
   // location.
-  std::string writeDuckDBTPCHLineitemTableToParquet() {
+  std::string writeDuckDBTPCHLineitemTableToParquet() const {
     constexpr std::string_view tableName("lineitem");
     // Lineitem SF=0.01 has 60175 rows
     // Set the number of rows in a RowGroup so that the generated file contains
