@@ -51,6 +51,12 @@ class ParquetTpchTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
+  int64_t date(std::string_view string_date) {
+    Date date;
+    parseTo(string_date, date);
+    return date.days();
+  }
+
   // For a given file at filePath, add splits equal to numSplits.
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> makeSplits(
       const std::string& filePath,
@@ -96,18 +102,18 @@ class ParquetTpchTest : public HiveConnectorTestBase {
   // location.
   std::string writeDuckDBTPCHLineitemTableToParquet() {
     constexpr std::string_view tableName("lineitem");
-    // Lineitem SF=0.01 has about 64K rows
+    // Lineitem SF=0.01 has 60175 rows
     // Set the number of rows in a RowGroup so that the generated file contains
     // multiple RowGroups.
     constexpr int rowGroupNumRows = 15'000;
     const auto& filePath =
         fmt::format("{}/{}.parquet", tempDirectory_->path, tableName);
-    // Convert decimal columns to double and date columns to varchar.
+    // Convert decimal columns to double.
     const auto& query = fmt::format(
         "COPY (SELECT l_orderkey as orderkey, l_partkey as partkey, l_suppkey as suppkey, l_linenumber as linenumber, "
         "l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount, "
         "l_tax::DOUBLE as tax, l_returnflag as returnflag, l_linestatus as linestatus, "
-        "strftime(l_shipdate, '%Y-%m-%d') as shipdate, strftime(l_receiptdate, '%Y-%m-%d') as receiptdate, "
+        "l_shipdate as shipdate, l_receiptdate as receiptdate, "
         "l_shipinstruct as shipinstruct, l_shipmode as shipmode, l_comment as comment "
         "FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {})",
         tableName,
@@ -127,26 +133,20 @@ TEST_F(ParquetTpchTest, tpchQ1) {
   const auto& lineitemFilePath = writeDuckDBTPCHLineitemTableToParquet();
 
   // TPCH Q1
-  auto rowType =
-      ROW({"returnflag",
-           "linestatus",
-           "quantity",
-           "extendedprice",
-           "discount",
-           "tax",
-           "shipdate"},
-          {VARCHAR(),
-           VARCHAR(),
-           DOUBLE(),
-           DOUBLE(),
-           DOUBLE(),
-           DOUBLE(),
-           VARCHAR()});
+  auto rowType = ROW(
+      {"returnflag",
+       "linestatus",
+       "quantity",
+       "extendedprice",
+       "discount",
+       "tax",
+       "shipdate"},
+      {VARCHAR(), VARCHAR(), DOUBLE(), DOUBLE(), DOUBLE(), DOUBLE(), DATE()});
 
   // shipdate <= '1998-09-02'
   auto filters =
       common::test::SubfieldFiltersBuilder()
-          .add("shipdate", common::test::lessThanOrEqual("1998-09-02"))
+          .add("shipdate", common::test::lessThanOrEqual(date("1998-09-02")))
           .build();
 
   const int sourcePlanNodeId = 10;
@@ -249,11 +249,13 @@ TEST_F(ParquetTpchTest, tpchQ6) {
 
   auto rowType =
       ROW({"shipdate", "extendedprice", "quantity", "discount"},
-          {VARCHAR(), DOUBLE(), DOUBLE(), DOUBLE()});
+          {DATE(), DOUBLE(), DOUBLE(), DOUBLE()});
 
   auto filters =
       common::test::SubfieldFiltersBuilder()
-          .add("shipdate", common::test::between("1994-01-01", "1994-12-31"))
+          .add(
+              "shipdate",
+              common::test::between(date("1994-01-01"), date("1994-12-31")))
           .add("discount", common::test::betweenDouble(0.05, 0.07))
           .add("quantity", common::test::lessThanDouble(24.0))
           .build();
