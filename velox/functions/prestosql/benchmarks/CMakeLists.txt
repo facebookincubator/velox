@@ -94,3 +94,7 @@ target_compile_definitions(velox_benchmark_array_proxy_with_nulls
 
 target_compile_definitions(velox_benchmark_array_proxy_no_nulls
                            PUBLIC WITH_NULLS=false)
+
+add_executable(velox_benchmark_nested_array_proxy NestedArrayProxyBenchmark.cpp)
+target_link_libraries(velox_benchmark_nested_array_proxy
+                      ${BENCHMARK_DEPENDENCIES_NO_FUNC})
