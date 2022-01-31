@@ -27,6 +27,7 @@ void registerSimpleFunctions() {
   registerBinaryFloatingPoint<MinusFunction>({"minus"});
   registerBinaryFloatingPoint<MultiplyFunction>({"multiply"});
   registerBinaryFloatingPoint<DivideFunction>({"divide"});
+  registerBinaryFloatingPoint<FloorDivideFunction>({"floor_divide"});
   registerBinaryFloatingPoint<ModulusFunction>({"mod"});
   registerUnaryNumeric<CeilFunction>({"ceil", "ceiling"});
   registerUnaryNumeric<FloorFunction>({"floor"});

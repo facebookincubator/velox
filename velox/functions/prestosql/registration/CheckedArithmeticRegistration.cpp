@@ -25,6 +25,7 @@ void registerCheckedArithmeticFunctions() {
   registerBinaryIntegral<CheckedMultiplyFunction>({"multiply"});
   registerBinaryIntegral<CheckedModulusFunction>({"mod"});
   registerBinaryIntegral<CheckedDivideFunction>({"divide"});
+  registerBinaryIntegral<CheckedFloorDivideFunction>({"floor_divide"});
   registerUnaryIntegral<CheckedNegateFunction>({"negate"});
 }
 

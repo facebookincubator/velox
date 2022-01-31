@@ -64,6 +64,16 @@ struct CheckedDivideFunction {
 };
 
 template <typename T>
+struct CheckedFloorDivideFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput& a, const TInput& b) {
+    result = checkedFloorDivide(a, b);
+    return true;
+  }
+};
+
+template <typename T>
 struct CheckedModulusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool

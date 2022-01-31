@@ -60,6 +60,16 @@ T checkedDivide(const T& a, const T& b) {
 }
 
 template <typename T>
+T checkedFloorDivide(const T& a, const T& b) {
+  if (b == 0) {
+    VELOX_ARITHMETIC_ERROR("division by zero");
+  }
+  // promote to float type to correctly compute floor divide for negative
+  // integers. e.g: -3 / 2 is -1, but floor(float(-3) / 2) is -2.
+  return std::floor(float(a) / b);
+}
+
+template <typename T>
 T checkedModulus(const T& a, const T& b) {
   if (UNLIKELY(b == 0)) {
     VELOX_ARITHMETIC_ERROR("Cannot divide by 0");

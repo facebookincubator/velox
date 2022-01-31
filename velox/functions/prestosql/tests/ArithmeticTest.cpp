@@ -93,6 +93,33 @@ __attribute__((__no_sanitize__("float-divide-by-zero")))
       "c0 / c1", {10.5, 9.2, 0.0}, {2, 0, 0}, {5.25, kInf, kNan});
 }
 
+TEST_F(ArithmeticTest, floor_divide)
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+__attribute__((__no_sanitize__("float-divide-by-zero")))
+#endif
+#endif
+{
+  assertExpression<int32_t>(
+      "floor_divide(c0, c1)", {10, 11, -34}, {2, 2, 10}, {5, 5, -4});
+  assertExpression<int64_t>(
+      "floor_divide(c0, c1)", {10, 11, -34}, {2, 2, 10}, {5, 5, -4});
+
+  assertError<int32_t>("floor_divide(c0, c1)", {10}, {0}, "division by zero");
+  assertError<int32_t>("floor_divide(c0, c1)", {0}, {0}, "division by zero");
+
+  assertExpression<float>(
+      "floor_divide(c0, c1)",
+      {10.5, -3.0, 1.0, 0.0},
+      {2, 2, 0, 0},
+      {5.0, -2.0, kInfF, kNanF});
+  assertExpression<double>(
+      "floor_divide(c0, c1)",
+      {10.5, -3.0, 1.0, 0.0},
+      {2, 2, 0, 0},
+      {5.0, -2.0, kInf, kNan});
+}
+
 TEST_F(ArithmeticTest, mod) {
   std::vector<double> numerDouble = {0, 6, 0, -7, -1, -9, 9, 10.1};
   std::vector<double> denomDouble = {1, 2, -1, 3, -1, -3, -3, -99.9};

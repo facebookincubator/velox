@@ -86,6 +86,23 @@ struct DivideFunction {
 };
 
 template <typename T>
+struct FloorDivideFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool
+  call(TInput& result, const TInput& a, const TInput& b)
+// depend on compiler have correct behaviour for divide by zero
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+      __attribute__((__no_sanitize__("float-divide-by-zero")))
+#endif
+#endif
+  {
+    result = std::floor(a / b);
+    return true;
+  }
+};
+
+template <typename T>
 struct ModulusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool

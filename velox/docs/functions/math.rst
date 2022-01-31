@@ -31,6 +31,14 @@ Mathematical Functions
     zero returns positive infinity if x is greater than zero, negative infinity if
     x if less than zero and NaN if x is equal to zero.
 
+.. function:: floor_divide(x, y) -> [same as x]
+
+    Returns the floor of dividing x by y. The types of x and y must be the same.
+    The result of dividing by zero depends on the input types. For integral types,
+    division by zero results in an error. For floating point types,  division by
+    zero returns positive infinity if x is greater than zero, negative infinity if
+    x if less than zero and NaN if x is equal to zero.
+
 .. function:: exp(x) -> double
 
     Returns Euler's number raised to the power of ``x``.
