@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include "velox/functions/Macros.h"
 #include <bitset>
+#include "velox/functions/Macros.h"
 namespace facebook::velox::functions {
 
 static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
