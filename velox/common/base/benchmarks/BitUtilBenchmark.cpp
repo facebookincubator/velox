@@ -141,6 +141,54 @@ BENCHMARK_RELATIVE(BM_scatterBits, n) {
   runScatterBits(n, false);
 }
 
+void BM_forEachBit(
+    uint32_t iterations,
+    size_t numBits,
+    std::optional<size_t> bitToClear = std::nullopt) {
+  folly::BenchmarkSuspender suspender;
+  uint32_t size = bits::nwords(numBits);
+  std::vector<uint64_t> data(size);
+  uint64_t* rawData = data.data();
+  bits::fillBits(rawData, 0, numBits, true);
+  if (bitToClear.has_value()) {
+    bits::setBit(rawData, bitToClear.value(), false);
+  }
+  suspender.dismiss();
+
+  for (uint32_t i = 0; i < iterations; ++i) {
+    bits::forEachBit(rawData, 0, numBits, true, [](auto row) {
+      return folly::doNotOptimizeAway(row * row);
+    });
+  }
+  suspender.rehire();
+}
+
+namespace {
+const static auto kNumRuns = 1000;
+}
+void BM_ForEachBitAllTrue(uint32_t iterations, size_t numBits) {
+  for (int i = 0; i < kNumRuns; i++) {
+    BM_forEachBit(iterations, numBits);
+  }
+}
+
+void BM_ForEachBitLastBitFalse(uint32_t iterations, size_t numBits) {
+  for (int i = 0; i < kNumRuns; i++) {
+    BM_forEachBit(iterations, numBits, numBits - 1);
+  }
+}
+
+void BM_ForEachBitFirstBitFalse(uint32_t iterations, size_t numBits) {
+  for (int i = 0; i < kNumRuns; i++) {
+    BM_forEachBit(iterations, numBits, 1);
+  }
+}
+BENCHMARK_DRAW_LINE();
+BENCHMARK_PARAM(BM_ForEachBitAllTrue, 10000);
+BENCHMARK_RELATIVE_PARAM(BM_ForEachBitLastBitFalse, 10000);
+BENCHMARK_RELATIVE_PARAM(BM_ForEachBitFirstBitFalse, 10000);
+BENCHMARK_DRAW_LINE();
+
 } // namespace test
 } // namespace velox
 } // namespace facebook
