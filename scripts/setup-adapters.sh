@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Minimal setup for Ubuntu 20.04.
+set -eufx -o pipefail
+
 function install_aws-sdk-cpp {
   local NAME="aws-sdk-cpp"
   local AWS_SDK_VERSION="1.9.96"
