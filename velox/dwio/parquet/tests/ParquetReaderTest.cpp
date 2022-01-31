@@ -428,7 +428,7 @@ TEST_F(ParquetReaderTest, varcharFilters) {
 
   // name IN ('CANADA', 'UNITED KINGDOM')
   const std::vector<std::string> twoFilterValues{"CANADA", "UNITED KINGDOM"};
-  filters.insert({"name", common::test::equal(std::move(twoFilterValues))});
+  filters.insert({"name", common::test::equal(twoFilterValues)});
 
   expected = vectorMaker_->rowVector({
       vectorMaker_->flatVector<int64_t>({3, 23}),
