@@ -24,6 +24,7 @@
 namespace facebook::velox::exec::test {
 
 using MaterializedRow = std::vector<velox::variant>;
+using DuckDBQueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
 
 class DuckDbQueryRunner {
  public:
@@ -33,7 +34,7 @@ class DuckDbQueryRunner {
       const std::string& name,
       const std::vector<RowVectorPtr>& data);
 
-  void execute(const std::string& sql);
+  DuckDBQueryResult execute(const std::string& sql);
 
   std::multiset<MaterializedRow> execute(
       const std::string& sql,
@@ -62,11 +63,13 @@ class DuckDbQueryRunner {
     return allRows;
   }
 
-  std::string GetQuery(int query) {
-    return ::duckdb::TPCHExtension::GetQuery(query);
+  // returns the DuckDB TPC-H Extension Query as string for a given 'queryNo'
+  // Example: queryNo = 1 returns the TPC-H Query1 in the TPC-H Extension
+  std::string getTpchQuery(int queryNo) {
+    return ::duckdb::TPCHExtension::GetQuery(queryNo);
   }
 
-  void initTPCH(double sf);
+  void initializeTpch(double scaleFactor);
 
  private:
   ::duckdb::DuckDB db_;

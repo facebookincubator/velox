@@ -53,7 +53,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       std::vector<std::string>&& outputColumnNames,
       common::test::SubfieldFilters filters,
       const std::string& sql) {
-    const auto& rowType = getRowType(std::move(outputColumnNames));
+    auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder()
                     .tableScan(
@@ -84,7 +84,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
       const std::vector<std::string>& aggregates,
       const std::vector<ChannelIndex>& groupingKeys,
       const std::string& sql) {
-    const auto& rowType = getRowType(std::move(outputColumnNames));
+    auto rowType = getRowType(std::move(outputColumnNames));
 
     auto plan = PlanBuilder()
                     .tableScan(
