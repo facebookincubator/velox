@@ -137,7 +137,7 @@ function install_double_conversion {
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
   OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
-    cmake_install -DBUILD_TESTS=OFF
+    cmake_install -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON
 }
 
 function install_ranges_v3 {
