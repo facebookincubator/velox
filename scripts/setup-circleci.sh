@@ -89,7 +89,7 @@ cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
 cmake_install googletest -DBUILD_SHARED_LIBS=ON
 # Folly fails to build in release-mode due
 # AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
-cmake_install folly -DCMAKE_BUILD_TYPE=Debug
+cmake_install folly -DCMAKE_BUILD_TYPE=Debug -DFOLLY_HAVE_INT128_T=1
 # cmake_install ranges-v3
 
 dnf clean all

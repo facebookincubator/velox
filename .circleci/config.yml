@@ -53,7 +53,7 @@ workflows:
 executors:
   build:
     docker:
-      - image : prestocpp/velox-circleci:mikesh-20220131
+      - image : prestocpp/velox-circleci:mikesh-20220201
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
