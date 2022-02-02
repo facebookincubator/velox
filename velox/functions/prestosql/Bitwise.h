@@ -32,23 +32,23 @@ struct BitwiseAndFunction {
 
 template <typename T>
 struct BitCountFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, TInput num, TInput bits) {
-    if (bits == kMaxBits) {
-      result = std::bitset<kMaxBits>(num).count();
-      return true;
-    }
-    if (bits <= 1 || bits > kMaxBits) {
-      return false;
-    }
-    // check if input "num" falls within the limits of max and min that
+  // template <typename TInput>
+  FOLLY_ALWAYS_INLINE bool call(int64_t& result, int64_t num, int32_t bits) {
+    VELOX_USER_CHECK(
+        (bits > 1 && bits <= kMaxBits),
+        "Bits specified in bit_count must be between 2 and 64,"
+        " got {}",
+        bits)
+    // Check if input "num" falls within the limits of max and min that
     // can be represented with "bits".
-    int64_t lowbitsmask = (1L << (bits - 1)) - 1;
-    if (num > lowbitsmask || num < ~lowbitsmask) {
-      return false;
-    }
-    int64_t mask = (1L << bits) - 1;
-    result = std::bitset<kMaxBits>(num & mask).count();
+    int64_t lowBitsMask = (1L << (bits - 1)) - 1;
+    VELOX_USER_CHECK(
+        (num >= ~lowBitsMask && num <= lowBitsMask),
+        "Number must be representable with the bits specified."
+        " {} can not be represented with {} bits",
+        num,
+        bits);
+    result = bits::countBits(reinterpret_cast<uint64_t*>(&num), 0, bits);
     return true;
   }
 };

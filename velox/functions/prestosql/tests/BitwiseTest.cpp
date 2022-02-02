@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <optional>
-
 #include <gmock/gmock.h>
 
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
@@ -30,6 +29,17 @@ static constexpr auto kMax32 = std::numeric_limits<int32_t>::max();
 static constexpr auto kMin64 = std::numeric_limits<int64_t>::min();
 static constexpr auto kMax64 = std::numeric_limits<int64_t>::max();
 static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
+constexpr const char* kBitCountNumNotFitError =
+    "Number must be representable "
+    "with the bits specified. "
+    "{} can not be "
+    "represented with {} bits";
+constexpr const char* kBitCountInvalidBitsError =
+    "Bits specified in bit_count "
+    "must be between "
+    "2 and 64, got {}";
+
+static constexpr int kMaxErrorLen = 200;
 
 class BitwiseTest : public functions::test::FunctionBaseTest {
  protected:
@@ -56,8 +66,9 @@ class BitwiseTest : public functions::test::FunctionBaseTest {
     return evaluateOnce<int64_t>("bitwise_xor(c0, c1)", a, b);
   }
 
-  template <typename T>
-  std::optional<int64_t> bitCount(std::optional<T> a, std::optional<T> b) {
+  std::optional<int64_t> bitCount(
+      std::optional<int64_t> a,
+      std::optional<int64_t> b) {
     return evaluateOnce<int64_t>("bit_count(c0, c1)", a, b);
   }
 
@@ -127,25 +138,57 @@ TEST_F(BitwiseTest, bitwiseAnd) {
 }
 
 TEST_F(BitwiseTest, bitCount) {
-  EXPECT_EQ(bitCount<int64_t>(9, kMaxBits), 2);
-  EXPECT_EQ(bitCount<int64_t>(9, 8), 2);
-  EXPECT_EQ(bitCount<int64_t>(-7, kMaxBits), 62);
-  EXPECT_EQ(bitCount<int64_t>(-7, 8), 6);
-  EXPECT_EQ(bitCount<int64_t>(kMin64, kMaxBits), 1);
-  EXPECT_EQ(bitCount<int64_t>(kMax64, kMaxBits), 63);
-  EXPECT_EQ(bitCount<int64_t>(-2, 2), 1);
+  EXPECT_EQ(bitCount(9, kMaxBits), 2);
+  EXPECT_EQ(bitCount(9, 8), 2);
+  EXPECT_EQ(bitCount(-7, kMaxBits), 62);
+  EXPECT_EQ(bitCount(-7, 8), 6);
+  EXPECT_EQ(bitCount(kMin64, kMaxBits), 1);
+  EXPECT_EQ(bitCount(kMax64, kMaxBits), 63);
+  EXPECT_EQ(bitCount(-2, 2), 1);
 
-  EXPECT_EQ(bitCount<int64_t>(7, 2), std::nullopt);
-  // bits size must be in range (1,64]
-  EXPECT_EQ(bitCount<int64_t>(7, 1), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(7, 65), std::nullopt);
-  // Need a signed bit(MSB) to represent any number.
-  EXPECT_EQ(bitCount<int64_t>(3, 2), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(2, 2), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(kMax64, 63), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(kMin64, 63), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(-64, 6), std::nullopt);
-  EXPECT_EQ(bitCount<int64_t>(64, 6), std::nullopt);
+  int64_t num = 7;
+  int64_t bits = 2;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  bits = 1;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountInvalidBitsError, bits));
+  bits = 65;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountInvalidBitsError, bits));
+  num = 3;
+  bits = 2;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  num = 2;
+  bits = 2;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  num = kMax64;
+  bits = 63;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  num = kMin64;
+  bits = 63;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  num = -64;
+  bits = 6;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
+  num = 64;
+  bits = 6;
+  assertUserError(
+      [&]() { bitCount(num, bits); },
+      fmt::format(kBitCountNumNotFitError, num, bits));
 }
 
 TEST_F(BitwiseTest, bitwiseNot) {
