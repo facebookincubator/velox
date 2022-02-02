@@ -52,11 +52,10 @@ class ParquetTpchTest : public testing::Test {
   void SetUp() override {
     filesystems::registerLocalFileSystem();
     parquet::registerParquetReaderFactory();
-    auto dataCache = std::make_unique<SimpleLRUDataCache>(1UL << 30);
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr, std::move(dataCache));
+            ->newConnector(kHiveConnectorId, nullptr);
     connector::registerConnector(hiveConnector);
     tempDirectory_ = exec::test::TempDirectoryPath::create();
     lineitemType_ =
