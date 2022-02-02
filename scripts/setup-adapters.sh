@@ -52,6 +52,8 @@ function install_aws-sdk-cpp {
 }
 
 cd "${DEPENDENCY_DIR}" || exit
+# aws-sdk-cpp missing dependencies
+yum install -y curl-devel
 
 install_aws-sdk-cpp
 _ret=$?
