@@ -199,12 +199,6 @@ inline std::unique_ptr<common::BytesValues> equal(
       std::vector<std::string>{value}, nullAllowed);
 }
 
-inline std::unique_ptr<common::BytesValues> equal(
-    const std::vector<std::string>& values,
-    bool nullAllowed = false) {
-  return std::make_unique<common::BytesValues>(values, nullAllowed);
-}
-
 inline std::unique_ptr<common::BigintRange> equal(
     int64_t value,
     bool nullAllowed = false) {

@@ -427,8 +427,8 @@ TEST_F(ParquetReaderTest, varcharFilters) {
       "nation.parquet", rowType, std::move(filters), expected);
 
   // name IN ('CANADA', 'UNITED KINGDOM')
-  const std::vector<std::string> twoFilterValues{"CANADA", "UNITED KINGDOM"};
-  filters.insert({"name", common::test::equal(twoFilterValues)});
+  filters.insert(
+      {"name", common::test::in({std::string("CANADA"), "UNITED KINGDOM"})});
 
   expected = vectorMaker_->rowVector({
       vectorMaker_->flatVector<int64_t>({3, 23}),
@@ -440,9 +440,10 @@ TEST_F(ParquetReaderTest, varcharFilters) {
       "nation.parquet", rowType, std::move(filters), expected);
 
   // name IN ('UNITED STATES', 'CANADA', 'INDIA', 'RUSSIA')
-  const std::vector<std::string> fourFilterValues{
-      "UNITED STATES", "INDIA", "CANADA", "RUSSIA"};
-  filters.insert({"name", common::test::equal(fourFilterValues)});
+  filters.insert(
+      {"name",
+       common::test::in(
+           {std::string("UNITED STATES"), "INDIA", "CANADA", "RUSSIA"})});
 
   expected = vectorMaker_->rowVector({
       vectorMaker_->flatVector<int64_t>({3, 8, 22, 24}),
