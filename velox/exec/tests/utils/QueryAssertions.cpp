@@ -390,6 +390,12 @@ std::string generateUserFriendlyDiff(
   return message.str();
 }
 
+void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
+  ASSERT_TRUE(result->success)
+      << "DuckDB query failed: " << result->error << std::endl
+      << sql;
+}
+
 } // namespace
 
 void DuckDbQueryRunner::createTable(
@@ -430,12 +436,6 @@ void DuckDbQueryRunner::initializeTpch(double scaleFactor) {
   db_.LoadExtension<::duckdb::TPCHExtension>();
   auto query = fmt::format("CALL dbgen(sf={})", scaleFactor);
   execute(query);
-}
-
-void verifyDuckDBResult(DuckDBQueryResult& result, std::string_view sql) {
-  ASSERT_TRUE(result->success)
-      << "DuckDB query failed: " << result->error << std::endl
-      << sql;
 }
 
 DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {

@@ -101,7 +101,7 @@ class ParquetTpchTest : public HiveConnectorTestBase {
   // Split file at a given path 'filePath' into 'numSplits' splits.
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> makeSplits(
       const std::string& filePath,
-      int64_t numSplits) const {
+      int64_t numSplits = 10) const {
     const int fileSize = fs::file_size(filePath);
     // Take the upper bound.
     const int splitSize = std::ceil(fileSize / numSplits);
@@ -114,24 +114,6 @@ class ParquetTpchTest : public HiveConnectorTestBase {
       splits.push_back(std::move(split));
     }
     return splits;
-  }
-
-  void addSplitsToTask(
-      exec::Task* task,
-      bool& noMoreSplits,
-      const std::vector<std::string>& filePaths,
-      int sourcePlanNodeId = 0,
-      int64_t numSplits = 10) const {
-    if (!noMoreSplits) {
-      for (const auto& filePath : filePaths) {
-        auto const& splits = makeSplits(filePath, numSplits);
-        for (const auto& split : splits) {
-          task->addSplit(std::to_string(sourcePlanNodeId), exec::Split(split));
-        }
-      }
-      task->noMoreSplits(std::to_string(sourcePlanNodeId));
-      noMoreSplits = true;
-    }
   }
 
   // Write the DuckDB Lineitem TPC-H table to a Parquet file and return the file
@@ -156,14 +138,12 @@ class ParquetTpchTest : public HiveConnectorTestBase {
     return filePath;
   }
 
-  RowTypePtr getLineitemColumns(
-      std::vector<std::string>&& outputColumnNames) const {
+  RowTypePtr getLineitemColumns(std::vector<std::string> names) const {
     std::vector<TypePtr> types;
-    for (auto colName : outputColumnNames) {
+    for (auto colName : names) {
       types.push_back(lineitemType_->findChild(colName));
     }
-
-    return ROW(std::move(outputColumnNames), std::move(types));
+    return ROW(std::move(names), std::move(types));
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -175,7 +155,15 @@ class ParquetTpchTest : public HiveConnectorTestBase {
     return exec::test::assertQuery(
         params,
         [&](exec::Task* task) {
-          addSplitsToTask(task, noMoreSplits, {filePath}, sourcePlanNodeId);
+          if (!noMoreSplits) {
+            auto const& splits = makeSplits(filePath);
+            for (const auto& split : splits) {
+              task->addSplit(
+                  std::to_string(sourcePlanNodeId), exec::Split(split));
+            }
+            task->noMoreSplits(std::to_string(sourcePlanNodeId));
+            noMoreSplits = true;
+          }
         },
         duckQuery,
         *duckDb_);
@@ -185,13 +173,6 @@ class ParquetTpchTest : public HiveConnectorTestBase {
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
   RowTypePtr lineitemType_;
 };
-
-// output of getTpchQuery() has a new line and semi-colon that need to be
-// removed in order to use the query string in a subquery
-inline void prepareQueryStringForSubquery(std::string& queryString) {
-  queryString.pop_back(); // remove new line
-  queryString.pop_back(); // remove semi-colon
-}
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTest::duckDb_ = nullptr;
 
@@ -283,7 +264,6 @@ TEST_F(ParquetTpchTest, q1) {
   params.planNode = std::move(plan);
   auto duckDbSql = duckDb_->getTpchQuery(1);
   // Additional steps for double type result verification.
-  prepareQueryStringForSubquery(duckDbSql);
   const auto& duckDBRounded = fmt::format(
       "select l_returnflag, l_linestatus, round(sum_qty, 2), "
       "round(sum_base_price, 2), round(sum_disc_price, 2), round(sum_charge, 2), "
@@ -338,7 +318,6 @@ TEST_F(ParquetTpchTest, q6) {
   params.planNode = std::move(plan);
   auto duckDbSql = duckDb_->getTpchQuery(6);
   // Additional steps for double type result verification.
-  prepareQueryStringForSubquery(duckDbSql);
   const auto& duckDBRounded =
       fmt::format("select round(revenue, 2) from ({})", duckDbSql);
 
