@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/file/FileSystems.h"
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -35,7 +36,7 @@ namespace fs = std::filesystem;
 namespace fs = std::experimental::filesystem;
 #endif
 
-class ParquetTpchTest : public HiveConnectorTestBase {
+class ParquetTpchTest : public testing::Test {
  protected:
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
@@ -45,12 +46,18 @@ class ParquetTpchTest : public HiveConnectorTestBase {
       constexpr double kTpchScaleFactor = 0.01;
       duckDb_->initializeTpch(kTpchScaleFactor);
     }
-    OperatorTestBase::SetUpTestCase();
+    functions::prestosql::registerAllFunctions();
   }
 
   void SetUp() override {
-    HiveConnectorTestBase::SetUp();
+    filesystems::registerLocalFileSystem();
     parquet::registerParquetReaderFactory();
+    auto dataCache = std::make_unique<SimpleLRUDataCache>(1UL << 30);
+    auto hiveConnector =
+        connector::getConnectorFactory(
+            connector::hive::HiveConnectorFactory::kHiveConnectorName)
+            ->newConnector(kHiveConnectorId, nullptr, std::move(dataCache));
+    connector::registerConnector(hiveConnector);
     tempDirectory_ = exec::test::TempDirectoryPath::create();
     lineitemType_ =
         ROW({"orderkey",
@@ -88,8 +95,8 @@ class ParquetTpchTest : public HiveConnectorTestBase {
   }
 
   void TearDown() override {
+    connector::unregisterConnector(kHiveConnectorId);
     parquet::unregisterParquetReaderFactory();
-    HiveConnectorTestBase::TearDown();
   }
 
   int64_t date(std::string_view stringDate) const {
@@ -109,7 +116,8 @@ class ParquetTpchTest : public HiveConnectorTestBase {
 
     // Add all the splits.
     for (int i = 0; i < numSplits; i++) {
-      auto split = makeHiveConnectorSplit(filePath, i * splitSize, splitSize);
+      auto split = HiveConnectorTestBase::makeHiveConnectorSplit(
+          filePath, i * splitSize, splitSize);
       split->fileFormat = dwio::common::FileFormat::PARQUET;
       splits.push_back(std::move(split));
     }
@@ -204,8 +212,8 @@ TEST_F(ParquetTpchTest, q1) {
       PlanBuilder(sourcePlanNodeId)
           .tableScan(
               rowType,
-              makeTableHandle(std::move(filters)),
-              allRegularColumns(rowType))
+              HiveConnectorTestBase::makeTableHandle(std::move(filters)),
+              HiveConnectorTestBase::allRegularColumns(rowType))
           .project(
               {"returnflag",
                "linestatus",
@@ -299,21 +307,23 @@ TEST_F(ParquetTpchTest, q6) {
   params.maxDrivers = 4;
   params.numResultDrivers = 1;
 
-  auto plan = PlanBuilder(10)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(sourcePlanNodeId)
-                           .tableScan(
-                               rowType,
-                               makeTableHandle(std::move(filters)),
-                               allRegularColumns(rowType))
-                           .project({"extendedprice * discount"})
-                           .partialAggregation({}, {"sum(p0)"})
-                           .planNode()})
-                  .finalAggregation({}, {"sum(a0)"}, {DOUBLE()})
-                  // Additional step for double type result verification
-                  .project({"round(a0, cast(2 as integer))"})
-                  .planNode();
+  auto plan =
+      PlanBuilder(10)
+          .localPartition(
+              {},
+              {PlanBuilder(sourcePlanNodeId)
+                   .tableScan(
+                       rowType,
+                       HiveConnectorTestBase::makeTableHandle(
+                           std::move(filters)),
+                       HiveConnectorTestBase::allRegularColumns(rowType))
+                   .project({"extendedprice * discount"})
+                   .partialAggregation({}, {"sum(p0)"})
+                   .planNode()})
+          .finalAggregation({}, {"sum(a0)"}, {DOUBLE()})
+          // Additional step for double type result verification
+          .project({"round(a0, cast(2 as integer))"})
+          .planNode();
 
   params.planNode = std::move(plan);
   auto duckDbSql = duckDb_->getTpchQuery(6);
