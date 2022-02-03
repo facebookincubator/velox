@@ -2,14 +2,6 @@
 Bitwise Functions
 =================
 
-.. function:: bitwise_and(x, y) -> [bigint]
-
-    Returns the bitwise AND of ``x`` and ``y`` in 2's complement representation.
-
-.. function:: bitwise_arithmetic_shift_right(x, shift) -> [bigint]``
-
-    Returns the arithmetic right shift operation on ``x`` shifted by ``shift`` in 2’s complement representation.
-
 .. function:: bit_count(x, bits) -> bigint
 
     Count the number of bits set in ``x`` (treated as ``bits``-bit signed
@@ -19,6 +11,14 @@ Bitwise Functions
         SELECT bit_count(9, 8); -- 2
         SELECT bit_count(-7, 64); -- 62
         SELECT bit_count(-7, 8); -- 6
+
+.. function:: bitwise_and(x, y) -> [bigint]
+
+    Returns the bitwise AND of ``x`` and ``y`` in 2's complement representation.
+
+.. function:: bitwise_arithmetic_shift_right(x, shift) -> [bigint]``
+
+    Returns the arithmetic right shift operation on ``x`` shifted by ``shift`` in 2’s complement representation.
 
 .. function:: bitwise_left_shift(x, shift) -> [bigint]``
 
