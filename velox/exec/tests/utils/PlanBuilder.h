@@ -135,6 +135,7 @@ class PlanBuilder {
       const std::vector<std::string>& masks = {}) {
     return aggregation(
         groupingKeys,
+        {},
         aggregates,
         masks,
         core::AggregationNode::Step::kPartial,
@@ -156,6 +157,7 @@ class PlanBuilder {
       const std::vector<TypePtr>& resultTypes) {
     return aggregation(
         groupingKeys,
+        {},
         aggregates,
         {},
         core::AggregationNode::Step::kFinal,
@@ -174,6 +176,7 @@ class PlanBuilder {
       const std::vector<TypePtr>& resultTypes) {
     return aggregation(
         groupingKeys,
+        {},
         aggregates,
         {},
         core::AggregationNode::Step::kIntermediate,
@@ -186,6 +189,7 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates) {
     return aggregation(
         groupingKeys,
+        {},
         aggregates,
         {},
         core::AggregationNode::Step::kSingle,
@@ -194,6 +198,19 @@ class PlanBuilder {
 
   PlanBuilder& aggregation(
       const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks,
+      core::AggregationNode::Step step,
+      bool ignoreNullKeys,
+      const std::vector<TypePtr>& resultTypes = {}) {
+    // TODO Introduce builder for the aggregation node.
+    return aggregation(
+        groupingKeys, {}, aggregates, masks, step, ignoreNullKeys, resultTypes);
+  }
+
+  PlanBuilder& aggregation(
+      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<ChannelIndex>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,

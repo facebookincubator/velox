@@ -378,6 +378,7 @@ PlanBuilder::createAggregateMasks(
 
 PlanBuilder& PlanBuilder::aggregation(
     const std::vector<ChannelIndex>& groupingKeys,
+    const std::vector<ChannelIndex>& preGroupedKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
@@ -390,7 +391,7 @@ PlanBuilder& PlanBuilder::aggregation(
       nextPlanNodeId(),
       step,
       fields(groupingKeys),
-      std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
+      fields(preGroupedKeys),
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
       createAggregateMasks(numAggregates, masks),
