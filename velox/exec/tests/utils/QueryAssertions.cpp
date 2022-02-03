@@ -19,6 +19,7 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/VectorTypeUtils.h"
 
 using facebook::velox::duckdb::duckdbTimestampToVelox;
@@ -430,6 +431,15 @@ void DuckDbQueryRunner::createTable(
       appender.EndRow();
     }
   }
+}
+
+std::string DuckDbQueryRunner::getTpchQuery(int queryNo) {
+  auto queryString = ::duckdb::TPCHExtension::GetQuery(queryNo);
+  // Output of GetQuery() has a new line and a semi-colon. These need to be
+  // removed in order to use the query string in a subquery
+  queryString.pop_back(); // remove new line
+  queryString.pop_back(); // remove semi-colon
+  return queryString;
 }
 
 void DuckDbQueryRunner::initializeTpch(double scaleFactor) {

@@ -18,7 +18,6 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/external/duckdb/duckdb.hpp"
-#include "velox/external/duckdb/tpch/include/tpch-extension.hpp"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::exec::test {
@@ -65,14 +64,7 @@ class DuckDbQueryRunner {
 
   // Returns the DuckDB TPC-H Extension Query as string for a given 'queryNo'
   // Example: queryNo = 1 returns the TPC-H Query1 in the TPC-H Extension
-  std::string getTpchQuery(int queryNo) {
-    auto queryString = ::duckdb::TPCHExtension::GetQuery(queryNo);
-    // Output of GetQuery() has a new line and a semi-colon. These need to be
-    // removed in order to use the query string in a subquery
-    queryString.pop_back(); // remove new line
-    queryString.pop_back(); // remove semi-colon
-    return queryString;
-  }
+  std::string getTpchQuery(int queryNo);
 
   void initializeTpch(double scaleFactor);
 
