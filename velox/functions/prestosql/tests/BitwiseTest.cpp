@@ -29,17 +29,6 @@ static constexpr auto kMax32 = std::numeric_limits<int32_t>::max();
 static constexpr auto kMin64 = std::numeric_limits<int64_t>::min();
 static constexpr auto kMax64 = std::numeric_limits<int64_t>::max();
 static constexpr int kMaxBits = std::numeric_limits<uint64_t>::digits;
-constexpr const char* kBitCountNumNotFitError =
-    "Number must be representable "
-    "with the bits specified. "
-    "{} can not be "
-    "represented with {} bits";
-constexpr const char* kBitCountInvalidBitsError =
-    "Bits specified in bit_count "
-    "must be between "
-    "2 and 64, got {}";
-
-static constexpr int kMaxErrorLen = 200;
 
 class BitwiseTest : public functions::test::FunctionBaseTest {
  protected:
@@ -67,9 +56,9 @@ class BitwiseTest : public functions::test::FunctionBaseTest {
   }
 
   std::optional<int64_t> bitCount(
-      std::optional<int64_t> a,
-      std::optional<int64_t> b) {
-    return evaluateOnce<int64_t>("bit_count(c0, c1)", a, b);
+      std::optional<int64_t> num,
+      std::optional<int64_t> bits) {
+    return evaluateOnce<int64_t>("bit_count(c0, c1)", num, bits);
   }
 
   template <typename T>
@@ -146,49 +135,36 @@ TEST_F(BitwiseTest, bitCount) {
   EXPECT_EQ(bitCount(kMax64, kMaxBits), 63);
   EXPECT_EQ(bitCount(-2, 2), 1);
 
-  int64_t num = 7;
-  int64_t bits = 2;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  bits = 1;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountInvalidBitsError, bits));
-  bits = 65;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountInvalidBitsError, bits));
-  num = 3;
-  bits = 2;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  num = 2;
-  bits = 2;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  num = kMax64;
-  bits = 63;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  num = kMin64;
-  bits = 63;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  num = -64;
-  bits = 6;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
-  num = 64;
-  bits = 6;
-  assertUserError(
-      [&]() { bitCount(num, bits); },
-      fmt::format(kBitCountNumNotFitError, num, bits));
+  auto assertInvalidBits = [this](int64_t num, int64_t bits) {
+    assertUserError(
+        [&]() { this->bitCount(num, bits); },
+        fmt::format(
+            "Bits specified in bit_count "
+            "must be between "
+            "2 and 64, got {}",
+            bits));
+  };
+
+  auto assertNumberTooLarge = [this](int64_t num, int64_t bits) {
+    assertUserError(
+        [&]() { this->bitCount(num, bits); },
+        fmt::format(
+            "Number must be representable "
+            "with the bits specified. "
+            "{} can not be "
+            "represented with {} bits",
+            num,
+            bits));
+  };
+  assertNumberTooLarge(7, 2);
+  assertNumberTooLarge(3, 2);
+  assertNumberTooLarge(2, 2);
+  assertNumberTooLarge(kMax64, 63);
+  assertNumberTooLarge(kMin64, 63);
+  assertNumberTooLarge(-64, 6);
+  assertNumberTooLarge(64, 6);
+  assertInvalidBits(7, 1);
+  assertInvalidBits(7, 65);
 }
 
 TEST_F(BitwiseTest, bitwiseNot) {

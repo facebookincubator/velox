@@ -10,6 +10,16 @@ Bitwise Functions
 
     Returns the arithmetic right shift operation on ``x`` shifted by ``shift`` in 2’s complement representation.
 
+.. function:: bit_count(x, bits) -> bigint
+
+    Count the number of bits set in ``x`` (treated as ``bits``-bit signed
+    integer) in 2's complement representation::
+
+        SELECT bit_count(9, 64); -- 2
+        SELECT bit_count(9, 8); -- 2
+        SELECT bit_count(-7, 64); -- 62
+        SELECT bit_count(-7, 8); -- 6
+
 .. function:: bitwise_left_shift(x, shift) -> [bigint]``
 
     Returns the left shifted value of ``x``. Here x can be of type ``TINYINT`` , ``SMALLINT``, ``INTEGER`` and ``BIGINT``.
@@ -41,13 +51,3 @@ Bitwise Functions
 .. function:: bitwise_xor(x, y) -> [bigint]``
 
     Returns the bitwise XOR of ``x`` and ``y`` in 2's complement representation.
-
-.. function:: bit_count(x, bits) -> bigint
-
-    Count the number of bits set in ``x`` (treated as ``bits``-bit signed
-    integer) in 2's complement representation::
-
-        SELECT bit_count(9, 64); -- 2
-        SELECT bit_count(9, 8); -- 2
-        SELECT bit_count(-7, 64); -- 62
-        SELECT bit_count(-7, 8); -- 6

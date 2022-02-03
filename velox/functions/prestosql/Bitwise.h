@@ -32,10 +32,9 @@ struct BitwiseAndFunction {
 
 template <typename T>
 struct BitCountFunction {
-  // template <typename TInput>
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, int64_t num, int32_t bits) {
     VELOX_USER_CHECK(
-        (bits > 1 && bits <= kMaxBits),
+        (bits >= 2 && bits <= kMaxBits),
         "Bits specified in bit_count must be between 2 and 64,"
         " got {}",
         bits)
