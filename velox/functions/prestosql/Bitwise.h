@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <bitset>
 #include "velox/functions/Macros.h"
 namespace facebook::velox::functions {
 
