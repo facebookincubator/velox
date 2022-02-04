@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,12 +14,12 @@
 #pragma once
 #include <string>
 
-#include "velox/experimental/codegen/CodegenExceptions.h"
-#include "velox/experimental/codegen/ast/ASTNode.h"
-#include "velox/experimental/codegen/ast/CodegenUtils.h"
+#include "f4d/experimental/codegen/CodegenExceptions.h"
+#include "f4d/experimental/codegen/ast/ASTNode.h"
+#include "f4d/experimental/codegen/ast/CodegenUtils.h"
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 
 namespace {
@@ -105,8 +103,7 @@ class ConstantExpression final : public ASTNode {
 
     auto constantValue =
         isNull() ? "std::nullopt" : codegenValue<T>(value_.value());
-    auto code = codegenUtils::codegenAssignment(
-        codegenUtils::codegenOptionalAccess(outputVarName), constantValue);
+    auto code = codegenUtils::codegenAssignment(outputVarName, constantValue);
     return CodeSnippet(outputVarName, code);
   }
 
@@ -165,5 +162,5 @@ CodeSnippet ConstantExpression<std::string>::generateCode(
     const std::string& outputVarName) const;
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 } // namespace facebook

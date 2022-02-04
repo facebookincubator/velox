@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,5 +13,5 @@
  */
 #pragma once
 
-#include "velox/experimental/codegen/library_loader/FunctionTable.h"
-#include "velox/experimental/codegen/vector_function/GeneratedVectorFunction-inl.h"
+#include "f4d/experimental/codegen/library_loader/FunctionTable.h"
+#include "f4d/experimental/codegen/vector_function/GeneratedVectorFunction-inl.h"

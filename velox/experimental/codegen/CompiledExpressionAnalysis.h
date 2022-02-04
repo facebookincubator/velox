@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,22 +18,22 @@
 // expressions.
 
 #include <functional>
-#include "velox/core/PlanNode.h"
-#include "velox/experimental/codegen/CodegenASTAnalysis.h"
-#include "velox/experimental/codegen/ast/AST.h"
-#include "velox/experimental/codegen/ast/ASTAnalysis.h"
-#include "velox/experimental/codegen/ast/ASTNode.h"
-#include "velox/experimental/codegen/transform/PlanNodeTransform.h"
+#include "f4d/core/PlanNode.h"
+#include "f4d/experimental/codegen/CodegenASTAnalysis.h"
+#include "f4d/experimental/codegen/ast/AST.h"
+#include "f4d/experimental/codegen/ast/ASTAnalysis.h"
+#include "f4d/experimental/codegen/ast/ASTNode.h"
+#include "f4d/experimental/codegen/transform/PlanNodeTransform.h"
 
-namespace facebook::velox::codegen {
+namespace facebook::f4d::codegen {
 
-using velox::core::ITypedExpr;
-using velox::transform::PlanNodeAnalysis;
+using f4d::core::ITypedExpr;
+using f4d::transform::PlanNodeAnalysis;
+using f4d::transform::TransformFlags;
 
 struct CompiledExpressionAnalysisResult {
-  /// TOOD: Merge
-  /// std::map<std::string,std::pair<size_t,facebook::velox::TypePtr>> into
-  /// GeneratedExpressionStruct
+  /// TOOD: Merge std::map<std::string,std::pair<size_t,facebook::f4d::TypePtr>>
+  /// into GeneratedExpressionStruct
   std::map<std::shared_ptr<const ITypedExpr>, GeneratedExpressionStruct>
       generatedCode_;
   std::map<core::PlanNodeId, bool> isDefaultNull_;
@@ -54,10 +52,8 @@ class GenerateCompiledExpressionVisitor {
       const UDFManager& udfManager,
       bool useSymbolsForArithmetic,
       DefaultScopedTimer::EventSequence& eventSequence,
-      bool enableDefaultNullOpt = true,
-      bool enableFilterDefaultNull = true)
-      : enableDefaultNullOpt_(enableDefaultNullOpt),
-        enableFilterDefaultNull_(enableFilterDefaultNull),
+      const TransformFlags& flags)
+      : flags_(flags),
         astNodes_(astNodes),
         result_(result),
         generator_(udfManager, useSymbolsForArithmetic, false),
@@ -81,10 +77,7 @@ class GenerateCompiledExpressionVisitor {
   }
 
  private:
-  bool enableDefaultNullOpt_ = true;
-
-  // enable the extended default null analysis for filter
-  bool enableFilterDefaultNull_ = true;
+  const transform::TransformFlags& flags_;
 
   const std::map<std::shared_ptr<const ITypedExpr>, CodegenASTNode>& astNodes_;
   CompiledExpressionAnalysisResult& result_;
@@ -131,11 +124,7 @@ class GenerateCompiledExpressionVisitor {
     bool isDefaultNull = false;
     bool isDefaultNullStrict = false;
 
-    // currently when projection is after a filter, then only use default null
-    // for filter
-    if (enableDefaultNullOpt_ &&
-        std::dynamic_pointer_cast<const core::FilterNode>(
-            projection.sources()[0]) == nullptr) {
+    if (flags_.enableDefaultNullOpt) {
       isDefaultNull = true;
       isDefaultNullStrict = true;
       std::set<std::string> inputAttrs;
@@ -175,6 +164,7 @@ class GenerateCompiledExpressionVisitor {
       result_.isDefaultNull_[projection.id()] = isDefaultNull;
       result_.isDefaultNullStrict_[projection.id()] = isDefaultNullStrict;
     }
+
     for (const auto& expr : projection.projections()) {
       // when the compiled expression is default null we generate code
       // assuming all inputs are not nullable and the vector function only
@@ -191,10 +181,11 @@ class GenerateCompiledExpressionVisitor {
       return;
     }
     bool isDefaultNull = false;
-    if (enableDefaultNullOpt_) {
+    if (flags_.enableDefaultNullOpt) {
       isDefaultNull = result_.isDefaultNull_[filterNode.id()] =
-          enableFilterDefaultNull_ ? analysis::isFilterDefaultNull(*ast.get())
-                                   : analysis::isDefaultNull(*ast.get());
+          flags_.enableFilterDefaultNull
+          ? analysis::isFilterDefaultNull(*ast.get())
+          : analysis::isDefaultNull(*ast.get());
       // filter doesn't care default null strict since it doesn't use
       // VectorWriter
     }
@@ -211,13 +202,11 @@ class CompiledExpressionAnalysis : PlanNodeAnalysis {
       const UDFManager& udfManager,
       bool useSymbolsForArithmetic,
       DefaultScopedTimer::EventSequence& eventSequence,
-      bool enableDefaultNullOpt = true,
-      bool enableFilterDefaultNull = true)
+      const TransformFlags& flags = transform::PlanNodeTransform::defaultFlags)
       : udfManager_(udfManager),
         useSymbolsForArithmetic_(useSymbolsForArithmetic),
         eventSequence_(eventSequence),
-        enableDefaultNullOpt_(enableDefaultNullOpt),
-        enableFilterDefaultNull_(enableFilterDefaultNull) {}
+        flags_(flags) {}
 
   ~CompiledExpressionAnalysis() override {}
 
@@ -232,8 +221,7 @@ class CompiledExpressionAnalysis : PlanNodeAnalysis {
         udfManager_,
         useSymbolsForArithmetic_,
         eventSequence_,
-        enableDefaultNullOpt_,
-        enableFilterDefaultNull_);
+        flags_);
     dfsApply(
         plan, [&visitor](const auto& planNode) { visitor.visit(planNode); });
   }
@@ -247,6 +235,6 @@ class CompiledExpressionAnalysis : PlanNodeAnalysis {
   const UDFManager& udfManager_;
   bool useSymbolsForArithmetic_;
   DefaultScopedTimer::EventSequence& eventSequence_;
-  bool enableDefaultNullOpt_, enableFilterDefaultNull_;
+  const TransformFlags& flags_;
 };
-} // namespace facebook::velox::codegen
+} // namespace facebook::f4d::codegen

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,8 +15,8 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <iostream>
-#include "velox/experimental/codegen/vector_function/StringTypes.h"
-namespace facebook::velox::codegen {
+#include "f4d/experimental/codegen/vector_function/StringTypes.h"
+namespace facebook::f4d::codegen {
 class TempAllocatorTest : public testing::Test {};
 
 TEST_F(TempAllocatorTest, construction) {
@@ -84,4 +82,4 @@ TEST_F(TempAllocatorTest, Assignment) {
   std::memcpy((*string1).data(), refString.data(), refString.size());
   checkValue(string1);
 }
-} // namespace facebook::velox::codegen
+} // namespace facebook::f4d::codegen

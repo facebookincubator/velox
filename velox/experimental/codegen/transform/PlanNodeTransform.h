@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,14 +18,35 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#include "velox/core/PlanNode.h"
+#include "f4d/core/PlanNode.h"
 
 /// This header introduces base/abstract classes for the plan node
 /// transformation framework.
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace transform {
+
+union TransformFlags {
+  struct {
+    bool compileFilter : 1; // use codegen for filter expr
+
+    // merge filter into projection
+    // invalid if compileFilter not set
+    bool mergeFilter : 1;
+
+    bool enableDefaultNullOpt : 1; // enable default null optimization
+
+    // use extended default null definition for filter
+    // invalid if enableDefaultNullOpt not set
+    bool enableFilterDefaultNull : 1;
+
+    // up for more flags in the future
+  };
+
+  // make it easily comparable, may need to increase size as more flags added
+  uint8_t flagVal;
+};
 
 // Transformation Base class
 struct PlanNodeTransform {
@@ -38,6 +57,8 @@ struct PlanNodeTransform {
   /// \return A new transformed plan
   virtual std::shared_ptr<core::PlanNode> transform(
       const core::PlanNode& plan) = 0;
+
+  constexpr static TransformFlags defaultFlags = {{1, 1, 1, 1}};
 };
 
 auto planNodeTransformCompare = [](const PlanNodeTransform& a,
@@ -83,5 +104,5 @@ struct PlanNodeTransformSequence : public PlanNodeTransform {
 };
 
 } // namespace transform
-} // namespace velox
+} // namespace f4d
 } // namespace facebook

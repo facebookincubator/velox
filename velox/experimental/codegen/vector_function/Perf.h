@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,7 +17,7 @@
 #include <iostream>
 
 #if !defined(CODEGEN_PERF) || !defined(__linux__)
-namespace facebook::velox::codegen {
+namespace facebook::f4d::codegen {
 class Perf {
  public:
   Perf() {}
@@ -34,7 +32,7 @@ class Perf {
   void report() const {}
   void report(std::ostream&) const {}
 };
-} // namespace facebook::velox::codegen
+} // namespace facebook::f4d::codegen
 #else
 
 #include <linux/perf_event.h>
@@ -125,7 +123,7 @@ inline std::ostream& operator<<(std::ostream& os, const PerfEvent& e) {
 }
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 
 class Perf {
@@ -215,7 +213,7 @@ class Perf {
 };
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 } // namespace facebook
 
 #endif // !defined(CODEGEN_PERF) || !defined(__linux__)

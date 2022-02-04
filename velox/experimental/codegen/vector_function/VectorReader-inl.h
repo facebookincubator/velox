@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,14 +13,14 @@
  */
 #pragma once
 
-#include "velox/buffer/Buffer.h"
-#include "velox/common/base/Nulls.h"
-#include "velox/experimental/codegen/vector_function/StringTypes.h"
-#include "velox/type/Type.h"
-#include "velox/vector/FlatVector.h"
+#include "f4d/buffer/Buffer.h"
+#include "f4d/common/base/Nulls.h"
+#include "f4d/experimental/codegen/vector_function/StringTypes.h"
+#include "f4d/type/Type.h"
+#include "f4d/vector/FlatVector.h"
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 
 // Expected members of the vector reader config.
@@ -35,7 +33,7 @@ namespace codegen {
 //   // true means set to null, false means not null
 //   static constexpr bool intializedWithNullSet_
 //
-//   // when true, the reader will never receive a null value to write
+//   // when true, the reader will never reveive a null value to write
 //   static constexpr bool mayWriteNull_
 //
 //
@@ -80,13 +78,17 @@ struct VectorReader {
 
     if constexpr (Config::isWriter_) {
       mutableRawNulls_ = flatVector->mutableRawNulls();
-      mutableRawValues_ = flatVector->mutableRawValues();
     } else {
       if constexpr (Config::mayReadNull_) {
         // TODO when read only vector does not have nulls we dont need to
         // allocate nulls
         mutableRawNulls_ = flatVector->mutableRawNulls();
       }
+    }
+
+    if constexpr (Config::isWriter_) {
+      mutableRawValues_ = flatVector->mutableRawValues();
+    } else {
       mutableRawValues_ = const_cast<NativeType*>(flatVector->rawValues());
     }
   }
@@ -181,13 +183,17 @@ struct VectorReader<
 
     if constexpr (Config::isWriter_) {
       mutableRawNulls_ = flatVector->mutableRawNulls();
-      mutableRawValues_ = flatVector->template mutableRawValues<uint64_t>();
     } else {
       // TODO when read only vector does not have nulls we dont need to allocate
       // nulls
       if constexpr (Config::mayReadNull_) {
         mutableRawNulls_ = flatVector->mutableRawNulls();
       }
+    }
+
+    if constexpr (Config::isWriter_) {
+      mutableRawValues_ = flatVector->template mutableRawValues<uint64_t>();
+    } else {
       mutableRawValues_ =
           const_cast<uint64_t*>(flatVector->template rawValues<uint64_t>());
     }
@@ -305,13 +311,17 @@ struct VectorReader<
 
     if constexpr (Config::isWriter_) {
       mutableRawNulls_ = flatVector->mutableRawNulls();
-      mutableRawValues_ = flatVector->template mutableRawValues<StringView>();
     } else {
       // TODO when read only vector does not have nulls we dont need to allocate
       // nulls
       if constexpr (Config::mayReadNull_) {
         mutableRawNulls_ = flatVector->mutableRawNulls();
       }
+    }
+
+    if constexpr (Config::isWriter_) {
+      mutableRawValues_ = flatVector->template mutableRawValues<StringView>();
+    } else {
       mutableRawValues_ =
           const_cast<StringView*>(flatVector->template rawValues<StringView>());
     }
@@ -585,5 +595,5 @@ struct VectorReader<
 };
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 } // namespace facebook

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,20 +18,21 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
-#include "velox/experimental/codegen/vector_function/ConcatExpression-inl.h"
-#include "velox/experimental/codegen/vector_function/Perf.h"
-#include "velox/experimental/codegen/vector_function/VectorReader-inl.h"
-#include "velox/expression/VectorFunction.h"
+#include "f4d/experimental/codegen/vector_function/ConcatExpression-inl.h"
+#include "f4d/experimental/codegen/vector_function/Perf.h"
+#include "f4d/experimental/codegen/vector_function/VectorReader-inl.h"
+#include "f4d/expression/VectorFunction.h"
+#include "f4d/vector/SelectivityVector.h"
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 
-template <bool isDefaultNull, bool isDefaultNullStrict>
+template <bool isDefaultNull>
 struct InputReaderConfig {
   static constexpr bool isWriter_ = false;
-  // when true, the reader will never read a nullvalue
-  static constexpr bool mayReadNull_ = !isDefaultNull && !isDefaultNullStrict;
+  // when false, the reader will never read a nullvalue
+  static constexpr bool mayReadNull_ = !isDefaultNull;
 
   // irrelevent for reader
   static constexpr bool mayWriteNull_ = false;
@@ -72,8 +71,10 @@ std::ostream& printReference(
   } else {
     referenceStream << value.value();
   }
+  const std::string format =
+      "ReferenceType [ rowIndex {}, vector address {}, value {} ]";
   out << fmt::format(
-      "ReferenceType [ rowIndex {}, vector address {}, value {} ]",
+      format,
       reference.rowIndex_,
       static_cast<void*>(reference.reader_.vector_.get()),
       referenceStream.str());
@@ -88,7 +89,8 @@ std::ostream& printValue(std::ostream& out, const ValType& value) {
   } else {
     referenceStream << value.value();
   }
-  out << fmt::format("[ value {} ]", referenceStream.str());
+  const std::string format = "[ value {} ]";
+  out << fmt::format(format, referenceStream.str());
   return out;
 }
 
@@ -114,18 +116,17 @@ std::ostream& operator<<(std::ostream& out, const std::tuple<Types...>& tuple) {
 
 /// Base class for all generated function
 /// This add a new apply method to support multiple output;
-class GeneratedVectorFunctionBase
-    : public facebook::velox::exec::VectorFunction {
+class GeneratedVectorFunctionBase : public facebook::f4d::exec::VectorFunction {
  public:
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Woverloaded-virtual"
   // Multiple output apply method.
-  virtual size_t apply(
-      const facebook::velox::SelectivityVector& rows,
-      std::vector<facebook::velox::VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      facebook::velox::exec::EvalCtx* context,
-      std::vector<facebook::velox::VectorPtr>& results) const = 0;
+  virtual void apply(
+      const facebook::f4d::SelectivityVector& rows,
+      std::vector<facebook::f4d::VectorPtr>& args,
+      [[maybe_unused]] facebook::f4d::exec::Expr* caller,
+      facebook::f4d::exec::EvalCtx* context,
+      std::vector<facebook::f4d::VectorPtr>& results) const = 0;
 #pragma clang diagnostic pop
 
   void setRowType(const std::shared_ptr<const RowType>& rowType) {
@@ -138,18 +139,31 @@ class GeneratedVectorFunctionBase
 
 // helper templates/functions
 namespace {
-template <typename Func, typename T, std::size_t... Indices>
+template <
+    typename Func,
+    typename T,
+    std::size_t... Indices,
+    typename... ExtraArgs>
 void applyLambdaToVector(
     Func func,
     std::vector<T>& args,
-    [[maybe_unused]] const std::index_sequence<Indices...>& unused) {
-  (func(args[Indices]), ...);
+    [[maybe_unused]] const std::index_sequence<Indices...>& unused,
+    ExtraArgs&... extraArgs) {
+  (func(args[Indices], extraArgs...), ...);
 }
 
 template <size_t... Indices>
 constexpr bool indexIn(const size_t i, const std::index_sequence<Indices...>&) {
   return ((i == Indices) || ...);
 }
+
+template <size_t... Indices, typename OtherIndices>
+constexpr bool isSubset(
+    const std::index_sequence<Indices...>&,
+    const OtherIndices& other) {
+  return (indexIn(Indices, other) && ...);
+}
+
 } // namespace
 
 ///
@@ -165,13 +179,32 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
   using FilterInputIndices =
       typename GeneratedCode::template InputMapAtIndex<0>;
 
+  // projection input is at index 0 when no filter and 1 when has filter
+  using ProjectionInputIndices =
+      typename GeneratedCode::template InputMapAtIndex<
+          GeneratedCode::hasFilter>;
+
+  constexpr static bool isFilterDefaultNull =
+      GeneratedCode::hasFilter && GeneratedCodeConfig::isFilterDefaultNull;
+
+  /// when it's filter default null and projection attributes is
+  /// a subset of filter attributes, in this case even if it's projection
+  /// default null we can ignore it (and optimize some computations later),
+  /// because the null bits of the projection attributes is going to be filtered
+  /// out at filter stage already
+  constexpr static bool isProjectionDefaultNull =
+      (GeneratedCodeConfig::isProjectionDefaultNull ||
+       GeneratedCodeConfig::isProjectionDefaultNullStrict) &&
+      (!isFilterDefaultNull ||
+       !isSubset(ProjectionInputIndices{}, FilterInputIndices{}));
+
   GeneratedVectorFunction() : generatedExpression_() {}
 
  public:
   virtual void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
+      exec::Expr* caller,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
     VELOX_CHECK(result != nullptr);
@@ -197,11 +230,8 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
     // Constuct nulls
     for (auto& child : result->get()->as<RowVector>()->children()) {
       child->setCodegenOutput();
-      if constexpr (
-          (GeneratedCodeConfig::isDefaultNull ||
-           GeneratedCodeConfig::isDefaultNullStrict) &&
-          !GeneratedCode::hasFilter) {
-        // preset all with nulls, only if it's projection only
+      if constexpr (isProjectionDefaultNull) {
+        // preset all with nulls
         child->addNulls(nullptr, rows);
       } else {
         // preset all not nulls
@@ -237,70 +267,46 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
       }
     }
 
-    size_t resultSize;
-
-    if constexpr (
-        GeneratedCodeConfig::isDefaultNull ||
-        GeneratedCodeConfig::isDefaultNullStrict) {
-      // only proccess indices where all inputs are not nulls
-      auto rowsNotNull = rows;
-
-      auto deselectNull = [&rowsNotNull, &rows](const VectorPtr& arg) {
-        if (arg->mayHaveNulls() && arg->getNullCount() != 0) {
-          rowsNotNull.deselectNulls(
-              arg->flatRawNulls(rows), rows.begin(), rows.end());
-        }
-      };
-
-      if constexpr (GeneratedCode::hasFilter) {
-        /// when it's filter default null, we only deselect null bits on filter
-        /// attributes even if projection's also default null, because input
-        /// index and output index don't match now.
-        applyLambdaToVector(deselectNull, args, FilterInputIndices{});
-      } else {
-        for (const auto& arg : args) {
-          deselectNull(arg);
-        }
-      }
-
-      resultSize = apply(
-          rowsNotNull,
-          args,
-          outputType,
-          context,
-          result->get()->as<RowVector>()->children());
-
-    } else {
-      resultSize = apply(
-          rows,
-          args,
-          outputType,
-          context,
-          result->get()->as<RowVector>()->children());
-    }
-
-    // truncate result
-    if (resultSize != args[0]->size()) {
-      for (size_t columnIndex = 0; columnIndex < rowType_->size();
-           ++columnIndex) {
-        result->get()
-            ->as<RowVector>()
-            ->childAt(columnIndex)
-            ->resize(resultSize);
-      }
-      result->get()->resize(resultSize);
-    }
+    apply(
+        rows,
+        args,
+        caller,
+        context,
+        result->get()->as<RowVector>()->children());
   }
 
-  size_t apply(
-      const facebook::velox::SelectivityVector& rows,
-      std::vector<facebook::velox::VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      facebook::velox::exec::EvalCtx* context,
-      std::vector<facebook::velox::VectorPtr>& results) const override {
+  void apply(
+      const facebook::f4d::SelectivityVector& rows,
+      std::vector<facebook::f4d::VectorPtr>& args,
+      [[maybe_unused]] facebook::f4d::exec::Expr* caller,
+      facebook::f4d::exec::EvalCtx* context,
+      std::vector<facebook::f4d::VectorPtr>& results) const override {
     VELOX_CHECK(rowType_ != nullptr);
     VELOX_CHECK(context != nullptr);
     VELOX_CHECK(results.size() == rowType_->size());
+
+    /// in some (constexpr) cases copies aren't needed, can we assume compilers
+    /// can pick up those cases and avoid instantiating here?
+    auto filterSel = rows, projectionSel = rows;
+
+    auto deselectNull =
+        [&rows](const VectorPtr& arg, SelectivityVector& rowsNotNull) {
+          if (arg->mayHaveNulls() && arg->getNullCount() != 0) {
+            rowsNotNull.deselectNulls(
+                arg->flatRawNulls(rows), rows.begin(), rows.end());
+          }
+        };
+
+    // build filter selectivity vector if it's filter default null
+    if constexpr (isFilterDefaultNull) {
+      applyLambdaToVector(deselectNull, args, FilterInputIndices{}, filterSel);
+    }
+
+    // build projection selectivity vector if it's projection default null
+    if constexpr (isProjectionDefaultNull) {
+      applyLambdaToVector(
+          deselectNull, args, ProjectionInputIndices{}, projectionSel);
+    }
 
     auto inReaders = createReaders(
         args,
@@ -314,74 +320,62 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
             std::size_t,
             std::tuple_size_v<OutputTypes>>{});
 
-    size_t outIndex = 0;
-    auto computeRow =
-        [&inReaders, &outReaders, this, &outIndex](size_t rowIndex) {
-          // Input tuples
-          auto inputs = applyToTuple(
-              [rowIndex](auto&& reader) -> auto {
-                return (const typename std::remove_reference_t<
-                        decltype(reader)>::InputType)reader[rowIndex];
-              },
-              inReaders,
-              std::make_integer_sequence<
-                  std::size_t,
-                  std::tuple_size_v<InputTypes>>{});
-
 #ifdef DEBUG_CODEGEN
-          // Debugging code
-          std::cerr << "Input : ";
-          printTuple(inputs);
-          std::cerr << std::endl;
+#define DEBUG_PRINT()       \
+  std::cerr << "Input : ";  \
+  printTuple(inputs);       \
+  std::cerr << std::endl;   \
+  std::cerr << "Output : "; \
+  printTuple(outputs);      \
+  std::cerr << std::endl
+#else
+#define DEBUG_PRINT()
 #endif
-
-          // Output tuples
-          if constexpr (!GeneratedCode::hasFilter) {
-            // with filter, output index is computed and depends on how many
-            // passed the filter, without filter, it's just input index
-            outIndex = rowIndex;
-          }
-
-          auto outputs = applyToTuple(
-              [outIndex](auto&& reader) ->
-              typename std::remove_reference_t<decltype(reader)>::PointerType {
-                return reader[outIndex];
-              },
-              outReaders,
-              std::make_integer_sequence<
-                  std::size_t,
-                  std::tuple_size_v<OutputTypes>>{});
-
-          // Apply the generated function.
-          if constexpr (GeneratedCode::hasFilter) {
-            // with filter, return value indicates passed or not
-            if (generatedExpression_(inputs, outputs)) {
+    // some duplication for better readability here
+    if constexpr (!GeneratedCode::hasFilter) {
+      // projection only
+      auto computeRow = [&inReaders, &outReaders, this](size_t rowIndex) {
+        auto inputs = makeInputTuple(rowIndex, inReaders);
+        auto outputs = makeOutputTuple(rowIndex, outReaders);
+        // Apply the generated function.
+        generatedExpression_(inputs, outputs);
+        DEBUG_PRINT();
+        return true;
+      };
+      {
+        Perf perf;
+        projectionSel.applyToSelected(computeRow);
+      }
+    } else {
+      // merged filter + projection
+      size_t outIndex = 0;
+      auto computeRow =
+          [&inReaders, &outReaders, this, &outIndex, &projectionSel](
+              size_t rowIndex) {
+            auto inputs = makeInputTuple(rowIndex, inReaders);
+            auto outputs = makeOutputTuple(outIndex, outReaders);
+            bool projectionSelected = 1;
+            if constexpr (isProjectionDefaultNull) {
+              projectionSelected = projectionSel.isValid(rowIndex);
+            }
+            // Apply the generated function.
+            if (generatedExpression_(inputs, outputs, projectionSelected)) {
               outIndex++;
             }
-          } else {
-            generatedExpression_(inputs, outputs);
-          }
-
-#ifdef DEBUG_CODEGEN
-          // Debugging code
-          std::cerr << "Output : ";
-          printTuple(outputs);
-          std::cerr << std::endl;
-#endif
-          return true;
-        };
-
-    {
-      Perf perf;
-      rows.applyToSelected(computeRow);
+            DEBUG_PRINT();
+            return true;
+          };
+      {
+        Perf perf;
+        filterSel.applyToSelected(computeRow);
+      }
+      if (outIndex != args[0]->size()) {
+        for (auto& child : results) {
+          child->resize(outIndex);
+        }
+      }
     }
-
-    // no filter, the return value is just original size
-    if constexpr (!GeneratedCode::hasFilter) {
-      outIndex = args[0]->size();
-    }
-
-    return outIndex;
+#undef DEBUG_PRINT
   }
 
   // TODO: Missing implementation;
@@ -409,37 +403,35 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
 
   template <size_t... Indices>
   auto createReaders(
-      std::vector<facebook::velox::VectorPtr>& args,
+      std::vector<facebook::f4d::VectorPtr>& args,
       const std::index_sequence<Indices...>&) const {
-    if constexpr (
-        GeneratedCode::hasFilter && GeneratedCodeConfig::isDefaultNull) {
-      // Filter default null
-      return std::make_tuple(
-          VectorReader<
-              std::tuple_element_t<Indices, InputTypes>,
-              InputReaderConfig<indexIn(Indices, FilterInputIndices{}), false>>(
-              args[Indices])...);
-    } else {
-      return std::make_tuple(
-          VectorReader<
-              std::tuple_element_t<Indices, InputTypes>,
-              InputReaderConfig<
-                  GeneratedCodeConfig::isDefaultNull,
-                  GeneratedCodeConfig::isDefaultNullStrict>>(args[Indices])...);
-    }
+    /// situations where we know that we won't read null value:
+    /// 1. if an attribute is in filter, and filter condition is default null
+    /// 2. if an attribute is ONLY in projection, and projection is default null
+    return std::make_tuple(
+        VectorReader<
+            std::tuple_element_t<Indices, InputTypes>,
+            InputReaderConfig<
+                (isFilterDefaultNull &&
+                 indexIn(Indices, FilterInputIndices{})) ||
+                (isProjectionDefaultNull &&
+                 indexIn(Indices, ProjectionInputIndices{}) &&
+                 !indexIn(Indices, FilterInputIndices{}))>>(args[Indices])...);
   }
 
   template <size_t... Indices>
   auto createWriters(
-      std::vector<facebook::velox::VectorPtr>& results,
+      std::vector<facebook::f4d::VectorPtr>& results,
       const std::index_sequence<Indices...>&) const {
-    return std::make_tuple(VectorReader<
-                           std::tuple_element_t<Indices, OutputTypes>,
-                           OutputReaderConfig<
-                               GeneratedCodeConfig::isDefaultNull,
-                               GeneratedCodeConfig::isDefaultNullStrict>>(
-        results[Indices])...);
+    return std::make_tuple(
+        VectorReader<
+            std::tuple_element_t<Indices, OutputTypes>,
+            OutputReaderConfig<
+                GeneratedCodeConfig::isProjectionDefaultNull,
+                GeneratedCodeConfig::isProjectionDefaultNullStrict>>(
+            results[Indices])...);
   }
+
   template <typename Func, typename Tuple, size_t... Index>
   inline auto applyToTuple(
       Func&& fun,
@@ -450,9 +442,35 @@ class GeneratedVectorFunction : public GeneratedVectorFunctionBase {
     return std::make_tuple(fun(std::get<Index>(std::forward<Tuple>(args)))...);
   }
 
+  template <typename Tuple>
+  inline auto makeInputTuple(size_t& rowIndex, Tuple&& inReaders) const {
+    return applyToTuple(
+        [rowIndex](auto&& reader) -> auto {
+          return (const typename std::remove_reference_t<
+                  decltype(reader)>::InputType)reader[rowIndex];
+        },
+        inReaders,
+        std::make_integer_sequence<
+            std::size_t,
+            std::tuple_size_v<InputTypes>>{});
+  }
+
+  template <typename Tuple>
+  inline auto makeOutputTuple(size_t& rowIndex, Tuple&& outReaders) const {
+    return applyToTuple(
+        [rowIndex](auto&& reader) ->
+        typename std::remove_reference_t<decltype(reader)>::PointerType {
+          return reader[rowIndex];
+        },
+        outReaders,
+        std::make_integer_sequence<
+            std::size_t,
+            std::tuple_size_v<OutputTypes>>{});
+  }
+
   mutable GeneratedCode generatedExpression_;
 };
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 } // namespace facebook

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,33 +18,34 @@
 
 #include <folly/Benchmark.h>
 #include <optional>
-#include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-#include "velox/exec/Operator.h"
-#include "velox/exec/tests/utils/Cursor.h"
-#include "velox/exec/tests/utils/FunctionUtils.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/experimental/codegen/CodegenCompiledExpressionTransform.h"
-#include "velox/experimental/codegen/CodegenLogger.h"
-#include "velox/experimental/codegen/code_generator/ExprCodeGenerator.h"
-#include "velox/experimental/codegen/utils/resources/ResourcePath.h"
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
-#include "velox/parse/ExpressionsParser.h"
-#include "velox/type/Type.h"
+#include "f4d/core/PlanNode.h"
+#include "f4d/dwio/dwrf/test/utils/BatchMaker.h"
+#include "f4d/exec/Operator.h"
+#include "f4d/exec/tests/Cursor.h"
+#include "f4d/exec/tests/PlanBuilder.h"
+#include "f4d/exec/tests/utils/FunctionUtils.h"
+#include "f4d/experimental/codegen/CodegenCompiledExpressionTransform.h"
+#include "f4d/experimental/codegen/CodegenLogger.h"
+#include "f4d/experimental/codegen/code_generator/ExprCodeGenerator.h"
+#include "f4d/experimental/codegen/utils/resources/ResourcePath.h"
+#include "f4d/functions/common/CoreFunctions.h"
+#include "f4d/functions/common/VectorFunctions.h"
+#include "f4d/parse/Expressions.h"
+#include "f4d/parse/ExpressionsParser.h"
+#include "f4d/type/Type.h"
 
-namespace facebook::velox::codegen {
+namespace facebook::f4d::codegen {
 
-using namespace facebook::velox;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::exec::test;
+using namespace facebook::f4d;
+using namespace facebook::f4d::exec;
+using namespace facebook::f4d::exec::test;
 
-using facebook::velox::test::BatchMaker;
+using facebook::f4d::test::BatchMaker;
 
 class CodegenTestCore {
  protected:
   constexpr static TransformFlags defaultFlags =
-      CodegenCompiledExpressionTransform::defaultFlags;
+      PlanNodeTransform::defaultFlags;
   /// For future use, evaluate expression without creating a plan node.
   /// \tparam SQLType
   /// \param inputRowBatches input  data
@@ -67,8 +66,7 @@ class CodegenTestCore {
       typedExprs.push_back(makeTypedExpr(expr, inputRowBatches.type()));
     };
 
-    facebook::velox::exec::ExprSet exprSet(
-        std::move(typedExprs), execCtx_.get());
+    facebook::f4d::exec::ExprSet exprSet(std::move(typedExprs), execCtx_.get());
     EvalCtx context(execCtx_.get(), &exprSet, &inputRowBatches);
     std::vector<VectorPtr> results(sizeof...(SQLType));
     exprSet.eval(
@@ -103,11 +101,13 @@ class CodegenTestCore {
             useSymbolForArithmetic_,
             eventSequence_);
     pool_ = memory::getDefaultScopedMemoryPool();
-    queryCtx_ = core::QueryCtx::createForTest();
-    execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
+    queryCtx_ = std::make_shared<core::QueryCtx>();
+    execCtx_ = std::make_unique<core::ExecCtx>(
+        memory::getDefaultScopedMemoryPool(), queryCtx_.get());
 
     exec::test::registerTypeResolver();
-    functions::prestosql::registerAllFunctions();
+    functions::registerFunctions();
+    functions::registerVectorFunctions();
   }
 
   /// Creates a plan node given filter and a list of projection
@@ -280,7 +280,7 @@ class CodegenTestCore {
   }
 
   std::unique_ptr<CodegenCompiledExpressionTransform> codegenTransformation_;
-  std::unique_ptr<facebook::velox::memory::MemoryPool> pool_;
+  std::unique_ptr<facebook::f4d::memory::MemoryPool> pool_;
   std::unique_ptr<core::ExecCtx> execCtx_;
   std::shared_ptr<core::QueryCtx> queryCtx_;
   UDFManager udfManager_;
@@ -416,5 +416,9 @@ class CodegenTestBase : public CodegenTestCore, public testing::Test {
   virtual void SetUp() override {
     init();
   }
+
+  void TearDown() override {
+    Driver::testingJoinAndReinitializeExecutor();
+  }
 };
-}; // namespace facebook::velox::codegen
+}; // namespace facebook::f4d::codegen

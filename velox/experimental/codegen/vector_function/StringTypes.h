@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,12 +19,12 @@
 #include <string>
 #include <unordered_set>
 #include <variant>
-#include "velox/buffer/Buffer.h"
-#include "velox/common/base/Exceptions.h"
-#include "velox/type/StringView.h"
+#include "f4d/buffer/Buffer.h"
+#include "f4d/common/base/Exceptions.h"
+#include "f4d/type/StringView.h"
 #pragma once
 
-namespace facebook::velox {
+namespace facebook::f4d {
 namespace codegen {
 
 struct TempBuffer {
@@ -293,4 +291,4 @@ struct ConcatOutputString {};
 // TODO:// coming have some thoughts
 
 } // namespace codegen
-} // namespace facebook::velox
+} // namespace facebook::f4d

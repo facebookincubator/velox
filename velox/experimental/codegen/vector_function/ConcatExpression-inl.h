@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,10 +17,10 @@
 
 #include <tuple>
 #include <utility>
-#include "velox/expression/Expr.h"
+#include "f4d/expression/Expr.h"
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 
 /// Expected generated code format.
@@ -129,20 +127,26 @@ requires(compiledExpression<T>&&...) // All the type parameters
 
   /// TODO: It's important that this function and helper be inline
   template <typename InputTuple, typename OutputTuple>
-  inline bool operator()(InputTuple&& input, OutputTuple&& output) {
-    if constexpr (hasFilter) {
-      std::tuple<std::optional<bool>> filterOutput({});
-      this->helperFilter(input, filterOutput, std::index_sequence<0>{});
-      auto passed = std::get<0>(filterOutput);
-      if (!passed || !*passed) {
-        return false;
-      }
-      helperFromInd1(input, output, std::make_index_sequence<sizeof...(T)>{});
-      return true;
-    } else {
-      helper(input, output, std::make_index_sequence<sizeof...(T)>{});
-      return true;
+  inline void operator()(InputTuple&& input, OutputTuple&& output) {
+    helper(input, output, std::make_index_sequence<sizeof...(T)>{});
+  }
+
+  // only invoked when it's filter merged into projection and using dict vector
+  template <typename InputTuple, typename OutputTuple>
+  inline bool operator()(
+      InputTuple&& input,
+      OutputTuple&& output,
+      bool isProjectionSelected) {
+    std::tuple<std::optional<bool>> filterOutput({});
+    this->helperFilter(input, filterOutput, std::index_sequence<0>{});
+    auto passed = std::get<0>(filterOutput);
+    if (!passed || !*passed) {
+      return false;
     }
+    if (isProjectionSelected) {
+      helperFromInd1(input, output, std::make_index_sequence<sizeof...(T)>{});
+    }
+    return true;
   }
 
  private:
@@ -203,5 +207,5 @@ requires(compiledExpression<T>&&...) // All the type parameters
 };
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 }; // namespace facebook

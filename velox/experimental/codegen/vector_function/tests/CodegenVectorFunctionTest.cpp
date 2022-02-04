@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,10 +15,10 @@
 #include <folly/Random.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
-#include "velox/experimental/codegen/vector_function/GeneratedVectorFunction-inl.h" // NOLINT (CLANGTIDY  ) facebook-hte-InlineHeader
-#include "velox/experimental/codegen/vector_function/StringTypes.h"
+#include "f4d/experimental/codegen/vector_function/GeneratedVectorFunction-inl.h" // NOLINT (CLANGTIDY  ) facebook-hte-InlineHeader
+#include "f4d/experimental/codegen/vector_function/StringTypes.h"
 
-namespace facebook::velox::codegen {
+namespace facebook::f4d::codegen {
 
 struct GeneratedVectorFunctionConfigDouble {
   struct Generated1 {
@@ -64,8 +62,9 @@ struct GeneratedVectorFunctionConfigDouble {
       Type1,
       Type2>;
 
-  static constexpr bool isDefaultNull = false;
-  static constexpr bool isDefaultNullStrict = false;
+  static constexpr bool isFilterDefaultNull = false;
+  static constexpr bool isProjectionDefaultNull = false;
+  static constexpr bool isProjectionDefaultNullStrict = false;
 };
 
 TEST(TestConcat, BasicConcatRow) {
@@ -76,6 +75,38 @@ TEST(TestConcat, BasicConcatRow) {
   concat(args, output);
   EXPECT_EQ(std::get<0>(output), *std::get<0>(args) + *std::get<1>(args));
   EXPECT_EQ(std::get<1>(output), *std::get<0>(args) - *std::get<1>(args));
+}
+
+TEST(VectorReader, ReadDoublesVectors) {
+  const size_t vectorSize = 1000;
+  auto inRowType = ROW({"columnA", "columnB"}, {DOUBLE(), DOUBLE()});
+  auto outRowType = ROW({"expr1", "expr2"}, {DOUBLE(), DOUBLE()});
+
+  auto pool_ = memory::getDefaultScopedMemoryPool();
+  auto pool = pool_.get();
+  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool);
+  auto outRowVector = BaseVector::create(outRowType, vectorSize, pool);
+
+  VectorPtr& in1 = inRowVector->as<RowVector>()->childAt(0);
+
+  SelectivityVector selectivityVector(vectorSize);
+  selectivityVector.setAll();
+  in1->resize(vectorSize);
+  in1->addNulls(nullptr, selectivityVector);
+  VectorReader<DoubleType, OutputReaderConfig<false, false>> writer(in1);
+  VectorReader<DoubleType, InputReaderConfig<false>> reader(in1);
+
+  for (size_t row = 0; row < vectorSize; row++) {
+    writer[row] = (double)row;
+  }
+
+  for (size_t row = 0; row < vectorSize; row++) {
+    ASSERT_DOUBLE_EQ((double)row, *reader[row]);
+  }
+
+  for (size_t row = 0; row < vectorSize; row++) {
+    ASSERT_DOUBLE_EQ(*reader[row], in1->asFlatVector<double>()->valueAt(row));
+  }
 }
 
 TEST(TestConcat, EvalConcatFunction) {
@@ -103,9 +134,11 @@ TEST(TestConcat, EvalConcatFunction) {
   in2->addNulls(nullptr, rows);
 
   std::vector<VectorPtr> in{in1, in2};
-  auto queryCtx = core::QueryCtx::createForTest();
-  auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
-  exec::EvalCtx context(execCtx.get(), nullptr, inRowVector->as<RowVector>());
+  auto queryCtx_ = std::make_shared<core::QueryCtx>();
+  auto execCtx_ = std::make_unique<core::ExecCtx>(
+      memory::getDefaultScopedMemoryPool(), queryCtx_.get());
+  exec::EvalCtx context(execCtx_.get(), nullptr, inRowVector->as<RowVector>());
+
   GeneratedVectorFunction<GeneratedVectorFunctionConfigDouble> vectorFunction;
 
   vectorFunction.setRowType(outRowType);
@@ -186,17 +219,60 @@ struct GeneratedVectorFunctionConfigBool {
       Type1,
       Type2>;
 
-  static constexpr bool isDefaultNull = false;
-  static constexpr bool isDefaultNullStrict = false;
+  static constexpr bool isFilterDefaultNull = false;
+  static constexpr bool isProjectionDefaultNull = false;
+  static constexpr bool isProjectionDefaultNullStrict = false;
 };
+
+TEST(VectorReader, ReadBoolVectors) {
+  // TODO: Move those to test class
+  auto pool_ = memory::getDefaultScopedMemoryPool();
+  auto pool = pool_.get();
+  const size_t vectorSize = 1000;
+
+  auto inRowType = ROW({"columnA", "columnB"}, {BOOLEAN(), BOOLEAN()});
+  auto outRowType = ROW({"expr1", "expr2"}, {BOOLEAN(), BOOLEAN()});
+
+  auto inRowVector = BaseVector::create(inRowType, vectorSize, pool);
+  auto outRowVector = BaseVector::create(outRowType, vectorSize, pool);
+
+  VectorPtr& inputVector = inRowVector->as<RowVector>()->childAt(0);
+  inputVector->resize(vectorSize);
+  VectorReader<BooleanType, InputReaderConfig<false>> reader(inputVector);
+  VectorReader<BooleanType, OutputReaderConfig<false, false>> writer(
+      inputVector);
+
+  for (size_t row = 0; row < vectorSize; row++) {
+    writer[row] = row % 2 == 0;
+  }
+
+  // Check that writing of values to the reader was success
+  for (size_t row = 0; row < vectorSize; row++) {
+    ASSERT_DOUBLE_EQ((row % 2 == 0), *reader[row]);
+    ASSERT_DOUBLE_EQ(
+        (row % 2 == 0), inputVector->asFlatVector<bool>()->valueAt(row));
+  }
+
+  // Write a null at even indices
+  for (size_t row = 0; row < vectorSize; row++) {
+    if (row % 2) {
+      writer[row] = std::nullopt;
+    }
+  }
+
+  for (size_t row = 0; row < vectorSize; row++) {
+    ASSERT_EQ(inputVector->asFlatVector<bool>()->isNullAt(row), row % 2);
+  }
+}
 
 TEST(TestBooEvalVectorFunction, EvalBoolExpression) {
   // TODO: Move those to test class
   auto pool_ = memory::getDefaultScopedMemoryPool();
   auto pool = pool_.get();
   const size_t vectorSize = 1000;
-  auto queryCtx = core::QueryCtx::createForTest();
-  auto execCtx = std::make_unique<core::ExecCtx>(pool, queryCtx.get());
+  auto queryCtx_ = std::make_shared<core::QueryCtx>();
+  auto execCtx_ = std::make_unique<core::ExecCtx>(
+      memory::getDefaultScopedMemoryPool(), queryCtx_.get());
 
   auto inRowType =
       ROW({"a", "b"},
@@ -234,7 +310,7 @@ TEST(TestBooEvalVectorFunction, EvalBoolExpression) {
   vectorFunction.setRowType(outRowType);
 
   // Eval
-  exec::EvalCtx context(execCtx.get(), nullptr, inRowVector->as<RowVector>());
+  exec::EvalCtx context(execCtx_.get(), nullptr, inRowVector->as<RowVector>());
   std::vector<VectorPtr> inputs{inputVector1, inputVector2};
   vectorFunction.apply(rows, inputs, nullptr, &context, &outRowVector);
 
@@ -249,4 +325,4 @@ TEST(TestBooEvalVectorFunction, EvalBoolExpression) {
     ASSERT_EQ(out2->valueAt(i), in1Flat->valueAt(i) || in2Flat->valueAt(i));
   }
 }
-} // namespace facebook::velox::codegen
+} // namespace facebook::f4d::codegen

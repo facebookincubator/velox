@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,11 +15,11 @@
 #include <folly/Benchmark.h>
 #include <folly/Random.h>
 #include <folly/init/Init.h>
-#include "velox/experimental/codegen/CodegenCompiledExpressionTransform.h"
-#include "velox/experimental/codegen/benchmark/CodegenBenchmark.h"
+#include "f4d/experimental/codegen/CodegenCompiledExpressionTransform.h"
+#include "f4d/experimental/codegen/benchmark/CodegenBenchmark.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::codegen;
+using namespace facebook::f4d;
+using namespace facebook::f4d::codegen;
 namespace {
 class FilterBenchmark : public BenchmarkGTest {};
 } // namespace
@@ -369,6 +367,65 @@ TEST_F(FilterBenchmark, DISABLED_FilterDefaultNullNotSuper) {
       "filterDefaultNullNotSuper",
       "a > 5 AND b > 5",
       {"c+1"},
+      inputRowType4,
+      typicalBatches,
+      defaultFilterFlags,
+      true);
+}
+
+// filter isn't default null but projection is
+/*
+compile filter:0,merge:0,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_10x100000_reference                   68.38ns   14.62M
+filterProjDefaultNull_10x100000_compiled         113.81%    60.09ns   16.64M
+filterProjDefaultNull_10x100000_vectorFunc      1540.32%     4.44ns  225.25M
+filterProjDefaultNull_10x100000_compileTime        1.16%     5.91us  169.18K
+compile filter:1,merge:0,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_10x100000_reference                   68.90ns   14.51M
+filterProjDefaultNull_10x100000_compiled         248.13%    27.77ns   36.01M
+filterProjDefaultNull_10x100000_vectorFunc       979.20%     7.04ns  142.12M
+filterProjDefaultNull_10x100000_compileTime        1.24%     5.54us  180.53K
+compile filter:1,merge:1,defaultnull:0                       0.00fs  Infinity
+filterProjDefaultNull_10x100000_reference                   69.96ns   14.29M
+filterProjDefaultNull_10x100000_compiled         393.90%    17.76ns   56.30M
+filterProjDefaultNull_10x100000_vectorFunc       369.46%    18.94ns   52.81M
+filterProjDefaultNull_10x100000_compileTime        1.25%     5.58us  179.09K
+compile filter:1,merge:1,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_10x100000_reference                   69.25ns   14.44M
+filterProjDefaultNull_10x100000_compiled         521.49%    13.28ns   75.31M
+filterProjDefaultNull_10x100000_vectorFunc       495.95%    13.96ns   71.62M
+filterProjDefaultNull_10x100000_compileTime        1.25%     5.56us  179.81K
+
+compile filter:0,merge:0,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_100x10000_reference                   62.19ns   16.08M
+filterProjDefaultNull_100x10000_compiled         106.92%    58.17ns   17.19M
+filterProjDefaultNull_100x10000_vectorFunc      1180.80%     5.27ns  189.88M
+filterProjDefaultNull_100x10000_compileTime        1.11%     5.61us  178.21K
+compile filter:1,merge:0,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_100x10000_reference                   64.23ns   15.57M
+filterProjDefaultNull_100x10000_compiled         220.86%    29.08ns   34.38M
+filterProjDefaultNull_100x10000_vectorFunc      1320.52%     4.86ns  205.58M
+filterProjDefaultNull_100x10000_compileTime        1.14%     5.64us  177.34K
+compile filter:1,merge:1,defaultnull:0                       0.00fs  Infinity
+filterProjDefaultNull_100x10000_reference                   66.38ns   15.06M
+filterProjDefaultNull_100x10000_compiled         365.22%    18.18ns   55.02M
+filterProjDefaultNull_100x10000_vectorFunc       345.90%    19.19ns   52.11M
+filterProjDefaultNull_100x10000_compileTime        1.18%     5.61us  178.23K
+compile filter:1,merge:1,defaultnull:1                       0.00fs  Infinity
+filterProjDefaultNull_100x10000_reference                   62.40ns   16.02M
+filterProjDefaultNull_100x10000_compiled         481.30%    12.97ns   77.13M
+filterProjDefaultNull_100x10000_vectorFunc       589.48%    10.59ns   94.46M
+filterProjDefaultNull_100x10000_compileTime        1.11%     5.60us  178.47K
+*/
+TEST_F(FilterBenchmark, DISABLED_FilterProjDefaultNull) {
+  auto inputRowType4 =
+      ROW({"a", "b", "c", "d"},
+          std::vector<TypePtr>{DOUBLE(), DOUBLE(), DOUBLE(), DOUBLE()});
+
+  benchmark.benchmarkExpressionsMult<DoubleType>(
+      "filterProjDefaultNull",
+      "a > 0.5 OR b > 0.5",
+      {"a/1.1*b*abs(c) + 100.11/d"},
       inputRowType4,
       typicalBatches,
       defaultFilterFlags,

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,11 +13,11 @@
  */
 
 #include <gtest/gtest.h>
-#include "velox/experimental/codegen/vector_function/Perf.h"
+#include "f4d/experimental/codegen/vector_function/Perf.h"
 
 using namespace ::testing;
 
-namespace facebook::velox::codegen {
+namespace facebook::f4d::codegen {
 /*@mode/dev-sand
 branch instructions: 3012
 branch misses: 7
@@ -39,4 +37,4 @@ TEST(PerfTest, TestLoop) {
     /// this whole thing disappears
   }
 }
-} // namespace facebook::velox::codegen
+} // namespace facebook::f4d::codegen

@@ -1,6 +1,4 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,19 +18,19 @@
 
 #include <functional>
 #include <optional>
-#include "velox/core/PlanNode.h"
-#include "velox/experimental/codegen/CompiledExpressionAnalysis.h"
-#include "velox/experimental/codegen/code_generator/ExprCodeGenerator.h"
-#include "velox/experimental/codegen/compiler_utils/CodeManager.h"
-#include "velox/experimental/codegen/compiler_utils/ICompiledCall.h"
-#include "velox/experimental/codegen/transform/PlanNodeTransform.h"
-#include "velox/experimental/codegen/transform/utils/ranges_utils.h"
-#include "velox/experimental/codegen/transform/utils/utils.h"
-#include "velox/experimental/codegen/utils/timer/NestedScopedTimer.h"
-#include "velox/parse/Expressions.h"
+#include "f4d/core/PlanNode.h"
+#include "f4d/experimental/codegen/CompiledExpressionAnalysis.h"
+#include "f4d/experimental/codegen/code_generator/ExprCodeGenerator.h"
+#include "f4d/experimental/codegen/compiler_utils/CodeManager.h"
+#include "f4d/experimental/codegen/compiler_utils/ICompiledCall.h"
+#include "f4d/experimental/codegen/transform/PlanNodeTransform.h"
+#include "f4d/experimental/codegen/transform/utils/ranges_utils.h"
+#include "f4d/experimental/codegen/transform/utils/utils.h"
+#include "f4d/experimental/codegen/utils/timer/NestedScopedTimer.h"
+#include "f4d/parse/Expressions.h"
 
 namespace facebook {
-namespace velox {
+namespace f4d {
 namespace codegen {
 using namespace transform;
 
@@ -43,12 +41,10 @@ class CompiledExpressionTransformVisitor {
       const CompiledExpressionAnalysisResult& compiledExprAnalysisResult,
       const CompilerOptions& options,
       DefaultScopedTimer::EventSequence& eventSequence,
-      bool compileFilter = true,
-      bool mergeFilter = true)
+      const TransformFlags& flags)
       : codeManager_(options, eventSequence),
         compiledExprAnalysisResult_(compiledExprAnalysisResult),
-        compileFilter_(compileFilter),
-        mergeFilter_(mergeFilter) {}
+        flags_(flags) {}
 
   template <typename Children>
   std::shared_ptr<core::PlanNode> visit(
@@ -59,7 +55,7 @@ class CompiledExpressionTransformVisitor {
     };
 
     if (auto filterNode = dynamic_cast<const core::FilterNode*>(&planNode)) {
-      if (!compileFilter_ || mergeFilter_) {
+      if (!flags_.compileFilter || flags_.mergeFilter) {
         return utils::adapter::FilterCopy::copyWith(
             *filterNode,
             std::placeholders::_1,
@@ -106,8 +102,7 @@ class CompiledExpressionTransformVisitor {
 
   const CompiledExpressionAnalysisResult& compiledExprAnalysisResult_;
 
-  bool compileFilter_;
-  bool mergeFilter_;
+  const TransformFlags& flags_;
 
   std::optional<std::reference_wrapper<const GeneratedExpressionStruct>>
   getGeneratedCode(const std::shared_ptr<const ITypedExpr>& expression) {
@@ -137,20 +132,21 @@ class CompiledExpressionTransformVisitor {
   const std::string& fileFormat() {
     // TODO: Move this into a file
     static const std::string fileFormat_ = R"(
-    #include "velox/experimental/codegen/vector_function/VectorFunctionLoadUtils.h" // @manual
+    #include "f4d/experimental/codegen/vector_function/VectorFunctionLoadUtils.h" // @manual
     {includes}
 
     using namespace facebook;
-    using namespace facebook::velox;
-    using namespace facebook::velox::codegen;
+    using namespace facebook::f4d;
+    using namespace facebook::f4d::codegen;
 
     {GeneratedCode}
 
     struct GeneratedVectorFunctionConfig {{
       using GeneratedCodeClass =  {GeneratedCodeClass};
-      static constexpr bool isDefaultNull = {isDefaultNull};
-      static constexpr bool isDefaultNullStrict = {isDefaultNullStrict};
 
+      static constexpr bool isFilterDefaultNull = {isFilterDefaultNull};
+      static constexpr bool isProjectionDefaultNull = {isProjectionDefaultNull};
+      static constexpr bool isProjectionDefaultNullStrict = {isProjectionDefaultNullStrict};
     }};
 
     std::shared_ptr<FunctionTable> functionTable;
@@ -247,7 +243,7 @@ class CompiledExpressionTransformVisitor {
       const std::string& columnName,
       const size_t outputIndex,
       std::stringstream& out) {
-    constexpr auto formatString = R"(
+    static const std::string formatString = R"(
         {generatedStructCode}
         using {usingDeclName} = std::tuple<{className},{inputMap},
                   std::index_sequence<{outputIndex}>>;
@@ -291,7 +287,7 @@ class CompiledExpressionTransformVisitor {
     }
 
     return fmt::format(
-        "using {} = facebook::velox::codegen::ConcatExpression<{},{},{},{}>;",
+        "using {} = facebook::f4d::codegen::ConcatExpression<{},{},{},{}>;",
         mainClassName,
         hasFilter,
         inImplTypes,
@@ -369,27 +365,22 @@ class CompiledExpressionTransformVisitor {
 
   /// Return FieldAccess expression for each Column in rowType
   /// eg [ROW({'a','b'}, {DOUBLETYPE,DOUBLETYPE} ->
-  /// [FieldAcess(a),FieldAccess(b)])
-  /// @param rowType
-  /// @param input input expression to link the generated FieldAccess
-  /// @return vector of FieldAccess, one for each column in rowType
+  /// [FieldAcess(a),FieldAccess(b)]) \param rowType \param input input
+  /// expression to link the generated FieldAccess \return vector of FieldAccess
+  /// , one for each column in rowType
   std::vector<std::shared_ptr<const core::ITypedExpr>> buildFieldAccessor(
       const RowType& rowType,
-      std::shared_ptr<const core::ITypedExpr> input = nullptr) {
+      const std::shared_ptr<const core::ITypedExpr>& input) {
     std::vector<std::shared_ptr<const core::ITypedExpr>> fieldAccessVector;
 
     for (size_t childIdx = 0; childIdx < rowType.size(); ++childIdx) {
       auto name = rowType.nameOf(childIdx);
-      auto type = rowType.childAt(childIdx);
-      if (input) {
-        auto fieldAccess = std::make_shared<const core::FieldAccessTypedExpr>(
-            type, input, std::move(name));
-        fieldAccessVector.push_back(fieldAccess);
-      } else {
-        auto fieldAccess = std::make_shared<const core::FieldAccessTypedExpr>(
-            type, std::move(name));
-        fieldAccessVector.push_back(fieldAccess);
-      }
+      std::vector<std::shared_ptr<const core::ITypedExpr>> inputs{input};
+
+      auto fieldAccess = std::make_shared<const core::FieldAccessTypedExpr>(
+          rowType.childAt(childIdx), std::move(inputs), std::move(name));
+
+      fieldAccessVector.push_back(fieldAccess);
     };
 
     return fieldAccessVector;
@@ -414,9 +405,14 @@ class CompiledExpressionTransformVisitor {
       const std::shared_ptr<const RowType>& callOutputType,
       const std::shared_ptr<const RowType>& callInputType,
       const std::shared_ptr<const RowType>& projectionInputType) {
+    // InputTypedExpr
+    auto projectionInputExpr =
+        std::make_shared<core::InputTypedExpr>(projectionInputType);
+
     // Create the input FieldAccess expression node to the read input data
     // Note we could reuse the one already existing in the current expressions.
-    auto inputFieldAccessVector = buildFieldAccessor(*callInputType);
+    auto inputFieldAccessVector =
+        buildFieldAccessor(*callInputType, projectionInputExpr);
 
     // Create ICompiledExpression
     auto compiledExpression = std::make_shared<codegen::ICompiledCall>(
@@ -475,17 +471,19 @@ class CompiledExpressionTransformVisitor {
     for (const auto& includePath : includeSet) {
       includes << fmt::format("#include {}\n", includePath);
     };
-    const std::string fileString = fmt::vformat(
+    const std::string fileString = fmt::format(
         fileFormat(),
-        fmt::make_format_args(
-            fmt::arg("includes", includes.str()),
-            fmt::arg("GeneratedCode", genCode),
-            fmt::arg("GeneratedCodeClass", "FilterExpr"),
-            fmt::arg(
-                "isDefaultNull", isDefaultNull(filter.id()) ? "true" : "false"),
-            fmt::arg(
-                "isDefaultNullStrict",
-                isDefaultNullStrict(filter.id()) ? "true" : "false")));
+        fmt::arg("includes", includes.str()),
+        fmt::arg("GeneratedCode", genCode),
+        fmt::arg("GeneratedCodeClass", "FilterExpr"),
+        fmt::arg("isFilterDefaultNull", "false"), // unused arg
+        fmt::arg(
+            "isProjectionDefaultNull",
+            isDefaultNull(filter.id()) ? "true" : "false"),
+        fmt::arg(
+            "isProjectionDefaultNullStrict",
+            isDefaultNullStrict(filter.id()) ? "true" : "false"));
+
     auto compiledObject = codeManager_.compiler().compileString({}, fileString);
     auto dynamicObject = codeManager_.compiler().link({}, {compiledObject});
 
@@ -511,7 +509,7 @@ class CompiledExpressionTransformVisitor {
     // Check for filter
     std::optional<GeneratedExpressionStruct> filterExpr = std::nullopt;
     auto filterNode = std::dynamic_pointer_cast<const core::FilterNode>(source);
-    if (compileFilter_ && mergeFilter_ && filterNode) {
+    if (flags_.compileFilter && flags_.mergeFilter && filterNode) {
       if (auto filterCode = getGeneratedCode(filterNode->filter())) {
         source = filterNode->sources()[0]; // change source to filter's source
         filterExpr.emplace(filterCode.value());
@@ -565,25 +563,26 @@ class CompiledExpressionTransformVisitor {
       includes << fmt::format("#include {}\n", includePath);
     };
 
-    bool isDefaultNull, isDefaultNullStrict;
+    bool isProjectionDefaultNull, isProjectionDefaultNullStrict,
+        isFilterDefaultNull = false;
     if (filterExpr) {
-      isDefaultNull = this->isDefaultNull(filterNode->id());
-      isDefaultNullStrict = this->isDefaultNullStrict(filterNode->id());
-    } else {
-      isDefaultNull = this->isDefaultNull(projection.id());
-      isDefaultNullStrict = this->isDefaultNullStrict(projection.id());
+      isFilterDefaultNull = this->isDefaultNull(filterNode->id());
     }
+    isProjectionDefaultNull = this->isDefaultNull(projection.id());
+    isProjectionDefaultNullStrict = this->isDefaultNullStrict(projection.id());
 
-    const std::string fileString = fmt::vformat(
+    const std::string fileString = fmt::format(
         fileFormat(),
-        fmt::make_format_args(
-            fmt::arg("includes", includes.str()),
-            fmt::arg("GeneratedCode", genCode),
-            fmt::arg("GeneratedCodeClass", "ProjectExpr"),
-            fmt::arg("isDefaultNull", isDefaultNull ? "true" : "false"),
-            fmt::arg(
-                "isDefaultNullStrict",
-                isDefaultNullStrict ? "true" : "false")));
+        fmt::arg("includes", includes.str()),
+        fmt::arg("GeneratedCode", genCode),
+        fmt::arg("GeneratedCodeClass", "ProjectExpr"),
+        fmt::arg("isFilterDefaultNull", isFilterDefaultNull ? "true" : "false"),
+        fmt::arg(
+            "isProjectionDefaultNull",
+            isProjectionDefaultNull ? "true" : "false"),
+        fmt::arg(
+            "isProjectionDefaultNullStrict",
+            isProjectionDefaultNullStrict ? "true" : "false"));
 
     auto compiledObject = codeManager_.compiler().compileString({}, fileString);
     auto dynamicObject = codeManager_.compiler().link({}, {compiledObject});
@@ -630,30 +629,8 @@ class CompiledExpressionTransformVisitor {
   }
 };
 
-union TransformFlags {
-  struct {
-    bool compileFilter : 1; // use codegen for filter expr
-
-    // merge filter into projection
-    // invalid if compileFilter not set
-    bool mergeFilter : 1;
-
-    bool enableDefaultNullOpt : 1; // enable default null optimization
-
-    // use extended default null definition for filter
-    // invalid if enableDefaultNullOpt not set
-    bool enableFilterDefaultNull : 1;
-
-    // up for more flags in the future
-  };
-
-  // make it easily comparable, may need to increase size as more flags added
-  uint8_t flagVal;
-};
-
 class CodegenCompiledExpressionTransform final : PlanNodeTransform {
  public:
-  constexpr static TransformFlags defaultFlags = {{1, 1, 1, 1}};
   CodegenCompiledExpressionTransform(
       const CompilerOptions& options,
       const UDFManager& udfManager,
@@ -672,20 +649,12 @@ class CodegenCompiledExpressionTransform final : PlanNodeTransform {
         "CodegenCompiledExpressionTransform", eventSequence_);
 
     CompiledExpressionAnalysis expressionAnalysis(
-        udfManager_,
-        useSymbolsForArithmetic_,
-        eventSequence_,
-        flags_.enableDefaultNullOpt,
-        flags_.enableFilterDefaultNull);
+        udfManager_, useSymbolsForArithmetic_, eventSequence_, flags_);
 
     expressionAnalysis.run(plan);
 
     CompiledExpressionTransformVisitor visitor(
-        expressionAnalysis.results(),
-        compilerOptions_,
-        eventSequence_,
-        flags_.compileFilter,
-        flags_.mergeFilter);
+        expressionAnalysis.results(), compilerOptions_, eventSequence_, flags_);
 
     auto nodeTransformer = [&visitor](
                                auto& node, const auto& transformedChildren) {
@@ -710,5 +679,5 @@ class CodegenCompiledExpressionTransform final : PlanNodeTransform {
 };
 
 } // namespace codegen
-} // namespace velox
+} // namespace f4d
 } // namespace facebook
