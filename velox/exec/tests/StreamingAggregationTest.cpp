@@ -56,7 +56,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                     .values(data)
                     .partialStreamingAggregation(
                         {0}, {"count(1)", "min(c1)", "max(c1)", "sum(c1)"})
-                    .finalStreamingAggregation()
+                    .finalAggregation()
                     .planNode();
 
     assertQuery(
@@ -72,7 +72,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                    {0},
                    {"count(1)", "min(c1)", "max(c1)", "sum(c1)"},
                    {"", "m1", "m2", "m1"})
-               .finalStreamingAggregation()
+               .finalAggregation()
                .planNode();
 
     assertQuery(
@@ -136,7 +136,7 @@ class StreamingAggregationTest : public OperatorTestBase {
                         {},
                         core::AggregationNode::Step::kPartial,
                         false)
-                    .finalStreamingAggregation()
+                    .finalAggregation()
                     .planNode();
 
     // Generate a list of grouping keys to use in the query: c0, c1, c2,..

@@ -203,7 +203,6 @@ class PlanBuilder {
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {}) {
-    // TODO Introduce builder for the aggregation node.
     return aggregation(
         groupingKeys, {}, aggregates, masks, step, ignoreNullKeys, resultTypes);
   }
@@ -228,8 +227,6 @@ class PlanBuilder {
         core::AggregationNode::Step::kPartial,
         false);
   }
-
-  PlanBuilder& finalStreamingAggregation();
 
   PlanBuilder& finalStreamingAggregation(
       const std::vector<ChannelIndex>& groupingKeys,
@@ -380,8 +377,7 @@ class PlanBuilder {
 
   std::shared_ptr<core::PlanNode> createIntermediateOrFinalAggregation(
       core::AggregationNode::Step step,
-      const core::AggregationNode* partialAggNode,
-      bool streaming);
+      const core::AggregationNode* partialAggNode);
 
   std::shared_ptr<const core::ITypedExpr> inferTypes(
       const std::shared_ptr<const core::IExpr>& untypedExpr);

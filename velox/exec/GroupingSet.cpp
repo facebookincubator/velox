@@ -100,8 +100,10 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
 
   auto numRows = input->size();
   if (!preGroupedKeyChannels_.empty()) {
+    if (remainingInput_) {
+      addRemainingInput();
+    }
     // Look for the last group of pre-grouped keys.
-    remainingInput_.reset();
     for (auto i = input->size() - 2; i >= 0; --i) {
       if (!equalKeys(preGroupedKeyChannels_, input, i, i + 1)) {
         // Process that many rows, flush the accumulators and the hash
@@ -120,6 +122,18 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
   activeRows_.setAll();
 
   addInputForActiveRows(input, mayPushdown);
+}
+
+void GroupingSet::noMoreInput() {
+  noMoreInput_ = true;
+
+  if (remainingInput_) {
+    addRemainingInput();
+  }
+}
+
+bool GroupingSet::hasOutput() {
+  return noMoreInput_ || remainingInput_;
 }
 
 void GroupingSet::addInputForActiveRows(
@@ -195,6 +209,16 @@ void GroupingSet::addInputForActiveRows(
     }
   }
   tempVectors_.clear();
+}
+
+void GroupingSet::addRemainingInput() {
+  activeRows_.clearAll();
+  activeRows_.resize(remainingInput_->size());
+  activeRows_.setValidRange(firstRemainingRow_, remainingInput_->size(), true);
+  activeRows_.updateBounds();
+
+  addInputForActiveRows(remainingInput_, remainingMayPushdown_);
+  remainingInput_.reset();
 }
 
 void GroupingSet::createHashTable() {
@@ -338,13 +362,6 @@ bool GroupingSet::getOutput(
     return getGlobalAggregationOutput(batchSize, isPartial, iterator, result);
   }
 
-  // We are ready to return results if received no-more-input message or running
-  // in partially streaming mode with non-empty pre-grouped keys and have full
-  // groups.
-  if (!(noMoreInput_ || (!preGroupedKeyChannels_.empty() && remainingInput_))) {
-    return false;
-  }
-
   // @lint-ignore CLANGTIDY
   char* groups[batchSize];
   int32_t numGroups =
@@ -354,15 +371,7 @@ bool GroupingSet::getOutput(
       table_->clear();
     }
     if (remainingInput_) {
-      // Call addInput for remaining rows.
-      activeRows_.clearAll();
-      activeRows_.resize(remainingInput_->size());
-      activeRows_.setValidRange(
-          firstRemainingRow_, remainingInput_->size(), true);
-      activeRows_.updateBounds();
-
-      addInputForActiveRows(remainingInput_, remainingMayPushdown_);
-      remainingInput_.reset();
+      addRemainingInput();
     }
     return false;
   }

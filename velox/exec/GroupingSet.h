@@ -38,10 +38,18 @@ class GroupingSet {
 
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
-  void noMoreInput() {
-    noMoreInput_ = true;
-  }
+  void noMoreInput();
 
+  /// Typically, the output is not available until all input has been added.
+  /// However, in case when input is clustered on some of the grouping keys, the
+  /// output becomes available every time one of these grouping keys changes
+  /// value. This method returns true if no-more-input message has been received
+  /// or if some groups are ready for output because pre-grouped keys values
+  /// have changed.
+  bool hasOutput();
+
+  /// Called if partial aggregation has reached memory limit or if hasOutput()
+  /// returns true.
   bool getOutput(
       int32_t batchSize,
       bool isPartial,
@@ -56,6 +64,8 @@ class GroupingSet {
 
  private:
   void addInputForActiveRows(const RowVectorPtr& input, bool mayPushdown);
+
+  void addRemainingInput();
 
   void initializeGlobalAggregation();
 

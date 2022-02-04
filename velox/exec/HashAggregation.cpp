@@ -148,9 +148,18 @@ void HashAggregation::addInput(RowVectorPtr input) {
 }
 
 RowVectorPtr HashAggregation::getOutput() {
-  if (finished_ ||
-      (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
-       !hasPreGroupedKeys_)) {
+  if (finished_) {
+    input_ = nullptr;
+    return nullptr;
+  }
+
+  // Produce results if one of the following is true:
+  // - received no-more-input message;
+  // - partial aggregation reached memory limit;
+  // - distinct aggregation has new keys;
+  // - running in partial streaming mode and have some output ready.
+  if (!noMoreInput_ && !partialFull_ && !newDistincts_ &&
+      !groupingSet_->hasOutput()) {
     input_ = nullptr;
     return nullptr;
   }
@@ -192,17 +201,6 @@ RowVectorPtr HashAggregation::getOutput() {
       batchSize, isPartialOutput_, &resultIterator_, result);
   if (!hasData) {
     resultIterator_.reset();
-
-    if (noMoreInput_ && hasPreGroupedKeys_) {
-      // Fetch the remaining data.
-      hasData = groupingSet_->getOutput(
-          batchSize, isPartialOutput_, &resultIterator_, result);
-      if (hasData) {
-        return result;
-      }
-
-      groupingSet_->resetPartial();
-    }
 
     if (partialFull_) {
       partialFull_ = false;
