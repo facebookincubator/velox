@@ -37,9 +37,10 @@ struct BitCountFunction {
         bits)
     // Check if input "num" falls within the limits of max and min that
     // can be represented with "bits".
-    int64_t lowBitsMask = (1L << (bits - 1)) - 1;
+    const int64_t lowBitsMask = 1L << (bits - 1);
+    const int64_t upperBound = lowBitsMask - 1;
     VELOX_USER_CHECK(
-        num >= ~lowBitsMask && num <= lowBitsMask,
+        num >= ~upperBound && num <= upperBound,
         "Number must be representable with the bits specified."
         " {} can not be represented with {} bits",
         num,

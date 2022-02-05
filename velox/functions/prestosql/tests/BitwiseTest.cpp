@@ -127,9 +127,9 @@ TEST_F(BitwiseTest, bitwiseAnd) {
 }
 
 TEST_F(BitwiseTest, bitCount) {
-  EXPECT_EQ(bitCount(9, kMaxBits), 2);
   EXPECT_EQ(bitCount(9, 8), 2);
   EXPECT_EQ(bitCount(-7, kMaxBits), 62);
+  EXPECT_EQ(bitCount(9, kMaxBits), 2);
   EXPECT_EQ(bitCount(-7, 8), 6);
   EXPECT_EQ(bitCount(kMin64, kMaxBits), 1);
   EXPECT_EQ(bitCount(kMax64, kMaxBits), 63);
