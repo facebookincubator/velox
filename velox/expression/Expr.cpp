@@ -656,7 +656,7 @@ void Expr::evalWithNulls(
       }
     }
 
-    if (mayHaveNulls && !distinctFields_.empty()) {
+    if (mayHaveNulls) {
       LocalSelectivityVector nonNullHolder(context);
       if (removeSureNulls(rows, context, nonNullHolder)) {
         VarSetter noMoreNulls(context->mutableNullsPruned(), true);
