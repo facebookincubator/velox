@@ -37,7 +37,7 @@ struct BitCountFunction {
         bits)
     // Check if input "num" falls within the limits of max and min that
     // can be represented with "bits".
-    const int64_t lowBitsMask = 1L << (bits - 1);
+    const uint64_t lowBitsMask = 1L << (bits - 1);
     const int64_t upperBound = lowBitsMask - 1;
     VELOX_USER_CHECK(
         num >= ~upperBound && num <= upperBound,
