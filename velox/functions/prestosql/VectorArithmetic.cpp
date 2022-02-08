@@ -65,7 +65,7 @@ class VectorArithmetic : public VectorFunction {
   /// the input indexes associated with null inputs on any of the values in args
   /// vectors.
   /// \param args: the input vectors to the function
-  /// \param caller: the output type
+  /// \param outputType: the output type
   /// \param context: the eval context that can be used for memory allocation or
   /// accessing config flags
   /// \param result: the output vector that must be created or reuse one of the
