@@ -21,6 +21,7 @@ add_library(
   velox_expression
   CastExpr.cpp
   ControlExpr.cpp
+  DynamicLibraryLoader.cpp
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
