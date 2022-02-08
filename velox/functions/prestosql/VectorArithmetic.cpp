@@ -82,16 +82,16 @@ class VectorArithmetic : public VectorFunction {
     // Dispatch dynamically to applyTyped
     switch (args[0]->typeKind()) {
       case TypeKind::INTEGER:
-        applyTyped<int32_t>(rows, args, outputType, context, result);
+        applyTyped<TypeTraits<TypeKind::INTEGER>::NativeType>(rows, args, outputType, context, result);
         return;
       case TypeKind::BIGINT:
-        applyTyped<int64_t>(rows, args, outputType, context, result);
+        applyTyped<TypeTraits<TypeKind::BIGINT>::NativeType>(rows, args, outputType, context, result);
         return;
       case TypeKind::REAL:
-        applyTyped<float>(rows, args, outputType, context, result);
+        applyTyped<TypeTraits<TypeKind::REAL>::NativeType>(rows, args, outputType, context, result);
         return;
       case TypeKind::DOUBLE:
-        applyTyped<double>(rows, args, outputType, context, result);
+        applyTyped<TypeTraits<TypeKind::DOUBLE>::NativeType>(rows, args, outputType, context, result);
         return;
       default:
         VELOX_CHECK(false, "Bad type for arithmetic");
