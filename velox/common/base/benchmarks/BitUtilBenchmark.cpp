@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/preprocessor/repetition/repeat.hpp>
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
@@ -164,30 +165,25 @@ void BM_forEachBit(
 }
 
 namespace {
-const static auto kNumRuns = 1000;
-}
-void BM_ForEachBitAllTrue(uint32_t iterations, size_t numBits) {
-  for (int i = 0; i < kNumRuns; i++) {
-    BM_forEachBit(iterations, numBits);
-  }
+constexpr static auto kNumRuns = 1000;
+constexpr static auto numBits = 10000;
+} // namespace
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK_MULTI(forEachBitAllTrue) {
+  BM_forEachBit(kNumRuns, numBits);
+  return kNumRuns;
 }
 
-void BM_ForEachBitLastBitFalse(uint32_t iterations, size_t numBits) {
-  for (int i = 0; i < kNumRuns; i++) {
-    BM_forEachBit(iterations, numBits, numBits - 1);
-  }
+BENCHMARK_RELATIVE_MULTI(forEachBitLastBitFalse) {
+  BM_forEachBit(kNumRuns, numBits, numBits - 1);
+  return kNumRuns;
 }
 
-void BM_ForEachBitFirstBitFalse(uint32_t iterations, size_t numBits) {
-  for (int i = 0; i < kNumRuns; i++) {
-    BM_forEachBit(iterations, numBits, 1);
-  }
+BENCHMARK_RELATIVE_MULTI(forEachBitFirstBitFalse) {
+  BM_forEachBit(kNumRuns, numBits, 1);
+  return kNumRuns;
 }
-BENCHMARK_DRAW_LINE();
-BENCHMARK_PARAM(BM_ForEachBitAllTrue, 10000);
-BENCHMARK_RELATIVE_PARAM(BM_ForEachBitLastBitFalse, 10000);
-BENCHMARK_RELATIVE_PARAM(BM_ForEachBitFirstBitFalse, 10000);
-BENCHMARK_DRAW_LINE();
 
 } // namespace test
 } // namespace velox

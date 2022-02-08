@@ -337,7 +337,7 @@ void forEachBit(
     int32_t end,
     bool isSet,
     Callable func) {
-  static const uint64_t kAllSet = -1ULL;
+  static constexpr uint64_t kAllSet = -1ULL;
   forEachWord(
       begin,
       end,
@@ -353,9 +353,6 @@ void forEachBit(
       },
       [isSet, bits, func](int32_t idx) {
         auto word = (isSet ? bits[idx] : ~bits[idx]);
-        if (!word) {
-          return;
-        }
         if (kAllSet == word) {
           const size_t start = idx * 64;
           const size_t end = (idx + 1) * 64;

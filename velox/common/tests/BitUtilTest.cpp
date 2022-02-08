@@ -443,7 +443,7 @@ TEST_F(BitUtilTest, forEachBit) {
   bits::fillBits(rawBits, 0, totalBits, true);
   bits::setBit(rawBits, 50, false);
   count = 0;
-  auto incrementCount = [&](auto row) { count++; };
+  auto incrementCount = [&](auto _) { count++; };
   bits::forEachBit(rawBits, 0, totalBits, true, incrementCount);
   ASSERT_EQ(totalBits - 1, count);
 
