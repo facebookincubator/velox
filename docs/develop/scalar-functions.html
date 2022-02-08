@@ -45,22 +45,35 @@
 <h1>How to add a scalar function?<a class="headerlink" href="#how-to-add-a-scalar-function" title="Permalink to this headline">¶</a></h1>
 <section id="simple-functions">
 <h2>Simple Functions<a class="headerlink" href="#simple-functions" title="Permalink to this headline">¶</a></h2>
-<p>A simple function, e.g. a <a class="reference internal" href="../functions/math.html"><span class="doc">mathematical function</span></a>, can be added by wrapping a
-C++ function in VELOX_UDF_BEGIN and VELOX_UDF_END macros. For example, a ceil
-function can be implemented like so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<p>This document describes the main concepts, features, and examples of the simple
+function API in Velox. For more real-world API usage examples, check
+<strong>velox/example/SimpleFunctions.cpp</strong>.</p>
+<p>A simple scalar function, e.g. a <a class="reference internal" href="../functions/math.html"><span class="doc">mathematical function</span></a>,
+can be added by wrapping a C++ function in a templated class. For example, a
+ceil function can be implemented as:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="w">                </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                </span><span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">                        </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                        </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">                                </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">                        </span><span class="p">}</span><span class="w"></span>
+<span class="w">                </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
-<p>Here, we are wrapping a template to allow our function to be called on
-different input types, e.g. float and double.</p>
-<p>It is important to use the name “call” for the function.</p>
-<p>The function must return a boolean indicating whether the result of
+<p>All simple function classes need to be templated, and provide a “call” method
+(or one of the variations described below). The top-level template parameter
+provides the type system adapter, which allows developers to use non-primitive
+types such as strings, arrays, maps, and struct (check below for examples).
+Although the top-level template parameter is not used for functions operating
+on primitive types, such as the one in the example above, it still needs to be
+specified.</p>
+<p>The call method itself can also be templated or overloaded to allow the
+function to be called on different input types, e.g. float and double. Note
+that template instantiation will only happen during function registration,
+described in the “Registration” section below.</p>
+<p>Please avoid using the obsolete VELOX_UDF_BEGIN/VELOX_UDF_END macros.</p>
+<p>The “call” function must return a boolean indicating whether the result of
 computation is null or not. True means the result is not null. False means
 the result is null. The arguments must start with an output
 parameter “result” followed by the function arguments. The “result” argument
@@ -134,16 +147,14 @@ mapping:</p>
 </tr>
 </tbody>
 </table>
-<p>arg_type and out_type templates are defined by the VELOX_UDF_BEGIN macro. These
+<p>arg_type and out_type templates are defined by using the
+VELOX_DEFINE_FUNCTION_TYPES(TExecParams) macro in the class definition. These
 types provide interfaces similar to std::string, std::vector, std::unordered_map
 and std::tuple. The underlying implementations are optimized to read and write
 from and to the columnar representation without extra copying.</p>
 <p>Note: Do not pay too much attention to complex type mappings at the moment.
 They are included here for completeness, but require a whole separate
 discussion.</p>
-<p>VELOX_UDF_BEGIN(ceil) expands to define udf_ceil struct. You can see the
-expanded struct in CLion by hovering on the VELOX_UDF_BEGIN macro.</p>
-<a class="reference internal image-reference" href="../_images/velox-udf-begin-macro.png"><img alt="../_images/velox-udf-begin-macro.png" src="../_images/velox-udf-begin-macro.png" style="width: 600px;" /></a>
 <section id="null-behavior">
 <h3>Null Behavior<a class="headerlink" href="#null-behavior" title="Permalink to this headline">¶</a></h3>
 <p>Most functions have default null behavior, e.g. a null value in any of the
@@ -152,18 +163,19 @@ automatically produces nulls for such inputs, eliding a call to the actual
 function. If a given function has a different behavior for null inputs, it
 must define a “callNullable” function instead of a “call” function. Here is
 an artificial example of a ceil function that returns 0 for null input:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callNullable</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="w">                  </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                  </span><span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">                          </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                          </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callNullable</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="c1">// Return 0 if input is null.</span>
-<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="o">*</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">    </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
-<span class="w">  </span><span class="p">}</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">                          </span><span class="p">}</span><span class="w"></span>
+<span class="w">                  </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Notice that callNullable function takes arguments as raw pointers and not
@@ -173,19 +185,20 @@ references to allow for specifying null values.</p>
 <h3>Determinism<a class="headerlink" href="#determinism" title="Permalink to this headline">¶</a></h3>
 <p>By default simple functions are assumed to be deterministic, e.g. given the
 same inputs they always produce the same results. If this is not the case,
-the function must define a static constexpr bool is_deterministic:</p>
+the function must define a static constexpr bool is_deterministic member:</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
 <p>An example of such function is rand():</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">rand</span><span class="p">)</span><span class="w"></span>
-<span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="w">                    </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                    </span><span class="k">struct</span><span class="w"> </span><span class="nc">RandFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_deterministic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
 
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">folly</span><span class="o">::</span><span class="n">Random</span><span class="o">::</span><span class="n">randDouble01</span><span class="p">();</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">      </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">folly</span><span class="o">::</span><span class="n">Random</span><span class="o">::</span><span class="n">randDouble01</span><span class="p">();</span><span class="w"></span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<span class="w">                    </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -205,27 +218,29 @@ engine will automatically mark the result strings as all-ASCII. When these
 strings are passed as input to some other function, the engine won’t need to
 scan the strings to determine whether they are ASCII or not.</p>
 <p>Here is an example of a trim function:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">trim</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">TrimFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span><span class="w"></span>
 
-<span class="c1">// ASCII input always produces ASCII result.</span>
-<span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_default_ascii_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// ASCII input always produces ASCII result.</span>
+<span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_default_ascii_behavior</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 
-<span class="c1">// Properly handles multi-byte characters.</span>
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimUnicodeWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// Properly handles multi-byte characters.</span>
+<span class="w">        </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
+<span class="w">            </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">          </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimUnicodeWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
+<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">        </span><span class="p">}</span><span class="w"></span>
 
-<span class="c1">// Assumes input is all ASCII.</span>
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callAscii</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimAsciiWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<span class="w">        </span><span class="c1">// Assumes input is all ASCII.</span>
+<span class="w">        </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">callAscii</span><span class="p">(</span><span class="w"></span>
+<span class="w">            </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"></span>
+<span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">stringImpl</span><span class="o">::</span><span class="n">trimAsciiWhiteSpace</span><span class="o">&lt;</span><span class="n">leftTrim</span><span class="p">,</span><span class="w"> </span><span class="n">rightTrim</span><span class="o">&gt;</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">);</span><span class="w"></span>
+<span class="w">          </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">        </span><span class="p">}</span><span class="w"></span>
+<span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -260,7 +275,10 @@ core::QueryConfig&amp;. The engine calls the initialize method once per query an
 thread of execution.</p>
 <p>Here is an example of an hour function extracting time zone from the session
 properties and using it when processing inputs.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">hour</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">HourFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">            </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span><span class="w"></span>
+
 <span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
 
 <span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">initialize</span><span class="p">(</span><span class="w"></span>
@@ -278,13 +296,16 @@ properties and using it when processing inputs.</p>
 <span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dateTime</span><span class="p">.</span><span class="n">tm_hour</span><span class="p">;</span><span class="w"></span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<span class="w">    </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Here is another example of the <a class="reference internal" href="../functions/datetime.html#date_trunc" title="date_trunc"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_trunc()</span></code></a> function parsing the constant
 unit argument during initialize and re-using parsed value when processing
 individual rows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">date_trunc</span><span class="p">)</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">DateTruncFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">            </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">TExecParams</span><span class="p">);</span><span class="w"></span>
+
 <span class="k">const</span><span class="w"> </span><span class="n">date</span><span class="o">::</span><span class="n">time_zone</span><span class="o">*</span><span class="w"> </span><span class="n">timeZone_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">;</span><span class="w"></span>
 <span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">DateTimeUnit</span><span class="o">&gt;</span><span class="w"> </span><span class="n">unit_</span><span class="p">;</span><span class="w"></span>
 
@@ -306,35 +327,31 @@ individual rows.</p>
 <span class="w">      </span><span class="n">unit_</span><span class="p">.</span><span class="n">has_value</span><span class="p">()</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">unit_</span><span class="p">.</span><span class="n">value</span><span class="p">()</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">fromDateTimeUnitString</span><span class="p">(</span><span class="n">unitString</span><span class="p">);</span><span class="w"></span>
 <span class="w">  </span><span class="p">...</span><span class="o">&lt;</span><span class="n">use</span><span class="w"> </span><span class="n">unit</span><span class="w"> </span><span class="k">enum</span><span class="o">&gt;</span><span class="p">...</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
 <section id="registration">
 <h3>Registration<a class="headerlink" href="#registration" title="Permalink to this headline">¶</a></h3>
 <p>Use registerFunction template to register simple functions.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">Func</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span> <span class="nc">TReturn</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="p">...</span><span class="w"> </span><span class="n">TArgs</span><span class="o">&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">class</span><span class="o">&gt;</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">Func</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="w"> </span><span class="nc">TReturn</span><span class="p">,</span><span class="w"> </span><span class="k">typename</span><span class="p">...</span><span class="w"> </span><span class="n">TArgs</span><span class="o">&gt;</span><span class="w"></span>
 <span class="kt">void</span><span class="w"> </span><span class="n">registerFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">aliases</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{},</span><span class="w"></span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Type</span><span class="o">&gt;</span><span class="w"> </span><span class="n">returnType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">nullptr</span><span class="p">)</span><span class="w"></span>
 </pre></div>
 </div>
-<p>The first template parameter is the udf_xxx struct, the next template
-parameter is the return type, the remaining template parameters are argument
-types. Aliases parameter allows to specify multiple names for the same
-function. By default, with empty aliases, the function is registered under
-the name used in the VELOX_UDF_BEGIN macro, e.g. “ceil”. If aliases are
-specified, the name used in VELOX_UDF_BEGIN is ignored and the function is
-registered only under the specified names. E.g. calling registerFunction
-with {“ceiling”} registers only the “ceiling” name, not both “ceil”
-(default) and “ceiling”. To register both names, call registerFunction like
-so:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">udf_ceil</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
+<p>The first template parameter is the class name, the next template parameter is
+the return type, the remaining template parameters are argument types. Aliases
+parameter allows developers to specify multiple names for the same function,
+but each function registration needs to provide at least one name. The “ceil”
+function defined above can be registered using the following function call:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p>Here, we register the udf_ceil function that takes a double and returns a
+<p>Here, we register the CeilFunction function that takes a double and returns a
 double. If we want to allow the ceil function to be called on float inputs,
 we need to call registerFunction again:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">udf_ceil</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">registerFunction</span><span class="o">&lt;</span><span class="n">CeilFunction</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;ceil&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ceiling&quot;</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
 <p>We need to call registerFunction for each signature we want to support.</p>
@@ -346,17 +363,18 @@ function into a header file and call that from the “call” or “callNullable
 Here is an example with ceil function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/functions/prestosql/ArithmeticImpl.h&quot;</span><span class="cp"></span>
 
-<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="n">VELOX_UDF_BEGIN</span><span class="p">(</span><span class="n">ceil</span><span class="p">)</span><span class="w"></span>
-<span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
-<span class="n">VELOX_UDF_END</span><span class="p">();</span><span class="w"></span>
+<span class="w">                        </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">TExecParams</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                        </span><span class="k">struct</span><span class="w"> </span><span class="nc">CeilFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">                                </span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="w">                                </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">a</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="n">a</span><span class="p">);</span><span class="w"></span>
+<span class="w">                                        </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">                                </span><span class="p">}</span><span class="w"></span>
+<span class="w">                        </span><span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
 <p>velox/functions/prestosql/ArithmeticImpl.h:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
 <span class="n">T</span><span class="w"> </span><span class="n">ceil</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">T</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arg</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="n">T</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ceil</span><span class="p">(</span><span class="n">arg</span><span class="p">);</span><span class="w"></span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="n">results</span><span class="p">;</span><span class="w"></span>
@@ -456,13 +474,13 @@ The following expressions are valid, where array[0] is an optional accessor.</p>
 <p><strong>2- ArrayView&lt;T&gt;</strong>:</p>
 <p>ArrayView have an interface similar to that of const <em>std::vector&lt;std::optional&lt;V&gt;&gt;</em>, the code
 below shows the function arraySum, a range loop is used to iterate over the values.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">struct</span> <span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">T</span><span class="p">);</span><span class="w"></span>
 
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
-<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">element</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">            </span><span class="k">if</span><span class="p">(</span><span class="n">element</span><span class="p">.</span><span class="n">has_value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">                </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">element</span><span class="p">.</span><span class="n">value</span><span class="p">();</span><span class="w"></span>
 <span class="w">            </span><span class="p">}</span><span class="w"></span>
@@ -481,13 +499,13 @@ below shows the function arraySum, a range loop is used to iterate over the valu
 <li><p>bool mayHaveNulls() : constant time check on the underlying vector nullity. When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
 <li><p>ArrayView&lt;T&gt;::SkipNullsContainer SkipNulls() : return an iterable container that provides direct access to non-null values in the underlying array. For example, the function above can be written as:</p></li>
 </ul>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">struct</span> <span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">T</span><span class="p">);</span><span class="w"></span>
 
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
-<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">value</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">            </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w"></span>
 <span class="w">        </span><span class="p">}</span><span class="w"></span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
@@ -497,21 +515,21 @@ below shows the function arraySum, a range loop is used to iterate over the valu
 </div>
 <p>The skipNulls iterator will check the nullity at each index and skip nulls, a more performant implementation
 would skip reading the nullity when mayHaveNulls() is false.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">struct</span> <span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">arraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">T</span><span class="p">);</span><span class="w"></span>
 
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 <span class="w">        </span><span class="k">if</span><span class="p">(</span><span class="n">array</span><span class="p">.</span><span class="n">mayHaveNulls</span><span class="p">()){</span><span class="w"></span>
-<span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">value</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">            </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">array</span><span class="p">.</span><span class="n">skipNulls</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">                </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">value</span><span class="p">;</span><span class="w"></span>
 <span class="w">            </span><span class="p">}</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
 <span class="w">        </span><span class="p">}</span><span class="w"></span>
 
 <span class="w">        </span><span class="c1">// no nulls, skip reading nullity.</span>
-<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">element</span> <span class="p">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">array</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">            </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">element</span><span class="p">.</span><span class="n">value</span><span class="p">();</span><span class="w"></span>
 <span class="w">        </span><span class="p">}</span><span class="w"></span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
@@ -523,8 +541,8 @@ versus l-values in STD containers. Hence those can be bound to const references 
 <p><strong>3- MapView&lt;K, V&gt;</strong>:</p>
 <p>MapView has an interface similar to std::map&lt;K, std::optional&lt;V&gt;&gt;,  the code below shows an example function mapSum,
 that sums up the keys and values.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
-<span class="k">struct</span> <span class="nc">mapSum</span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">mapSum</span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">map</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 <span class="w">        </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">map</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
@@ -582,11 +600,11 @@ assigned. And in such a case, the assignment has undefined behavior.</p>
 </div>
 <p>Note that in the range-loop, the range expression is assigned to a universal reference. Thus, the above concern applies to it.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Unsafe range loop.</span>
-<span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">e</span> <span class="p">:</span><span class="w"> </span><span class="o">**</span><span class="n">it</span><span class="p">){..}</span><span class="w"></span>
+<span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="o">**</span><span class="n">it</span><span class="p">){..}</span><span class="w"></span>
 
 <span class="c1">// Safe range loop.</span>
 <span class="k">auto</span><span class="w"> </span><span class="n">itt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="n">it</span><span class="p">;</span><span class="w"></span>
-<span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">e</span> <span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="n">itt</span><span class="p">){..}</span><span class="w"></span>
+<span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">e</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="o">*</span><span class="n">itt</span><span class="p">){..}</span><span class="w"></span>
 </pre></div>
 </div>
 </section>
@@ -919,7 +937,7 @@ expression used with a constant IN-list can create a hash set of the values
 once and reuse it for all the batches of data.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Represents arguments for stateful vector functions. Stores element type, and</span>
 <span class="c1">// the constant value (if supplied).</span>
-<span class="k">struct</span> <span class="nc">VectorFunctionArg</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">VectorFunctionArg</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="p">;</span><span class="w"></span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">constantValue</span><span class="p">;</span><span class="w"></span>
 <span class="p">};</span><span class="w"></span>
@@ -1089,8 +1107,9 @@ functions are listed in alphabetical order.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">How to add a scalar function?</a><ul>
 <li><a class="reference internal" href="#simple-functions">Simple Functions</a><ul>
 <li><a class="reference internal" href="#null-behavior">Null Behavior</a></li>
@@ -1124,12 +1143,17 @@ functions are listed in alphabetical order.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="vectors.html"
-                        title="previous chapter">Vectors</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="aggregate-functions.html"
-                        title="next chapter">How to add an aggregate function?</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="vectors.html"
+                          title="previous chapter">Vectors</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="aggregate-functions.html"
+                          title="next chapter">How to add an aggregate function?</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -1170,7 +1194,7 @@ functions are listed in alphabetical order.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

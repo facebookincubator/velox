@@ -259,7 +259,7 @@ values.</p>
 <p>FlatVector&lt;T&gt; uses BaseVector as the base class and it gets the type, size and
 nulls buffer from it. Flat vectors like all other vectors are held by
 std::shared_ptr using the FlatVectorPtr alias.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
 <span class="k">using</span><span class="w"> </span><span class="n">FlatVectorPtr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">FlatVector</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
@@ -563,8 +563,9 @@ complex types are no different than dictionary vectors of scalar types.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">Vectors</a><ul>
 <li><a class="reference internal" href="#buffers">Buffers</a></li>
 <li><a class="reference internal" href="#null-flags">Null Flags</a></li>
@@ -583,12 +584,17 @@ complex types are no different than dictionary vectors of scalar types.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="../develop.html"
-                        title="previous chapter">Developer Guide</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="scalar-functions.html"
-                        title="next chapter">How to add a scalar function?</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../develop.html"
+                          title="previous chapter">Developer Guide</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="scalar-functions.html"
+                          title="next chapter">How to add a scalar function?</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -629,7 +635,7 @@ complex types are no different than dictionary vectors of scalar types.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

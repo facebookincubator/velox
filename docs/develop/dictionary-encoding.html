@@ -199,7 +199,7 @@ LocalDecodedVector goes out of scope.</p>
 <p>When implementing an aggregate function, use a DecodedVector member variable
 for each input vector. There will be a few variables for raw input vectors and
 a few more for intermediate input vectors.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">ApproxDistinctAggregate</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">ApproxDistinctAggregate</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="k">public</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">Aggregate</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 
 <span class="w">      </span><span class="c1">// partial aggregation</span>
 <span class="w">      </span><span class="kt">void</span><span class="w"> </span><span class="nf">decodeArguments</span><span class="p">(</span><span class="w"></span>
@@ -270,8 +270,9 @@ the rows of interest.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">Dictionary Encoding</a><ul>
 <li><a class="reference internal" href="#introduction">Introduction</a></li>
 <li><a class="reference internal" href="#nulls">Nulls</a></li>
@@ -285,12 +286,17 @@ the rows of interest.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="expression-evaluation.html"
-                        title="previous chapter">Expression Evaluation</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="arena.html"
-                        title="next chapter">Arena Allocation</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="expression-evaluation.html"
+                          title="previous chapter">Expression Evaluation</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="arena.html"
+                          title="next chapter">Arena Allocation</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -331,7 +337,7 @@ the rows of interest.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

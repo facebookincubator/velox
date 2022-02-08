@@ -54,11 +54,11 @@ array or map elements which pass the predicate. The <a class="reference internal
 takes an array and a function, applies that function to each element of the
 array and returns an array of results.</p>
 <p>Here is an example of using filter and transform functions in Presto SQL:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="k">select</span> <span class="n">filter</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">=</span> <span class="mi">0</span><span class="p">);</span>
- <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"></span>
+<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w"></span>
 
-<span class="o">&gt;</span> <span class="k">select</span> <span class="k">transform</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">*</span> <span class="mi">2</span><span class="p">)</span>
- <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">transform</span><span class="p">(</span><span class="nb">array</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"></span>
+<span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">]</span><span class="w"></span>
 </pre></div>
 </div>
 <p>“x -&gt; x % 2 = 0” is a lambda expression. It consists of a signature and a body
@@ -89,10 +89,10 @@ column “b”:</p>
 </table>
 <p>We can filter the array “a” to keep only elements that are greater than or equal
 to “b”:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="k">select</span> <span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">&gt;=</span> <span class="n">b</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"></span>
 
-<span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]</span>
-<span class="p">[</span><span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">]</span>
+<span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">]</span><span class="w"></span>
+<span class="p">[</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mi">7</span><span class="p">]</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Here, “b” in the lambda expression is the capture. Lambda expressions can use
@@ -100,10 +100,10 @@ zero or more captures.</p>
 <p>Further, it is possible to apply different lambda expressions to different rows
 in the dataset. For example, we can filter the array “a” to keep even elements
 if “b” is even and odd elements if “b” is odd.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="k">select</span> <span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="k">if</span><span class="p">(</span><span class="n">b</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="n">x</span> <span class="o">-&gt;</span> <span class="n">x</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="n">x</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">1</span><span class="p">))</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">filter</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">if</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span><span class="w"></span>
 
-<span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">]</span>
-<span class="p">[</span><span class="mi">6</span><span class="p">]</span>
+<span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w"></span>
+<span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Note: At the time of writing Presto didn’t support this syntax.</p>
@@ -124,7 +124,7 @@ is possible for different rows to be associated with different lambdas as we
 have seen above. FunctionVector stores a list of different lambdas along with a
 set of rows each lambda applies to. Each lambda is represented as an object of
 type Callable which allows for evaluating the lambda on a set of rows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">Callable</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">Callable</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">hasCapture</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span><span class="w"></span>
 
 <span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="w"></span>
@@ -248,8 +248,9 @@ is used to resolve the types of captures.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">How to add a lambda function?</a><ul>
 <li><a class="reference internal" href="#introduction">Introduction</a></li>
 <li><a class="reference internal" href="#function-vector">Function Vector</a></li>
@@ -260,12 +261,17 @@ is used to resolve the types of captures.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="aggregate-functions.html"
-                        title="previous chapter">How to add an aggregate function?</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="expression-evaluation.html"
-                        title="next chapter">Expression Evaluation</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="aggregate-functions.html"
+                          title="previous chapter">How to add an aggregate function?</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="expression-evaluation.html"
+                          title="next chapter">Expression Evaluation</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -306,7 +312,7 @@ is used to resolve the types of captures.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

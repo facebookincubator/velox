@@ -303,7 +303,7 @@ by setting boolean flag “broadcast” in the PartitionedOutputNode to true.</p
 <section id="anti-joins">
 <h3>Anti Joins<a class="headerlink" href="#anti-joins" title="Permalink to this headline">¶</a></h3>
 <p>Anti join is used for queries like this:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">WHERE</span> <span class="n">t</span><span class="p">.</span><span class="k">key</span> <span class="k">NOT</span> <span class="k">IN</span> <span class="p">(</span><span class="k">SELECT</span> <span class="k">key</span> <span class="k">FROM</span> <span class="n">u</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Anti join returns probe-side rows which have no match in the build side. The
@@ -402,8 +402,9 @@ of how to build and execute a plan with a hash or merge join.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">Joins</a><ul>
 <li><a class="reference internal" href="#hash-join-implementation">Hash Join Implementation</a><ul>
 <li><a class="reference internal" href="#dynamic-filter-pushdown">Dynamic Filter Pushdown</a></li>
@@ -420,12 +421,17 @@ of how to build and execute a plan with a hash or merge join.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="aggregations.html"
-                        title="previous chapter">Aggregations</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="operators.html"
-                        title="next chapter">Plan Nodes and Operators</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="aggregations.html"
+                          title="previous chapter">Aggregations</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="operators.html"
+                          title="next chapter">Plan Nodes and Operators</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -466,7 +472,7 @@ of how to build and execute a plan with a hash or merge join.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

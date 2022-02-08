@@ -1,0 +1,154 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>January 2022 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="December 2021 Update" href="december-2021.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="december-2021.html" title="December 2021 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">January 2022 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="january-2022-update">
+<h1>January 2022 Update<a class="headerlink" href="#january-2022-update" title="Permalink to this headline">¶</a></h1>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for bucket-by-bucket query execution to allow for lower memory
+footprint for joins and aggregations on bucketed-by keys.</p></li>
+<li><p>Add support for converting ROW vectors (structs) to and from Arrow arrays.</p></li>
+<li><p>Add support for variadic arguments to simple functions.</p></li>
+<li><p>Add support for LEFT merge join.</p></li>
+<li><p>Add support for AS statement to PlanBuilder.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add support for AWS S3 IAM Roles.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add <a class="reference internal" href="../functions/math.html#pi" title="pi"><code class="xref py py-func docutils literal notranslate"><span class="pre">pi()</span></code></a>, <a class="reference internal" href="../functions/math.html#to_base" title="to_base"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_base()</span></code></a>, <a class="reference internal" href="../functions/array.html#array_join" title="array_join"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_join()</span></code></a>, <a class="reference internal" href="../functions/regexp.html#id1" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a>
+functions.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<p>Aditi Pandit, Alex Hornby, Andy Lee, Arun Thirupathi, Bikash Chandra, Chad
+Austin, Chao Chen, Cheng Su, Damian Reeves, Deepak Majeti, Jake Jung, Kevin
+Wilfong, Krishna Pai, Kunal Chakraborti, Laith Sakka, MJ Deng, Masha Basmanova,
+Muir Manders, Naresh Kumar, Orri Erling, Pedro Eugenio Rocha Pedreira, Sergey
+Pershin, Tom Jackson, Victor Zverovich, Wei He, Wei Zheng, Xavier Deguillard,
+Ying, Zeyi (Rice) Fan, Zhenyuan Zhao, Zsolt Dollenstein, xuedongluan</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">January 2022 Update</a><ul>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="december-2021.html"
+                          title="next chapter">December 2021 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/january-2022.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="december-2021.html" title="December 2021 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">January 2022 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>

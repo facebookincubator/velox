@@ -59,7 +59,7 @@ contain expressions. To compute aggregations over expressions add ProjectNode
 just before the AggregationNode.</p>
 <p>Here are examples of aggregation query plans:</p>
 <p>Group-by with a single grouping key and single aggregate function:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -67,7 +67,7 @@ just before the AggregationNode.</p>
 </ul>
 <p>Group-by with a single grouping key and an aggregate function applied to an
 expression:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span> <span class="o">*</span> <span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -80,21 +80,21 @@ expression:</p>
 </li>
 </ul>
 <p>Group-by with multiple grouping keys and multiple aggregates:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">),</span> <span class="k">avg</span><span class="p">(</span><span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {sum(c), avg(c)}</p></li>
 </ul>
 <p>Distinct aggregation:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">DISTINCT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="k">FROM</span> <span class="n">t</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
 <li><p>AggregationNode: groupingKeys = {a, b}, aggregates = {}</p></li>
 </ul>
 <p>Aggregation with a mask:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span> <span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="n">filter</span> <span class="p">(</span><span class="k">where</span> <span class="k">c</span> <span class="o">&gt;</span> <span class="mi">10</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="p">(</span><span class="k">where</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -107,7 +107,7 @@ expression:</p>
 </li>
 </ul>
 <p>Global aggregation:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">sum</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="k">avg</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">a</span><span class="p">),</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
 </pre></div>
 </div>
 <ul class="simple">
@@ -131,16 +131,16 @@ Pushdown is enabled when all of the following conditions are met:</p>
 <li><p>that column is not used anywhere else in the query.</p></li>
 </ul>
 <p>For example, pushdown is possible in the following query:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Pushdown is also possible if the data is filtered using columns other than the
 column that is the input to the aggregation function. For example, pushdown is
 enabled in the following query:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
-<span class="k">FROM</span> <span class="n">t</span>
-<span class="k">WHERE</span> <span class="n">a</span> <span class="o">&gt;</span> <span class="mi">100</span>
-<span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"></span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="w"></span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <p>In these queries, TableScan operator produces “b” column as a LazyVector
@@ -305,8 +305,9 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">Aggregations</a><ul>
 <li><a class="reference internal" href="#hashaggregation-operator">HashAggregation Operator</a></li>
 <li><a class="reference internal" href="#push-down-into-table-scan">Push-Down into Table Scan</a></li>
@@ -321,12 +322,17 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="arena.html"
-                        title="previous chapter">Arena Allocation</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="joins.html"
-                        title="next chapter">Joins</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="arena.html"
+                          title="previous chapter">Arena Allocation</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="joins.html"
+                          title="next chapter">Joins</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -367,7 +373,7 @@ following types: boolean, tinyint, smallint, integer, bigint, varchar.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>

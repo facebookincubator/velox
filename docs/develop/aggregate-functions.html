@@ -47,19 +47,19 @@
 There can be one or more aggregate functions in a single operator.
 Here are some examples.</p>
 <p>Global aggregation (no grouping keys), single aggregate “count”.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Global aggregation, two aggregates: “count” and “sum”:</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Aggregation with three aggregates: “count” and two “sum”s.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span> <span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">),</span> <span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">b</span><span class="p">),</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Aggregation with just one aggregate - “min” - and two grouping keys.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="k">min</span><span class="p">(</span><span class="k">c</span><span class="p">)</span> <span class="k">FROM</span> <span class="n">t</span> <span class="k">GROUP</span> <span class="k">BY</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Typically, aggregations are calculated in two steps: partial aggregation
@@ -197,7 +197,7 @@ accumulators.</p>
 </div>
 <p>Typically, an aggregate function doesn’t use the offsets directly. Instead, it uses helper methods from the base class.</p>
 <p>To access the accumulator:</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span> <span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
 <span class="n">T</span><span class="o">*</span><span class="w"> </span><span class="n">value</span><span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="n">T</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">group</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">offset_</span><span class="p">);</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
@@ -359,10 +359,10 @@ input type and result type.</p>
 <span class="w">        </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">isRawInput</span><span class="p">(</span><span class="n">step</span><span class="p">)</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span><span class="w"></span>
 
 <span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">kind</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="nl">BIGINT</span><span class="p">:</span><span class="w"></span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">BIGINT</span><span class="o">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
 <span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
-<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="nl">DOUBLE</span><span class="p">:</span><span class="w"></span>
+<span class="w">          </span><span class="k">case</span><span class="w"> </span><span class="n">TypeKind</span><span class="o">::</span><span class="n">DOUBLE</span><span class="o">:</span><span class="w"></span>
 <span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">ApproxPercentileAggregate</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;&gt;</span><span class="p">(</span><span class="w"></span>
 <span class="w">                </span><span class="n">hasWeight</span><span class="p">,</span><span class="w"> </span><span class="n">resultType</span><span class="p">);</span><span class="w"></span>
 <span class="w">          </span><span class="p">...</span><span class="w"></span>
@@ -386,7 +386,7 @@ functions takes value argument of a numeric type, an optional weight argument
 of type INTEGER, and a percentage argument of type DOUBLE. The intermediate
 type does not depend on the input types and is always VARBINARY. The final
 result type is the same as input value type.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="nl">inputType</span> <span class="p">:</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">inputType</span><span class="w"> </span><span class="o">:</span><span class="w"></span>
 <span class="w">       </span><span class="p">{</span><span class="s">&quot;tinyint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;smallint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;integer&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;bigint&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;real&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;double&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="c1">// (x, double percentage) -&gt; varbinary -&gt; x</span>
 <span class="w">    </span><span class="n">signatures</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">AggregateFunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
@@ -494,7 +494,7 @@ DOUBLE result type.</p>
 <p>An StlAllocator defined in velox/exec/HashStringAllocator.h can be used to make STL containers (e.g. std::vector) backed by memory allocated via the HashStringAllocator. StlAllocator is not an accumulator itself, but can be used to design accumulators that use STL containers. It is used by <a class="reference internal" href="../functions/aggregate.html#id2" title="approx_percentile"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#id1" title="approx_distinct"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_distinct()</span></code></a>.</p>
 <p>Memory allocated from the HashStringAllocator needs to be released in the destroy() method. See velox/aggregates/ArrayAgg.cpp for an example.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">folly</span><span class="o">::</span><span class="n">Range</span><span class="o">&lt;</span><span class="kt">char</span><span class="o">**&gt;</span><span class="w"> </span><span class="n">groups</span><span class="p">)</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="nl">group</span> <span class="p">:</span><span class="w"> </span><span class="n">groups</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">group</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">groups</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="w"> </span><span class="n">header</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="o">&lt;</span><span class="n">ArrayAccumulator</span><span class="o">&gt;</span><span class="p">(</span><span class="n">group</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">elements</span><span class="p">.</span><span class="n">begin</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">      </span><span class="n">allocator_</span><span class="o">-&gt;</span><span class="n">free</span><span class="p">(</span><span class="n">header</span><span class="p">);</span><span class="w"></span>
 <span class="w">    </span><span class="p">}</span><span class="w"></span>
@@ -519,8 +519,9 @@ DOUBLE result type.</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
-  <h3><a href="../index.html">Table of Contents</a></h3>
-  <ul>
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
 <li><a class="reference internal" href="#">How to add an aggregate function?</a><ul>
 <li><a class="reference internal" href="#memory-layout">Memory Layout</a></li>
 <li><a class="reference internal" href="#aggregate-class">Aggregate class</a></li>
@@ -537,12 +538,17 @@ DOUBLE result type.</p>
 </li>
 </ul>
 
-  <h4>Previous topic</h4>
-  <p class="topless"><a href="scalar-functions.html"
-                        title="previous chapter">How to add a scalar function?</a></p>
-  <h4>Next topic</h4>
-  <p class="topless"><a href="lambda-functions.html"
-                        title="next chapter">How to add a lambda function?</a></p>
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="scalar-functions.html"
+                          title="previous chapter">How to add a scalar function?</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="lambda-functions.html"
+                          title="next chapter">How to add a lambda function?</a></p>
+  </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
@@ -583,7 +589,7 @@ DOUBLE result type.</p>
     </div>
     <div class="footer" role="contentinfo">
         &#169; Copyright TBD.
-      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.2.0.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
     </div>
   </body>
 </html>
