@@ -44,6 +44,19 @@
   <section id="bitwise-functions">
 <h1>Bitwise Functions<a class="headerlink" href="#bitwise-functions" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py" id="bit_count">
+<span class="sig-name descname"><span class="pre">bit_count</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bits</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#bit_count" title="Permalink to this definition">¶</a></dt>
+<dd><p>Count the number of bits set in <code class="docutils literal notranslate"><span class="pre">x</span></code> (treated as <code class="docutils literal notranslate"><span class="pre">bits</span></code>-bit signed
+integer) in 2’s complement representation:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">bit_count</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">64</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">bit_count</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span> <span class="o">--</span> <span class="mi">2</span>
+<span class="n">SELECT</span> <span class="n">bit_count</span><span class="p">(</span><span class="o">-</span><span class="mi">7</span><span class="p">,</span> <span class="mi">64</span><span class="p">);</span> <span class="o">--</span> <span class="mi">62</span>
+<span class="n">SELECT</span> <span class="n">bit_count</span><span class="p">(</span><span class="o">-</span><span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">);</span> <span class="o">--</span> <span class="mi">6</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="bitwise_and">
 <span class="sig-name descname"><span class="pre">bitwise_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="p"><span class="pre">[</span></span><span class="pre">bigint</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#bitwise_and" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the bitwise AND of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in 2’s complement representation.</p>
