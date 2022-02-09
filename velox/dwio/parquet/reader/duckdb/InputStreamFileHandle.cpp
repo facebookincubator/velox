@@ -23,10 +23,6 @@ InputStreamFileHandle::~InputStreamFileHandle() {
 }
 
 void InputStreamFileHandle::Close() {
-  if (streamId_) {
-    dynamic_cast<InputStreamFileSystem&>(file_system).CloseStream(streamId_);
-    streamId_ = 0;
-  }
 }
 
 } // namespace facebook::velox::duckdb

@@ -267,10 +267,11 @@ ParquetReader::ParquetReader(
     std::unique_ptr<dwio::common::InputStream> stream,
     const dwio::common::ReaderOptions& options)
     : allocator_(options.getMemoryPool()),
-      reader_(std::make_shared<::duckdb::ParquetReader>(
-          allocator_,
-          getFileSystem()->OpenStream(std::move(stream)))),
       pool_(options.getMemoryPool()) {
+  fileSystem_ =
+      std::make_unique<duckdb::InputStreamFileSystem>(std::move(stream));
+  reader_ = std::make_shared<::duckdb::ParquetReader>(
+      allocator_, fileSystem_->fileHandle());
   auto names = reader_->names;
   std::vector<TypePtr> types;
   types.reserve(reader_->return_types.size());

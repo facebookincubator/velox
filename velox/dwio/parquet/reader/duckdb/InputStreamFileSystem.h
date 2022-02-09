@@ -28,7 +28,8 @@ namespace facebook::velox::duckdb {
 
 class InputStreamFileSystem : public ::duckdb::FileSystem {
  public:
-  InputStreamFileSystem() {}
+  InputStreamFileSystem(std::unique_ptr<dwio::common::InputStream> stream)
+      : stream_(std::move(stream)) {}
   ~InputStreamFileSystem() override = default;
 
   std::unique_ptr<::duckdb::FileHandle> OpenFile(
@@ -39,34 +40,14 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
           ::duckdb::FileCompressionType::UNCOMPRESSED*/
       ,
       ::duckdb::FileOpener* /*opener = nullptr*/) override {
-    int streamId = std::stoi(path);
-
-    auto lockedStreams = streams_.wlock();
-    auto it = lockedStreams->find(streamId);
-    VELOX_CHECK(
-        it != lockedStreams->end(), "Unknown stream with ID {}", streamId);
-    ++it->second.first;
-    return std::make_unique<InputStreamFileHandle>(*this, streamId);
+    return std::make_unique<InputStreamFileHandle>(*this, this->stream_.get());
   }
 
-  std::unique_ptr<::duckdb::FileHandle> OpenStream(
-      std::unique_ptr<dwio::common::InputStream> stream) {
-    auto streamId = nextStreamId_++;
-    streams_.wlock()->emplace(
-        std::make_pair(streamId, std::make_pair(1, std::move(stream))));
-    return std::make_unique<InputStreamFileHandle>(*this, streamId);
+  std::unique_ptr<::duckdb::FileHandle> fileHandle() {
+    return std::make_unique<InputStreamFileHandle>(*this, this->stream_.get());
   }
 
   void CloseStream(int streamId) {
-    auto lockedStreams = streams_.wlock();
-    auto it = lockedStreams->find(streamId);
-    VELOX_CHECK(
-        it != lockedStreams->end(), "Unknown stream with ID {}", streamId);
-    if (it->second.first == 1) {
-      lockedStreams->erase(it);
-    } else {
-      --it->second.first;
-    }
   }
 
   void Read(
@@ -75,18 +56,8 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
       int64_t nr_bytes,
       uint64_t location) override {
     auto& streamHandle = dynamic_cast<InputStreamFileHandle&>(handle);
-    dwio::common::InputStream* stream = nullptr;
-    {
-      auto lockedStreams = streams_.rlock();
-      auto it = lockedStreams->find(streamHandle.streamId());
-      VELOX_CHECK(
-          it != lockedStreams->end(),
-          "Unknown stream with ID {}",
-          streamHandle.streamId());
-      stream = it->second.second.get();
-    }
+    dwio::common::InputStream* stream = streamHandle.stream();
     stream->read(buffer, nr_bytes, location, dwio::common::LogType::FILE);
-    streamHandle.setOffset(location + nr_bytes);
   }
 
   void Write(
@@ -113,16 +84,7 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
 
   int64_t GetFileSize(::duckdb::FileHandle& handle) override {
     auto& streamHandle = dynamic_cast<InputStreamFileHandle&>(handle);
-    dwio::common::InputStream* stream = nullptr;
-    {
-      auto lockedStreams = streams_.rlock();
-      auto it = lockedStreams->find(streamHandle.streamId());
-      VELOX_CHECK(
-          it != lockedStreams->end(),
-          "Unknown stream with ID {}",
-          streamHandle.streamId());
-      stream = it->second.second.get();
-    }
+    dwio::common::InputStream* stream = streamHandle.stream();
     return stream->getLength();
   }
 
@@ -179,12 +141,7 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
   }
 
  private:
-  std::atomic<int> nextStreamId_ = 1;
-  // Maps stream ID to file handle counter and input stream.
-  folly::Synchronized<folly::F14FastMap<
-      int,
-      std::pair<int, std::unique_ptr<dwio::common::InputStream>>>>
-      streams_;
+  std::unique_ptr<dwio::common::InputStream> stream_;
 };
 
 } // namespace facebook::velox::duckdb
