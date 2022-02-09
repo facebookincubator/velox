@@ -22,24 +22,16 @@ namespace facebook::velox::duckdb {
 
 class InputStreamFileSystem;
 
+// Implements the DuckDB FileHandle API
 class InputStreamFileHandle : public ::duckdb::FileHandle {
  public:
-  InputStreamFileHandle(
-      ::duckdb::FileSystem& fileSystem,
-      dwio::common::InputStream* stream)
-      : FileHandle(fileSystem, ""), stream_(stream) {}
+  InputStreamFileHandle(::duckdb::FileSystem& fileSystem)
+      : FileHandle(fileSystem, "") {}
 
-  ~InputStreamFileHandle() override;
-
-  dwio::common::InputStream* stream() const {
-    return stream_;
-  }
+  ~InputStreamFileHandle() override {}
 
  protected:
-  void Close() override;
-
- private:
-  dwio::common::InputStream* stream_;
+  void Close() override {}
 };
 
 } // namespace facebook::velox::duckdb
