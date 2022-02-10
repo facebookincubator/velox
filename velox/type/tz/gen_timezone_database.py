@@ -92,7 +92,7 @@ def main():
     # >  ...
     #
 
-    # Explicitly add UTC
+    # Explicitly add UTC.
     entries.append(entry_template.substitute(tz_id=0, tz_name="+00:00"))
     with open(args.file_input) as file_in:
         for line in file_in:
