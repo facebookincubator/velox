@@ -72,9 +72,9 @@ class ParquetReader : public dwio::common::Reader {
 
  private:
   duckdb::VeloxPoolAllocator allocator_;
+  std::unique_ptr<duckdb::InputStreamFileSystem> fileSystem_;
   std::shared_ptr<::duckdb::ParquetReader> reader_;
   memory::MemoryPool& pool_;
-  std::unique_ptr<duckdb::InputStreamFileSystem> fileSystem_;
 
   RowTypePtr type_;
   mutable std::shared_ptr<const dwio::common::TypeWithId> typeWithId_;

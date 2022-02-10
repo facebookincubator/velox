@@ -34,6 +34,7 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
  public:
   InputStreamFileSystem(std::unique_ptr<dwio::common::InputStream> stream)
       : stream_(std::move(stream)) {}
+
   ~InputStreamFileSystem() override = default;
 
   // Arguments are not used as this only supports a specific InputStream
