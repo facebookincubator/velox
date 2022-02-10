@@ -93,7 +93,7 @@ contribute to the project.
 
 The main communication channel with the Velox OSS community is through the
 [the Velox-OSS Slack workspace](http://velox-oss.slack.com). Please don't
-hesitate in reaching out.
+hesitate in reaching out to Jiju.
 
 ## License
 
