@@ -620,6 +620,62 @@ avoid that by using writer proxies that write directly to Velox vectors. This se
 be updated once the new writer interfaces are completed.</p>
 </section>
 </section>
+<section id="variadic-arguments">
+<h3>Variadic Arguments<a class="headerlink" href="#variadic-arguments" title="Permalink to this headline">¶</a></h3>
+<p>The last argument to a simple function may be marked “Variadic”. This means
+invocations of this function may include 0..N arguments of that type at the end
+of the call.  While not a true type in Velox, “Variadic” can be thought of as a
+syntactic type, and behaves somewhat similarly to Array.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 10%" />
+<col style="width: 30%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
+<th class="head"><p>C++ Argument Type</p></th>
+<th class="head"><p>C++ Actual Argument Type</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>VARIADIC</p></td>
+<td><p>arg_type&lt;Variadic&lt;E&gt;&gt;</p></td>
+<td><p>VariadicView&lt;VectorOptionalValueAccessor&lt;VectorReader&lt;E&gt;&gt;&gt;&gt;</p></td>
+</tr>
+</tbody>
+</table>
+<p>Like the ArrayView, VariadicView has a similar interface to
+<em>const std::vector&lt;std::optional&lt;V&gt;&gt;</em>.</p>
+<p>VariadicView supports the following:</p>
+<ul class="simple">
+<li><p>size_t size() : return the number of arguments that were passed as part of the “Variadic” type in the function invocation.</p></li>
+<li><p>VectorOptionalValueAccessor&lt;arg_type&lt;T&gt;&gt; operator[](size_t index) : access the value of the argument at index.</p></li>
+<li><p>VariadicView&lt;T&gt;::Iterator begin() : iterator to the first argument.</p></li>
+<li><p>VariadicView&lt;T&gt;::Iterator end() : iterator indicating end of iteration.</p></li>
+<li><p>bool mayHaveNulls() : a check on the nullity of the arugments (note this takes time proportional to the number of arguments). When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
+<li><p>VariadicView&lt;T&gt;::SkipNullsContainer SkipNulls() : return an iterable container that provides direct access to each argument with a non-null value.</p></li>
+</ul>
+<p>The code below shows an example of a function that concatenates a variable number of strings:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">VariadicArgsReaderFunction</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">T</span><span class="p">);</span><span class="w"></span>
+
+<span class="w">  </span><span class="n">FOLLY_ALWAYS_INLINE</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Variadic</span><span class="o">&lt;</span><span class="n">Varchar</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">inputs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">inputs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">input</span><span class="p">.</span><span class="n">has_value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="n">output</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">input</span><span class="p">.</span><span class="n">value</span><span class="p">();</span><span class="w"></span>
+<span class="w">      </span><span class="p">}</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="p">};</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="vector-functions">
 <h2>Vector Functions<a class="headerlink" href="#vector-functions" title="Permalink to this headline">¶</a></h2>
@@ -1124,6 +1180,7 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#limitations">Limitations</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#variadic-arguments">Variadic Arguments</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#vector-functions">Vector Functions</a><ul>
