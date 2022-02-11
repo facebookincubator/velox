@@ -225,11 +225,17 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
 
   // One in 5 chance of adding a constant vector.
   if (oneIn(5)) {
-    // One in <nullChance> chance of adding a NULL constant vector.
-    if (oneIn(opts_.nullChance)) {
-      vector = BaseVector::createNullConstant(type, size, pool_);
+    // If adding a constant vector, 50% of chance between:
+    // - generate a regular constant vector.
+    // - generate a random vector and wrap it using a constant vector.
+    if (oneIn(2)) {
+      vector = fuzzConstant(type);
     } else {
-      vector = BaseVector::wrapInConstant(size, 0, fuzz(type, 1));
+      // Vector size can't be zero.
+      auto innerVectorSize = folly::Random::rand32(1, opts_.vectorSize, rng_);
+      auto constantIndex = rand<vector_size_t>(rng_) % innerVectorSize;
+      vector = BaseVector::wrapInConstant(
+          size, constantIndex, fuzz(type, innerVectorSize));
     }
   } else {
     vector = type->size() > 0 ? fuzzComplex(type, size) : fuzzFlat(type, size);
@@ -240,6 +246,17 @@ VectorPtr VectorFuzzer::fuzz(const TypePtr& type, vector_size_t size) {
     vector = fuzzDictionary(vector);
   }
   return vector;
+}
+
+VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type) {
+  return fuzzConstant(type, opts_.vectorSize);
+}
+
+VectorPtr VectorFuzzer::fuzzConstant(const TypePtr& type, vector_size_t size) {
+  if (oneIn(opts_.nullChance)) {
+    return BaseVector::createNullConstant(type, size, pool_);
+  }
+  return BaseVector::createConstant(randVariant(type), size, pool_);
 }
 
 VectorPtr VectorFuzzer::fuzzFlat(const TypePtr& type) {
