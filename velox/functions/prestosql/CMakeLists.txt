@@ -48,7 +48,8 @@ add_library(
   URLFunctions.cpp
   VectorArithmetic.cpp
   WidthBucketArray.cpp
-  Zip.cpp)
+  Zip.cpp
+  ArraysOverlap.cpp)
 
 target_link_libraries(
   velox_functions_prestosql_impl

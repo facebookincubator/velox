@@ -13,57 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/EvalCtx.h"
-#include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 
 namespace facebook::velox::functions {
 namespace {
-
-template <typename T>
-struct SetWithNull {
-  SetWithNull(vector_size_t initialSetSize = kInitialSetSize) {
-    set.reserve(initialSetSize);
-  }
-
-  void reset() {
-    set.clear();
-    hasNull = false;
-  }
-
-  std::unordered_set<T> set;
-  bool hasNull{false};
-
-  static constexpr vector_size_t kInitialSetSize{128};
-};
-
-// Generates a set based on the elements of an ArrayVector. Note that we take
-// rightSet as a parameter (instead of returning a new one) to reuse the
-// allocated memory.
-template <typename T, typename TVector>
-void generateSet(
-    const ArrayVector* arrayVector,
-    const TVector* arrayElements,
-    vector_size_t idx,
-    SetWithNull<T>& rightSet) {
-  auto size = arrayVector->sizeAt(idx);
-  auto offset = arrayVector->offsetAt(idx);
-  rightSet.reset();
-
-  for (vector_size_t i = offset; i < (offset + size); ++i) {
-    if (arrayElements->isNullAt(i)) {
-      rightSet.hasNull = true;
-    } else {
-      // Function can be called with either FlatVector or DecodedVector, but
-      // their APIs are slightly different.
-      if constexpr (std::is_same_v<TVector, DecodedVector>) {
-        rightSet.set.insert(arrayElements->template valueAt<T>(i));
-      } else {
-        rightSet.set.insert(arrayElements->valueAt(i));
-      }
-    }
-  }
-}
 
 // See documentation at https://prestodb.io/docs/current/functions/array.html
 template <bool isIntersect, typename T>
@@ -271,24 +224,6 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   const bool isLeftConstant_{false};
 };
 
-void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  VELOX_USER_CHECK_EQ(
-      inputArgs.size(), 2, "array_intersect requires exactly two parameters");
-
-  auto arrayType = inputArgs.front().type;
-  VELOX_USER_CHECK_EQ(
-      arrayType->kind(),
-      TypeKind::ARRAY,
-      "array_intersect requires arguments of type ARRAY");
-
-  for (auto& arg : inputArgs) {
-    VELOX_USER_CHECK(
-        arrayType->kindEquals(arg.type),
-        "array_intersect function requires all arguments of the same type: {} vs. {}",
-        arg.type->toString(),
-        arrayType->toString());
-  }
-}
 
 template <bool isIntersect, TypeKind kind>
 std::shared_ptr<exec::VectorFunction> createTyped(
@@ -335,7 +270,7 @@ std::shared_ptr<exec::VectorFunction> createTyped(
 std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs);
+  validateType(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
@@ -348,7 +283,7 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
 std::shared_ptr<exec::VectorFunction> createArrayExcept(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs);
+  validateType(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(

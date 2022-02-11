@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/expression//EvalCtx.h"
+#include "velox/expression/VectorFunction.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -115,4 +117,55 @@ MapVectorPtr flattenMap(
     const SelectivityVector& rows,
     const VectorPtr& vector,
     DecodedVector& decodedVector);
+
+template <typename T>
+struct SetWithNull {
+  SetWithNull(vector_size_t initialSetSize = kInitialSetSize) {
+    set.reserve(initialSetSize);
+  }
+
+  void reset() {
+    set.clear();
+    hasNull = false;
+  }
+
+  std::unordered_set<T> set;
+  bool hasNull{false};
+  static constexpr vector_size_t kInitialSetSize{128};
+};
+
+// Generates a set based on the elements of an ArrayVector. Note that we take
+// rightSet as a parameter (instead of returning a new one) to reuse the
+// allocated memory.
+template <typename T, typename TVector>
+void generateSet(
+    const ArrayVector* arrayVector,
+    const TVector* arrayElements,
+    vector_size_t idx,
+    SetWithNull<T>& rightSet);
+
+// Returns pointer to a decoded elements vector for a given BaseVector.
+// Here is how the nesting of classes looks like:
+//   EncodedArrayVector {
+//        ArrayVector {
+//          OFFSETS:[]
+//          SIZES:[]
+//          IDX:[]
+//          EncodedElementsVector
+//            {
+//              ElementsVector --> returns this
+//            }
+//        }
+//   }
+DecodedVector* getDecodedElementsFromArrayVector(
+    exec::EvalCtx* context,
+    const BaseVector& vector,
+    const SelectivityVector& rows);
+
+// Validates a vector of VectorFunctionArg satisfies PrestoDb array functions
+// that accept 2 parameters like array_intersect, array_except, arrays_overlap.
+void validateType(
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const std::string name,
+    const size_t expectedArgCount);
 } // namespace facebook::velox::functions
