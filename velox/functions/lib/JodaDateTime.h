@@ -89,6 +89,25 @@ enum class JodaFormatSpecifier : uint8_t {
   TIMEZONE_OFFSET_ID = 20
 };
 
+struct JodaPattern {
+  JodaFormatSpecifier specifier;
+  size_t count;
+};
+
+struct JodaToken {
+  enum { PATTERN, LITERAL } type;
+  union {
+    JodaPattern pattern;
+    std::string_view literal;
+  };
+
+  explicit JodaToken(const JodaPattern& pattern)
+      : type(PATTERN), pattern(pattern) {}
+
+  explicit JodaToken(const std::string_view& literal)
+      : type(LITERAL), literal(literal) {}
+};
+
 struct JodaResult {
   Timestamp timestamp;
   int64_t timezoneId{-1};
@@ -110,16 +129,8 @@ class JodaFormatter {
     initialize();
   }
 
-  const std::vector<std::string_view>& literalTokens() const {
-    return literalTokens_;
-  }
-
-  const std::vector<JodaFormatSpecifier>& patternTokens() const {
-    return patternTokens_;
-  }
-
-  const std::vector<size_t>& patternTokensCount() const {
-    return patternTokensCount_;
+  const std::vector<JodaToken>& tokens() const {
+    return tokens_;
   }
 
   // Parses `input` according to the format specified in the constructor. Throws
@@ -130,25 +141,7 @@ class JodaFormatter {
   void initialize();
 
   const std::string format_;
-
-  // Stores the literal tokens (substrings) found while parsing `format_`.
-  // There are always `patternTokens_ + 1` literal tokens, to follow the
-  // format below:
-  //
-  //   l[0] - p[0] - l[1] - p[1] - ... - p[n] - l[n+1]
-  //
-  // for instance, the format string "YYYY-MM-dd" would be stored as:
-  //
-  //  literals: {"", "-", "-", ""}
-  //  patterns: {YEAR_OF_ERA, MONTH_OF_YEAR, DAY_OF_MONTH}
-  //  patternCount: {4, 2, 2}
-  //
-  std::vector<std::string_view> literalTokens_;
-  std::vector<JodaFormatSpecifier> patternTokens_;
-
-  // Stores the number of times each pattern token was read, e.g: "Y" (1) vs
-  // "YYYY" (4).
-  std::vector<size_t> patternTokensCount_;
+  std::vector<JodaToken> tokens_;
 };
 
 } // namespace facebook::velox::functions
