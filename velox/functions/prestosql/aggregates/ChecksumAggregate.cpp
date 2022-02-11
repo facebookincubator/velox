@@ -58,12 +58,12 @@ class ChecksumAggregate : public exec::Aggregate {
     vector->resize(numGroups);
 
     auto* rawValues = vector->mutableRawValues();
+    vector->clearAllNulls();
     for (auto i = 0; i < numGroups; ++i) {
       auto group = groups[i];
       if (isNull(group)) {
         vector->setNull(i, true);
       } else {
-        vector->setNull(i, false);
         rawValues[i] = StringView(value<char>(group), sizeof(int64_t));
       }
     }
@@ -81,9 +81,9 @@ class ChecksumAggregate : public exec::Aggregate {
       auto group = groups[i];
       if (isNull(group)) {
         vector->setNull(i, true);
-        continue;
+      } else {
+        rawValues[i] = *value<int64_t>(group);
       }
-      rawValues[i] = *value<int64_t>(group);
     }
   }
 
@@ -99,11 +99,12 @@ class ChecksumAggregate : public exec::Aggregate {
     auto rawHashes = hashes->as<int64_t>();
 
     rows.applyToSelected([&](vector_size_t row) {
-      clearNull(groups[row]);
+      auto group = groups[row];
+      clearNull(group);
       if (arg->isNullAt(row)) {
-        computeHashForNull(groups[row]);
+        computeHashForNull(group);
       } else {
-        computeHash(groups[row], rawHashes[row]);
+        computeHash(group, rawHashes[row]);
       }
     });
   }
@@ -118,8 +119,11 @@ class ChecksumAggregate : public exec::Aggregate {
     auto rawValues = vector->rawValues();
 
     rows.applyToSelected([&](vector_size_t row) {
-      clearNull(groups[row]);
-      *value<int64_t>(groups[row]) += rawValues[row];
+      auto group = groups[row];
+      if (!vector->isNullAt(row)) {
+        clearNull(group);
+        *value<int64_t>(group) += rawValues[row];
+      }
     });
   }
 

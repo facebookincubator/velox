@@ -24,8 +24,6 @@ namespace facebook::velox::aggregate::test {
 
 class ChecksumAggregateTest : public AggregationTestBase {
  protected:
-  static constexpr auto O = makeOptional<int64_t>;
-
   template <typename T>
   void assertSingleGroupChecksum(
       const std::vector<std::optional<T>>& data,
@@ -192,50 +190,41 @@ TEST_F(ChecksumAggregateTest, varchars) {
 
 TEST_F(ChecksumAggregateTest, arrays) {
   auto arrayVector = makeVectorWithNullArrays<int64_t>({
-      O({1, 2}),
-      O({3, 4}),
+      {{1, 2}},
+      {{3, 4}},
   });
 
   assertChecksum(arrayVector, "/jjpuD6xkXs=");
 
-  arrayVector = makeVectorWithNullArrays<int64_t>({O({12, std::nullopt})});
+  arrayVector = makeVectorWithNullArrays<int64_t>({{{12, std::nullopt}}});
   assertChecksum(arrayVector, "sr3HNuzc+7Y=");
-  arrayVector = makeVectorWithNullArrays<int64_t>({O({1, 2}), std::nullopt});
+  arrayVector = makeVectorWithNullArrays<int64_t>({{{1, 2}}, std::nullopt});
   assertChecksum(arrayVector, "Nlzernkj88A=");
   arrayVector =
-      makeVectorWithNullArrays<int64_t>({O({1, 2}), std::nullopt, O({})});
+      makeVectorWithNullArrays<int64_t>({{{1, 2}}, std::nullopt, {{}}});
   assertChecksum(arrayVector, "Nlzernkj88A=");
 
-  // array of arrays
+  // Array of arrays.
   auto baseArrayVector = makeVectorWithNullArrays<int64_t>(
-      {O({1, 2}), O({3, 4}), O({4, std::nullopt}), O({})});
+      {{{1, 2}}, {{3, 4}}, {{4, std::nullopt}}, {{}}});
   auto arrayOfArrayVector = makeArrayVector({0, 2}, baseArrayVector);
   assertChecksum(arrayOfArrayVector, "Wp67EOfWZPA=");
 }
 
 TEST_F(ChecksumAggregateTest, maps) {
-  using p = std::pair<int64_t, double>;
-
   auto mapVector = makeMapVector<int64_t, double>(
-      {{p(1, 17.0),
-        p(2, 36.0),
-        p(3, 8.0),
-        p(4, 28.0),
-        p(5, 24.0),
-        p(6, 32.0)}});
+      {{{1, 17.0}, {2, 36.0}, {3, 8.0}, {4, 28.0}, {5, 24.0}, {6, 32.0}}});
 
   assertChecksum(mapVector, "T9pb6QUB4xM=");
 
-  auto mapOfArrays = createMapOfArraysVector<int64_t>(
-      {{{1, O({1, 2, 3})}}, {{2, O({4, 5, 6})}}, {{3, O({7, 8, 9})}}});
+  auto mapOfArrays = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, {{1, 2, 3}}}}, {{2, {{4, 5, 6}}}}, {{3, {{7, 8, 9}}}}});
 
   assertChecksum(mapOfArrays, "GGEqhJQZMa4=");
 
-  // map with nulls
-  auto mapWithNullArrays = createMapOfArraysVector<int64_t>(
-      {{{1, std::nullopt}},
-       {{2, O({4, 5, std::nullopt})}},
-       {{3, O({7, 8, 9})}}});
+  // Map with nulls.
+  auto mapWithNullArrays = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, std::nullopt}}, {{2, {{4, 5, std::nullopt}}}}, {{3, {{7, 8, 9}}}}});
 
   assertChecksum(mapWithNullArrays, "gwfQ1dI2P68=");
 }
@@ -271,8 +260,9 @@ TEST_F(ChecksumAggregateTest, globalAggregationNoData) {
 }
 
 TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
-  auto timestamp = makeFlatVector<int64_t>(5, [](auto row) { return row; });
-  auto timezone = makeFlatVector<int16_t>(5, [](auto row) { return row % 5; });
+  auto timestamp =
+      makeFlatVector<int64_t>(5, [](auto row) { return 1639426440000; });
+  auto timezone = makeFlatVector<int16_t>(5, [](auto row) { return 0; });
 
   auto timestampWithTzVector = std::make_shared<RowVector>(
       pool_.get(),
@@ -281,6 +271,6 @@ TEST_F(ChecksumAggregateTest, timestampWithTimezone) {
       5,
       std::vector<VectorPtr>{timestamp, timezone});
 
-  assertChecksum(timestampWithTzVector, "411aYzf4Rog=");
+  assertChecksum(timestampWithTzVector, "jwqENA0VLZY=");
 }
 } // namespace facebook::velox::aggregate::test

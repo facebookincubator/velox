@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "iostream"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/VectorMaker.h"
 
@@ -452,21 +451,22 @@ class VectorTestBase {
     return velox::test::VectorMaker::flatten(vector);
   }
 
-  // Convenience function to create a vector of type Map[K, ARRAY[K]].
+  // Convenience function to create a vector of type Map(K, ARRAY(K)).
   // Supports null keys, and values and even null elements.
   // Example:
+  //   static constexpr auto O = makeOptional<int64_t>;
   //    createMapOfArraysVector<int64_t>(
   //      {{{1, std::nullopt}},
   //       {{2, O({4, 5, std::nullopt})}},
   //       {{std::nullopt, O({7, 8, 9})}}});
-  template <typename T>
+  template <typename K, typename V>
   VectorPtr createMapOfArraysVector(
       std::vector<std::map<
-          std::optional<T>,
-          std::optional<std::vector<std::optional<T>>>>> maps) {
+          std::optional<K>,
+          std::optional<std::vector<std::optional<V>>>>> maps) {
     std::vector<vector_size_t> mapSizes;
-    std::vector<std::optional<T>> keys;
-    std::vector<std::optional<std::vector<std::optional<T>>>> values;
+    std::vector<std::optional<K>> keys;
+    std::vector<std::optional<std::vector<std::optional<V>>>> values;
     for (auto& map : maps) {
       mapSizes.push_back(map.size());
       for (const auto& [key, value] : map) {
@@ -476,7 +476,7 @@ class VectorTestBase {
     }
 
     auto mapValues = makeVectorWithNullArrays(values);
-    auto mapKeys = makeNullableFlatVector<T>(keys);
+    auto mapKeys = makeNullableFlatVector<K>(keys);
     auto size = mapSizes.size();
 
     auto offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
@@ -494,19 +494,13 @@ class VectorTestBase {
 
     return std::make_shared<MapVector>(
         pool_.get(),
-        MAP(BIGINT(), ARRAY(BIGINT())),
+        MAP(CppToType<K>::create(), ARRAY(CppToType<V>::create())),
         nullptr,
         size,
         offsets,
         sizes,
         mapKeys,
         mapValues);
-  }
-
-  template <typename T>
-  static std::optional<std::vector<std::optional<T>>> makeOptional(
-      std::vector<std::optional<T>> data) {
-    return std::make_optional(data);
   }
 
   memory::MemoryPool* pool() const {

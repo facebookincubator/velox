@@ -28,8 +28,6 @@ using limits = std::numeric_limits<T>;
 class PrestoHasherTest : public testing::Test,
                          public facebook::velox::test::VectorTestBase {
  protected:
-  static constexpr auto O = makeOptional<int64_t>;
-
   template <typename T>
   void assertHash(
       const std::vector<std::optional<T>>& data,
@@ -224,15 +222,15 @@ TEST_F(PrestoHasherTest, bools) {
 
 TEST_F(PrestoHasherTest, arrays) {
   auto baseArrayVector = vectorMaker_.arrayVectorNullable<int64_t>(
-      {O({1, 2}),
-       O({3, 4}),
-       O({4, 5}),
-       O({6, 7}),
-       O({8, 9}),
-       O({10, 11}),
-       O({12, std::nullopt}),
+      {{{1, 2}},
+       {{3, 4}},
+       {{4, 5}},
+       {{6, 7}},
+       {{8, 9}},
+       {{10, 11}},
+       {{12, std::nullopt}},
        std::nullopt,
-       O({})});
+       {{}}});
 
   assertHash(
       baseArrayVector,
@@ -256,11 +254,11 @@ TEST_F(PrestoHasherTest, arrays) {
 
   // Array with nulls
   auto arrayWithNulls = vectorMaker_.arrayVectorNullable<int64_t>({
-      O({std::nullopt}),
-      O({1, 2, 3}),
-      O({1024, std::nullopt, -99, -999}),
-      O({}),
-      O({std::nullopt, -1}),
+      {{std::nullopt}},
+      {{1, 2, 3}},
+      {{1024, std::nullopt, -99, -999}},
+      {{}},
+      {{std::nullopt, -1}},
   });
 
   assertHash(
@@ -284,17 +282,17 @@ TEST_F(PrestoHasherTest, maps) {
       mapVector,
       {9155312661752487122, -6461599496541202183, 5488675304642487510});
 
-  auto mapOfArrays = createMapOfArraysVector<int64_t>(
-      {{{1, O({1, 2, 3})}}, {{2, O({4, 5, 6})}}, {{3, O({7, 8, 9})}}});
+  auto mapOfArrays = createMapOfArraysVector<int64_t, int64_t>(
+      {{{1, {{1, 2, 3}}}}, {{2, {{4, 5, 6}}}}, {{3, {{7, 8, 9}}}}});
   assertHash(
       mapOfArrays,
       {-6691024575166067114, -7912800814947937532, -5636922976001735986});
 
   // map with nulls
-  auto mapWithNullArrays = createMapOfArraysVector<int64_t>(
+  auto mapWithNullArrays = createMapOfArraysVector<int64_t, int64_t>(
       {{{1, std::nullopt}},
-       {{2, O({4, 5, std::nullopt})}},
-       {{std::nullopt, O({7, 8, 9})}}});
+       {{2, {{4, 5, std::nullopt}}}},
+       {{std::nullopt, {{7, 8, 9}}}}});
   assertHash(
       mapWithNullArrays,
       {9155312661752487122, 6562918552317873797, 2644717257979355699});
