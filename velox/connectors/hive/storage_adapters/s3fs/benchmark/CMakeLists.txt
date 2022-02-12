@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# for generated headers
+add_executable(velox_s3read_benchmark S3ReadBenchmark.cpp
+                                      S3ReadBenchmarkMain.cpp)
 
-add_library(velox_s3fs S3FileSystem.cpp S3Util.cpp)
-target_include_directories(velox_s3fs PUBLIC ${AWSSDK_INCLUDE_DIRS})
-target_link_libraries(velox_s3fs ${AWSSDK_LIBRARIES})
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-  add_subdirectory(benchmark)
-endif()
+target_link_libraries(velox_s3read_benchmark velox_s3fs velox_exception
+                      velox_exec_test_util ${FMT} ${FOLLY_WITH_DEPENDENCIES})
