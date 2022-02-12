@@ -16,7 +16,7 @@ workflows:
   version: 2
   dist-compile:
     jobs:
-      - header-check
+      - format-check
 
 executors:
   build:
