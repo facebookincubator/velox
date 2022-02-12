@@ -16,9 +16,6 @@ workflows:
   version: 2
   dist-compile:
     jobs:
-      - linux-build
-      - macos-build
-      - format-check
       - header-check
 
 executors:
