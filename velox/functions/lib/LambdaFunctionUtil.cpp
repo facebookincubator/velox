@@ -154,53 +154,26 @@ MapVectorPtr flattenMap(
           map->mapValues()));
 }
 
-template <typename T, typename TVector>
-void generateSet(
-    const ArrayVector* arrayVector,
-    const TVector* arrayElements,
-    vector_size_t idx,
-    SetWithNull<T>& rightSet) {
-  auto size = arrayVector->sizeAt(idx);
-  auto offset = arrayVector->offsetAt(idx);
-  rightSet.reset();
-
-  for (vector_size_t i = offset; i < (offset + size); ++i) {
-    if (arrayElements->isNullAt(i)) {
-      rightSet.hasNull = true;
-    } else {
-      // Function can be called with either FlatVector or DecodedVector, but
-      // their APIs are slightly different.
-      if constexpr (std::is_same_v<TVector, DecodedVector>) {
-        rightSet.set.insert(arrayElements->template valueAt<T>(i));
-      } else {
-        rightSet.set.insert(arrayElements->valueAt(i));
-      }
-    }
-  }
-}
-
 DecodedVector* getDecodedElementsFromArrayVector(
-    exec::EvalCtx* context,
-    const BaseVector& vector,
+    exec::LocalDecodedVector& decoder,
+    exec::LocalDecodedVector& elementsDecoder,
     const SelectivityVector& rows) {
-  exec::LocalDecodedVector decoder(context, vector, rows);
   auto decodedVector = decoder.get();
   auto baseArrayVector = decoder->base()->as<ArrayVector>();
 
   // Decode and acquire array elements vector.
   auto elementsVector = baseArrayVector->elements();
-  auto elementsRows = toElementRows(
+  auto elementsSelectivityRows = toElementRows(
       elementsVector->size(), rows, baseArrayVector, decodedVector->indices());
-  exec::LocalDecodedVector decodedElements(
-      context, *elementsVector, elementsRows);
-  auto decodedElementsVector = decodedElements.get();
+  elementsDecoder.get()->decode(*elementsVector, elementsSelectivityRows);
+  auto decodedElementsVector = elementsDecoder.get();
   return decodedElementsVector;
 }
 
 void validateType(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const std::string name,
-    const size_t expectedArgCount) {
+    const vector_size_t expectedArgCount) {
   VELOX_USER_CHECK_EQ(
       inputArgs.size(),
       expectedArgCount,

@@ -83,15 +83,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
 
     // Decode and acquire array elements vector.
-    auto leftElementsVector = baseLeftArray->elements();
-    auto leftElementsRows = toElementRows(
-        leftElementsVector->size(),
-        rows,
-        baseLeftArray,
-        decodedLeftArray->indices());
-    exec::LocalDecodedVector leftElementsHolder(
-        context, *leftElementsVector, leftElementsRows);
-    auto decodedLeftElements = leftElementsHolder.get();
+    exec::LocalDecodedVector leftElementsDecoder(context);
+    auto decodedLeftElements = getDecodedElementsFromArrayVector(
+        leftHolder, leftElementsDecoder, rows);
 
     auto leftElementsCount =
         countElements<ArrayVector>(rows, *decodedLeftArray);
@@ -189,9 +183,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
           rows,
           baseRightArray,
           decodedRightArray->indices());
-      exec::LocalDecodedVector rightElementsHolder(
-          context, *rightElementsVector, rightElementsRows);
-      auto decodedRightElements = rightElementsHolder.get();
+      exec::LocalDecodedVector rightElementsHolder(context);
+      auto decodedRightElements = getDecodedElementsFromArrayVector(
+          rightHolder, rightElementsHolder, rows);
       SetWithNull<T> rightSet;
 
       rows.applyToSelected([&](vector_size_t row) {

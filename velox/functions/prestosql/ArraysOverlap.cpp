@@ -42,42 +42,54 @@ class ArraysOverlapFunction : public exec::VectorFunction {
     if (constantSet_.has_value() && isLeftConstant_) {
       std::swap(left, right);
     }
-
     exec::LocalDecodedVector decoder(context, *left, rows);
-    auto decodedLeftArray = decoder.get();
-    auto baseLeftArray = decoder->base()->as<ArrayVector>();
-
-    // Decode and acquire array elements vector.
-    //    auto leftElementsVector = baseLeftArray->elements();
-    //    auto leftElementsRows = toElementRows(
-    //        leftElementsVector->size(),
-    //        rows,
-    //        baseLeftArray,
-    //        decodedLeftArray->indices());
-    //    exec::LocalDecodedVector leftElementsHolder(
-    //        context, *leftElementsVector, leftElementsRows);
-    //    auto decodedLeftElements = leftElementsHolder.get();
+    exec::LocalDecodedVector elementsDecoder(context);
     auto decodedLeftElements =
-        getDecodedElementsFromArrayVector(context, *left, rows);
-    auto leftElementsCount =
-        countElements<ArrayVector>(rows, *decodedLeftArray);
-    vector_size_t rowCount = left->size();
+        getDecodedElementsFromArrayVector(decoder, elementsDecoder, rows);
+
+    FlatVector<bool>* resBoolVector = (*result)->asFlatVector<bool>();
+    auto processRow = [&](const vector_size_t rowId,
+                          const SetWithNull<T>& rightSet) {
+      auto decodedLeftArray = decoder.get();
+      auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
+      auto idx = decodedLeftArray->index(rowId);
+      auto offset = baseLeftArray->offsetAt(idx);
+      auto size = baseLeftArray->sizeAt(idx);
+
+      for (auto i = offset; i < (offset + size); ++i) {
+        // For each element in the current row search for it in the rightSet.
+        if (decodedLeftElements->isNullAt(i)) {
+          continue;
+        }
+        if (rightSet.set.count(decodedLeftElements->valueAt<T>(i)) > 0) {
+          // Found and overlapping element. Add to result set.
+          resBoolVector->set(rowId, true);
+          return;
+        }
+      }
+      // If none of them is found in the rightSet, set false for current row
+      // indicating there are no overlapping elements with rightSet.
+      resBoolVector->set(rowId, false);
+    };
 
     if (constantSet_.has_value()) {
       rows.applyToSelected(
-          [&](vector_size_t row) { processRow(row, *constantSet_, result); });
+          [&](vector_size_t row) { processRow(row, *constantSet_); });
     }
     // General case when no arrays are constant and both sets need to be
     // computed for each row.
     else {
-      auto decodedRightElements =
-          getDecodedElementsFromArrayVector(context, *right, rows);
+      exec::LocalDecodedVector rightDecoder(context, *right, rows);
+      exec::LocalDecodedVector rightElementsDecoder(context);
+      auto decodedRightElements = getDecodedElementsFromArrayVector(
+          rightDecoder, rightElementsDecoder, rows);
       SetWithNull<T> rightSet;
 
       rows.applyToSelected([&](vector_size_t row) {
-        auto idx = decodedRightArray->index(row);
+        auto idx = rightDecoder.get()->index(row);
+        auto baseRightArray = rightDecoder.get()->base()->as<ArrayVector>();
         generateSet<T>(baseRightArray, decodedRightElements, idx, rightSet);
-        processRow(row, rightSet, result);
+        processRow(row, rightSet);
       });
     }
   }
@@ -99,7 +111,6 @@ const std::shared_ptr<exec::VectorFunction> createTyped(
   BaseVector* left = inputArgs[0].constantValue.get();
   BaseVector* right = inputArgs[1].constantValue.get();
   using T = typename TypeTraits<kind>::NativeType;
-  // Constant optimization is not supported for constant lhs for array_except
   const bool isLeftConstant = (left != nullptr);
   if (left == nullptr && right == nullptr) {
     return std::make_shared<ArraysOverlapFunction<T>>();
