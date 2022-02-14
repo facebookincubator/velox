@@ -58,7 +58,9 @@ struct Scratch {
 
 class ReadBenchmark {
  public:
-  ReadBenchmark() {
+  ReadBenchmark(bool initialize = true) {
+    if (!initialize)
+      return;
     executor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);
     if (FLAGS_odirect) {
@@ -287,7 +289,7 @@ class ReadBenchmark {
 
   void run();
 
- private:
+ protected:
   static constexpr int64_t kRegionSize = 64 << 20; // 64MB
   static constexpr int32_t kWrite = -10000;
   // 0 means no op, kWrite means being written, other numbers are reader counts.

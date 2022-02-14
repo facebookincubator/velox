@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_read_benchmark ReadBenchmark.cpp ReadBenchmarkMain.cpp)
+add_library(velox_read_benchmark_lib ReadBenchmark.cpp)
 
-target_link_libraries(velox_read_benchmark velox_file velox_exception
-                      velox_exec_test_util ${FMT} ${FOLLY_WITH_DEPENDENCIES})
+add_executable(velox_read_benchmark ReadBenchmarkMain.cpp)
+
+target_link_libraries(
+  velox_read_benchmark
+  velox_read_benchmark_lib
+  velox_file
+  velox_exception
+  velox_exec_test_util
+  ${FMT}
+  ${FOLLY_WITH_DEPENDENCIES})
