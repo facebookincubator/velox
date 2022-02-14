@@ -47,7 +47,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
     auto decodedLeftElements =
         getDecodedElementsFromArrayVector(decoder, elementsDecoder, rows);
 
-    FlatVector<bool>* resBoolVector = (*result)->asFlatVector<bool>();
+    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
+    auto resBoolVector = (*result)->template asFlatVector<bool>();
     auto processRow = [&](const vector_size_t rowId,
                           const SetWithNull<T>& rightSet) {
       auto decodedLeftArray = decoder.get();
@@ -59,6 +60,7 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       for (auto i = offset; i < (offset + size); ++i) {
         // For each element in the current row search for it in the rightSet.
         if (decodedLeftElements->isNullAt(i)) {
+          // Arrays overlap skips null values.
           continue;
         }
         if (rightSet.set.count(decodedLeftElements->valueAt<T>(i)) > 0) {
@@ -142,10 +144,10 @@ std::shared_ptr<exec::VectorFunction> createArraysOverlapFunction(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-  // array(T), array(T) -> array(T)
+  // array(T), array(T) -> array(bool)
   return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
-              .returnType("array(T)")
+              .returnType("array(boolean)")
               .argumentType("array(T)")
               .argumentType("array(T)")
               .build()};

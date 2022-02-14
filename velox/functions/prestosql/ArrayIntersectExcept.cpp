@@ -173,24 +173,19 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
     // computed for each row.
     else {
       exec::LocalDecodedVector rightHolder(context, *right, rows);
-      auto decodedRightArray = rightHolder.get();
-      auto baseRightArray = decodedRightArray->base()->as<ArrayVector>();
-
       // Decode and acquire array elements vector.
-      auto rightElementsVector = baseRightArray->elements();
-      auto rightElementsRows = toElementRows(
-          rightElementsVector->size(),
-          rows,
-          baseRightArray,
-          decodedRightArray->indices());
       exec::LocalDecodedVector rightElementsHolder(context);
       auto decodedRightElements = getDecodedElementsFromArrayVector(
           rightHolder, rightElementsHolder, rows);
       SetWithNull<T> rightSet;
 
       rows.applyToSelected([&](vector_size_t row) {
-        auto idx = decodedRightArray->index(row);
-        generateSet<T>(baseRightArray, decodedRightElements, idx, rightSet);
+        auto idx = rightHolder.get()->index(row);
+        generateSet<T>(
+            rightHolder.get()->base()->as<ArrayVector>(),
+            decodedRightElements,
+            idx,
+            rightSet);
         processRow(row, rightSet, outputSet);
       });
     }
