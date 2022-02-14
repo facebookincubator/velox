@@ -154,46 +154,4 @@ MapVectorPtr flattenMap(
           map->mapValues()));
 }
 
-DecodedVector* getDecodedElementsFromArrayVector(
-    exec::LocalDecodedVector& decoder,
-    exec::LocalDecodedVector& elementsDecoder,
-    const SelectivityVector& rows) {
-  auto decodedVector = decoder.get();
-  auto baseArrayVector = decoder->base()->as<ArrayVector>();
-
-  // Decode and acquire array elements vector.
-  auto elementsVector = baseArrayVector->elements();
-  auto elementsSelectivityRows = toElementRows(
-      elementsVector->size(), rows, baseArrayVector, decodedVector->indices());
-  elementsDecoder.get()->decode(*elementsVector, elementsSelectivityRows);
-  auto decodedElementsVector = elementsDecoder.get();
-  return decodedElementsVector;
-}
-
-void validateType(
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const std::string name,
-    const vector_size_t expectedArgCount) {
-  VELOX_USER_CHECK_EQ(
-      inputArgs.size(),
-      expectedArgCount,
-      "{} requires exactly two parameters",
-      name);
-
-  auto arrayType = inputArgs.front().type;
-  VELOX_USER_CHECK_EQ(
-      arrayType->kind(),
-      TypeKind::ARRAY,
-      "{} requires arguments of type ARRAY",
-      name);
-
-  for (auto& arg : inputArgs) {
-    VELOX_USER_CHECK(
-        arrayType->kindEquals(arg.type),
-        "{} function requires all arguments of the same type: {} vs. {}",
-        name,
-        arg.type->toString(),
-        arrayType->toString());
-  }
-}
 } // namespace facebook::velox::functions

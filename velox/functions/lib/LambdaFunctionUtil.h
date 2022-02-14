@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression//EvalCtx.h"
-#include "velox/expression/VectorFunction.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -117,67 +115,4 @@ MapVectorPtr flattenMap(
     const SelectivityVector& rows,
     const VectorPtr& vector,
     DecodedVector& decodedVector);
-
-template <typename T>
-struct SetWithNull {
-  SetWithNull(vector_size_t initialSetSize = kInitialSetSize) {
-    set.reserve(initialSetSize);
-  }
-
-  void reset() {
-    set.clear();
-    hasNull = false;
-  }
-
-  std::unordered_set<T> set;
-  bool hasNull{false};
-  static constexpr vector_size_t kInitialSetSize{128};
-};
-
-// Generates a set based on the elements of an ArrayVector. Note that we take
-// rightSet as a parameter (instead of returning a new one) to reuse the
-// allocated memory.
-template <typename T, typename TVector>
-void generateSet(
-    const ArrayVector* arrayVector,
-    const TVector* arrayElements,
-    vector_size_t idx,
-    SetWithNull<T>& rightSet) {
-  auto size = arrayVector->sizeAt(idx);
-  auto offset = arrayVector->offsetAt(idx);
-  rightSet.reset();
-
-  for (vector_size_t i = offset; i < (offset + size); ++i) {
-    if (arrayElements->isNullAt(i)) {
-      rightSet.hasNull = true;
-    } else {
-      // Function can be called with either FlatVector or DecodedVector, but
-      // their APIs are slightly different.
-      if constexpr (std::is_same_v<TVector, DecodedVector>) {
-        rightSet.set.insert(arrayElements->template valueAt<T>(i));
-      } else {
-        rightSet.set.insert(arrayElements->valueAt(i));
-      }
-    }
-  }
-}
-
-// Returns pointer to a decoded elements vector for a given BaseVector.
-// Here is how the nesting of classes looks like:
-//        ArrayVector {
-//          OFFSETS:[]
-//          SIZES:[]
-//          ElementsVector --> returns this
-//        }
-DecodedVector* getDecodedElementsFromArrayVector(
-    exec::LocalDecodedVector& decoder,
-    exec::LocalDecodedVector& elementsDecoder,
-    const SelectivityVector& rows);
-
-// Validates a vector of VectorFunctionArg satisfies PrestoDb array functions
-// that accept 2 parameters like array_intersect, array_except, arrays_overlap.
-void validateType(
-    const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const std::string name,
-    const vector_size_t expectedArgCount);
 } // namespace facebook::velox::functions

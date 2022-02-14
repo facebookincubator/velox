@@ -161,42 +161,36 @@ TEST_F(ArraysOverlapTest, longStrArrays) {
       {},
       {S("red shiny car ahead"), S("green plants make us happy")},
   });
-  auto expected =
-      makeNullableFlatVector<bool>({true, false, false, true, true});
+  auto expected = makeNullableFlatVector<bool>({true, false, false, true});
   testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
 
 //// When one of the arrays is constant.
-// TEST_F(ArraysOverlapTest, constant) {
-//   auto array1 = makeNullableArrayVector<int32_t>({
-//       {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
-//       {1, 2, -2, 1},
-//       {3, 8, std::nullopt},
-//       {1, 1, -2, -2, -2, 4, 8},
-//   });
-//   auto expected = makeNullableArrayVector<int32_t>({
-//       {1, -2, 4},
-//       {1, -2},
-//       {},
-//       {1, -2, 4},
-//   });
-//   testExpr(expected, "arrays_overlap(C0, ARRAY[1,-2,4])", {array1});
-//   testExpr(expected, "arrays_overlap(ARRAY[1,-2,4], C0)", {array1});
-//   testExpr(
-//       expected, "arrays_overlap(ARRAY[1,1,-2,1,-2,4,1,4,4], C0)", {array1});
-//
-//   // Array containing NULLs.
-//   expected = makeNullableArrayVector<int32_t>({
-//       {1, std::nullopt, 4},
-//       {1},
-//       {std::nullopt},
-//       {1, 4},
-//   });
-//   testExpr(expected, "arrays_overlap(C0, ARRAY[1,NULL,4])", {array1});
-//   testExpr(expected, "arrays_overlap(ARRAY[1,NULL,4], C0)", {array1});
-// }
-//
+TEST_F(ArraysOverlapTest, constant) {
+  auto array1 = makeNullableArrayVector<int32_t>({
+      {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
+      {1, 2, -2, 1},
+      {3, 8, std::nullopt},
+      {1, 1, -2, -2, -2, 4, 8},
+  });
+  auto expected = makeNullableFlatVector<bool>({true, true, false, true});
+  testExpr(expected, "arrays_overlap(C0, ARRAY[1,-2,4])", {array1});
+  testExpr(expected, "arrays_overlap(ARRAY[1,-2,4], C0)", {array1});
+  testExpr(
+      expected, "arrays_overlap(ARRAY[1,1,-2,1,-2,4,1,4,4], C0)", {array1});
+
+  // Array containing NULLs.
+  expected = makeNullableFlatVector<bool>({
+      true,
+      true,
+      false,
+      true,
+  });
+  testExpr(expected, "arrays_overlap(C0, ARRAY[1,NULL,4])", {array1});
+  testExpr(expected, "arrays_overlap(ARRAY[1,NULL,4], C0)", {array1});
+}
+
 TEST_F(ArraysOverlapTest, wrongTypes) {
   auto expected = makeNullableFlatVector<bool>({true});
   auto array1 = makeNullableArrayVector<int32_t>({{1}});
