@@ -15,8 +15,12 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/benchmark/S3ReadBenchmark.h"
+#include "velox/core/Context.h"
+
+#include <fstream>
 
 DEFINE_string(path, "", "Path of test file");
+DEFINE_string(s3_config, "", "Path of S3 config file");
 DEFINE_int64(
     file_size_gb,
     0,
@@ -48,6 +52,30 @@ static bool IsNonEmpty(const char* flagname, const std::string& value) {
 DEFINE_validator(path, &IsNonEmpty);
 
 namespace facebook::velox {
+
+// From presto-cpp
+std::shared_ptr<Config> readConfig(const std::string& filePath) {
+  std::ifstream configFile(filePath);
+  if (!configFile.is_open()) {
+    throw std::runtime_error(
+        fmt::format("Couldn't open config file {} for reading.", filePath));
+  }
+
+  std::unordered_map<std::string, std::string> properties;
+  std::string line;
+  while (getline(configFile, line)) {
+    line.erase(std::remove_if(line.begin(), line.end(), isspace), line.end());
+    if (line[0] == '#' || line.empty()) {
+      continue;
+    }
+    auto delimiterPos = line.find('=');
+    auto name = line.substr(0, delimiterPos);
+    auto value = line.substr(delimiterPos + 1);
+    properties.emplace(name, value);
+  }
+
+  return std::make_shared<facebook::velox::core::MemConfig>(properties);
+}
 
 void S3ReadBenchmark::run() {
   if (FLAGS_bytes) {

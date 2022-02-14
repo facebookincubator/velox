@@ -34,6 +34,7 @@
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 
 DECLARE_string(path);
+DECLARE_string(s3_config);
 DECLARE_int64(file_size_gb);
 DECLARE_int32(num_threads);
 DECLARE_int32(seed);
@@ -55,6 +56,8 @@ struct Scratch {
   std::string bufferCopy;
 };
 
+std::shared_ptr<Config> readConfig(const std::string& filePath);
+
 class S3ReadBenchmark {
  public:
   S3ReadBenchmark() {
@@ -62,7 +65,11 @@ class S3ReadBenchmark {
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);
 
     filesystems::registerS3FileSystem();
-    auto s3fs = filesystems::getFileSystem(FLAGS_path, nullptr);
+    std::shared_ptr<Config> config;
+    if (!FLAGS_s3_config.empty()) {
+      config = readConfig(FLAGS_s3_config);
+    }
+    auto s3fs = filesystems::getFileSystem(FLAGS_path, config);
     readFile_ = s3fs->openFileForRead(FLAGS_path);
 
     fileSize_ = readFile_->size();
