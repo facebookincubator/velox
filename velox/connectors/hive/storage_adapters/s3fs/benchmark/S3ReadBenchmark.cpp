@@ -47,16 +47,4 @@ std::shared_ptr<Config> readConfig(const std::string& filePath) {
   return std::make_shared<facebook::velox::core::MemConfig>(properties);
 }
 
-void S3ReadBenchmark::run() {
-  if (FLAGS_bytes) {
-    modes(FLAGS_bytes, FLAGS_gap, FLAGS_num_in_run);
-    return;
-  }
-  modes(1100, 0, 10);
-  modes(1100, 1200, 10);
-  modes(16 * 1024, 0, 10);
-  modes(16 * 1024, 10000, 10);
-  modes(1000000, 0, 8);
-  modes(1000000, 100000, 8);
-}
 } // namespace facebook::velox

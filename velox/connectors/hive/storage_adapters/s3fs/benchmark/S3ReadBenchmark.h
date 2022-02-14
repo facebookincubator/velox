@@ -68,8 +68,6 @@ class S3ReadBenchmark : public ReadBenchmark {
       rng_.seed(FLAGS_seed);
     }
   }
-
-  void run();
 };
 
 } // namespace facebook::velox
