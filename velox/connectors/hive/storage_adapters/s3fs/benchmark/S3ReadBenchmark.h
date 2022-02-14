@@ -14,24 +14,7 @@
  * limitations under the License.
  */
 
-#include <iostream>
-
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-
-#include <folly/Random.h>
-#include <folly/Synchronized.h>
-#include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/executors/QueuedImmediateExecutor.h>
-#include <folly/futures/Future.h>
-#include <folly/init/Init.h>
-#include <folly/portability/SysUio.h>
-#include <gflags/gflags.h>
-
-#include "velox/common/file/File.h"
 #include "velox/common/file/benchmark/ReadBenchmark.h"
-#include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 
 DECLARE_string(s3_config);
