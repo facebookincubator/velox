@@ -37,6 +37,7 @@
 namespace facebook::velox {
 namespace {
 // Reference: https://issues.apache.org/jira/browse/ARROW-8692
+// https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/s3fs.cc#L843
 class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
                          public std::iostream {
  public:
@@ -152,7 +153,7 @@ class S3ReadFile final : public ReadFile {
     ss << "bytes=" << offset << "-" << offset + length - 1;
     request.SetRange(awsString(ss.str()));
     request.SetResponseStreamFactory(
-        AwsWriteableStreamFactory(reinterpret_cast<char*>(position), length));
+        AwsWriteableStreamFactory(position, length));
     auto outcome = client_->GetObject(request);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
   }
