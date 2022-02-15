@@ -92,7 +92,6 @@ class S3ReadFile final : public ReadFile {
   }
 
   std::string pread(uint64_t offset, uint64_t length) const override {
-    // TODO: use allocator that doesn't initialize memory?
     std::string result(length, 0);
     char* position = result.data();
     preadInternal(offset, length, position);
@@ -112,13 +111,16 @@ class S3ReadFile final : public ReadFile {
     for (const auto range : buffers) {
       length += range.size();
     }
-    // TODO: allocate from a memory pool
-    std::string result(length, 0);
-    preadInternal(offset, length, static_cast<char*>(result.data()));
+
+    void* buffer;
+    VELOX_CHECK_NOT_NULL(pool_);
+    memory::ScopedMemory scopedMemory(*pool_, &buffer, length);
+    char* result = reinterpret_cast<char*>(buffer);
+    preadInternal(offset, length, result);
     size_t resultOffset = 0;
     for (auto range : buffers) {
       if (range.data()) {
-        memcpy(range.data(), &(result.data()[resultOffset]), range.size());
+        memcpy(range.data(), &(result[resultOffset]), range.size());
       }
       resultOffset += range.size();
     }
