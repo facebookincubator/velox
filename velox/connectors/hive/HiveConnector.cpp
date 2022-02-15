@@ -347,6 +347,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 
   fileHandle_ = fileHandleFactory_->generate(split_->filePath);
+  // The pool_ is alive as long as the Driver is.
   fileHandle_->file->setMemoryPool(pool_);
   // For DataCache and no cache, the stream keeps track of IO.
   auto asyncCache = dynamic_cast<cache::AsyncDataCache*>(mappedMemory_);

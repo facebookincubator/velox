@@ -128,7 +128,7 @@ static inline MemoryPool& getCheckedReference(std::weak_ptr<MemoryPool> ptr) {
 
 class ScopedMemory {
  public:
-  explicit ScopedMemory(MemoryPool& pool, void** memory, size_t length)
+  ScopedMemory(MemoryPool& pool, void** memory, size_t length)
       : pool_{pool}, length_(length) {
     memory_ = *memory = pool_.allocate(length);
   }

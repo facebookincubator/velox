@@ -111,6 +111,9 @@ class ReadFile {
     bytesRead_ = 0;
   }
 
+  // The lifetime of the ReadFile object need not be the same as that of the
+  // MemoryPool. It is the responsibility of the caller to ensure that a valid
+  // MemoryPool is set before use.
   void setMemoryPool(velox::memory::MemoryPool* pool) {
     pool_ = pool;
   }
