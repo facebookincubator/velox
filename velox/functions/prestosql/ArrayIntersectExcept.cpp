@@ -62,12 +62,12 @@ void generateSet(
   }
 }
 
-DecodedVector* getDecodedElementsFromArrayVector(
-    exec::LocalDecodedVector& decoder,
+DecodedVector* decodeArrayElements(
+    exec::LocalDecodedVector& arrayDecoder,
     exec::LocalDecodedVector& elementsDecoder,
     const SelectivityVector& rows) {
-  auto decodedVector = decoder.get();
-  auto baseArrayVector = decoder->base()->as<ArrayVector>();
+  auto decodedVector = arrayDecoder.get();
+  auto baseArrayVector = arrayDecoder->base()->as<ArrayVector>();
 
   // Decode and acquire array elements vector.
   auto elementsVector = baseArrayVector->elements();
@@ -112,7 +112,7 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
   /// are constant (array literals) we create a set before instantiating the
   /// object and pass as a constructor parameter (constantSet).
 
-  ArrayIntersectExceptFunction() {}
+  ArrayIntersectExceptFunction() = default;
 
   explicit ArrayIntersectExceptFunction(
       SetWithNull<T> constantSet,
@@ -144,8 +144,8 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 
     // Decode and acquire array elements vector.
     exec::LocalDecodedVector leftElementsDecoder(context);
-    auto decodedLeftElements = getDecodedElementsFromArrayVector(
-        leftHolder, leftElementsDecoder, rows);
+    auto decodedLeftElements =
+        decodeArrayElements(leftHolder, leftElementsDecoder, rows);
 
     auto leftElementsCount =
         countElements<ArrayVector>(rows, *decodedLeftArray);
@@ -235,17 +235,13 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
       exec::LocalDecodedVector rightHolder(context, *right, rows);
       // Decode and acquire array elements vector.
       exec::LocalDecodedVector rightElementsHolder(context);
-      auto decodedRightElements = getDecodedElementsFromArrayVector(
-          rightHolder, rightElementsHolder, rows);
+      auto decodedRightElements =
+          decodeArrayElements(rightHolder, rightElementsHolder, rows);
       SetWithNull<T> rightSet;
-
+      auto rightArrayVector = rightHolder.get()->base()->as<ArrayVector>();
       rows.applyToSelected([&](vector_size_t row) {
         auto idx = rightHolder.get()->index(row);
-        generateSet<T>(
-            rightHolder.get()->base()->as<ArrayVector>(),
-            decodedRightElements,
-            idx,
-            rightSet);
+        generateSet<T>(rightArrayVector, decodedRightElements, idx, rightSet);
         processRow(row, rightSet, outputSet);
       });
     }
@@ -297,36 +293,37 @@ class ArraysOverlapFunction : public exec::VectorFunction {
     if (constantSet_.has_value() && isLeftConstant_) {
       std::swap(left, right);
     }
-    exec::LocalDecodedVector decoder(context, *left, rows);
+    exec::LocalDecodedVector arrayDecoder(context, *left, rows);
     exec::LocalDecodedVector elementsDecoder(context);
     auto decodedLeftElements =
-        getDecodedElementsFromArrayVector(decoder, elementsDecoder, rows);
+        decodeArrayElements(arrayDecoder, elementsDecoder, rows);
 
     BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
-    auto resBoolVector = (*result)->template asFlatVector<bool>();
-    auto processRow = [&](const vector_size_t rowId,
+    auto resultBoolVector = (*result)->template asFlatVector<bool>();
+    auto processRow = [&](auto row,
                           const SetWithNull<T>& rightSet) {
-      auto decodedLeftArray = decoder.get();
+      auto decodedLeftArray = arrayDecoder.get();
       auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
-      auto idx = decodedLeftArray->index(rowId);
+      auto idx = decodedLeftArray->index(row);
       auto offset = baseLeftArray->offsetAt(idx);
       auto size = baseLeftArray->sizeAt(idx);
-
+      bool hasNull = false;
       for (auto i = offset; i < (offset + size); ++i) {
         // For each element in the current row search for it in the rightSet.
         if (decodedLeftElements->isNullAt(i)) {
           // Arrays overlap skips null values.
+          hasNull = true;
           continue;
         }
         if (rightSet.set.count(decodedLeftElements->valueAt<T>(i)) > 0) {
-          // Found and overlapping element. Add to result set.
-          resBoolVector->set(rowId, true);
+          // Found an overlapping element. Add to result set.
+          resultBoolVector->set(row, true);
           return;
         }
       }
       // If none of them is found in the rightSet, set false for current row
       // indicating there are no overlapping elements with rightSet.
-      resBoolVector->set(rowId, false);
+      resultBoolVector->set(row, false);
     };
 
     if (constantSet_.has_value()) {
@@ -338,8 +335,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
     else {
       exec::LocalDecodedVector rightDecoder(context, *right, rows);
       exec::LocalDecodedVector rightElementsDecoder(context);
-      auto decodedRightElements = getDecodedElementsFromArrayVector(
-          rightDecoder, rightElementsDecoder, rows);
+      auto decodedRightElements =
+          decodeArrayElements(rightDecoder, rightElementsDecoder, rows);
       SetWithNull<T> rightSet;
 
       rows.applyToSelected([&](vector_size_t row) {
@@ -361,7 +358,7 @@ class ArraysOverlapFunction : public exec::VectorFunction {
   const bool isLeftConstant_{false};
 }; // class ArraysOverlapFunction
 
-void validateType(
+void validateMatchingArrayTypes(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
     const std::string name,
     const vector_size_t expectedArgCount) {
@@ -390,9 +387,8 @@ void validateType(
 }
 
 template <typename T>
-void validateConstVecAndGenerateSet(
-    const BaseVector* baseVector,
-    SetWithNull<T>& constantSet) {
+SetWithNull<T> validateConstantVectorAndGenerateSet(
+    const BaseVector* baseVector) {
   auto constantVector = baseVector->as<ConstantVector<velox::ComplexType>>();
   auto constantArray = constantVector->as<ConstantVector<velox::ComplexType>>();
   VELOX_CHECK_NOT_NULL(constantArray, "wrong constant type found");
@@ -403,7 +399,9 @@ void validateConstVecAndGenerateSet(
   VELOX_CHECK_NOT_NULL(
       elementsAsFlatVector, "constant value must be encoded as flat");
   auto idx = constantArray->index();
+  SetWithNull<T> constantSet;
   generateSet<T>(arrayVecPtr, elementsAsFlatVector, idx, constantSet);
+  return constantSet;
 }
 
 template <bool isIntersect, TypeKind kind>
@@ -426,8 +424,8 @@ std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
     }
   }
   BaseVector* constantVector = isLeftConstant ? left : right;
-  SetWithNull<T> constantSet;
-  validateConstVecAndGenerateSet<T>(constantVector, constantSet);
+  SetWithNull<T> constantSet =
+      validateConstantVectorAndGenerateSet<T>(constantVector);
   return std::make_shared<ArrayIntersectExceptFunction<isIntersect, T>>(
       std::move(constantSet), isLeftConstant);
 }
@@ -435,7 +433,7 @@ std::shared_ptr<exec::VectorFunction> createTypedArraysIntersectExcept(
 std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs, name, 2);
+  validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
@@ -448,7 +446,7 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
 std::shared_ptr<exec::VectorFunction> createArrayExcept(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs, name, 2);
+  validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
@@ -460,7 +458,6 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
     const std::string returnType) {
-  // array(T), array(T) -> array(T)
   return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
               .returnType(returnType)
@@ -476,13 +473,13 @@ const std::shared_ptr<exec::VectorFunction> createTypedArraysOverlap(
   BaseVector* left = inputArgs[0].constantValue.get();
   BaseVector* right = inputArgs[1].constantValue.get();
   using T = typename TypeTraits<kind>::NativeType;
-  const bool isLeftConstant = (left != nullptr);
   if (left == nullptr && right == nullptr) {
     return std::make_shared<ArraysOverlapFunction<T>>();
   }
-  BaseVector* baseVector = (left != nullptr) ? left : right;
-  SetWithNull<T> constantSet;
-  validateConstVecAndGenerateSet<T>(baseVector, constantSet);
+  const bool isLeftConstant = (left != nullptr);
+  BaseVector* baseVector = isLeftConstant ? left : right;
+  SetWithNull<T> constantSet =
+      validateConstantVectorAndGenerateSet<T>(baseVector);
   return std::make_shared<ArraysOverlapFunction<T>>(
       std::move(constantSet), isLeftConstant);
 }
@@ -490,7 +487,7 @@ const std::shared_ptr<exec::VectorFunction> createTypedArraysOverlap(
 std::shared_ptr<exec::VectorFunction> createArraysOverlapFunction(
     const std::string& name,
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
-  validateType(inputArgs, name, 2);
+  validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
@@ -500,7 +497,7 @@ std::shared_ptr<exec::VectorFunction> createArraysOverlapFunction(
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_arrays_overlap,
-    signatures("array(boolean)"),
+    signatures("boolean"),
     createArraysOverlapFunction);
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
