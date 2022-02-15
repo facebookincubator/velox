@@ -38,6 +38,9 @@ namespace facebook::velox {
 namespace {
 // Reference: https://issues.apache.org/jira/browse/ARROW-8692
 // https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/s3fs.cc#L843
+// A non-copying iostream. See
+// https://stackoverflow.com/questions/35322033/aws-c-sdk-uploadpart-times-out
+// https://stackoverflow.com/questions/13059091/creating-an-input-stream-from-constant-memory
 class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
                          public std::iostream {
  public:
@@ -48,6 +51,10 @@ class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
         std::iostream(this) {}
 };
 
+// By default, the AWS SDK reads object data into an auto-growing StringStream.
+// To avoid copies, read directly into a pre-allocated buffer instead.
+// See https://github.com/aws/aws-sdk-cpp/issues/64 for an alternative but
+// functionally similar recipe.
 Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
   return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
 }
