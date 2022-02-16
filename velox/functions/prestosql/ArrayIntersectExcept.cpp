@@ -300,8 +300,7 @@ class ArraysOverlapFunction : public exec::VectorFunction {
 
     BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
     auto resultBoolVector = (*result)->template asFlatVector<bool>();
-    auto processRow = [&](auto row,
-                          const SetWithNull<T>& rightSet) {
+    auto processRow = [&](auto row, const SetWithNull<T>& rightSet) {
       auto decodedLeftArray = arrayDecoder.get();
       auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
       auto idx = decodedLeftArray->index(row);
