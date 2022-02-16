@@ -29,10 +29,6 @@ constexpr int kOneMB = 1 << 20;
 
 class S3FileSystemTest : public testing::Test {
  protected:
-  void SetUp() override {
-    pool_ = memory::getDefaultScopedMemoryPool();
-  }
-
   static void SetUpTestSuite() {
     if (minioServer_ == nullptr) {
       minioServer_ = std::make_shared<MinioServer>();
@@ -98,7 +94,6 @@ class S3FileSystemTest : public testing::Test {
     ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
   }
 
-  std::unique_ptr<memory::ScopedMemoryPool> pool_;
   static std::shared_ptr<MinioServer> minioServer_;
 };
 
@@ -118,7 +113,6 @@ TEST_F(S3FileSystemTest, writeAndRead) {
   filesystems::S3FileSystem s3fs(hiveConfig);
   s3fs.initializeClient();
   auto readFile = s3fs.openFileForRead(s3File);
-  readFile->setMemoryPool(pool_.get());
   readData(readFile.get());
 }
 
@@ -135,7 +129,6 @@ TEST_F(S3FileSystemTest, viaRegistry) {
   auto hiveConfig = minioServer_->hiveConfig();
   auto s3fs = filesystems::getFileSystem(s3File, hiveConfig);
   auto readFile = s3fs->openFileForRead(s3File);
-  readFile->setMemoryPool(pool_.get());
   readData(readFile.get());
 }
 
@@ -154,7 +147,6 @@ TEST_F(S3FileSystemTest, fileHandle) {
       std::make_unique<SimpleLRUCache<std::string, FileHandle>>(1000),
       std::make_unique<FileHandleGenerator>(hiveConfig));
   auto fileHandle = factory.generate(s3File);
-  fileHandle->file->setMemoryPool(pool_.get());
   readData(fileHandle->file.get());
 }
 

@@ -126,23 +126,6 @@ static inline MemoryPool& getCheckedReference(std::weak_ptr<MemoryPool> ptr) {
 };
 } // namespace detail
 
-class ScopedMemory {
- public:
-  explicit ScopedMemory(MemoryPool& pool, void** memory, size_t length)
-      : pool_{pool}, length_(length) {
-    memory_ = *memory = pool_.allocate(length);
-  }
-
-  ~ScopedMemory() {
-    pool_.free(memory_, length_);
-  }
-
- private:
-  MemoryPool& pool_;
-  void* memory_;
-  size_t length_;
-};
-
 class ScopedMemoryPool final : public MemoryPool {
  public:
   explicit ScopedMemoryPool(std::weak_ptr<MemoryPool> poolPtr)

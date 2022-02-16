@@ -38,7 +38,6 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/Arena.h"
-#include "velox/common/memory/Memory.h"
 
 namespace facebook::velox {
 
@@ -111,13 +110,8 @@ class ReadFile {
     bytesRead_ = 0;
   }
 
-  void setMemoryPool(velox::memory::MemoryPool* pool) {
-    pool_ = pool;
-  }
-
  protected:
   mutable std::atomic<uint64_t> bytesRead_ = 0;
-  velox::memory::MemoryPool* pool_;
 };
 
 // A write-only file. Nothing written to the file should be read back until it
