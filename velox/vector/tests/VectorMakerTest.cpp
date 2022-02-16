@@ -810,3 +810,45 @@ TEST_F(VectorMakerTest, isSorted) {
           ->isSorted()
           .value());
 }
+
+TEST_F(VectorMakerTest, mapVector) {
+  const std::vector<std::map<int64_t, int64_t>> data = {
+      {{0, 0}, {1, 1}},
+      {{2, 3}, {3, 4}, {5, 6}},
+      {},
+      {{7, 99}},
+  };
+
+  auto mapVector = maker_.mapVector<int64_t, int64_t>(data);
+
+  EXPECT_FALSE(mapVector->mayHaveNulls());
+
+  // Validate map sizes and offsets.
+  EXPECT_EQ(4, mapVector->size());
+
+  EXPECT_EQ(2, mapVector->sizeAt(0));
+  EXPECT_EQ(3, mapVector->sizeAt(1));
+  EXPECT_EQ(0, mapVector->sizeAt(2));
+  EXPECT_EQ(1, mapVector->sizeAt(3));
+
+  EXPECT_EQ(0, mapVector->offsetAt(0));
+  EXPECT_EQ(2, mapVector->offsetAt(1));
+  EXPECT_EQ(5, mapVector->offsetAt(2));
+  EXPECT_EQ(5, mapVector->offsetAt(3));
+
+  // Validate actual vector elements.
+  auto* keyVector = mapVector->mapKeys()->asFlatVector<int64_t>();
+  auto* valueVector = mapVector->mapValues()->asFlatVector<int64_t>();
+
+  EXPECT_FALSE(keyVector->mayHaveNulls());
+  EXPECT_FALSE(valueVector->mayHaveNulls());
+
+  vector_size_t idx = 0;
+  for (const auto& item : data) {
+    for (const auto& kv : item) {
+      const auto row = idx++;
+      EXPECT_EQ(kv.first, keyVector->valueAt(row));
+      EXPECT_EQ(kv.second, valueVector->valueAt(row));
+    }
+  }
+}

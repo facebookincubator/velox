@@ -587,6 +587,51 @@ class VectorMaker {
         BaseVector::countNulls(nulls, 0, size));
   }
 
+  template <typename TKey, typename TValue>
+  MapVectorPtr mapVector(const std::vector<std::map<TKey, TValue>>& data) {
+    const vector_size_t size = data.size();
+    BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool_);
+
+    auto rawOffsets = offsets->asMutable<vector_size_t>();
+    auto rawSizes = sizes->asMutable<vector_size_t>();
+
+    // Count number of elements.
+    vector_size_t numElements = 0;
+    for (const auto& map : data) {
+      numElements += map.size();
+    }
+
+    // Create the underlying flat vector.
+    auto keyVector = std::dynamic_pointer_cast<FlatVector<TKey>>(
+        BaseVector::create(CppToType<TKey>::create(), numElements, pool_));
+    auto valueVector = std::dynamic_pointer_cast<FlatVector<TValue>>(
+        BaseVector::create(CppToType<TValue>::create(), numElements, pool_));
+
+    vector_size_t currentIdx = 0;
+    for (const auto& map : data) {
+      *rawSizes++ = map.size();
+      *rawOffsets++ = currentIdx;
+
+      for (const auto& kv : map) {
+        const auto row = currentIdx++;
+        keyVector->set(row, kv.first);
+        valueVector->set(row, kv.second);
+      }
+    }
+
+    return std::make_shared<MapVector>(
+        pool_,
+        MAP(CppToType<TKey>::create(), CppToType<TValue>::create()),
+        nullptr,
+        size,
+        offsets,
+        sizes,
+        keyVector,
+        valueVector,
+        0);
+  }
+
   MapVectorPtr allNullMapVector(
       vector_size_t size,
       const std::shared_ptr<const Type>& keyType,
