@@ -58,9 +58,9 @@ struct Scratch {
 
 class ReadBenchmark {
  public:
-  ReadBenchmark(bool initialize = true) {
-    if (!initialize)
-      return;
+  ReadBenchmark() {}
+
+  virtual void initialize() {
     executor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);
     if (FLAGS_odirect) {

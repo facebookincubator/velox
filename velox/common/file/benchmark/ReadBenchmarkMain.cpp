@@ -21,5 +21,6 @@ using namespace facebook::velox;
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   ReadBenchmark bm;
+  bm.initialize();
   bm.run();
 }

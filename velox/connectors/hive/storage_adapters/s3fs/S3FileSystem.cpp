@@ -223,7 +223,7 @@ class S3Config {
   }
 
  private:
-  const Config* config_;
+  const Config* FOLLY_NONNULL config_;
 };
 
 class S3FileSystem::Impl {
