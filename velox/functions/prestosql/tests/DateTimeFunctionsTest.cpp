@@ -1355,3 +1355,127 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
       TimestampWithTimezone(86400000, util::getTimeZoneID("Asia/Kolkata")),
       parseDatetime("1970-01-02+00:00", "YYYY-MM-dd+HH:mm"));
 }
+
+TEST_F(DateTimeFunctionsTest, dateFormat) {
+  using util::fromTimestampString;
+
+  auto dateFormat = [&](const Timestamp& timestamp, const std::string& format) {
+    auto resultVector = evaluate(
+        "date_format(c0, c1)",
+        makeRowVector(
+            {makeNullableFlatVector<Timestamp>({timestamp}),
+             makeNullableFlatVector<std::string>({format})}));
+    return resultVector->as<SimpleVector<StringView>>()->valueAt(0).getString();
+  };
+
+  auto dateFormatFromStringCastTimestamp = [&](const std::string& timestamp,
+                                               const std::string& format) {
+    auto resultVector = evaluate(
+        fmt::format("date_format(timestamp '{}', c0)", timestamp),
+        makeRowVector({makeNullableFlatVector<std::string>({format})}));
+    return resultVector->as<SimpleVector<StringView>>()->valueAt(0).getString();
+  };
+
+  // Normal cases
+  EXPECT_EQ(
+      "1970-01-01", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-29 12:00:00 AM",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"), "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-29 00:00:00.987000",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "-2000-02-29 00:00:00.987000",
+      dateFormat(
+          fromTimestampString("-2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "1970-01-01",
+      dateFormatFromStringCastTimestamp("1970-01-01", "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-29 12:00:00 AM",
+      dateFormatFromStringCastTimestamp(
+          "2000-02-29 00:00:00.987", "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-29 00:00:00.987000",
+      dateFormatFromStringCastTimestamp(
+          "2000-02-29 00:00:00.987", "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "-2000-02-29 00:00:00.987000",
+      dateFormatFromStringCastTimestamp(
+          "-2000-02-29 00:00:00.987", "%Y-%m-%d %H:%i:%s.%f"));
+
+  // Quoted literal
+  EXPECT_EQ(
+      "%Y-%m-%d %H:%i:%s.%f",
+      dateFormat(
+          fromTimestampString("-2000-02-29 00:00:00.987"),
+          "'%Y-%m-%d %H:%i:%s.%f'"));
+  EXPECT_EQ(
+      "%%%%",
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%%%%'%%'"));
+
+  // With timezone
+  setQueryTimeZone("Asia/Kolkata");
+  EXPECT_EQ(
+      "1970-01-01", dateFormat(fromTimestampString("1970-01-01"), "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-29 12:00:00 AM",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"), "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-29 00:00:00.987000",
+      dateFormat(
+          fromTimestampString("2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "-2000-02-29 00:00:00.987000",
+      dateFormat(
+          fromTimestampString("-2000-02-29 00:00:00.987"),
+          "%Y-%m-%d %H:%i:%s.%f"));
+  EXPECT_EQ(
+      "1969-12-31",
+      dateFormatFromStringCastTimestamp("1970-01-01", "%Y-%m-%d"));
+  EXPECT_EQ(
+      "2000-02-28 06:30:00 PM",
+      dateFormatFromStringCastTimestamp(
+          "2000-02-29 00:00:00.987", "%Y-%m-%d %r"));
+  EXPECT_EQ(
+      "2000-02-28 18:30:00.987000",
+      dateFormatFromStringCastTimestamp(
+          "2000-02-29 00:00:00.987", "%Y-%m-%d %H:%i:%s.%f"));
+
+
+  // User format errors or unsupported errors
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), ""),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%D"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%U"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%u"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%V"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%w"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%X"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%v"),
+      VeloxUserError);
+  EXPECT_THROW(
+      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%x"),
+      VeloxUserError);
+}

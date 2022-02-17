@@ -17,6 +17,7 @@
 #include "velox/external/date/tz.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/JodaDateTime.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -666,6 +667,46 @@ struct DateDiffFunction {
         : getDateUnit(unitString, true).value();
 
     result = diffDate(unit, date1, date2);
+    return true;
+  }
+};
+
+template <typename T>
+struct DateFormatFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  const date::time_zone* sessionTimeZone_ = nullptr;
+  std::optional<std::shared_ptr<DateTimeFormatter>> mysqlDateTime_ =
+      std::nullopt;
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* formatString) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
+    if (formatString != nullptr) {
+      auto formatStringView =
+          StringView(formatString->data(), formatString->size());
+      mysqlDateTime_ = buildMysqlDateTimeFormatter(formatStringView);
+    }
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      out_type<Varchar>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& formatString) {
+    if (!mysqlDateTime_.has_value()) {
+      if (formatString == "") {
+        VELOX_USER_FAIL("Format cannot be empty");
+      }
+      mysqlDateTime_ = buildMysqlDateTimeFormatter(formatString);
+    }
+
+    auto formattedResult =
+        mysqlDateTime_.value()->format(timestamp, sessionTimeZone_);
+    auto resultSize = formattedResult.size();
+    result.resize(resultSize);
+    std::memcpy(result.data(), formattedResult.data(), resultSize);
     return true;
   }
 };

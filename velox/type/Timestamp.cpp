@@ -15,6 +15,7 @@
  */
 #include "velox/type/Timestamp.h"
 #include <chrono>
+#include "velox/common/base/Exceptions.h"
 #include "velox/external/date/tz.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -22,6 +23,12 @@ namespace facebook::velox {
 namespace {
 
 inline int64_t deltaWithTimezone(const date::time_zone& zone, int64_t seconds) {
+  // Magic number -2^39 + 24*3600. Passing this number time_zone::to_sys() will
+  // SIGABRT. We don't want that to happen.
+  if (seconds <= (-1096193779200l + 86400l)) {
+    VELOX_UNSUPPORTED(
+        "Timestamp out of bound for time zone adjustment {} seconds", seconds);
+  }
   auto tp = std::chrono::time_point<std::chrono::system_clock>(
       std::chrono::seconds(seconds));
   auto epoch = zone.to_local(tp).time_since_epoch();
@@ -44,6 +51,12 @@ inline int64_t getPrestoTZOffsetInSeconds(int16_t tzID) {
 } // namespace
 
 void Timestamp::toTimezone(const date::time_zone& zone) {
+  // Magic number -2^39 + 24*3600. Passing this number time_zone::to_sys() will
+  // SIGABRT. We don't want that to happen.
+  if (seconds_ <= (-1096193779200l + 86400l)) {
+    VELOX_UNSUPPORTED(
+        "Timestamp out of bound for time zone adjustment {} seconds", seconds_);
+  }
   date::local_time<std::chrono::seconds> localTime{
       std::chrono::seconds(seconds_)};
   std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>

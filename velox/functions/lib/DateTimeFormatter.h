@@ -132,7 +132,7 @@ struct DateTimeToken {
         return literal == right.literal;
       } else {
         return pattern.specifier == right.pattern.specifier &&
-            pattern.minRepresentDigits == right.pattern.minRepresentDigits;
+               pattern.minRepresentDigits == right.pattern.minRepresentDigits;
       }
     }
     return false;
@@ -171,11 +171,21 @@ class DateTimeFormatter {
     return tokens_;
   }
 
+  Timestamp parse(const std::string_view& input) const {
+    VELOX_NYI("date time parsing not implemented yet");
+  }
+
+  std::string format(
+      const Timestamp& timestamp,
+      const date::time_zone* timezone) const;
+
  private:
   std::unique_ptr<char[]> literalBuf_;
   size_t bufSize_;
   std::vector<DateTimeToken> tokens_;
 };
 
+std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
+    const std::string& format);
 
 } // namespace facebook::velox::functions
