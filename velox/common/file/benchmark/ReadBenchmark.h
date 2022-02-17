@@ -60,6 +60,8 @@ struct Scratch {
 // FileSystem for various ReadFile APIs.
 class ReadBenchmark {
  public:
+  virtual ~ReadBenchmark() = default;
+
   // Initialize a LocalReadFile instance for the specified 'path'.
   virtual void initialize() {
     executor_ =
