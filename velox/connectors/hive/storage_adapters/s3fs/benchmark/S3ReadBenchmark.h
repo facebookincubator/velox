@@ -23,6 +23,11 @@ namespace facebook::velox {
 
 std::shared_ptr<Config> readConfig(const std::string& filePath);
 
+// This benchmark measures the throughput of an S3 compatible FileSystem for
+// various ReadFile APIs. The output helps us understand the maximum possible
+// gains for queries. Example: If a single thread requires reading 1GB of data
+// and the IO throughput is 100 MBps, then it takes 10 seconds to just read the
+// data.
 class S3ReadBenchmark : public ReadBenchmark {
  public:
   void initialize() override {
