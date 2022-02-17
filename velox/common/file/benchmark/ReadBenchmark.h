@@ -58,8 +58,6 @@ struct Scratch {
 
 class ReadBenchmark {
  public:
-  ReadBenchmark() {}
-
   virtual void initialize() {
     executor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);

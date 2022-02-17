@@ -43,11 +43,13 @@ DEFINE_int32(
     "Total reads per thread when throughput for a --bytes/--gap/--/gap/"
     "--num_in_run combination");
 
-static bool IsNonEmpty(const char* flagname, const std::string& value) {
+namespace {
+static bool notEmpty(const char* /*flagName*/, const std::string& value) {
   return !value.empty();
 }
+} // namespace
 
-DEFINE_validator(path, &IsNonEmpty);
+DEFINE_validator(path, &notEmpty);
 
 namespace facebook::velox {
 
