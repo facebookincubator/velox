@@ -25,6 +25,7 @@ std::shared_ptr<Config> readConfig(const std::string& filePath);
 
 class S3ReadBenchmark : public ReadBenchmark {
  public:
+  // Initialize a S3ReadFile instance for the specified 'path'.
   void initialize() override {
     executor_ =
         std::make_unique<folly::IOThreadPoolExecutor>(FLAGS_num_threads);
