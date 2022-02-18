@@ -45,32 +45,32 @@ class ArraysOverlapTest : public FunctionBaseTest {
         {1, -2, 4},
         {1, -2, 4},
     });
-    auto expected = makeNullableFlatVector<bool>({true, true, false, true});
+    auto expected =
+        makeNullableFlatVector<bool>({true, true, std::nullopt, true});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
     testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
   }
 
   template <typename T>
   void testFloatingPoint() {
-    auto array1 = makeNullableArrayVector<T>({
-        {1.0001, -2.0, 3.03, std::nullopt, 4.00004},
-        {std::numeric_limits<T>::min(), 2.02, -2.001, 1},
-        {std::numeric_limits<T>::max(), 8.0001, std::nullopt},
-        {9.0009,
-         std::numeric_limits<T>::infinity(),
-         std::numeric_limits<T>::max()},
-        {std::numeric_limits<T>::quiet_NaN(), 9.0009},
-    });
-    auto array2 = makeNullableArrayVector<T>({
-        {1.0, -2.0, 4.0},
-        {std::numeric_limits<T>::min(), 2.0199, -2.001, 1.000001},
-        {1.0001, -2.02, std::numeric_limits<T>::max(), 8.00099},
-        {9.0009, std::numeric_limits<T>::infinity()},
-        {9.0009, std::numeric_limits<T>::quiet_NaN()},
-    });
-    auto expected =
-        makeNullableFlatVector<bool>({true, true, true, true, true});
-
+    auto array1 = makeNullableArrayVector<T>(
+        {{1.0001, -2.0, 3.03, std::nullopt, 4.00004},
+         {std::numeric_limits<T>::min(), 2.02, -2.001, 1},
+         {std::numeric_limits<T>::max(), 8.0001, std::nullopt},
+         {9.0009,
+          std::numeric_limits<T>::infinity(),
+          std::numeric_limits<T>::max()},
+         {std::numeric_limits<T>::quiet_NaN(), 9.0009},
+         {std::numeric_limits<T>::quiet_NaN(), 9.0009, std::nullopt}});
+    auto array2 = makeNullableArrayVector<T>(
+        {{1.0, -2.0, 4.0},
+         {std::numeric_limits<T>::min(), 2.0199, -2.001, 1.000001},
+         {1.0001, -2.02, std::numeric_limits<T>::max(), 8.00099},
+         {9.0009, std::numeric_limits<T>::infinity()},
+         {9.0009, std::numeric_limits<T>::quiet_NaN()},
+         {9.0}});
+    auto expected = makeNullableFlatVector<bool>(
+        {true, true, true, true, true, std::nullopt});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
     testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
   }
@@ -113,7 +113,7 @@ TEST_F(ArraysOverlapTest, boolArrays) {
        {std::nullopt}});
 
   auto expected = makeNullableFlatVector<bool>(
-      {true, true, true, false, true, true, true, true, false});
+      {true, true, true, false, true, true, true, true, std::nullopt});
 
   testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
@@ -127,7 +127,7 @@ TEST_F(ArraysOverlapTest, strArrays) {
       {S("a"), std::nullopt, S("b")},
       {S("a"), S("b"), S("a"), S("a")},
       {std::nullopt, S("b"), std::nullopt},
-      {S("abc")},
+      {S("abcd")},
   });
   auto array2 = makeNullableArrayVector<StringView>({
       {S("a")},
@@ -135,7 +135,8 @@ TEST_F(ArraysOverlapTest, strArrays) {
       {std::nullopt, std::nullopt, std::nullopt},
       {S("abc"), S("a"), S("b")},
   });
-  auto expected = makeNullableFlatVector<bool>({true, true, false, true});
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, std::nullopt, false});
   testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
@@ -161,7 +162,8 @@ TEST_F(ArraysOverlapTest, longStrArrays) {
       {},
       {S("red shiny car ahead"), S("green plants make us happy")},
   });
-  auto expected = makeNullableFlatVector<bool>({true, false, false, true});
+  auto expected =
+      makeNullableFlatVector<bool>({true, std::nullopt, false, true});
   testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
@@ -172,9 +174,11 @@ TEST_F(ArraysOverlapTest, constant) {
       {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
       {1, 2, -2, 1},
       {3, 8, std::nullopt},
+      {3, 8, 5},
       {1, 1, -2, -2, -2, 4, 8},
   });
-  auto expected = makeNullableFlatVector<bool>({true, true, false, true});
+  auto expected =
+      makeNullableFlatVector<bool>({true, true, std::nullopt, false, true});
   testExpr(expected, "arrays_overlap(C0, ARRAY[1,-2,4])", {array1});
   testExpr(expected, "arrays_overlap(ARRAY[1,-2,4], C0)", {array1});
   testExpr(
@@ -184,7 +188,8 @@ TEST_F(ArraysOverlapTest, constant) {
   expected = makeNullableFlatVector<bool>({
       true,
       true,
-      false,
+      std::nullopt,
+      std::nullopt,
       true,
   });
   testExpr(expected, "arrays_overlap(C0, ARRAY[1,NULL,4])", {array1});

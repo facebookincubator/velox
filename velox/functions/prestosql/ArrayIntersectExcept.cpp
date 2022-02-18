@@ -272,11 +272,9 @@ class ArrayIntersectExceptFunction : public exec::VectorFunction {
 template <typename T>
 class ArraysOverlapFunction : public exec::VectorFunction {
  public:
-  ArraysOverlapFunction() {}
+  ArraysOverlapFunction() = default;
 
-  explicit ArraysOverlapFunction(
-      SetWithNull<T> constantSet,
-      bool isLeftConstant)
+  ArraysOverlapFunction(SetWithNull<T> constantSet, bool isLeftConstant)
       : constantSet_(std::move(constantSet)), isLeftConstant_(isLeftConstant) {}
 
   void apply(
@@ -306,7 +304,7 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       auto idx = decodedLeftArray->index(row);
       auto offset = baseLeftArray->offsetAt(idx);
       auto size = baseLeftArray->sizeAt(idx);
-      bool hasNull = false;
+      bool hasNull = rightSet.hasNull;
       for (auto i = offset; i < (offset + size); ++i) {
         // For each element in the current row search for it in the rightSet.
         if (decodedLeftElements->isNullAt(i)) {
@@ -322,7 +320,11 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       }
       // If none of them is found in the rightSet, set false for current row
       // indicating there are no overlapping elements with rightSet.
-      resultBoolVector->set(row, false);
+      if (hasNull) {
+        resultBoolVector->setNull(row, true);
+      } else {
+        resultBoolVector->set(row, false);
+      }
     };
 
     if (constantSet_.has_value()) {
