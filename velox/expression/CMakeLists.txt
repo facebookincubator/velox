@@ -32,4 +32,5 @@ target_link_libraries(velox_expression velox_core velox_vector
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
+  add_subdirectory(benchmarks)
 endif()
