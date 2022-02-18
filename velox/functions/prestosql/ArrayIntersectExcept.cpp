@@ -283,9 +283,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
-    // if one of them is a ConstantVector.
-    // Iterate through the other ArrayVector->elementsFlatVector
-    // and do constantSet_.find()
+    // If one of them is a ConstantVector, iterate through the other
+    // ArrayVector->elementsFlatVector and do constantSet_.find().
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
     if (constantSet_.has_value() && isLeftConstant_) {
@@ -308,7 +307,7 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       for (auto i = offset; i < (offset + size); ++i) {
         // For each element in the current row search for it in the rightSet.
         if (decodedLeftElements->isNullAt(i)) {
-          // Arrays overlap skips null values.
+          // Arrays overlap function skips null values.
           hasNull = true;
           continue;
         }
@@ -318,11 +317,11 @@ class ArraysOverlapFunction : public exec::VectorFunction {
           return;
         }
       }
-      // If none of them is found in the rightSet, set false for current row
-      // indicating there are no overlapping elements with rightSet.
       if (hasNull) {
+        // If encountered a NULL, insert NULL in the result.
         resultBoolVector->setNull(row, true);
       } else {
+        // If there is no overlap and no nulls, then insert false.
         resultBoolVector->set(row, false);
       }
     };
