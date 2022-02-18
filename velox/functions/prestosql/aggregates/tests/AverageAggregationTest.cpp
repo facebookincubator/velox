@@ -293,5 +293,39 @@ TEST_F(AverageAggregationTest, partialResults) {
 
   assertQuery(plan, "SELECT row(4950, 100)");
 }
+
+TEST_F(AverageAggregationTest, floatAverage) {
+  auto vectors = {
+      makeRowVector(
+          {makeFlatVector<int64_t>(
+               10, [](vector_size_t row) { return row % 3; }),
+           makeFlatVector<float>(10, [](vector_size_t row) { return row; })}),
+  };
+  {
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({}, {"avg(c1)"})
+                    .planNode();
+    assertQuery(plan, "SELECT row(10, 45)");
+  }
+  {
+    createDuckDbTable(vectors);
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({}, {"avg(c1)"})
+                    .finalAggregation({}, {"avg(a0)"}, {REAL()})
+                    .planNode();
+    assertQuery(plan, "SELECT avg(c1) from tmp");
+  }
+  {
+    createDuckDbTable(vectors);
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({0}, {"avg(c1)"})
+                    .finalAggregation({0}, {"avg(a0)"}, {REAL()})
+                    .planNode();
+    assertQuery(plan, "SELECT c0, avg(c1) from tmp group by 1");
+  }
+}
 } // namespace
 } // namespace facebook::velox::aggregate::test

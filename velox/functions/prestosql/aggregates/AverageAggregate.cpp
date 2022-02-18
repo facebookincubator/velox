@@ -30,7 +30,8 @@ struct SumCount {
 };
 
 // Partial aggregation produces a pair of sum and count.
-// Final aggregation takes a pair of sum and count and returns a double.
+// Final aggregation takes a pair of sum and count and returns a double or
+// float.
 // T is the input type for partial aggregation. Not used for final aggregation.
 template <typename T>
 class AverageAggregate : public exec::Aggregate {
@@ -54,29 +55,31 @@ class AverageAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    auto vector = (*result)->as<FlatVector<double>>();
-    VELOX_CHECK(vector);
-    vector->resize(numGroups);
-    uint64_t* rawNulls = getRawNulls(vector);
-
-    double* rawValues = vector->mutableRawValues();
-    for (int32_t i = 0; i < numGroups; ++i) {
-      char* group = groups[i];
-      if (isNull(group)) {
-        vector->setNull(i, true);
-      } else {
-        clearNull(rawNulls, i);
-        auto* sumCount = accumulator(group);
-        rawValues[i] = (double)sumCount->sum / sumCount->count;
-      }
+    switch (resultType_->kind()) {
+      case TypeKind::DOUBLE:
+        return extractValues<double>(groups, numGroups, result);
+      case TypeKind::REAL:
+        return extractValues<float>(groups, numGroups, result);
+      default:
+        VELOX_FAIL(
+            "Unknown results type for {} single/final aggregation",
+            resultType_->kindName());
     }
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto rowVector = (*result)->as<RowVector>();
-    auto sumVector = rowVector->childAt(0)->asFlatVector<double>();
-    auto countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
+
+    FlatVector<double>* sumVector;
+    FlatVector<int64_t>* countVector;
+    if (rowVector->childAt(0)->typeKind() == TypeKind::DOUBLE) {
+      sumVector = rowVector->childAt(0)->asFlatVector<double>();
+      countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
+    } else {
+      sumVector = rowVector->childAt(1)->asFlatVector<double>();
+      countVector = rowVector->childAt(0)->asFlatVector<int64_t>();
+    }
 
     rowVector->resize(numGroups);
     sumVector->resize(numGroups);
@@ -168,9 +171,15 @@ class AverageAggregate : public exec::Aggregate {
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
     auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
-    auto baseSumVector = baseRowVector->childAt(0)->as<SimpleVector<double>>();
-    auto baseCountVector =
-        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    SimpleVector<double>* baseSumVector;
+    SimpleVector<int64_t>* baseCountVector;
+    if (baseRowVector->childAt(0)->typeKind() == TypeKind::DOUBLE) {
+      baseSumVector = baseRowVector->childAt(0)->as<SimpleVector<double>>();
+      baseCountVector = baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    } else {
+      baseSumVector = baseRowVector->childAt(1)->as<SimpleVector<double>>();
+      baseCountVector = baseRowVector->childAt(0)->as<SimpleVector<int64_t>>();
+    }
 
     if (decodedPartial_.isConstantMapping()) {
       if (!decodedPartial_.isNullAt(0)) {
@@ -210,9 +219,15 @@ class AverageAggregate : public exec::Aggregate {
       bool /* mayPushdown */) override {
     decodedPartial_.decode(*args[0], rows);
     auto baseRowVector = dynamic_cast<const RowVector*>(decodedPartial_.base());
-    auto baseSumVector = baseRowVector->childAt(0)->as<SimpleVector<double>>();
-    auto baseCountVector =
-        baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    SimpleVector<double>* baseSumVector;
+    SimpleVector<int64_t>* baseCountVector;
+    if (baseRowVector->childAt(0)->typeKind() == TypeKind::DOUBLE) {
+      baseSumVector = baseRowVector->childAt(0)->as<SimpleVector<double>>();
+      baseCountVector = baseRowVector->childAt(1)->as<SimpleVector<int64_t>>();
+    } else {
+      baseSumVector = baseRowVector->childAt(1)->as<SimpleVector<double>>();
+      baseCountVector = baseRowVector->childAt(0)->as<SimpleVector<int64_t>>();
+    }
 
     if (decodedPartial_.isConstantMapping()) {
       if (!decodedPartial_.isNullAt(0)) {
@@ -268,29 +283,54 @@ class AverageAggregate : public exec::Aggregate {
     return exec::Aggregate::value<SumCount>(group);
   }
 
+  template <typename resultType>
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result) {
+    auto vector = (*result)->as<FlatVector<resultType>>();
+    VELOX_CHECK(vector);
+    vector->resize(numGroups);
+    uint64_t* rawNulls = getRawNulls(vector);
+
+    resultType* rawValues = vector->mutableRawValues();
+    for (int32_t i = 0; i < numGroups; ++i) {
+      char* group = groups[i];
+      if (isNull(group)) {
+        vector->setNull(i, true);
+      } else {
+        clearNull(rawNulls, i);
+        auto* sumCount = accumulator(group);
+        rawValues[i] = (resultType)sumCount->sum / sumCount->count;
+      }
+    }
+  }
+
   DecodedVector decodedRaw_;
   DecodedVector decodedPartial_;
 };
 
 void checkSumCountRowType(TypePtr type, const std::string& errorMessage) {
   VELOX_CHECK_EQ(type->kind(), TypeKind::ROW, "{}", errorMessage);
-  VELOX_CHECK_EQ(
-      type->childAt(0)->kind(), TypeKind::DOUBLE, "{}", errorMessage);
-  VELOX_CHECK_EQ(
-      type->childAt(1)->kind(), TypeKind::BIGINT, "{}", errorMessage);
+  std::unordered_set<TypeKind> sumCountType{
+      type->childAt(0)->kind(), type->childAt(1)->kind()};
+  std::unordered_set<TypeKind> expectedSumCountType{
+      TypeKind::BIGINT, TypeKind::DOUBLE};
+  VELOX_CHECK(sumCountType == expectedSumCountType, "{}", errorMessage);
 }
 
 bool registerAverageAggregate(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
-
-  for (const auto& inputType :
-       {"smallint", "integer", "bigint", "real", "double"}) {
+  for (const auto& inputType : {"smallint", "integer", "bigint", "double"}) {
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType("double")
                              .intermediateType("row(double,bigint)")
                              .argumentType(inputType)
                              .build());
   }
+
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .returnType("double")
+                           .intermediateType("row(bigint,double)")
+                           .argumentType("real")
+                           .build());
 
   exec::registerAggregateFunction(
       name,
