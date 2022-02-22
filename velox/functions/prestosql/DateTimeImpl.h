@@ -48,11 +48,11 @@ FOLLY_ALWAYS_INLINE std::optional<Timestamp> fromUnixtime(double unixtime) {
   static const Timestamp kMinTimestamp(
       kMin / 1000 - 1, (kMin % 1000 + 1000) * kNanosecondsInMillisecond);
 
-  if (UNLIKELY(unixtime >= kMax)) {
+  if (UNLIKELY(unixtime >= static_cast<double>(kMax))) {
     return kMaxTimestamp;
   }
 
-  if (UNLIKELY(unixtime <= kMin)) {
+  if (UNLIKELY(unixtime <= static_cast<double>(kMin))) {
     return kMinTimestamp;
   }
 
