@@ -30,8 +30,8 @@
 
 namespace facebook::velox::substraitconverter {
 
-// This class contains some common funcitons used to parse Substrait components, and
-// convert it to recognizable representations.
+// This class contains some common funcitons used to parse Substrait components,
+// and convert it to recognizable representations.
 class SubstraitParser {
  public:
   SubstraitParser();
@@ -48,11 +48,13 @@ class SubstraitParser {
   std::shared_ptr<SubstraitType> parseType(const substrait::Type& stype);
   std::vector<std::string> makeNames(const std::string& prefix, int size);
   std::string makeNodeName(int node_id, int col_idx);
-  std::string findFunction(const std::unordered_map<uint64_t, std::string>& functions_map,
-                           const uint64_t& id) const;
+  std::string findFunction(
+      const std::unordered_map<uint64_t, std::string>& functions_map,
+      const uint64_t& id) const;
   // Used for mapping Substrait function key words into Velox functions.
   std::unordered_map<std::string, std::string> substrait_velox_function_map = {
-      {"MULTIPLY", "multiply"}, {"SUM", "sum"}};
+      {"MULTIPLY", "multiply"},
+      {"SUM", "sum"}};
 };
 
 } // namespace facebook::velox::substraitconverter

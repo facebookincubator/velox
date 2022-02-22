@@ -27,6 +27,8 @@ using namespace facebook::velox::dwio::common;
 
 namespace facebook::velox::substraitconverter {
 
+SubstraitVeloxPlanConverter::SubstraitVeloxPlanConverter() {}
+
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     const substrait::AggregateRel& sagg) {
   std::shared_ptr<const core::PlanNode> child_node;

@@ -13,8 +13,13 @@
 # limitations under the License.
 
 add_executable(velox_plan_conversion_test PlanConversionTest.cpp)
+add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
+#add_test(velox_plan_conversion_test velox_plan_conversion_test)
 
-add_test(velox_plan_conversion_test velox_plan_conversion_test)
+add_test(
+  NAME velox_plan_conversion_test
+  COMMAND velox_plan_conversion_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(
   velox_plan_conversion_test

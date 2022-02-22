@@ -60,13 +60,16 @@ class SubstraitVeloxExprConverter {
       const int32_t& input_plan_node_id);
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
       const substrait::Expression::Literal& slit);
-  std::shared_ptr<const core::ITypedExpr> toVeloxExpr(const substrait::Expression& sexpr,
-                                                      const int32_t& input_plan_node_id);
-  int32_t parseReferenceSegment(const substrait::Expression::ReferenceSegment& sref);
+  std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
+      const substrait::Expression& sexpr,
+      const int32_t& input_plan_node_id);
+  int32_t parseReferenceSegment(
+      const substrait::Expression::ReferenceSegment& sref);
   TypePtr getVeloxType(std::string type_name);
   connector::hive::SubfieldFilters toVeloxFilter(
       const std::vector<std::string>& input_name_list,
-      const std::vector<TypePtr>& input_type_list, const substrait::Expression& sfilter);
+      const std::vector<TypePtr>& input_type_list,
+      const substrait::Expression& sfilter);
 
  private:
   void getFlatConditions(

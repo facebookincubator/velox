@@ -89,7 +89,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
           auto length = lengths[idx];
           auto split = std::make_shared<
               facebook::velox::connector::hive::HiveConnectorSplit>(
-              "hive-connector",
+              facebook::velox::exec::test::kHiveConnectorId,
               path,
               facebook::velox::dwio::common::FileFormat::ORC,
               start,
@@ -163,22 +163,35 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       auto planConverter = std::make_shared<
           facebook::velox::substraitconverter::SubstraitVeloxPlanConverter>();
       auto planNode = planConverter->toVeloxPlan(subPlan);
+      u_int32_t partitionIndex = planConverter->getPartitionIndex();
+      std::vector<std::string> paths;
+      planConverter->getPaths(&paths);
+      std::vector<u_int64_t> starts;
+      planConverter->getStarts(&starts);
+      std::vector<u_int64_t> lengths;
+      planConverter->getLengths(&lengths);
       auto resIter = std::make_shared<WholeComputeResultIterator>(
-          planNode,
-          planConverter->getPartitionIndex(),
-          planConverter->getPaths(),
-          planConverter->getStarts(),
-          planConverter->getLengths());
+          planNode, partitionIndex, paths, starts, lengths);
       return resIter;
     }
   };
 };
 
 TEST_P(PlanConversionTest, queryTest) {
-  std::string subPlanPath = "";
+  std::string current_path = fs::current_path().c_str();
+  std::string subPlanPath =
+      current_path + "/../../../../../velox/substrait_converter/tests/sub.data";
   auto veloxConverter = std::make_shared<VeloxConverter>();
   auto resIter = veloxConverter->getResIter(subPlanPath);
   while (resIter->HasNext()) {
     auto rv = resIter->Next();
+    for (size_t i = 0; i < rv->size(); ++i) {
+      std::cout << rv->toString(i) << std::endl;
+    }
   }
 }
+
+VELOX_INSTANTIATE_TEST_SUITE_P(
+    PlanConversionTests,
+    PlanConversionTest,
+    testing::Values(true, false));

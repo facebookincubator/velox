@@ -37,43 +37,55 @@ class SubstraitVeloxPlanConverter {
  public:
   SubstraitVeloxPlanConverter();
 
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::AggregateRel& sagg);
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const substrait::AggregateRel& sagg);
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
       const substrait::ProjectRel& sproject);
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::FilterRel& sfilter);
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::ReadRel& sread,
-                                                    u_int32_t* index,
-                                                    std::vector<std::string>* paths,
-                                                    std::vector<u_int64_t>* starts,
-                                                    std::vector<u_int64_t>* lengths);
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const substrait::FilterRel& sfilter);
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const substrait::ReadRel& sread,
+      u_int32_t* index,
+      std::vector<std::string>* paths,
+      std::vector<u_int64_t>* starts,
+      std::vector<u_int64_t>* lengths);
   std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::Rel& srel);
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::RelRoot& sroot);
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::Plan& splan);
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const substrait::RelRoot& sroot);
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const substrait::Plan& splan);
 
   u_int32_t getPartitionIndex() {
     return partition_index_;
   }
 
-  std::vector<std::string> getPaths() {
-    return paths_;
+  void getPaths(std::vector<std::string>* paths) {
+    for (auto path : paths_) {
+      (*paths).push_back(path);
+    }
   }
 
-  std::vector<u_int64_t> getStarts() {
-    return starts_;
+  void getStarts(std::vector<u_int64_t>* starts) {
+    for (auto start : starts_) {
+      (*starts).push_back(start);
+    }
   }
 
-  std::vector<u_int64_t> getLengths() {
-    return lengths_;
+  void getLengths(std::vector<u_int64_t>* lengths) {
+    for (auto length : lengths_) {
+      (*lengths).push_back(length);
+    }
   }
 
   u_int32_t partition_index_;
   std::vector<std::string> paths_;
   std::vector<u_int64_t> starts_;
   std::vector<u_int64_t> lengths_;
- 
+
  private:
   int plan_node_id_ = 0;
-  std::shared_ptr<SubstraitParser> sub_parser_ = std::make_shared<SubstraitParser>();
+  std::shared_ptr<SubstraitParser> sub_parser_ =
+      std::make_shared<SubstraitParser>();
   // Will be initialized with a function map.
   std::shared_ptr<SubstraitVeloxExprConverter> expr_converter_;
   std::unordered_map<uint64_t, std::string> functions_map_;

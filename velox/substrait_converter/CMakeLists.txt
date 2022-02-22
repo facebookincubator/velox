@@ -45,16 +45,23 @@ add_custom_command(OUTPUT ${PROTO_OUTPUT_FILES}
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
 
-add_library(velox_substrait_utils SubstraitUtils.cpp)
-target_include_directories(velox_substrait_utils PUBLIC ${PROTO_OUTPUT_DIR})
+#add_library(velox_substrait_proto ${PROTO_SRCS})
+#target_link_libraries(velox_substrait_proto protobuf::libprotobuf)
 
-add_library(velox_substrait_expr_converter SubstraitToVeloxExpr.cpp)
-target_link_libraries(velox_substrait_expr_converter velox_substrait_utils velox_connector velox_dwio_dwrf_common)
+set(SRCS ${PROTO_SRCS}
+         SubstraitUtils.cpp
+         SubstraitToVeloxExpr.cpp
+         SubstraitToVeloxPlan.cpp)
+add_library(velox_substrait_plan_converter ${SRCS})
+target_include_directories(velox_substrait_plan_converter PUBLIC ${PROTO_OUTPUT_DIR})
+#target_link_libraries(velox_substrait_utils velox_substrait_proto)
 
-add_library(velox_substrait_plan_converter SubstraitToVeloxPlan.cpp)
-target_link_libraries(velox_substrait_plan_converter velox_substrait_expr_converter)
+#add_library(velox_substrait_expr_converter SubstraitToVeloxExpr.cpp)
+#target_link_libraries(velox_substrait_expr_converter velox_substrait_utils velox_connector velox_dwio_dwrf_common)
 
-# Disable tests temporarily for some linking issues are not resolved.
-#if(${VELOX_BUILD_TESTING})
-# add_subdirectory(tests)
-#endif()
+#add_library(velox_substrait_plan_converter SubstraitToVeloxPlan.cpp)
+target_link_libraries(velox_substrait_plan_converter velox_connector velox_dwio_dwrf_common)
+
+if(${VELOX_BUILD_TESTING})
+ add_subdirectory(tests)
+endif()
