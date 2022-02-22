@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "substrait_to_velox_plan.h"
+#include "SubstraitToVeloxPlan.h"
 
-#include "type_utils.h"
+#include "TypeUtils.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/vector/arrow/Bridge.h"
 
@@ -25,7 +25,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::dwio::common;
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     const substrait::AggregateRel& sagg) {
@@ -36,18 +36,21 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     throw std::runtime_error("Child expected");
   }
   auto input_types = child_node->outputType();
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> velox_grouping_exprs;
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
+      velox_grouping_exprs;
   auto& groupings = sagg.groupings();
   int input_plan_node_id = plan_node_id_ - 1;
   int out_idx = 0;
   for (auto& grouping : groupings) {
     auto grouping_exprs = grouping.grouping_expressions();
     for (auto& grouping_expr : grouping_exprs) {
-      auto field_expr = expr_converter_->toVeloxExpr(grouping_expr, input_plan_node_id);
-      // Velox's groupings are limited to be Field, and pre-projection for grouping cols
-      // is not supported.
+      auto field_expr =
+          expr_converter_->toVeloxExpr(grouping_expr, input_plan_node_id);
+      // Velox's groupings are limited to be Field, and pre-projection for
+      // grouping cols is not supported.
       auto typed_field_expr =
-          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(field_expr);
+          std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+              field_expr);
       velox_grouping_exprs.push_back(typed_field_expr);
       out_idx += 1;
     }
@@ -86,21 +89,24 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
       switch (arg.rex_type_case()) {
         case substrait::Expression::RexTypeCase::kSelection: {
           auto sel = arg.selection();
-          auto field_expr = expr_converter_->toVeloxExpr(sel, input_plan_node_id);
+          auto field_expr =
+              expr_converter_->toVeloxExpr(sel, input_plan_node_id);
           agg_params.push_back(field_expr);
           break;
         }
         case substrait::Expression::RexTypeCase::kScalarFunction: {
           // Pre-projection is needed before Aggregate.
           auto sfunc = arg.scalar_function();
-          auto velox_expr = expr_converter_->toVeloxExpr(sfunc, input_plan_node_id);
+          auto velox_expr =
+              expr_converter_->toVeloxExpr(sfunc, input_plan_node_id);
           project_exprs.push_back(velox_expr);
           auto col_out_name = sub_parser_->makeNodeName(plan_node_id_, out_idx);
           project_out_names.push_back(col_out_name);
           auto sub_type = sub_parser_->parseType(sfunc.output_type());
           auto velox_type = expr_converter_->getVeloxType(sub_type->type);
-          auto agg_input_param = std::make_shared<const core::FieldAccessTypedExpr>(
-              velox_type, col_out_name);
+          auto agg_input_param =
+              std::make_shared<const core::FieldAccessTypedExpr>(
+                  velox_type, col_out_name);
           agg_params.push_back(agg_input_param);
           break;
         }
@@ -110,26 +116,38 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
       }
     }
     auto agg_out_type = agg_function.output_type();
-    auto agg_velox_type =
-        expr_converter_->getVeloxType(sub_parser_->parseType(agg_out_type)->type);
+    auto agg_velox_type = expr_converter_->getVeloxType(
+        sub_parser_->parseType(agg_out_type)->type);
     auto agg_expr = std::make_shared<const core::CallTypedExpr>(
         agg_velox_type, std::move(agg_params), func_name);
     agg_exprs.push_back(agg_expr);
     out_idx += 1;
   }
   bool ignoreNullKeys = false;
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(out_idx);
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
+      out_idx);
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
+      pre_grouping_exprs;
   if (project_out_names.size() > 0) {
     auto project_node = std::make_shared<core::ProjectNode>(
-        nextPlanNodeId(), std::move(project_out_names), std::move(project_exprs),
+        nextPlanNodeId(),
+        std::move(project_out_names),
+        std::move(project_exprs),
         child_node);
     std::vector<std::string> agg_out_names;
     for (int idx = 0; idx < out_idx; idx++) {
       agg_out_names.push_back(sub_parser_->makeNodeName(plan_node_id_, idx));
     }
     auto agg_node = std::make_shared<core::AggregationNode>(
-        nextPlanNodeId(), agg_step, velox_grouping_exprs, agg_out_names, agg_exprs,
-        aggregateMasks, ignoreNullKeys, project_node);
+        nextPlanNodeId(),
+        agg_step,
+        velox_grouping_exprs,
+        pre_grouping_exprs,
+        agg_out_names,
+        agg_exprs,
+        aggregateMasks,
+        ignoreNullKeys,
+        project_node);
     return agg_node;
   } else {
     std::vector<std::string> agg_out_names;
@@ -137,8 +155,15 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
       agg_out_names.push_back(sub_parser_->makeNodeName(plan_node_id_, idx));
     }
     auto agg_node = std::make_shared<core::AggregationNode>(
-        nextPlanNodeId(), agg_step, velox_grouping_exprs, agg_out_names, agg_exprs,
-        aggregateMasks, ignoreNullKeys, child_node);
+        nextPlanNodeId(),
+        agg_step,
+        velox_grouping_exprs,
+        pre_grouping_exprs,
+        agg_out_names,
+        agg_exprs,
+        aggregateMasks,
+        ignoreNullKeys,
+        child_node);
     return agg_node;
   }
 }
@@ -164,7 +189,10 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     col_idx += 1;
   }
   auto project_node = std::make_shared<core::ProjectNode>(
-      nextPlanNodeId(), std::move(project_names), std::move(expressions), child_node);
+      nextPlanNodeId(),
+      std::move(project_names),
+      std::move(expressions),
+      child_node);
   return project_node;
 }
 
@@ -189,10 +217,14 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
 }
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
-    const substrait::ReadRel& sread, u_int32_t* index, std::vector<std::string>* paths,
-    std::vector<u_int64_t>* starts, std::vector<u_int64_t>* lengths) {
+    const substrait::ReadRel& sread,
+    u_int32_t* index,
+    std::vector<std::string>* paths,
+    std::vector<u_int64_t>* starts,
+    std::vector<u_int64_t>* lengths) {
   std::vector<std::string> col_name_list;
-  std::vector<std::shared_ptr<SubstraitParser::SubstraitType>> substrait_type_list;
+  std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
+      substrait_type_list;
   if (sread.has_base_schema()) {
     auto& base_schema = sread.base_schema();
     for (auto& name : base_schema.names()) {
@@ -230,15 +262,17 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     auto& sfilter = sread.filter();
     hive::SubfieldFilters filters =
         expr_converter_->toVeloxFilter(col_name_list, velox_type_list, sfilter);
-    table_handle = std::make_shared<hive::HiveTableHandle>(filter_pushdown_enabled,
-                                                           std::move(filters), nullptr);
+    table_handle = std::make_shared<hive::HiveTableHandle>(
+        filter_pushdown_enabled, std::move(filters), nullptr);
   }
   std::vector<std::string> out_names;
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>> assignments;
+  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
+      assignments;
   for (int idx = 0; idx < col_name_list.size(); idx++) {
     auto out_name = sub_parser_->makeNodeName(plan_node_id_, idx);
     assignments[out_name] = std::make_shared<hive::HiveColumnHandle>(
-        col_name_list[idx], hive::HiveColumnHandle::ColumnType::kRegular,
+        col_name_list[idx],
+        hive::HiveColumnHandle::ColumnType::kRegular,
         velox_type_list[idx]);
     out_names.push_back(out_name);
   }
@@ -257,7 +291,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   } else if (srel.has_filter()) {
     return toVeloxPlan(srel.filter());
   } else if (srel.has_read()) {
-    return toVeloxPlan(srel.read(), &partition_index_, &paths_, &starts_, &lengths_);
+    return toVeloxPlan(
+        srel.read(), &partition_index_, &paths_, &starts_, &lengths_);
   } else {
     throw new std::runtime_error("Rel is not supported.");
   }
@@ -268,9 +303,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   auto& snames = sroot.names();
   int name_idx = 0;
   for (auto& sname : snames) {
-    if (name_idx == 0 && sname == "fake_arrow_output") {
-      fake_arrow_output_ = true;
-    }
+    // TODO: Use names as output columns' names
     name_idx += 1;
   }
   if (sroot.has_input()) {
@@ -292,8 +325,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     auto name = sfmap.name();
     functions_map_[id] = name;
   }
-  expr_converter_ =
-      std::make_shared<SubstraitVeloxExprConverter>(sub_parser_, functions_map_);
+  expr_converter_ = std::make_shared<SubstraitVeloxExprConverter>(
+      sub_parser_, functions_map_);
   std::shared_ptr<const core::PlanNode> plan_node;
   // In fact, only one RelRoot is expected here.
   for (auto& srel : splan.relations()) {
@@ -313,4 +346,4 @@ std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
   return id;
 }
 
-} // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter

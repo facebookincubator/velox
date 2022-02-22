@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "substrait_to_velox_expr.h"
+#include "SubstraitToVeloxExpr.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::connector;
 using namespace facebook::velox::dwio::common;
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 SubstraitVeloxExprConverter::SubstraitVeloxExprConverter(
     const std::shared_ptr<SubstraitParser>& sub_parser,
@@ -35,15 +35,18 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const substrait::Expression::FieldReference& sfield,
     const int32_t& input_plan_node_id) {
   switch (sfield.reference_type_case()) {
-    case substrait::Expression::FieldReference::ReferenceTypeCase::kDirectReference: {
+    case substrait::Expression::FieldReference::ReferenceTypeCase::
+        kDirectReference: {
       auto dref = sfield.direct_reference();
       int32_t col_idx = parseReferenceSegment(dref);
       auto field_name = sub_parser_->makeNodeName(input_plan_node_id, col_idx);
       // FIXME: get the input type
-      return std::make_shared<const core::FieldAccessTypedExpr>(DOUBLE(), field_name);
+      return std::make_shared<const core::FieldAccessTypedExpr>(
+          DOUBLE(), field_name);
       break;
     }
-    case substrait::Expression::FieldReference::ReferenceTypeCase::kMaskedReference: {
+    case substrait::Expression::FieldReference::ReferenceTypeCase::
+        kMaskedReference: {
       throw new std::runtime_error("not supported");
       break;
     }
@@ -53,7 +56,8 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   }
 }
 
-std::shared_ptr<const core::ITypedExpr> SubstraitVeloxExprConverter::toVeloxExpr(
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
     const substrait::Expression::ScalarFunction& sfunc,
     const int32_t& input_plan_node_id) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
@@ -63,14 +67,16 @@ std::shared_ptr<const core::ITypedExpr> SubstraitVeloxExprConverter::toVeloxExpr
   }
   auto function_id = sfunc.function_reference();
   auto function_name = sub_parser_->findFunction(functions_map_, function_id);
-  auto velox_function = sub_parser_->substrait_velox_function_map[function_name];
+  auto velox_function =
+      sub_parser_->substrait_velox_function_map[function_name];
   auto sub_type = sub_parser_->parseType(sfunc.output_type());
   auto velox_type = getVeloxType(sub_type->type);
-  return std::make_shared<const core::CallTypedExpr>(velox_type, std::move(params),
-                                                     velox_function);
+  return std::make_shared<const core::CallTypedExpr>(
+      velox_type, std::move(params), velox_function);
 }
 
-std::shared_ptr<const core::ConstantTypedExpr> SubstraitVeloxExprConverter::toVeloxExpr(
+std::shared_ptr<const core::ConstantTypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
     const substrait::Expression::Literal& slit) {
   switch (slit.literal_type_case()) {
     case substrait::Expression_Literal::LiteralTypeCase::kFp64: {
@@ -89,8 +95,10 @@ std::shared_ptr<const core::ConstantTypedExpr> SubstraitVeloxExprConverter::toVe
   }
 }
 
-std::shared_ptr<const core::ITypedExpr> SubstraitVeloxExprConverter::toVeloxExpr(
-    const substrait::Expression& sexpr, const int32_t& input_plan_node_id) {
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
+    const substrait::Expression& sexpr,
+    const int32_t& input_plan_node_id) {
   std::shared_ptr<const core::ITypedExpr> velox_expr;
   switch (sexpr.rex_type_case()) {
     case substrait::Expression::RexTypeCase::kLiteral: {
@@ -130,7 +138,8 @@ TypePtr SubstraitVeloxExprConverter::getVeloxType(std::string type_name) {
 int32_t SubstraitVeloxExprConverter::parseReferenceSegment(
     const substrait::Expression::ReferenceSegment& sref) {
   switch (sref.reference_type_case()) {
-    case substrait::Expression::ReferenceSegment::ReferenceTypeCase::kStructField: {
+    case substrait::Expression::ReferenceSegment::ReferenceTypeCase::
+        kStructField: {
       auto sfield = sref.struct_field();
       auto field_id = sfield.field();
       return field_id;
@@ -166,7 +175,9 @@ class SubstraitVeloxExprConverter::FilterInfo {
       is_initialized_ = true;
     }
   }
-  bool isInitialized() { return is_initialized_ ? true : false; }
+  bool isInitialized() {
+    return is_initialized_ ? true : false;
+  }
 
   std::optional<double> left_ = std::nullopt;
   std::optional<double> right_ = std::nullopt;
@@ -193,13 +204,18 @@ void SubstraitVeloxExprConverter::getFlatConditions(
       } else {
         (*scalar_functions).push_back(sfunc);
       }
+      break;
     }
+    default:
+      throw new std::runtime_error("Not supported in getFlatConditions.");
+      break;
   }
 }
 
 hive::SubfieldFilters SubstraitVeloxExprConverter::toVeloxFilter(
     const std::vector<std::string>& input_name_list,
-    const std::vector<TypePtr>& input_type_list, const substrait::Expression& sfilter) {
+    const std::vector<TypePtr>& input_type_list,
+    const substrait::Expression& sfilter) {
   hive::SubfieldFilters filters;
   std::unordered_map<int, std::shared_ptr<FilterInfo>> col_info_map;
   for (int idx = 0; idx < input_name_list.size(); idx++) {
@@ -209,8 +225,8 @@ hive::SubfieldFilters SubstraitVeloxExprConverter::toVeloxFilter(
   std::vector<substrait::Expression_ScalarFunction> scalar_functions;
   getFlatConditions(sfilter, &scalar_functions);
   for (auto& scalar_function : scalar_functions) {
-    auto filter_name =
-        sub_parser_->findFunction(functions_map_, scalar_function.function_reference());
+    auto filter_name = sub_parser_->findFunction(
+        functions_map_, scalar_function.function_reference());
     int32_t col_idx;
     // FIXME: different type support
     double val;
@@ -270,11 +286,16 @@ hive::SubfieldFilters SubstraitVeloxExprConverter::toVeloxFilter(
       bool null_allowed = filter_info->null_allowed_;
       filters[common::Subfield(input_name_list[idx])] =
           std::make_unique<common::DoubleRange>(
-              left_bound, left_unbounded, left_exclusive, right_bound, right_unbounded,
-              right_exclusive, null_allowed);
+              left_bound,
+              left_unbounded,
+              left_exclusive,
+              right_bound,
+              right_unbounded,
+              right_exclusive,
+              null_allowed);
     }
   }
   return filters;
 }
 
-}  // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter

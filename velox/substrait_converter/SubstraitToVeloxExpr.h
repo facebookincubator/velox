@@ -18,7 +18,7 @@
 
 #include <folly/executors/IOThreadPoolExecutor.h>
 
-#include "substrait_utils.h"
+#include "SubstraitUtils.h"
 #include "velox/common/caching/DataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -44,7 +44,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 // This class is used to convert Substrait representations to Velox expressions.
 class SubstraitVeloxExprConverter {
@@ -77,4 +77,4 @@ class SubstraitVeloxExprConverter {
   class FilterInfo;
 };
 
-} // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter

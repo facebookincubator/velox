@@ -27,9 +27,8 @@
 #include "substrait/relations.pb.h"
 #include "substrait/type.pb.h"
 #include "substrait/type_expressions.pb.h"
-#include "utils/result_iterator.h"
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 // This class contains some common funcitons used to parse Substrait components, and
 // convert it to recognizable representations.
@@ -56,4 +55,4 @@ class SubstraitParser {
       {"MULTIPLY", "multiply"}, {"SUM", "sum"}};
 };
 
-} // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter

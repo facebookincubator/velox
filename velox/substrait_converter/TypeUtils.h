@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-#include <arrow/type_fwd.h>
-
 #include "velox/type/Type.h"
+
+namespace facebook::velox::substraitconverter {
 
 bool isPrimitive(const TypePtr& type) {
   switch (type->kind()) {
@@ -44,17 +44,6 @@ bool isString(const TypePtr& type) {
   return false;
 }
 
-std::shared_ptr<arrow::DataType> toArrowType(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::DOUBLE:
-      return arrow::float64();
-    case TypeKind::VARCHAR:
-      return arrow::utf8();
-    default:
-      throw new std::runtime_error("Type conversion is not supported.");
-  }
-}
-
 int64_t bytesOfType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::INTEGER:
@@ -67,3 +56,5 @@ int64_t bytesOfType(const TypePtr& type) {
       throw new std::runtime_error("bytesOfType is not supported.");
   }
 }
+
+} // namespace facebook::velox::substraitconverter

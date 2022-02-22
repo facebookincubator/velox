@@ -24,13 +24,13 @@
 #include <arrow/type_fwd.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 
-#include "substrait_to_velox_expr.h"
-#include "substrait_utils.h"
+#include "SubstraitToVeloxExpr.h"
+#include "SubstraitUtils.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 // This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
@@ -50,17 +50,34 @@ class SubstraitVeloxPlanConverter {
   std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::RelRoot& sroot);
   std::shared_ptr<const core::PlanNode> toVeloxPlan(const substrait::Plan& splan);
 
- private:
-  int plan_node_id_ = 0;
-  std::shared_ptr<SubstraitParser> sub_parser_;
-  std::shared_ptr<SubstraitVeloxExprConverter> expr_converter_;
-  std::unordered_map<uint64_t, std::string> functions_map_;
+  u_int32_t getPartitionIndex() {
+    return partition_index_;
+  }
+
+  std::vector<std::string> getPaths() {
+    return paths_;
+  }
+
+  std::vector<u_int64_t> getStarts() {
+    return starts_;
+  }
+
+  std::vector<u_int64_t> getLengths() {
+    return lengths_;
+  }
+
   u_int32_t partition_index_;
-  bool fake_arrow_output_ = false;
   std::vector<std::string> paths_;
   std::vector<u_int64_t> starts_;
   std::vector<u_int64_t> lengths_;
+ 
+ private:
+  int plan_node_id_ = 0;
+  std::shared_ptr<SubstraitParser> sub_parser_ = std::make_shared<SubstraitParser>();
+  // Will be initialized with a function map.
+  std::shared_ptr<SubstraitVeloxExprConverter> expr_converter_;
+  std::unordered_map<uint64_t, std::string> functions_map_;
   std::string nextPlanNodeId();
 };
 
-} // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter

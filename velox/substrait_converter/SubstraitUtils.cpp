@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "substrait_utils.h"
+#include "SubstraitUtils.h"
 
-namespace facebook::velox::substrait {
+namespace facebook::velox::substraitconverter {
 
 SubstraitParser::SubstraitParser() {}
 
@@ -37,6 +37,7 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
     }
     case substrait::Type::KindCase::kStruct: {
       // TODO
+      type_name = "Struct";
       auto sstruct = stype.struct_();
       auto stypes = sstruct.types();
       for (auto& type : stypes) {
@@ -83,7 +84,8 @@ SubstraitParser::parseNamedStruct(const substrait::NamedStruct& named_struct) {
   // Parse Struct
   auto& sstruct = named_struct.struct_();
   auto& stypes = sstruct.types();
-  std::vector<std::shared_ptr<SubstraitParser::SubstraitType>> substrait_type_list;
+  std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
+      substrait_type_list;
   for (auto& type : stypes) {
     auto substrait_type = parseType(type);
     substrait_type_list.push_back(substrait_type);
@@ -91,7 +93,9 @@ SubstraitParser::parseNamedStruct(const substrait::NamedStruct& named_struct) {
   return substrait_type_list;
 }
 
-std::vector<std::string> SubstraitParser::makeNames(const std::string& prefix, int size) {
+std::vector<std::string> SubstraitParser::makeNames(
+    const std::string& prefix,
+    int size) {
   std::vector<std::string> names;
   for (int i = 0; i < size; i++) {
     names.push_back(fmt::format("{}_{}", prefix, i));
@@ -103,6 +107,8 @@ std::string SubstraitParser::makeNodeName(int node_id, int col_idx) {
   return fmt::format("n{}_{}", node_id, col_idx);
 }
 
+// This function is used to find the function name in a function map through
+// function id.
 std::string SubstraitParser::findFunction(
     const std::unordered_map<uint64_t, std::string>& functions_map,
     const uint64_t& id) const {
@@ -114,4 +120,4 @@ std::string SubstraitParser::findFunction(
   return map[id];
 }
 
-} // namespace facebook::velox::substrait
+} // namespace facebook::velox::substraitconverter
