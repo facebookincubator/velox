@@ -22,6 +22,11 @@
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
+DEFINE_bool(
+    allow_accuracy_for_approx_percentile,
+    false,
+    "Allow 'accuracy' parameter for 'approx_percentile' aggregation.");
+
 namespace facebook::velox::aggregate {
 namespace {
 int32_t serializedSize(const folly::TDigest& digest) {
@@ -68,14 +73,22 @@ folly::TDigest deserialize(TByteStream& input) {
 }
 
 template <typename T>
-folly::TDigest singleValueDigest(T v, int64_t count) {
+folly::TDigest singleValueDigest(T v, int64_t count, size_t tDigestMaxSize) {
   return folly::TDigest(
-      {folly::TDigest::Centroid(v, count)}, v * count, count, v, v);
+      {folly::TDigest::Centroid(v, count)},
+      v * count,
+      count,
+      v,
+      v,
+      tDigestMaxSize);
 }
 
 struct TDigestAccumulator {
-  explicit TDigestAccumulator(HashStringAllocator* allocator)
-      : values_{StlAllocator<double>(allocator)},
+  explicit TDigestAccumulator(
+      HashStringAllocator* allocator,
+      size_t tDigestMaxSize)
+      : tDigestMaxSize_{tDigestMaxSize},
+        values_{StlAllocator<double>(allocator)},
         largeCountValues_{StlAllocator<double>(allocator)},
         largeCounts_{StlAllocator<int64_t>(allocator)} {}
 
@@ -155,7 +168,8 @@ struct TDigestAccumulator {
 
   void flush(HashStringAllocator* allocator) {
     if (!values_.empty()) {
-      folly::TDigest digest{hasValue() ? read() : folly::TDigest()};
+      folly::TDigest digest{
+          hasValue() ? read() : folly::TDigest(tDigestMaxSize_)};
       digest = digest.merge(values_);
       values_.clear();
       write(digest, allocator);
@@ -165,8 +179,8 @@ struct TDigestAccumulator {
       std::vector<folly::TDigest> digests;
       digests.reserve(largeCountValues_.size() + 1);
       for (auto i = 0; i < largeCountValues_.size(); i++) {
-        digests.emplace_back(
-            singleValueDigest(largeCountValues_[i], largeCounts_[i]));
+        digests.emplace_back(singleValueDigest(
+            largeCountValues_[i], largeCounts_[i], tDigestMaxSize_));
       }
 
       if (hasValue()) {
@@ -186,6 +200,8 @@ struct TDigestAccumulator {
   // Maximum number of values to accumulate before updating TDigest.
   static const size_t kMaxBufferSize = 4096;
 
+  size_t tDigestMaxSize_{100};
+
   HashStringAllocator::Header* begin_{nullptr};
 
   std::vector<double, StlAllocator<double>> values_;
@@ -202,8 +218,13 @@ struct TDigestAccumulator {
 template <typename T>
 class ApproxPercentileAggregate : public exec::Aggregate {
  public:
-  ApproxPercentileAggregate(bool hasWeight, const TypePtr& resultType)
-      : exec::Aggregate(resultType), hasWeight_{hasWeight} {}
+  ApproxPercentileAggregate(
+      bool hasWeight,
+      bool hasAccuracy,
+      const TypePtr& resultType)
+      : exec::Aggregate(resultType),
+        hasWeight_{hasWeight},
+        hasAccuracy_{hasAccuracy} {}
 
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TDigestAccumulator);
@@ -215,7 +236,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      new (group + offset_) TDigestAccumulator(allocator_);
+      new (group + offset_) TDigestAccumulator(allocator_, tDigestMaxSize_);
     }
   }
 
@@ -452,6 +473,23 @@ class ApproxPercentileAggregate : public exec::Aggregate {
       decodedWeight_.decode(*args[argIndex++], rows, true);
     }
     decodedPercentile_.decode(*args[argIndex++], rows, true);
+    if (hasAccuracy_) {
+      VELOX_CHECK(
+          FLAGS_allow_accuracy_for_approx_percentile,
+          "Accuracy argument for 'approx_percentile' is now allowed "
+          "as per 'allow_accuracy_for_approx_percentile' flag");
+      // Convert accuracy to the max size of TDigest with some limits.
+      DecodedVector decodedAccuracy;
+      decodedAccuracy.decode(*args[argIndex++], rows, true);
+      VELOX_CHECK(
+          decodedAccuracy.isConstantMapping(),
+          "Accuracy argument must be constant for all input rows");
+      // TODO(spershin): We need to use a formula that provides a certain
+      // accuracy guarantees to the users.
+      const auto accuracy = decodedAccuracy.valueAt<double>(0);
+      tDigestMaxSize_ =
+          std::min(10'000UL, std::max(100UL, size_t(1 / 10 * accuracy)));
+    }
 
     // TODO Add support for accuracy parameter
     VELOX_CHECK_EQ(argIndex, args.size());
@@ -481,17 +519,84 @@ class ApproxPercentileAggregate : public exec::Aggregate {
   }
 
   const bool hasWeight_;
+  const bool hasAccuracy_;
   double percentile_{-1.0};
   DecodedVector decodedValue_;
   DecodedVector decodedWeight_;
   DecodedVector decodedPercentile_;
   DecodedVector decodedDigest_;
+  /// Depending on optional accuracy, default is 100.
+  size_t tDigestMaxSize_{100};
 };
+
+/// Check for proper types and detemrine if we have 'weight' and 'accuracy'.
+void checkApproxPercentileArguments(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes,
+    bool isRawInput,
+    bool& hasWeight,
+    bool& hasAccuracy) {
+  const auto numArgs = argTypes.size();
+  size_t idxPercentile{1};
+  size_t idxAccuracy{2};
+  if (numArgs == 3) {
+    if (argTypes[1]->kind() == TypeKind::BIGINT) {
+      hasWeight = true;
+      idxPercentile = 2;
+    } else {
+      hasAccuracy = true;
+    }
+  } else if (numArgs == 4) {
+    hasWeight = true;
+    hasAccuracy = true;
+    idxPercentile = 2;
+    idxAccuracy = 3;
+  }
+
+  if (isRawInput) {
+    VELOX_USER_CHECK_GE(numArgs, 2, "{} takes 2, 3 or 4 arguments", name);
+    VELOX_USER_CHECK_LE(numArgs, 4, "{} takes 2, 3 or 4 arguments", name);
+
+    if (hasWeight) {
+      VELOX_USER_CHECK_EQ(
+          argTypes[1]->kind(),
+          TypeKind::BIGINT,
+          "The type of the weight argument of {} must be BIGINT",
+          name);
+    }
+
+    if (hasAccuracy) {
+      VELOX_USER_CHECK_EQ(
+          argTypes[idxAccuracy]->kind(),
+          TypeKind::DOUBLE,
+          "The type of the accuracy argument of {} must be DOUBLE",
+          name);
+    }
+
+    VELOX_USER_CHECK_EQ(
+        argTypes[idxPercentile]->kind(),
+        TypeKind::DOUBLE,
+        "The type of the percentile argument of {} must be DOUBLE",
+        name);
+  } else {
+    VELOX_USER_CHECK_EQ(
+        numArgs,
+        1,
+        "The number of partial result arguments for {} must be 1",
+        name);
+    VELOX_USER_CHECK_GE(
+        argTypes[0]->kind(),
+        TypeKind::VARBINARY,
+        "The type of partial result for {} must be VARBINARY",
+        name);
+  }
+}
 
 bool registerApproxPercentile(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& inputType :
        {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
+    // approx_percentile(x, percentage) → [same as x]
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(inputType)
                              .intermediateType("varbinary")
@@ -499,6 +604,7 @@ bool registerApproxPercentile(const std::string& name) {
                              .argumentType("double")
                              .build());
 
+    // approx_percentile(x, w, percentage) → [same as x]
     signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                              .returnType(inputType)
                              .intermediateType("varbinary")
@@ -506,7 +612,27 @@ bool registerApproxPercentile(const std::string& name) {
                              .argumentType("bigint")
                              .argumentType("double")
                              .build());
+
+    // approx_percentile(x, percentage, accuracy) → [same as x]
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .returnType(inputType)
+                             .intermediateType("varbinary")
+                             .argumentType(inputType)
+                             .argumentType("double")
+                             .argumentType("double")
+                             .build());
+
+    // approx_percentile(x, w, percentage, accuracy) → [same as x]
+    signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                             .returnType(inputType)
+                             .intermediateType("varbinary")
+                             .argumentType(inputType)
+                             .argumentType("bigint")
+                             .argumentType("double")
+                             .argumentType("double")
+                             .build());
   }
+
   exec::registerAggregateFunction(
       name,
       std::move(signatures),
@@ -514,44 +640,15 @@ bool registerApproxPercentile(const std::string& name) {
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
-        auto isRawInput = exec::isRawInput(step);
-        auto hasWeight = argTypes.size() == 3;
-
-        if (isRawInput) {
-          VELOX_USER_CHECK_GE(
-              argTypes.size(), 2, "{} takes 2 or 3 arguments", name);
-          VELOX_USER_CHECK_LE(
-              argTypes.size(), 3, "{} takes 2 or 3 arguments", name);
-
-          if (hasWeight) {
-            VELOX_USER_CHECK_EQ(
-                argTypes[1]->kind(),
-                TypeKind::BIGINT,
-                "The type of the weight argument of {} must be BIGINT",
-                name);
-          }
-
-          VELOX_USER_CHECK_EQ(
-              argTypes.back()->kind(),
-              TypeKind::DOUBLE,
-              "The type of the percentile argument of {} must be DOUBLE",
-              name);
-        } else {
-          VELOX_USER_CHECK_EQ(
-              argTypes.size(),
-              1,
-              "The type of partial result for {} must be VARBINARY",
-              name);
-          VELOX_USER_CHECK_GE(
-              argTypes[0]->kind(),
-              TypeKind::VARBINARY,
-              "The type of partial result for {} must be VARBINARY",
-              name);
-        }
+        const auto isRawInput = exec::isRawInput(step);
+        bool hasWeight{false};
+        bool hasAccuracy{false};
+        checkApproxPercentileArguments(
+            name, argTypes, isRawInput, hasWeight, hasAccuracy);
 
         if (!isRawInput && exec::isPartialOutput(step)) {
           return std::make_unique<ApproxPercentileAggregate<double>>(
-              false, VARBINARY());
+              false, false, VARBINARY());
         }
 
         TypePtr type = isRawInput ? argTypes[0] : resultType;
@@ -559,22 +656,22 @@ bool registerApproxPercentile(const std::string& name) {
         switch (type->kind()) {
           case TypeKind::TINYINT:
             return std::make_unique<ApproxPercentileAggregate<int8_t>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           case TypeKind::SMALLINT:
             return std::make_unique<ApproxPercentileAggregate<int16_t>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           case TypeKind::INTEGER:
             return std::make_unique<ApproxPercentileAggregate<int32_t>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           case TypeKind::BIGINT:
             return std::make_unique<ApproxPercentileAggregate<int64_t>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           case TypeKind::REAL:
             return std::make_unique<ApproxPercentileAggregate<float>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           case TypeKind::DOUBLE:
             return std::make_unique<ApproxPercentileAggregate<double>>(
-                hasWeight, resultType);
+                hasWeight, hasAccuracy, resultType);
           default:
             VELOX_USER_FAIL(
                 "Unsupported input type for {} aggregation {}",

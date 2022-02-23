@@ -124,6 +124,15 @@ Approximate Aggregate Functions
     given ``percentage``. The value of ``percentage`` must be between zero and
     one and must be constant for all input rows.
 
+.. function:: approx_percentile(x, percentage, accuracy) → [same as x]
+
+    As approx_percentile(x, percentage), but with a maximum rank error of accuracy.
+    The value of accuracy must be between zero and one (exclusive) and must be
+    constant for all input rows. Note that a lower “accuracy” is really a
+    lower error threshold, and thus more accurate.
+    Note, that accuracy does not provide guarantees, but a lower accuracy does mean
+    a lower error threshold. The default accuracy is 0.01.
+
 .. function:: approx_percentile(x, w, percentage) -> [same as x]
 
     Returns the approximate weighed percentile for all input values of ``x``
@@ -131,6 +140,12 @@ Approximate Aggregate Functions
     an integer value of at least one. It is effectively a replication count for
     the value ``x`` in the percentile set. The value of ``p`` must be between
     zero and one and must be constant for all input rows.
+
+.. function:: approx_percentile(x, w, percentage, accuracy) → [same as x]
+
+    As approx_percentile(x, w, percentage), but with a maximum rank error of accuracy.
+    Note, that accuracy does not provide guarantees, but a lower accuracy does mean
+    a lower error threshold. The default accuracy is 0.01.
 
 Statistical Aggregate Functions
 -------------------------------

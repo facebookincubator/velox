@@ -16,6 +16,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 
+DECLARE_bool(allow_accuracy_for_approx_percentile);
+
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
@@ -26,14 +28,18 @@ namespace {
 class ApproxPercentileTest : public AggregationTestBase {
  protected:
   template <typename T>
-  void
-  testGlobalAgg(const VectorPtr& values, double percentile, T expectedResult) {
-    auto op =
-        PlanBuilder()
-            .values({makeRowVector({values})})
-            .singleAggregation(
-                {}, {fmt::format("approx_percentile(c0, {})", percentile)})
-            .planNode();
+  void testGlobalAgg(
+      const VectorPtr& values,
+      double percentile,
+      const char* accuracy,
+      T expectedResult) {
+    auto op = PlanBuilder()
+                  .values({makeRowVector({values})})
+                  .singleAggregation(
+                      {},
+                      {fmt::format(
+                          "approx_percentile(c0, {}{})", percentile, accuracy)})
+                  .planNode();
 
     assertQuery(
         op,
@@ -45,7 +51,9 @@ class ApproxPercentileTest : public AggregationTestBase {
     op = PlanBuilder()
              .values({makeRowVector({values})})
              .partialAggregation(
-                 {}, {fmt::format("approx_percentile(c0, {})", percentile)})
+                 {},
+                 {fmt::format(
+                     "approx_percentile(c0, {}{})", percentile, accuracy)})
              .finalAggregation()
              .planNode();
 
@@ -56,16 +64,19 @@ class ApproxPercentileTest : public AggregationTestBase {
   }
 
   template <typename T>
-  void testGlobalAgg(
+  void testGlobalAggWeights(
       const VectorPtr& values,
       const VectorPtr& weights,
       double percentile,
+      const char* accuracy,
       T expectedResult) {
     auto op =
         PlanBuilder()
             .values({makeRowVector({values, weights})})
             .singleAggregation(
-                {}, {fmt::format("approx_percentile(c0, c1, {})", percentile)})
+                {},
+                {fmt::format(
+                    "approx_percentile(c0, c1, {}{})", percentile, accuracy)})
             .planNode();
 
     assertQuery(
@@ -78,7 +89,9 @@ class ApproxPercentileTest : public AggregationTestBase {
     op = PlanBuilder()
              .values({makeRowVector({values, weights})})
              .partialAggregation(
-                 {}, {fmt::format("approx_percentile(c0, c1, {})", percentile)})
+                 {},
+                 {fmt::format(
+                     "approx_percentile(c0, c1, {}{})", percentile, accuracy)})
              .finalAggregation()
              .planNode();
 
@@ -146,23 +159,27 @@ class ApproxPercentileTest : public AggregationTestBase {
 };
 
 TEST_F(ApproxPercentileTest, globalAgg) {
+  FLAGS_allow_accuracy_for_approx_percentile = true;
   vector_size_t size = 1'000;
   auto values =
       makeFlatVector<int32_t>(size, [](auto row) { return row % 23; });
   auto weights =
       makeFlatVector<int64_t>(size, [](auto row) { return row % 23 + 1; });
 
-  testGlobalAgg(values, 0.5, 10);
-  testGlobalAgg(values, weights, 0.5, 15);
+  testGlobalAgg(values, 0.5, "", 10);
+  testGlobalAgg(values, 0.5, ", 0.0001", 10);
+  testGlobalAggWeights(values, weights, 0.5, "", 15);
+  testGlobalAggWeights(values, weights, 0.5, ", 0.0001", 15);
 
   auto valuesWithNulls = makeFlatVector<int32_t>(
       size, [](auto row) { return row % 23; }, nullEvery(7));
   auto weightsWithNulls = makeFlatVector<int64_t>(
       size, [](auto row) { return row % 23 + 1; }, nullEvery(11));
 
-  testGlobalAgg(valuesWithNulls, 0.5, 10);
-  testGlobalAgg(valuesWithNulls, weights, 0.5, 15);
-  testGlobalAgg(valuesWithNulls, weightsWithNulls, 0.5, 15);
+  testGlobalAgg(valuesWithNulls, 0.5, "", 10);
+  testGlobalAgg(valuesWithNulls, 0.5, ", 0.01", 10);
+  testGlobalAggWeights(valuesWithNulls, weights, 0.5, "", 15);
+  testGlobalAggWeights(valuesWithNulls, weightsWithNulls, 0.5, ", 0.001", 15);
 }
 
 TEST_F(ApproxPercentileTest, groupByAgg) {
@@ -201,6 +218,7 @@ TEST_F(ApproxPercentileTest, groupByAgg) {
 
 // Test large values of "weight" parameter used in global aggregation.
 TEST_F(ApproxPercentileTest, largeWeightsGlobal) {
+  FLAGS_allow_accuracy_for_approx_percentile = true;
   vector_size_t size = 1'000;
   auto values =
       makeFlatVector<int32_t>(size, [](auto row) { return row % 23; });
@@ -208,12 +226,14 @@ TEST_F(ApproxPercentileTest, largeWeightsGlobal) {
   // All weights are very large and are about the same.
   auto weights = makeFlatVector<int64_t>(
       size, [](auto row) { return 1'000'000 + row % 23 + 1; });
-  testGlobalAgg(values, weights, 0.5, 10);
+  testGlobalAggWeights(values, weights, 0.5, "", 10);
+  testGlobalAggWeights(values, weights, 0.5, ", 0.001", 10);
 
   // Weights are large, but different.
   weights = makeFlatVector<int64_t>(
       size, [](auto row) { return 1'000 * (row % 23 + 1); });
-  testGlobalAgg(values, weights, 0.5, 15);
+  testGlobalAggWeights(values, weights, 0.5, "", 15);
+  testGlobalAggWeights(values, weights, 0.5, ", 0.00001", 15);
 }
 
 // Test large values of "weight" parameter used in group-by.
