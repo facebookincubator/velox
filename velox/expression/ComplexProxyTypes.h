@@ -16,6 +16,8 @@
 
 #pragma once
 #include <folly/Likely.h>
+#include <optional>
+#include <tuple>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
@@ -33,7 +35,7 @@ struct VectorWriter;
 
 // Lightweight object that can be used as a proxy for array primitive elements.
 // It is returned by ArrayProxy::operator()[].
-template <typename T>
+template <typename T, bool allowNull = true>
 struct PrimitiveWriterProxy {
   using vector_t = typename TypeToFlatVector<T>::type;
   using element_t = typename CppToType<T>::NativeType;
@@ -42,6 +44,7 @@ struct PrimitiveWriterProxy {
       : flatVector_(flatVector), index_(index) {}
 
   void operator=(std::nullopt_t) {
+    static_assert(allowNull, "not allowed to write null to this primitive");
     flatVector_->setNull(index_, true);
   }
 
@@ -50,6 +53,8 @@ struct PrimitiveWriterProxy {
   }
 
   void operator=(const std::optional<element_t>& value) {
+    static_assert(allowNull, "not allowed to write null to this primitive");
+
     if (value.has_value()) {
       flatVector_->set(index_, value.value());
     } else {
