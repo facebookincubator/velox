@@ -1,0 +1,126 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <folly/Benchmark.h>
+#include <folly/init/Init.h>
+#include <gflags/gflags.h>
+
+#include "velox/common/file/FileSystems.h"
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Split.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+using namespace facebook::velox::exec::test;
+using namespace facebook::velox::dwio::common;
+
+namespace {
+static bool notEmpty(const char* /*flagName*/, const std::string& value) {
+  return !value.empty();
+}
+} // namespace
+
+DEFINE_string(data_path, "", "Root path of TPC-H data");
+DEFINE_int32(query, 1, "Query number");
+DEFINE_int32(num_drivers, 4, "Number of drivers");
+DEFINE_string(format, "parquet", "Data format");
+DEFINE_bool(verbose, false, "Print benchmark results in detail");
+
+DEFINE_validator(data_path, &notEmpty);
+
+class TpchBenchmark {
+ public:
+  void initialize() {
+    functions::prestosql::registerAllScalarFunctions();
+    filesystems::registerLocalFileSystem();
+    parquet::registerParquetReaderFactory();
+    dwrf::registerDwrfReaderFactory();
+    auto hiveConnector =
+        connector::getConnectorFactory(
+            connector::hive::HiveConnectorFactory::kHiveConnectorName)
+            ->newConnector(kHiveConnectorId, nullptr);
+    connector::registerConnector(hiveConnector);
+  }
+
+  std::shared_ptr<Task> run(const TpchPlan& tpchPlan) {
+    CursorParameters params;
+    params.maxDrivers = FLAGS_num_drivers;
+    params.numResultDrivers = 1;
+    params.planNode = tpchPlan.plan;
+    constexpr int kNumSplits = 10;
+
+    bool noMoreSplits = false;
+    auto addSplits = [&](exec::Task* task) {
+      if (!noMoreSplits) {
+        for (const auto entry : tpchPlan.dataFiles) {
+          for (const auto path : entry.second) {
+            auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
+                path, kNumSplits, tpchPlan.dataFileFormat);
+            for (const auto& split : splits) {
+              task->addSplit(entry.first, exec::Split(split));
+            }
+          }
+          task->noMoreSplits(entry.first);
+        }
+      }
+      noMoreSplits = true;
+    };
+    auto [cursor, results] = readCursor(params, addSplits);
+    return cursor->task();
+  }
+};
+
+TpchBenchmark benchmark;
+TpchQueryBuilder queryBuilder(toFileFormat(FLAGS_format));
+
+BENCHMARK(q1) {
+  const auto planContext = queryBuilder.getQueryPlan(1);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q6) {
+  const auto planContext = queryBuilder.getQueryPlan(6);
+  benchmark.run(planContext);
+}
+
+int main(int argc, char** argv) {
+  folly::init(&argc, &argv, false);
+  benchmark.initialize();
+  queryBuilder.initialize(FLAGS_data_path);
+  if (!FLAGS_verbose) {
+    folly::runBenchmarks();
+  } else {
+    const auto queryPlan = queryBuilder.getQueryPlan(FLAGS_query);
+    const auto task = benchmark.run(queryPlan);
+    const auto stats = task->taskStats();
+    std::cout << fmt::format(
+                     "Execution time: {} ms",
+                     (stats.executionEndTimeMs - stats.executionStartTimeMs))
+              << std::endl;
+    std::cout << fmt::format(
+                     "Splits total: {}, finished: {}",
+                     stats.numTotalSplits,
+                     stats.numFinishedSplits)
+              << std::endl;
+    std::cout << printPlanWithStats(*queryPlan.plan, stats) << std::endl;
+  }
+}
