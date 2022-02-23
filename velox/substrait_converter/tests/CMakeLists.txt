@@ -14,7 +14,6 @@
 
 add_executable(velox_plan_conversion_test PlanConversionTest.cpp)
 add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
-#add_test(velox_plan_conversion_test velox_plan_conversion_test)
 
 add_test(
   NAME velox_plan_conversion_test
