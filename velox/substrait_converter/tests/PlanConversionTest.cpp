@@ -172,16 +172,24 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
       std::vector<std::string> paths;
       planConverter->getPaths(&paths);
+      // In test, need to get the absolute path of the generated ORC file.
+      std::vector<std::string> absolutePaths;
+      for (auto path : paths) {
+        std::string currentPath = fs::current_path().c_str();
+        std::string absolutePath = "file://" + currentPath + path;
+        absolutePaths.push_back(absolutePath);
+      }
       std::vector<u_int64_t> starts;
       planConverter->getStarts(&starts);
       std::vector<u_int64_t> lengths;
       planConverter->getLengths(&lengths);
       auto resIter = std::make_shared<WholeComputeResultIterator>(
-          planNode, partitionIndex, paths, starts, lengths);
+          planNode, partitionIndex, absolutePaths, starts, lengths);
       return resIter;
     }
   };
 
+  // This method can be used to create a Fixed-width type of Vector without Null values.
   template <typename T>
   VectorPtr createSpecificScalar(
       size_t size,
@@ -197,6 +205,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         &pool, nulls, size, values, std::vector<BufferPtr>{});
   }
 
+  // This method can be used to create a String type of Vector without Null values.
   VectorPtr createSpecificStringVector(
       size_t size,
       std::vector<std::string> vals,
@@ -246,8 +255,9 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
  select sum(l_extendedprice*l_discount) as revenue from lineitem where
  l_shipdate_new >= 8766 and l_shipdate_new < 9131 and l_discount between .06 -
  0.01 and .06 + 0.01 and l_quantity < 24
- 
- * Tested Velox computings include: TableScan (Filter Pushdown) + Project + Aggregate
+
+ * Tested Velox computings include: TableScan (Filter Pushdown) + Project +
+ Aggregate
  * Output: the Velox computed Aggregation result
 */
 TEST_P(PlanConversionTest, queryTest) {
@@ -436,9 +446,9 @@ TEST_P(PlanConversionTest, queryTest) {
       &(*pool), type, nulls, 10, vectors, nullCount);
   std::vector<RowVectorPtr> batches;
   batches.push_back(rv);
-
+  std::string currentPath = fs::current_path().c_str();
   auto sink = std::make_unique<facebook::velox::dwio::common::FileSink>(
-      "/tmp/mock_lineitem.orc");
+      currentPath + "/mock_lineitem.orc");
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
   const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max();
 
@@ -456,10 +466,17 @@ TEST_P(PlanConversionTest, queryTest) {
     writer->write(batches[i]);
   }
   writer->close();
-  // Begin to trigger Velox's computing based on generated ORC file
-  std::string current_path = fs::current_path().c_str();
+  // Find the Velox path according current path.
+  std::string veloxPath;
+  size_t pos = 0;
+  if ((pos = currentPath.find("velox")) != std::string::npos) {
+    veloxPath = currentPath.substr(0, pos);
+  } else {
+    throw new std::runtime_error("Current path is not a valid Velox path.");
+  }
+  // Begin to trigger Velox's computing with the Substrait plan.
   std::string subPlanPath =
-      current_path + "/../../../../../velox/substrait_converter/tests/sub.json";
+      veloxPath + "velox/velox/substrait_converter/tests/sub.json";
   auto veloxConverter = std::make_shared<VeloxConverter>();
   auto resIter = veloxConverter->getResIter(subPlanPath);
   while (resIter->HasNext()) {

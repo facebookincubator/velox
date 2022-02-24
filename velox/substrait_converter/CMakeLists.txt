@@ -18,41 +18,37 @@ set(substrait_proto_directory ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait)
 set(PROTO_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto/")
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/proto/substrait)
 file(GLOB PROTO_FILES ${substrait_proto_directory}/*.proto
-                      ${substrait_proto_directory}/extensions/*.proto)
-FOREACH(PROTO ${PROTO_FILES})
+     ${substrait_proto_directory}/extensions/*.proto)
+foreach(PROTO ${PROTO_FILES})
   file(RELATIVE_PATH REL_PROTO ${substrait_proto_directory} ${PROTO})
   string(REGEX REPLACE "\\.proto" "" PROTO_NAME ${REL_PROTO})
-  LIST(APPEND PROTO_SRCS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.cc")
-  LIST(APPEND PROTO_HDRS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.h")
-ENDFOREACH()
+  list(APPEND PROTO_SRCS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.cc")
+  list(APPEND PROTO_HDRS "${PROTO_OUTPUT_DIR}/substrait/${PROTO_NAME}.pb.h")
+endforeach()
 set(PROTO_OUTPUT_FILES ${PROTO_HDRS} ${PROTO_SRCS})
 set_source_files_properties(${PROTO_OUTPUT_FILES} PROPERTIES GENERATED TRUE)
 
-get_filename_component(PROTO_DIR ${substrait_proto_directory}/,
-                       DIRECTORY)
+get_filename_component(PROTO_DIR ${substrait_proto_directory}/, DIRECTORY)
 
 # Generate Substrait hearders
-add_custom_command(OUTPUT ${PROTO_OUTPUT_FILES}
-                   COMMAND protoc
-                           --proto_path
-                           ${proto_directory}/
-                           --cpp_out
-                           ${PROTO_OUTPUT_DIR}
-                           ${PROTO_FILES}
-                   DEPENDS  ${PROTO_DIR}
-                   COMMENT "Running PROTO compiler"
-                   VERBATIM)
+add_custom_command(
+  OUTPUT ${PROTO_OUTPUT_FILES}
+  COMMAND protoc --proto_path ${proto_directory}/ --cpp_out ${PROTO_OUTPUT_DIR}
+          ${PROTO_FILES}
+  DEPENDS ${PROTO_DIR}
+  COMMENT "Running PROTO compiler"
+  VERBATIM)
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
 
-set(SRCS ${PROTO_SRCS}
-         SubstraitUtils.cpp
-         SubstraitToVeloxExpr.cpp
+set(SRCS ${PROTO_SRCS} SubstraitUtils.cpp SubstraitToVeloxExpr.cpp
          SubstraitToVeloxPlan.cpp)
 add_library(velox_substrait_plan_converter ${SRCS})
-target_include_directories(velox_substrait_plan_converter PUBLIC ${PROTO_OUTPUT_DIR})
-target_link_libraries(velox_substrait_plan_converter velox_connector velox_dwio_dwrf_common)
+target_include_directories(velox_substrait_plan_converter
+                           PUBLIC ${PROTO_OUTPUT_DIR})
+target_link_libraries(velox_substrait_plan_converter velox_connector
+                      velox_dwio_dwrf_common)
 
 if(${VELOX_BUILD_TESTING})
- add_subdirectory(tests)
+  add_subdirectory(tests)
 endif()

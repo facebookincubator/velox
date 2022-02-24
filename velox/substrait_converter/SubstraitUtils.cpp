@@ -51,7 +51,7 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       break;
     }
     default:
-      std::cout << "Type not supported" << std::endl;
+      throw new std::runtime_error("Type not supported");
       break;
   }
   bool nullable;

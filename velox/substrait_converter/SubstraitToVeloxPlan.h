@@ -16,12 +16,6 @@
 
 #pragma once
 
-#include <arrow/array/array_binary.h>
-#include <arrow/array/array_primitive.h>
-#include <arrow/array/data.h>
-#include <arrow/array/util.h>
-#include <arrow/record_batch.h>
-#include <arrow/type_fwd.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 
 #include "SubstraitToVeloxExpr.h"
