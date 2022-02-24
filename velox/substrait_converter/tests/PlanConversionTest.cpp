@@ -189,7 +189,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
     }
   };
 
-  // This method can be used to create a Fixed-width type of Vector without Null values.
+  // This method can be used to create a Fixed-width type of Vector without Null
+  // values.
   template <typename T>
   VectorPtr createSpecificScalar(
       size_t size,
@@ -205,7 +206,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         &pool, nulls, size, values, std::vector<BufferPtr>{});
   }
 
-  // This method can be used to create a String type of Vector without Null values.
+  // This method can be used to create a String type of Vector without Null
+  // values.
   VectorPtr createSpecificStringVector(
       size_t size,
       std::vector<std::string> vals,
@@ -469,14 +471,17 @@ TEST_P(PlanConversionTest, queryTest) {
   // Find the Velox path according current path.
   std::string veloxPath;
   size_t pos = 0;
-  if ((pos = currentPath.find("velox")) != std::string::npos) {
-    veloxPath = currentPath.substr(0, pos);
+  if ((pos = currentPath.find("project")) != std::string::npos) {
+    // In Github test, the Velox home is /root/project.
+    veloxPath = currentPath.substr(0, pos) + "project";
+  } else if ((pos = currentPath.find("velox")) != std::string::npos) {
+    veloxPath = currentPath.substr(0, pos) + "velox";
   } else {
     throw new std::runtime_error("Current path is not a valid Velox path.");
   }
   // Begin to trigger Velox's computing with the Substrait plan.
   std::string subPlanPath =
-      veloxPath + "velox/velox/substrait_converter/tests/sub.json";
+      veloxPath + "/velox/substrait_converter/tests/sub.json";
   auto veloxConverter = std::make_shared<VeloxConverter>();
   auto resIter = veloxConverter->getResIter(subPlanPath);
   while (resIter->HasNext()) {
