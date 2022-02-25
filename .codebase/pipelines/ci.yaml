@@ -19,7 +19,23 @@ jobs:
         commands:
           - _build/debug/velox/examples/velox_example_expression_eval
           - _build/debug/velox/examples/velox_example_opaque_type
-
+  hdfs-build:
+    name: hdfs tests
+    image: hub.byted.org/base/presto.cpp.ci:d14d1e4af28865f7b5f933a466d9c4e1
+    working-directory: velox
+    steps:
+      - name: Get Hdfs Dependencies
+        commands:
+          - git clone --single-branch https://code.byted.org/cpputil/infsec.git velox/connectors/hive/storage_adapters/hdfs/infsec
+          - git clone --single-branch --branch hdfs_for_velox https://code.byted.org/dp/libhdfs3.git velox/connectors/hive/storage_adapters/hdfs/libhdfs3/
+          - git clone --single-branch --branch 1.0.0 https://code.byted.org/cpputil/consul.git velox/connectors/hive/storage_adapters/hdfs/service_discover/consul
+          - git clone --single-branch https://code.byted.org/cpputil/minizip.git velox/connectors/hive/storage_adapters/hdfs/service_discover/minizip
+      - name: Build
+        commands:
+          - make hdfs-debug-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+      - name: Run Hdfs Tests
+        commands:
+          - make NUM_THREADS=16 hdfstest
   format-check:
     name: format check
     image: hub.byted.org/base/presto.cpp.ci:d14d1e4af28865f7b5f933a466d9c4e1

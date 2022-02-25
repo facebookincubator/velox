@@ -17,6 +17,7 @@
 
 #include <unistd.h>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <string>
 
@@ -33,7 +34,12 @@ class TempFilePath {
     unlink(path.c_str());
     close(fd);
   }
-
+  void append(std::string data) {
+    std::ofstream file(path, std::ios_base::app);
+    file << data;
+    file.flush();
+    file.close();
+  }
   const std::string path;
 
   TempFilePath(const TempFilePath&) = delete;
