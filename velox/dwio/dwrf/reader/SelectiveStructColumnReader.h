@@ -114,6 +114,13 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
     }
   }
 
+  void setRowGroupSpecificFilters();
+
+  void moveScanSpec(ColumnReader& other) override {
+    auto otherStruct = dynamic_cast<SelectiveStructColumnReader*>(&other);
+    scanSpec_->moveAdaptation(*otherStruct->scanSpec_);
+  }
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<SelectiveColumnReader>> children_;
@@ -124,6 +131,7 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
 
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
+  int32_t previousRowGroup_{-1};
 };
 
 } // namespace facebook::velox::dwrf

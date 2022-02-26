@@ -18,6 +18,8 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 
+DEFINE_bool(enable_split_preload, false, "Prefetch split metadata");
+
 namespace facebook::velox::exec {
 
 TableScan::TableScan(
@@ -45,7 +47,12 @@ RowVectorPtr TableScan::getOutput() {
     if (needNewSplit_) {
       exec::Split split;
       auto reason = driverCtx_->task->getSplitOrFuture(
-          driverCtx_->splitGroupId, planNodeId_, split, blockingFuture_);
+          driverCtx_->splitGroupId,
+          planNodeId_,
+          split,
+          blockingFuture_,
+          maxPreloadedSplits_,
+          splitPreloader_);
       if (reason != BlockingReason::kNotBlocked) {
         return nullptr;
       }
@@ -85,13 +92,19 @@ RowVectorPtr TableScan::getOutput() {
             "Got splits with different connector IDs");
       }
 
-      dataSource_->addSplit(connectorSplit);
+      if (connectorSplit->dataSource) {
+        auto prepared = *connectorSplit->dataSource->move().release();
+        dataSource_->setFromDataSource(std::move(prepared));
+      } else {
+        dataSource_->addSplit(connectorSplit);
+      }
       ++stats_.numSplits;
       setBatchSize();
     }
 
     const auto ioTimeStartMicros = getCurrentTimeMicro();
     auto data = dataSource_->next(readBatchSize_);
+    checkPreload();
     stats().addRuntimeStat(
         "dataSourceWallNanos",
         (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000);
@@ -109,6 +122,40 @@ RowVectorPtr TableScan::getOutput() {
     driverCtx_->task->splitFinished(planNodeId_, currentSplitGroupId_);
     currentSplitGroupId_ = -1;
     needNewSplit_ = true;
+  }
+}
+
+void TableScan::preload(std::shared_ptr<connector::ConnectorSplit> split) {
+  using DataSourcePtr = std::shared_ptr<connector::DataSource>;
+  split->dataSource =
+      std::make_shared<AsyncSource<DataSourcePtr>>([type = outputType_,
+                                                    table = tableHandle_,
+                                                    columns = columnHandles_,
+                                                    connector = connector_,
+                                                    ctx = connectorQueryCtx_,
+                                                    split]() {
+        auto value = std::make_unique<DataSourcePtr>();
+        *value = connector->createDataSource(type, table, columns, ctx.get());
+        (*value)->addSplit(split);
+        return value;
+      });
+}
+
+void TableScan::checkPreload() {
+  auto executor = connector_->executor();
+  if (!FLAGS_enable_split_preload || !executor ||
+      !connector_->supportsSplitPreload()) {
+    return;
+  }
+  if (dataSource_->allPrefetchIssued()) {
+    maxPreloadedSplits_ = driverCtx_->task->numDrivers(driverCtx_->driver);
+    if (!splitPreloader_) {
+      splitPreloader_ =
+          [executor, this](std::shared_ptr<connector::ConnectorSplit> split) {
+            preload(split);
+            executor->add([split]() { split->dataSource->prepare(); });
+          };
+    }
   }
 }
 

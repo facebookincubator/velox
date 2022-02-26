@@ -18,6 +18,7 @@ add_executable(
   ExceptionTests.cpp
   RangeTest.cpp
   BitUtilTest.cpp
+  AsyncSourceTest.cpp
   BloomFilterTest.cpp
   CoalesceIoTest.cpp
   RawVectorTest.cpp

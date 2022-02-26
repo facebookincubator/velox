@@ -71,4 +71,25 @@ void VectorStreamGroup::read(
   getVectorSerde()->deserialize(source, pool, type, result);
 }
 
+std::unique_ptr<folly::IOBuf> VectorStreamGroup::getIOBuf() {
+  if (!iobuf_) {
+    makeIOBuf();
+  }
+  return iobuf_->clone();
+}
+
+void VectorStreamGroup::makeIOBuf() {
+  VELOX_CHECK(!iobuf_);
+  IOBufOutputStream stream(*mappedMemory(), nullptr, StreamArena::size());
+  std::vector<memory::MappedMemory::Allocation> allocations;
+  std::vector<std::string> tinyAllocations;
+  resetAllocations(allocations, tinyAllocations);
+  flush(&stream);
+  serializer_ = nullptr;
+  iobuf_ = stream.getIOBuf();
+  for (auto& buf : *iobuf_) {
+    iobufBytes_ += buf.size();
+  }
+}
+
 } // namespace facebook::velox

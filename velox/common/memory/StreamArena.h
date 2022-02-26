@@ -52,10 +52,22 @@ class StreamArena {
     return mappedMemory_;
   }
 
+  // Returns the held memory in 'allocations' and
+  // 'tinyAllocations'. Resets held memory to empty. The use case is
+  // converting a set of serialized streams to the final
+  // message. First the allocations for the individually serialized
+  // streams are moved out. Then the final message is written, backed
+  // by new allocations from the same MappedMemory. After this, the
+  // individually serialized streams are dropped and 'this' is left
+  // holding the memory for the final message.
+  void resetAllocations(
+      std::vector<memory::MappedMemory::Allocation>& allocations,
+      std::vector<std::string>& tiny);
+
  private:
   memory::MappedMemory* mappedMemory_;
   // All allocations.
-  std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
+  std::vector<memory::MappedMemory::Allocation> allocations_;
   // The allocation from which pages are given out. Moved to 'allocations_' when
   // used up.
   memory::MappedMemory::Allocation allocation_;

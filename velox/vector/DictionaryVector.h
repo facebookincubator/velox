@@ -233,6 +233,7 @@ class DictionaryVector : public SimpleVector<T> {
     if (indexType_ == TypeKind::SMALLINT) {
       return reinterpret_cast<const uint16_t*>(rawIndices_)[idx];
     }
+    VELOX_CHECK_LT((uint32_t)idx, indices_->size() / sizeof(vector_size_t));
     return reinterpret_cast<const uint8_t*>(rawIndices_)[idx];
   }
 

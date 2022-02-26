@@ -16,6 +16,12 @@
 
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
 #include "velox/dwio/dwrf/reader/ColumnLoader.h"
+#include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
+
+DEFINE_bool(
+    enable_specialize_filters,
+    true,
+    "Enable specializing filters by column stats");
 
 namespace facebook::velox::dwrf {
 
@@ -131,6 +137,7 @@ void SelectiveStructColumnReader::next(
   if (numValues > oldSize) {
     std::iota(&rows_[oldSize], &rows_[rows_.size()], oldSize);
   }
+  setRowGroupSpecificFilters();
   read(readOffset_, rows_, nullptr);
   getValues(outputRows(), &result);
 }
@@ -238,6 +245,29 @@ void SelectiveStructColumnReader::getValues(RowSet rows, VectorPtr* result) {
                 this, children_[index].get(), numReads_));
       } else {
         children_[index]->getValues(rows, &resultRow->childAt(channel));
+      }
+    }
+  }
+}
+
+void SelectiveStructColumnReader::setRowGroupSpecificFilters() {
+  if (!FLAGS_enable_specialize_filters) {
+    return;
+  }
+  auto rowGroup = readOffset_ / rowsPerRowGroup_;
+  if (rowGroup == previousRowGroup_) {
+    return;
+  }
+  previousRowGroup_ = rowGroup;
+  auto& childSpecs = scanSpec_->children();
+  for (auto& childSpec : childSpecs) {
+    if (childSpec->filter()) {
+      auto& reader = children_[childSpec->subscript()];
+      auto rowGroupIndex = readOffset_ / rowsPerRowGroup_;
+      auto stats = reader->rowGroupStats(rowGroupIndex);
+      if (stats &&
+          dynamic_cast<SelectiveIntegerDirectColumnReader*>(reader.get())) {
+        childSpec->specializeFilter(reader->type(), stats);
       }
     }
   }

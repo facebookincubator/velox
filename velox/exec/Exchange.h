@@ -32,11 +32,17 @@ class SerializedPage {
       std::istream* stream,
       uint64_t size,
       memory::MappedMemory* memory);
+  // Construct from IOBuf chain.
+  SerializedPage(std::unique_ptr<folly::IOBuf> iobuf);
 
   ~SerializedPage() = default;
 
   uint64_t byteSize() const {
-    return allocation_.byteSize();
+    if (allocation_) {
+      return allocation_->byteSize();
+    } else {
+      return iobufBytes_;
+    }
   }
 
   // Makes 'input' ready for deserializing 'this' with
@@ -45,17 +51,14 @@ class SerializedPage {
 
   static std::unique_ptr<SerializedPage> fromVectorStreamGroup(
       VectorStreamGroup* group) {
-    std::stringstream out;
-    OutputStreamListener listener;
-    OutputStream outputStream(&out, &listener);
-    group->flush(&outputStream);
-    return std::make_unique<SerializedPage>(
-        &out, out.tellp(), group->mappedMemory());
+    return std::make_unique<SerializedPage>(group->getIOBuf());
   }
 
  private:
-  memory::MappedMemory::Allocation allocation_;
+  std::unique_ptr<memory::MappedMemory::Allocation> allocation_;
   std::vector<ByteRange> ranges_;
+  std::unique_ptr<folly::IOBuf> iobuf_;
+  int64_t iobufBytes_{0};
 };
 
 // Queue of results retrieved from source. Owned by shared_ptr by
@@ -82,6 +85,7 @@ class ExchangeQueue {
       checkComplete();
       return;
     }
+    byteSize_ += page->byteSize();
     queue_.push_back(std::move(page));
     if (!promises_.empty()) {
       // Resume one of the waiting drivers.
@@ -121,7 +125,16 @@ class ExchangeQueue {
     auto page = std::move(queue_.front());
     queue_.pop_front();
     *atEnd = false;
+    byteSize_ -= page->byteSize();
     return page;
+  }
+
+  uint64_t byteSize() const {
+    return byteSize_;
+  }
+
+  uint64_t maxSize() const {
+    return maxSize_;
   }
 
   void addSource() {
@@ -159,6 +172,9 @@ class ExchangeQueue {
   // When set, all promises will be realized and the next dequeue will
   // throw an exception with this message.
   std::string error_;
+  // Total size of SerializedPages in queue.
+  uint64_t byteSize_{0};
+  uint64_t maxSize_{128 << 20};
 };
 
 class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {

@@ -35,6 +35,8 @@ struct OperationCounters {
   uint64_t latencyInMs{0};
   uint64_t requestCount{0};
   uint64_t delayInjectedInSecs{0};
+
+  void merge(const OperationCounters& other);
 };
 
 class IoCounter {
@@ -50,6 +52,11 @@ class IoCounter {
   void increment(uint64_t bytes) {
     ++count_;
     bytes_ += bytes;
+  }
+
+  void merge(const IoCounter& other) {
+    bytes_ += other.bytes_;
+    count_ += other.count_;
   }
 
  private:
@@ -101,6 +108,8 @@ class IoStatistics {
       const uint64_t delayInjectedInSecs);
 
   std::unordered_map<std::string, OperationCounters> operationStats() const;
+
+  void merge(const IoStatistics& other);
 
  private:
   std::atomic<uint64_t> rawBytesRead_{0};

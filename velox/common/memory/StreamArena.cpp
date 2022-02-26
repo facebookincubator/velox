@@ -25,14 +25,13 @@ void StreamArena::newRange(int32_t bytes, ByteRange* range) {
   int32_t numRuns = allocation_.numRuns();
   if (currentRun_ >= numRuns) {
     if (numRuns) {
-      allocations_.push_back(std::make_unique<memory::MappedMemory::Allocation>(
-          std::move(allocation_)));
+      allocations_.push_back(std::move(allocation_));
     }
     if (!mappedMemory_->allocate(
             std::max(allocationQuantum_, numPages),
             kVectorStreamOwner,
             allocation_)) {
-      throw std::bad_alloc();
+      VELOX_FAIL("Failed allocation for StreamArena");
     }
     currentRun_ = 0;
     currentPage_ = 0;
@@ -58,4 +57,15 @@ void StreamArena::newTinyRange(int32_t bytes, ByteRange* range) {
   range->buffer = reinterpret_cast<uint8_t*>(tinyRanges_.back().data());
   range->size = bytes;
 }
+void StreamArena::resetAllocations(
+    std::vector<memory::MappedMemory::Allocation>& allocations,
+    std::vector<std::string>& tinyAllocations) {
+  allocations_.emplace_back(std::move(allocation_));
+  allocations = std::move(allocations_);
+  tinyAllocations = std::move(tinyRanges_);
+  currentRun_ = 0;
+  currentPage_ = 0;
+  size_ = 0;
+}
+
 } // namespace facebook::velox

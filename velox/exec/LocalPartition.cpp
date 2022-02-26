@@ -17,6 +17,8 @@
 #include "velox/exec/LocalPartition.h"
 #include "velox/exec/Task.h"
 
+DEFINE_bool(local_partition_copy, true, "copy data in local partitioning");
+
 namespace facebook::velox::exec {
 namespace {
 void notify(std::vector<VeloxPromise<bool>>& promises) {
@@ -283,10 +285,17 @@ wrapChildren(const RowVectorPtr& input, vector_size_t size, BufferPtr indices) {
   std::vector<VectorPtr> wrappedChildren;
   wrappedChildren.reserve(input->type()->size());
   for (auto i = 0; i < input->type()->size(); i++) {
-    wrappedChildren.emplace_back(BaseVector::wrapInDictionary(
-        BufferPtr(nullptr), indices, size, input->childAt(i)));
+    if (!FLAGS_local_partition_copy) {
+      wrappedChildren.emplace_back(BaseVector::wrapInDictionary(
+          BufferPtr(nullptr), indices, size, input->childAt(i)));
+    } else {
+      auto child = input->childAt(i);
+      auto copy = BaseVector::create(child->type(), size, input->pool());
+      SelectivityVector inputRows(size);
+      copy->copy(child.get(), inputRows, indices->as<vector_size_t>());
+      wrappedChildren.emplace_back(copy);
+    }
   }
-
   return std::make_shared<RowVector>(
       input->pool(), input->type(), BufferPtr(nullptr), size, wrappedChildren);
 }

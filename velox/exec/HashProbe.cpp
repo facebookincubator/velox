@@ -19,6 +19,8 @@
 #include "velox/exec/Task.h"
 #include "velox/expression/ControlExpr.h"
 
+DEFINE_bool(no_probe_reuse, true, "Disabel result reuse for HashProbe");
+
 namespace facebook::velox::exec {
 
 namespace {
@@ -353,6 +355,10 @@ folly::Range<vector_size_t*> initializeRowNumberMapping(
 } // namespace
 
 void HashProbe::prepareOutput(vector_size_t size) {
+  if (FLAGS_no_probe_reuse) {
+    output_ = nullptr;
+  }
+
   VectorPtr outputAsBase = std::move(output_);
   BaseVector::ensureWritable(
       SelectivityVector::empty(), outputType_, pool(), &outputAsBase);

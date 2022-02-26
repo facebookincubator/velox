@@ -301,6 +301,12 @@ void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
     }
 
     lazyVector->load(rowSet, nullptr);
+    // An explicit call to loadedVector() is necessary to allow for proper
+    // initialization of dictionaries, sequences, etc. on top of lazy vector
+    // after it has been loaded. If encoding has been peeled off, the loading of
+    // the lazy vector would have happen already, but we still need to
+    // initialize this vector.
+    field->loadedVector();
   }
   // An explicit call to loadedVector() is necessary to allow for proper
   // initialization of dictionaries, sequences, etc. on top of lazy vector

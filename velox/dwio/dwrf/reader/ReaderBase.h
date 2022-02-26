@@ -65,8 +65,9 @@ class ReaderBase {
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::InputStream> stream,
       dwio::common::encryption::DecrypterFactory* factory = nullptr,
-      BufferedInputFactory* bufferedInputFactory =
-          BufferedInputFactory::baseFactory(),
+      std::function<BufferedInputFactory * FOLLY_NONNULL()>
+          bufferedInputFactorySource =
+              []() { return BufferedInputFactory::baseFactory(); },
       dwio::common::DataCacheConfig* dataCacheConfig = nullptr);
 
   // create reader base from metadata
@@ -133,8 +134,8 @@ class ReaderBase {
   }
 
   const BufferedInputFactory& bufferedInputFactory() const {
-    return bufferedInputFactory_ ? *bufferedInputFactory_
-                                 : *BufferedInputFactory::baseFactory();
+    return bufferedInputFactorySource_ ? *bufferedInputFactorySource_()
+                                       : *BufferedInputFactory::baseFactory();
   }
 
   const std::unique_ptr<StripeMetadataCache>& getMetadataCache() const {
@@ -236,8 +237,9 @@ class ReaderBase {
   proto::Footer* footer_ = nullptr;
   std::unique_ptr<StripeMetadataCache> cache_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  BufferedInputFactory* bufferedInputFactory_ =
-      BufferedInputFactory::baseFactory();
+  std::function<BufferedInputFactory * FOLLY_NONNULL()>
+      bufferedInputFactorySource_ =
+          []() { return BufferedInputFactory::baseFactory(); };
   dwio::common::DataCacheConfig* dataCacheConfig_ = nullptr;
 
   std::unique_ptr<BufferedInput> input_;

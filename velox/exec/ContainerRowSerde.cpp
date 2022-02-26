@@ -184,6 +184,8 @@ void serializeSwitch(
     const BaseVector& source,
     vector_size_t index,
     ByteStream& stream) {
+  VELOX_CHECK(&source != nullptr);
+  VELOX_CHECK_LT((uint32_t)index, source.size());
   VELOX_DYNAMIC_TYPE_DISPATCH(
       serializeOne, source.typeKind(), source, index, stream);
 }

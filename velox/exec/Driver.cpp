@@ -19,6 +19,7 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
@@ -78,11 +79,11 @@ velox::memory::MemoryPool* FOLLY_NONNULL DriverCtx::addOperatorPool() {
   return task->addOperatorPool(execCtx->pool());
 }
 
-std::unique_ptr<connector::ConnectorQueryCtx>
+std::shared_ptr<connector::ConnectorQueryCtx>
 DriverCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId) const {
-  return std::make_unique<connector::ConnectorQueryCtx>(
+  return std::make_shared<connector::ConnectorQueryCtx>(
       execCtx->pool(),
       task->queryCtx()->getConnectorConfig(connectorId),
       expressionEvaluator.get(),
@@ -294,6 +295,9 @@ StopReason Driver::runInternal(
         "queuedWallNanos",
         (getCurrentTimeMicro() - queueTimeStartMicros_) * 1'000);
   }
+  process::TraceContext trace(
+      fmt::format("driver {}", self->ctx_->task->taskId()), true);
+
   // Get 'task_' into a local because this could be unhooked from it on another
   // thread.
   auto task = task_;

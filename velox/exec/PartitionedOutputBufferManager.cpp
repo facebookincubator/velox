@@ -15,6 +15,15 @@
  */
 #include "velox/exec/PartitionedOutputBufferManager.h"
 
+DEFINE_int32(
+    min_partitioned_output_buffer_mb,
+    32,
+    "Minimum MB of buffer for Task output");
+DEFINE_int32(
+    partitioned_output_continue_pct,
+    90,
+    "Fill percentage of Task partitioned output for resuming a blocked Task");
+
 namespace facebook::velox::exec {
 
 void DestinationBuffer::getData(
@@ -146,6 +155,24 @@ void releaseAfterAcknowledge(
 }
 } // namespace
 
+PartitionedOutputBuffer::PartitionedOutputBuffer(
+    std::shared_ptr<Task> task,
+    bool broadcast,
+    int numDestinations,
+    uint32_t numDrivers)
+    : task_(std::move(task)),
+      broadcast_(broadcast),
+      numDrivers_(numDrivers),
+      maxSize_(std::max<int64_t>(
+          FLAGS_min_partitioned_output_buffer_mb << 20,
+          task_->queryCtx()->config().maxPartitionedOutputBufferSize())),
+      continueSize_((maxSize_ * FLAGS_partitioned_output_continue_pct) / 100) {
+  buffers_.reserve(numDestinations);
+  for (int i = 0; i < numDestinations; i++) {
+    buffers_.push_back(std::make_unique<DestinationBuffer>());
+  }
+}
+
 void PartitionedOutputBuffer::updateBroadcastOutputBuffers(
     int numBuffers,
     bool noMoreBuffers) {
@@ -217,6 +244,7 @@ BlockingReason PartitionedOutputBuffer::enqueue(
     if (broadcast_) {
       std::shared_ptr<VectorStreamGroup> shared = std::move(data);
       for (auto& buffer : buffers_) {
+        VELOX_CHECK(buffer, "Null broadcast destination buffer");
         buffer->enqueue(shared);
         dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
       }

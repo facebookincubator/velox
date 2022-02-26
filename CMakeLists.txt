@@ -132,7 +132,7 @@ set(POSITION_INDEPENDENT_CODE True)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -mbmi2 -march=native -D USE_VELOX_COMMON_BASE"
+    "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -mbmi2 -march=native -g -D USE_VELOX_COMMON_BASE -g"
 )
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")

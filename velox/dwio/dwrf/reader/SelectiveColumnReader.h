@@ -236,6 +236,12 @@ class SelectiveColumnReader : public ColumnReader {
     return true;
   }
 
+  const dwio::common::ColumnStatistics* FOLLY_NULLABLE
+  rowGroupStats(int32_t index) const {
+    auto it = rowGroupStats_.find(index);
+    return it == rowGroupStats_.end() ? nullptr : it->second.get();
+  }
+
  protected:
   static constexpr int8_t kNoValueSize = -1;
   static constexpr uint32_t kRowGroupNotSet = ~0;
@@ -378,6 +384,10 @@ class SelectiveColumnReader : public ColumnReader {
 
   // Number of clocks spent initializing.
   uint64_t initTimeClocks_{0};
+
+  mutable folly::
+      F14FastMap<int32_t, std::unique_ptr<dwio::common::ColumnStatistics>>
+          rowGroupStats_;
 };
 
 template <>

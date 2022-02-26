@@ -86,6 +86,14 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_;
   uint64_t notifyMaxBytes_;
+
+  // Microsecond time when 'this' became non-empty.
+  uint64_t dataAvailableSince_{0};
+  // Cumulative time spent in a non-empty state.
+  uint64_t fetchDelay_{0};
+  uint64_t fetchCount_{0};
+  // Microsecond time of last time the output was given to the consumer.
+  uint64_t lastSendStart_{0};
 };
 
 class PartitionedOutputBuffer {
@@ -94,17 +102,7 @@ class PartitionedOutputBuffer {
       std::shared_ptr<Task> task,
       bool broadcast,
       int numDestinations,
-      uint32_t numDrivers)
-      : task_(std::move(task)),
-        broadcast_(broadcast),
-        numDrivers_(numDrivers),
-        maxSize_(task_->queryCtx()->config().maxPartitionedOutputBufferSize()),
-        continueSize_(maxSize_ / 2) {
-    buffers_.reserve(numDestinations);
-    for (int i = 0; i < numDestinations; i++) {
-      buffers_.push_back(std::make_unique<DestinationBuffer>());
-    }
-  }
+      uint32_t numDrivers);
 
   /// The total number of broadcast buffers may not be known at the task start
   /// time. This method can be called to update the total number of broadcast

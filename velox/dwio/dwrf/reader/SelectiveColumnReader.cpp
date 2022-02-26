@@ -21,12 +21,16 @@
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
-
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
 
 #include "velox/dwio/dwrf/reader/SelectiveRepeatedColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
+
+DEFINE_bool(
+    enable_specialize_filters,
+    true,
+    "Specialize filters based on row group stats");
 
 namespace facebook::velox::dwrf {
 
@@ -72,6 +76,7 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
   }
 
   ensureRowGroupIndex();
+  scanSpec_->clearSpecializedFilter();
   auto filter = scanSpec_->filter();
 
   std::vector<uint32_t> stridesToSkip;
@@ -81,6 +86,8 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
         buildColumnStatisticsFromProto(entry.statistics(), context);
     if (!testFilter(filter, columnStats.get(), rowGroupSize, type_)) {
       stridesToSkip.push_back(i); // Skipping stride based on column stats.
+    } else {
+      rowGroupStats_[i] = std::move(columnStats);
     }
   }
   return stridesToSkip;

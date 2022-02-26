@@ -87,5 +87,6 @@ class FilterProject : public Operator {
   FilterEvalCtx filterEvalCtx_;
 
   vector_size_t numProcessedInputRows_{0};
+  std::string traceLabel_;
 };
 } // namespace facebook::velox::exec

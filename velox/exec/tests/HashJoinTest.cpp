@@ -459,6 +459,10 @@ TEST_F(HashJoinTest, arrayBasedLookup) {
       task->taskStats().pipelineStats.back().operatorStats.back().runtimeStats;
   EXPECT_EQ(101, joinStats["distinctKey0"].sum);
   EXPECT_EQ(200, joinStats["rangeKey0"].sum);
+  // The size is between 64 and 72K because the allocation of the
+  // payload rounds up to next 64K and the table itself to the next 4K.
+  EXPECT_LT(64 * 1024, joinStats["buildBytes"].sum);
+  EXPECT_GT(72 * 1024, joinStats["buildBytes"].sum);
 }
 
 TEST_F(HashJoinTest, innerJoinWithEmptyBuild) {

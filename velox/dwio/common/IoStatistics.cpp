@@ -45,7 +45,11 @@ uint64_t IoStatistics::outputBatchSize() const {
 }
 
 uint64_t IoStatistics::incRawBytesRead(int64_t v) {
-  return rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
+  auto r = v + rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
+  if ((int64_t)r < 0) {
+    LOG(INFO) << "bing";
+  }
+  return r;
 }
 
 uint64_t IoStatistics::incRawBytesWritten(int64_t v) {
@@ -86,6 +90,32 @@ std::unordered_map<std::string, OperationCounters>
 IoStatistics::operationStats() const {
   std::lock_guard<std::mutex> lock{operationStatsMutex_};
   return operationStats_;
+}
+
+void IoStatistics::merge(const IoStatistics& other) {
+  rawBytesRead_ += other.rawBytesRead_;
+  rawBytesWritten_ += other.rawBytesWritten_;
+
+  rawOverreadBytes_ += other.rawOverreadBytes_;
+  prefetch_.merge(other.prefetch_);
+  read_.merge(other.read_);
+  ramHit_.merge(other.ramHit_);
+  ssdRead_.merge(other.ssdRead_);
+  queryThreadIoLatency_.merge(other.queryThreadIoLatency_);
+  std::lock_guard<std::mutex> l(operationStatsMutex_);
+  for (auto& item : other.operationStats_) {
+    operationStats_[item.first].merge(item.second);
+  }
+}
+
+void OperationCounters::merge(const OperationCounters& other) {
+  resourceThrottleCount += other.resourceThrottleCount;
+  localThrottleCount += other.localThrottleCount;
+  globalThrottleCount += other.globalThrottleCount;
+  retryCount += other.retryCount;
+  latencyInMs += other.latencyInMs;
+  requestCount += other.requestCount;
+  delayInjectedInSecs += other.delayInjectedInSecs;
 }
 
 } // namespace common

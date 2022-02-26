@@ -87,14 +87,15 @@ ReaderBase::ReaderBase(
     MemoryPool& pool,
     std::unique_ptr<InputStream> stream,
     DecrypterFactory* factory,
-    BufferedInputFactory* bufferedInputFactory,
+    std::function<BufferedInputFactory*()> bufferedInputFactorySource,
     dwio::common::DataCacheConfig* dataCacheConfig)
     : pool_{pool},
       stream_{std::move(stream)},
       arena_(std::make_unique<google::protobuf::Arena>()),
-      bufferedInputFactory_(bufferedInputFactory),
+      bufferedInputFactorySource_(bufferedInputFactorySource),
       dataCacheConfig_(dataCacheConfig) {
-  input_ = bufferedInputFactory_->create(*stream_, pool, dataCacheConfig);
+  input_ =
+      bufferedInputFactorySource_()->create(*stream_, pool, dataCacheConfig);
 
   // We may have cached the tail before, in which case we can skip the read.
   if (dataCacheConfig && dataCacheConfig->cache) {
@@ -213,8 +214,10 @@ ReaderBase::ReaderBase(
     const std::string tailKey = TailKey(dataCacheConfig->filenum);
     dataCacheConfig->cache->put(tailKey, {tail.get(), tailSize});
   }
+
   if (input_->shouldPrefetchStripes()) {
     auto numStripes = getFooter().stripes_size();
+    input_->setNumStripes(numStripes);
     for (auto i = 0; i < numStripes; i++) {
       const auto& stripe = getFooter().stripes(i);
       input_->enqueue(

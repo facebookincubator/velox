@@ -56,13 +56,29 @@ class ScanSpec {
   // can only be isNull or isNotNull, other filtering is given by
   // 'children'.
   common::Filter* filter() const {
+    if (localFilter_) {
+      return localFilter_.get();
+    }
     return filter_.get();
+  }
+
+  void setLocalFilter(std::unique_ptr<Filter> localFilter) {
+    localFilter_ = std::move(localFilter);
   }
 
   // Sets 'filter_'. May be used at initialization or when adding a
   // pushed down filter, e.g. top k cutoff.
   void setFilter(std::unique_ptr<Filter> filter) {
     filter_ = std::move(filter);
+    localFilter_ = nullptr;
+  }
+
+  void specializeFilter(
+      const TypePtr& type,
+      const dwio::common::ColumnStatistics* stats);
+
+  void clearSpecializedFilter() {
+    localFilter_ = nullptr;
   }
 
   // Returns a constant vector if 'this' corresponds to a partitioning
@@ -147,6 +163,10 @@ class ScanSpec {
   const std::vector<std::unique_ptr<ScanSpec>>& children() const {
     return children_;
   }
+
+  // Returns 'children in a stable order. May be used for parallel construction
+  // and read-ahead of reader trees while the main user of 'this' is running.
+  const std::vector<ScanSpec*>& stableChildren();
 
   // Returns a read sequence number. This can b used for tagging
   // lazy vectors with a generation number so that we can check that
@@ -251,8 +271,13 @@ class ScanSpec {
   // Returns the child which produces values for 'channel'. Throws if not found.
   ScanSpec& getChildByChannel(ChannelIndex channel);
 
+  void moveAdaptation(ScanSpec& other);
+
  private:
   void reorder();
+
+  // Serializes stableChildren().
+  std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
   // is used for setup on first use and to produce a read sequence
@@ -279,6 +304,7 @@ class ScanSpec {
   // returned as flat.
   bool makeFlat_ = false;
   std::unique_ptr<common::Filter> filter_;
+  std::unique_ptr<common::Filter> localFilter_;
   SelectivityInfo selectivity_;
   // Sort children by filtering efficiency.
   bool enableFilterReorder_ = true;
@@ -298,6 +324,10 @@ class ScanSpec {
   // true differentiates pruning from the case of extracting all children.
 
   std::vector<std::unique_ptr<ScanSpec>> children_;
+  // Read-only copy of children, not subject to reordering. Used when
+  // asynchronously constructing reader trees for read-ahead, while
+  // 'children_' is reorderable by a running scan.
+  std::vector<ScanSpec*> stableChildren_;
   mutable std::optional<bool> hasFilter_;
   ValueHook* valueHook_ = nullptr;
 };

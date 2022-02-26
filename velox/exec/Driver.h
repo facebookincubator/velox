@@ -183,7 +183,7 @@ struct DriverCtx {
   // Makes an extract of QueryCtx for use in a connector. 'planNodeId'
   // is the id of the calling TableScan. This and the task id identify
   // the scan for column access tracking.
-  std::unique_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
+  std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
       const std::string& planNodeId) const;
 };

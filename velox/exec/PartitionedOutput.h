@@ -18,6 +18,10 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 
+#include <folly/Random.h>
+
+DECLARE_int32(min_partitioned_output_buffer_mb);
+
 namespace facebook::velox::exec {
 
 class PartitionedOutput;
@@ -28,7 +32,9 @@ class Destination {
       const std::string& taskId,
       int destination,
       memory::MappedMemory* FOLLY_NONNULL memory)
-      : taskId_(taskId), destination_(destination), memory_(memory) {}
+      : taskId_(taskId), destination_(destination), memory_(memory) {
+    setTargetSizePct();
+  }
 
   // Resets the destination before starting a new batch.
   void beginBatch() {
@@ -72,6 +78,12 @@ class Destination {
   void
   serialize(const RowVectorPtr& input, vector_size_t begin, vector_size_t end);
 
+  void setTargetSizePct() {
+    // Flush at  70 to 120% of target row or byte count.
+    targetSizePct_ = 70 + (folly::Random::rand32(rng_) % 50);
+    targetNumRows_ = (10000 * targetSizePct_) / 100;
+  }
+
   const std::string taskId_;
   const int destination_;
   memory::MappedMemory* FOLLY_NONNULL const memory_;
@@ -82,6 +94,17 @@ class Destination {
   vector_size_t row_{0};
   std::unique_ptr<VectorStreamGroup> current_;
   bool finished_{false};
+
+  // Flush accumulated data to buffer manager after reaching this
+  // percentage of target bytes or rows. This will make data for
+  // different destinations ready at different times to flatten a
+  // burst of traffic.
+  int32_t targetSizePct_;
+
+  int32_t targetNumRows_;
+
+  // Generator for varying target batch size. Randomly seededat construction.
+  folly::Random::DefaultGenerator rng_;
 };
 
 // In a distributed query engine data needs to be shuffled between workers so
@@ -118,6 +141,9 @@ class PartitionedOutput : public Operator {
         future_(false),
         bufferManager_(PartitionedOutputBufferManager::getInstance(
             operatorCtx_->task()->queryCtx()->host())),
+        maxBufferedBytes_(std::max<int64_t>(
+            FLAGS_min_partitioned_output_buffer_mb << 20,
+            ctx->task->queryCtx()->config().maxPartitionedOutputBufferSize())),
         mappedMemory_{operatorCtx_->mappedMemory()} {
     if (numDestinations_ == 1 || planNode->isBroadcast()) {
       VELOX_CHECK(keyChannels_.empty());
@@ -165,7 +191,6 @@ class PartitionedOutput : public Operator {
   /// Collect all rows with null keys into nullRows_.
   void collectNullRows();
 
-  static constexpr uint64_t kMaxDestinationSize = 1024 * 1024; // 1MB
   static constexpr uint64_t kMinDestinationSize = 16 * 1024; // 16 KB
 
   const std::vector<ChannelIndex> keyChannels_;
@@ -186,6 +211,7 @@ class PartitionedOutput : public Operator {
   std::vector<std::unique_ptr<Destination>> destinations_;
   bool replicatedAny_{false};
   std::weak_ptr<exec::PartitionedOutputBufferManager> bufferManager_;
+  const int64_t maxBufferedBytes_;
   memory::MappedMemory* FOLLY_NONNULL mappedMemory_;
 
   // Reusable memory.

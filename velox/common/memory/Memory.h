@@ -48,12 +48,26 @@ class ScopedMemoryPool;
 
 class AbstractMemoryPool {
  public:
-  virtual ~AbstractMemoryPool() {}
+  static constexpr uint64_t kPoolMagic = 0x8001800180018001;
+  static constexpr uint64_t kFreedPoolMagic = 0xdead8001dead8001;
+
+  virtual ~AbstractMemoryPool() {
+    magic_ = kFreedPoolMagic;
+  }
   virtual void* allocate(int64_t size) = 0;
   virtual void* allocateZeroFilled(int64_t numMembers, int64_t sizeEach) = 0;
   virtual void* reallocate(void* p, int64_t size, int64_t newSize) = 0;
   virtual void free(void* p, int64_t size) = 0;
   virtual size_t getPreferredSize(size_t size) = 0;
+
+  void checkMagic() {
+    if (magic_ != kPoolMagic) {
+      LOG(FATAL) << "Bad memory pool magic " << magic_;
+    }
+  }
+
+ private:
+  uint64_t magic_{kPoolMagic};
 };
 
 class MemoryPool : public AbstractMemoryPool {
@@ -164,6 +178,7 @@ class ScopedMemoryPool final : public MemoryPool {
   }
 
   void free(void* p, int64_t size) override {
+    checkMagic();
     return pool_.free(p, size);
   }
 
@@ -610,6 +625,7 @@ void* MemoryPoolImpl<Allocator, ALIGNMENT>::reallocate(
 
 template <typename Allocator, uint16_t ALIGNMENT>
 void MemoryPoolImpl<Allocator, ALIGNMENT>::free(void* p, int64_t size) {
+  checkMagic();
   auto alignedSize = sizeAlign<ALIGNMENT>(ALIGNER<ALIGNMENT>{}, size);
   allocator_.free(p, alignedSize);
   release(alignedSize);

@@ -22,17 +22,17 @@ SerializedPage::SerializedPage(
     std::istream* stream,
     uint64_t size,
     memory::MappedMemory* memory)
-    : allocation_(memory) {
+    : allocation_(std::make_unique<memory::MappedMemory::Allocation>(memory)) {
   if (!memory->allocate(
           bits::roundUp(size, memory::MappedMemory::kPageSize) /
               memory::MappedMemory::kPageSize,
           kSerializedPageOwner,
-          allocation_)) {
+          *allocation_)) {
     VELOX_FAIL("Could not allocate memory for exchange input");
   }
   auto toRead = size;
-  for (int i = 0; i < allocation_.numRuns(); ++i) {
-    auto run = allocation_.runAt(i);
+  for (int i = 0; i < allocation_->numRuns(); ++i) {
+    auto run = allocation_->runAt(i);
     auto runSize = run.numPages() * memory::MappedMemory::kPageSize;
     auto bytes = std::min<int32_t>(runSize, toRead);
     ranges_.push_back(ByteRange{run.data(), bytes, 0});
@@ -44,6 +44,19 @@ SerializedPage::SerializedPage(
   }
 
   VELOX_CHECK_EQ(toRead, 0);
+}
+
+SerializedPage::SerializedPage(std::unique_ptr<folly::IOBuf> iobuf)
+    : iobuf_(std::move(iobuf)) {
+  for (auto& buf : *iobuf_) {
+    auto bufSize = buf.size();
+    ranges_.push_back(ByteRange{
+        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
+        bufSize,
+        0,
+        bufSize});
+    iobufBytes_ += bufSize;
+  }
 }
 
 void SerializedPage::prepareStreamForDeserialize(ByteStream* input) {
@@ -316,6 +329,7 @@ RowVectorPtr Exchange::getOutput() {
   if (!inputStream_) {
     inputStream_ = std::make_unique<ByteStream>();
     stats_.rawInputBytes += currentPage_->byteSize();
+    stats_.addRuntimeStat("exchangeInputBytes", currentPage_->byteSize());
     currentPage_->prepareStreamForDeserialize(inputStream_.get());
   }
 
@@ -330,7 +344,7 @@ RowVectorPtr Exchange::getOutput() {
     inputStream_ = nullptr;
   }
 
-  return result_;
+  return std::move(result_);
 }
 
 VELOX_REGISTER_EXCHANGE_SOURCE_METHOD_DEFINITION(
