@@ -117,6 +117,24 @@ TEST(Type, Date) {
   EXPECT_EQ(date->begin(), date->end());
 }
 
+TEST(Type, Decimal) {
+  auto shortDecimal = SHORT_DECIMAL(10, 5);
+  EXPECT_EQ(shortDecimal->toString(), "SHORT_DECIMAL(10,5)");
+  EXPECT_EQ(shortDecimal->size(), 0);
+  EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
+  EXPECT_EQ(shortDecimal->kind(), TypeKind::SHORT_DECIMAL);
+  EXPECT_STREQ(shortDecimal->kindName(), "SHORT_DECIMAL");
+  EXPECT_EQ(shortDecimal->begin(), shortDecimal->end());
+
+  auto longDecimal = LONG_DECIMAL(10, 5);
+  EXPECT_EQ(longDecimal->toString(), "LONG_DECIMAL(10,5)");
+  EXPECT_EQ(longDecimal->size(), 0);
+  EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
+  EXPECT_EQ(longDecimal->kind(), TypeKind::LONG_DECIMAL);
+  EXPECT_STREQ(longDecimal->kindName(), "LONG_DECIMAL");
+  EXPECT_EQ(longDecimal->begin(), longDecimal->end());
+}
+
 TEST(Type, DateToString) {
   Date epoch(0);
   EXPECT_EQ(epoch.toString(), "1970-01-01");

@@ -105,6 +105,20 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
 };
 
+template <>
+struct VariantTypeTraits<TypeKind::SHORT_DECIMAL> {
+  using native_type = typename TypeTraits<TypeKind::SHORT_DECIMAL>::NativeType;
+  // @TODO: This just a place holder. Replace with ShortDecimalVariant
+  using stored_type = int64_t;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::LONG_DECIMAL> {
+  using native_type = typename TypeTraits<TypeKind::LONG_DECIMAL>::NativeType;
+  // @TODO: This just a place holder. Replace with LongDecimalVariant
+  using stored_type = int128_t;
+};
+
 struct OpaqueCapsule {
   std::shared_ptr<const OpaqueType> type;
   std::shared_ptr<void> obj;

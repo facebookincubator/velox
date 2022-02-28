@@ -287,6 +287,12 @@ std::string variant::toJson() const {
       auto& date = value<TypeKind::DATE>();
       return '"' + date.toString() + '"';
     }
+    case TypeKind::SHORT_DECIMAL: {
+      VELOX_NYI();
+    }
+    case TypeKind::LONG_DECIMAL: {
+      VELOX_NYI();
+    }
     case TypeKind::OPAQUE: {
       // Return expression that we can't parse back - we use toJson for
       // debugging only. Variant::serialize should actually serialize the data.
