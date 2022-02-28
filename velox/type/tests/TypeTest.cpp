@@ -16,6 +16,7 @@
 #include "velox/type/Type.h"
 #include <gtest/gtest.h>
 #include <sstream>
+#include "velox/type/Variant.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -196,6 +197,79 @@ TEST(Type, parseStringToDate) {
 
   // Century after epoch.
   EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
+}
+
+TEST(Type, parseStringToDecimal) {
+  EXPECT_EQ(BigDecimal(14, 2, 2), DecimalCasts::parseStringToDecimal("0.14"));
+  EXPECT_EQ(BigDecimal(-14, 2, 2), DecimalCasts::parseStringToDecimal("-0.14"));
+  EXPECT_EQ(BigDecimal(-14, 2, 2), DecimalCasts::parseStringToDecimal("-.14"));
+  EXPECT_EQ(
+      BigDecimal(-1400, 4, 4), DecimalCasts::parseStringToDecimal("-.1400"));
+  EXPECT_EQ(
+      BigDecimal(1400, 4, 4), DecimalCasts::parseStringToDecimal("+.1400"));
+  EXPECT_EQ(
+      BigDecimal(14001234, 8, 4),
+      DecimalCasts::parseStringToDecimal("+1400.1234"));
+
+  EXPECT_EQ(
+      BigDecimal(123456789012345, 15, 5),
+      DecimalCasts::parseStringToDecimal(std::string("1234567890.12345")));
+  int128_t testValue = 0xAB54A98CEB1F0AD2;
+  EXPECT_EQ(
+      BigDecimal(testValue, 20, 0),
+      DecimalCasts::parseStringToDecimal(std::string("12345678901234567890")));
+  EXPECT_EQ(
+      BigDecimal(testValue, 20, 19),
+      DecimalCasts::parseStringToDecimal(std::string("1.2345678901234567890")));
+  EXPECT_EQ(
+      BigDecimal(testValue, 20, 20),
+      DecimalCasts::parseStringToDecimal(
+          std::string("0.12345678901234567890")));
+  // Negative decimals
+  EXPECT_EQ(
+      BigDecimal(-123456789012, 12, 0),
+      DecimalCasts::parseStringToDecimal(std::string("-123456789012")));
+  // Compiler doesn't support defining >18 digits integral literals.
+  int128_t bigIntValue = ((int128_t)(0x18EE90FF6) << 64) | 0xC373E0EE4E3F0AD2;
+  int128_t negBigIntValue = ~bigIntValue + 1;
+  EXPECT_EQ(
+      BigDecimal(negBigIntValue, 30, 29),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-1.23456789012345678901234567890")));
+  EXPECT_EQ(
+      BigDecimal(negBigIntValue, 30, 30),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-0.123456789012345678901234567890")));
+
+  // Leading and trailing zeroes.
+  EXPECT_EQ(
+      BigDecimal(testValue, 20, 0),
+      DecimalCasts::parseStringToDecimal(
+          std::string("000000000012345678901234567890")));
+  EXPECT_EQ(
+      BigDecimal(testValue * 10, 21, 11),
+      DecimalCasts::parseStringToDecimal(
+          std::string("00001234567890.12345678900")));
+  EXPECT_EQ(
+      BigDecimal(negBigIntValue, 30, 10),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-000000000012345678901234567890.1234567890")));
+
+  // Construction of Int128 value will overflow.
+  EXPECT_THROW(
+      DecimalCasts::parseStringToDecimal(
+          "1234567890123456789012345678901234567890"),
+      VeloxUserError);
+
+  // Construction of Int128 value will underflow.
+  EXPECT_THROW(
+      DecimalCasts::parseStringToDecimal(
+          "-1234567890123456789012345678901234567890"),
+      VeloxUserError);
+
+  // Bad decimal formats
+  EXPECT_THROW(DecimalCasts::parseStringToDecimal("-0.1A"), VeloxUserError);
+  EXPECT_THROW(DecimalCasts::parseStringToDecimal("*0.1"), VeloxUserError);
 }
 
 TEST(Type, Map) {

@@ -57,6 +57,7 @@ TypeKind mapNameToTypeKind(const std::string& name) {
       {"VARBINARY", TypeKind::VARBINARY},
       {"TIMESTAMP", TypeKind::TIMESTAMP},
       {"DATE", TypeKind::DATE},
+      {"DECIMAL", TypeKind::DECIMAL},
       {"ARRAY", TypeKind::ARRAY},
       {"MAP", TypeKind::MAP},
       {"ROW", TypeKind::ROW},
@@ -87,6 +88,8 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
       {TypeKind::VARBINARY, "VARBINARY"},
       {TypeKind::TIMESTAMP, "TIMESTAMP"},
       {TypeKind::DATE, "DATE"},
+      {TypeKind::DECIMAL, "DECIMAL"},
+      {TypeKind::DECIMAL128, "DECIMAL128"},
       {TypeKind::ARRAY, "ARRAY"},
       {TypeKind::MAP, "MAP"},
       {TypeKind::ROW, "ROW"},
@@ -561,6 +564,10 @@ KOSKI_DEFINE_SCALAR_ACCESSOR(TIMESTAMP);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARCHAR);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 KOSKI_DEFINE_SCALAR_ACCESSOR(DATE);
+// KOSKI_DEFINE_SCALAR_ACCESSOR(DECIMAL);
+std::shared_ptr<const DecimalType> DECIMAL() {
+  return std::make_shared<DecimalType>();
+}
 KOSKI_DEFINE_SCALAR_ACCESSOR(UNKNOWN);
 
 #undef KOSKI_DEFINE_SCALAR_ACCESSOR

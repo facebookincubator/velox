@@ -212,6 +212,11 @@ class ByteStream {
     return *reinterpret_cast<const T*>(&value);
   }
 
+  BigDecimal readDecimal() {
+    // TODO: @karteek
+    VELOX_NYI();
+  }
+
   template <typename Char>
   void readBytes(Char* data, int32_t size) {
     readBytes(reinterpret_cast<uint8_t*>(data), size);

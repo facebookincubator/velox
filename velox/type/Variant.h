@@ -49,6 +49,9 @@ template <>
 struct VariantEquality<TypeKind::DATE>;
 
 template <>
+struct VariantEquality<TypeKind::DECIMAL>;
+
+template <>
 struct VariantEquality<TypeKind::ARRAY>;
 
 template <>
@@ -103,6 +106,18 @@ struct VariantTypeTraits<TypeKind::MAP> {
 template <>
 struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::DECIMAL> {
+  using native_type = typename TypeTraits<TypeKind::DECIMAL>::NativeType;
+  using stored_type = facebook::velox::BigDecimal;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::DECIMAL128> {
+  using native_type = typename TypeTraits<TypeKind::DECIMAL128>::NativeType;
+  using stored_type = facebook::velox::BigDecimal;
 };
 
 struct OpaqueCapsule {
@@ -213,6 +228,8 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DATE)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DECIMAL)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DECIMAL128)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TIMESTAMP)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::UNKNOWN)
   // On 64-bit platforms `int64_t` is declared as `long int`, not `long long
@@ -271,6 +288,13 @@ class variant {
         TypeKind::DATE,
         new
         typename detail::VariantTypeTraits<TypeKind::DATE>::stored_type{input}};
+  }
+
+  static variant decimal(const BigDecimal& input) {
+    return {
+        TypeKind::DECIMAL,
+        new typename detail::VariantTypeTraits<TypeKind::DECIMAL>::stored_type{
+            input}};
   }
 
   template <class T>

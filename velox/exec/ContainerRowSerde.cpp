@@ -226,6 +226,22 @@ void deserializeOne<TypeKind::VARCHAR>(
   deserializeString(in, index, result);
 }
 
+void deserializeDecimal(
+    ByteStream& stream,
+    vector_size_t index,
+    BaseVector& vector) {
+  // TODO: @karteek implement Deserialize decimal.
+  VELOX_NYI();
+}
+
+template <>
+void deserializeOne<TypeKind::DECIMAL>(
+    ByteStream& in,
+    vector_size_t index,
+    BaseVector& result) {
+  deserializeDecimal(in, index, result);
+}
+
 template <>
 void deserializeOne<TypeKind::VARBINARY>(
     ByteStream& in,
@@ -385,6 +401,15 @@ int compare<TypeKind::VARCHAR>(
 
   auto result = compareStringAsc(left, right, index, flags.equalsOnly);
   return flags.ascending ? result : result * -1;
+}
+
+template <>
+int compare<TypeKind::DECIMAL>(
+    ByteStream& left,
+    const BaseVector& right,
+    vector_size_t index,
+    CompareFlags flags) {
+  return 0;
 }
 
 template <>
@@ -626,6 +651,14 @@ int32_t compare<TypeKind::VARBINARY>(
                          : rightValue.compare(leftValue);
 }
 
+template <>
+int32_t compare<TypeKind::DECIMAL>(
+    ByteStream& left,
+    ByteStream& right,
+    const Type* /*type*/,
+    CompareFlags flags){// TODO: @karteek Implement compare DECIMAL function.
+                        VELOX_NYI()}
+
 int32_t compareArrays(
     ByteStream& left,
     ByteStream& right,
@@ -751,6 +784,18 @@ uint64_t hashOne<TypeKind::VARBINARY>(
     const Type* /*type*/) {
   std::string storage;
   return folly::hasher<StringView>()(readStringView(stream, storage));
+}
+
+void readDecimal(ByteStream& stream, BigDecimal& data) {
+  // TODO: @karteek Implement read decimal.
+  data = stream.readDecimal();
+}
+
+template <>
+uint64_t hashOne<TypeKind::DECIMAL>(ByteStream& stream, const Type* /*type*/) {
+  BigDecimal data;
+  readDecimal(stream, data);
+  return folly::hasher<BigDecimal>()(data);
 }
 
 uint64_t hashArray(ByteStream& in, uint64_t hash, const Type* elementType) {

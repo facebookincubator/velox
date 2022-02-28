@@ -76,6 +76,19 @@ struct VariantEquality<TypeKind::DATE> {
   }
 };
 
+// DECIMAL
+template <>
+struct VariantEquality<TypeKind::DECIMAL> {
+  template <bool NullEqualsNull>
+  static bool equals(const variant& a, const variant& b) {
+    if (a.isNull() || b.isNull()) {
+      return evaluateNullEquality<NullEqualsNull>(a, b);
+    } else {
+      return a.value<TypeKind::DECIMAL>() == b.value<TypeKind::DECIMAL>();
+    }
+  }
+};
+
 // array
 template <>
 struct VariantEquality<TypeKind::ARRAY> {
@@ -287,6 +300,14 @@ std::string variant::toJson() const {
       auto& date = value<TypeKind::DATE>();
       return '"' + date.toString() + '"';
     }
+    case TypeKind::DECIMAL: {
+      auto& decimal = value<TypeKind::DECIMAL>();
+      return '"' + decimal.toString() + '"';
+    }
+    case TypeKind::DECIMAL128: {
+      auto& decimal = value<TypeKind::DECIMAL128>();
+      return '"' + decimal.toString() + '"';
+    }
     case TypeKind::OPAQUE: {
       // Return expression that we can't parse back - we use toJson for
       // debugging only. Variant::serialize should actually serialize the data.
@@ -378,6 +399,7 @@ folly::dynamic variant::serialize() const {
     case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
     case TypeKind::INVALID:
+    case TypeKind::DECIMAL:
       VELOX_NYI();
 
     case TypeKind::OPAQUE:
@@ -459,6 +481,7 @@ variant variant::create(const folly::dynamic& variantobj) {
     }
     case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
+    case TypeKind::DECIMAL:
       FOLLY_FALLTHROUGH;
     case TypeKind::INVALID:
       VELOX_NYI();
@@ -516,6 +539,10 @@ uint64_t variant::hash() const {
     case TypeKind::DATE: {
       auto dateValue = value<TypeKind::DATE>();
       return folly::Hash{}(dateValue.days());
+    }
+    case TypeKind::DECIMAL: {
+      auto decimalValue = value<TypeKind::DECIMAL>();
+      return folly::Hash{}(decimalValue);
     }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();

@@ -37,6 +37,7 @@
 #include "velox/common/base/ClassName.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/Date.h"
+#include "velox/type/Decimal.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
@@ -69,7 +70,8 @@ enum class TypeKind : int8_t {
   VARBINARY = 8,
   TIMESTAMP = 9,
   DATE = 10,
-
+  DECIMAL = 11,
+  DECIMAL128 = 12,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
@@ -89,7 +91,8 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
-
+// template <TypeKind KIND>
+class DecimalType;
 class ArrayType;
 class MapType;
 class RowType;
@@ -265,6 +268,34 @@ struct TypeTraits<TypeKind::DATE> {
   static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "DATE";
+};
+
+template <>
+struct TypeTraits<TypeKind::DECIMAL> {
+  using ImplType = DecimalType;
+  // TODO: This must be a signed int64 but clashes with BIGINT
+  // while declaring the variant constructor.
+  using NativeType = uint64_t;
+  using DeepCopiedType = NativeType;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::DECIMAL;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = true;
+  static constexpr const char* name = "DECIMAL";
+};
+
+template <>
+struct TypeTraits<TypeKind::DECIMAL128> {
+  using ImplType = DecimalType;
+  using NativeType = int128_t;
+  using DeepCopiedType = NativeType;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::DECIMAL128;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = true;
+  static constexpr const char* name = "DECIMAL128";
 };
 
 template <>
@@ -463,6 +494,7 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   VELOX_FLUENT_CAST(Varbinary, VARBINARY)
   VELOX_FLUENT_CAST(Timestamp, TIMESTAMP)
   VELOX_FLUENT_CAST(Date, DATE)
+  VELOX_FLUENT_CAST(Decimal, DECIMAL)
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
   VELOX_FLUENT_CAST(Row, ROW)
@@ -499,6 +531,79 @@ class TypeBase : public Type {
   const char* kindName() const override {
     return TypeTraits<KIND>::name;
   }
+};
+
+/*
+ * A DecimalType tp re
+ */
+class DecimalType : public Type {
+ public:
+  DecimalType(int typmod = 4608)
+      : typmod_(typmod),
+        Type(
+            PRECISION(typmod) <= 18 ? TypeKind::DECIMAL
+                                    : TypeKind::DECIMAL128) {
+    isBigDecimal_ = !(PRECISION(typmod) <= 18);
+  }
+
+  inline bool isPrimitiveType() const override {
+    return isBigDecimal_ ? TypeTraits<TypeKind::DECIMAL128>::isPrimitiveType
+                         : TypeTraits<TypeKind::DECIMAL>::isPrimitiveType;
+  }
+
+  inline bool isFixedWidth() const override {
+    return isBigDecimal_ ? TypeTraits<TypeKind::DECIMAL128>::isFixedWidth
+                         : TypeTraits<TypeKind::DECIMAL>::isFixedWidth;
+  }
+
+  inline const char* kindName() const override {
+    return isBigDecimal_ ? TypeTraits<TypeKind::DECIMAL>::name
+                         : TypeTraits<TypeKind::DECIMAL128>::name;
+  }
+
+  inline uint32_t size() const override {
+    // BigDecimal TypeSignature can have 2 children which can be
+    // long literals or variables to represent the precision and scale.
+    return NUM_DECIMAL_PARAMETERS;
+  }
+
+  inline bool operator==(const Type& other) const override {
+    return (
+        (TypeKind::DECIMAL == other.kind() ||
+         TypeKind::DECIMAL128 == other.kind()) &&
+        this->typmod_ == dynamic_cast<const DecimalType*>(&other)->typmod());
+  }
+
+  // FOLLY_NOINLINE static const std::shared_ptr<const DecimalType> create(int
+  // typmod); FOLLY_NOINLINE static const std::shared_ptr<const DecimalType>
+  // create();
+  inline int typmod() const {
+    return typmod_;
+  }
+
+  inline const std::shared_ptr<const Type>& childAt(uint32_t) const override {
+    throw std::invalid_argument{"scalar type has no children"};
+  }
+
+  std::string toString() const override {
+    return mapTypeKindToName(this->kind());
+  }
+
+  size_t cppSizeInBytes() const override {
+    return isBigDecimal_ ? sizeof(TypeTraits<TypeKind::DECIMAL128>::NativeType)
+                         : sizeof(TypeTraits<TypeKind::DECIMAL>::NativeType);
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = TypeTraits<TypeKind::DECIMAL>::name;
+    return obj;
+  }
+
+ private:
+  int typmod_;
+  bool isBigDecimal_;
 };
 
 template <TypeKind KIND>
@@ -848,6 +953,7 @@ using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
+using DecimalType = DecimalType;
 
 // Used as T for SimpleVector subclasses that wrap another vector when
 // the wrapped vector is of a complex type. Applies to
@@ -866,7 +972,6 @@ struct ComplexType {
 
 template <TypeKind KIND>
 struct TypeFactory {
-  // default factory
   static std::shared_ptr<const typename TypeTraits<KIND>::ImplType> create() {
     return TypeTraits<KIND>::ImplType::create();
   }
@@ -928,6 +1033,8 @@ std::shared_ptr<const MapType> MAP(
 std::shared_ptr<const TimestampType> TIMESTAMP();
 
 std::shared_ptr<const DateType> DATE();
+
+std::shared_ptr<const DecimalType> DECIMAL();
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
@@ -1033,6 +1140,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
         return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::DATE>(      \
             __VA_ARGS__);                                                \
       }                                                                  \
+      case ::facebook::velox::TypeKind::DECIMAL: {                       \
+        return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::DECIMAL>(   \
+            __VA_ARGS__);                                                \
+      }                                                                  \
       default:                                                           \
         VELOX_FAIL(                                                      \
             "not a scalar type! kind: {}", mapTypeKindToName(typeKind)); \
@@ -1095,6 +1206,10 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       }                                                                        \
       case ::facebook::velox::TypeKind::DATE: {                                \
         return PREFIX<::facebook::velox::TypeKind::DATE> SUFFIX(__VA_ARGS__);  \
+      }                                                                        \
+      case ::facebook::velox::TypeKind::DECIMAL: {                             \
+        return PREFIX<::facebook::velox::TypeKind::DECIMAL> SUFFIX(            \
+            __VA_ARGS__);                                                      \
       }                                                                        \
       case ::facebook::velox::TypeKind::ARRAY: {                               \
         return PREFIX<::facebook::velox::TypeKind::ARRAY> SUFFIX(__VA_ARGS__); \
@@ -1184,6 +1299,9 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       case ::facebook::velox::TypeKind::DATE: {                               \
         return CLASS<::facebook::velox::TypeKind::TIMESTAMP>::FIELD;          \
       }                                                                       \
+      case ::facebook::velox::TypeKind::DECIMAL: {                            \
+        return CLASS<::facebook::velox::TypeKind::DECIMAL>::FIELD;            \
+      }                                                                       \
       case ::facebook::velox::TypeKind::ARRAY: {                              \
         return CLASS<::facebook::velox::TypeKind::ARRAY>::FIELD;              \
       }                                                                       \
@@ -1222,6 +1340,7 @@ VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 VELOX_SCALAR_ACCESSOR(DATE);
+// VELOX_SCALAR_ACCESSOR(DECIMAL);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <TypeKind KIND>
@@ -1477,6 +1596,30 @@ struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
+
+template <>
+struct CppToType<BigDecimal> : public CppToTypeBase<TypeKind::DECIMAL128> {
+  static auto create() {
+    return std::make_shared<const DecimalType>();
+  }
+
+  static auto create(int typmod) {
+    // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
+    return std::make_shared<const DecimalType>(typmod);
+  }
+};
+
+template <>
+struct CppToType<int128_t> : public CppToTypeBase<TypeKind::DECIMAL> {
+  static auto create(int typmod) {
+    return std::make_shared<const DecimalType>(typmod);
+    // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
+  }
+  static auto create() {
+    return std::make_shared<const DecimalType>();
+    // return TypeFactory<TypeKind::DECIMAL>::create();
+  }
+};
 
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly

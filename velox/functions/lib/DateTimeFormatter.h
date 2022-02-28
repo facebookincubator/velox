@@ -87,7 +87,7 @@ enum class DateTimeFormatSpecifier : uint8_t {
   // Second of minute, e.g: 55
   SECOND_OF_MINUTE = 19,
 
-  // Decimal fraction of a second, e.g: The fraction of 00:00:01.987 is 987
+  // BigDecimal fraction of a second, e.g: The fraction of 00:00:01.987 is 987
   FRACTION_OF_SECOND = 20,
 
   // Timezone, e.g: "Pacific Standard Time" or "PST"
