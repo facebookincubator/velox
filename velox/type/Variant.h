@@ -49,6 +49,9 @@ template <>
 struct VariantEquality<TypeKind::DATE>;
 
 template <>
+struct VariantEquality<TypeKind::DECIMAL>;
+
+template <>
 struct VariantEquality<TypeKind::ARRAY>;
 
 template <>
@@ -213,6 +216,7 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DATE)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DECIMAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TIMESTAMP)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::UNKNOWN)
   // On 64-bit platforms `int64_t` is declared as `long int`, not `long long
@@ -271,6 +275,13 @@ class variant {
         TypeKind::DATE,
         new
         typename detail::VariantTypeTraits<TypeKind::DATE>::stored_type{input}};
+  }
+
+  static variant decimal(const Decimal& input) {
+    return {
+        TypeKind::DECIMAL,
+        new typename detail::VariantTypeTraits<TypeKind::DECIMAL>::stored_type{
+            input}};
   }
 
   template <class T>
