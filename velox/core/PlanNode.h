@@ -19,6 +19,9 @@
 #include "velox/connectors/WriteProtocol.h"
 #include "velox/core/Expressions.h"
 
+#include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/Bridge.h"
+
 namespace facebook::velox::core {
 
 typedef std::string PlanNodeId;
@@ -230,6 +233,50 @@ class ValuesNode : public PlanNode {
   const std::vector<RowVectorPtr> values_;
   const RowTypePtr outputType_;
   const bool parallelizable_;
+};
+
+class ArrowStreamNode : public PlanNode {
+ public:
+  ArrowStreamNode(
+      const PlanNodeId& id,
+      const RowTypePtr& outputType,
+      std::shared_ptr<ArrowArrayStream> arrowStream,
+      memory::MemoryPool* pool)
+      : PlanNode(id),
+        outputType_(outputType),
+        arrowStream_(std::move(arrowStream)),
+        pool_(pool) {
+    VELOX_CHECK(arrowStream != nullptr);
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  bool requiresSplits() const override {
+    return true;
+  }
+
+  const std::shared_ptr<ArrowArrayStream>& arrowStream() const {
+    return arrowStream_;
+  }
+
+  memory::MemoryPool* memoryPool() const {
+    return pool_;
+  }
+
+  std::string_view name() const override {
+    return "ArrowStream";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const RowTypePtr outputType_;
+  std::shared_ptr<ArrowArrayStream> arrowStream_;
+  memory::MemoryPool* pool_;
 };
 
 class FilterNode : public PlanNode {
