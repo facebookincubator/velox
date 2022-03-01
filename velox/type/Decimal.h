@@ -13,9 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#ifndef VELOX_DECIMAL_H
-#define VELOX_DECIMAL_H
+#include <folly/dynamic.h>
+#include <iomanip>
+#include <sstream>
+#include <string>
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/StringView.h"
 
 namespace facebook::velox {
 
@@ -35,12 +40,16 @@ enum DecimalInternalType { INT16, INT32, INT64, INT128 };
  */
 class Decimal {
  public:
-  inline const uint8_t getPrecision() {
+  inline const uint8_t getPrecision() const {
     return precision_;
   }
 
-  inline const uint8_t getScale() {
+  inline const uint8_t getScale() const {
     return scale_;
+  }
+
+  inline const DecimalInternalType getInternalType() const {
+    return internalType_;
   }
 
   /**
@@ -64,9 +73,7 @@ class Decimal {
   // Needed for serialization of FlatVector<Decimal>
   operator StringView() const {VELOX_NYI()}
 
-  std::string toString() const {
-    return "";
-  }
+  std::string toString() const;
 
   operator std::string() const {
     return toString();
@@ -100,6 +107,7 @@ class Decimal {
  private:
   uint8_t precision_;
   uint8_t scale_;
+  DecimalInternalType internalType_;
 };
 
 class SmallDecimal : public Decimal {
@@ -120,5 +128,37 @@ class LargeDecimal : public Decimal {
       : Decimal(precision, scale) {}
 };
 
+class DecimalParser {
+  static Decimal strToDecimal(
+      const std::string value,
+      const uint8_t precision,
+      const uint8_t scale) {
+    return 0;
+  }
+};
+
+void parseTo(folly::StringPiece in, Decimal& out);
+
+template <typename T>
+void toAppend(const ::facebook::velox::Decimal& value, T* result) {}
 } // namespace facebook::velox
-#endif // VELOX_DECIMAL_H
+
+namespace std {
+template <>
+struct hash<::facebook::velox::Decimal> {
+  size_t operator()(const ::facebook::velox::Decimal& value) const {
+    return 0;
+  }
+};
+
+std::string to_string(const ::facebook::velox::Decimal& ts);
+} // namespace std
+
+namespace folly {
+template <>
+struct hasher<::facebook::velox::Decimal> {
+  size_t operator()(const ::facebook::velox::Decimal& value) const {
+    return 0;
+  }
+};
+} // namespace folly

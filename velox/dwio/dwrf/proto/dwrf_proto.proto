@@ -176,6 +176,7 @@ message Type {
     MAP = 11;
     STRUCT = 12;
     UNION = 13;
+    DECIMAL = 14;
   }
   required Kind kind = 1;
   repeated uint32 subtypes = 2 [ packed = true ];
