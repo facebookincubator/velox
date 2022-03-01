@@ -13,3 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "velox/type/Decimal.h"
+
+namespace facebook::velox {
+void parseTo(folly::StringPiece in, Decimal& out) {
+  VELOX_NYI();
+}
+
+std::string Decimal::toString() const {
+  return "";
+}
+} // namespace facebook::velox
+
+namespace std {
+std::string to_string(const ::facebook::velox::Decimal& decimal) {
+  return decimal.toString();
+}
+} // namespace std
