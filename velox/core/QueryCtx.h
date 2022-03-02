@@ -57,11 +57,28 @@ class QueryCtx : public Context {
         config_{this} {
     setConfigOverrides(config);
     if (!pool_) {
-      pool_ = memory::getProcessDefaultMemoryManager().getRoot().addScopedChild(
-          kQueryRootMemoryPool);
-      static const auto kUnlimited = std::numeric_limits<int64_t>::max();
-      pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create(
-          kUnlimited, kUnlimited, kUnlimited));
+      initPool();
+    }
+  }
+
+  // Constructor to block the destruction of executor while this
+  // object is alive.
+  explicit QueryCtx(
+      folly::Executor::KeepAlive<> executor_keepalive,
+      std::shared_ptr<Config> config = std::make_shared<MemConfig>(),
+      std::unordered_map<std::string, std::shared_ptr<Config>>
+          connectorConfigs = {},
+      memory::MappedMemory* mappedMemory = memory::MappedMemory::getInstance(),
+      std::unique_ptr<memory::MemoryPool> pool = nullptr)
+      : Context{ContextScope::QUERY},
+        pool_(std::move(pool)),
+        mappedMemory_(mappedMemory),
+        connectorConfigs_(connectorConfigs),
+        executor_keepalive_(std::move(executor_keepalive)),
+        config_{this} {
+    setConfigOverrides(config);
+    if (!pool_) {
+      initPool();
     }
   }
 
@@ -74,8 +91,12 @@ class QueryCtx : public Context {
   }
 
   folly::Executor* executor() const {
-    VELOX_CHECK(executor_, "Executor was not supplied.");
-    return executor_.get();
+    if (executor_) {
+      return executor_.get();
+    }
+    auto executor = executor_keepalive_.get();
+    VELOX_CHECK(executor, "Executor was not supplied.");
+    return executor;
   }
 
   const QueryConfig& config() const {
@@ -115,12 +136,21 @@ class QueryCtx : public Context {
     return kEmptyConfig.get();
   }
 
+  void initPool() {
+    pool_ = memory::getProcessDefaultMemoryManager().getRoot().addScopedChild(
+        kQueryRootMemoryPool);
+    static const auto kUnlimited = std::numeric_limits<int64_t>::max();
+    pool_->setMemoryUsageTracker(
+        memory::MemoryUsageTracker::create(kUnlimited, kUnlimited, kUnlimited));
+  }
+
   static constexpr const char* kQueryRootMemoryPool = "query_root";
 
   std::unique_ptr<memory::MemoryPool> pool_;
   memory::MappedMemory* mappedMemory_;
   std::unordered_map<std::string, std::shared_ptr<Config>> connectorConfigs_;
   std::shared_ptr<folly::Executor> executor_;
+  folly::Executor::KeepAlive<> executor_keepalive_;
   QueryConfig config_;
 };
 
