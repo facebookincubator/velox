@@ -16,7 +16,7 @@
 
 #include "velox/type/Type.h"
 
-namespace facebook::velox::substraitconverter {
+namespace facebook::velox::substrait {
 
 bool isPrimitive(const TypePtr& type) {
   switch (type->kind()) {
@@ -44,7 +44,8 @@ bool isString(const TypePtr& type) {
 }
 
 int64_t bytesOfType(const TypePtr& type) {
-  switch (type->kind()) {
+  auto typeKind = type->kind();
+  switch (typeKind) {
     case TypeKind::INTEGER:
       return 4;
     case TypeKind::BIGINT:
@@ -52,8 +53,20 @@ int64_t bytesOfType(const TypePtr& type) {
     case TypeKind::DOUBLE:
       return 8;
     default:
-      throw new std::runtime_error("bytesOfType is not supported.");
+      VELOX_NYI("Returning bytes of Type not supported for type {}.", typeKind);
   }
 }
 
-} // namespace facebook::velox::substraitconverter
+TypePtr toVeloxType(const std::string& typeName) {
+  if (typeName == "BOOL") {
+    return BOOLEAN();
+  } else if (typeName == "FP64") {
+    return DOUBLE();
+  } else if (typeName == "STRING") {
+    return VARCHAR();
+  } else {
+    VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
+  }
+}
+
+} // namespace facebook::velox::substrait
