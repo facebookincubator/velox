@@ -746,15 +746,45 @@ void TryExpr::evalSpecialForm(
     EvalCtx* context,
     VectorPtr* result) {
   VarSetter throwOnError(context->mutableThrowOnError(), false);
+  // It's possible with nested TRY expressions that some rows already threw
+  // exceptions in earlier expressions that haven't been handled yet. To avoid
+  // incorrectly handling them here, store those errors and temporarily reset
+  // the errors in context to nullptr, so we only handle errors coming from
+  // expressions that are children of this TRY expression.
+  // This also prevents this TRY expression from leaking exceptions to the
+  // parent TRY expression, so the parent won't incorrectly null out rows that
+  // threw exceptions which this expression already handled.
+  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
+      context->errorsPtr(), nullptr);
   inputs_[0]->eval(rows, context, result);
 
   auto errors = context->errors();
   if (errors) {
-    rows.applyToSelected([&](auto row) {
-      if (row < errors->size() && !errors->isNullAt(row)) {
-        (*result)->setNull(row, true);
+    if ((*result)->encoding() == VectorEncoding::Simple::CONSTANT) {
+      // Since it's constant, if any row is NULL they're all NULL, so check row
+      // 0 arbitrarily.
+      if ((*result)->isNullAt(0)) {
+        // The result is already a NULL constant, so this is a no-op.
+        return;
       }
-    });
+
+      // If the result is constant, the input should have been constant as
+      // well, so we should have consistently gotten exceptions.
+      // If this is not the case, an easy way to handle it would be to wrap
+      // the ConstantVector in a DictionaryVector and NULL out the rows that
+      // saw errors.
+      VELOX_DCHECK(
+          rows.testSelected([&](auto row) { return !errors->isNullAt(row); }));
+      // Set the result to be a NULL constant.
+      *result = BaseVector::createNullConstant(
+          (*result)->type(), (*result)->size(), context->pool());
+    } else {
+      rows.applyToSelected([&](auto row) {
+        if (row < errors->size() && !errors->isNullAt(row)) {
+          (*result)->setNull(row, true);
+        }
+      });
+    }
   }
 }
 

@@ -19,6 +19,7 @@
 
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox {
 class TryExprTest : public functions::test::FunctionBaseTest {};
@@ -68,5 +69,75 @@ TEST_F(TryExprTest, skipExecution) {
       "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
 
   assertEqualVectors(makeNullableFlatVector(expected), result);
+}
+
+TEST_F(TryExprTest, nestedTryChildErrors) {
+  // This tests that with nested TRY expressions, the parent TRY does not see
+  // errors the child TRY already handled.
+
+  // Put "a" wherever we want an exception, as casting it to an integer will
+  // throw.
+  auto flatVector = makeFlatVector<StringView>(
+      5, [&](auto row) { return row % 2 == 0 ? "1" : "a"; });
+  auto result = evaluate<FlatVector<int64_t>>(
+      "try(coalesce(try(cast(c0 as integer)), 3))",
+      makeRowVector({flatVector}));
+
+  assertEqualVectors(
+      // Every other row throws an exception, which should get caught and
+      // coalesced to 3.
+      makeFlatVector<int64_t>({1, 3, 1, 3, 1}),
+      result);
+}
+
+TEST_F(TryExprTest, nestedTryParentErrors) {
+  // This tests that with nested TRY expressions, the child TRY does not see
+  // errros the parent TRY is supposed to handle.
+
+  vector_size_t size = 10;
+  // Put "a" wherever we want an exception, as casting it to an integer will
+  // throw.
+  auto col0 = makeFlatVector<StringView>(
+      size, [&](auto row) { return row % 3 == 0 ? "a" : "1"; });
+  auto col1 = makeFlatVector<StringView>(
+      size, [&](auto row) { return row % 3 == 1 ? "a" : "1"; });
+  auto result = evaluate<FlatVector<int64_t>>(
+      "try(cast(c1 as integer) + coalesce(try(cast(c0 as integer)), 3))",
+      makeRowVector({col0, col1}));
+
+  assertEqualVectors(
+      makeFlatVector<int64_t>(
+          size,
+          [&](auto row) {
+            if (row % 3 == 0) {
+              // col0 produced an error, so coalesce returned 3.
+              return 4;
+            }
+
+            return 2;
+          },
+          [&](auto row) {
+            if (row % 3 == 1) {
+              // col1 produced an error, so the whole expression is NULL.
+              return true;
+            }
+
+            return false;
+          }),
+      result);
+}
+
+TEST_F(TryExprTest, constant) {
+  // Test a TRY around an expression over a constant vector and other constants
+  // that throws an exception (division by 0).
+  auto constant = makeConstant<int64_t>(0, 10);
+
+  // We use evaluateSimplified here because evaluate peels the encodings before
+  // invoking the expression.  Since evaluateSimplified does not, the result
+  // vector the TRY expression sees is a non-null ConstantVector.
+  auto result = evaluateSimplified<ConstantVector<int64_t>>(
+      "try(1 / c0)", makeRowVector({constant}));
+
+  assertEqualVectors(makeNullConstant(TypeKind::BIGINT, 10), result);
 }
 } // namespace facebook::velox
