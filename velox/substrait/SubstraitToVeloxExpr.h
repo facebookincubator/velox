@@ -17,7 +17,7 @@
 #pragma once
 
 #include "SubstraitUtils.h"
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/Expressions.h"
 
 namespace facebook::velox::substrait {
 
@@ -52,29 +52,14 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression& sExpr,
       const int32_t& inputPlanNodeId);
 
-  /// Used to convert Substrait Filter into Velox SubfieldFilters.
-  connector::hive::SubfieldFilters toVeloxFilter(
-      const std::vector<std::string>& inputNameList,
-      const std::vector<TypePtr>& inputTypeList,
-      const ::substrait::Expression& sFilter);
-
  private:
-  /// Multiple conditions are connected to a binary tree structure with
-  /// the relation key words, including AND, OR, and etc. Currently, only
-  /// AND is supported. This function is used to extract all the Substrait
-  /// conditions in the binary tree structure into a vector.
-  void getFlatConditions(
-      const ::substrait::Expression& sFilter,
-      std::vector<::substrait::Expression_ScalarFunction>* scalarFunctions);
-
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.
   std::shared_ptr<SubstraitParser> subParser_;
+
   /// The map storing the relations between the function id and the function
   /// name.
   std::unordered_map<uint64_t, std::string> functionMap_;
-  /// This class contains the needed infos for Filter Pushdown.
-  class FilterInfo;
 };
 
 } // namespace facebook::velox::substrait

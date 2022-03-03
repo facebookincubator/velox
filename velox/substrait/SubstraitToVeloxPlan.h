@@ -17,16 +17,13 @@
 #pragma once
 
 #include "SubstraitToVeloxExpr.h"
-
-using namespace facebook::velox::exec;
+#include "velox/connectors/hive/HiveConnector.h"
 
 namespace facebook::velox::substrait {
 
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  SubstraitVeloxPlanConverter() {}
-
   /// Used to convert Substrait AggregateRel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
       const ::substrait::AggregateRel& sAgg);
@@ -42,10 +39,10 @@ class SubstraitVeloxPlanConverter {
   /// Used to convert Substrait ReadRel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
       const ::substrait::ReadRel& sRead,
-      u_int32_t* index,
-      std::vector<std::string>* paths,
-      std::vector<u_int64_t>* starts,
-      std::vector<u_int64_t>* lengths);
+      u_int32_t& index,
+      std::vector<std::string>& paths,
+      std::vector<u_int64_t>& starts,
+      std::vector<u_int64_t>& lengths);
 
   /// Used to convert Substrait Rel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
@@ -64,51 +61,74 @@ class SubstraitVeloxPlanConverter {
     return partitionIndex_;
   }
 
-  /// Will return the paths of the files to be scanned.
-  void getPaths(std::vector<std::string>* paths) {
-    for (auto path : paths_) {
-      (*paths).push_back(path);
+  /// Will add the paths of the files to be scanned into a vector.
+  void getPaths(std::vector<std::string>& paths) {
+    for (const auto& path : paths_) {
+      paths.emplace_back(path);
     }
   }
 
-  /// Will return the starts of the files to be scanned.
-  void getStarts(std::vector<u_int64_t>* starts) {
-    for (auto start : starts_) {
-      (*starts).push_back(start);
+  /// Will add the starts of the files to be scanned into a vector.
+  void getStarts(std::vector<u_int64_t>& starts) {
+    for (const auto& start : starts_) {
+      starts.emplace_back(start);
     }
   }
 
   /// Will return the lengths to be scanned for each file.
-  void getLengths(std::vector<u_int64_t>* lengths) {
-    for (auto length : lengths_) {
-      (*lengths).push_back(length);
+  void getLengths(std::vector<u_int64_t>& lengths) {
+    for (const auto& length : lengths_) {
+      lengths.emplace_back(length);
     }
   }
 
+ private:
   /// The Partition index.
   u_int32_t partitionIndex_;
+
   /// The file paths to be scanned.
   std::vector<std::string> paths_;
+
   /// The file starts in the scan.
   std::vector<u_int64_t> starts_;
+
   /// The lengths to be scanned.
   std::vector<u_int64_t> lengths_;
 
- private:
+  /// The unique identification for each PlanNode.
   int planNodeId_ = 0;
+
+  /// The map storing the relations between the function id and the function
+  /// name. Will be constructed based on the Substrait representation.
+  std::unordered_map<uint64_t, std::string> functionMap_;
+
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.
   std::shared_ptr<SubstraitParser> subParser_ =
       std::make_shared<SubstraitParser>();
+
   /// The Expression converter used to convert Substrait representations into
   /// Velox expressions.
   std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
-  /// The map storing the relations between the function id and the function
-  /// name. Will be constructed based on the Substrait representation.
-  std::unordered_map<uint64_t, std::string> functionMap_;
+
   /// A function returning current function id and adding the plan node id by
   /// one once called.
   std::string nextPlanNodeId();
+
+  /// Used to convert Substrait Filter into Velox SubfieldFilters which will
+  /// be used in TableScan.
+  connector::hive::SubfieldFilters toVeloxFilter(
+      const std::vector<std::string>& inputNameList,
+      const std::vector<TypePtr>& inputTypeList,
+      const ::substrait::Expression& sFilter);
+
+  /// Multiple conditions are connected to a binary tree structure with
+  /// the relation key words, including AND, OR, and etc. Currently, only
+  /// AND is supported. This function is used to extract all the Substrait
+  /// conditions in the binary tree structure into a vector.
+  void flattenConditions(
+      const ::substrait::Expression& sFilter,
+      std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions);
 };
 
 } // namespace facebook::velox::substrait

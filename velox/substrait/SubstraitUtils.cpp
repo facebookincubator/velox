@@ -77,17 +77,18 @@ std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
 SubstraitParser::parseNamedStruct(const ::substrait::NamedStruct& namedStruct) {
   const auto& sNames = namedStruct.names();
   std::vector<std::string> nameList;
+  nameList.reserve(sNames.size());
   for (const auto& sName : sNames) {
-    nameList.push_back(sName);
+    nameList.emplace_back(sName);
   }
   // Parse Struct.
   const auto& sStruct = namedStruct.struct_();
   const auto& sTypes = sStruct.types();
   std::vector<std::shared_ptr<SubstraitParser::SubstraitType>>
       substraitTypeList;
+  substraitTypeList.reserve(sTypes.size());
   for (const auto& type : sTypes) {
-    auto substraitType = parseType(type);
-    substraitTypeList.push_back(substraitType);
+    substraitTypeList.emplace_back(parseType(type));
   }
   return substraitTypeList;
 }
@@ -113,8 +114,9 @@ std::vector<std::string> SubstraitParser::makeNames(
     const std::string& prefix,
     int size) {
   std::vector<std::string> names;
+  names.reserve(size);
   for (int i = 0; i < size; i++) {
-    names.push_back(fmt::format("{}_{}", prefix, i));
+    names.emplace_back(fmt::format("{}_{}", prefix, i));
   }
   return names;
 }

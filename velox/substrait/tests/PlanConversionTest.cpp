@@ -68,8 +68,6 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
 
   class VeloxConverter {
    public:
-    VeloxConverter() {}
-
     // This class is an iterator for Velox computing.
     class WholeComputeResultIterator {
      public:
@@ -86,6 +84,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
             lengths_(lengths) {
         std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
             connectorSplits;
+        connectorSplits.reserve(paths.size());
         for (int idx = 0; idx < paths.size(); idx++) {
           auto path = paths[idx];
           auto start = starts[idx];
@@ -97,7 +96,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
               facebook::velox::dwio::common::FileFormat::ORC,
               start,
               length);
-          connectorSplits.push_back(split);
+          connectorSplits.emplace_back(split);
         }
         splits_.reserve(connectorSplits.size());
         for (const auto& connectorSplit : connectorSplits) {
@@ -176,18 +175,19 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       // Get the information for TableScan.
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
       std::vector<std::string> paths;
-      planConverter->getPaths(&paths);
+      planConverter->getPaths(paths);
       // In test, need to get the absolute path of the generated ORC file.
       std::vector<std::string> absolutePaths;
+      absolutePaths.reserve(paths.size());
       for (auto path : paths) {
         std::string currentPath = fs::current_path().c_str();
         std::string absolutePath = "file://" + currentPath + path;
-        absolutePaths.push_back(absolutePath);
+        absolutePaths.emplace_back(absolutePath);
       }
       std::vector<u_int64_t> starts;
-      planConverter->getStarts(&starts);
+      planConverter->getStarts(starts);
       std::vector<u_int64_t> lengths;
-      planConverter->getLengths(&lengths);
+      planConverter->getLengths(lengths);
       // Construct the result iterator.
       auto resIter = std::make_shared<WholeComputeResultIterator>(
           planNode, partitionIndex, absolutePaths, starts, lengths);
@@ -305,6 +305,9 @@ TEST_P(PlanConversionTest, queryTest) {
   std::unique_ptr<facebook::velox::memory::MemoryPool> pool{
       facebook::velox::memory::getDefaultScopedMemoryPool()};
   std::vector<VectorPtr> vectors;
+  // TPC-H lineitem table has 16 columns.
+  int colNum = 16;
+  vectors.reserve(colNum);
   std::vector<int64_t> lOrderkeyData = {
       4636438147,
       2012485446,
@@ -316,7 +319,7 @@ TEST_P(PlanConversionTest, queryTest) {
       2142695974,
       6354246853,
       4141748419};
-  vectors.push_back(createSpecificScalar<int64_t>(10, lOrderkeyData, *pool));
+  vectors.emplace_back(createSpecificScalar<int64_t>(10, lOrderkeyData, *pool));
   std::vector<int64_t> lPartkeyData = {
       263222018,
       255918298,
@@ -328,7 +331,7 @@ TEST_P(PlanConversionTest, queryTest) {
       273511608,
       112999357,
       299103530};
-  vectors.push_back(createSpecificScalar<int64_t>(10, lPartkeyData, *pool));
+  vectors.emplace_back(createSpecificScalar<int64_t>(10, lPartkeyData, *pool));
   std::vector<int64_t> lSuppkeyData = {
       2102019,
       13998315,
@@ -340,12 +343,13 @@ TEST_P(PlanConversionTest, queryTest) {
       871626,
       1639379,
       3423588};
-  vectors.push_back(createSpecificScalar<int64_t>(10, lSuppkeyData, *pool));
+  vectors.emplace_back(createSpecificScalar<int64_t>(10, lSuppkeyData, *pool));
   std::vector<int32_t> lLinenumberData = {4, 6, 1, 5, 1, 2, 1, 5, 2, 6};
-  vectors.push_back(createSpecificScalar<int32_t>(10, lLinenumberData, *pool));
+  vectors.emplace_back(
+      createSpecificScalar<int32_t>(10, lLinenumberData, *pool));
   std::vector<double> lQuantityData = {
       6.0, 1.0, 19.0, 4.0, 6.0, 12.0, 23.0, 11.0, 16.0, 19.0};
-  vectors.push_back(createSpecificScalar<double>(10, lQuantityData, *pool));
+  vectors.emplace_back(createSpecificScalar<double>(10, lQuantityData, *pool));
   std::vector<double> lExtendedpriceData = {
       30586.05,
       7821.0,
@@ -357,20 +361,20 @@ TEST_P(PlanConversionTest, queryTest) {
       41754.18,
       8704.26,
       63780.36};
-  vectors.push_back(
+  vectors.emplace_back(
       createSpecificScalar<double>(10, lExtendedpriceData, *pool));
   std::vector<double> lDiscountData = {
       0.05, 0.06, 0.01, 0.07, 0.05, 0.06, 0.07, 0.05, 0.06, 0.07};
-  vectors.push_back(createSpecificScalar<double>(10, lDiscountData, *pool));
+  vectors.emplace_back(createSpecificScalar<double>(10, lDiscountData, *pool));
   std::vector<double> lTaxData = {
       0.02, 0.03, 0.01, 0.0, 0.01, 0.01, 0.03, 0.07, 0.01, 0.04};
-  vectors.push_back(createSpecificScalar<double>(10, lTaxData, *pool));
+  vectors.emplace_back(createSpecificScalar<double>(10, lTaxData, *pool));
   std::vector<std::string> lReturnflagData = {
       "N", "A", "A", "R", "A", "N", "A", "A", "N", "R"};
-  vectors.push_back(createSpecificStringVector(10, lReturnflagData, *pool));
+  vectors.emplace_back(createSpecificStringVector(10, lReturnflagData, *pool));
   std::vector<std::string> lLinestatusData = {
       "O", "F", "F", "F", "F", "O", "F", "F", "O", "F"};
-  vectors.push_back(createSpecificStringVector(10, lLinestatusData, *pool));
+  vectors.emplace_back(createSpecificStringVector(10, lLinestatusData, *pool));
   std::vector<double> lShipdateNewData = {
       8953.666666666666,
       8773.666666666666,
@@ -382,7 +386,8 @@ TEST_P(PlanConversionTest, queryTest) {
       8778.666666666666,
       9013.666666666666,
       8832.666666666666};
-  vectors.push_back(createSpecificScalar<double>(10, lShipdateNewData, *pool));
+  vectors.emplace_back(
+      createSpecificScalar<double>(10, lShipdateNewData, *pool));
   std::vector<double> lCommitdateNewData = {
       10447.666666666666,
       8953.666666666666,
@@ -394,7 +399,7 @@ TEST_P(PlanConversionTest, queryTest) {
       8666.666666666666,
       9519.666666666666,
       9138.666666666666};
-  vectors.push_back(
+  vectors.emplace_back(
       createSpecificScalar<double>(10, lCommitdateNewData, *pool));
   std::vector<double> lReceiptdateNewData = {
       10456.666666666666,
@@ -407,7 +412,7 @@ TEST_P(PlanConversionTest, queryTest) {
       8726.666666666666,
       9593.666666666666,
       9178.666666666666};
-  vectors.push_back(
+  vectors.emplace_back(
       createSpecificScalar<double>(10, lReceiptdateNewData, *pool));
   std::vector<std::string> lShipinstructData = {
       "COLLECT COD",
@@ -420,7 +425,8 @@ TEST_P(PlanConversionTest, queryTest) {
       "DELIVER IN PERSON",
       "TAKE BACK RETURN",
       "NONE"};
-  vectors.push_back(createSpecificStringVector(10, lShipinstructData, *pool));
+  vectors.emplace_back(
+      createSpecificStringVector(10, lShipinstructData, *pool));
   std::vector<std::string> lShipmodeData = {
       "FOB",
       "REG AIR",
@@ -432,7 +438,7 @@ TEST_P(PlanConversionTest, queryTest) {
       "REG AIR",
       "TRUCK",
       "AIR"};
-  vectors.push_back(createSpecificStringVector(10, lShipmodeData, *pool));
+  vectors.emplace_back(createSpecificStringVector(10, lShipmodeData, *pool));
   std::vector<std::string> lCommentData = {
       " the furiously final foxes. quickly final p",
       "thely ironic",
@@ -444,13 +450,15 @@ TEST_P(PlanConversionTest, queryTest) {
       "lyly regular excuses affi",
       "lly unusual theodolites grow slyly abov",
       " the quickly ironic pains lose car"};
-  vectors.push_back(createSpecificStringVector(10, lCommentData, *pool));
+  vectors.emplace_back(createSpecificStringVector(10, lCommentData, *pool));
   BufferPtr nulls = nullptr;
   uint64_t nullCount = 0;
   RowVectorPtr rv = std::make_shared<RowVector>(
       &(*pool), type, nulls, 10, vectors, nullCount);
   std::vector<RowVectorPtr> batches;
-  batches.push_back(rv);
+  // Batches has only one RowVector here.
+  batches.reserve(1);
+  batches.emplace_back(rv);
   // Will write the data into an ORC file.
   std::string currentPath = fs::current_path().c_str();
   auto sink = std::make_unique<facebook::velox::dwio::common::FileSink>(

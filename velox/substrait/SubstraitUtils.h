@@ -31,8 +31,6 @@ namespace facebook::velox::substrait {
 /// components, and convert them into recognizable representations.
 class SubstraitParser {
  public:
-  SubstraitParser() {}
-
   /// Used to store the type name and nullability.
   struct SubstraitType {
     std::string type;
