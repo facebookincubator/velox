@@ -6,7 +6,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
-    <title>January 2022 Update &#8212; Velox  documentation</title>
+    <title>February 2022 Update &#8212; Velox  documentation</title>
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
     <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
     <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
@@ -15,8 +15,8 @@
     <script src="../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="December 2021 Update" href="december-2021.html" />
-    <link rel="prev" title="February 2022 Update" href="february-2022.html" /> 
+    <link rel="next" title="January 2022 Update" href="january-2022.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
       <h3>Navigation</h3>
@@ -25,14 +25,14 @@
           <a href="../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="december-2021.html" title="December 2021 Update"
+          <a href="january-2022.html" title="January 2022 Update"
              accesskey="N">next</a> |</li>
         <li class="right" >
-          <a href="february-2022.html" title="February 2022 Update"
+          <a href="../monthly-updates.html" title="Monthly Updates"
              accesskey="P">previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">January 2022 Update</a></li> 
+        <li class="nav-item nav-item-this"><a href="">February 2022 Update</a></li> 
       </ul>
     </div>  
 
@@ -41,40 +41,31 @@
         <div class="bodywrapper">
           <div class="body" role="main">
             
-  <section id="january-2022-update">
-<h1>January 2022 Update<a class="headerlink" href="#january-2022-update" title="Permalink to this headline">¶</a></h1>
+  <section id="february-2022-update">
+<h1>February 2022 Update<a class="headerlink" href="#february-2022-update" title="Permalink to this headline">¶</a></h1>
 <section id="core-library">
 <h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
 <ul class="simple">
-<li><p>Add support for bucket-by-bucket query execution to allow for lower memory
-footprint for joins and aggregations on bucketed-by keys.</p></li>
-<li><p>Add support for converting ROW vectors (structs) to and from Arrow arrays.</p></li>
-<li><p>Add support for variadic arguments to simple functions.</p></li>
-<li><p>Add support for LEFT merge join.</p></li>
-<li><p>Add support for AS statement to PlanBuilder.</p></li>
-</ul>
-</section>
-<section id="hive-connector">
-<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
-<ul class="simple">
-<li><p>Add support for AWS S3 IAM Roles.</p></li>
+<li><p>Add support for multiple sources to LocalMergeNode plan node.</p></li>
+<li><p>Optimize aggregation over partially clustered input.</p></li>
 </ul>
 </section>
 <section id="presto-functions">
 <h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
 <ul class="simple">
-<li><p>Add <a class="reference internal" href="../functions/math.html#pi" title="pi"><code class="xref py py-func docutils literal notranslate"><span class="pre">pi()</span></code></a>, <a class="reference internal" href="../functions/math.html#to_base" title="to_base"><code class="xref py py-func docutils literal notranslate"><span class="pre">to_base()</span></code></a>, <a class="reference internal" href="../functions/array.html#array_join" title="array_join"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_join()</span></code></a>, <a class="reference internal" href="../functions/regexp.html#id1" title="regexp_replace"><code class="xref py py-func docutils literal notranslate"><span class="pre">regexp_replace()</span></code></a>
-functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/bitwise.html#bit_count" title="bit_count"><code class="xref py py-func docutils literal notranslate"><span class="pre">bit_count()</span></code></a>, <a class="reference internal" href="../functions/binary.html#sha256" title="sha256"><code class="xref py py-func docutils literal notranslate"><span class="pre">sha256()</span></code></a>, <a class="reference internal" href="../functions/datetime.html#date_diff" title="date_diff"><code class="xref py py-func docutils literal notranslate"><span class="pre">date_diff()</span></code></a> Presto function.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/aggregate.html#checksum" title="checksum"><code class="xref py py-func docutils literal notranslate"><span class="pre">checksum()</span></code></a> aggregate Presto function.</p></li>
+<li><p>Add support for casting from BIGINT and VARCHAR to JSON.</p></li>
 </ul>
 </section>
 <section id="credits">
 <h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
-<p>Aditi Pandit, Alex Hornby, Andy Lee, Arun Thirupathi, Bikash Chandra, Chad
-Austin, Chao Chen, Cheng Su, Damian Reeves, Deepak Majeti, Jake Jung, Kevin
-Wilfong, Krishna Pai, Kunal Chakraborti, Laith Sakka, MJ Deng, Masha Basmanova,
-Muir Manders, Naresh Kumar, Orri Erling, Pedro Eugenio Rocha Pedreira, Sergey
-Pershin, Tom Jackson, Victor Zverovich, Wei He, Wei Zheng, Xavier Deguillard,
-Ying, Zeyi (Rice) Fan, Zhenyuan Zhao, Zsolt Dollenstein, xuedongluan</p>
+<p>Alex Hornby, Andrea Aquino, Behnam Robatmili, Bowei Xu, Chad Austin, Chao Chen,
+Deepak Majeti, Ge Gao, Genevieve Helsel, Harvey Hunt, Huameng Jiang, Jimmy Lu,
+Karteek Murthy Samba Murthy, Kevin Wilfong, Krishna Pai, Laith Sakka, Marc Fisher,
+Masha Basmanova, Michael Shang, Orri Erling, Pedro Eugenio Rocha Pedreira,
+Sagar Mittal, Satya Valluri, Sergey Pershin, Veera Veeraprakash, Wei He,Wei Zheng,
+Wenlei Xie, Xavier Deguillard, Yang Ce, Zhenyuan Zhao, Zichun Zhang, jijufb.</p>
 </section>
 </section>
 
@@ -88,9 +79,8 @@ Ying, Zeyi (Rice) Fan, Zhenyuan Zhao, Zsolt Dollenstein, xuedongluan</p>
   <div>
     <h3><a href="../index.html">Table of Contents</a></h3>
     <ul>
-<li><a class="reference internal" href="#">January 2022 Update</a><ul>
+<li><a class="reference internal" href="#">February 2022 Update</a><ul>
 <li><a class="reference internal" href="#core-library">Core Library</a></li>
-<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
 <li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
 <li><a class="reference internal" href="#credits">Credits</a></li>
 </ul>
@@ -100,18 +90,18 @@ Ying, Zeyi (Rice) Fan, Zhenyuan Zhao, Zsolt Dollenstein, xuedongluan</p>
   </div>
   <div>
     <h4>Previous topic</h4>
-    <p class="topless"><a href="february-2022.html"
-                          title="previous chapter">February 2022 Update</a></p>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="december-2021.html"
-                          title="next chapter">December 2021 Update</a></p>
+    <p class="topless"><a href="january-2022.html"
+                          title="next chapter">January 2022 Update</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
     <ul class="this-page-menu">
-      <li><a href="../_sources/monthly-updates/january-2022.rst.txt"
+      <li><a href="../_sources/monthly-updates/february-2022.rst.txt"
             rel="nofollow">Show Source</a></li>
     </ul>
    </div>
@@ -136,14 +126,14 @@ Ying, Zeyi (Rice) Fan, Zhenyuan Zhao, Zsolt Dollenstein, xuedongluan</p>
           <a href="../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="december-2021.html" title="December 2021 Update"
+          <a href="january-2022.html" title="January 2022 Update"
              >next</a> |</li>
         <li class="right" >
-          <a href="february-2022.html" title="February 2022 Update"
+          <a href="../monthly-updates.html" title="Monthly Updates"
              >previous</a> |</li>
         <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
           <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
-        <li class="nav-item nav-item-this"><a href="">January 2022 Update</a></li> 
+        <li class="nav-item nav-item-this"><a href="">February 2022 Update</a></li> 
       </ul>
     </div>
     <div class="footer" role="contentinfo">
