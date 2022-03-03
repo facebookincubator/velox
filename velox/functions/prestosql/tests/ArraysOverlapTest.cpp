@@ -30,23 +30,40 @@ class ArraysOverlapTest : public FunctionBaseTest {
     auto result =
         evaluate<SimpleVector<bool>>(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+
+    if (input.size() == 2) {
+      auto newSize = input[0]->size() * 2;
+      auto indices = makeIndices(newSize, [](auto row) { return row / 2; });
+      auto firstDict = wrapInDictionary(indices, newSize, input[0]);
+      auto secondFlat = flatten(wrapInDictionary(indices, newSize, input[1]));
+
+      auto dictResult = evaluate<SimpleVector<bool>>(
+          expression, makeRowVector({firstDict, secondFlat}));
+      auto dictExpected = wrapInDictionary(indices, newSize, expected);
+      assertEqualVectors(dictExpected, dictResult);
+    }
   }
+
   template <typename T>
   void testInt() {
-    auto array1 = makeNullableArrayVector<T>({
-        {1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
-        {1, 2, -2, 1},
-        {3, 8, std::nullopt},
-        {1, 1, -2, -2, -2, 4, 8},
-    });
-    auto array2 = makeNullableArrayVector<T>({
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, -2, 4},
-        {1, -2, 4},
-    });
-    auto expected =
-        makeNullableFlatVector<bool>({true, true, std::nullopt, true});
+    auto array1 = makeNullableArrayVector<T>(
+        {{1, -2, 3, std::nullopt, 4, 5, 6, std::nullopt},
+         {1, 2, -2, 1},
+         {3, 8, std::nullopt},
+         {1, 1, -2, -2, -2, 4, 8},
+         {2, -1},
+         {1, 2, 3},
+         {std::nullopt}});
+    auto array2 = makeNullableArrayVector<T>(
+        {{1, -2, 4},
+         {1, -2, 4},
+         {1, -2, 4},
+         {1, -2, 4},
+         {1, -2, std::nullopt},
+         {5, 6, 7},
+         {std::nullopt}});
+    auto expected = makeNullableFlatVector<bool>(
+        {true, true, std::nullopt, true, std::nullopt, false, std::nullopt});
     testExpr(expected, "arrays_overlap(C0, C1)", {array1, array2});
     testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
   }
@@ -64,7 +81,7 @@ class ArraysOverlapTest : public FunctionBaseTest {
          {std::numeric_limits<T>::quiet_NaN(), 9.0009, std::nullopt}});
     auto array2 = makeNullableArrayVector<T>(
         {{1.0, -2.0, 4.0},
-         {std::numeric_limits<T>::min(), 2.0199, -2.001, 1.000001},
+         {std::numeric_limits<T>::min(), 2.0199, 1.000001},
          {1.0001, -2.02, std::numeric_limits<T>::max(), 8.00099},
          {9.0009, std::numeric_limits<T>::infinity()},
          {9.0009, std::numeric_limits<T>::quiet_NaN()},
@@ -119,15 +136,15 @@ TEST_F(ArraysOverlapTest, boolArrays) {
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
 
-//// Test inline strings.
-TEST_F(ArraysOverlapTest, strArrays) {
+/// Test inline strings.
+TEST_F(ArraysOverlapTest, shortStrings) {
   using S = StringView;
 
   auto array1 = makeNullableArrayVector<StringView>({
-      {S("a"), std::nullopt, S("b")},
+      {"a"_sv, std::nullopt, S("b")},
       {S("a"), S("b"), S("a"), S("a")},
       {std::nullopt, S("b"), std::nullopt},
-      {S("abcd")},
+      {"abcd"_sv},
   });
   auto array2 = makeNullableArrayVector<StringView>({
       {S("a")},
@@ -141,8 +158,8 @@ TEST_F(ArraysOverlapTest, strArrays) {
   testExpr(expected, "arrays_overlap(C1, C0)", {array1, array2});
 }
 
-// Test non-inline (> 12 length) strings.
-TEST_F(ArraysOverlapTest, longStrArrays) {
+/// Test non-inline (> 12 length) strings.
+TEST_F(ArraysOverlapTest, longStrings) {
   using S = StringView;
 
   auto array1 = makeNullableArrayVector<StringView>({

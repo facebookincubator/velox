@@ -283,8 +283,6 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       const TypePtr& /* outputType */,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
-    // If one of them is a ConstantVector, iterate through the other
-    // ArrayVector->elementsFlatVector and do constantSet_.find().
     BaseVector* left = args[0].get();
     BaseVector* right = args[1].get();
     if (constantSet_.has_value() && isLeftConstant_) {
@@ -294,12 +292,11 @@ class ArraysOverlapFunction : public exec::VectorFunction {
     exec::LocalDecodedVector elementsDecoder(context);
     auto decodedLeftElements =
         decodeArrayElements(arrayDecoder, elementsDecoder, rows);
-
+    auto decodedLeftArray = arrayDecoder.get();
+    auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
     BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
     auto resultBoolVector = (*result)->template asFlatVector<bool>();
     auto processRow = [&](auto row, const SetWithNull<T>& rightSet) {
-      auto decodedLeftArray = arrayDecoder.get();
-      auto baseLeftArray = decodedLeftArray->base()->as<ArrayVector>();
       auto idx = decodedLeftArray->index(row);
       auto offset = baseLeftArray->offsetAt(idx);
       auto size = baseLeftArray->sizeAt(idx);
@@ -338,10 +335,9 @@ class ArraysOverlapFunction : public exec::VectorFunction {
       auto decodedRightElements =
           decodeArrayElements(rightDecoder, rightElementsDecoder, rows);
       SetWithNull<T> rightSet;
-
+      auto baseRightArray = rightDecoder.get()->base()->as<ArrayVector>();
       rows.applyToSelected([&](vector_size_t row) {
         auto idx = rightDecoder.get()->index(row);
-        auto baseRightArray = rightDecoder.get()->base()->as<ArrayVector>();
         generateSet<T>(baseRightArray, decodedRightElements, idx, rightSet);
         processRow(row, rightSet);
       });
@@ -360,8 +356,8 @@ class ArraysOverlapFunction : public exec::VectorFunction {
 
 void validateMatchingArrayTypes(
     const std::vector<exec::VectorFunctionArg>& inputArgs,
-    const std::string name,
-    const vector_size_t expectedArgCount) {
+    const std::string& name,
+    vector_size_t expectedArgCount) {
   VELOX_USER_CHECK_EQ(
       inputArgs.size(),
       expectedArgCount,
@@ -457,7 +453,7 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
-    const std::string returnType) {
+    const std::string& returnType) {
   return {exec::FunctionSignatureBuilder()
               .typeVariable("T")
               .returnType(returnType)
@@ -470,16 +466,15 @@ template <TypeKind kind>
 const std::shared_ptr<exec::VectorFunction> createTypedArraysOverlap(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   VELOX_CHECK_EQ(inputArgs.size(), 2);
-  BaseVector* left = inputArgs[0].constantValue.get();
-  BaseVector* right = inputArgs[1].constantValue.get();
+  auto left = inputArgs[0].constantValue.get();
+  auto right = inputArgs[1].constantValue.get();
   using T = typename TypeTraits<kind>::NativeType;
   if (left == nullptr && right == nullptr) {
     return std::make_shared<ArraysOverlapFunction<T>>();
   }
-  const bool isLeftConstant = (left != nullptr);
-  BaseVector* baseVector = isLeftConstant ? left : right;
-  SetWithNull<T> constantSet =
-      validateConstantVectorAndGenerateSet<T>(baseVector);
+  auto isLeftConstant = (left != nullptr);
+  auto baseVector = isLeftConstant ? left : right;
+  auto constantSet = validateConstantVectorAndGenerateSet<T>(baseVector);
   return std::make_shared<ArraysOverlapFunction<T>>(
       std::move(constantSet), isLeftConstant);
 }
