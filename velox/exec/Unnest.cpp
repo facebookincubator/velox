@@ -34,10 +34,13 @@ Unnest::Unnest(
   }
 
   const auto& unnestVariable = unnestNode->unnestVariables()[0];
-  if (!unnestVariable->type()->isArray()) {
-    VELOX_UNSUPPORTED(
-        "Unnest operator doesn't support non-ARRAY unnest variables yet: {}",
-        unnestVariable->type()->toString())
+  if (!unnestVariable->type()->isArray() && !unnestVariable->type()->isMap()) {
+    VELOX_UNSUPPORTED("Unnest operator supports only ARRAY and MAP types")
+  }
+  if (unnestVariable->type()->isArray()) {
+    unnestColumnType_ = ARRAY;
+  } else {
+    unnestColumnType_ = MAP;
   }
 
   if (unnestNode->withOrdinality()) {
@@ -64,18 +67,26 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   auto size = input_->size();
-
-  // Build repeated indices to apply to "replicated" columns.
-  const auto& unnestVector = input_->childAt(unnestChannel_);
-
   inputRows_.resize(size);
-  unnestDecoded_.decode(*unnestVector, inputRows_);
 
+  const auto& unnestVector = input_->childAt(unnestChannel_);
+  unnestDecoded_.decode(*unnestVector, inputRows_);
   auto unnestIndices = unnestDecoded_.indices();
 
-  auto unnestBase = unnestDecoded_.base()->as<ArrayVector>();
-  auto rawSizes = unnestBase->rawSizes();
-  auto rawOffsets = unnestBase->rawOffsets();
+  const ArrayVector* unnestDecodedBaseArrayVector;
+  const MapVector* unnestDecodedBaseMapVector;
+  const vector_size_t* rawSizes;
+  const vector_size_t* rawOffsets;
+  if (unnestColumnType_ == ARRAY) {
+    unnestDecodedBaseArrayVector = unnestDecoded_.base()->as<ArrayVector>();
+    rawSizes = unnestDecodedBaseArrayVector->rawSizes();
+    rawOffsets = unnestDecodedBaseArrayVector->rawOffsets();
+  } else {
+    VELOX_CHECK(unnestColumnType_ == MAP);
+    unnestDecodedBaseMapVector = unnestDecoded_.base()->as<MapVector>();
+    rawSizes = unnestDecodedBaseMapVector->rawSizes();
+    rawOffsets = unnestDecodedBaseMapVector->rawOffsets();
+  }
 
   // Count number of elements.
   vector_size_t numElements = 0;
@@ -86,13 +97,13 @@ RowVectorPtr Unnest::getOutput() {
   }
 
   if (numElements == 0) {
-    // All arrays are null or empty.
+    // All arrays/maps are null or empty.
     input_ = nullptr;
     return nullptr;
   }
 
   // Create "indices" buffer to repeat rows as many times as there are elements
-  // in the array.
+  // in the array(or map).
   BufferPtr repeatedIndices = allocateIndices(numElements, pool());
   auto* rawIndices = repeatedIndices->asMutable<vector_size_t>();
   vector_size_t index = 0;
@@ -112,8 +123,7 @@ RowVectorPtr Unnest::getOutput() {
         numElements, repeatedIndices, input_->childAt(projection.inputChannel));
   }
 
-  // Make "elements" column. Elements may be out of order. Use a
-  // dictionary to ensure the right order.
+  // Make dictionary index for elements column since they may be out of order.
   BufferPtr elementIndices = allocateIndices(numElements, pool());
   auto* rawElementIndices = elementIndices->asMutable<vector_size_t>();
   index = 0;
@@ -133,12 +143,33 @@ RowVectorPtr Unnest::getOutput() {
     }
   }
 
-  outputs[identityProjections_.size()] = identityMapping
-      ? unnestBase->elements()
-      : wrapChild(numElements, elementIndices, unnestBase->elements());
+  if (unnestColumnType_ == ARRAY) {
+    // Construct unnest column using Array elements wrapped using above created
+    // dictionary.
+    outputs[identityProjections_.size()] = identityMapping
+        ? unnestDecodedBaseArrayVector->elements()
+        : wrapChild(
+              numElements,
+              elementIndices,
+              unnestDecodedBaseArrayVector->elements());
+  } else {
+    // Construct two unnest columns for Map keys and values vectors wrapped
+    // using above created dictionary
+    outputs[identityProjections_.size()] = identityMapping
+        ? unnestDecodedBaseMapVector->mapKeys()
+        : wrapChild(
+              numElements,
+              elementIndices,
+              unnestDecodedBaseMapVector->mapKeys());
+    outputs[identityProjections_.size() + 1] = identityMapping
+        ? unnestDecodedBaseMapVector->mapValues()
+        : wrapChild(
+              numElements,
+              elementIndices,
+              unnestDecodedBaseMapVector->mapValues());
+  }
 
   input_ = nullptr;
-
   return std::make_shared<RowVector>(
       pool(), outputType_, BufferPtr(nullptr), numElements, std::move(outputs));
 }

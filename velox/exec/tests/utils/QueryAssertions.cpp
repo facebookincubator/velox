@@ -40,6 +40,9 @@ std::string makeCreateTableSql(
     auto child = rowType.childAt(i);
     if (child->isArray()) {
       sql << child->asArray().elementType()->kindName() << "[]";
+    } else if (child->isMap()) {
+      sql << "MAP(" << child->asMap().keyType()->kindName() << ", "
+          << child->asMap().valueType()->kindName() << ")";
     } else {
       sql << child->kindName();
     }
@@ -103,6 +106,36 @@ template <>
   }
 
   return ::duckdb::Value::LIST(array);
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::MAP>(
+    const VectorPtr& vector,
+    int32_t row) {
+  auto mapVector = vector->as<MapVector>();
+  auto& mapKeys = mapVector->mapKeys();
+  auto& mapValues = mapVector->mapValues();
+  auto offset = mapVector->offsetAt(row);
+  auto size = mapVector->sizeAt(row);
+
+  std::vector<::duckdb::Value> duckKeysVector;
+  std::vector<::duckdb::Value> duckValuesVector;
+  duckKeysVector.reserve(size);
+  duckValuesVector.reserve(size);
+  for (auto i = 0; i < size; i++) {
+    auto innerRow = offset + i;
+    duckKeysVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        duckValueAt, mapKeys->typeKind(), mapKeys, innerRow));
+    if (!mapValues->isNullAt(innerRow)) {
+      duckValuesVector.emplace_back(::duckdb::Value(nullptr));
+    } else {
+      duckValuesVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          duckValueAt, mapValues->typeKind(), mapValues, innerRow));
+    }
+  }
+  return ::duckdb::Value::MAP(
+      ::duckdb::Value::LIST(duckKeysVector),
+      ::duckdb::Value::LIST(duckValuesVector));
 }
 
 template <TypeKind kind>
@@ -421,6 +454,8 @@ void DuckDbQueryRunner::createTable(
           appender.Append(nullptr);
         } else if (rowType.childAt(column)->isArray()) {
           appender.Append(duckValueAt<TypeKind::ARRAY>(columnVector, row));
+        } else if (rowType.childAt(column)->isMap()) {
+          appender.Append(duckValueAt<TypeKind::MAP>(columnVector, row));
         } else {
           auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
               duckValueAt, rowType.childAt(column)->kind(), columnVector, row);

@@ -21,7 +21,7 @@ using namespace facebook::velox::exec::test;
 
 class UnnestTest : public OperatorTestBase {};
 
-TEST_F(UnnestTest, basic) {
+TEST_F(UnnestTest, basicArray) {
   auto vector = makeRowVector({
       makeFlatVector<int64_t>(100, [](auto row) { return row; }),
       makeArrayVector<int32_t>(
@@ -37,6 +37,19 @@ TEST_F(UnnestTest, basic) {
 
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
   assertQuery(op, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
+}
+
+TEST_F(UnnestTest, basicMap) {
+  auto vector = makeRowVector(
+      {makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+       makeMapVector<int64_t, double>(
+           100,
+           [](auto row) { return row % 3 + 1; },
+           [](auto row) { return row; },
+           [](auto row) { return row * 0.1; })});
+  createDuckDbTable({vector});
+  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
+  assertQuery(op, "SELECT c0, UNNEST(c1) FROM tmp");
 }
 
 TEST_F(UnnestTest, allEmptyOrNullArrays) {
