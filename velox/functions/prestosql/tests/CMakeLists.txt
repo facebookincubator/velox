@@ -30,6 +30,7 @@ add_executable(
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArrayPositionTest.cpp
+  ArraysOverlapTest.cpp
   BitwiseTest.cpp
   CardinalityTest.cpp
   CeilFloorTest.cpp
@@ -59,8 +60,7 @@ add_executable(
   URLFunctionsTest.cpp
   WidthBucketArrayTest.cpp
   GreatestLeastTest.cpp
-  ZipTest.cpp
-  ArraysOverlapTest.cpp)
+  ZipTest.cpp)
 
 add_test(velox_functions_test velox_functions_test)
 
