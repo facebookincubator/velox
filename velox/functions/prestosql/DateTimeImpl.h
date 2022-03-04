@@ -42,17 +42,20 @@ FOLLY_ALWAYS_INLINE std::optional<Timestamp> fromUnixtime(double unixtime) {
 
   static const int64_t kMax = std::numeric_limits<int64_t>::max();
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
+  static const uint64_t kSignedMax = (1ull << 63);
 
   static const Timestamp kMaxTimestamp(
       kMax / 1000, kMax % 1000 * kNanosecondsInMillisecond);
   static const Timestamp kMinTimestamp(
       kMin / 1000 - 1, (kMin % 1000 + 1000) * kNanosecondsInMillisecond);
 
-  if (UNLIKELY(unixtime >= static_cast<double>(kMax))) {
+  // We use kSignedMax because on some compilers if we cast kMax to a double, we
+  // get a number larger than kMax, which overflows.
+  if (UNLIKELY(kSignedMax - unixtime <= 1)) {
     return kMaxTimestamp;
   }
 
-  if (UNLIKELY(unixtime <= static_cast<double>(kMin))) {
+  if (UNLIKELY(unixtime <= kMin)) {
     return kMinTimestamp;
   }
 
