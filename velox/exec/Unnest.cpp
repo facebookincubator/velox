@@ -143,25 +143,16 @@ RowVectorPtr Unnest::getOutput() {
     // dictionary.
     outputs[identityProjections_.size()] = identityMapping
         ? unnestBaseArray->elements()
-        : wrapChild(
-              numElements,
-              elementIndices,
-              unnestBaseArray->elements());
+        : wrapChild(numElements, elementIndices, unnestBaseArray->elements());
   } else {
     // Construct two unnest columns for Map keys and values vectors wrapped
     // using above created dictionary.
     outputs[identityProjections_.size()] = identityMapping
         ? unnestBaseMap->mapKeys()
-        : wrapChild(
-              numElements,
-              elementIndices,
-              unnestBaseMap->mapKeys());
+        : wrapChild(numElements, elementIndices, unnestBaseMap->mapKeys());
     outputs[identityProjections_.size() + 1] = identityMapping
         ? unnestBaseMap->mapValues()
-        : wrapChild(
-              numElements,
-              elementIndices,
-              unnestBaseMap->mapValues());
+        : wrapChild(numElements, elementIndices, unnestBaseMap->mapValues());
   }
 
   input_ = nullptr;

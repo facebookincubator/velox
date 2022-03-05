@@ -38,8 +38,7 @@ class Unnest : public Operator {
 
   bool isFinished() override;
 
-private:
-
+ private:
   ChannelIndex unnestChannel_;
 
   SelectivityVector inputRows_;

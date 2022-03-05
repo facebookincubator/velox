@@ -48,19 +48,19 @@ TEST_F(UnnestTest, basicMap) {
            [](auto row) { return row % 2; },
            [](auto row) { return row % 2 + 1; })});
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-  // DuckDB doesn't support Unnest from MAP column. Hence, creating for DuckDB use a table with 2 separate array
-  // columns with the keys and values part of the MAP.
-  auto duckDbVector = makeRowVector({
-            makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-            makeArrayVector<int32_t>(
-                    100,
-                    [](auto row) { return 2; },
-                    [](auto row, auto index) { return index; }),
-            makeArrayVector<int32_t>(
-                    100,
-                    [](auto row) { return 2; },
-                    [](auto row, auto index) { return index + 1; })
-            });
+  // DuckDB doesn't support Unnest from MAP column. Hence, creating for DuckDB
+  // use a table with 2 separate array columns with the keys and values part of
+  // the MAP.
+  auto duckDbVector = makeRowVector(
+      {makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+       makeArrayVector<int32_t>(
+           100,
+           [](auto row) { return 2; },
+           [](auto row, auto index) { return index; }),
+       makeArrayVector<int32_t>(
+           100,
+           [](auto row) { return 2; },
+           [](auto row, auto index) { return index + 1; })});
   createDuckDbTable({duckDbVector});
   assertQuery(op, "SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
 }
@@ -80,14 +80,14 @@ TEST_F(UnnestTest, allEmptyOrNullArrays) {
 }
 
 TEST_F(UnnestTest, allEmptyOrNullMaps) {
-    auto vector = makeRowVector(
-            {makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-             makeMapVector<int64_t, double>(
-                     100,
-                     [](auto row) { return 0; },
-                     [](auto /* row */) { return 0; },
-                     [](auto /* row */) { return 0; },
-                     nullEvery(5))});
-    auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-    assertQueryReturnsEmptyResult(op);
+  auto vector = makeRowVector(
+      {makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+       makeMapVector<int64_t, double>(
+           100,
+           [](auto row) { return 0; },
+           [](auto /* row */) { return 0; },
+           [](auto /* row */) { return 0; },
+           nullEvery(5))});
+  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
+  assertQueryReturnsEmptyResult(op);
 }
