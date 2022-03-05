@@ -48,9 +48,8 @@ TEST_F(UnnestTest, basicMap) {
            [](auto row) { return row % 2; },
            [](auto row) { return row % 2 + 1; })});
   auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-  // DuckDB doesn't support Unnest from MAP column. Hence, creating for DuckDB
-  // use a table with 2 separate array columns with the keys and values part of
-  // the MAP.
+  // DuckDB doesn't support Unnest from MAP column. Hence,using 2 separate array
+  // columns with the keys and values part of the MAP to validate.
   auto duckDbVector = makeRowVector(
       {makeFlatVector<int64_t>(100, [](auto row) { return row; }),
        makeArrayVector<int32_t>(
