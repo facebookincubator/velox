@@ -37,11 +37,6 @@ Unnest::Unnest(
   if (!unnestVariable->type()->isArray() && !unnestVariable->type()->isMap()) {
     VELOX_UNSUPPORTED("Unnest operator supports only ARRAY and MAP types")
   }
-  if (unnestVariable->type()->isArray()) {
-    unnestColumnType_ = ARRAY;
-  } else {
-    unnestColumnType_ = MAP;
-  }
 
   if (unnestNode->withOrdinality()) {
     VELOX_UNSUPPORTED("Unnest operator doesn't support ordinality column yet");
@@ -73,19 +68,19 @@ RowVectorPtr Unnest::getOutput() {
   unnestDecoded_.decode(*unnestVector, inputRows_);
   auto unnestIndices = unnestDecoded_.indices();
 
-  const ArrayVector* unnestDecodedBaseArrayVector;
-  const MapVector* unnestDecodedBaseMapVector;
+  const ArrayVector* unnestBaseArray;
+  const MapVector* unnestBaseMap;
   const vector_size_t* rawSizes;
   const vector_size_t* rawOffsets;
-  if (unnestColumnType_ == ARRAY) {
-    unnestDecodedBaseArrayVector = unnestDecoded_.base()->as<ArrayVector>();
-    rawSizes = unnestDecodedBaseArrayVector->rawSizes();
-    rawOffsets = unnestDecodedBaseArrayVector->rawOffsets();
+  if (unnestVector->typeKind() == TypeKind::ARRAY) {
+    unnestBaseArray = unnestDecoded_.base()->as<ArrayVector>();
+    rawSizes = unnestBaseArray->rawSizes();
+    rawOffsets = unnestBaseArray->rawOffsets();
   } else {
-    VELOX_CHECK(unnestColumnType_ == MAP);
-    unnestDecodedBaseMapVector = unnestDecoded_.base()->as<MapVector>();
-    rawSizes = unnestDecodedBaseMapVector->rawSizes();
-    rawOffsets = unnestDecodedBaseMapVector->rawOffsets();
+    VELOX_CHECK(unnestVector->typeKind() == TypeKind::MAP);
+    unnestBaseMap = unnestDecoded_.base()->as<MapVector>();
+    rawSizes = unnestBaseMap->rawSizes();
+    rawOffsets = unnestBaseMap->rawOffsets();
   }
 
   // Count number of elements.
@@ -143,30 +138,30 @@ RowVectorPtr Unnest::getOutput() {
     }
   }
 
-  if (unnestColumnType_ == ARRAY) {
+  if (unnestVector->typeKind() == TypeKind::ARRAY) {
     // Construct unnest column using Array elements wrapped using above created
     // dictionary.
     outputs[identityProjections_.size()] = identityMapping
-        ? unnestDecodedBaseArrayVector->elements()
+        ? unnestBaseArray->elements()
         : wrapChild(
               numElements,
               elementIndices,
-              unnestDecodedBaseArrayVector->elements());
+              unnestBaseArray->elements());
   } else {
     // Construct two unnest columns for Map keys and values vectors wrapped
-    // using above created dictionary
+    // using above created dictionary.
     outputs[identityProjections_.size()] = identityMapping
-        ? unnestDecodedBaseMapVector->mapKeys()
+        ? unnestBaseMap->mapKeys()
         : wrapChild(
               numElements,
               elementIndices,
-              unnestDecodedBaseMapVector->mapKeys());
+              unnestBaseMap->mapKeys());
     outputs[identityProjections_.size() + 1] = identityMapping
-        ? unnestDecodedBaseMapVector->mapValues()
+        ? unnestBaseMap->mapValues()
         : wrapChild(
               numElements,
               elementIndices,
-              unnestDecodedBaseMapVector->mapValues());
+              unnestBaseMap->mapValues());
   }
 
   input_ = nullptr;

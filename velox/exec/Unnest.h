@@ -38,11 +38,9 @@ class Unnest : public Operator {
 
   bool isFinished() override;
 
- private:
-  enum UnnestColumnType { ARRAY, MAP };
+private:
 
   ChannelIndex unnestChannel_;
-  UnnestColumnType unnestColumnType_;
 
   SelectivityVector inputRows_;
   DecodedVector unnestDecoded_;
