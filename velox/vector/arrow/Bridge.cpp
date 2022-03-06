@@ -330,7 +330,7 @@ void exportToArrow(
   arrowArray.buffers = bridgeHolder->getArrowBuffers();
   arrowArray.release = bridgeRelease;
   arrowArray.length = vector->size();
-  arrowArray.n_buffers = 0;
+  arrowArray.n_buffers = 1;
   arrowArray.n_children = 0;
   arrowArray.children = nullptr;
 
@@ -340,7 +340,6 @@ void exportToArrow(
   // Setting up buffer pointers. First one is always nulls.
   if (vector->nulls()) {
     bridgeHolder->setBuffer(0, vector->nulls());
-    arrowArray.n_buffers = 1;
 
     // getNullCount() returns a std::optional. -1 means we don't have the count
     // available yet (and we don't want to count it here).
