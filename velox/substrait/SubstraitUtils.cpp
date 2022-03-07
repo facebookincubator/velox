@@ -120,7 +120,7 @@ std::string SubstraitParser::makeNodeName(int node_id, int col_idx) {
   return fmt::format("n{}_{}", node_id, col_idx);
 }
 
-std::string SubstraitParser::findSubstraitFunction(
+std::string SubstraitParser::findSubstraitFuncSpec(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) const {
   if (functionMap.find(id) == functionMap.end()) {
@@ -131,20 +131,31 @@ std::string SubstraitParser::findSubstraitFunction(
   return map[id];
 }
 
+std::string SubstraitParser::getSubFunctionName(
+    const std::string& subFuncSpec) const {
+  // Get the position of ":" in the function name.
+  std::size_t pos = subFuncSpec.find(":");
+  if (pos == std::string::npos) {
+    return subFuncSpec;
+  }
+  return subFuncSpec.substr(0, pos);
+}
+
 std::string SubstraitParser::findVeloxFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) const {
-  std::string subFunc = findSubstraitFunction(functionMap, id);
-  std::string veloxFunc = mapToVeloxFunction(subFunc);
-  return veloxFunc;
+  std::string subFuncSpec = findSubstraitFuncSpec(functionMap, id);
+  std::string subFuncName = getSubFunctionName(subFuncSpec);
+  return mapToVeloxFunction(subFuncName);
 }
 
 std::string SubstraitParser::mapToVeloxFunction(
     const std::string& subFunc) const {
   if (substraitVeloxFunctionMap.find(subFunc) ==
       substraitVeloxFunctionMap.end()) {
-    VELOX_FAIL(
-        "Could not find Substrait function {} in function map.", subFunc);
+    // If not finding the mapping from Substrait function name to Velox function
+    // name, the original Substrait function name will be used.
+    return subFunc;
   }
   std::unordered_map<std::string, std::string>& map =
       const_cast<std::unordered_map<std::string, std::string>&>(

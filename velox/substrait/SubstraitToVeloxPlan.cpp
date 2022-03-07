@@ -41,8 +41,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     for (const auto& groupingExpr : groupingExprs) {
       // Velox's groupings are limited to be Field, so groupingExpr is
       // expected to be FieldReference.
-      auto fieldExpr =
-          exprConverter_->toVeloxExpr(groupingExpr.selection(), inputPlanNodeId);
+      auto fieldExpr = exprConverter_->toVeloxExpr(
+          groupingExpr.selection(), inputPlanNodeId);
       veloxGroupingExprs.emplace_back(fieldExpr);
       outIdx += 1;
     }
@@ -100,7 +100,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     auto aggExpr = std::make_shared<const core::CallTypedExpr>(
         toVeloxType(aggOutType->type), std::move(aggParams), funcName);
     aggExprs.emplace_back(aggExpr);
-  
+
     // Initialize the Aggregate Step.
     if (!phaseInited) {
       auto phase = aggFunction.phase();
@@ -121,7 +121,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     }
     outIdx += 1;
   }
-  
+
   // Construct the Aggregate Node.
   bool ignoreNullKeys = false;
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
@@ -351,7 +351,6 @@ std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
 // TODO: Support different types here.
 class FilterInfo {
  public:
-
   // Used to set the left bound.
   void setLeft(double left, bool isExclusive) {
     left_ = left;
@@ -413,8 +412,9 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
   flattenConditions(sFilter, scalarFunctions);
   // Construct the FilterInfo for the related column.
   for (const auto& scalarFunction : scalarFunctions) {
-    auto filterName = subParser_->findSubstraitFunction(
+    auto filterNameSpec = subParser_->findSubstraitFuncSpec(
         functionMap_, scalarFunction.function_reference());
+    auto filterName = subParser_->getSubFunctionName(filterNameSpec);
     int32_t colIdx;
     // TODO: Add different types' support here.
     double val;
@@ -439,15 +439,15 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
               "Substrait conversion not supported for arg type '{}'", typeCase);
       }
     }
-    if (filterName == "IS_NOT_NULL") {
+    if (filterName == "is_not_null") {
       colInfoMap[colIdx]->forbidsNull();
-    } else if (filterName == "GREATER_THAN_OR_EQUAL") {
+    } else if (filterName == "gte") {
       colInfoMap[colIdx]->setLeft(val, false);
-    } else if (filterName == "GREATER_THAN") {
+    } else if (filterName == "gt") {
       colInfoMap[colIdx]->setLeft(val, true);
-    } else if (filterName == "LESS_THAN_OR_EQUAL") {
+    } else if (filterName == "lte") {
       colInfoMap[colIdx]->setRight(val, false);
-    } else if (filterName == "LESS_THAN") {
+    } else if (filterName == "lt") {
       colInfoMap[colIdx]->setRight(val, true);
     } else {
       VELOX_NYI(
@@ -498,10 +498,10 @@ void SubstraitVeloxPlanConverter::flattenConditions(
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kScalarFunction: {
       auto sFunc = sFilter.scalar_function();
-      auto filterName = subParser_->findSubstraitFunction(
+      auto filterNameSpec = subParser_->findSubstraitFuncSpec(
           functionMap_, sFunc.function_reference());
-      // TODO: Only AND relation is supported here.
-      if (filterName == "AND") {
+      // TODO: Only and relation is supported here.
+      if (subParser_->getSubFunctionName(filterNameSpec) == "and") {
         for (const auto& sCondition : sFunc.args()) {
           flattenConditions(sCondition, scalarFunctions);
         }

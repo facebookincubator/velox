@@ -188,7 +188,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         std::string absolutePath = "file://" + currentPath + path;
         absolutePaths.emplace_back(absolutePath);
       }
-  
+
       std::vector<u_int64_t> starts = planConverter->getStarts();
       std::vector<u_int64_t> lengths = planConverter->getLengths();
       // Construct the result iterator.

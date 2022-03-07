@@ -4,50 +4,50 @@
   {
    "extension_function": {
     "extension_uri_reference": 0,
-    "function_anchor": 0,
-    "name": "IS_NOT_NULL"
-   }
-  },
-  {
-   "extension_function": {
-    "extension_uri_reference": 0,
-    "function_anchor": 2,
-    "name": "GREATER_THAN_OR_EQUAL"
-   }
-  },
-  {
-   "extension_function": {
-    "extension_uri_reference": 0,
-    "function_anchor": 1,
-    "name": "AND"
-   }
-  },
-  {
-   "extension_function": {
-    "extension_uri_reference": 0,
     "function_anchor": 4,
-    "name": "LESS_THAN_OR_EQUAL"
+    "name": "lte:fp64_fp64"
    }
   },
   {
    "extension_function": {
     "extension_uri_reference": 0,
     "function_anchor": 5,
-    "name": "SUM"
-   }
-  },
-  {
-   "extension_function": {
-    "extension_uri_reference": 0,
-    "function_anchor": 6,
-    "name": "MULTIPLY"
+    "name": "sum:opt_fp64"
    }
   },
   {
    "extension_function": {
     "extension_uri_reference": 0,
     "function_anchor": 3,
-    "name": "LESS_THAN"
+    "name": "lt:fp64_fp64"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 0,
+    "name": "is_not_null:fp64"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 1,
+    "name": "and:bool_bool"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 2,
+    "name": "gte:fp64_fp64"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 6,
+    "name": "multiply:opt_fp64_fp64"
    }
   }
  ],

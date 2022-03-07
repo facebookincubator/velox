@@ -27,8 +27,8 @@
 
 namespace facebook::velox::substrait {
 
-/// This class contains some common funcitons used to parse Substrait components,
-/// and convert them into recognizable representations.
+/// This class contains some common functions used to parse Substrait
+/// components, and convert them into recognizable representations.
 class SubstraitParser {
  public:
   /// Used to store the type name and nullability.
@@ -59,11 +59,15 @@ class SubstraitParser {
   /// a simple name or a compound name. The compound name format is:
   /// <function name>:<short_arg_type0>_<short_arg_type1>_..._<short_arg_typeN>.
   /// Currently, the input types in the function specification are not used. But
-  /// in the future, they should be used for the validation according the specifications
-  /// in Substrait yaml files.
+  /// in the future, they should be used for the validation according the
+  /// specifications in Substrait yaml files.
   std::string findSubstraitFuncSpec(
       const std::unordered_map<uint64_t, std::string>& functionMap,
       uint64_t id) const;
+
+  /// This function is used to get the function name from the compound name.
+  /// When the input is a simple name, it will be returned.
+  std::string getSubFunctionName(const std::string& subFuncSpec) const;
 
   /// Used to find the Velox function name according to the function id
   /// from a pre-constructed function map.
@@ -77,9 +81,9 @@ class SubstraitParser {
  private:
   /// Used for mapping Substrait function key words into Velox functions' key
   /// words. Key: the Substrait function key word, Value: the Velox function key
-  /// word.
-  const std::unordered_map<std::string, std::string> substraitVeloxFunctionMap =
-      {{"MULTIPLY", "multiply"}, {"SUM", "sum"}};
+  /// word. For those functions with different names in Substrait and Velox,
+  /// a mapping relation should be added here.
+  const std::unordered_map<std::string, std::string> substraitVeloxFunctionMap;
 };
 
 } // namespace facebook::velox::substrait
