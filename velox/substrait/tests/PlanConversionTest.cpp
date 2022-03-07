@@ -73,7 +73,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
      public:
       WholeComputeResultIterator(
           const std::shared_ptr<const core::PlanNode>& planNode,
-          const u_int32_t& index,
+          u_int32_t index,
           const std::vector<std::string>& paths,
           const std::vector<u_int64_t>& starts,
           const std::vector<u_int64_t>& lengths)
@@ -82,6 +82,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
             paths_(paths),
             starts_(starts),
             lengths_(lengths) {
+        // Construct the splits.
         std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
             connectorSplits;
         connectorSplits.reserve(paths.size());
@@ -102,6 +103,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         for (const auto& connectorSplit : connectorSplits) {
           splits_.emplace_back(exec::Split(folly::copy(connectorSplit), -1));
         }
+
         params_.planNode = planNode;
         cursor_ = std::make_unique<exec::test::TaskCursor>(params_);
         addSplits_ = [&](Task* task) {
@@ -168,14 +170,16 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       std::string subData = buffer.str();
       ::substrait::Plan subPlan;
       google::protobuf::util::JsonStringToMessage(subData, &subPlan);
+
       auto planConverter = std::make_shared<
           facebook::velox::substrait::SubstraitVeloxPlanConverter>();
       // Convert to Velox PlanNode.
       auto planNode = planConverter->toVeloxPlan(subPlan);
+
       // Get the information for TableScan.
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
-      std::vector<std::string> paths;
-      planConverter->getPaths(paths);
+      std::vector<std::string> paths = planConverter->getPaths();
+
       // In test, need to get the absolute path of the generated ORC file.
       std::vector<std::string> absolutePaths;
       absolutePaths.reserve(paths.size());
@@ -184,10 +188,9 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         std::string absolutePath = "file://" + currentPath + path;
         absolutePaths.emplace_back(absolutePath);
       }
-      std::vector<u_int64_t> starts;
-      planConverter->getStarts(starts);
-      std::vector<u_int64_t> lengths;
-      planConverter->getLengths(lengths);
+  
+      std::vector<u_int64_t> starts = planConverter->getStarts();
+      std::vector<u_int64_t> lengths = planConverter->getLengths();
       // Construct the result iterator.
       auto resIter = std::make_shared<WholeComputeResultIterator>(
           planNode, partitionIndex, absolutePaths, starts, lengths);
@@ -451,6 +454,7 @@ TEST_P(PlanConversionTest, queryTest) {
       "lly unusual theodolites grow slyly abov",
       " the quickly ironic pains lose car"};
   vectors.emplace_back(createSpecificStringVector(10, lCommentData, *pool));
+
   BufferPtr nulls = nullptr;
   uint64_t nullCount = 0;
   RowVectorPtr rv = std::make_shared<RowVector>(
@@ -459,13 +463,13 @@ TEST_P(PlanConversionTest, queryTest) {
   // Batches has only one RowVector here.
   batches.reserve(1);
   batches.emplace_back(rv);
+
   // Will write the data into an ORC file.
   std::string currentPath = fs::current_path().c_str();
   auto sink = std::make_unique<facebook::velox::dwio::common::FileSink>(
       currentPath + "/mock_lineitem.orc");
   auto config = std::make_shared<facebook::velox::dwrf::Config>();
   const int64_t writerMemoryCap = std::numeric_limits<int64_t>::max();
-
   facebook::velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = type;
@@ -480,6 +484,7 @@ TEST_P(PlanConversionTest, queryTest) {
     writer->write(batches[i]);
   }
   writer->close();
+
   // Find the Velox path according current path.
   std::string veloxPath;
   size_t pos = 0;
@@ -491,6 +496,7 @@ TEST_P(PlanConversionTest, queryTest) {
   } else {
     throw new std::runtime_error("Current path is not a valid Velox path.");
   }
+
   // Begin to trigger Velox's computing with the Substrait plan.
   std::string subPlanPath = veloxPath + "/velox/substrait/tests/sub.json";
   auto veloxConverter = std::make_shared<VeloxConverter>();

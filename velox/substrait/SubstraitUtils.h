@@ -27,18 +27,14 @@
 
 namespace facebook::velox::substrait {
 
-/// This class contains some common funcitons used to parse Substrait
-/// components, and convert them into recognizable representations.
+/// This class contains some common funcitons used to parse Substrait components,
+/// and convert them into recognizable representations.
 class SubstraitParser {
  public:
   /// Used to store the type name and nullability.
   struct SubstraitType {
     std::string type;
     bool nullable;
-    SubstraitType(const std::string& subType, const bool& subNullable) {
-      type = subType;
-      nullable = subNullable;
-    }
   };
 
   /// Used to parse Substrait NamedStruct.
@@ -59,16 +55,21 @@ class SubstraitParser {
   std::string makeNodeName(int nodeId, int colIdx);
 
   /// Used to find the Substrait function name according to the function id
-  /// from a pre-constructed function map.
-  std::string findSubstraitFunction(
+  /// from a pre-constructed function map. The function specification can be
+  /// a simple name or a compound name. The compound name format is:
+  /// <function name>:<short_arg_type0>_<short_arg_type1>_..._<short_arg_typeN>.
+  /// Currently, the input types in the function specification are not used. But
+  /// in the future, they should be used for the validation according the specifications
+  /// in Substrait yaml files.
+  std::string findSubstraitFuncSpec(
       const std::unordered_map<uint64_t, std::string>& functionMap,
-      const uint64_t& id) const;
+      uint64_t id) const;
 
   /// Used to find the Velox function name according to the function id
   /// from a pre-constructed function map.
   std::string findVeloxFunction(
       const std::unordered_map<uint64_t, std::string>& functionMap,
-      const uint64_t& id) const;
+      uint64_t id) const;
 
   /// Used to map the Substrait function key word into Velox function key word.
   std::string mapToVeloxFunction(const std::string& subFunc) const;

@@ -18,9 +18,6 @@
 
 namespace facebook::velox::substrait {
 
-/// Return whether the type is primitive.
-bool isPrimitive(const TypePtr& type);
-
 /// Return whether the type is String type.
 bool isString(const TypePtr& type);
 

@@ -37,6 +37,9 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::FilterRel& sFilter);
 
   /// Used to convert Substrait ReadRel into Velox PlanNode.
+  /// Index: the index of the partition this item belongs to.
+  /// Starts: the start positions in byte to read from the items.
+  /// Lengths: the lengths in byte to read from the items.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
       const ::substrait::ReadRel& sRead,
       u_int32_t& index,
@@ -61,25 +64,19 @@ class SubstraitVeloxPlanConverter {
     return partitionIndex_;
   }
 
-  /// Will add the paths of the files to be scanned into a vector.
-  void getPaths(std::vector<std::string>& paths) {
-    for (const auto& path : paths_) {
-      paths.emplace_back(path);
-    }
+  /// Will return the paths of the files to be scanned.
+  const std::vector<std::string>& getPaths() {
+    return paths_;
   }
 
-  /// Will add the starts of the files to be scanned into a vector.
-  void getStarts(std::vector<u_int64_t>& starts) {
-    for (const auto& start : starts_) {
-      starts.emplace_back(start);
-    }
+  /// Will return the starts of the files to be scanned.
+  const std::vector<u_int64_t>& getStarts() {
+    return starts_;
   }
 
   /// Will return the lengths to be scanned for each file.
-  void getLengths(std::vector<u_int64_t>& lengths) {
-    for (const auto& length : lengths_) {
-      lengths.emplace_back(length);
-    }
+  const std::vector<u_int64_t>& getLengths() {
+    return lengths_;
   }
 
  private:

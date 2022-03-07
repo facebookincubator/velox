@@ -22,7 +22,7 @@ namespace facebook::velox::substrait {
 std::shared_ptr<const core::FieldAccessTypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::FieldReference& sField,
-    const int32_t& inputPlanNodeId) {
+    int32_t inputPlanNodeId) {
   auto typeCase = sField.reference_type_case();
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
@@ -43,7 +43,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& sFunc,
-    const int32_t& inputPlanNodeId) {
+    int32_t inputPlanNodeId) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
   params.reserve(sFunc.args().size());
   for (const auto& sArg : sFunc.args()) {
@@ -75,7 +75,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression& sExpr,
-    const int32_t& inputPlanNodeId) {
+    int32_t inputPlanNodeId) {
   std::shared_ptr<const core::ITypedExpr> veloxExpr;
   auto typeCase = sExpr.rex_type_case();
   switch (typeCase) {

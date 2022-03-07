@@ -18,24 +18,10 @@
 
 namespace facebook::velox::substrait {
 
-bool isPrimitive(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-      return true;
-    default:
-      break;
-  }
-  return false;
-}
-
 bool isString(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
       return true;
     default:
       break;
@@ -58,15 +44,17 @@ int64_t bytesOfType(const TypePtr& type) {
 }
 
 TypePtr toVeloxType(const std::string& typeName) {
-  if (typeName == "BOOL") {
+  auto typeKind = mapNameToTypeKind(typeName);
+  if (typeKind == TypeKind::BOOLEAN) {
     return BOOLEAN();
-  } else if (typeName == "FP64") {
-    return DOUBLE();
-  } else if (typeName == "STRING") {
-    return VARCHAR();
-  } else {
-    VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }
+  if (typeKind == TypeKind::DOUBLE) {
+    return DOUBLE();
+  }
+  if (typeKind == TypeKind::VARCHAR) {
+    return VARCHAR();
+  }
+  VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
 }
 
 } // namespace facebook::velox::substrait

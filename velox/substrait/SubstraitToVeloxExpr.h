@@ -36,12 +36,12 @@ class SubstraitVeloxExprConverter {
   /// Used to convert Substrait Field into Velox Field Expression.
   std::shared_ptr<const core::FieldAccessTypedExpr> toVeloxExpr(
       const ::substrait::Expression::FieldReference& sField,
-      const int32_t& inputPlanNodeId);
+      int32_t inputPlanNodeId);
 
   /// Used to convert Substrait ScalarFunction into Velox Expression.
   std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
       const ::substrait::Expression::ScalarFunction& sFunc,
-      const int32_t& inputPlanNodeId);
+      int32_t inputPlanNodeId);
 
   /// Used to convert Substrait Literal into Velox Expression.
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
@@ -50,7 +50,7 @@ class SubstraitVeloxExprConverter {
   /// Used to convert Substrait Expression into Velox Expression.
   std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
       const ::substrait::Expression& sExpr,
-      const int32_t& inputPlanNodeId);
+      int32_t inputPlanNodeId);
 
  private:
   /// The Substrait parser used to convert Substrait representations into
