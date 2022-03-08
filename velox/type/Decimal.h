@@ -19,20 +19,49 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/StringView.h"
 
 namespace facebook::velox {
 
-static constexpr uint8_t kMaxPrecisionInt16 = 4;
-static constexpr uint8_t kMaxPercisionInt32 = 9;
-static constexpr uint8_t kMaxPrecisionInt64 = 18;
+using int128_t = __int128_t;
 static constexpr uint8_t kMaxPrecisionInt128 = 38;
-static constexpr uint8_t kMaxPrecisionDecimal = kMaxPrecisionInt128;
-static constexpr uint8_t kDefaultScale = 3;
-static constexpr uint8_t kDefaultPrecision = 18;
+static constexpr uint8_t kDefaultScale = 0;
+static constexpr uint8_t kDefaultPrecision = kMaxPrecisionInt128;
 
-enum DecimalInternalType { INT16, INT32, INT64, INT128 };
+/**
+ * A wrapper struct over int128_t type.
+ * Refer https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html
+ * for supported arithmetic operations extensions.
+ */
+struct Int128 {
+  int128_t value = 0;
+  Int128() = default;
+  Int128(int128_t value) : value(value) {}
+  void operator=(const Int128& rhs) {
+    this->value = rhs.value;
+  }
+
+  Int128 operator+(Int128& rhs) {
+    Int128 sum;
+    VELOX_CHECK(!__builtin_add_overflow(this->value, rhs.value, &sum.value));
+    return sum;
+  }
+
+  Int128 operator*(Int128& rhs) {
+    Int128 product;
+    VELOX_CHECK(
+        !__builtin_mul_overflow(this->value, rhs.value, &product.value));
+    return product;
+  }
+
+  Int128 operator-(Int128& rhs) {
+    Int128 diff;
+    VELOX_CHECK(!__builtin_sub_overflow(this->value, rhs.value, &diff.value));
+    return diff;
+  }
+};
 
 /*
  * This class defines the Velox DECIMAL type support to store
@@ -48,32 +77,20 @@ class Decimal {
     return scale_;
   }
 
-  inline const DecimalInternalType getInternalType() const {
-    return internalType_;
+  inline Int128 getUnscaledValue() {
+    return unscaledValue_;
   }
 
-  /**
-   * Returns the max number of bytes required to store a decimal of
-   * given the precision.
-   * @param precision Precision of the decimal value.
-   * @return Max Number of bytes.
-   */
-  DecimalInternalType getInternalType(const uint16_t precision) {
-    VELOX_USER_CHECK(precision >= 1 && precision <= kMaxPrecisionInt128);
-    if (precision <= kMaxPrecisionInt16) {
-      return INT16;
-    } else if (precision <= kMaxPercisionInt32) {
-      return INT32;
-    } else if (precision <= kMaxPrecisionInt64) {
-      return INT64;
-    }
-    return INT128;
+  inline void setUnscaledValue(const Int128& value) {
+    unscaledValue_ = value;
   }
 
   // Needed for serialization of FlatVector<Decimal>
   operator StringView() const {VELOX_NYI()}
 
   std::string toString() const;
+
+  Decimal operator+(Decimal& rhs) {}
 
   operator std::string() const {
     return toString();
@@ -98,42 +115,88 @@ class Decimal {
     return true;
   }
 
-  Decimal(uint8_t precision = kDefaultPrecision, uint8_t scale = kDefaultScale)
+  /*
+   * Constructor to build a Decimal type from a string literal.
+   */
+  Decimal(
+      const std::string& value,
+      uint8_t precision = kDefaultPrecision,
+      uint8_t scale = kDefaultScale)
       : precision_(precision), scale_(scale) {
     // Validate string value fits in the precision and scale.
+    VELOX_USER_CHECK(precision <= kMaxPrecisionInt128);
     // validate precision and scale
   }
 
+  Decimal(Int128 value, uint8_t precision, uint8_t scale) {
+    unscaledValue_ = value;
+  }
+
+  Decimal() = default;
+
  private:
-  uint8_t precision_;
-  uint8_t scale_;
-  DecimalInternalType internalType_;
+  uint8_t precision_ = kDefaultPrecision; // The number of digits in unscaled
+                                          // decimal value
+  uint8_t scale_ = kDefaultScale; // The number of digits on the right
+                                  // of radix point.
+  Int128 unscaledValue_; // The actual unscaled value with
+                         // max precision 38.
 };
 
-class SmallDecimal : public Decimal {
-  // represents Decimal value with precision 1 to 18.
-  SmallDecimal(
-      std::string value,
-      uint8_t precision = kDefaultPrecision,
-      uint8_t scale = kDefaultScale)
-      : Decimal(precision, scale) {}
-};
+class DecimalCast {
+  static Decimal stringToDecimal(const std::string& value) {
+    // throws overflow exception if length is > 38
+    VELOX_CHECK_GT(
+        value.length(), 0, "Decimal string must have at least 1 char")
+    VELOX_CHECK_LE(
+        value.length(),
+        kMaxPrecisionInt128 + 1,
+        "Decimal string overflows max precision of %d",
+        kMaxPrecisionInt128);
+    Int128 unscaledValue;
+    uint8_t precision;
+    uint8_t scale;
+    parseToInt128(value, unscaledValue, precision, scale);
+    return Decimal(unscaledValue, precision, scale);
+  }
 
-class LargeDecimal : public Decimal {
-  // represents the integer form for decimals in the range 18 to 38.
-  LargeDecimal(
-      std::string value,
-      uint8_t precision = kDefaultPrecision,
-      uint8_t scale = kDefaultScale)
-      : Decimal(precision, scale) {}
-};
+  /**
+   * -1234567890123456789.123`1
+   */
+  static void parseToInt128(
+      const std::string& value,
+      Int128& result,
+      uint8_t& precision,
+      uint8_t& scale) {
+    uint8_t pos = 0;
+    bool isNegative = false;
+    if (!isdigit(value[pos] - '0')) {
+      VELOX_CHECK_EQ(value[pos++], '-', "Illegal decimal value %s", value);
+      isNegative = true;
+    }
+    precision = 0;
+    scale = 0;
+    bool hasScale = false;
+    Int128 digit;
+    Int128 exponent((int128_t)10);
+    while (pos < value.length()) {
+      if (value[pos] == '.') {
+        hasScale = true;
+        continue;
+      }
+      VELOX_CHECK(std::isdigit(value[pos]), "Invalid decimal string");
+      digit.value = value[pos] - '0';
+      if (isNegative) {
+        result = result * exponent - digit;
+      } else {
+        result = result * exponent + digit;
+      }
 
-class DecimalParser {
-  static Decimal strToDecimal(
-      const std::string value,
-      const uint8_t precision,
-      const uint8_t scale) {
-    return 0;
+      if (hasScale)
+        scale++;
+      pos++;
+    }
+    precision = hasScale ? value.length() - 1 : value.length();
   }
 };
 

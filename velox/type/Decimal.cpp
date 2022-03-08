@@ -24,6 +24,7 @@ void parseTo(folly::StringPiece in, Decimal& out) {
 std::string Decimal::toString() const {
   return "";
 }
+
 } // namespace facebook::velox
 
 namespace std {
