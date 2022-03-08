@@ -249,6 +249,7 @@ void HashBuild::addRuntimeStats() {
       stats_.addRuntimeStat(fmt::format("distinctKey{}", i), asDistinct);
     }
   }
+  stats_.addRuntimeStat("buildBytes", table_->allocatedBytes());
 }
 
 BlockingReason HashBuild::isBlocked(ContinueFuture* future) {
