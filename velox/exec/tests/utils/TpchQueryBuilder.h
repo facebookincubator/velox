@@ -97,7 +97,7 @@ class TpchQueryBuilder {
 
   std::vector<std::string> getColumnAliases(
       const std::string& tableName,
-      std::vector<std::string> columnNames) const {
+      const std::vector<std::string>& columnNames) const {
     std::vector<std::string> aliases;
     for (const auto& name : columnNames) {
       aliases.push_back(getColumnAlias(tableName, name));
