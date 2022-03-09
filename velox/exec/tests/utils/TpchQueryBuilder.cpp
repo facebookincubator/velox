@@ -136,8 +136,8 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   // shipdate <= '1998-09-02'
   auto shipDate = getColumnAlias(kTableName, "l_shipdate");
   common::test::SubfieldFiltersBuilder filtersBuilder;
-  // DWRF does not support Date type. It uses Varchar instead.
-  if ((selectedRowType->findChild(shipDate))->isVarchar()) {
+  // DWRF does not support Date type. Use Varchar instead.
+  if (selectedRowType->findChild(shipDate)->isVarchar()) {
     filtersBuilder.add(shipDate, common::test::lessThanOrEqual("1998-09-02"));
   } else {
     filtersBuilder.add(
@@ -226,7 +226,7 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
 
   auto shipDate = getColumnAlias(kTableName, "l_shipdate");
   common::test::SubfieldFiltersBuilder filtersBuilder;
-  // DWRF does not support Date type. Uses Varchar instead.
+  // DWRF does not support Date type. Use Varchar instead.
   if (selectedRowType->findChild(shipDate)->isVarchar()) {
     filtersBuilder.add(
         shipDate, common::test::between("1994-01-01", "1994-12-31"));
