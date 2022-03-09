@@ -40,6 +40,9 @@ std::string makeCreateTableSql(
     auto child = rowType.childAt(i);
     if (child->isArray()) {
       sql << child->asArray().elementType()->kindName() << "[]";
+    } else if (child->isMap()) {
+      sql << "MAP(" << child->asMap().keyType()->kindName() << ", "
+          << child->asMap().valueType()->kindName() << ")";
     } else {
       sql << child->kindName();
     }
@@ -103,6 +106,36 @@ template <>
   }
 
   return ::duckdb::Value::LIST(array);
+}
+
+template <>
+::duckdb::Value duckValueAt<TypeKind::MAP>(
+    const VectorPtr& vector,
+    int32_t row) {
+  auto mapVector = vector->as<MapVector>();
+  auto& mapKeys = mapVector->mapKeys();
+  auto& mapValues = mapVector->mapValues();
+  auto offset = mapVector->offsetAt(row);
+  auto size = mapVector->sizeAt(row);
+
+  std::vector<::duckdb::Value> duckKeysVector;
+  std::vector<::duckdb::Value> duckValuesVector;
+  duckKeysVector.reserve(size);
+  duckValuesVector.reserve(size);
+  for (auto i = 0; i < size; i++) {
+    auto innerRow = offset + i;
+    duckKeysVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        duckValueAt, mapKeys->typeKind(), mapKeys, innerRow));
+    if (!mapValues->isNullAt(innerRow)) {
+      duckValuesVector.emplace_back(::duckdb::Value(nullptr));
+    } else {
+      duckValuesVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          duckValueAt, mapValues->typeKind(), mapValues, innerRow));
+    }
+  }
+  return ::duckdb::Value::MAP(
+      ::duckdb::Value::LIST(duckKeysVector),
+      ::duckdb::Value::LIST(duckValuesVector));
 }
 
 template <TypeKind kind>
@@ -175,35 +208,28 @@ velox::variant rowVariantAt(
   return velox::variant::row(std::move(values));
 }
 
-std::vector<MaterializedRow> materialize(
-    ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
-  EXPECT_EQ(rowType->size(), dataChunk->GetTypes().size())
-      << "Wrong number of columns";
+velox::variant mapVariantAt(
+    const ::duckdb::Value& vector,
+    const std::shared_ptr<const Type>& mapType) {
+  std::map<variant, variant> map;
 
-  auto size = dataChunk->size();
-  std::vector<MaterializedRow> rows;
-  rows.reserve(size);
+  const auto& mapValue = ::duckdb::StructValue::GetChildren(vector);
+  VELOX_CHECK(mapValue.size() == 2);
 
-  for (size_t i = 0; i < size; ++i) {
-    MaterializedRow row;
-    row.reserve(rowType->size());
-    for (size_t j = 0; j < rowType->size(); ++j) {
-      auto typeKind = rowType->childAt(j)->kind();
-      if (dataChunk->GetValue(j, i).IsNull()) {
-        row.push_back(variant(typeKind));
-      } else if (typeKind == TypeKind::ROW) {
-        row.push_back(
-            rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
-      } else {
-        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            variantAt, typeKind, dataChunk, i, j);
-        row.push_back(value);
-      }
-    }
-    rows.push_back(row);
+  auto mapTypePtr = dynamic_cast<const MapType*>(mapType.get());
+  auto keyType = mapTypePtr->keyType()->kind();
+  auto valueType = mapTypePtr->valueType()->kind();
+  const auto& keyList = ::duckdb::ListValue::GetChildren(mapValue[0]);
+  const auto& valueList = ::duckdb::ListValue::GetChildren(mapValue[1]);
+  VELOX_CHECK(keyList.size() == valueList.size());
+  for (int i = 0; i < keyList.size(); i++) {
+    auto variantKey =
+        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, keyType, keyList[i]);
+    auto variantValue =
+        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, valueType, valueList[i]);
+    map.insert({variantKey, variantValue});
   }
-  return rows;
+  return velox::variant::map(map);
 }
 
 template <TypeKind kind>
@@ -320,6 +346,40 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
   return rows;
 }
 
+std::vector<MaterializedRow> materialize(
+    ::duckdb::DataChunk* dataChunk,
+    const std::shared_ptr<const RowType>& rowType) {
+  EXPECT_EQ(rowType->size(), dataChunk->GetTypes().size())
+      << "Wrong number of columns";
+
+  auto size = dataChunk->size();
+  std::vector<MaterializedRow> rows;
+  rows.reserve(size);
+
+  for (size_t i = 0; i < size; ++i) {
+    MaterializedRow row;
+    row.reserve(rowType->size());
+    for (size_t j = 0; j < rowType->size(); ++j) {
+      auto typeKind = rowType->childAt(j)->kind();
+      if (dataChunk->GetValue(j, i).IsNull()) {
+        row.push_back(variant(typeKind));
+      } else if (typeKind == TypeKind::MAP) {
+        row.push_back(
+            mapVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
+      } else if (typeKind == TypeKind::ROW) {
+        row.push_back(
+            rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
+      } else {
+        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            variantAt, typeKind, dataChunk, i, j);
+        row.push_back(value);
+      }
+    }
+    rows.push_back(row);
+  }
+  return rows;
+}
+
 MaterializedRow getColumns(
     const MaterializedRow& row,
     const std::vector<uint32_t>& columnIndices) {
@@ -421,6 +481,8 @@ void DuckDbQueryRunner::createTable(
           appender.Append(nullptr);
         } else if (rowType.childAt(column)->isArray()) {
           appender.Append(duckValueAt<TypeKind::ARRAY>(columnVector, row));
+        } else if (rowType.childAt(column)->isMap()) {
+          appender.Append(duckValueAt<TypeKind::MAP>(columnVector, row));
         } else {
           auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
               duckValueAt, rowType.childAt(column)->kind(), columnVector, row);
