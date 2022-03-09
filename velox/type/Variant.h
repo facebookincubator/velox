@@ -108,6 +108,12 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
 };
 
+template <>
+struct VariantTypeTraits<TypeKind::DECIMAL> {
+  using native_type = typename TypeTraits<TypeKind::DECIMAL>::NativeType;
+  using stored_type = facebook::velox::Decimal;
+};
+
 struct OpaqueCapsule {
   std::shared_ptr<const OpaqueType> type;
   std::shared_ptr<void> obj;

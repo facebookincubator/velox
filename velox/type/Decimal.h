@@ -90,8 +90,6 @@ class Decimal {
 
   std::string toString() const;
 
-  Decimal operator+(Decimal& rhs) {}
-
   operator std::string() const {
     return toString();
   }
@@ -115,32 +113,21 @@ class Decimal {
     return true;
   }
 
-  /*
-   * Constructor to build a Decimal type from a string literal.
-   */
   Decimal(
-      const std::string& value,
+      Int128 value,
       uint8_t precision = kDefaultPrecision,
       uint8_t scale = kDefaultScale)
-      : precision_(precision), scale_(scale) {
-    // Validate string value fits in the precision and scale.
-    VELOX_USER_CHECK(precision <= kMaxPrecisionInt128);
-    // validate precision and scale
-  }
+      : unscaledValue_(value), precision_(precision), scale_(scale) {}
 
-  Decimal(Int128 value, uint8_t precision, uint8_t scale) {
-    unscaledValue_ = value;
-  }
-
-  Decimal() = default;
+  constexpr Decimal() = default;
 
  private:
+  Int128 unscaledValue_; // The actual unscaled value with
+                         // max precision 38.
   uint8_t precision_ = kDefaultPrecision; // The number of digits in unscaled
                                           // decimal value
   uint8_t scale_ = kDefaultScale; // The number of digits on the right
                                   // of radix point.
-  Int128 unscaledValue_; // The actual unscaled value with
-                         // max precision 38.
 };
 
 class DecimalCast {
