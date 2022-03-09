@@ -126,7 +126,7 @@ template <>
     auto innerRow = offset + i;
     duckKeysVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         duckValueAt, mapKeys->typeKind(), mapKeys, innerRow));
-    if (!mapValues->isNullAt(innerRow)) {
+    if (mapValues->isNullAt(innerRow)) {
       duckValuesVector.emplace_back(::duckdb::Value(nullptr));
     } else {
       duckValuesVector.emplace_back(VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
