@@ -232,6 +232,40 @@ velox::variant mapVariantAt(
   return velox::variant::map(map);
 }
 
+std::vector<MaterializedRow> materialize(
+        ::duckdb::DataChunk* dataChunk,
+        const std::shared_ptr<const RowType>& rowType) {
+    EXPECT_EQ(rowType->size(), dataChunk->GetTypes().size())
+                        << "Wrong number of columns";
+
+    auto size = dataChunk->size();
+    std::vector<MaterializedRow> rows;
+    rows.reserve(size);
+
+    for (size_t i = 0; i < size; ++i) {
+        MaterializedRow row;
+        row.reserve(rowType->size());
+        for (size_t j = 0; j < rowType->size(); ++j) {
+            auto typeKind = rowType->childAt(j)->kind();
+            if (dataChunk->GetValue(j, i).IsNull()) {
+                row.push_back(variant(typeKind));
+            } else if (typeKind == TypeKind::MAP) {
+                row.push_back(
+                        mapVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
+            } else if (typeKind == TypeKind::ROW) {
+                row.push_back(
+                        rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
+            } else {
+                auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+                        variantAt, typeKind, dataChunk, i, j);
+                row.push_back(value);
+            }
+        }
+        rows.push_back(row);
+    }
+    return rows;
+}
+
 template <TypeKind kind>
 velox::variant variantAt(VectorPtr vector, int32_t row) {
   using T = typename KindToFlatVector<kind>::WrapperType;
@@ -343,40 +377,6 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
     rows.push_back(row);
   }
 
-  return rows;
-}
-
-std::vector<MaterializedRow> materialize(
-    ::duckdb::DataChunk* dataChunk,
-    const std::shared_ptr<const RowType>& rowType) {
-  EXPECT_EQ(rowType->size(), dataChunk->GetTypes().size())
-      << "Wrong number of columns";
-
-  auto size = dataChunk->size();
-  std::vector<MaterializedRow> rows;
-  rows.reserve(size);
-
-  for (size_t i = 0; i < size; ++i) {
-    MaterializedRow row;
-    row.reserve(rowType->size());
-    for (size_t j = 0; j < rowType->size(); ++j) {
-      auto typeKind = rowType->childAt(j)->kind();
-      if (dataChunk->GetValue(j, i).IsNull()) {
-        row.push_back(variant(typeKind));
-      } else if (typeKind == TypeKind::MAP) {
-        row.push_back(
-            mapVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
-      } else if (typeKind == TypeKind::ROW) {
-        row.push_back(
-            rowVariantAt(dataChunk->GetValue(j, i), rowType->childAt(j)));
-      } else {
-        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            variantAt, typeKind, dataChunk, i, j);
-        row.push_back(value);
-      }
-    }
-    rows.push_back(row);
-  }
   return rows;
 }
 
