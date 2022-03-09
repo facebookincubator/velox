@@ -185,8 +185,10 @@ BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
       for (auto i = 0; i < keyChannels_.size(); i++) {
         auto it = channels.find(keyChannels_[i]);
         if (it != channels.end()) {
-          dynamicFilterBuilders_[i].emplace(DynamicFilterBuilder(
-              *(buildHashers[i].get()), keyChannels_[i], dynamicFilters_));
+          auto builder = DynamicFilterBuilder(
+              *(buildHashers[i].get()), keyChannels_[i], dynamicFilters_);
+          builder.addOutput(10);
+          dynamicFilterBuilders_[i].emplace(std::move(builder));
         }
       }
     }

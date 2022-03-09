@@ -152,4 +152,24 @@ std::string printPlanWithStats(
         }
       });
 }
+
+std::string printRuntimeStats(const TaskStats& taskStats) {
+  std::stringstream stream;
+
+  for (const auto& pipelineStats : taskStats.pipelineStats) {
+    for (const auto& opStats : pipelineStats.operatorStats) {
+      for (const auto& [key, value] : opStats.runtimeStats) {
+        stream << "["
+               << "Pipeline" << opStats.pipelineId << "."
+               << "PlanNode" << opStats.planNodeId << "."
+               << opStats.operatorType << "." << key << "] "
+               << "Sum: " << value.sum << ", Count: " << value.count
+               << ", Min: " << value.min << ", Max: " << value.max << std::endl;
+      }
+      stream << std::endl;
+    }
+  }
+
+  return stream.str();
+}
 } // namespace facebook::velox::exec

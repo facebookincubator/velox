@@ -21,6 +21,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/tests/FilterBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+#include "velox/exec/PlanNodeStats.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -604,6 +605,150 @@ TEST_F(HashJoinTest, antiJoin) {
            .planNode();
 
   assertQuery(op, "SELECT t.c1 FROM t WHERE t.c0 NOT IN (SELECT c0 FROM u)");
+}
+
+TEST_F(HashJoinTest, TableScanOfJoin) {
+  const std::string baymaxPath =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/baymax_all/ds=2022-03-12/000173_0_20220320_071336_13234_druxq";
+  const std::string falconPath =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/falcon_splits_join_baymax_all_v2/ds=2022-03-19/000173_0_20220320_002641_02273_dg39k";
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> baymaxSplit =
+      makeHiveConnectorSplit(baymaxPath, {{"ds", "2022-03-12"}});
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> falconSplit =
+      makeHiveConnectorSplit(falconPath, {{"ds", "2022-03-19"}});
+
+  RowTypePtr baymaxRowType = ROW(
+      {"account_timezone_id", "admarket_account_id"}, {INTEGER(), BIGINT()});
+  ColumnHandleMap baymaxAssignments = {
+      {"account_timezone_id", regularColumn("account_timezone_id", BIGINT())},
+      {"admarket_account_id", regularColumn("admarket_account_id", BIGINT())},
+      {"ds", partitionKey("ds", VARCHAR())}};
+  RowTypePtr falconRowType = ROW({"admarket_id"}, {BIGINT()});
+  ColumnHandleMap falconAssignments = {
+      {"admarket_id", regularColumn("admarket_id", BIGINT())},
+      {"ds", partitionKey("ds", VARCHAR())}};
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId baymaxScanId;
+  core::PlanNodeId falconScanId;
+
+  auto falconOp =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              falconRowType,
+              makeTableHandle(
+                  common::test::SubfieldFiltersBuilder()
+                      .add(
+                          "brand_team_id",
+                          common::test::equal(1510718369245892))
+                      .add("user_id", common::test::equal(100000385964168))
+                      .build()),
+              falconAssignments)
+          .capturePlanNodeId(falconScanId)
+          .planNode();
+
+  auto falconValuesOp =
+      PlanBuilder(planNodeIdGenerator)
+          .values({makeRowVector(
+                                {"admarket_id"},
+                                {makeFlatVector<int64_t>(
+                                    {23848382111580503, 23848382111580503})})})
+                            .planNode();
+
+  auto op =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              baymaxRowType,
+              makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
+              baymaxAssignments)
+          .capturePlanNodeId(baymaxScanId)
+          .hashJoin(
+              {"admarket_account_id"},
+              {"admarket_id"},
+              falconValuesOp,
+              "",
+              {"account_timezone_id", "admarket_account_id"},
+              core::JoinType::kSemi)
+          //          .partialAggregation({0},
+          //          {"approx_distinct(admarket_account_id)"})
+          //          .finalAggregation()
+          .planNode();
+
+  CursorParameters params;
+  //  params.maxDrivers = 15;
+  params.planNode = op;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  cursor->task()->addSplit(baymaxScanId, exec::Split(baymaxSplit));
+  //  cursor->task()->addSplit(falconScanId, exec::Split(falconSplit));
+  cursor->task()->noMoreSplits(baymaxScanId);
+  //  cursor->task()->noMoreSplits(falconScanId);
+
+  int32_t totalCnt = 0;
+  while (cursor->moveNext()) {
+    totalCnt += cursor->current()->size();
+  }
+
+  std::cout << printPlanWithStats(*op, cursor->task()->taskStats(), true)
+            << std::endl;
+  //  std::cout << printRuntimeStats(cursor->task()->taskStats()) << std::endl;
+}
+
+TEST_F(HashJoinTest, dynamicFilterAdaptivity) {
+  std::vector<RowVectorPtr> leftVectors;
+  leftVectors.reserve(5);
+
+  auto leftFiles = makeFilePaths(5);
+
+  for (int i = 0; i < 5; i++) {
+    auto rowVector = makeRowVector({
+        makeFlatVector<int32_t>(10005, [&](auto row) { return row * 2; }),
+        makeFlatVector<int64_t>(10005, [](auto row) { return row; }),
+    });
+    leftVectors.push_back(rowVector);
+    writeToFile(leftFiles[i]->path, kWriter, rowVector);
+  }
+
+  auto rightKey =
+      makeFlatVector<int32_t>(100, [](auto row) { return row * 2 + 1; });
+  auto rightVectors = {makeRowVector({
+      rightKey,
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+  })};
+
+  createDuckDbTable("t", {leftVectors});
+  createDuckDbTable("u", {rightVectors});
+
+  auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  auto buildSide = PlanBuilder(planNodeIdGenerator)
+                       .values(rightVectors)
+                       .project({"c0 AS u_c0", "c1 AS u_c1"})
+                       .planNode();
+  {
+    core::PlanNodeId leftScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(probeType)
+                  .capturePlanNodeId(leftScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      buildSide,
+                      "",
+                      {"c0", "c1", "u_c1"},
+                      core::JoinType::kInner)
+                  .project({"c0", "c1 + 1", "c1 + u_c1"})
+                  .planNode();
+
+    auto task = assertQuery(
+        op,
+        {{leftScanId, leftFiles}},
+        "SELECT t.c0, t.c1 + 1, t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0");
+    EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
+    EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
+    EXPECT_EQ(getInputPositions(task, 0), 0);
+  }
 }
 
 TEST_F(HashJoinTest, dynamicFilters) {

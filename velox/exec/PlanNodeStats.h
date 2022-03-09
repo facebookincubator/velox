@@ -110,4 +110,6 @@ std::string printPlanWithStats(
     const core::PlanNode& plan,
     const TaskStats& taskStats,
     bool includeCustomStats = false);
+
+std::string printRuntimeStats(const TaskStats& taskStats);
 } // namespace facebook::velox::exec

@@ -31,7 +31,7 @@ class HashProbe : public Operator {
       const std::shared_ptr<const core::HashJoinNode>& hashJoinNode);
 
   bool needsInput() const override {
-    return !finished_ && !noMoreInput_ && !input_;
+    return !finished_ && !noMoreInput_ && !input_ && table_;
   }
 
   void addInput(RowVectorPtr input) override;
@@ -108,7 +108,7 @@ class HashProbe : public Operator {
 
       // Add filter if VectorHasher is somewhat selective, e.g. dropped at least
       // 1/3 of the rows. Make sure we have seen at least 10K rows.
-      if (isActive_ && numIn_ >= 10'000 && numOut_ < 0.66 * numIn_) {
+      if (isActive_) {
         if (auto filter = buildHasher_.getFilter(false)) {
           dynamicFilters_.emplace(channel_, std::move(filter));
         }
