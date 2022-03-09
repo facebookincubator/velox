@@ -40,7 +40,7 @@ struct TpchPlan {
 
 /// Contains type information, data files, and column aliases for a table.
 /// This information is inferred from the input data files.
-struct TableMetadata {
+struct TpchTableMetadata {
   RowTypePtr type;
   std::vector<std::string> dataFiles;
   std::unordered_map<std::string, std::string> columnAliases;
@@ -66,12 +66,11 @@ struct TableMetadata {
 /// should be in the same order as in the TPC-H standard.
 class TpchQueryBuilder {
  public:
-  TpchQueryBuilder(const dwio::common::FileFormat format) : format_(format) {}
+  TpchQueryBuilder(dwio::common::FileFormat format) : format_(format) {}
 
-  /// Read each data file and initialize row types and determine data paths for
+  /// Read each data file, initialize row types, and determine data paths for
   /// each table.
   /// @param dataPath path to the data files
-  /// @param format file format
   void initialize(const std::string& dataPath);
 
   /// Get the query plan for a given TPC-H query number.
@@ -107,8 +106,8 @@ class TpchQueryBuilder {
   }
 
   std::vector<std::string> getProjectColumnAliases(
-      std::string tableName,
-      std::vector<std::string> columnNames) const {
+      const std::string& tableName,
+      const std::vector<std::string>& columnNames) const {
     std::vector<std::string> aliases;
     for (const auto& name : columnNames) {
       aliases.push_back(getColumnAlias(tableName, name) + " AS " + name);
@@ -116,7 +115,7 @@ class TpchQueryBuilder {
     return aliases;
   }
 
-  std::unordered_map<std::string, TableMetadata> tableMetadata_;
+  std::unordered_map<std::string, TpchTableMetadata> tableMetadata_;
   const dwio::common::FileFormat format_;
   static const std::unordered_map<std::string, std::vector<std::string>>
       kTables_;

@@ -53,7 +53,7 @@ class ParquetTpchTest : public testing::Test {
     tpchBuilder_.initialize(tempDirectory_->path);
   }
 
-  /// Write TPC-H table as a Parquet file to temp directory in hive-style
+  /// Write TPC-H tables as a Parquet file to temp directory in hive-style
   /// partition
   static void saveTpchTablesAsParquet() {
     constexpr int kRowGroupSize = 10'000;
@@ -84,17 +84,15 @@ class ParquetTpchTest : public testing::Test {
     constexpr int kNumSplits = 10;
     auto addSplits = [&](exec::Task* task) {
       if (!noMoreSplits) {
-        auto sources = tpchPlan.dataFiles;
-        for (const auto source : sources) {
-          const auto& filePaths = source.second;
-          for (const auto path : filePaths) {
+        for (const auto entry : tpchPlan.dataFiles) {
+          for (const auto path : entry.second) {
             auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
                 path, kNumSplits, tpchPlan.dataFileFormat);
             for (const auto& split : splits) {
-              task->addSplit(source.first, exec::Split(split));
+              task->addSplit(entry.first, exec::Split(split));
             }
           }
-          task->noMoreSplits(source.first);
+          task->noMoreSplits(entry.first);
         }
       }
       noMoreSplits = true;

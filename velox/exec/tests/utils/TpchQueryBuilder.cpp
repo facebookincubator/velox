@@ -75,7 +75,7 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
     case 6:
       return getQ6Plan();
     default:
-      VELOX_NYI();
+      VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
 }
 
@@ -110,7 +110,7 @@ ColumnHandleMap allRegularColumns(
 } // namespace
 
 TpchPlan TpchQueryBuilder::getQ1Plan() const {
-  const std::string kTableName = "lineitem";
+  static const std::string kTableName = "lineitem";
   std::vector<std::string> selectedColumns = {
       "l_returnflag",
       "l_linestatus",
@@ -128,7 +128,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           tableMetadata_.at(kTableName).type, aliasSelectedColumns);
   auto selectedRowType = columnSelector->buildSelectedReordered();
-  // We need to add an extra project step to map file columns to standard
+  // Add an extra project step to map file columns to standard
   // column names.
   const auto projectAlias =
       getProjectColumnAliases(kTableName, selectedColumns);
@@ -147,7 +147,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId lineitemPlanNodeId;
 
-  const auto stage1 =
+  const auto partialAggStage =
       PlanBuilder(planNodeIdGenerator)
           .tableScan(
               selectedRowType,
@@ -177,7 +177,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .localPartition({}, {stage1})
+          .localPartition({}, {partialAggStage})
           .finalAggregation(
               {0, 1},
               {"sum(a0)",
@@ -207,7 +207,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
 }
 
 TpchPlan TpchQueryBuilder::getQ6Plan() const {
-  const std::string kTableName = "lineitem";
+  static const std::string kTableName = "lineitem";
   std::vector<std::string> selectedColumns = {
       "l_shipdate", "l_extendedprice", "l_quantity", "l_discount"};
 
@@ -219,15 +219,15 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           tableMetadata_.at(kTableName).type, aliasSelectedColumns);
   auto selectedRowType = columnSelector->buildSelectedReordered();
-  // We need to add an extra project step to map file columns to standard
+  // Add an extra project step to map file columns to standard
   // column names.
   const auto projectAlias =
       getProjectColumnAliases(kTableName, selectedColumns);
 
   auto shipDate = getColumnAlias(kTableName, "l_shipdate");
   common::test::SubfieldFiltersBuilder filtersBuilder;
-  // DWRF does not support Date type. It uses Varchar instead.
-  if ((selectedRowType->findChild(shipDate))->isVarchar()) {
+  // DWRF does not support Date type. Uses Varchar instead.
+  if (selectedRowType->findChild(shipDate)->isVarchar()) {
     filtersBuilder.add(
         shipDate, common::test::between("1994-01-01", "1994-12-31"));
   } else {
