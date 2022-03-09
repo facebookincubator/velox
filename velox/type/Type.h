@@ -276,8 +276,8 @@ struct TypeTraits<TypeKind::DECIMAL> {
   static constexpr uint32_t minSubTypes = 0;
   static constexpr uint32_t maxSubTypes = 0;
   static constexpr TypeKind typeKind = TypeKind::DECIMAL;
-  static constexpr bool isPrimitiveType = true;
-  static constexpr bool isFixedWidth = false;
+  static constexpr bool isPrimitiveType = false;
+  static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "DECIMAL";
 };
 

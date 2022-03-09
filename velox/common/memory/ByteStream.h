@@ -212,6 +212,12 @@ class ByteStream {
     return *reinterpret_cast<const T*>(&value);
   }
 
+  template <>
+  Decimal read<Decimal>() {
+    // TODO: @karteek
+    return Decimal();
+  }
+
   template <typename Char>
   void readBytes(Char* data, int32_t size) {
     readBytes(reinterpret_cast<uint8_t*>(data), size);
