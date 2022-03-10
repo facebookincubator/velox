@@ -38,7 +38,12 @@ static constexpr uint8_t kDefaultPrecision = kMaxPrecisionInt128;
 struct Int128 {
   int128_t value = 0;
   Int128() = default;
+  Int128(const Int128& copy) {
+    this->value = copy.value;
+  }
+
   Int128(int128_t value) : value(value) {}
+
   void operator=(const Int128& rhs) {
     this->value = rhs.value;
   }
