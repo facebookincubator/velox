@@ -212,8 +212,7 @@ class ByteStream {
     return *reinterpret_cast<const T*>(&value);
   }
 
-  template <>
-  Decimal read<Decimal>() {
+  Decimal readDecimal() {
     // TODO: @karteek
     VELOX_NYI();
   }
