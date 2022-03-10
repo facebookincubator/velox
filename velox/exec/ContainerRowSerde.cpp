@@ -230,6 +230,7 @@ void deserializeDecimal(
     vector_size_t index,
     BaseVector& vector) {
   // TODO: @karteek implement Deserialize decimal.
+  VELOX_NYI();
 }
 
 template <>
@@ -631,10 +632,8 @@ int32_t compare<TypeKind::DECIMAL>(
     ByteStream& left,
     ByteStream& right,
     const Type* /*type*/,
-    CompareFlags flags) {
-  // TODO: @karteek Implement compare DECIMAL function.
-  return 0;
-}
+    CompareFlags flags){// TODO: @karteek Implement compare DECIMAL function.
+                        VELOX_NYI()}
 
 int32_t compareArrays(
     ByteStream& left,

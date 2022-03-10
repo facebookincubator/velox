@@ -215,7 +215,7 @@ class ByteStream {
   template <>
   Decimal read<Decimal>() {
     // TODO: @karteek
-    return Decimal();
+    VELOX_NYI();
   }
 
   template <typename Char>
