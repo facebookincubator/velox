@@ -140,6 +140,13 @@ FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::DOUBLE>(
 }
 
 template <>
+FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::DECIMAL>(
+    const SelectivityVector& rows,
+    BufferPtr& hashes) {
+  VELOX_NYI();
+}
+
+template <>
 FOLLY_ALWAYS_INLINE void PrestoHasher::hash<TypeKind::TIMESTAMP>(
     const SelectivityVector& rows,
     BufferPtr& hashes) {
