@@ -198,6 +198,50 @@ TEST(Type, parseStringToDate) {
   EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
 }
 
+TEST(Type, parseStringToDecimal) {
+  Decimal actual =
+      DecimalCasts::parseStringToDecimal(std::string("1234567890.12345"));
+  EXPECT_EQ(Decimal(123456789012345, 15, 5), actual);
+  actual =
+      DecimalCasts::parseStringToDecimal(std::string("12345678901234567890"));
+  EXPECT_EQ(Decimal(12345678901234567890, 20, 0), actual);
+  actual =
+      DecimalCasts::parseStringToDecimal(std::string("1.2345678901234567890"));
+  EXPECT_EQ(Decimal(12345678901234567890, 20, 19), actual);
+  actual =
+      DecimalCasts::parseStringToDecimal(std::string("0.12345678901234567890"));
+  EXPECT_EQ(Decimal(12345678901234567890, 20, 20), actual);
+  // Negative decimals
+  actual = DecimalCasts::parseStringToDecimal(std::string("-123456789012"));
+  EXPECT_EQ(Decimal(-123456789012, 12, 0), actual);
+  // 00000000000000000000000000000001100011101110100100001111111101101100001101110011111000001110111001001110001111110000101011010010
+  // Creates 16 bytes value 123456789012345678901234567890
+  int128_t bigIntValue = ((int128_t)(0x18EE90FF6) << 64) | 0xC373E0EE4E3F0AD2;
+  // Compiler doesn't allow defining a literal like -12345678901234567890,
+  // so we need to negate and add 1 to the positive number.
+  int128_t negBigIntValue = ~bigIntValue + 1;
+  actual = DecimalCasts::parseStringToDecimal(
+      std::string("-1.23456789012345678901234567890"));
+  EXPECT_EQ(Decimal(negBigIntValue, 30, 29), actual);
+  actual = DecimalCasts::parseStringToDecimal(
+      std::string("-0.123456789012345678901234567890"));
+  EXPECT_EQ(Decimal(negBigIntValue, 30, 30), actual);
+
+  // Leading and trailing zeroes.
+  actual = DecimalCasts::parseStringToDecimal(
+      std::string("000000000012345678901234567890"));
+  EXPECT_EQ(Decimal(12345678901234567890, 20, 0), actual);
+  actual =
+      DecimalCasts::parseStringToDecimal(std::string("00001234567890.5678900"));
+  EXPECT_EQ(Decimal(12345678905678900, 17, 7), actual);
+  actual = DecimalCasts::parseStringToDecimal(
+      std::string("-000000000012345678901234567890.1234567890"));
+  EXPECT_EQ(Decimal(negBigIntValue, 30, 10), actual);
+
+  actual = DecimalCasts::parseStringToDecimal(
+      "1234567890123456789012345678901234567890");
+}
+
 TEST(Type, Map) {
   auto map0 = MAP(INTEGER(), ARRAY(BIGINT()));
   EXPECT_EQ(map0->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");

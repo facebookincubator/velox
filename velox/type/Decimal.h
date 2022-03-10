@@ -61,6 +61,14 @@ struct Int128 {
     VELOX_CHECK(!__builtin_sub_overflow(this->value, rhs.value, &diff.value));
     return diff;
   }
+
+  bool operator==(const Int128& other) const {
+    return this->value == other.value;
+  }
+
+  Int128 operator~() {
+    return ~this->value;
+  }
 };
 
 /*
@@ -77,7 +85,7 @@ class Decimal {
     return scale_;
   }
 
-  inline Int128 getUnscaledValue() {
+  inline Int128 getUnscaledValue() const {
     return unscaledValue_;
   }
 
@@ -95,7 +103,10 @@ class Decimal {
   }
 
   bool operator==(const Decimal& other) const {
-    return true;
+    return (
+        this->unscaledValue_ == other.getUnscaledValue() &&
+        this->precision_ == other.getPrecision() &&
+        this->scale_ == other.getScale());
   }
   bool operator!=(const Decimal& other) const {
     return true;
@@ -130,16 +141,12 @@ class Decimal {
                                   // of radix point.
 };
 
-class DecimalCast {
-  static Decimal stringToDecimal(const std::string& value) {
+class DecimalCasts {
+ public:
+  static Decimal parseStringToDecimal(const std::string& value) {
     // throws overflow exception if length is > 38
     VELOX_CHECK_GT(
         value.length(), 0, "Decimal string must have at least 1 char")
-    VELOX_CHECK_LE(
-        value.length(),
-        kMaxPrecisionInt128 + 1,
-        "Decimal string overflows max precision of %d",
-        kMaxPrecisionInt128);
     Int128 unscaledValue;
     uint8_t precision;
     uint8_t scale;
@@ -148,19 +155,21 @@ class DecimalCast {
   }
 
   /**
-   * -1234567890123456789.123`1
    */
   static void parseToInt128(
-      const std::string& value,
+      std::string value,
       Int128& result,
       uint8_t& precision,
       uint8_t& scale) {
     uint8_t pos = 0;
     bool isNegative = false;
-    if (!isdigit(value[pos] - '0')) {
-      VELOX_CHECK_EQ(value[pos++], '-', "Illegal decimal value %s", value);
+    // Remove leading zeroes.
+    if (!isdigit(value[pos])) {
+      VELOX_CHECK_EQ(value[pos], '-', "Illegal decimal value {}", value);
+      value = value.erase(0, 1);
       isNegative = true;
     }
+    value = value.erase(0, value.find_first_not_of('0'));
     precision = 0;
     scale = 0;
     bool hasScale = false;
@@ -169,6 +178,7 @@ class DecimalCast {
     while (pos < value.length()) {
       if (value[pos] == '.') {
         hasScale = true;
+        pos++;
         continue;
       }
       VELOX_CHECK(std::isdigit(value[pos]), "Invalid decimal string");
@@ -179,11 +189,12 @@ class DecimalCast {
         result = result * exponent + digit;
       }
 
-      if (hasScale)
+      if (hasScale) {
         scale++;
+      }
+      precision++;
       pos++;
     }
-    precision = hasScale ? value.length() - 1 : value.length();
   }
 };
 
