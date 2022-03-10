@@ -150,7 +150,11 @@ class DecimalCasts {
     Int128 unscaledValue;
     uint8_t precision;
     uint8_t scale;
-    parseToInt128(value, unscaledValue, precision, scale);
+    try {
+      parseToInt128(value, unscaledValue, precision, scale);
+    } catch (VeloxRuntimeError e) {
+      VELOX_USER_CHECK(false, "Decimla overflow");
+    }
     return Decimal(unscaledValue, precision, scale);
   }
 
@@ -165,9 +169,13 @@ class DecimalCasts {
     bool isNegative = false;
     // Remove leading zeroes.
     if (!isdigit(value[pos])) {
-      VELOX_CHECK_EQ(value[pos], '-', "Illegal decimal value {}", value);
+      // Presto allows string literals that start with +123.45
+      VELOX_CHECK(
+          value[pos] == '-' || value[pos] == '+',
+          "Illegal decimal value {}",
+          value);
+      isNegative = value[pos] == '-';
       value = value.erase(0, 1);
-      isNegative = true;
     }
     value = value.erase(0, value.find_first_not_of('0'));
     precision = 0;
@@ -188,7 +196,6 @@ class DecimalCasts {
       } else {
         result = result * exponent + digit;
       }
-
       if (hasScale) {
         scale++;
       }

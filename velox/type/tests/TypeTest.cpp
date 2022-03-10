@@ -238,8 +238,21 @@ TEST(Type, parseStringToDecimal) {
       std::string("-000000000012345678901234567890.1234567890"));
   EXPECT_EQ(Decimal(negBigIntValue, 30, 10), actual);
 
-  actual = DecimalCasts::parseStringToDecimal(
-      "1234567890123456789012345678901234567890");
+  // Construction of Int128 value will overflow.
+  EXPECT_THROW(
+      DecimalCasts::parseStringToDecimal(
+          "1234567890123456789012345678901234567890"),
+      VeloxUserError);
+
+  // Construction of Int128 value will underflow.
+  EXPECT_THROW(
+      DecimalCasts::parseStringToDecimal(
+          "-1234567890123456789012345678901234567890"),
+      VeloxUserError);
+
+  // Bad decimal formats
+  EXPECT_THROW(DecimalCasts::parseStringToDecimal("-0.1A"), VeloxUserError);
+  EXPECT_THROW(DecimalCasts::parseStringToDecimal("*0.1"), VeloxUserError);
 }
 
 TEST(Type, Map) {
