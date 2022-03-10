@@ -63,8 +63,7 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   // Whether the return type for this UDF allows for fast path iteration.
   static constexpr bool fastPathIteration =
-      return_type_traits::isPrimitiveType && return_type_traits::isFixedWidth &&
-      (return_type_traits::typeKind != TypeKind::BOOLEAN);
+      return_type_traits::isPrimitiveType && return_type_traits::isFixedWidth;
 
   struct ApplyContext {
     ApplyContext(
@@ -319,7 +318,11 @@ class SimpleFunctionAdapter : public VectorFunction {
         // beforehand, so we only need to update the null buffer if the function
         // returned null (which is not the common case).
         if (notNull) {
-          data[row] = out;
+          if constexpr (return_type_traits::typeKind == TypeKind::BOOLEAN) {
+            bits::setBit(data, row, out);
+          } else {
+            data[row] = out;
+          }
         } else {
           if (!nullBuffer) {
             nullBuffer = applyContext.result->mutableRawNulls();
