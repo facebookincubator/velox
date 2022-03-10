@@ -754,7 +754,7 @@ uint64_t hashOne<TypeKind::VARBINARY>(
 
 void readDecimal(ByteStream& stream, Decimal& data) {
   // TODO: @karteek Implement read decimal.
-  data = stream.read<Decimal>();
+  data = stream.readDecimal();
 }
 
 template <>

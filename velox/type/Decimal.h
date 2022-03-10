@@ -157,8 +157,8 @@ class DecimalCasts {
     uint8_t scale;
     try {
       parseToInt128(value, unscaledValue, precision, scale);
-    } catch (VeloxRuntimeError e) {
-      VELOX_USER_CHECK(false, "Decimla overflow");
+    } catch (VeloxRuntimeError const& e) {
+      VELOX_USER_CHECK(false, "Decimal overflow");
     }
     return Decimal(unscaledValue, precision, scale);
   }
@@ -175,7 +175,7 @@ class DecimalCasts {
     // Remove leading zeroes.
     if (!isdigit(value[pos])) {
       // Presto allows string literals that start with +123.45
-      VELOX_CHECK(
+      VELOX_USER_CHECK(
           value[pos] == '-' || value[pos] == '+',
           "Illegal decimal value {}",
           value);
@@ -194,7 +194,7 @@ class DecimalCasts {
         pos++;
         continue;
       }
-      VELOX_CHECK(std::isdigit(value[pos]), "Invalid decimal string");
+      VELOX_USER_CHECK(std::isdigit(value[pos]), "Invalid decimal string");
       digit.value = value[pos] - '0';
       if (isNegative) {
         result = result * exponent - digit;

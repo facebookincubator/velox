@@ -199,44 +199,49 @@ TEST(Type, parseStringToDate) {
 }
 
 TEST(Type, parseStringToDecimal) {
-  Decimal actual =
-      DecimalCasts::parseStringToDecimal(std::string("1234567890.12345"));
-  EXPECT_EQ(Decimal(123456789012345, 15, 5), actual);
-  actual =
-      DecimalCasts::parseStringToDecimal(std::string("12345678901234567890"));
-  EXPECT_EQ(Decimal(12345678901234567890, 20, 0), actual);
-  actual =
-      DecimalCasts::parseStringToDecimal(std::string("1.2345678901234567890"));
-  EXPECT_EQ(Decimal(12345678901234567890, 20, 19), actual);
-  actual =
-      DecimalCasts::parseStringToDecimal(std::string("0.12345678901234567890"));
-  EXPECT_EQ(Decimal(12345678901234567890, 20, 20), actual);
+  EXPECT_EQ(
+      Decimal(123456789012345, 15, 5),
+      DecimalCasts::parseStringToDecimal(std::string("1234567890.12345")));
+  int128_t testValue = 0xAB54A98CEB1F0AD2;
+  EXPECT_EQ(
+      Decimal(testValue, 20, 0),
+      DecimalCasts::parseStringToDecimal(std::string("12345678901234567890")));
+  EXPECT_EQ(
+      Decimal(testValue, 20, 19),
+      DecimalCasts::parseStringToDecimal(std::string("1.2345678901234567890")));
+  EXPECT_EQ(
+      Decimal(testValue, 20, 20),
+      DecimalCasts::parseStringToDecimal(
+          std::string("0.12345678901234567890")));
   // Negative decimals
-  actual = DecimalCasts::parseStringToDecimal(std::string("-123456789012"));
-  EXPECT_EQ(Decimal(-123456789012, 12, 0), actual);
-  // 00000000000000000000000000000001100011101110100100001111111101101100001101110011111000001110111001001110001111110000101011010010
-  // Creates 16 bytes value 123456789012345678901234567890
+  EXPECT_EQ(
+      Decimal(-123456789012, 12, 0),
+      DecimalCasts::parseStringToDecimal(std::string("-123456789012")));
+  // Compiler doesn't support defining >18 digits integral literals.
   int128_t bigIntValue = ((int128_t)(0x18EE90FF6) << 64) | 0xC373E0EE4E3F0AD2;
-  // Compiler doesn't allow defining a literal like -12345678901234567890,
-  // so we need to negate and add 1 to the positive number.
   int128_t negBigIntValue = ~bigIntValue + 1;
-  actual = DecimalCasts::parseStringToDecimal(
-      std::string("-1.23456789012345678901234567890"));
-  EXPECT_EQ(Decimal(negBigIntValue, 30, 29), actual);
-  actual = DecimalCasts::parseStringToDecimal(
-      std::string("-0.123456789012345678901234567890"));
-  EXPECT_EQ(Decimal(negBigIntValue, 30, 30), actual);
+  EXPECT_EQ(
+      Decimal(negBigIntValue, 30, 29),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-1.23456789012345678901234567890")));
+  EXPECT_EQ(
+      Decimal(negBigIntValue, 30, 30),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-0.123456789012345678901234567890")));
 
   // Leading and trailing zeroes.
-  actual = DecimalCasts::parseStringToDecimal(
-      std::string("000000000012345678901234567890"));
-  EXPECT_EQ(Decimal(12345678901234567890, 20, 0), actual);
-  actual =
-      DecimalCasts::parseStringToDecimal(std::string("00001234567890.5678900"));
-  EXPECT_EQ(Decimal(12345678905678900, 17, 7), actual);
-  actual = DecimalCasts::parseStringToDecimal(
-      std::string("-000000000012345678901234567890.1234567890"));
-  EXPECT_EQ(Decimal(negBigIntValue, 30, 10), actual);
+  EXPECT_EQ(
+      Decimal(testValue, 20, 0),
+      DecimalCasts::parseStringToDecimal(
+          std::string("000000000012345678901234567890")));
+  EXPECT_EQ(
+      Decimal(testValue * 10, 21, 11),
+      DecimalCasts::parseStringToDecimal(
+          std::string("00001234567890.12345678900")));
+  EXPECT_EQ(
+      Decimal(negBigIntValue, 30, 10),
+      DecimalCasts::parseStringToDecimal(
+          std::string("-000000000012345678901234567890.1234567890")));
 
   // Construction of Int128 value will overflow.
   EXPECT_THROW(
