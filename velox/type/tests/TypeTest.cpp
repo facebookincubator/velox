@@ -199,6 +199,15 @@ TEST(Type, parseStringToDate) {
 }
 
 TEST(Type, parseStringToDecimal) {
+  EXPECT_EQ(Decimal(14, 2, 2), DecimalCasts::parseStringToDecimal("0.14"));
+  EXPECT_EQ(Decimal(-14, 2, 2), DecimalCasts::parseStringToDecimal("-0.14"));
+  EXPECT_EQ(Decimal(-14, 2, 2), DecimalCasts::parseStringToDecimal("-.14"));
+  EXPECT_EQ(Decimal(-1400, 4, 4), DecimalCasts::parseStringToDecimal("-.1400"));
+  EXPECT_EQ(Decimal(1400, 4, 4), DecimalCasts::parseStringToDecimal("+.1400"));
+  EXPECT_EQ(
+      Decimal(14001234, 8, 4),
+      DecimalCasts::parseStringToDecimal("+1400.1234"));
+
   EXPECT_EQ(
       Decimal(123456789012345, 15, 5),
       DecimalCasts::parseStringToDecimal(std::string("1234567890.12345")));
