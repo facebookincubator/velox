@@ -117,6 +117,11 @@ template <>
   const auto& mapValues = mapVector->mapValues();
   auto offset = mapVector->offsetAt(row);
   auto size = mapVector->sizeAt(row);
+  if (size == 0) {
+      return ::duckdb::Value::MAP(
+              ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(mapKeys->typeKind())),
+              ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(mapValues->typeKind())));
+  }
 
   std::vector<::duckdb::Value> duckKeysVector;
   std::vector<::duckdb::Value> duckValuesVector;

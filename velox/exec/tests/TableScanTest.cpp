@@ -333,7 +333,7 @@ TEST_P(TableScanTest, constDictLazy) {
        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
        makeMapVector<int64_t, double>(
            size,
-           [](auto row) { return row % 3 + 1; },
+           [](auto row) { return row % 3; },
            [](auto row) { return row; },
            [](auto row) { return row * 0.1; })});
 
@@ -364,7 +364,7 @@ TEST_P(TableScanTest, constDictLazy) {
            .project({"cardinality(c2)"})
            .planNode();
 
-  assertQuery(op, {filePath}, "SELECT 1 FROM tmp WHERE c0 = 5");
+  assertQuery(op, {filePath}, "SELECT 0 FROM tmp WHERE c0 = 5");
 
   tableHandle =
       makeTableHandle(SubfieldFilters{}, parseExpr("c0 = 2", rowType));
@@ -373,7 +373,7 @@ TEST_P(TableScanTest, constDictLazy) {
            .project({"cardinality(c2)"})
            .planNode();
 
-  assertQuery(op, {filePath}, "SELECT 3 FROM tmp WHERE c0 = 5");
+  assertQuery(op, {filePath}, "SELECT 2 FROM tmp WHERE c0 = 5");
 }
 
 TEST_P(TableScanTest, count) {
