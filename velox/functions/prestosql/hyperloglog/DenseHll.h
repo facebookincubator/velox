@@ -60,11 +60,11 @@ class DenseHll {
   /// Serializes internal state using Presto DenseV2 format.
   void serialize(char* output);
 
-  /// Returns true if 'input' has Presto DenseV2 format.
+  /// Returns true if 'input' contains Presto DenseV2 format indicator.
   static bool canDeserialize(const char* input);
 
-  /// Returns true if 'input' has valid Presto DenseV2 format.
-  /// Presto DenseV2 HLL format must be the following:
+  /// Returns true if 'input' contains Presto DenseV2 format indicator and the
+  /// rest of the data matches HLL format:
   /// 1 byte for version
   /// 1 byte for index bit length, index bit length must be in [4,16]
   /// 1 byte for baseline value
