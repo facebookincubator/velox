@@ -113,8 +113,8 @@ template <>
     const VectorPtr& vector,
     int32_t row) {
   auto mapVector = vector->as<MapVector>();
-  auto& mapKeys = mapVector->mapKeys();
-  auto& mapValues = mapVector->mapValues();
+  const auto& mapKeys = mapVector->mapKeys();
+  const auto& mapValues = mapVector->mapValues();
   auto offset = mapVector->offsetAt(row);
   auto size = mapVector->sizeAt(row);
 
@@ -189,7 +189,7 @@ velox::variant variantAt(const ::duckdb::Value& value) {
 
 velox::variant rowVariantAt(
     const ::duckdb::Value& vector,
-    const std::shared_ptr<const Type>& rowType) {
+    const TypePtr& rowType) {
   std::vector<velox::variant> values;
   const auto& structValue = ::duckdb::StructValue::GetChildren(vector);
   for (size_t i = 0; i < structValue.size(); ++i) {
@@ -210,18 +210,18 @@ velox::variant rowVariantAt(
 
 velox::variant mapVariantAt(
     const ::duckdb::Value& vector,
-    const std::shared_ptr<const Type>& mapType) {
+    const TypePtr& mapType) {
   std::map<variant, variant> map;
 
   const auto& mapValue = ::duckdb::StructValue::GetChildren(vector);
-  VELOX_CHECK(mapValue.size() == 2);
+  VELOX_CHECK_EQ(mapValue.size(), 2);
 
   auto mapTypePtr = dynamic_cast<const MapType*>(mapType.get());
   auto keyType = mapTypePtr->keyType()->kind();
   auto valueType = mapTypePtr->valueType()->kind();
   const auto& keyList = ::duckdb::ListValue::GetChildren(mapValue[0]);
   const auto& valueList = ::duckdb::ListValue::GetChildren(mapValue[1]);
-  VELOX_CHECK(keyList.size() == valueList.size());
+  VELOX_CHECK_EQ(keyList.size(), valueList.size());
   for (int i = 0; i < keyList.size(); i++) {
     auto variantKey =
         VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(variantAt, keyType, keyList[i]);
