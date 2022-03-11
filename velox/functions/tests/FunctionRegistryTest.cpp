@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "velox/exec/Aggregate.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/VectorFunction.h"
@@ -197,6 +198,94 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     VectorFuncFour::signatures(),
     std::make_unique<VectorFuncFour>());
 
+class AggregateFunc : public velox::exec::Aggregate {
+ public:
+  explicit AggregateFunc(TypePtr resultType) : Aggregate(resultType) {}
+
+  void finalize(char** /*groups*/, int32_t /*numGroups*/) override {}
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return 0;
+  }
+
+  void initializeNewGroups(
+      char** /*groups*/,
+      folly::Range<const vector_size_t*> /*indices*/) override {}
+
+  void addRawInput(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void addIntermediateResults(
+      char** /*groups*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void addSingleGroupRawInput(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void addSingleGroupIntermediateResults(
+      char* /*group*/,
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/,
+      bool /*mayPushdown*/) override {}
+
+  void extractValues(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {}
+
+  void extractAccumulators(
+      char** /*groups*/,
+      int32_t /*numGroups*/,
+      VectorPtr* /*result*/) override {}
+};
+
+bool registerAggregateFunc(const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("array(bigint)")
+          .argumentType("bigint")
+          .argumentType("double")
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .typeVariable("T")
+          .returnType("T")
+          .intermediateType("array(T)")
+          .argumentType("T")
+          .argumentType("T")
+          .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("date")
+          .intermediateType("date")
+          .build(),
+  };
+
+  exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [&](core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+        if (exec::isPartialOutput(step)) {
+          if (argTypes.empty()) {
+            return std::make_unique<AggregateFunc>(resultType);
+          }
+          return std::make_unique<AggregateFunc>(ARRAY(resultType));
+        }
+        return std::make_unique<AggregateFunc>(resultType);
+      });
+
+  return true;
+}
+
 inline void registerTestFunctions() {
   // If no alias is specified, ensure it will fallback to the struct name.
   registerFunction<FuncOne, Varchar, Varchar>({"func_one"});
@@ -219,6 +308,8 @@ inline void registerTestFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_two, "vector_func_two");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_three, "vector_func_three");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_four, "vector_func_four");
+
+  registerAggregateFunc("aggregate_func");
 }
 } // namespace
 
@@ -242,6 +333,16 @@ class FunctionRegistryTest : public ::testing::Test {
     } else {
       EXPECT_EQ(actual, nullptr);
     }
+  }
+
+  void testResolveAggregateFunction(
+      const std::string& functionName,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& expectedReturn,
+      const TypePtr& expectedIntermediate) {
+    auto result = velox::resolveAggregateFunction(functionName, argTypes);
+    checkEqual(result.first, expectedReturn);
+    checkEqual(result.second, expectedIntermediate);
   }
 };
 
@@ -445,6 +546,90 @@ TEST_F(FunctionRegistryTest, registerFunctionTwice) {
   // The function should only be registered once, despite the multiple calls to
   // registerFunction.
   ASSERT_EQ(signatures.size(), 1);
+}
+
+template <typename T>
+struct TestFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      out_type<Varchar>& out,
+      const arg_type<Varchar>&,
+      const arg_type<Varchar>&) {
+    out = "1"_sv;
+  }
+
+  void call(int32_t& out, const arg_type<Variadic<Varchar>>&) {
+    out = 2;
+  }
+
+  void
+  call(float& out, const arg_type<Generic<T1>>&, const arg_type<Generic<T1>>&) {
+    out = 3;
+  }
+
+  void call(int64_t& out, const arg_type<Variadic<Generic<>>>&) {
+    out = 4;
+  }
+
+  void call(
+      double& out,
+      const arg_type<Varchar>&,
+      const arg_type<Variadic<Generic<>>>&) {
+    out = 5;
+  }
+};
+
+TEST_F(FunctionRegistryTest, resolveFunctionsBasedOnPriority) {
+  std::string func = "func_with_priority";
+
+  registerFunction<TestFunction, double, Varchar, Variadic<Generic<>>>({func});
+  registerFunction<TestFunction, Varchar, Varchar, Varchar>({func});
+  registerFunction<TestFunction, int64_t, Variadic<Generic<>>>({func});
+  registerFunction<TestFunction, int32_t, Variadic<Varchar>>({func});
+  registerFunction<TestFunction, float, Generic<T1>, Generic<T1>>({func});
+
+  auto result1 = resolveFunction(func, {VARCHAR(), VARCHAR()});
+  ASSERT_EQ(*result1, *VARCHAR());
+
+  auto result2 = resolveFunction(func, {VARCHAR(), VARCHAR(), VARCHAR()});
+  ASSERT_EQ(*result2, *INTEGER());
+
+  auto result3 = resolveFunction(func, {VARCHAR(), INTEGER()});
+  ASSERT_EQ(*result3, *DOUBLE());
+
+  auto result4 = resolveFunction(func, {INTEGER(), VARCHAR()});
+  ASSERT_EQ(*result4, *BIGINT());
+
+  auto result5 = resolveFunction(func, {INTEGER(), INTEGER()});
+  ASSERT_EQ(*result5, *REAL());
+}
+
+TEST_F(FunctionRegistryTest, hasAggregateFunctionSignature) {
+  testResolveAggregateFunction(
+      "aggregate_func", {BIGINT(), DOUBLE()}, BIGINT(), ARRAY(BIGINT()));
+  testResolveAggregateFunction(
+      "aggregate_func", {DOUBLE(), DOUBLE()}, DOUBLE(), ARRAY(DOUBLE()));
+  testResolveAggregateFunction(
+      "aggregate_func",
+      {ARRAY(BOOLEAN()), ARRAY(BOOLEAN())},
+      ARRAY(BOOLEAN()),
+      ARRAY(ARRAY(BOOLEAN())));
+  testResolveAggregateFunction("aggregate_func", {}, DATE(), DATE());
+}
+
+TEST_F(FunctionRegistryTest, hasAggregateFunctionSignatureWrongFunctionName) {
+  testResolveAggregateFunction(
+      "aggregate_func_nonexist", {BIGINT(), BIGINT()}, nullptr, nullptr);
+  testResolveAggregateFunction("aggregate_func_nonexist", {}, nullptr, nullptr);
+}
+
+TEST_F(FunctionRegistryTest, hasAggregateFunctionSignatureWrongArgType) {
+  testResolveAggregateFunction(
+      "aggregate_func", {DOUBLE(), BIGINT()}, nullptr, nullptr);
+  testResolveAggregateFunction("aggregate_func", {BIGINT()}, nullptr, nullptr);
+  testResolveAggregateFunction(
+      "aggregate_func", {BIGINT(), BIGINT(), BIGINT()}, nullptr, nullptr);
 }
 
 } // namespace facebook::velox

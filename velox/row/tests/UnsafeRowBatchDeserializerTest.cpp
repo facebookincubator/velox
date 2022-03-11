@@ -14,57 +14,22 @@
  * limitations under the License.
  */
 
-#include "velox/row/UnsafeRowDeserializer.h"
 #include <gtest/gtest.h>
 #include <vector>
+
 #include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/row/UnsafeRow24Deserializer.h"
+#include "velox/row/UnsafeRowBatchDeserializer.h"
 #include "velox/row/UnsafeRowDynamicSerializer.h"
 #include "velox/row/UnsafeRowParser.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
-
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
-
-using namespace facebook::velox;
-using namespace facebook::velox::row;
 
 namespace facebook::velox::row {
 namespace {
 
-class UnsafeRowDeserializerTest : public ::testing::Test {};
-
-class UnsafeRowStaticDeserializerTest : public ::testing::Test {};
-
-struct UnsafeRowLegacyWrapper {
-  static VectorPtr Deserialize(
-      const std::vector<std::string_view>& rows,
-      TypePtr type,
-      memory::MemoryPool* pool) {
-    std::vector<std::optional<std::string_view>> rows_opt;
-    for (std::string_view row : rows)
-      rows_opt.emplace_back(row);
-    return UnsafeRowDynamicVectorDeserializer::deserializeComplex(
-        rows_opt, type, pool);
-  }
-};
-
-struct UnsafeRow24Wrapper {
-  static VectorPtr Deserialize(
-      const std::vector<std::string_view>& s,
-      TypePtr type,
-      memory::MemoryPool* pool) {
-    VELOX_CHECK(type->isRow());
-    return UnsafeRow24Deserializer::Create(
-               std::dynamic_pointer_cast<const RowType>(type))
-        ->DeserializeRows(pool, {s});
-  }
-};
-
-template <typename T>
-class UnsafeRowVectorDeserializerTest : public ::testing::Test {
+class UnsafeRowBatchDeserializerTest : public ::testing::Test {
  public:
-  UnsafeRowVectorDeserializerTest()
+  UnsafeRowBatchDeserializerTest()
       : pool_(memory::getDefaultScopedMemoryPool()),
         bufferPtr(AlignedBuffer::allocate<char>(1024, pool_.get(), true)),
         buffer(bufferPtr->asMutable<char>()) {}
@@ -123,9 +88,6 @@ class UnsafeRowVectorDeserializerTest : public ::testing::Test {
   char* buffer;
 };
 
-using DeserImpls = ::testing::Types<UnsafeRowLegacyWrapper, UnsafeRow24Wrapper>;
-TYPED_TEST_SUITE(UnsafeRowVectorDeserializerTest, DeserImpls);
-
 template <typename T>
 testing::AssertionResult checkVariableLengthData(
     std::optional<std::string_view> element,
@@ -149,45 +111,9 @@ testing::AssertionResult checkVariableLengthData(
   return testing::AssertionSuccess();
 }
 
-/**
- * Checks that an UnsafeRowPrimitiveIterator is set correctly.
- * @tparam T the element's native type
- * @param iteratorPtr
- * @param expectedKind
- * @param expectedIsNull
- * @param val
- * @return testing::AssertionFailure if any value is not as expected,
- * testing::AssertionSuccess otherwise
- */
-template <typename T>
-testing::AssertionResult checkPrimitiveIterator(
-    DataIteratorPtr iteratorPtr,
-    TypeKind expectedKind,
-    bool expectedIsNull,
-    size_t val = 0) {
-  auto iterator =
-      std::dynamic_pointer_cast<UnsafeRowPrimitiveIterator>(iteratorPtr);
-  if (!iterator) {
-    return testing::AssertionFailure()
-        << "DataIteratorPtr is not a PrimitiveIterator";
-  }
-  if (iterator->type()->kind() != expectedKind) {
-    return testing::AssertionFailure();
-  }
-  if (iterator->isNull() != expectedIsNull) {
-    return testing::AssertionFailure();
-  }
-  if (!expectedIsNull) {
-    if (reinterpret_cast<const T*>(iterator->data()->data())[0] != val) {
-      return testing::AssertionFailure();
-    }
-  }
-  return testing::AssertionSuccess();
-}
-
-TEST_F(UnsafeRowDeserializerTest, DeserializePrimitives) {
+TEST_F(UnsafeRowBatchDeserializerTest, DeserializePrimitives) {
   /*
-   * UnsafeRow with 7 elements:
+   * UnsfafeRow with 7 elements:
    *  index | type        | value
    *  ------|-------------|-------
    *  0     | BOOLEAN     | true
@@ -216,36 +142,36 @@ TEST_F(UnsafeRowDeserializerTest, DeserializePrimitives) {
   UnsafeRowDynamicParser rowParser = UnsafeRowDynamicParser(rowTypes, rowData);
 
   ASSERT_FALSE(rowParser.isNullAt(0));
-  auto val0 = UnsafeRowPrimitiveDeserializer::deserializeFixedWidth<
+  auto val0 = UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
       TypeTraits<TypeKind::BOOLEAN>::NativeType>(rowParser.dataAt(0));
   ASSERT_EQ(val0, true);
 
   ASSERT_FALSE(rowParser.isNullAt(1));
-  auto val1 = UnsafeRowPrimitiveDeserializer::deserializeFixedWidth<
+  auto val1 = UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
       TypeTraits<TypeKind::TINYINT>::NativeType>(rowParser.dataAt(1));
   ASSERT_EQ(val1, 0x1);
 
   ASSERT_FALSE(rowParser.isNullAt(2));
-  auto val2 = UnsafeRowPrimitiveDeserializer::deserializeFixedWidth<
+  auto val2 = UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
       TypeTraits<TypeKind::SMALLINT>::NativeType>(rowParser.dataAt(2));
   ASSERT_EQ(val2, 0x2222);
 
   ASSERT_FALSE(rowParser.isNullAt(3));
-  auto val3 = UnsafeRowPrimitiveDeserializer::deserializeFixedWidth<
+  auto val3 = UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
       TypeTraits<TypeKind::INTEGER>::NativeType>(rowParser.dataAt(3));
   ASSERT_EQ(val3, 0x33333333);
 
   ASSERT_TRUE(rowParser.isNullAt(4));
 
   ASSERT_FALSE(rowParser.isNullAt(5));
-  auto val5 = UnsafeRowPrimitiveDeserializer::deserializeFixedWidth<
+  auto val5 = UnsafeRowPrimitiveBatchDeserializer::deserializeFixedWidth<
       TypeTraits<TypeKind::REAL>::NativeType>(rowParser.dataAt(5));
   ASSERT_EQ(val5, (float)1.2345);
 
   ASSERT_TRUE(rowParser.isNullAt(6));
 }
 
-TEST_F(UnsafeRowDeserializerTest, DeserializeStrings) {
+TEST_F(UnsafeRowBatchDeserializerTest, DeserializeStrings) {
   /*
    * index | string value
    * ------|-------------
@@ -274,7 +200,7 @@ TEST_F(UnsafeRowDeserializerTest, DeserializeStrings) {
   UnsafeRowDynamicParser rowParser = UnsafeRowDynamicParser(rowTypes, rowData);
 
   ASSERT_FALSE(rowParser.isNullAt(0));
-  StringView val0 = UnsafeRowPrimitiveDeserializer::deserializeStringView(
+  StringView val0 = UnsafeRowPrimitiveBatchDeserializer::deserializeStringView(
       rowParser.dataAt(0));
   checkVariableLengthData(
       std::string_view(val0.data(), val0.size()), 0x05, u8"hello");
@@ -282,7 +208,7 @@ TEST_F(UnsafeRowDeserializerTest, DeserializeStrings) {
   ASSERT_TRUE(rowParser.isNullAt(1));
 
   ASSERT_FALSE(rowParser.isNullAt(2));
-  StringView val2 = UnsafeRowPrimitiveDeserializer::deserializeStringView(
+  StringView val2 = UnsafeRowPrimitiveBatchDeserializer::deserializeStringView(
       rowParser.dataAt(2));
   checkVariableLengthData(
       std::string_view(val2.data(), val2.size()),
@@ -290,166 +216,7 @@ TEST_F(UnsafeRowDeserializerTest, DeserializeStrings) {
       u8"This is a rather long string.  Quite long indeed.");
 }
 
-TEST_F(UnsafeRowDeserializerTest, UnsafeRowArrayIterator) {
-  // We only test the UnsafeRowArrayIterators because all UnsafeRow complex
-  // types are represented as arrays.
-
-  /*
-   * [
-   *   [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
-   *   null,
-   *   [7, null, 9]
-   * ]
-   */
-
-  // an unsafe row with 1 element, where the first element is an array of arrays
-  // generated from Spark Java implementation
-  uint8_t data[14][8] = {
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x60, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00},
-      {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x20, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00},
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00},
-      {0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x01, 0x02, 0x03, 0x04, 0x01, 0x02, 0x03, 0x04},
-      {0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00},
-      {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x07, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00}};
-
-  // The outer array contains 3 variable length elements.
-  auto arrayData = std::string_view(
-      reinterpret_cast<const char*>(reinterpret_cast<const char*>(data) + 16),
-      12 * 8);
-  auto outerArray = UnsafeRowArrayIterator(arrayData, false);
-
-  ASSERT_TRUE(outerArray.hasNext());
-  std::optional<std::string_view> first = outerArray.next();
-  uint8_t firstExpected[4][8] = {
-      {0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x01, 0x02, 0x03, 0x04, 0x01, 0x02, 0x03, 0x04},
-      {0x01, 0x02, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00}};
-  ASSERT_TRUE(checkVariableLengthData(first, 0x20, firstExpected));
-
-  // second element is null
-  ASSERT_TRUE(outerArray.hasNext());
-  std::optional<std::string_view> second = outerArray.next();
-  ASSERT_FALSE(second.has_value());
-
-  ASSERT_TRUE(outerArray.hasNext());
-  std::optional<std::string_view> third = outerArray.next();
-  uint8_t thirdExpected[4][8] = {
-      {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x07, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00}};
-  ASSERT_TRUE(checkVariableLengthData(third, 0x18, thirdExpected));
-
-  // no more elements
-  ASSERT_FALSE(outerArray.hasNext());
-  EXPECT_THROW(outerArray.next(), VeloxRuntimeError);
-
-  // Check that we can traverse through the third inner array
-  // The third inner array contains fixed length elements
-  // [7, null, 9]
-  auto thirdInnerArray = UnsafeRowArrayIterator(third.value(), true, 1);
-  ASSERT_TRUE(thirdInnerArray.hasNext());
-  std::optional<std::string_view> thirdInnerArray1 = thirdInnerArray.next();
-  ASSERT_EQ(thirdInnerArray1->size(), 1);
-  ASSERT_EQ(thirdInnerArray1->data()[0], 0x7);
-
-  ASSERT_TRUE(thirdInnerArray.hasNext());
-  std::optional<std::string_view> thirdInnerArray2 = thirdInnerArray.next();
-  ASSERT_FALSE(thirdInnerArray2.has_value());
-
-  ASSERT_TRUE(thirdInnerArray.hasNext());
-  std::optional<std::string_view> thirdInnerArray3 = thirdInnerArray.next();
-  ASSERT_EQ(thirdInnerArray3->size(), 1);
-  ASSERT_EQ(thirdInnerArray3->data()[0], 0x9);
-}
-
-TEST_F(UnsafeRowStaticDeserializerTest, FixedWidthArrayStdContainer) {
-  /*
-   * UnsafeRow with 2 elements:
-   * Element 1: Array of TinyInt with 5 elements
-   *   [0x01, 0x02, null, 0x03, null],
-   * Element 2: Array of SmallInt with 5 elements
-   *   [0x1111, 0x2222, null, 0x4444, 0x5555]
-   */
-  uint8_t data[10][8] = {
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x18, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00},
-      {0x20, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00},
-      {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x01, 0x02, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00},
-      {0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x11, 0x11, 0x22, 0x22, 0x00, 0x00, 0x44, 0x44},
-      {0x55, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-
-  auto rowData = std::string_view(reinterpret_cast<const char*>(data), 10 * 8);
-  UnsafeRowStaticParser rowParser =
-      UnsafeRowStaticParser<Array<TinyintType>, Array<SmallintType>>(rowData);
-
-  std::optional<std::vector<std::optional<uint8_t>>> val0 =
-      UnsafeRowStaticDeserializer<Array<TinyintType>, std::vector<uint8_t>>::
-          deserialize(rowParser.dataAt<0>());
-  ASSERT_TRUE(val0.has_value());
-  auto vector0 = val0.value();
-  ASSERT_EQ(vector0.size(), 5);
-  ASSERT_EQ(vector0[0], 0x01);
-  ASSERT_EQ(vector0[1], 0x02);
-  ASSERT_FALSE(vector0[2].has_value());
-  ASSERT_EQ(vector0[3], 0x03);
-  ASSERT_FALSE(vector0[4].has_value());
-
-  std::optional<std::vector<std::optional<uint16_t>>> val1 =
-      UnsafeRowStaticDeserializer<Array<SmallintType>, std::vector<uint16_t>>::
-          deserialize(rowParser.dataAt<1>());
-  ASSERT_TRUE(val1.has_value());
-  auto vector1 = val1.value();
-  ASSERT_EQ(vector1.size(), 5);
-  ASSERT_EQ(vector1[0], 0x1111);
-  ASSERT_EQ(vector1[1], 0x2222);
-  ASSERT_FALSE(vector1[2].has_value());
-  ASSERT_EQ(vector1[3], 0x4444);
-  ASSERT_EQ(vector1[4], 0x5555);
-}
-
-TEST_F(UnsafeRowStaticDeserializerTest, MapStdContainer) {
-  /*
-    { 1 : 2, 3: null}
-  */
-
-  uint8_t data[9][8] = {
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x38, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00},
-      {0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-      {0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-
-  auto rowData = std::string_view(reinterpret_cast<const char*>(data), 9 * 8);
-  UnsafeRowStaticParser rowParser =
-      UnsafeRowStaticParser<Map<SmallintType, SmallintType>>(rowData);
-
-  auto val0 = UnsafeRowStaticDeserializer<
-      Map<SmallintType, SmallintType>,
-      std::multimap<int16_t, int16_t>>::deserialize(rowParser.dataAt<0>());
-
-  ASSERT_EQ(val0->size(), 2);
-  ASSERT_EQ(val0->find(1)->second.value(), 2);
-  ASSERT_FALSE(val0->find(3)->second.has_value());
-}
-
-TYPED_TEST(UnsafeRowVectorDeserializerTest, FixedWidthArray) {
+TEST_F(UnsafeRowBatchDeserializerTest, FixedWidthArray) {
   /*
    * UnsafeRow with 2 elements (element 2 is ignored):
    * Element 1: Array of TinyInt with 5 elements
@@ -479,34 +246,8 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, FixedWidthArray) {
   std::vector<TypePtr> rowTypes{ARRAY(TINYINT()), ARRAY(SMALLINT())};
   UnsafeRowDynamicParser rowParser = UnsafeRowDynamicParser(rowTypes, rowData);
 
-  // first test flattenComplexData
-  std::vector<DataIteratorPtr> array0Iter =
-      UnsafeRowDynamicVectorDeserializer::flattenComplexData(
-          rowParser.dataAt(0), rowTypes.at(0));
-  // 1 ArrayIterator + 5 PrimitiveIterators
-  ASSERT_EQ(array0Iter.size(), 6);
-
-  auto array0Iter0 =
-      std::dynamic_pointer_cast<UnsafeRowArrayIterator>(array0Iter[0]);
-  ASSERT_TRUE(array0Iter0);
-  ASSERT_TRUE(array0Iter0->type()->isArray());
-  ASSERT_EQ(array0Iter0->size(), 5);
-  ASSERT_FALSE(array0Iter0->isNull());
-  ASSERT_TRUE(array0Iter0->childIsFixedLength());
-
-  ASSERT_TRUE(checkPrimitiveIterator<uint8_t>(
-      array0Iter[1], TypeKind::TINYINT, false, 0x1));
-  ASSERT_TRUE(checkPrimitiveIterator<uint8_t>(
-      array0Iter[2], TypeKind::TINYINT, false, 0x2));
-  ASSERT_TRUE(
-      checkPrimitiveIterator<uint8_t>(array0Iter[3], TypeKind::TINYINT, true));
-  ASSERT_TRUE(checkPrimitiveIterator<uint8_t>(
-      array0Iter[4], TypeKind::TINYINT, false, 0x3));
-  ASSERT_TRUE(
-      checkPrimitiveIterator<uint8_t>(array0Iter[5], TypeKind::TINYINT, true));
-
-  VectorPtr val0 = UnsafeRowDynamicVectorDeserializer::deserializeComplex(
-      rowParser.dataAt(0), rowParser.typeAt(0), this->pool_.get());
+  VectorPtr val0 = UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+      rowParser.dataAt(0), rowParser.typeAt(0), pool_.get());
   /*
    * ArrayVector<FlatVector<int8_t>>:
    * offsets: 0
@@ -518,7 +259,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, FixedWidthArray) {
   int32_t arrayVectorOffsets[1] = {0};
   vector_size_t arrayVectorLengths[1] = {5};
   bool arrayVectorNulls[1] = {0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_TRUE(checkVectorMetadata(
       arrayVectorPtr,
       arrayVectorSize,
       arrayVectorOffsets,
@@ -539,7 +280,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, FixedWidthArray) {
   ASSERT_TRUE(arrayFlatVector->isNullAt(4));
 }
 
-TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
+TEST_F(UnsafeRowBatchDeserializerTest, NestedArray) {
   /*
    * type: Array->Array->Array->TinyInt
    * ArrayVector<ArrayVector<ArrayVector<FlatVector<int8_t>>>
@@ -615,10 +356,11 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
 
   auto rowData =
       std::string_view(reinterpret_cast<const char*>(data0), 17 * 2 * 8);
-  ;
-  auto rowType = ROW({"f0"}, {ARRAY(ARRAY(ARRAY(TINYINT())))});
-  VectorPtr val = TypeParam::Deserialize({rowData}, rowType, this->pool_.get());
-  VectorPtr val0 = val->as<RowVector>()->childAt(0);
+  std::vector<TypePtr> rowTypes{ARRAY(ARRAY(ARRAY(TINYINT())))};
+  UnsafeRowDynamicParser rowParser = UnsafeRowDynamicParser(rowTypes, rowData);
+
+  VectorPtr val0 = UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+      rowParser.dataAt(0), rowParser.typeAt(0), pool_.get());
 
   /*
    * ArrayVector<ArrayVector<ArrayVector<FlatVector<int8_t>>>
@@ -632,7 +374,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
   int32_t outermostArrayOffsets[1] = {0};
   vector_size_t outermostArraySizes[1] = {3};
   bool outermostArrayNulls[1] = {0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_TRUE(checkVectorMetadata(
       outermostArrayVectorPtr,
       outermostArraySize,
       outermostArrayOffsets,
@@ -653,7 +395,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
   int32_t outerArrayOffsets[3] = {0, 2, 5};
   vector_size_t outerArraySizes[3] = {2, 3, 1};
   bool outerArrayNulls[3] = {0, 0, 0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_TRUE(checkVectorMetadata(
       outerArrayVectorPtr,
       outerArraySize,
       outerArrayOffsets,
@@ -675,7 +417,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
   int32_t innerArrayOffsets[6] = {0, 2, 4, 7, 7, 8};
   vector_size_t innerArraySizes[6] = {2, 2, 3, 0, 1, 2};
   bool innerArrayNulls[6] = {0, 0, 0, 1, 0, 0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_TRUE(checkVectorMetadata(
       innerArrayVectorPtr,
       innerArraySize,
       innerArrayOffsets,
@@ -699,7 +441,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedArray) {
       0);
 }
 
-TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
+TEST_F(UnsafeRowBatchDeserializerTest, NestedMap) {
   /*
    * TypePtr: Map<Short, Map<Short, Short>>
    * {
@@ -754,13 +496,11 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
 
   auto rowData =
       std::string_view(reinterpret_cast<const char*>(data0), 12 * 2 * 8);
+  std::vector<TypePtr> rowTypes{MAP(SMALLINT(), MAP(SMALLINT(), SMALLINT()))};
+  UnsafeRowDynamicParser rowParser = UnsafeRowDynamicParser(rowTypes, rowData);
 
-  VectorPtr val = TypeParam::Deserialize(
-      {rowData},
-      ROW({"f0"}, {MAP(SMALLINT(), MAP(SMALLINT(), SMALLINT()))}),
-      this->pool_.get());
-  VectorPtr val0 = val->as<RowVector>()->childAt(0);
-  /* DO NOT SUBMIT */ LOG(ERROR) << __FUNCTION__ << ": val=" << val->toString();
+  VectorPtr val0 = UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+      rowParser.dataAt(0), rowParser.typeAt(0), pool_.get());
 
   /*
    * Map<Short, Map<Short, Short>>
@@ -772,10 +512,12 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
   auto outerMapSize = 1;
   int32_t outerMapOffsets[1] = {0};
   vector_size_t outerMapSizes[1] = {2};
-  // print_buffer(reinterpret_cast<const char
-  // *>(outerMapVectorPtr->sizes()->asMutable<vector_size_t>()), 128);
   bool outerMapNulls[1] = {0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_EQ(1, outerMapVectorPtr->size());
+  EXPECT_EQ(
+      outerMapVectorPtr->toString(0),
+      "2 elements starting at 0 {1 = 2 elements starting at 0 {2 = 3,\n 4 = null},\n 6 = 1 elements starting at 2 {7 = 8}}");
+  ASSERT_TRUE(checkVectorMetadata(
       outerMapVectorPtr,
       outerMapSize,
       outerMapOffsets,
@@ -807,7 +549,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
   int32_t innerMapOffsets[2] = {0, 2};
   vector_size_t innerMapSizes[2] = {2, 1};
   bool innerMapNulls[2] = {0, 0};
-  ASSERT_TRUE(this->checkVectorMetadata(
+  ASSERT_TRUE(checkVectorMetadata(
       innerMapVectorPtr,
       innerMapSize,
       innerMapOffsets,
@@ -815,7 +557,7 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, NestedMap) {
       innerMapNulls));
 }
 
-TYPED_TEST(UnsafeRowVectorDeserializerTest, RowVector) {
+TEST_F(UnsafeRowBatchDeserializerTest, RowVector) {
   // row[0], 0b010010
   // {0x0101010101010101, null, 0xABCDEF, 56llu << 32 | 4, null, 64llu << 32 |
   // 60, "1234", "Make time for civilization, for civilization wont make time."}
@@ -860,12 +602,13 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, RowVector) {
   auto row1 = std::string_view(reinterpret_cast<const char*>(data1), 12 * 8);
 
   // Two rows
-  std::vector<std::string_view> rows{row0, row1};
+  std::vector<std::optional<std::string_view>> rows{row0, row1};
 
   auto rowType =
       ROW({BIGINT(), VARCHAR(), BIGINT(), VARCHAR(), VARCHAR(), VARCHAR()});
 
-  VectorPtr val0 = TypeParam::Deserialize(rows, rowType, this->pool_.get());
+  VectorPtr val0 = UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+      rows, rowType, pool_.get());
 
   auto rowVectorPtr = std::dynamic_pointer_cast<RowVector>(val0);
 
@@ -891,10 +634,10 @@ Make time for civilization, for civilization wont make time.}");
 Im a string with 30 characters}");
 }
 
-template <typename T>
-class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
+class UnsafeRowComplexBatchDeserializerTests
+    : public exec::test::OperatorTestBase {
  public:
-  UnsafeRowComplexDeserializerTests() {}
+  UnsafeRowComplexBatchDeserializerTests() {}
 
   constexpr static int kMaxBuffers = 10;
 
@@ -926,7 +669,7 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
     ASSERT_EQ(expected->size(), actual->size());
     ASSERT_EQ(expected->typeKind(), actual->typeKind());
     for (auto i = 0; i < expected->size(); i++) {
-      ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
+      EXPECT_TRUE(expected->equalValueAt(actual.get(), i, i))
           << "at " << i << ": expected " << expected->toString(i)
           << ", but got " << actual->toString(i);
     }
@@ -937,92 +680,57 @@ class UnsafeRowComplexDeserializerTests : public exec::test::OperatorTestBase {
   std::array<char[1024], kMaxBuffers> buffers_{};
 };
 
-TYPED_TEST_SUITE(UnsafeRowComplexDeserializerTests, DeserImpls);
-
-TYPED_TEST(
-    UnsafeRowComplexDeserializerTests,
+TEST_F(
+    UnsafeRowComplexBatchDeserializerTests,
     UnsafeRowDeserializationRowsTests) {
-  std::vector<std::string_view> serializedVec;
+  std::vector<std::optional<std::string_view>> serializedVec;
   int32_t batchSize = 10;
-  const auto& inputVector = this->createInputRow(batchSize);
+  const auto& inputVector = createInputRow(batchSize);
   for (size_t i = 0; i < batchSize; ++i) {
     // Serialize rowVector into bytes.
     auto rowSize = UnsafeRowDynamicSerializer::serialize(
-        inputVector->type(), inputVector, this->buffers_[i], /*idx=*/i);
+        inputVector->type(), inputVector, buffers_[i], /*idx=*/i);
     ASSERT_TRUE(rowSize.has_value());
-    serializedVec.push_back(
-        std::string_view(this->buffers_[i], rowSize.value()));
+    serializedVec.push_back(std::string_view(buffers_[i], rowSize.value()));
   }
-  VectorPtr outputVector = TypeParam::Deserialize(
-      serializedVec, inputVector->type(), this->pool_.get());
-  this->assertEqualVectors(inputVector, outputVector);
+  VectorPtr outputVector =
+      UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+          serializedVec, inputVector->type(), pool_.get());
+  assertEqualVectors(inputVector, outputVector);
 }
 
-TYPED_TEST(UnsafeRowComplexDeserializerTests, UnsafeRowDeserializationTests) {
-  const auto& inputVector = this->createInputRow(1);
+TEST_F(UnsafeRowComplexBatchDeserializerTests, UnsafeRowDeserializationTests) {
+  const auto& inputVector = createInputRow(1);
   // Serialize rowVector into bytes.
   auto rowSize = UnsafeRowDynamicSerializer::serialize(
-      inputVector->type(), inputVector, this->buffers_[0], /*idx=*/0);
+      inputVector->type(), inputVector, buffers_[0], /*idx=*/0);
 
-  VectorPtr outputVector = TypeParam::Deserialize(
-      {std::string_view(this->buffers_[0], rowSize.value())},
-      inputVector->type(),
-      this->pool_.get());
-  this->assertEqualVectors(inputVector, outputVector);
+  VectorPtr outputVector =
+      UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+          std::string_view(buffers_[0], rowSize.value()),
+          inputVector->type(),
+          pool_.get());
+  assertEqualVectors(inputVector, outputVector);
 }
 
-TYPED_TEST(
-    UnsafeRowComplexDeserializerTests,
+TEST_F(
+    UnsafeRowComplexBatchDeserializerTests,
     UnsafeRowDeserializationRows2Tests) {
-  const auto& inputVector = this->createInputRow(2);
+  const auto& inputVector = createInputRow(2);
   // Serialize rowVector into bytes.
   auto rowSize = UnsafeRowDynamicSerializer::serialize(
-      inputVector->type(), inputVector, this->buffers_[0], /*idx=*/0);
+      inputVector->type(), inputVector, buffers_[0], /*idx=*/0);
 
   auto nextRowSize = UnsafeRowDynamicSerializer::serialize(
-      inputVector->type(), inputVector, this->buffers_[1], /*idx=*/1);
+      inputVector->type(), inputVector, buffers_[1], /*idx=*/1);
 
-  VectorPtr outputVector = TypeParam::Deserialize(
-      {std::string_view(this->buffers_[0], rowSize.value()),
-       std::string_view(this->buffers_[1], nextRowSize.value())},
-      inputVector->type(),
-      this->pool_.get());
-  this->assertEqualVectors(inputVector, outputVector);
-}
-
-VectorFuzzer::Options fuzzerOptions() {
-  return {
-      .nullChance = 10,
-      .stringVariableLength = true,
-      .containerVariableLength = true,
-      .useMicrosecondPrecisionTimestamp = true,
-  };
-}
-
-TYPED_TEST(UnsafeRowComplexDeserializerTests, Fuzzer) {
-  if (std::is_same_v<TypeParam, UnsafeRowLegacyWrapper>) {
-    LOG(WARNING) << "Disabled for legacy unsafe row deserializer";
-    return;
-  }
-  std::string buffer(100 << 20, '\0'); // Up to 100MB.
-  VectorFuzzer fuzzer(fuzzerOptions(), this->pool_.get(), 0);
-  for (int i = 0; i < 100; ++i) {
-    auto seed = i; // TODO: Switch to folly::Random::rand32().
-    fuzzer.reSeed(seed);
-    const TypePtr type = fuzzer.randRowType();
-    LOG(INFO) << "i=" << i << " seed=" << seed << " type=" << type->toString();
-    const VectorPtr input = fuzzer.fuzz(type);
-    std::vector<std::string_view> rowData;
-    char* data = &buffer[0];
-    for (int i = 0; i < input->size(); ++i) {
-      auto size = UnsafeRowDynamicSerializer::serialize(type, input, data, i);
-      ASSERT_TRUE(size);
-      rowData.emplace_back(data, *size);
-      data += *size;
-    }
-    auto output = TypeParam::Deserialize(rowData, type, this->pool_.get());
-    this->assertEqualVectors(input, output);
-  }
+  VectorPtr outputVector =
+      UnsafeRowDynamicVectorBatchDeserializer::deserializeComplex(
+          {std::string_view(buffers_[0], rowSize.value()),
+           std::string_view(buffers_[1], nextRowSize.value())},
+          inputVector->type(),
+          pool_.get());
+  assertEqualVectors(inputVector, outputVector);
 }
 
 } // namespace

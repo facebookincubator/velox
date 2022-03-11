@@ -621,7 +621,8 @@ class MapView {
     return Iterator{keyReader_, valueReader_, size_ + offset_};
   }
 
-  const Element operator[](vector_size_t index) const {
+  // Index-based access for the map elements.
+  const Element atIndex(vector_size_t index) const {
     return Element{keyReader_, valueReader_, index + offset_};
   }
 
@@ -639,6 +640,11 @@ class MapView {
     auto it = find(key);
     VELOX_USER_CHECK(it != end(), "accessed key is not found in the map");
     return it->second;
+  }
+
+  // Beware!! runtime is O(N)!!
+  ValueAccessor operator[](const key_element_t& key) const {
+    return at(key);
   }
 
  private:
@@ -678,7 +684,7 @@ class RowView {
 };
 
 template <size_t I, bool returnsOptionalValues, class... Types>
-auto get(const RowView<returnsOptionalValues, Types...>& row) {
+inline auto get(const RowView<returnsOptionalValues, Types...>& row) {
   return row.template at<I>();
 }
 
