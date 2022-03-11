@@ -20,10 +20,13 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
 class LimitTest : public OperatorTestBase {
-protected:
- void basicLimitTests(const std::vector<RowVectorPtr>& vectors) {
+ protected:
+  void basicLimitTests(const std::vector<RowVectorPtr>& vectors) {
     auto makePlan = [&](int32_t offset, int32_t limit) {
-        return PlanBuilder().values(vectors).limit(offset, limit, true).planNode();
+      return PlanBuilder()
+          .values(vectors)
+          .limit(offset, limit, true)
+          .planNode();
     };
 
     assertQuery(makePlan(0, 10), "SELECT * FROM tmp LIMIT 10");
@@ -35,20 +38,22 @@ protected:
     assertQuery(makePlan(17, 1'000), "SELECT * FROM tmp OFFSET 17 LIMIT 1000");
     assertQuery(makePlan(17, 2'000), "SELECT * FROM tmp OFFSET 17 LIMIT 2000");
 
-    assertQuery(makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
     assertQuery(
-            makePlan(1'000, 1'000), "SELECT * FROM tmp OFFSET 1000 LIMIT 1000");
+        makePlan(1'000, 145), "SELECT * FROM tmp OFFSET 1000 LIMIT 145");
     assertQuery(
-            makePlan(1'000, 1'234), "SELECT * FROM tmp OFFSET 1000 LIMIT 1234");
+        makePlan(1'000, 1'000), "SELECT * FROM tmp OFFSET 1000 LIMIT 1000");
+    assertQuery(
+        makePlan(1'000, 1'234), "SELECT * FROM tmp OFFSET 1000 LIMIT 1234");
 
     assertQuery(makePlan(1'234, 10), "SELECT * FROM tmp OFFSET 1234 LIMIT 10");
-    assertQuery(makePlan(1'234, 983), "SELECT * FROM tmp OFFSET 1234 LIMIT 983");
     assertQuery(
-            makePlan(1'234, 1'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 1000");
+        makePlan(1'234, 983), "SELECT * FROM tmp OFFSET 1234 LIMIT 983");
     assertQuery(
-            makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
+        makePlan(1'234, 1'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 1000");
+    assertQuery(
+        makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
     assertQueryReturnsEmptyResult(makePlan(12'345, 10));
-}
+  }
 };
 
 TEST_F(LimitTest, basic) {
