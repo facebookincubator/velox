@@ -22,7 +22,7 @@
 #include <sstream>
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/SimpleFunctionMetadata.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/SimpleFunctionRegistry.h"

@@ -16,10 +16,10 @@
 #pragma once
 
 #include "velox/common/memory/MappedMemory.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/VectorHasher.h"
+#include "velox/expression/Aggregate.h"
 
 namespace facebook::velox::exec {
 

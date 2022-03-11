@@ -15,8 +15,8 @@
  */
 
 #include <limits>
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregationHook.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"

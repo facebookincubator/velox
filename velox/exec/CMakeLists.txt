@@ -13,7 +13,6 @@
 # limitations under the License.
 add_library(
   velox_exec
-  Aggregate.cpp
   AggregationMasks.cpp
   ContainerRowSerde.cpp
   CrossJoinBuild.cpp

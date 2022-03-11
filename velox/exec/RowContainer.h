@@ -17,8 +17,8 @@
 
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/MappedMemory.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 namespace facebook::velox::exec {

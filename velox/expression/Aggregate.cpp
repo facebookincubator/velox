@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::exec {

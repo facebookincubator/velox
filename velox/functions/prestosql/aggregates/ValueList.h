@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 

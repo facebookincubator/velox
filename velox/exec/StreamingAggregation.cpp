@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/StreamingAggregation.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/expression/Aggregate.h"
 
 namespace facebook::velox::exec {
 

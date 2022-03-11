@@ -15,8 +15,8 @@
  */
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include <velox/exec/Aggregate.h>
 #include <velox/exec/HashPartitionFunction.h>
+#include <velox/expression/Aggregate.h>
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"

@@ -15,7 +15,7 @@
  */
 #include <folly/stats/TDigest.h>
 #include "velox/common/memory/HashStringAllocator.h"
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/aggregates/IOUtils.h"

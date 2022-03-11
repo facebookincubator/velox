@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/vector/ComplexVector.h"

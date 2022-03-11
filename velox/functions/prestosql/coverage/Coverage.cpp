@@ -17,7 +17,7 @@
 #include <gflags/gflags.h>
 #include <fstream>
 #include <iostream>
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 

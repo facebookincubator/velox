@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 
 using facebook::velox::exec::Aggregate;

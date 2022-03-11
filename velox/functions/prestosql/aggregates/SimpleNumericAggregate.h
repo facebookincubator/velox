@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregationHook.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"

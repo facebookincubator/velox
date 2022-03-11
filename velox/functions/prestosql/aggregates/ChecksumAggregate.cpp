@@ -16,7 +16,7 @@
 
 #define XXH_INLINE_ALL
 
-#include "velox/exec/Aggregate.h"
+#include "velox/expression/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/external/xxhash.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"

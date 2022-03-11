@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/HashAggregation.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/Task.h"
+#include "velox/expression/Aggregate.h"
 
 namespace facebook::velox::exec {
 
