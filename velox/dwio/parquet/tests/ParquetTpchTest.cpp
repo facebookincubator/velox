@@ -23,13 +23,23 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
+#include <map>
+#include <ostream>
+#include <vector>
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 static const int kNumDrivers = 4;
 
-class ParquetTpchTest : public testing::Test {
+struct QueryParams {
+  int queryId;
+  int queryPipelineCount;
+  int queryFinishedSplits;
+};
+
+class ParquetTpchTest : public testing::TestWithParam<QueryParams> {
  protected:
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
@@ -43,6 +53,7 @@ class ParquetTpchTest : public testing::Test {
     parse::registerTypeResolver();
     filesystems::registerLocalFileSystem();
     parquet::registerParquetReaderFactory();
+
     auto hiveConnector =
         connector::getConnectorFactory(
             connector::hive::HiveConnectorFactory::kHiveConnectorName)
@@ -111,38 +122,50 @@ class ParquetTpchTest : public testing::Test {
 };
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTest::duckDb_ = nullptr;
-std::shared_ptr<exec::test::TempDirectoryPath> ParquetTpchTest::tempDirectory_ =
-    nullptr;
-TpchQueryBuilder ParquetTpchTest::tpchBuilder_(
-    facebook::velox::dwio::common::FileFormat::PARQUET);
-std::unordered_map<std::string, std::string>
-    ParquetTpchTest::duckDbParquetWriteSQL_ = {std::make_pair(
+std::shared_ptr<exec::test::TempDirectoryPath> ParquetTpchTest::tempDirectory_ = nullptr;
+TpchQueryBuilder ParquetTpchTest::tpchBuilder_(    dwio::common::FileFormat::PARQUET);
+
+std::unordered_map<std::string, std::string> ParquetTpchTest::duckDbParquetWriteSQL_ = {
+std::make_pair(
         "lineitem",
         R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
         l_quantity::DOUBLE as l_quantity, l_extendedprice::DOUBLE as l_extendedprice, l_discount::DOUBLE as l_discount,
         l_tax::DOUBLE as l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate,
-        l_shipinstruct, l_shipmode, l_comment FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))")};
+        l_shipinstruct, l_shipmode, l_comment FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+    std::make_pair(
+      "orders",
+      R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
+        o_totalprice::DOUBLE as o_totalprice,
+        o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+        std::make_pair(
+      "customer",
+      R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
+        c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+};
 
-TEST_F(ParquetTpchTest, q1) {
-  auto tpchPlan = tpchBuilder_.getQueryPlan(1);
-  auto duckDbSql = duckDb_->getTpchQuery(1);
+std::ostream& operator<<(std::ostream& os, const QueryParams& params) {
+  os << "QueryId_" << params.queryId;
+  return os;
+}
+
+TEST_P(ParquetTpchTest, CompareWithDuckDB) {
+  auto queryParams = GetParam();
+  auto tpchPlan = tpchBuilder_.getQueryPlan(queryParams.queryId);
+  auto duckDbSql = duckDb_->getTpchQuery(queryParams.queryId);
   auto task = assertQuery(tpchPlan, duckDbSql);
 
   const auto& stats = task->taskStats();
-  // There should be two pipelines.
-  ASSERT_EQ(2, stats.pipelineStats.size());
-  // We used the default of 10 splits per file.
-  ASSERT_EQ(10, stats.numFinishedSplits);
+  ASSERT_EQ(queryParams.queryPipelineCount, stats.pipelineStats.size());
+  ASSERT_EQ(queryParams.queryFinishedSplits, stats.numFinishedSplits);
 }
 
-TEST_F(ParquetTpchTest, q6) {
-  auto tpchPlan = tpchBuilder_.getQueryPlan(6);
-  auto duckDbSql = duckDb_->getTpchQuery(6);
-  auto task = assertQuery(tpchPlan, duckDbSql);
-
-  const auto& stats = task->taskStats();
-  // There should be two pipelines
-  ASSERT_EQ(2, stats.pipelineStats.size());
-  // We used the default of 10 splits
-  ASSERT_EQ(10, stats.numFinishedSplits);
-}
+INSTANTIATE_TEST_CASE_P(
+    CompareWithDuckDB,
+    ParquetTpchTest,
+    testing::Values(
+        QueryParams{1, 2, 10},
+        QueryParams{6, 2, 10},
+        QueryParams{18, 5, 30}),
+    testing::PrintToStringParamName());

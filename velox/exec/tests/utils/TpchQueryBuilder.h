@@ -82,6 +82,7 @@ class TpchQueryBuilder {
  private:
   TpchPlan getQ1Plan() const;
   TpchPlan getQ6Plan() const;
+  TpchPlan getQ18Plan() const;
 
   const std::vector<std::string>& getTableFilePaths(
       const std::string& tableName) const {

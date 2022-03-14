@@ -74,6 +74,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ1Plan();
     case 6:
       return getQ6Plan();
+    case 18:
+      return getQ18Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
@@ -268,27 +270,166 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   return context;
 }
 
-const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {"lineitem"};
+TpchPlan TpchQueryBuilder::getQ18Plan() const {
+  static const std::vector<std::string> kTableNames = {
+      "lineitem", "orders", "customer"};
+  std::vector<std::string> lineitemSelectedColumns = {
+      "l_orderkey", "l_quantity"};
+  std::vector<std::string> ordersSelectedColumns = {
+      "o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"};
+  std::vector<std::string> customerSelectedColumns = {"c_name", "c_custkey"};
+
+  // Get the corresponding selected column names in the file.
+  const auto lineitemAliasSelectedColumns =
+      getColumnAliases(kTableNames[0], lineitemSelectedColumns);
+  const auto ordersAliasSelectedColumns =
+      getColumnAliases(kTableNames[1], ordersSelectedColumns);
+  const auto customerAliasSelectedColumns =
+      getColumnAliases(kTableNames[2], customerSelectedColumns);
+
+  auto lineitemColumnSelector =
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          tableMetadata_.at(kTableNames[0]).type, lineitemAliasSelectedColumns);
+  auto ordersColumnSelector =
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          tableMetadata_.at(kTableNames[1]).type, ordersAliasSelectedColumns);
+  auto customerColumnSelector =
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          tableMetadata_.at(kTableNames[2]).type, customerAliasSelectedColumns);
+
+  auto lineitemSelectedRowType =
+      lineitemColumnSelector->buildSelectedReordered();
+  auto ordersSelectedRowType = ordersColumnSelector->buildSelectedReordered();
+  auto customerSelectedRowType =
+      customerColumnSelector->buildSelectedReordered();
+  // Add an extra project step to map file columns to standard
+  // column names.
+  const auto lineitemProjectAlias =
+      getProjectColumnAliases(kTableNames[0], lineitemSelectedColumns);
+  const auto ordersProjectAlias =
+      getProjectColumnAliases(kTableNames[1], ordersSelectedColumns);
+  const auto customerProjectAlias =
+      getProjectColumnAliases(kTableNames[2], customerSelectedColumns);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId customerSrourceNodeId;
+  core::PlanNodeId ordersSourceNodeId;
+  core::PlanNodeId lineitemSourceNodeId;
+
+  auto bigOrders = PlanBuilder(planNodeIdGenerator)
+                       .localPartition(
+                           {0}, // l_orderkey
+                           {PlanBuilder(planNodeIdGenerator)
+                                .tableScan(lineitemSelectedRowType)
+                                .capturePlanNodeId(lineitemSourceNodeId)
+                                .partialAggregation({0}, {"sum(l_quantity)"})
+                                .planNode()})
+                       .finalAggregation({0}, {"sum(a0)"}, {DOUBLE()})
+                       .project({"l_orderkey", "a0 AS quantity"})
+                       .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(ordersSelectedRowType)
+                   .capturePlanNodeId(ordersSourceNodeId)
+                   .hashJoin(
+                       {"o_orderkey"},
+                       {"l_orderkey"},
+                       bigOrders,
+                       "quantity > 300.0",
+                       {"o_orderkey",
+                        "o_custkey",
+                        "o_orderdate",
+                        "o_totalprice",
+                        "l_orderkey",
+                        "quantity"})
+                   .hashJoin(
+                       {"o_custkey"},
+                       {"c_custkey"},
+                       PlanBuilder(planNodeIdGenerator)
+                           .tableScan(customerSelectedRowType)
+                           .capturePlanNodeId(customerSrourceNodeId)
+                           .planNode(),
+                       "",
+                       {"o_orderkey",
+                        "o_orderdate",
+                        "o_totalprice",
+                        "quantity",
+                        "c_name",
+                        "c_custkey"})
+                   .planNode()})
+          .orderBy({2, 1}, {core::kDescNullsLast, core::kAscNullsLast}, false)
+          .limit(0, 100, false)
+          .project(
+              {"c_name",
+               "c_custkey",
+               "o_orderkey",
+               "o_orderdate",
+               "o_totalprice",
+               "quantity"})
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemSourceNodeId] = getTableFilePaths(kTableNames[0]);
+  context.dataFiles[ordersSourceNodeId] = getTableFilePaths(kTableNames[1]);
+  context.dataFiles[customerSrourceNodeId] = getTableFilePaths(kTableNames[2]);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {
+    "lineitem",
+    "orders",
+    "customer"
+};
 
 const std::unordered_map<std::string, std::vector<std::string>>
-    TpchQueryBuilder::kTables_ = {std::make_pair(
-        "lineitem",
-        std::vector<std::string>{
-            "l_orderkey",
-            "l_partkey",
-            "l_suppkey",
-            "l_linenumber",
-            "l_quantity",
-            "l_extendedprice",
-            "l_discount",
-            "l_tax",
-            "l_returnflag",
-            "l_linestatus",
-            "l_shipdate",
-            "l_commitdate",
-            "l_receiptdate",
-            "l_shipinstruct",
-            "l_shipmode",
-            "l_comment"})};
+    TpchQueryBuilder::kTables_ = {
+        std::make_pair(
+            "lineitem",
+            std::vector<std::string>{
+                "l_orderkey",
+                "l_partkey",
+                "l_suppkey",
+                "l_linenumber",
+                "l_quantity",
+                "l_extendedprice",
+                "l_discount",
+                "l_tax",
+                "l_returnflag",
+                "l_linestatus",
+                "l_shipdate",
+                "l_commitdate",
+                "l_receiptdate",
+                "l_shipinstruct",
+                "l_shipmode",
+                "l_comment"}),
+        std::make_pair(
+            "orders",
+            std::vector<std::string>{
+                "o_orderkey",
+                "o_custkey",
+                "o_orderstatus",
+                "o_totalprice",
+                "o_orderdate",
+                "o_orderpriority",
+                "o_clerk",
+                "o_shippriority",
+                "o_comment"}),
+        std::make_pair(
+            "customer",
+            std::vector<std::string>{
+                "c_custkey",
+                "c_name",
+                "c_addres",
+                "c_nationkey",
+                "c_phone",
+                "c_acctbal",
+                "c_mktsegment",
+                "c_comment"})};
 
 } // namespace facebook::velox::exec::test
