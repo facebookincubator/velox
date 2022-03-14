@@ -23,8 +23,6 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 
-#include <map>
-#include <ostream>
 #include <vector>
 
 using namespace facebook::velox;
@@ -33,13 +31,7 @@ using namespace facebook::velox::exec::test;
 
 static const int kNumDrivers = 4;
 
-struct QueryParams {
-  int id;
-  int pipelineCount;
-  int finishedSplits;
-};
-
-class ParquetTpchTest : public testing::TestWithParam<QueryParams> {
+class ParquetTpchTest : public testing::Test {
  protected:
   // Setup a DuckDB instance for the entire suite and load TPC-H data with scale
   // factor 0.01.
@@ -115,6 +107,18 @@ class ParquetTpchTest : public testing::TestWithParam<QueryParams> {
     return exec::test::assertQuery(params, addSplits, duckQuery, *duckDb_);
   }
 
+  void assertQuery(
+      int queryId,
+      const int expectedPipelineCount,
+      const int expectedFinishedSplits) const {
+    auto tpchPlan = tpchBuilder_.getQueryPlan(queryId);
+    auto duckDbSql = duckDb_->getTpchQuery(queryId);
+    auto task = assertQuery(tpchPlan, duckDbSql);
+    const auto& stats = task->taskStats();
+    ASSERT_EQ(expectedPipelineCount, stats.pipelineStats.size());
+    ASSERT_EQ(expectedFinishedSplits, stats.numFinishedSplits);
+  }
+
   static std::shared_ptr<DuckDbQueryRunner> duckDb_;
   static std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
   static TpchQueryBuilder tpchBuilder_;
@@ -148,27 +152,14 @@ std::unordered_map<std::string, std::string>
         FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
 };
 
-std::ostream& operator<<(std::ostream& os, const QueryParams& params) {
-  os << "QueryId_" << params.id;
-  return os;
+TEST_F(ParquetTpchTest, Q1) {
+  assertQuery(1, 2, 10);
 }
 
-TEST_P(ParquetTpchTest, CompareWithDuckDB) {
-  auto queryParams = GetParam();
-  auto tpchPlan = tpchBuilder_.getQueryPlan(queryParams.id);
-  auto duckDbSql = duckDb_->getTpchQuery(queryParams.id);
-  auto task = assertQuery(tpchPlan, duckDbSql);
-
-  const auto& stats = task->taskStats();
-  ASSERT_EQ(queryParams.pipelineCount, stats.pipelineStats.size());
-  ASSERT_EQ(queryParams.finishedSplits, stats.numFinishedSplits);
+TEST_F(ParquetTpchTest, Q6) {
+  assertQuery(6, 2, 10);
 }
 
-INSTANTIATE_TEST_CASE_P(
-    CompareWithDuckDB,
-    ParquetTpchTest,
-    testing::Values(
-        QueryParams{1, 2, 10},
-        QueryParams{6, 2, 10},
-        QueryParams{18, 5, 30}),
-    testing::PrintToStringParamName());
+TEST_F(ParquetTpchTest, Q18) {
+  assertQuery(18, 5, 30);
+}

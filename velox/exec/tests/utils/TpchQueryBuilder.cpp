@@ -260,15 +260,14 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
   static const std::string kLineitem = "lineitem";
   static const std::string kOrders = "orders";
   static const std::string kCustomer = "customer";
-  std::vector<std::string> lineitemSelectedColumns = {
-      "l_orderkey", "l_quantity"};
-  std::vector<std::string> ordersSelectedColumns = {
+  std::vector<std::string> lineitemColumns = {"l_orderkey", "l_quantity"};
+  std::vector<std::string> ordersColumns = {
       "o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"};
-  std::vector<std::string> customerSelectedColumns = {"c_name", "c_custkey"};
+  std::vector<std::string> customerColumns = {"c_name", "c_custkey"};
 
-  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemSelectedColumns);
-  auto ordersSelectedRowType = getRowType(kOrders, ordersSelectedColumns);
-  auto customerSelectedRowType = getRowType(kCustomer, customerSelectedColumns);
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId customerScanNodeId;
