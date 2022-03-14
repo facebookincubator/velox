@@ -105,6 +105,15 @@ class TpchQueryBuilder {
     return aliases;
   }
 
+  std::shared_ptr<const RowType> getRowType(
+      const std::string& tableName,
+      const std::vector<std::string>& columnNames) const {
+    const auto aliases = getColumnAliases(tableName, columnNames);
+    auto columnSelector = std::make_shared<dwio::common::ColumnSelector>(
+        tableMetadata_.at(tableName).type, aliases);
+    return columnSelector->buildSelectedReordered();
+  }
+
   std::vector<std::string> getProjectColumnAliases(
       const std::string& tableName,
       const std::vector<std::string>& columnNames) const {

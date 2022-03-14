@@ -122,14 +122,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
       "l_tax",
       "l_shipdate"};
 
-  // Get the corresponding selected column names in the file.
-  const auto aliasSelectedColumns =
-      getColumnAliases(kTableName, selectedColumns);
-
-  auto columnSelector =
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          tableMetadata_.at(kTableName).type, aliasSelectedColumns);
-  auto selectedRowType = columnSelector->buildSelectedReordered();
+  auto selectedRowType = getRowType(kTableName, selectedColumns);
   // Add an extra project step to map file columns to standard
   // column names.
   const auto projectAlias =
@@ -213,14 +206,7 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   std::vector<std::string> selectedColumns = {
       "l_shipdate", "l_extendedprice", "l_quantity", "l_discount"};
 
-  // Get the corresponding selected column names in the file.
-  const auto aliasSelectedColumns =
-      getColumnAliases(kTableName, selectedColumns);
-
-  auto columnSelector =
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          tableMetadata_.at(kTableName).type, aliasSelectedColumns);
-  auto selectedRowType = columnSelector->buildSelectedReordered();
+  auto selectedRowType = getRowType(kTableName, selectedColumns);
   // Add an extra project step to map file columns to standard
   // column names.
   const auto projectAlias =
@@ -271,62 +257,35 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
 }
 
 TpchPlan TpchQueryBuilder::getQ18Plan() const {
-  static const std::vector<std::string> kTableNames = {
-      "lineitem", "orders", "customer"};
+  static const std::string kLineitem = "lineitem";
+  static const std::string kOrders = "orders";
+  static const std::string kCustomer = "customer";
   std::vector<std::string> lineitemSelectedColumns = {
       "l_orderkey", "l_quantity"};
   std::vector<std::string> ordersSelectedColumns = {
       "o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"};
   std::vector<std::string> customerSelectedColumns = {"c_name", "c_custkey"};
 
-  // Get the corresponding selected column names in the file.
-  const auto lineitemAliasSelectedColumns =
-      getColumnAliases(kTableNames[0], lineitemSelectedColumns);
-  const auto ordersAliasSelectedColumns =
-      getColumnAliases(kTableNames[1], ordersSelectedColumns);
-  const auto customerAliasSelectedColumns =
-      getColumnAliases(kTableNames[2], customerSelectedColumns);
-
-  auto lineitemColumnSelector =
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          tableMetadata_.at(kTableNames[0]).type, lineitemAliasSelectedColumns);
-  auto ordersColumnSelector =
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          tableMetadata_.at(kTableNames[1]).type, ordersAliasSelectedColumns);
-  auto customerColumnSelector =
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          tableMetadata_.at(kTableNames[2]).type, customerAliasSelectedColumns);
-
-  auto lineitemSelectedRowType =
-      lineitemColumnSelector->buildSelectedReordered();
-  auto ordersSelectedRowType = ordersColumnSelector->buildSelectedReordered();
-  auto customerSelectedRowType =
-      customerColumnSelector->buildSelectedReordered();
-  // Add an extra project step to map file columns to standard
-  // column names.
-  const auto lineitemProjectAlias =
-      getProjectColumnAliases(kTableNames[0], lineitemSelectedColumns);
-  const auto ordersProjectAlias =
-      getProjectColumnAliases(kTableNames[1], ordersSelectedColumns);
-  const auto customerProjectAlias =
-      getProjectColumnAliases(kTableNames[2], customerSelectedColumns);
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemSelectedColumns);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersSelectedColumns);
+  auto customerSelectedRowType = getRowType(kCustomer, customerSelectedColumns);
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
-  core::PlanNodeId customerSrourceNodeId;
-  core::PlanNodeId ordersSourceNodeId;
-  core::PlanNodeId lineitemSourceNodeId;
+  core::PlanNodeId customerScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+  core::PlanNodeId lineitemScanNodeId;
 
-  auto bigOrders = PlanBuilder(planNodeIdGenerator)
-                       .localPartition(
-                           {0}, // l_orderkey
-                           {PlanBuilder(planNodeIdGenerator)
-                                .tableScan(lineitemSelectedRowType)
-                                .capturePlanNodeId(lineitemSourceNodeId)
-                                .partialAggregation({0}, {"sum(l_quantity)"})
-                                .planNode()})
-                       .finalAggregation({0}, {"sum(a0)"}, {DOUBLE()})
-                       .project({"l_orderkey", "a0 AS quantity"})
-                       .planNode();
+  auto bigOrders =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {0}, // l_orderkey
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(lineitemSelectedRowType)
+                   .capturePlanNodeId(lineitemScanNodeId)
+                   .partialAggregation({0}, {"sum(l_quantity) AS partial_sum"})
+                   .planNode()})
+          .finalAggregation({0}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
+          .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
@@ -334,7 +293,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
               {},
               {PlanBuilder(planNodeIdGenerator)
                    .tableScan(ordersSelectedRowType)
-                   .capturePlanNodeId(ordersSourceNodeId)
+                   .capturePlanNodeId(ordersScanNodeId)
                    .hashJoin(
                        {"o_orderkey"},
                        {"l_orderkey"},
@@ -351,7 +310,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                        {"c_custkey"},
                        PlanBuilder(planNodeIdGenerator)
                            .tableScan(customerSelectedRowType)
-                           .capturePlanNodeId(customerSrourceNodeId)
+                           .capturePlanNodeId(customerScanNodeId)
                            .planNode(),
                        "",
                        {"o_orderkey",
@@ -374,9 +333,9 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 
   TpchPlan context;
   context.plan = std::move(plan);
-  context.dataFiles[lineitemSourceNodeId] = getTableFilePaths(kTableNames[0]);
-  context.dataFiles[ordersSourceNodeId] = getTableFilePaths(kTableNames[1]);
-  context.dataFiles[customerSrourceNodeId] = getTableFilePaths(kTableNames[2]);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFileFormat = format_;
   return context;
 }

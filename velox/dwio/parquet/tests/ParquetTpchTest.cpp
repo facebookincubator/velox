@@ -34,9 +34,9 @@ using namespace facebook::velox::exec::test;
 static const int kNumDrivers = 4;
 
 struct QueryParams {
-  int queryId;
-  int queryPipelineCount;
-  int queryFinishedSplits;
+  int id;
+  int pipelineCount;
+  int finishedSplits;
 };
 
 class ParquetTpchTest : public testing::TestWithParam<QueryParams> {
@@ -149,19 +149,19 @@ std::unordered_map<std::string, std::string>
 };
 
 std::ostream& operator<<(std::ostream& os, const QueryParams& params) {
-  os << "QueryId_" << params.queryId;
+  os << "QueryId_" << params.id;
   return os;
 }
 
 TEST_P(ParquetTpchTest, CompareWithDuckDB) {
   auto queryParams = GetParam();
-  auto tpchPlan = tpchBuilder_.getQueryPlan(queryParams.queryId);
-  auto duckDbSql = duckDb_->getTpchQuery(queryParams.queryId);
+  auto tpchPlan = tpchBuilder_.getQueryPlan(queryParams.id);
+  auto duckDbSql = duckDb_->getTpchQuery(queryParams.id);
   auto task = assertQuery(tpchPlan, duckDbSql);
 
   const auto& stats = task->taskStats();
-  ASSERT_EQ(queryParams.queryPipelineCount, stats.pipelineStats.size());
-  ASSERT_EQ(queryParams.queryFinishedSplits, stats.numFinishedSplits);
+  ASSERT_EQ(queryParams.pipelineCount, stats.pipelineStats.size());
+  ASSERT_EQ(queryParams.finishedSplits, stats.numFinishedSplits);
 }
 
 INSTANTIATE_TEST_CASE_P(
