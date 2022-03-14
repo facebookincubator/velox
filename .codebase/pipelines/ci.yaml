@@ -1,0 +1,38 @@
+name: Prestocpp CI
+trigger: change
+jobs:
+  build:
+    name: unit test
+    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    working-directory: velox
+    steps:
+      - name: Build
+        commands:
+          - make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+      - name: Run Unit Tests
+        commands:
+          - make NUM_THREADS=16 unittest
+      - name: Run Fuzzer Tests
+        commands:
+          - _build/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0
+      - name: Run the velox examples
+        commands:
+          - _build/debug/velox/examples/velox_example_expression_eval
+          - _build/debug/velox/examples/velox_example_opaque_type
+
+  format-check:
+    name: format check
+    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    steps:
+      - name: Check formatting
+        commands:
+          - |
+            if ! make format-check; then
+            make format-fix
+            echo -e "\n==== Apply using:"
+            echo "patch -p1 \<<EOF"
+            git --no-pager diff
+            echo "EOF"
+            false
+            fi
+
