@@ -709,9 +709,21 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   auto cursor = std::make_unique<TaskCursor>(params);
   addSplits(cursor->task().get());
 
+  {
+    auto& executor = folly::QueuedImmediateExecutor::instance();
+    auto future = cursor->task()->stateChangeFuture(1'000).via(&executor);
+    future.wait();
+  }
+
   while (cursor->moveNext()) {
     result.push_back(cursor->current());
     addSplits(cursor->task().get());
+
+    {
+      auto& executor = folly::QueuedImmediateExecutor::instance();
+      auto future = cursor->task()->stateChangeFuture(1'000).via(&executor);
+      future.wait();
+    }
   }
   return {std::move(cursor), std::move(result)};
 }
