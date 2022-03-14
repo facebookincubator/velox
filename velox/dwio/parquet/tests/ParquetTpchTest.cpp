@@ -122,25 +122,28 @@ class ParquetTpchTest : public testing::TestWithParam<QueryParams> {
 };
 
 std::shared_ptr<DuckDbQueryRunner> ParquetTpchTest::duckDb_ = nullptr;
-std::shared_ptr<exec::test::TempDirectoryPath> ParquetTpchTest::tempDirectory_ = nullptr;
-TpchQueryBuilder ParquetTpchTest::tpchBuilder_(    dwio::common::FileFormat::PARQUET);
+std::shared_ptr<exec::test::TempDirectoryPath> ParquetTpchTest::tempDirectory_ =
+    nullptr;
+TpchQueryBuilder ParquetTpchTest::tpchBuilder_(
+    dwio::common::FileFormat::PARQUET);
 
-std::unordered_map<std::string, std::string> ParquetTpchTest::duckDbParquetWriteSQL_ = {
-std::make_pair(
-        "lineitem",
-        R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
+std::unordered_map<std::string, std::string>
+    ParquetTpchTest::duckDbParquetWriteSQL_ = {
+        std::make_pair(
+            "lineitem",
+            R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
         l_quantity::DOUBLE as l_quantity, l_extendedprice::DOUBLE as l_extendedprice, l_discount::DOUBLE as l_discount,
         l_tax::DOUBLE as l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate,
         l_shipinstruct, l_shipmode, l_comment FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
-    std::make_pair(
-      "orders",
-      R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
+        std::make_pair(
+            "orders",
+            R"(COPY (SELECT o_orderkey, o_custkey, o_orderstatus,
         o_totalprice::DOUBLE as o_totalprice,
         o_orderdate, o_orderpriority, o_clerk, o_shippriority, o_comment
         FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
         std::make_pair(
-      "customer",
-      R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
+            "customer",
+            R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment
         FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
 };

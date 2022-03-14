@@ -384,8 +384,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {
     "lineitem",
     "orders",
-    "customer"
-};
+    "customer"};
 
 const std::unordered_map<std::string, std::vector<std::string>>
     TpchQueryBuilder::kTables_ = {
