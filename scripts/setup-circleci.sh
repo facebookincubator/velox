@@ -64,7 +64,7 @@ wget_and_untar http://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz 
 wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.72.0/source/boost_1_72_0.tar.gz boost &
 wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/google/googletest/archive/release-1.10.0.tar.gz googletest &
-wget_and_untar https://github.com/facebook/folly/archive/v2021.05.10.00.tar.gz folly &
+wget_and_untar https://github.com/facebook/folly/archive/v2022.03.14.00.tar.gz folly &
 #  wget_and_untar https://github.com/ericniebler/range-v3/archive/0.11.0.tar.gz ranges-v3 &
 
 wait  # For cmake and source downloads to complete.
