@@ -114,19 +114,19 @@ class Decimal {
         this->scale_ == other.getScale());
   }
   bool operator!=(const Decimal& other) const {
-    return true;
+    VELOX_NYI();
   }
 
   bool operator<(const Decimal& other) const {
-    return true;
+    VELOX_NYI();
   }
 
   bool operator<=(const Decimal& other) const {
-    return true;
+    VELOX_NYI();
   }
 
   bool operator>(const Decimal& other) const {
-    return true;
+    VELOX_NYI();
   }
 
   Decimal(
@@ -220,7 +220,7 @@ namespace std {
 template <>
 struct hash<::facebook::velox::Decimal> {
   size_t operator()(const ::facebook::velox::Decimal& value) const {
-    return 0;
+    VELOX_NYI();
   }
 };
 
@@ -231,7 +231,7 @@ namespace folly {
 template <>
 struct hasher<::facebook::velox::Decimal> {
   size_t operator()(const ::facebook::velox::Decimal& value) const {
-    return 0;
+    VELOX_NYI();
   }
 };
 } // namespace folly

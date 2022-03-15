@@ -538,7 +538,7 @@ uint64_t variant::hash() const {
     }
     case TypeKind::DECIMAL: {
       auto decimalValue = value<TypeKind::DECIMAL>();
-      return folly::Hash{}(decimalValue.toString());
+      return folly::Hash{}(decimalValue);
     }
     case TypeKind::TIMESTAMP: {
       auto timestampValue = value<TypeKind::TIMESTAMP>();
