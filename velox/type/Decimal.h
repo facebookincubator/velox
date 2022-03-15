@@ -114,7 +114,7 @@ class Decimal {
         this->scale_ == other.getScale());
   }
   bool operator!=(const Decimal& other) const {
-    VELOX_NYI();
+    return !(*this == other);
   }
 
   bool operator<(const Decimal& other) const {

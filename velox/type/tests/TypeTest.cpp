@@ -199,6 +199,23 @@ TEST(Type, parseStringToDate) {
   EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
 }
 
+TEST(type, decimalNotEqualOperator) {
+  Int128 hugeInt(1234567890);
+  Decimal test1(hugeInt, 10, 5);
+  Decimal test2(hugeInt, 10, 5);
+
+  EXPECT_EQ(test1 != test2, false);
+  // Different precisions.
+  test2 = Decimal(hugeInt, 11, 5);
+  EXPECT_EQ(test1 != test2, true);
+  // Different scales.
+  test2 = Decimal(hugeInt, 10, 6);
+  EXPECT_EQ(test1 != test2, true);
+  // Different scales.
+  test2 = Decimal(Int128(1111122222), 10, 5);
+  EXPECT_EQ(test1 != test2, true);
+}
+
 TEST(Type, parseStringToDecimal) {
   EXPECT_EQ(Decimal(14, 2, 2), DecimalCasts::parseStringToDecimal("0.14"));
   EXPECT_EQ(Decimal(-14, 2, 2), DecimalCasts::parseStringToDecimal("-0.14"));
