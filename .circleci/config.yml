@@ -20,6 +20,7 @@ workflows:
       - linux-build-options
       - linux-parquet-s3-build
       - macos-build
+      - macos-build-release
       - format-check
       - header-check
       - linux-benchmarks-basic
@@ -112,6 +113,53 @@ jobs:
       - save_cache:
           name: "Save CCache cache"
           key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
+          paths:
+            - .ccache/
+
+  macos-build-release:
+    macos:
+      xcode: "11.7.0"
+    steps:
+      - checkout
+      - restore_cache:
+          name: "Restore Dependency Cache"
+          key: velox-circleci-macos-deps-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+      - run:
+          name: "Install dependencies"
+          command: |
+            set -xu
+            if [[ ! -e ~/deps ]]; then
+              mkdir ~/deps ~/deps-src
+              curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C ~/deps
+              PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-macos.sh
+              rm -rf ~/deps/.git ~/deps/Library/Taps/  # Reduce cache size by 70%.
+            fi
+      - save_cache:
+          name: "Save Dependency Cache"
+          key: velox-circleci-macos-deps-{{ checksum ".circleci/config.yml" }}-{{ checksum "scripts/setup-macos.sh" }}
+          paths:
+            - ~/deps
+      - run:
+          name: "Calculate merge-base date for CCache"
+          command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+      - restore_cache:
+          name: "Restore CCache cache"
+          keys:
+            - velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
+      - run:
+          name: "Build minimal release on MacOS"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            mkdir -p .ccache
+            export CCACHE_DIR=$(pwd)/.ccache
+            ccache -sz -M 5Gi
+            cmake -B _build/release -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Release -DVELOX_BUILD_MINIMAL=ON -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            ninja -C _build/release
+            ccache -s
+          no_output_timeout: 1h
+      - save_cache:
+          name: "Save CCache cache"
+          key: velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
           paths:
             - .ccache/
 
