@@ -37,15 +37,31 @@ namespace {
 static bool notEmpty(const char* /*flagName*/, const std::string& value) {
   return !value.empty();
 }
+static bool validateFormat(const char* flagname, const std::string& value) {
+  if ((value.compare("parquet") == 0) ||
+      (value.compare("orc") == 0)) // value is ok
+    return true;
+  std::cout
+      << fmt::format(
+             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"orc\"]",
+             flagname,
+             value)
+      << std::endl;
+  return false;
+}
 } // namespace
 
 DEFINE_string(data_path, "", "Root path of TPC-H data");
-DEFINE_int32(query, 1, "Query number");
+DEFINE_int32(
+    run_query_verbose,
+    -1,
+    "Run a given query and print execution statistics ");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(format, "parquet", "Data format");
-DEFINE_bool(verbose, false, "Print benchmark results in detail");
+DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
 
 DEFINE_validator(data_path, &notEmpty);
+DEFINE_validator(format, &validateFormat);
 
 class TpchBenchmark {
  public:
@@ -66,7 +82,7 @@ class TpchBenchmark {
     params.maxDrivers = FLAGS_num_drivers;
     params.numResultDrivers = 1;
     params.planNode = tpchPlan.plan;
-    constexpr int kNumSplits = 10;
+    const int kNumSplitsPerFile = FLAGS_num_splits_per_file;
 
     bool noMoreSplits = false;
     auto addSplits = [&](exec::Task* task) {
@@ -74,7 +90,7 @@ class TpchBenchmark {
         for (const auto entry : tpchPlan.dataFiles) {
           for (const auto path : entry.second) {
             auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-                path, kNumSplits, tpchPlan.dataFileFormat);
+                path, kNumSplitsPerFile, tpchPlan.dataFileFormat);
             for (const auto& split : splits) {
               task->addSplit(entry.first, exec::Split(split));
             }
@@ -102,14 +118,19 @@ BENCHMARK(q6) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q18) {
+  const auto planContext = queryBuilder.getQueryPlan(18);
+  benchmark.run(planContext);
+}
+
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   benchmark.initialize();
   queryBuilder.initialize(FLAGS_data_path);
-  if (!FLAGS_verbose) {
+  if (FLAGS_run_query_verbose == -1) {
     folly::runBenchmarks();
   } else {
-    const auto queryPlan = queryBuilder.getQueryPlan(FLAGS_query);
+    const auto queryPlan = queryBuilder.getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
     const auto stats = task->taskStats();
     std::cout << fmt::format(
