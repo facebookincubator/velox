@@ -22,7 +22,7 @@ void parseTo(folly::StringPiece in, Decimal& out) {
 }
 
 std::string Decimal::toString() const {
-  return "";
+  VELOX_NYI();
 }
 
 } // namespace facebook::velox

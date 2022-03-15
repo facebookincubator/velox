@@ -16,6 +16,7 @@
 #include "velox/type/Type.h"
 #include <gtest/gtest.h>
 #include <sstream>
+#include "velox/type/Variant.h"
 
 using namespace facebook;
 using namespace facebook::velox;
