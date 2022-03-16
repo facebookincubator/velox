@@ -743,7 +743,7 @@ class MapView {
   class Iterator : public IndexBasedIterator<Element, vector_size_t> {
    public:
     using BaseIterator = IndexBasedIterator<Element, vector_size_t>;
-    using iterator_category = typename BaseIterator::iterator_category;
+    using iterator_category = std::random_access_iterator_tag;
     using value_type = typename BaseIterator::value_type;
     using difference_type = typename BaseIterator::difference_type;
     using pointer = typename BaseIterator::pointer;
@@ -763,17 +763,84 @@ class MapView {
           valueReader_(valueReader) {}
 
     PointerWrapper<Element> operator->() const {
+      this->validateBounds();
+
       return PointerWrapper(Element{keyReader_, valueReader_, this->index_});
     }
 
     Element operator*() const {
+      this->validateBounds();
+
       return Element{keyReader_, valueReader_, this->index_};
+    }
+
+    Element operator[](difference_type n) const {
+      VELOX_DCHECK_LT(
+          this->index_ + n,
+          this->containerEndIndex_,
+          "Attempting to iterate access element at {} + {} which is beyond the container which ends at {}.",
+          this->index_,
+          n,
+          this->containerEndIndex_ - 1);
+      VELOX_DCHECK_GE(
+          this->index_ + n,
+          this->containerStartIndex_,
+          "Attempting to iterate access element at {} + {} which is before the container which starts at {}.",
+          this->index_,
+          n,
+          this->containerStartIndex_);
+
+      return Element{keyReader_, valueReader_, this->index_ + n};
+    }
+
+    // Iterators +/- ints.
+    // Since these operations return new iterators they can't be inherited
+    // from the parent.
+    Iterator operator+(difference_type rhs) const {
+      return Iterator(
+          keyReader_,
+          valueReader_,
+          this->index_ + rhs,
+          this->containerStartIndex_,
+          this->containerEndIndex_);
+    }
+
+    Iterator operator-(difference_type rhs) const {
+      return Iterator(
+          keyReader_,
+          valueReader_,
+          this->index_ - rhs,
+          this->containerStartIndex_,
+          this->containerEndIndex_);
+    }
+
+    friend Iterator operator+(difference_type lhs, const Iterator& rhs) {
+      return Iterator(
+          rhs.keyReader_,
+          rhs.valueReader_,
+          lhs + rhs.index_,
+          rhs.containerStartIndex_,
+          rhs.containerEndIndex_);
+    }
+
+    // Subtract iterators.
+    // This can't be inherited from the parent because the compiler will try
+    // to use the - difference_type operator above instead of checking the
+    // parent.
+    difference_type operator-(const Iterator& rhs) const {
+      return this->index_ - rhs.index_;
     }
 
    private:
     const key_reader_t* keyReader_;
     const value_reader_t* valueReader_;
   };
+
+  // If this ever fails it could surprising performance regressions, e.g.
+  // std::distance will become linear instead of contant time.
+  static_assert(std::is_base_of_v<
+                std::random_access_iterator_tag,
+                typename std::iterator_traits<Iterator>::iterator_category>);
 
   Iterator begin() const {
     return Iterator{
