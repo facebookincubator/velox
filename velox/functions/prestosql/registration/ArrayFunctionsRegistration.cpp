@@ -25,14 +25,6 @@ inline void registerArrayMinMaxFunctions() {
   registerFunction<ArrayMaxFunction, T, Array<T>>({"array_max"});
 }
 
-template <typename T>
-inline void registerArrayJoinFunctions() {
-  registerFunction<udf_array_join<T>, Varchar, Array<T>, Varchar>(
-      {"array_join"});
-  registerFunction<udf_array_join<T>, Varchar, Array<T>, Varchar, Varchar>(
-      {"array_join"});
-}
-
 void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, "array_constructor");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, "array_distinct");
@@ -60,13 +52,15 @@ void registerArrayFunctions() {
   registerArrayMinMaxFunctions<Timestamp>();
   registerArrayMinMaxFunctions<Date>();
 
-  registerArrayJoinFunctions<int8_t>();
-  registerArrayJoinFunctions<int16_t>();
-  registerArrayJoinFunctions<int32_t>();
-  registerArrayJoinFunctions<int64_t>();
-  registerArrayJoinFunctions<float>();
-  registerArrayJoinFunctions<double>();
-  registerArrayJoinFunctions<bool>();
-  registerArrayJoinFunctions<Varchar>();
+  ArrayJoinHolder<int8_t>::registerFunctions();
+  ArrayJoinHolder<int16_t>::registerFunctions();
+  ArrayJoinHolder<int32_t>::registerFunctions();
+  ArrayJoinHolder<int64_t>::registerFunctions();
+  ArrayJoinHolder<float>::registerFunctions();
+  ArrayJoinHolder<double>::registerFunctions();
+  ArrayJoinHolder<bool>::registerFunctions();
+  ArrayJoinHolder<Varchar>::registerFunctions();
+  ArrayJoinHolder<Timestamp>::registerFunctions();
+  ArrayJoinHolder<Date>::registerFunctions();
 }
 }; // namespace facebook::velox::functions
