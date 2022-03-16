@@ -48,7 +48,7 @@ class VariadicView {
         const std::vector<std::unique_ptr<reader_t>>* readers,
         size_t readerIndex,
         vector_size_t offset)
-        : IndexBasedIterator<Element, int>(readerIndex),
+        : IndexBasedIterator<Element, int>(readerIndex, 0, readers->size()),
           readers_(readers),
           offset_(offset) {}
 
