@@ -339,6 +339,25 @@ TEST_F(DateTimeFunctionsTest, hour) {
   // EXPECT_EQ(21, hour(Timestamp(4000000000, 123000000)));
   EXPECT_EQ(23, hour(Timestamp(998474645, 321000000)));
   EXPECT_EQ(8, hour(Timestamp(998423705, 321000000)));
+
+  const auto hourWTZ = [&](int64_t timestamp, const char* tz) {
+    const int64_t tzid = util::getTimeZoneID(tz);
+    return evaluateOnce<int64_t>(
+        "hour(c0)",
+        makeRowVector({makeRowVector({
+            makeNullableFlatVector<int64_t>({timestamp}),
+            makeNullableFlatVector<int16_t>({tzid}),
+        })}));
+  };
+  EXPECT_EQ(0, hourWTZ(0, "+00:00"));
+  EXPECT_EQ(20, hourWTZ(1639426440000, "+00:00"));
+  EXPECT_EQ(23, hourWTZ(1639426440000, "+03:00"));
+  EXPECT_EQ(0, hourWTZ(1639426440000, "+04:00"));
+  EXPECT_EQ(13, hourWTZ(1639426440000, "-07:00"));
+  EXPECT_EQ(20, hourWTZ(1639426440000, "-00:01"));
+  EXPECT_EQ(20, hourWTZ(1639426440000, "+00:01"));
+  EXPECT_EQ(6, hourWTZ(1639426440000, "-14:00"));
+  EXPECT_EQ(10, hourWTZ(1639426440000, "+14:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, hourDate) {
