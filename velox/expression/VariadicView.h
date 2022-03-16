@@ -44,6 +44,13 @@ class VariadicView {
 
   class Iterator : public IndexBasedIterator<Element, int> {
    public:
+    using BaseIterator = IndexBasedIterator<Element, int>;
+    using iterator_category = std::random_access_iterator_tag;
+    using value_type = typename BaseIterator::value_type;
+    using difference_type = typename BaseIterator::difference_type;
+    using pointer = typename BaseIterator::pointer;
+    using reference = typename BaseIterator::reference;
+
     Iterator(
         const std::vector<std::unique_ptr<reader_t>>* readers,
         size_t readerIndex,
@@ -53,6 +60,8 @@ class VariadicView {
           offset_(offset) {}
 
     PointerWrapper<Element> operator->() const {
+      this->validateBounds();
+
       if constexpr (returnsOptionalValues) {
         return PointerWrapper(
             Element{(*readers_)[this->index_].get(), offset_});
@@ -62,6 +71,8 @@ class VariadicView {
     }
 
     Element operator*() const {
+      this->validateBounds();
+
       if constexpr (returnsOptionalValues) {
         return Element{(*readers_)[this->index_].get(), offset_};
       } else {
@@ -69,10 +80,63 @@ class VariadicView {
       }
     }
 
+    Element operator[](difference_type n) {
+      VELOX_DCHECK_LT(
+          this->index_ + n,
+          this->containerEndIndex_,
+          "Attempting to iterate access element at {} + {} which is beyond the container which ends at {}.",
+          this->index_,
+          n,
+          this->containerEndIndex_ - 1);
+      VELOX_DCHECK_GE(
+          this->index_ + n,
+          this->containerStartIndex_,
+          "Attempting to iterate access element at {} + {} which is before the container which starts at {}.",
+          this->index_,
+          n,
+          this->containerStartIndex_);
+
+      if constexpr (returnsOptionalValues) {
+        return Element{(*readers_)[this->index_ + n].get(), offset_};
+      } else {
+        return (*readers_)[this->index_ + n]->readNullFree(offset_);
+      }
+    }
+
+    // Iterators +/- ints.
+    // Since these operations return new iterators they can't be inherited
+    // from the parent.
+    Iterator operator+(difference_type rhs) const {
+      return Iterator(readers_, this->index_ + rhs, offset_);
+    }
+
+    Iterator operator-(difference_type rhs) const {
+      return Iterator(readers_, this->index_ - rhs, offset_);
+    }
+
+    friend Iterator operator+(difference_type lhs, const Iterator& rhs) {
+      return Iterator(rhs.readers_, lhs + rhs.index_, rhs.offset_);
+    }
+
+    // Subtract iterators.
+    // This can't be inherited from the parent because the compiler will try
+    // to use the - difference_type operator above instead of checking the
+    // parent.
+    difference_type operator-(const Iterator& rhs) const {
+      return this->index_ - rhs.index_;
+    }
+
    protected:
     const std::vector<std::unique_ptr<reader_t>>* readers_;
-    const vector_size_t offset_;
+    // This is only not const to support the assignment operator.
+    vector_size_t offset_;
   };
+
+  // If this ever fails it could surprising performance regressions, e.g.
+  // std::distance will become linear instead of contant time.
+  static_assert(std::is_base_of_v<
+                std::random_access_iterator_tag,
+                typename std::iterator_traits<Iterator>::iterator_category>);
 
   Iterator begin() const {
     return Iterator{readers_, 0, offset_};
