@@ -15,14 +15,11 @@
  */
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/prestosql/DateTimeImpl.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
 namespace {
-
-inline int64_t toMillis(double unixtime) {
-  return std::floor(unixtime * 1'000);
-}
 
 class FromUnixtimeFunction : public exec::VectorFunction {
  public:
@@ -53,7 +50,9 @@ class FromUnixtimeFunction : public exec::VectorFunction {
       timezones = BaseVector::createConstant(timezoneId, size, pool);
 
       rows.applyToSelected([&](auto row) {
-        rawTimestamps[row] = toMillis(unixtimes->valueAt<double>(row));
+        auto timestamp = fromUnixtime(unixtimes->valueAt<double>(row));
+        timestamp.toTimezoneUTC(timezoneId);
+        rawTimestamps[row] = timestamp.toMillis();
       });
     } else {
       timezones = BaseVector::create(SMALLINT(), size, pool);
@@ -61,11 +60,13 @@ class FromUnixtimeFunction : public exec::VectorFunction {
           timezones->asFlatVector<int16_t>()->mutableRawValues();
 
       rows.applyToSelected([&](auto row) {
-        rawTimestamps[row] = toMillis(unixtimes->valueAt<double>(row));
-
         auto timezoneName = timezoneNames->valueAt<StringView>(row);
         rawTimezones[row] = util::getTimeZoneID(
             std::string_view(timezoneName.data(), timezoneName.size()));
+
+        auto timestamp = fromUnixtime(unixtimes->valueAt<double>(row));
+        timestamp.toTimezoneUTC(rawTimezones[row]);
+        rawTimestamps[row] = timestamp.toMillis();
       });
     }
 

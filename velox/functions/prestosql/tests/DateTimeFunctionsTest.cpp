@@ -159,7 +159,7 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
 
     auto expected = makeRowVector({
         makeFlatVector<int64_t>(
-            size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
+            size, [&](auto row) { return (unixtimeAt(row) + 3600) * 1'000; }),
         makeConstant((int16_t)900, size),
     });
     assertEqualVectors(expected, result);
@@ -180,7 +180,10 @@ TEST_F(DateTimeFunctionsTest, fromUnixtimeWithTimeZone) {
 
     auto expected = makeRowVector({
         makeFlatVector<int64_t>(
-            size, [&](auto row) { return unixtimeAt(row) * 1'000; }),
+            size,
+            [&](auto row) {
+              return (unixtimeAt(row) + 3600 * (row % 5 + 1)) * 1'000;
+            }),
         makeFlatVector<int16_t>(
             size, [&](auto row) { return timezoneIds[row % 5]; }),
     });

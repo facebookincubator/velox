@@ -50,15 +50,10 @@ template <typename T>
 struct FromUnixtimeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE bool call(
+  FOLLY_ALWAYS_INLINE void call(
       Timestamp& result,
       const arg_type<double>& unixtime) {
-    auto resultOptional = fromUnixtime(unixtime);
-    if (LIKELY(resultOptional.has_value())) {
-      result = resultOptional.value();
-      return true;
-    }
-    return false;
+    result = fromUnixtime(unixtime);
   }
 };
 
