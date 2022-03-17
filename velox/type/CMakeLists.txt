@@ -24,11 +24,11 @@ add_library(
   Timestamp.cpp
   TimestampConversion.cpp
   Date.cpp
+  Decimal.h
+  Decimal.cpp
   Filter.cpp
   Subfield.cpp
-  Tokenizer.cpp
-  Decimal.h
-  Decimal.cpp)
+  Tokenizer.cpp)
 
 target_link_libraries(
   velox_type
