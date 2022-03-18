@@ -1,0 +1,339 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>printPlanWithStats &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Monthly Updates" href="../../monthly-updates.html" />
+    <link rel="prev" title="Debugging Tools" href="../debugging.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">printPlanWithStats</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="printplanwithstats">
+<h1>printPlanWithStats<a class="headerlink" href="#printplanwithstats" title="Permalink to this headline">¶</a></h1>
+<p>Velox collects a number of valuable statistics during query execution.  These
+counters are exposed via Task::taskStats() API for programmatic access and can
+be printed in a human-friendly format for manual inspection. We use these to
+reason about the query execution dynamic and troubleshoot performance issues.</p>
+<p>If you are familiar with Presto, the tools described below would look very
+similar to the PrestoQueryLookup tool available via bunnylol presto
+&lt;query-id&gt;.</p>
+<section id="plannode-tostring">
+<h2>PlanNode::toString()<a class="headerlink" href="#plannode-tostring" title="Permalink to this headline">¶</a></h2>
+<p>PlanNode::toString() method prints a query plan as a tree of plan nodes. This
+API can be used before or after executing a query.</p>
+<p>PlanNode::toString() method takes two optional flags: detailed and recursive.
+When detailed is true, the output includes extra details about each plan node.
+When recursive is true, the output includes the whole plan tree, otherwise only
+a single plan node is shown.</p>
+<p>In “detailed” mode, Project node shows projection expressions, Filter node shows
+filter expression, Join node shows join type and join keys, Aggregation node
+shows grouping keys and aggregate functions, OrderBy node shows sorting keys
+and orders, etc.</p>
+<p>Let’s use a simple join query as an example:</p>
+<p><cite>plan-&gt;toString(false /*detailed*/, true /*recursive*/)</cite> prints a plan tree using plan node names:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Project</span>
+  <span class="o">-&gt;</span> <span class="n">HashJoin</span>
+    <span class="o">-&gt;</span> <span class="n">TableScan</span>
+    <span class="o">-&gt;</span> <span class="n">Project</span>
+      <span class="o">-&gt;</span> <span class="n">Values</span>
+</pre></div>
+</div>
+<p><cite>plan-&gt;toString(true /*detailed*/, true /*recursive*/)</cite> adds plan node details to each plan node.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">p1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="mi">1</span><span class="p">)),</span> <span class="p">(</span><span class="n">p2</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;u_c1&quot;</span><span class="p">])),</span> <span class="p">]</span>
+  <span class="o">-&gt;</span> <span class="n">HashJoin</span><span class="p">[</span><span class="n">INNER</span> <span class="n">c0</span><span class="o">=</span><span class="n">u_c0</span><span class="p">]</span>
+    <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+    <span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">u_c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">u_c1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="p">]</span>
+      <span class="o">-&gt;</span> <span class="n">Values</span><span class="p">[</span><span class="mi">100</span> <span class="n">rows</span> <span class="ow">in</span> <span class="mi">1</span> <span class="n">vectors</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>Let’s also look at an aggregation query:</p>
+<p><cite>plan-&gt;toString(false /*detailed*/, true /*recursive*/)</cite></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Aggregation</span>
+  <span class="o">-&gt;</span> <span class="n">TableScan</span>
+</pre></div>
+</div>
+<p><cite>plan-&gt;toString(true /*detailed*/, true /*recursive*/)</cite></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Aggregation</span><span class="p">[</span><span class="n">PARTIAL</span> <span class="p">[</span><span class="n">c5</span><span class="p">]</span> <span class="n">a0</span> <span class="o">:=</span> <span class="nb">max</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="n">a1</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="n">a2</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c2&quot;</span><span class="p">]),</span> <span class="n">a3</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c3&quot;</span><span class="p">]),</span> <span class="n">a4</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c4&quot;</span><span class="p">])]</span>
+  <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+</pre></div>
+</div>
+</section>
+<section id="id1">
+<h2>printPlanWithStats()<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
+<p>printPlanWithStats() function prints a query plan annotated with runtime
+statistics. This function can be used after the query finishes processing. It
+takes a root plan node and a TaskStats struct.</p>
+<p>By default, printPlanWithStats shows a number of output rows, CPU time and peak
+memory usage for each plan node.</p>
+<p><cite>printPlanWithStats(*plan, task-&gt;taskStats())</cite></p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">p1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="mi">1</span><span class="p">)),</span> <span class="p">(</span><span class="n">p2</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;u_c1&quot;</span><span class="p">])),</span> <span class="p">]</span>
+  <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">104120</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3282171</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+ <span class="o">-&gt;</span> <span class="n">HashJoin</span><span class="p">[</span><span class="n">INNER</span> <span class="n">c0</span><span class="o">=</span><span class="n">u_c0</span><span class="p">]</span>
+    <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">85580</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3488512</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">484000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">2097152</span> <span class="nb">bytes</span>
+    <span class="n">HashBuild</span><span class="p">:</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">0</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">420363</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+    <span class="n">HashProbe</span><span class="p">:</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">85580</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3068149</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">484000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+   <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+      <span class="n">Input</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Raw</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">20480</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">74041</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">16091681</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">14000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+   <span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">u_c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">u_c1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="p">]</span>
+      <span class="n">Output</span><span class="p">:</span> <span class="mi">100</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">1343</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">64738</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">0</span> <span class="nb">bytes</span>
+     <span class="o">-&gt;</span> <span class="n">Values</span><span class="p">[</span><span class="mi">100</span> <span class="n">rows</span> <span class="ow">in</span> <span class="mi">1</span> <span class="n">vectors</span><span class="p">]</span>
+        <span class="n">Input</span><span class="p">:</span> <span class="mi">0</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">100</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">1343</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">9793</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">0</span> <span class="nb">bytes</span>
+</pre></div>
+</div>
+<p>With includeCustomStats flag enabled, printPlanWithStats adds operator-specific
+statistics for each plan node, e.g. number of distinct values for the join key,
+number of row groups skipped in table scan, amount of data read from cache and
+storage in table scan, number of rows processed via aggregation pushdown into
+scan, etc.</p>
+<p>Here is the output for the join query from above.</p>
+<p><cite>printPlanWithStats(*plan, task-&gt;taskStats(), true)</cite> shows custom operator statistics.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">p1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="mi">1</span><span class="p">)),</span> <span class="p">(</span><span class="n">p2</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">plus</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">],</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;u_c1&quot;</span><span class="p">])),</span> <span class="p">]</span>
+   <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">104120</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3282171</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+      <span class="n">dataSourceLazyWallNanos</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">931000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">20</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">36000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">102000</span>
+  <span class="o">-&gt;</span> <span class="n">HashJoin</span><span class="p">[</span><span class="n">INNER</span> <span class="n">c0</span><span class="o">=</span><span class="n">u_c0</span><span class="p">]</span>
+     <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">85580</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3488512</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">484000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">2097152</span> <span class="nb">bytes</span>
+     <span class="n">HashBuild</span><span class="p">:</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">0</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">420363</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+        <span class="n">queuedWallNanos</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">90000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">90000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">90000</span>
+        <span class="n">rangeKey0</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">200</span>
+        <span class="n">distinctKey0</span>       <span class="nb">sum</span><span class="p">:</span> <span class="mi">101</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">101</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">101</span>
+     <span class="n">HashProbe</span><span class="p">:</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">2000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">85580</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3068149</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">484000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+        <span class="n">queuedWallNanos</span>           <span class="nb">sum</span><span class="p">:</span> <span class="mi">36000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">36000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">36000</span>
+        <span class="n">dynamicFiltersProduced</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+       <span class="n">Input</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Raw</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">20480</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">74041</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">16091681</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">14000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+          <span class="n">queuedWallNanos</span>            <span class="nb">sum</span><span class="p">:</span> <span class="mi">56000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">56000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">56000</span>
+          <span class="n">ramReadBytes</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">dataSourceLazyWallNanos</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">1156000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">68000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">292000</span>
+          <span class="n">skippedStrides</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">dynamicFiltersAccepted</span>     <span class="nb">sum</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1</span>
+          <span class="n">localReadBytes</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">numRamRead</span>                 <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">numPrefetch</span>                <span class="nb">sum</span><span class="p">:</span> <span class="mi">38</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">38</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">38</span>
+          <span class="n">prefetchBytes</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">62939</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">62939</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">62939</span>
+          <span class="n">skippedSplits</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">storageReadBytes</span>           <span class="nb">sum</span><span class="p">:</span> <span class="mi">153855</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">153855</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">153855</span>
+          <span class="n">dataSourceWallNanos</span>        <span class="nb">sum</span><span class="p">:</span> <span class="mi">6341000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">40</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">37000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1282000</span>
+          <span class="n">numStorageRead</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">140</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">140</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">140</span>
+          <span class="n">skippedSplitBytes</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+          <span class="n">numLocalRead</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+    <span class="o">-&gt;</span> <span class="n">Project</span><span class="p">[</span><span class="n">expressions</span><span class="p">:</span> <span class="p">(</span><span class="n">u_c0</span><span class="p">:</span><span class="n">INTEGER</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="p">(</span><span class="n">u_c1</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span> <span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="p">]</span>
+       <span class="n">Output</span><span class="p">:</span> <span class="mi">100</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">1343</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">64738</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">0</span> <span class="nb">bytes</span>
+      <span class="o">-&gt;</span> <span class="n">Values</span><span class="p">[</span><span class="mi">100</span> <span class="n">rows</span> <span class="ow">in</span> <span class="mi">1</span> <span class="n">vectors</span><span class="p">]</span>
+         <span class="n">Input</span><span class="p">:</span> <span class="mi">0</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">100</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">1343</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">9793</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">0</span> <span class="nb">bytes</span>
+</pre></div>
+</div>
+<p>And this is the output for the aggregation query from above.</p>
+<p><cite>printPlanWithStats(*plan, task-&gt;taskStats())</cite> shows basic statistics:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Aggregation</span><span class="p">[</span><span class="n">PARTIAL</span> <span class="p">[</span><span class="n">c5</span><span class="p">]</span> <span class="n">a0</span> <span class="o">:=</span> <span class="nb">max</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="n">a1</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="n">a2</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c2&quot;</span><span class="p">]),</span> <span class="n">a3</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c3&quot;</span><span class="p">]),</span> <span class="n">a4</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c4&quot;</span><span class="p">])]</span>
+   <span class="n">Output</span><span class="p">:</span> <span class="mi">849</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">86400</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">6831560</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+  <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+     <span class="n">Input</span><span class="p">:</span> <span class="mi">10000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">10000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3022092</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">57000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+</pre></div>
+</div>
+<p><cite>printPlanWithStats(*plan, task-&gt;taskStats(), true)</cite> includes custom statistics:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">Aggregation</span><span class="p">[</span><span class="n">PARTIAL</span> <span class="p">[</span><span class="n">c5</span><span class="p">]</span> <span class="n">a0</span> <span class="o">:=</span> <span class="nb">max</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c0&quot;</span><span class="p">]),</span> <span class="n">a1</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c1&quot;</span><span class="p">]),</span> <span class="n">a2</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c2&quot;</span><span class="p">]),</span> <span class="n">a3</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c3&quot;</span><span class="p">]),</span> <span class="n">a4</span> <span class="o">:=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">ROW</span><span class="p">[</span><span class="s2">&quot;c4&quot;</span><span class="p">])]</span>
+   <span class="n">Output</span><span class="p">:</span> <span class="mi">849</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">86400</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">6831560</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+  <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+     <span class="n">Input</span><span class="p">:</span> <span class="mi">10000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">10000</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">0</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">3022092</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">57000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+        <span class="n">queuedWallNanos</span>            <span class="nb">sum</span><span class="p">:</span> <span class="mi">233000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">233000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">233000</span>
+        <span class="n">ramReadBytes</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">dataSourceLazyWallNanos</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">2673000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">165000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">709000</span>
+        <span class="n">skippedStrides</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">loadedToValueHook</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">50000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">10000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">10000</span>
+        <span class="n">numRamRead</span>                 <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">numPrefetch</span>                <span class="nb">sum</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">2</span>
+        <span class="n">prefetchBytes</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">31880</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">31880</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">31880</span>
+        <span class="n">localReadBytes</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">skippedSplits</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">storageReadBytes</span>           <span class="nb">sum</span><span class="p">:</span> <span class="mi">63010</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">63010</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">63010</span>
+        <span class="n">dataSourceWallNanos</span>        <span class="nb">sum</span><span class="p">:</span> <span class="mi">2092000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">103000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1989000</span>
+        <span class="n">numStorageRead</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">7</span>
+        <span class="n">skippedSplitBytes</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">numLocalRead</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+</pre></div>
+</div>
+</section>
+<section id="common-operator-statistics">
+<h2>Common operator statistics<a class="headerlink" href="#common-operator-statistics" title="Permalink to this headline">¶</a></h2>
+<p>Let’s take a closer look at statistics that are collected for all operators.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+       <span class="n">Input</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Raw</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">20480</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">74041</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">16091681</span><span class="n">ns</span><span class="p">,</span> <span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">14000</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+</pre></div>
+</div>
+<p>For each operator, Velox tracks the total number of input and output rows as
+well as their estimated size in bytes. printPlanWithStats shows output rows and
+bytes for each plan node and shows input rows and bytes for leaf nodes. Showing
+input rows for non-leaf nodes is redundant since the number of input rows
+equals the number of output rows of the immediate child plan node.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Input</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">),</span> <span class="n">Output</span><span class="p">:</span> <span class="mi">11240</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">60480</span> <span class="nb">bytes</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>For TableScan, Velox also reports raw input rows and bytes. These are the rows
+processed before applying a pushed down filter.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Raw</span> <span class="n">Input</span><span class="p">:</span> <span class="mi">20480</span> <span class="n">rows</span> <span class="p">(</span><span class="mi">74041</span> <span class="nb">bytes</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Velox also measures CPU time and peak memory usage for each operator. This
+information is shown for all plan nodes.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">16091681</span><span class="n">ns</span><span class="p">,</span> <span class="n">Peak</span> <span class="n">memory</span><span class="p">:</span> <span class="mi">1048576</span> <span class="nb">bytes</span>
+</pre></div>
+</div>
+<p>Some operators like TableScan and HashProbe may be blocked waiting for splits or
+hash tables. Velox records the total wall time an operator was blocked and
+printPlanWithStats shows this information as “Blocked wall time”.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Blocked</span> <span class="n">wall</span> <span class="n">time</span><span class="p">:</span> <span class="mi">14000</span><span class="n">ns</span>
+</pre></div>
+</div>
+</section>
+<section id="custom-operator-statistics">
+<h2>Custom operator statistics<a class="headerlink" href="#custom-operator-statistics" title="Permalink to this headline">¶</a></h2>
+<p>Operators also collect and report operator-specific statistics.</p>
+<p>TableScan operator reports statistics that show how much data has been read from
+cache vs. durable storage, how much data was prefetched, how many files and row
+groups were skipped via stats-based pruning.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+        <span class="n">ramReadBytes</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">skippedStrides</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">numRamRead</span>                 <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">numPrefetch</span>                <span class="nb">sum</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">2</span>
+        <span class="n">prefetchBytes</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">31880</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">31880</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">31880</span>
+        <span class="n">localReadBytes</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">skippedSplits</span>              <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">storageReadBytes</span>           <span class="nb">sum</span><span class="p">:</span> <span class="mi">63010</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">63010</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">63010</span>
+        <span class="n">numStorageRead</span>             <span class="nb">sum</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">7</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">7</span>
+        <span class="n">skippedSplitBytes</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+        <span class="n">numLocalRead</span>               <span class="nb">sum</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">0</span>
+</pre></div>
+</div>
+<p>HashBuild operator reports range and number of distinct values for the join keys.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">HashJoin</span><span class="p">[</span><span class="n">INNER</span> <span class="n">c0</span><span class="o">=</span><span class="n">u_c0</span><span class="p">]</span>
+     <span class="n">HashBuild</span><span class="p">:</span>
+        <span class="n">rangeKey0</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">200</span>
+        <span class="n">distinctKey0</span>       <span class="nb">sum</span><span class="p">:</span> <span class="mi">101</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">101</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">101</span>
+</pre></div>
+</div>
+<p>HashProbe operator reports whether it generated dynamic filter and TableScan
+operator reports whether it received dynamic filter pushed down from the join.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">-&gt;</span> <span class="n">HashJoin</span><span class="p">[</span><span class="n">INNER</span> <span class="n">c0</span><span class="o">=</span><span class="n">u_c0</span><span class="p">]</span>
+     <span class="n">HashProbe</span><span class="p">:</span>
+        <span class="n">dynamicFiltersProduced</span>    <span class="nb">sum</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="o">-&gt;</span> <span class="n">TableScan</span><span class="p">[]</span>
+          <span class="n">dynamicFiltersAccepted</span>     <span class="nb">sum</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<p>TableScan operator shows how many rows were processed by pushing down aggregation into TableScan.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">loadedToValueHook</span>          <span class="nb">sum</span><span class="p">:</span> <span class="mi">50000</span><span class="p">,</span> <span class="n">count</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nb">min</span><span class="p">:</span> <span class="mi">10000</span><span class="p">,</span> <span class="nb">max</span><span class="p">:</span> <span class="mi">10000</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">printPlanWithStats</a><ul>
+<li><a class="reference internal" href="#plannode-tostring">PlanNode::toString()</a></li>
+<li><a class="reference internal" href="#id1">printPlanWithStats()</a></li>
+<li><a class="reference internal" href="#common-operator-statistics">Common operator statistics</a></li>
+<li><a class="reference internal" href="#custom-operator-statistics">Custom operator statistics</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../debugging.html"
+                          title="previous chapter">Debugging Tools</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../../monthly-updates.html"
+                          title="next chapter">Monthly Updates</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/debugging/print-plan-with-stats.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../debugging.html" title="Debugging Tools"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">printPlanWithStats</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
