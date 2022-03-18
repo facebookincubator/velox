@@ -142,6 +142,6 @@ int main(int argc, char** argv) {
                      stats.numTotalSplits,
                      stats.numFinishedSplits)
               << std::endl;
-    std::cout << printPlanWithStats(*queryPlan.plan, stats) << std::endl;
+    std::cout << printPlanWithStats(*queryPlan.plan, stats, true) << std::endl;
   }
 }
