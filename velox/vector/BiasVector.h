@@ -92,7 +92,6 @@ class BiasVector : public SimpleVector<T> {
   //    bias");
 
  public:
-  static const std::string BIAS_VALUE;
   static constexpr bool can_simd =
       (std::is_same<T, int64_t>::value || std::is_same<T, int32_t>::value ||
        std::is_same<T, int16_t>::value);
@@ -103,6 +102,7 @@ class BiasVector : public SimpleVector<T> {
       size_t length,
       TypeKind valueType,
       BufferPtr values,
+      T&& bias,
       const folly::F14FastMap<std::string, std::string>& metaData =
           cdvi::EMPTY_METADATA,
       std::optional<int32_t> distinctCount = std::nullopt,
@@ -255,9 +255,6 @@ class BiasVector : public SimpleVector<T> {
   // Used to debias several values at a time.
   __m256i biasBuffer_;
 };
-
-template <typename T>
-const std::string BiasVector<T>::BIAS_VALUE = "CDV1";
 
 template <typename T>
 using BiasVectorPtr = std::shared_ptr<BiasVector<T>>;

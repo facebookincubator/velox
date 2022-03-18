@@ -137,24 +137,23 @@ class VectorTest : public testing::Test {
     }
     auto rawValues = values->asMutable<TBias>();
     int32_t numNulls = 0;
-    constexpr int32_t kBias = 100;
+    int32_t bias = 100;
     for (int32_t i = 0; i < size; ++i) {
       if (withNulls && i % 3 == 0) {
         ++numNulls;
         bits::setNull(rawNulls, i);
       } else {
-        rawValues[i] = testValue<TBias>(i, buffer) - kBias;
+        rawValues[i] = testValue<TBias>(i, buffer) - bias;
       }
     }
-    folly::F14FastMap<std::string, std::string> metadata;
-    metadata[BiasVector<T>::BIAS_VALUE] = folly::to<std::string>(kBias);
     return std::make_shared<BiasVector<T>>(
         pool_.get(),
         nulls,
         size,
         BiasKind,
         std::move(values),
-        std::move(metadata),
+        std::move(bias),
+        cdvi::EMPTY_METADATA,
         std::nullopt,
         numNulls,
         false,

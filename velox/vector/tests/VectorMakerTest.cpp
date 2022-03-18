@@ -39,8 +39,6 @@ TEST_F(VectorMakerTest, flatVector) {
   EXPECT_EQ(0, flatVector->getNullCount().value());
   EXPECT_FALSE(flatVector->isSorted().value());
   EXPECT_EQ(9, flatVector->getDistinctValueCount().value());
-  EXPECT_EQ(-123456, flatVector->getMin().value());
-  EXPECT_EQ(1024, flatVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     EXPECT_EQ(data[i], flatVector->valueAt(i));
@@ -58,8 +56,6 @@ TEST_F(VectorMakerTest, nullableFlatVector) {
   EXPECT_EQ(2, flatVector->getNullCount().value());
   EXPECT_FALSE(flatVector->isSorted().value());
   EXPECT_EQ(8, flatVector->getDistinctValueCount().value());
-  EXPECT_EQ(-123456, flatVector->getMin().value());
-  EXPECT_EQ(1024, flatVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -87,8 +83,6 @@ TEST_F(VectorMakerTest, flatVectorString) {
   EXPECT_EQ(0, flatVector->getNullCount().value());
   EXPECT_FALSE(flatVector->isSorted().value());
   EXPECT_EQ(5, flatVector->getDistinctValueCount().value());
-  EXPECT_EQ(""_sv, flatVector->getMin().value());
-  EXPECT_EQ(StringView("world"), flatVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     EXPECT_EQ(data[i], std::string(flatVector->valueAt(i)));
@@ -161,8 +155,6 @@ TEST_F(VectorMakerTest, nullableFlatVectorString) {
   EXPECT_EQ(1, flatVector->getNullCount().value());
   EXPECT_FALSE(flatVector->isSorted().value());
   EXPECT_EQ(4, flatVector->getDistinctValueCount().value());
-  EXPECT_EQ(""_sv, flatVector->getMin().value());
-  EXPECT_EQ("world"_sv, flatVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -190,8 +182,6 @@ TEST_F(VectorMakerTest, nullableFlatVectorBool) {
   EXPECT_EQ(1, flatVector->getNullCount().value());
   EXPECT_FALSE(flatVector->isSorted().value());
   EXPECT_EQ(2, flatVector->getDistinctValueCount().value());
-  EXPECT_EQ(false, flatVector->getMin().value());
-  EXPECT_EQ(true, flatVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -600,8 +590,6 @@ TEST_F(VectorMakerTest, biasVector) {
   EXPECT_TRUE(biasVector->mayHaveNulls());
   EXPECT_EQ(1, biasVector->getNullCount().value());
   EXPECT_FALSE(biasVector->isSorted().value());
-  EXPECT_EQ(10, biasVector->getMin().value());
-  EXPECT_EQ(15, biasVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -624,8 +612,6 @@ TEST_F(VectorMakerTest, sequenceVector) {
   EXPECT_EQ(3, sequenceVector->getNullCount().value());
   EXPECT_FALSE(sequenceVector->isSorted().value());
   EXPECT_EQ(4, sequenceVector->getDistinctValueCount().value());
-  EXPECT_EQ(10, sequenceVector->getMin().value());
-  EXPECT_EQ(15, sequenceVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -657,8 +643,6 @@ TEST_F(VectorMakerTest, sequenceVectorString) {
   EXPECT_EQ(3, sequenceVector->getNullCount().value());
   EXPECT_FALSE(sequenceVector->isSorted().value());
   EXPECT_EQ(3, sequenceVector->getDistinctValueCount().value());
-  EXPECT_EQ("a"_sv, sequenceVector->getMin().value());
-  EXPECT_EQ("c"_sv, sequenceVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {
@@ -741,8 +725,6 @@ TEST_F(VectorMakerTest, dictionaryVector) {
   EXPECT_EQ(2, dictionaryVector->getNullCount().value());
   EXPECT_FALSE(dictionaryVector->isSorted().value());
   EXPECT_EQ(3, dictionaryVector->getDistinctValueCount().value());
-  EXPECT_EQ(10, dictionaryVector->getMin().value());
-  EXPECT_EQ(99, dictionaryVector->getMax().value());
 
   for (vector_size_t i = 0; i < data.size(); i++) {
     if (data[i] == std::nullopt) {

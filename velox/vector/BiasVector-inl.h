@@ -56,6 +56,7 @@ BiasVector<T>::BiasVector(
     size_t length,
     TypeKind valueType,
     BufferPtr values,
+    T&& bias,
     const folly::F14FastMap<std::string, std::string>& metaData,
     std::optional<vector_size_t> distinctCount,
     std::optional<vector_size_t> nullCount,
@@ -73,16 +74,12 @@ BiasVector<T>::BiasVector(
           representedBytes,
           storageByteCount),
       valueType_(valueType),
-      values_(std::move(values)) {
+      values_(std::move(values)),
+      bias_(std::move(bias)) {
   VELOX_CHECK(
       valueType_ == TypeKind::INTEGER || valueType_ == TypeKind::SMALLINT ||
           valueType_ == TypeKind::TINYINT,
       "Invalid array type for biased values");
-
-  auto bias =
-      SimpleVector<T>::template getMetaDataValue<T>(metaData, BIAS_VALUE);
-  VELOX_CHECK(bias.has_value(), "Bias value is required");
-  bias_ = bias.value();
   biasBuffer_ = simd::setAll256i(bias_);
 
   switch (valueType_) {

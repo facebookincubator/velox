@@ -235,14 +235,6 @@ void assertExtraMetadata(
     const VectorMakerStats<T>& expectedStats,
     const SimpleVectorPtr<T>& outVector) {
   EXPECT_EQ(expectedStats.isSorted, outVector->isSorted().value());
-  EXPECT_EQ(expectedStats.min.has_value(), outVector->getMin().has_value());
-  EXPECT_EQ(expectedStats.max.has_value(), outVector->getMax().has_value());
-  if (expectedStats.min.has_value() && outVector->getMin().has_value()) {
-    EXPECT_EQ(expectedStats.min.value(), outVector->getMin().value());
-  }
-  if (expectedStats.max.has_value() && outVector->getMax().has_value()) {
-    EXPECT_EQ(expectedStats.max.value(), outVector->getMax().value());
-  }
 }
 
 template <typename T>
