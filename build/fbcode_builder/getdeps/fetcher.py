@@ -525,12 +525,15 @@ def get_fbsource_repo_data(build_options) -> FbsourceRepoData:
     if cached_data:
         return cached_data
 
-    cmd = ["hg", "log", "-r.", "-T{node}\n{date|hgdate}"]
-    env = Env()
-    env.set("HGPLAIN", "1")
-    log_data = subprocess.check_output(
-        cmd, cwd=build_options.fbsource_dir, env=dict(env.items())
-    ).decode("ascii")
+    if "GETDEPS_HG_REPO_DATA" in os.environ:
+        log_data = os.environ["GETDEPS_HG_REPO_DATA"]
+    else:
+        cmd = ["hg", "log", "-r.", "-T{node}\n{date|hgdate}"]
+        env = Env()
+        env.set("HGPLAIN", "1")
+        log_data = subprocess.check_output(
+            cmd, cwd=build_options.fbsource_dir, env=dict(env.items())
+        ).decode("ascii")
 
     (hash, datestr) = log_data.split("\n")
 
@@ -651,15 +654,14 @@ class ShipitTransformerFetcher(Fetcher):
 
 
 def download_url_to_file_with_progress(url: str, file_name) -> None:
-    print("Download %s -> %s ..." % (url, file_name))
+    print("Download with %s -> %s ..." % (url, file_name))
 
     class Progress(object):
         last_report = 0
 
-        def progress(self, count, block, total):
+        def write_update(self, total, amount):
             if total == -1:
                 total = "(Unknown)"
-            amount = count * block
 
             if sys.stdout.isatty():
                 sys.stdout.write("\r downloading %s of %s " % (amount, total))
@@ -672,10 +674,33 @@ def download_url_to_file_with_progress(url: str, file_name) -> None:
                     self.last_report = now
             sys.stdout.flush()
 
+        def progress_pycurl(self, total, amount, _uploadtotal, _uploadamount):
+            self.write_update(total, amount)
+
+        def progress_urllib(self, count, block, total):
+            amount = count * block
+            self.write_update(total, amount)
+
     progress = Progress()
     start = time.time()
     try:
-        (_filename, headers) = urlretrieve(url, file_name, reporthook=progress.progress)
+        if os.environ.get("GETDEPS_USE_LIBCURL") is not None:
+            import pycurl
+
+            with open(file_name, "wb") as f:
+                c = pycurl.Curl()
+                c.setopt(pycurl.URL, url)
+                c.setopt(pycurl.WRITEDATA, f)
+                # display progress
+                c.setopt(pycurl.NOPROGRESS, False)
+                c.setopt(pycurl.XFERINFOFUNCTION, progress.progress_pycurl)
+                c.perform()
+                c.close()
+            headers = None
+        else:
+            (_filename, headers) = urlretrieve(
+                url, file_name, reporthook=progress.progress_urllib
+            )
     except (OSError, IOError) as exc:  # noqa: B014
         raise TransientFailure(
             "Failed to download %s to %s: %s" % (url, file_name, str(exc))
@@ -684,7 +709,8 @@ def download_url_to_file_with_progress(url: str, file_name) -> None:
     end = time.time()
     sys.stdout.write(" [Complete in %f seconds]\n" % (end - start))
     sys.stdout.flush()
-    print(f"{headers}")
+    if headers is not None:
+        print(f"{headers}")
 
 
 class ArchiveFetcher(Fetcher):

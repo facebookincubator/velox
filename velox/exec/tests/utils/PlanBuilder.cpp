@@ -18,9 +18,9 @@
 #include <velox/exec/Aggregate.h>
 #include <velox/exec/HashPartitionFunction.h>
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
-#include "velox/parse/ExpressionsParser.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
@@ -33,7 +33,7 @@ std::shared_ptr<const core::ITypedExpr> parseExpr(
     const std::string& text,
     RowTypePtr rowType,
     memory::MemoryPool* pool) {
-  auto untyped = parse::parseExpr(text);
+  auto untyped = duckdb::parseExpr(text);
   return core::Expressions::inferTypes(untyped, rowType, pool);
 }
 } // namespace
@@ -101,7 +101,7 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
   std::vector<std::string> projectNames;
   for (auto i = 0; i < projections.size(); ++i) {
-    auto untypedExpr = parse::parseExpr(projections[i]);
+    auto untypedExpr = duckdb::parseExpr(projections[i]);
     expressions.push_back(inferTypes(untypedExpr));
     if (untypedExpr->alias().has_value()) {
       projectNames.push_back(untypedExpr->alias().value());
@@ -337,7 +337,7 @@ PlanBuilder::createAggregateExpressionsAndNames(
       resolver.setResultType(resultTypes[i]);
     }
 
-    auto untypedExpr = parse::parseExpr(agg);
+    auto untypedExpr = duckdb::parseExpr(agg);
 
     auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr));
@@ -420,20 +420,46 @@ PlanBuilder& PlanBuilder::streamingAggregation(
   return *this;
 }
 
+namespace {
+std::pair<
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
+    std::vector<core::SortOrder>>
+parseOrderByClauses(
+    const std::vector<std::string>& keys,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool) {
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  for (const auto& key : keys) {
+    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
+    auto typedExpr =
+        core::Expressions::inferTypes(untypedExpr, inputType, pool);
+
+    auto sortingKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        sortingKey,
+        "ORDER BY clause must use a column name, not an expression: {}",
+        key);
+    sortingKeys.emplace_back(sortingKey);
+    sortingOrders.emplace_back(sortOrder);
+  }
+
+  return {sortingKeys, sortingOrders};
+}
+} // namespace
+
 PlanBuilder& PlanBuilder::localMerge(
-    const std::vector<ChannelIndex>& keyIndices,
-    const std::vector<core::SortOrder>& sortOrder,
+    const std::vector<std::string>& keys,
     std::vector<std::shared_ptr<const core::PlanNode>> sources) {
   VELOX_CHECK_NULL(planNode_, "localMerge() must be the first call");
   VELOX_CHECK_GE(
       sources.size(), 1, "localMerge() requires at least one source");
+
   const auto& inputType = sources[0]->outputType();
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
-  std::vector<core::SortOrder> sortingOrders;
-  for (int i = 0; i < keyIndices.size(); i++) {
-    sortingKeys.push_back(field(inputType, keyIndices[i]));
-    sortingOrders.push_back(sortOrder[i]);
-  }
+  auto [sortingKeys, sortingOrders] =
+      parseOrderByClauses(keys, inputType, pool_);
+
   planNode_ = std::make_shared<core::LocalMergeNode>(
       nextPlanNodeId(), sortingKeys, sortingOrders, std::move(sources));
 
@@ -487,15 +513,11 @@ PlanBuilder& PlanBuilder::window(
 }
 
 PlanBuilder& PlanBuilder::orderBy(
-    const std::vector<ChannelIndex>& keyIndices,
-    const std::vector<core::SortOrder>& sortOrder,
+    const std::vector<std::string>& keys,
     bool isPartial) {
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
-  std::vector<core::SortOrder> sortingOrders;
-  for (int i = 0; i < keyIndices.size(); i++) {
-    sortingKeys.emplace_back(field(keyIndices[i]));
-    sortingOrders.emplace_back(sortOrder[i]);
-  }
+  auto [sortingKeys, sortingOrders] =
+      parseOrderByClauses(keys, planNode_->outputType(), pool_);
+
   planNode_ = std::make_shared<core::OrderByNode>(
       nextPlanNodeId(), sortingKeys, sortingOrders, isPartial, planNode_);
 

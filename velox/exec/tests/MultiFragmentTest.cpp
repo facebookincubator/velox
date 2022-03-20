@@ -303,11 +303,10 @@ TEST_F(MultiFragmentTest, mergeExchange) {
     auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
     auto partialSortPlan = PlanBuilder(planNodeIdGenerator)
                                .localMerge(
-                                   {0},
-                                   {kAscNullsLast},
+                                   {"c0"},
                                    {PlanBuilder(planNodeIdGenerator)
                                         .tableScan(rowType_)
-                                        .orderBy({0}, {kAscNullsLast}, true)
+                                        .orderBy({"c0"}, true)
                                         .planNode()})
                                .partitionedOutput({}, 1)
                                .planNode();

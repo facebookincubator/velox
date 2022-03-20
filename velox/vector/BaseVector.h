@@ -350,10 +350,6 @@ class BaseVector {
     clearNulls(0, size());
   }
 
-  virtual void clear() {
-    resize(0);
-  }
-
   // Sets the size to 'size' and ensures there is space for the
   // indicated number of nulls and top level values.
   // 'setNotNull' indicates if nulls in range [oldSize, newSize) should be set
@@ -579,6 +575,11 @@ class BaseVector {
   virtual uint64_t retainedSize() const {
     return nulls_ ? nulls_->capacity() : 0;
   }
+
+  /// Returns an estimate of the 'retainedSize' of a flat representation of the
+  /// data stored in this vector. Returns zero if this is a lazy vector that
+  /// hasn't been loaded yet.
+  virtual uint64_t estimateFlatSize() const;
 
   // Returns true if 'vector' is a unique reference to a flat vector
   // and nulls and values are uniquely referenced.

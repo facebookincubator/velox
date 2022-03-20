@@ -697,8 +697,8 @@ class VectorTest : public testing::Test {
             oddIndices.size() - oddIndices.size() / 2));
     std::stringstream evenStream;
     std::stringstream oddStream;
-    OutputStream eventOutputStream(&evenStream);
-    OutputStream oddOutputStream(&oddStream);
+    OStreamOutputStream eventOutputStream(&evenStream);
+    OStreamOutputStream oddOutputStream(&oddStream);
     even.flush(&eventOutputStream);
     odd.flush(&oddOutputStream);
     ByteStream input;
@@ -1060,6 +1060,23 @@ TEST_F(VectorTest, resizeStringAsciiness) {
   ASSERT_TRUE(stringVector->isAscii(rows).value());
   stringVector->resize(2);
   ASSERT_FALSE(stringVector->isAscii(rows));
+}
+
+TEST_F(VectorTest, copyNoRows) {
+  auto maker = std::make_unique<test::VectorMaker>(pool_.get());
+  {
+    auto source = maker->flatVectorNullable<int32_t>({1, 2, 3});
+    auto target = BaseVector::create(INTEGER(), 10, pool_.get());
+    SelectivityVector rows(3, false);
+    target->copy(source.get(), rows, nullptr);
+  }
+
+  {
+    auto source = maker->flatVectorNullable<StringView>({"a", "b", "c"});
+    auto target = BaseVector::create(VARCHAR(), 10, pool_.get());
+    SelectivityVector rows(3, false);
+    target->copy(source.get(), rows, nullptr);
+  }
 }
 
 TEST_F(VectorTest, copyAscii) {
