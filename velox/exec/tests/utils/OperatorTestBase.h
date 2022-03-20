@@ -40,6 +40,10 @@ class OperatorTestBase : public testing::Test,
     duckDbQueryRunner_.createTable("tmp", data);
   }
 
+  void executeDuckDBQuery(const std::string& duckDBSql) {
+    duckDbQueryRunner_.execute(duckDBSql);
+  }
+
   void createDuckDbTable(
       const std::string& tableName,
       const std::vector<RowVectorPtr>& data) {

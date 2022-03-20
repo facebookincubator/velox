@@ -249,6 +249,12 @@ class PlanBuilder {
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {});
 
+  PlanBuilder& window(
+      const std::vector<ChannelIndex>& partitionKeyIndices,
+      const std::vector<ChannelIndex>& sortKeyIndices,
+      const std::vector<core::SortOrder>& sortOrder,
+      const std::vector<std::string>& windowFunctions);
+
   PlanBuilder& localMerge(
       const std::vector<ChannelIndex>& keyIndices,
       const std::vector<core::SortOrder>& sortOrder,

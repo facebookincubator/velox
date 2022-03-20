@@ -50,6 +50,7 @@ add_library(
   Unnest.cpp
   Values.cpp
   VectorHasher.cpp
+  Window.cpp
   AssignUniqueId.cpp)
 
 target_link_libraries(

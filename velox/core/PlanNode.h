@@ -17,6 +17,7 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/WindowFunction.h"
 
 namespace facebook::velox::core {
 
@@ -57,6 +58,11 @@ class SortOrder {
   SortOrder(bool ascending, bool nullsFirst)
       : ascending_(ascending), nullsFirst_(nullsFirst) {}
 
+  SortOrder(const SortOrder& a) {
+    ascending_ = a.ascending_;
+    nullsFirst_ = a.nullsFirst_;
+  }
+
   bool isAscending() const {
     return ascending_;
   }
@@ -73,8 +79,10 @@ class SortOrder {
   }
 
  private:
-  const bool ascending_;
-  const bool nullsFirst_;
+  // const bool ascending_;
+  bool ascending_;
+  bool nullsFirst_;
+  // const bool nullsFirst_;
 };
 
 extern const SortOrder kAscNullsFirst;
@@ -542,6 +550,92 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   ss << step;
   return ss.str();
 }
+
+class WindowNode : public PlanNode {
+ public:
+  /**
+   * @param partitionKeys: The partition keys over which the window function is
+   * computed.
+   */
+  WindowNode(
+      const PlanNodeId& id,
+      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+          partitionKeys,
+      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+          sortingKeys,
+      const std::vector<SortOrder>& sortingOrders,
+      const std::vector<std::string>& windowFunctionNames,
+      const std::vector<std::shared_ptr<const CallTypedExpr>>& windowFunctions,
+      std::shared_ptr<const PlanNode> source);
+
+  const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+  partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
+      const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+  partitionAndSortKeys() const {
+    return partitionAndSortKeys_;
+  }
+
+  const std::vector<SortOrder>& partitionAndSortOrders() const {
+    return partitionAndSortOrders_;
+  }
+
+  const std::vector<std::string>& windowFunctionNames() const {
+    return windowFunctionNames_;
+  }
+
+  const std::vector<std::shared_ptr<const CallTypedExpr>>& windowFunctionExprs()
+      const {
+    return windowFunctionExprs_;
+  }
+
+  const std::vector<std::shared_ptr<WindowFunction>>& windowFunctions() const {
+    return windowFunctions_;
+  }
+
+  std::string_view name() const override {
+    return "Window";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> partitionKeys_;
+
+  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<SortOrder> sortingOrders_;
+
+  const std::vector<std::string> windowFunctionNames_;
+  const std::vector<std::shared_ptr<const CallTypedExpr>> windowFunctionExprs_;
+
+  const std::vector<std::shared_ptr<const PlanNode>> sources_;
+
+  std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
+      partitionAndSortKeys_;
+  std::vector<SortOrder> partitionAndSortOrders_;
+
+  RowTypePtr outputType_;
+  std::vector<std::shared_ptr<WindowFunction>> windowFunctions_;
+};
 
 class ExchangeNode : public PlanNode {
  public:
