@@ -37,7 +37,7 @@ namespace {
 static bool notEmpty(const char* /*flagName*/, const std::string& value) {
   return !value.empty();
 }
-static bool validateFormat(const char* flagname, const std::string& value) {
+static bool validateDataFormat(const char* flagname, const std::string& value) {
   if ((value.compare("parquet") == 0) ||
       (value.compare("orc") == 0)) // value is ok
     return true;
@@ -57,11 +57,11 @@ DEFINE_int32(
     -1,
     "Run a given query and print execution statistics ");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
-DEFINE_string(format, "parquet", "Data format");
+DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
 
 DEFINE_validator(data_path, &notEmpty);
-DEFINE_validator(format, &validateFormat);
+DEFINE_validator(data_format, &validateDataFormat);
 
 class TpchBenchmark {
  public:
@@ -82,7 +82,7 @@ class TpchBenchmark {
     params.maxDrivers = FLAGS_num_drivers;
     params.numResultDrivers = 1;
     params.planNode = tpchPlan.plan;
-    const int kNumSplitsPerFile = FLAGS_num_splits_per_file;
+    const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
     bool noMoreSplits = false;
     auto addSplits = [&](exec::Task* task) {
@@ -90,7 +90,7 @@ class TpchBenchmark {
         for (const auto entry : tpchPlan.dataFiles) {
           for (const auto path : entry.second) {
             auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-                path, kNumSplitsPerFile, tpchPlan.dataFileFormat);
+                path, numSplitsPerFile, tpchPlan.dataFileFormat);
             for (const auto& split : splits) {
               task->addSplit(entry.first, exec::Split(split));
             }
@@ -126,7 +126,8 @@ BENCHMARK(q18) {
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   benchmark.initialize();
-  queryBuilder = std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_format));
+  queryBuilder =
+      std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
   queryBuilder->initialize(FLAGS_data_path);
   if (FLAGS_run_query_verbose == -1) {
     folly::runBenchmarks();
