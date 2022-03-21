@@ -267,6 +267,14 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
   auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
   auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
   auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  // Add an extra project step to map file columns to standard
+  // column names.
+  const auto lineitemColumnAlias =
+      getProjectColumnAliases(kLineitem, lineitemColumns);
+  const auto ordersColumnAlias =
+      getProjectColumnAliases(kOrders, ordersColumns);
+  const auto customerColumnAlias =
+      getProjectColumnAliases(kCustomer, customerColumns);
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId customerScanNodeId;
@@ -280,6 +288,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
               {PlanBuilder(planNodeIdGenerator)
                    .tableScan(lineitemSelectedRowType)
                    .capturePlanNodeId(lineitemScanNodeId)
+                   .project(lineitemColumnAlias)
                    .partialAggregation({0}, {"sum(l_quantity) AS partial_sum"})
                    .planNode()})
           .finalAggregation({0}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
@@ -291,6 +300,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                       {PlanBuilder(planNodeIdGenerator)
                            .tableScan(ordersSelectedRowType)
                            .capturePlanNodeId(ordersScanNodeId)
+                           .project(ordersColumnAlias)
                            .hashJoin(
                                {"o_orderkey"},
                                {"l_orderkey"},
@@ -308,6 +318,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                                PlanBuilder(planNodeIdGenerator)
                                    .tableScan(customerSelectedRowType)
                                    .capturePlanNodeId(customerScanNodeId)
+                                   .project(customerColumnAlias)
                                    .planNode(),
                                "",
                                {"c_name",
