@@ -106,31 +106,32 @@ class TpchBenchmark {
 };
 
 TpchBenchmark benchmark;
-TpchQueryBuilder queryBuilder(toFileFormat(FLAGS_format));
+std::shared_ptr<TpchQueryBuilder> queryBuilder;
 
 BENCHMARK(q1) {
-  const auto planContext = queryBuilder.getQueryPlan(1);
+  const auto planContext = queryBuilder->getQueryPlan(1);
   benchmark.run(planContext);
 }
 
 BENCHMARK(q6) {
-  const auto planContext = queryBuilder.getQueryPlan(6);
+  const auto planContext = queryBuilder->getQueryPlan(6);
   benchmark.run(planContext);
 }
 
 BENCHMARK(q18) {
-  const auto planContext = queryBuilder.getQueryPlan(18);
+  const auto planContext = queryBuilder->getQueryPlan(18);
   benchmark.run(planContext);
 }
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   benchmark.initialize();
-  queryBuilder.initialize(FLAGS_data_path);
+  queryBuilder = std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_format));
+  queryBuilder->initialize(FLAGS_data_path);
   if (FLAGS_run_query_verbose == -1) {
     folly::runBenchmarks();
   } else {
-    const auto queryPlan = queryBuilder.getQueryPlan(FLAGS_run_query_verbose);
+    const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
     const auto stats = task->taskStats();
     std::cout << fmt::format(
