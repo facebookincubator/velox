@@ -113,7 +113,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::shared_ptr<const core::ITypedExpr>& remainingFilter =
           nullptr) {
     return std::make_shared<connector::hive::HiveTableHandle>(
-        true, std::move(subfieldFilters), remainingFilter);
+        "hive_table", true, std::move(subfieldFilters), remainingFilter);
   }
 
   static std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
