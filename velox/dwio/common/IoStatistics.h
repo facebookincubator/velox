@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/dynamic.h>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -101,6 +102,8 @@ class IoStatistics {
       const uint64_t delayInjectedInSecs);
 
   std::unordered_map<std::string, OperationCounters> operationStats() const;
+
+  folly::dynamic getOperationStatsSnapshot() const;
 
  private:
   std::atomic<uint64_t> rawBytesRead_{0};
