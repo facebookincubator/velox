@@ -123,6 +123,15 @@ TEST_F(DateTimeFunctionsTest, toUnixtime) {
   EXPECT_EQ(1639426380, toUnixtimeWTZ(1639426440000, "+00:01"));
   EXPECT_EQ(1639476840, toUnixtimeWTZ(1639426440000, "-14:00"));
   EXPECT_EQ(1639376040, toUnixtimeWTZ(1639426440000, "+14:00"));
+  // test floating point and negative time
+  EXPECT_EQ(16394.26, toUnixtimeWTZ(16394260, "+00:00"));
+  EXPECT_EQ(5594.26, toUnixtimeWTZ(16394260, "+03:00"));
+  EXPECT_EQ(1994.26, toUnixtimeWTZ(16394260, "+04:00"));
+  EXPECT_EQ(41594.26, toUnixtimeWTZ(16394260, "-07:00"));
+  EXPECT_EQ(16454.26, toUnixtimeWTZ(16394260, "-00:01"));
+  EXPECT_EQ(16334.26, toUnixtimeWTZ(16394260, "+00:01"));
+  EXPECT_EQ(66794.26, toUnixtimeWTZ(16394260, "-14:00"));
+  EXPECT_EQ(-34005.74, toUnixtimeWTZ(16394260, "+14:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, fromUnixtimeRountTrip) {
