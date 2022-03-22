@@ -281,8 +281,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
               {PlanBuilder(planNodeIdGenerator)
                    .tableScan(
                        lineitemSelectedRowType,
-                       makeTableHandle(
-                           std::move(common::test::SubfieldFilters{})),
+                       makeTableHandle(common::test::SubfieldFilters{}),
                        allRegularColumns(
                            lineitemSelectedRowType, lineitemColumnAliases))
                    .capturePlanNodeId(lineitemScanNodeId)
@@ -291,52 +290,51 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
           .finalAggregation({0}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
           .planNode();
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(
+                       ordersSelectedRowType,
+                       makeTableHandle(common::test::SubfieldFilters{}),
+                       allRegularColumns(
+                           ordersSelectedRowType, ordersColumnAliases))
+                   .capturePlanNodeId(ordersScanNodeId)
+                   .hashJoin(
+                       {"o_orderkey"},
+                       {"l_orderkey"},
+                       bigOrders,
+                       "quantity > 300.0",
+                       {"o_orderkey",
+                        "o_custkey",
+                        "o_orderdate",
+                        "o_totalprice",
+                        "l_orderkey",
+                        "quantity"})
+                   .hashJoin(
+                       {"o_custkey"},
+                       {"c_custkey"},
+                       PlanBuilder(planNodeIdGenerator)
                            .tableScan(
-                               ordersSelectedRowType,
-                               makeTableHandle(
-                                   std::move(common::test::SubfieldFilters{})),
+                               customerSelectedRowType,
+                               makeTableHandle(common::test::SubfieldFilters{}),
                                allRegularColumns(
-                                   ordersSelectedRowType, ordersColumnAliases))
-                           .capturePlanNodeId(ordersScanNodeId)
-                           .hashJoin(
-                               {"o_orderkey"},
-                               {"l_orderkey"},
-                               bigOrders,
-                               "quantity > 300.0",
-                               {"o_orderkey",
-                                "o_custkey",
-                                "o_orderdate",
-                                "o_totalprice",
-                                "l_orderkey",
-                                "quantity"})
-                           .hashJoin(
-                               {"o_custkey"},
-                               {"c_custkey"},
-                               PlanBuilder(planNodeIdGenerator)
-                                   .tableScan(
-                                       customerSelectedRowType,
-                                       makeTableHandle(std::move(
-                                           common::test::SubfieldFilters{})),
-                                       allRegularColumns(
-                                           customerSelectedRowType,
-                                           customerColumnAliases))
-                                   .capturePlanNodeId(customerScanNodeId)
-                                   .planNode(),
-                               "",
-                               {"c_name",
-                                "c_custkey",
-                                "o_orderkey",
-                                "o_orderdate",
-                                "o_totalprice",
-                                "quantity"})
-                           .planNode()})
-                  .orderBy({"o_totalprice DESC", "o_orderdate"}, false)
-                  .limit(0, 100, false)
-                  .planNode();
+                                   customerSelectedRowType,
+                                   customerColumnAliases))
+                           .capturePlanNodeId(customerScanNodeId)
+                           .planNode(),
+                       "",
+                       {"c_name",
+                        "c_custkey",
+                        "o_orderkey",
+                        "o_orderdate",
+                        "o_totalprice",
+                        "quantity"})
+                   .planNode()})
+          .orderBy({"o_totalprice DESC", "o_orderdate"}, false)
+          .limit(0, 100, false)
+          .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);
