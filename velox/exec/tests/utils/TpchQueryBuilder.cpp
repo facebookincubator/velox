@@ -91,11 +91,11 @@ using ColumnHandleMap =
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>;
 
 std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
-    const std::string& name,
+    const std::string& tableName,
     common::test::SubfieldFilters subfieldFilters,
     const std::shared_ptr<const core::ITypedExpr>& remainingFilter = nullptr) {
   return std::make_shared<connector::hive::HiveTableHandle>(
-      name, true, std::move(subfieldFilters), remainingFilter);
+      tableName, true, std::move(subfieldFilters), remainingFilter);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(

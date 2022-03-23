@@ -63,11 +63,11 @@ using SubfieldFilters =
 class HiveTableHandle : public ConnectorTableHandle {
  public:
   HiveTableHandle(
-      const std::string& name,
+      const std::string& tableName,
       bool filterPushdownEnabled,
       SubfieldFilters subfieldFilters,
       const std::shared_ptr<const core::ITypedExpr>& remainingFilter)
-      : name_(name),
+      : tableName_(tableName),
         filterPushdownEnabled_(filterPushdownEnabled),
         subfieldFilters_(std::move(subfieldFilters)),
         remainingFilter_(remainingFilter) {}
@@ -87,7 +87,7 @@ class HiveTableHandle : public ConnectorTableHandle {
   std::string toString() const;
 
  private:
-  const std::string name_;
+  const std::string tableName_;
   const bool filterPushdownEnabled_;
   const SubfieldFilters subfieldFilters_;
   const std::shared_ptr<const core::ITypedExpr> remainingFilter_;

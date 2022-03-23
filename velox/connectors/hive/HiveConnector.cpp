@@ -42,11 +42,11 @@ static const char* kBucket = "$bucket";
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
-  out << "Name: " << name_;
+  out << "Table: " << tableName_;
   if (!subfieldFilters_.empty()) {
     out << ", Filters: [";
     bool notFirstFilter = false;
-    for (auto& pair : subfieldFilters_) {
+    for (const auto& pair : subfieldFilters_) {
       if (notFirstFilter) {
         out << ", ";
       }

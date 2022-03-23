@@ -416,27 +416,24 @@ TEST_F(PlanNodeToStringTest, exchange) {
 }
 
 TEST_F(PlanNodeToStringTest, tableScan) {
-  const auto shipDate = "shipdate";
-  const auto lineitem = "lineitem";
-  RowTypePtr rowType{
-      ROW({"discount", "tax", "shipdate"}, {DOUBLE(), DOUBLE(), VARCHAR()})};
-  ColumnHandleMap assignments = {
-      {"discount", HiveConnectorTestBase::regularColumn("discount", DOUBLE())},
-      {"tax", HiveConnectorTestBase::regularColumn("tax", DOUBLE())},
-      {"shipdate",
-       HiveConnectorTestBase::regularColumn("shipdate", VARCHAR())}};
+  RowTypePtr rowType{ROW(
+      {"discount", "quantity", "shipdate"}, {DOUBLE(), DOUBLE(), VARCHAR()})};
   auto filters = SubfieldFiltersBuilder()
-                     .add(shipDate, between("1994-01-01", "1994-12-31"))
-                     .add("l_discount", betweenDouble(0.05, 0.07))
-                     .add("l_quantity", lessThanDouble(24.0))
+                     .add("shipdate", between("1994-01-01", "1994-12-31"))
+                     .add("discount", betweenDouble(0.05, 0.07))
+                     .add("quantity", lessThanDouble(24.0))
                      .build();
-  auto tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-      lineitem, true, std::move(filters), nullptr);
-  auto plan =
-      PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode();
+  auto tableHandle = HiveConnectorTestBase::makeTableHandle(
+      std::move(filters), nullptr, "lineitem");
+  auto plan = PlanBuilder()
+                  .tableScan(
+                      rowType,
+                      tableHandle,
+                      HiveConnectorTestBase::allRegularColumns(rowType))
+                  .planNode();
 
   ASSERT_EQ("-> TableScan\n", plan->toString());
   ASSERT_EQ(
-      "-> TableScan[Name: lineitem, Filters: [(l_quantity, DoubleRange: (-inf, 24.000000) no nulls), (l_discount, DoubleRange: [0.050000, 0.070000] no nulls), (shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)]]\n",
+      "-> TableScan[Table: lineitem, Filters: [(quantity, DoubleRange: (-inf, 24.000000) no nulls), (discount, DoubleRange: [0.050000, 0.070000] no nulls), (shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)]]\n",
       plan->toString(true, false));
 }
