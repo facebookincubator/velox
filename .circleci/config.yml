@@ -208,7 +208,7 @@ jobs:
       - run:
           name: "Build Benchmarks - Baseline"
           command: |
-            git checkout $(git merge-base origin/main HEAD)
+            #git checkout $(git merge-base origin/main HEAD)
             mkdir -p benchmark-basic-dumps/baseline benchmark-basic-dumps/target
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
@@ -224,7 +224,7 @@ jobs:
       - run:
           name: "Build Benchmarks - Target"
           command: |
-            git checkout -
+            #git checkout -
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
