@@ -61,7 +61,7 @@ void FlatVector<bool>::copyValuesAndNulls(
   }
   uint64_t* rawValues = reinterpret_cast<uint64_t*>(rawValues_);
   if (source->encoding() == VectorEncoding::Simple::FLAT) {
-    auto flat = source->as<FlatVector<bool>>();
+    auto flat = source->asUnchecked<FlatVector<bool>>();
     auto* sourceValues = source->typeKind() != TypeKind::UNKNOWN
         ? flat->rawValues<uint64_t>()
         : nullptr;
@@ -99,7 +99,7 @@ void FlatVector<bool>::copyValuesAndNulls(
       }
     }
   } else if (source->isConstantEncoding()) {
-    auto constant = source->as<ConstantVector<bool>>();
+    auto constant = source->asUnchecked<ConstantVector<bool>>();
     if (constant->isNullAt(0)) {
       addNulls(nullptr, rows);
       return;
@@ -116,7 +116,7 @@ void FlatVector<bool>::copyValuesAndNulls(
       bits::orBits(rawNulls, rows.asRange().bits(), rows.begin(), rows.end());
     }
   } else {
-    auto sourceVector = source->as<SimpleVector<bool>>();
+    auto sourceVector = source->asUnchecked<SimpleVector<bool>>();
     rows.applyToSelected([&](auto row) {
       int32_t sourceRow = toSourceRow ? toSourceRow[row] : row;
       if (!source->isNullAt(sourceRow)) {
@@ -306,7 +306,7 @@ void FlatVector<StringView>::copy(
     });
   }
 
-  if (auto stringVector = source->as<SimpleVector<StringView>>()) {
+  if (auto stringVector = source->asUnchecked<SimpleVector<StringView>>()) {
     if (auto ascii = stringVector->isAscii(rows, toSourceRow)) {
       setIsAscii(ascii.value(), rows);
     } else {
@@ -329,7 +329,7 @@ void FlatVector<StringView>::copy(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
-  auto leaf = source->wrappedVector()->as<SimpleVector<StringView>>();
+  auto leaf = source->wrappedVector()->asUnchecked<SimpleVector<StringView>>();
   VELOX_CHECK(leaf, "Assigning non-string to string");
   if (pool_ == leaf->pool()) {
     // We copy referencing the storage of 'source'.

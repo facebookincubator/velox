@@ -21,6 +21,7 @@
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BuilderTypeUtils.h"
+#include "velox/vector/ConstantVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -234,6 +235,48 @@ class FlatVector final : public SimpleVector<T> {
 
   void setNoCopy(const vector_size_t /* unused */, const T& /* unused */) {
     VELOX_UNREACHABLE();
+  }
+
+  int32_t compare(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex,
+      CompareFlags flags) const override {
+    if (other->encoding() == VectorEncoding::Simple::FLAT) {
+      auto otherFlat = other->asUnchecked<FlatVector<T>>();
+      bool otherNull = otherFlat->isNullAt(otherIndex);
+      if (BaseVector::isNullAt(index)) {
+        if (otherNull) {
+          return 0;
+        }
+        return flags.nullsFirst ? -1 : 1;
+      }
+      if (otherNull) {
+        return flags.nullsFirst ? 1 : -1;
+      }
+      auto thisValue = rawValues_[index];
+      auto otherValue = otherFlat->rawValues_[otherIndex];
+      auto result = SimpleVector<T>::comparePrimitiveAsc(thisValue, otherValue);
+      return flags.ascending ? result : result * -1;
+    } else if (other->isConstantEncoding()) {
+      auto otherConstant = other->asUnchecked<ConstantVector<T>>();
+      bool otherNull = otherConstant->isNullAt(otherIndex);
+      if (BaseVector::isNullAt(index)) {
+        if (otherNull) {
+          return 0;
+        }
+        return flags.nullsFirst ? -1 : 1;
+      }
+      if (otherNull) {
+        return flags.nullsFirst ? 1 : -1;
+      }
+      auto thisValue = rawValues_[index];
+      auto otherValue = otherConstant->valueAtFast(otherIndex);
+      auto result = SimpleVector<T>::comparePrimitiveAsc(thisValue, otherValue);
+      return flags.ascending ? result : result * -1;
+    } else {
+      return SimpleVector<T>::compare(other, index, otherIndex, flags);
+    }
   }
 
   void copy(

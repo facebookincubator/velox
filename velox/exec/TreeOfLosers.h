@@ -31,9 +31,9 @@ class TreeOfLosers {
         : left_(std::move(left)), right_(std::move(right)) {}
 
     template <typename Compare>
-    std::optional<Value> front(Compare compare) {
+    std::optional<Value>& front(const Compare& compare) {
       if (atEnd_) {
-        return std::nullopt;
+        return value_;//std::nullopt;
       }
       if (value_.has_value()) {
         return value_;
@@ -41,40 +41,53 @@ class TreeOfLosers {
       if (source_) {
         if (source_->atEnd()) {
           atEnd_ = true;
-          return std::nullopt;
+          return value_;//std::nullopt;
         }
         value_ = source_->next();
-        return std::optional<Value>(value_);
+        return value_;
       }
-      auto leftValue = left_->front(compare);
-      auto rightValue = right_->front(compare);
+      auto& leftValue = left_->front(compare);
+      auto& rightValue = right_->front(compare);
       if (!leftValue.has_value()) {
         if (!rightValue.has_value()) {
           atEnd_ = true;
-          return std::nullopt;
+          return value_;//std::nullopt;
         }
-        value_ = rightValue;
+        value_ = std::move(rightValue);
         right_->pop();
         return value_;
+//        value_ = rightValue;
+//        right_->pop();
+//        return value_;
       }
       if (!rightValue.has_value()) {
-        value_ = leftValue;
+        value_ = std::move(leftValue);
         left_->pop();
         return value_;
+//        value_ = leftValue;
+//        left_->pop();
+//        return value_;
       }
       int32_t result = compare(leftValue.value(), rightValue.value());
       if (result <= 0) {
-        value_ = leftValue;
+        value_ = std::move(leftValue);
         left_->pop();
+        return value_;
+//        value_ = leftValue;
+//        left_->pop();
       } else {
-        value_ = rightValue;
+        value_ = std::move(rightValue);
         right_->pop();
+        return value_;
+//        value_ = rightValue;
+//        right_->pop();
       }
-      return value_;
+//      return value_;
     }
 
-    void pop() {
-      value_ = std::nullopt;
+    std::optional<Value> pop() {
+//      value_ = std::nullopt;
+      return std::move(value_);
     }
 
     std::optional<Value> value_;
@@ -105,7 +118,7 @@ class TreeOfLosers {
   }
 
   template <typename Compare>
-  std::optional<Value> next(Compare compare) {
+  std::optional<Value> next(const Compare& compare) {
     auto value = root_->front(compare);
     root_->pop();
     return value;

@@ -139,6 +139,30 @@ std::shared_ptr<exec::Task> HiveConnectorTestBase::assertQuery(
       duckDbQueryRunner_);
 }
 
+std::shared_ptr<exec::Task> HiveConnectorTestBase::assertQuery(
+    const std::shared_ptr<const core::PlanNode>& plan,
+    const std::unordered_map<core::PlanNodeId, std::vector<std::string>>&
+        filePaths,
+    const std::string& duckDbSql) {
+  bool noMoreSplits = false;
+  return test::assertQuery(
+      plan,
+      [&](auto* task) {
+        if (!noMoreSplits) {
+          for (const auto& entry : filePaths) {
+            auto planNodeId = entry.first;
+            for (auto file : entry.second) {
+              addSplit(task, planNodeId, makeHiveSplit(file));
+            }
+            task->noMoreSplits(planNodeId);
+          }
+          noMoreSplits = true;
+        }
+      },
+      duckDbSql,
+      duckDbQueryRunner_);
+}
+
 std::vector<std::shared_ptr<TempFilePath>> HiveConnectorTestBase::makeFilePaths(
     int count) {
   std::vector<std::shared_ptr<TempFilePath>> filePaths;

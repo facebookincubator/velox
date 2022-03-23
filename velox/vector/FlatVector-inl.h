@@ -150,7 +150,7 @@ void FlatVector<T>::copyValuesAndNulls(
     rawNulls = BaseVector::mutableRawNulls();
   }
   if (source->encoding() == VectorEncoding::Simple::FLAT) {
-    auto flat = source->as<FlatVector<T>>();
+    auto flat = source->asUnchecked<FlatVector<T>>();
     auto* sourceValues =
         source->typeKind() != TypeKind::UNKNOWN ? flat->rawValues() : nullptr;
     if (toSourceRow) {
@@ -183,7 +183,7 @@ void FlatVector<T>::copyValuesAndNulls(
       BaseVector::addNulls(nullptr, rows);
       return;
     }
-    auto constant = source->as<ConstantVector<T>>();
+    auto constant = source->asUnchecked<ConstantVector<T>>();
     T value = constant->valueAt(0);
     while (iter.next(row)) {
       rawValues_[row] = value;
@@ -193,7 +193,7 @@ void FlatVector<T>::copyValuesAndNulls(
     }
   } else {
     auto sourceVector = source->typeKind() != TypeKind::UNKNOWN
-        ? source->as<SimpleVector<T>>()
+        ? source->asUnchecked<SimpleVector<T>>()
         : nullptr;
     while (iter.next(row)) {
       auto sourceRow = toSourceRow ? toSourceRow[row] : row;
@@ -217,6 +217,26 @@ void FlatVector<T>::copyValuesAndNulls(
     vector_size_t targetIndex,
     vector_size_t sourceIndex,
     vector_size_t count) {
+  if (source->isConstantEncoding()) {
+    auto constant = source->asUnchecked<ConstantVector<T>>();
+    if (constant->isNullAt(0)) {
+      auto rawNulls = BaseVector::mutableRawNulls();
+      bits::fillBits(rawNulls, targetIndex, targetIndex + count, bits::kNull);
+      return;
+    }
+
+    uint64_t* rawNulls = const_cast<uint64_t*>(BaseVector::rawNulls_);
+    T value = constant->valueAt(0);
+    for (auto row = targetIndex; row < targetIndex + count; ++row) {
+      rawValues_[row] = value;
+    }
+    if (rawNulls) {
+      bits::fillBits(
+          rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
+    }
+    return;
+  }
+
   source = source->loadedVector();
   VELOX_CHECK(
       BaseVector::compatibleKind(BaseVector::typeKind(), source->typeKind()));
@@ -228,7 +248,7 @@ void FlatVector<T>::copyValuesAndNulls(
     rawNulls = BaseVector::mutableRawNulls();
   }
   if (source->encoding() == VectorEncoding::Simple::FLAT) {
-    auto flat = source->as<FlatVector<T>>();
+    auto flat = source->asUnchecked<FlatVector<T>>();
     if (source->typeKind() != TypeKind::UNKNOWN) {
       if (Buffer::is_pod_like_v<T>) {
         memcpy(
@@ -252,21 +272,21 @@ void FlatVector<T>::copyValuesAndNulls(
       }
     }
   } else if (source->isConstantEncoding()) {
-    if (source->isNullAt(0)) {
+    auto constant = source->asUnchecked<ConstantVector<T>>();
+    if (constant->isNullAt(0)) {
       bits::fillBits(rawNulls, targetIndex, targetIndex + count, bits::kNull);
       return;
     }
-    auto constant = source->as<ConstantVector<T>>();
     T value = constant->valueAt(0);
     for (auto row = targetIndex; row < targetIndex + count; ++row) {
       rawValues_[row] = value;
-      if (rawNulls) {
-        bits::fillBits(
-            rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
-      }
+    }
+    if (rawNulls) {
+      bits::fillBits(
+          rawNulls, targetIndex, targetIndex + count, bits::kNotNull);
     }
   } else {
-    auto sourceVector = source->as<SimpleVector<T>>();
+    auto sourceVector = source->asUnchecked<SimpleVector<T>>();
     for (int32_t i = 0; i < count; ++i) {
       if (!source->isNullAt(sourceIndex + i)) {
         rawValues_[targetIndex + i] = sourceVector->valueAt(sourceIndex + i);

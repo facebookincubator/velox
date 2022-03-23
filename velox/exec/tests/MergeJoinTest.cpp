@@ -14,8 +14,18 @@
  * limitations under the License.
  */
 
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/tests/FilterBuilder.h"
+
+#if __has_include("filesystem")
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#endif
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -498,4 +508,190 @@ TEST_F(MergeJoinTest, lazyVectors) {
       op,
       {{rightScanId, {rightFile}}, {leftScanId, {leftFile}}},
       "SELECT c0, rc0, c1, rc1, c2, c3  FROM t, u WHERE t.c0 = u.rc0 and c1 + rc1 < 30");
+}
+
+TEST_F(MergeJoinTest, xxx) {
+  std::vector<std::string> paths = {
+      "/Users/mbasmanova/test_data/day1.dwrf",
+      "/Users/mbasmanova/test_data/day2.dwrf",
+      "/Users/mbasmanova/test_data/day3.dwrf",
+      "/Users/mbasmanova/test_data/day4.dwrf",
+      "/Users/mbasmanova/test_data/day5.dwrf",
+      "/Users/mbasmanova/test_data/day6.dwrf",
+      "/Users/mbasmanova/test_data/day7.dwrf",
+  };
+
+  std::vector<std::string> ds = {
+      "2022-02-14",
+      "2022-02-15",
+      "2022-02-16",
+      "2022-02-17",
+      "2022-02-18",
+      "2022-02-19",
+      "2022-02-20"};
+  std::vector<int64_t> times = {
+      1644796800,
+      1644883200,
+      1644969600,
+      1645056000,
+      1645142400,
+      1645228800,
+      1645315200};
+
+  std::vector<core::PlanNodeId> scanIds(paths.size());
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  auto tableScan = [&](int i) {
+    return PlanBuilder(planNodeIdGenerator)
+        .tableScan(
+            ROW({"user_id", "total_request_cpu_us"}, {BIGINT(), BIGINT()}))
+        .capturePlanNodeId(scanIds[i])
+        //        .limit(0, 10'000'000, true)
+        .project({
+            "user_id as metric_unitid",
+            "total_request_cpu_us",
+            fmt::format("{} as metric_time", times[i]),
+                        fmt::format("'{}' as ds", ds[i]),
+        })
+        .planNode();
+  };
+
+  std::vector<std::shared_ptr<const core::PlanNode>> scans;
+  for (auto i = 0; i < paths.size(); ++i) {
+    scans.push_back(tableScan(i));
+  }
+
+  std::unordered_map<core::PlanNodeId, std::vector<std::string>> splits;
+  for (auto i = 0; i < paths.size(); ++i) {
+    splits.insert({scanIds[i], {paths[i]}});
+  }
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localMerge({"metric_unitid", "metric_time"}, scans)
+                  .singleAggregation({}, {"count(1)"})
+                  .planNode();
+
+  auto task = HiveConnectorTestBase::assertQuery(plan, splits, "SELECT null");
+  std::cout << printPlanWithStats(*plan, task->taskStats()) << std::endl;
+}
+
+TEST_F(MergeJoinTest, yyy) {
+  std::string path = "/Users/mbasmanova/test_data/exp.dwrf";
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId scanId;
+  core::PlanNodeId buildScanId;
+
+  auto rowType =
+      ROW({"userid", "time", "condition", "experiment"},
+          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()});
+  ColumnHandleMap buildAssignments = allRegularColumns(rowType);
+
+  ColumnHandleMap assignments;
+  assignments["metric_unitid"] = regularColumn("user_id", BIGINT());
+  assignments["total_request_cpu_us"] =
+      regularColumn("total_request_cpu_us", BIGINT());
+  assignments["ds"] = partitionKey("ds", VARCHAR());
+  assignments["metric_time"] = partitionKey("metric_time", BIGINT());
+
+  auto filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "experiment",
+              common::test::equal("fb4a_pre_capture_timer_v289_backtest"))
+          .build();
+  auto buildTableHandle = makeTableHandle(std::move(filters));
+
+  std::vector<std::string> paths = {
+      "/Users/mbasmanova/test_data/day1.dwrf",
+      "/Users/mbasmanova/test_data/day2.dwrf",
+      "/Users/mbasmanova/test_data/day3.dwrf",
+      "/Users/mbasmanova/test_data/day4.dwrf",
+      "/Users/mbasmanova/test_data/day5.dwrf",
+      "/Users/mbasmanova/test_data/day6.dwrf",
+      "/Users/mbasmanova/test_data/day7.dwrf",
+  };
+
+  std::vector<std::string> ds = {
+      "2022-02-14",
+      "2022-02-15",
+      "2022-02-16",
+      "2022-02-17",
+      "2022-02-18",
+      "2022-02-19",
+      "2022-02-20"};
+  std::vector<int64_t> times = {
+      1644796800,
+      1644883200,
+      1644969600,
+      1645056000,
+      1645142400,
+      1645228800,
+      1645315200};
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              ROW({"metric_unitid",
+                   "total_request_cpu_us",
+                   "metric_time",
+                   "ds"},
+                  {BIGINT(), BIGINT(), BIGINT(), VARCHAR()}),
+              makeTableHandle(common::test::SubfieldFiltersBuilder().build()),
+              assignments)
+          .capturePlanNodeId(buildScanId)
+          .hashJoin(
+              {"metric_unitid"},
+              {"userid"},
+              PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      ROW({"userid", "time", "condition"},
+                          {BIGINT(), BIGINT(), VARCHAR()}),
+                      buildTableHandle,
+                      buildAssignments)
+                  .capturePlanNodeId(scanId)
+                  .planNode(),
+              "time < metric_time",
+              {"userid", "condition", "total_request_cpu_us"},
+              core::JoinType::kInner)
+          .singleAggregation({0, 1}, {"sum(total_request_cpu_us) as sum_cpu"})
+          .singleAggregation(
+              {1}, {"avg(sum_cpu)", "variance(sum_cpu)", "count(sum_cpu)"})
+          .planNode();
+
+  std::vector<exec::Split> splits;
+  for (auto i = 0; i < paths.size(); ++i) {
+    auto split = std::make_shared<connector::hive::HiveConnectorSplit>(
+        kHiveConnectorId,
+        paths[i],
+        facebook::velox::dwio::common::FileFormat::ORC,
+        0,
+        fs::file_size(paths[i]),
+        std::unordered_map<std::string, std::optional<std::string>>{
+            {"ds", {ds[i]}},
+            {"metric_time", {std::to_string(times[i])}},
+        });
+    splits.push_back(exec::Split(split));
+  }
+
+  bool noMoreSplits = false;
+  auto task = ::assertQuery(
+      plan,
+      [&](Task* task) {
+        if (noMoreSplits) {
+          return;
+        }
+        task->addSplit(scanId, exec::Split(makeHiveConnectorSplit(path)));
+        task->noMoreSplits(scanId);
+        for (auto& split : splits) {
+          task->addSplit(buildScanId, std::move(split));
+        }
+        task->noMoreSplits(buildScanId);
+        noMoreSplits = true;
+      },
+      "SELECT null, null, null, null",
+      duckDbQueryRunner_);
+
+  std::cout << printPlanWithStats(*plan, task->taskStats(), true) << std::endl;
 }

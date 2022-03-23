@@ -18,7 +18,7 @@
 #include <memory>
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
-#include "velox/exec/RowContainer.h"
+#include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
 
@@ -57,8 +57,10 @@ class Merge : public SourceOperator {
   std::vector<std::shared_ptr<MergeSource>> sources_;
 
  private:
-  static const size_t kBatchSizeInBytes{2 * 1024 * 1024};
-  using SourceRow = std::pair<size_t, char*>;
+  struct SourceRow {
+    RowVector* vector;
+    vector_size_t index;
+  };
 
   class Comparator {
    public:
@@ -66,14 +68,18 @@ class Merge : public SourceOperator {
         const RowTypePtr& outputType,
         const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
             sortingKeys,
-        const std::vector<core::SortOrder>& sortingOrders,
-        RowContainer* rowContainer);
+        const std::vector<core::SortOrder>& sortingOrders);
+
+    Comparator(const Comparator&) = delete;
 
     // Returns true if lhs > rhs, false otherwise.
-    bool operator()(const SourceRow& lhs, const SourceRow& rhs) {
-      for (auto& key : keyInfo_) {
-        if (auto result = rowContainer_->compare(
-                lhs.second, rhs.second, key.first, key.second)) {
+    bool operator()(const SourceRow& lhs, const SourceRow& rhs) const {
+      for (const auto& key : keyInfo_) {
+        if (auto result = lhs.vector->childAt(key.first)->compare(
+                rhs.vector->childAt(key.first).get(),
+                lhs.index,
+                rhs.index,
+                key.second)) {
           return result > 0;
         }
       }
@@ -82,63 +88,87 @@ class Merge : public SourceOperator {
 
    private:
     std::vector<std::pair<ChannelIndex, CompareFlags>> keyInfo_;
-    RowContainer* rowContainer_;
   };
-
-  /// Appends next row from the specified source to 'candidates_'. If
-  /// corresponding CursorSource has next row, returns that row and advances the
-  /// cursor. Otherwise, fetches next batch of source rows from MergeSource,
-  /// copies them to rowContainer_ and resets the cursor.
-  BlockingReason pushSource(ContinueFuture* future, size_t sourceId);
-
-  BlockingReason ensureSourcesReady(ContinueFuture* future);
-
-  /// Returns "max" row from 'candidates_' and removes that row from
-  /// 'candidates_'. Assumes 'candidates_' is not empty.
-  SourceRow nextOutputRow();
 
   /// A cursor over an ordered batch of source rows copied into 'rowContainer_'.
   struct SourceCursor {
+    SourceCursor(
+        MergeSource* source,
+        std::vector<ContinueFuture>& blockingFutures)
+        : source_{source}, blockingFutures_{blockingFutures} {
+      fetchMoreData();
+    }
+
+    void isReady() {
+      if (needData_) {
+        fetchMoreData();
+      }
+    }
+
+    bool atEnd() const {
+      return atEnd_;
+    }
+
+    SourceRow next() {
+      SourceRow row = {data_.get(), index_};
+
+      ++index_;
+      if (index_ == data_->size()) {
+        prevData_ = std::move(data_);
+        fetchMoreData();
+      }
+
+      return row;
+    }
+
+   private:
+    void fetchMoreData() {
+      ContinueFuture future{false};
+      auto reason = source_->next(data_, &future);
+      if (reason != BlockingReason::kNotBlocked) {
+        blockingFutures_.push_back(std::move(future));
+        needData_ = true;
+      } else {
+        atEnd_ = !data_;
+        needData_ = false;
+        index_ = 0;
+
+        if (data_) {
+          for (auto& child : data_->children()) {
+            child = BaseVector::loadedVectorShared(child);
+          }
+        }
+      }
+    }
+
     /// Ordered source rows.
-    std::vector<char*> rows;
+    RowVectorPtr data_;
+    RowVectorPtr prevData_;
     /// Index of the next row.
-    vector_size_t index{0};
+    vector_size_t index_{0};
     /// True if source has been exhausted.
-    bool atEnd{false};
-
-    /// Returns true if there is a next row.
-    bool hasNext() {
-      return !atEnd && index < rows.size();
-    }
-
-    /// Returns next row and advances the cursor.
-    char* nextUnchecked() {
-      return rows[index++];
-    }
-
-    /// Copies the 'data' into 'rowContainer' and resets the cursor to point to
-    /// the first row.
-    void reset(const RowVectorPtr& data, RowContainer* rowContainer);
+    bool atEnd_{false};
+    bool needData_{false};
+    MergeSource* source_;
+    std::vector<ContinueFuture>& blockingFutures_;
   };
 
   /// A list of cursors over batches of ordered source data. One per source.
   /// Aligned with 'sources'.
-  std::vector<SourceCursor> sourceCursors_;
-
-  /// Ordered list of output rows.
-  std::vector<char*> rows_;
-
-  /// Row container to store incoming batches of source data.
-  std::unique_ptr<RowContainer> rowContainer_;
+  std::vector<SourceCursor*> sourceCursors_;
 
   /// STL-compatible comparator to compare rows by sorting keys.
   Comparator comparator_;
 
-  /// A list of "max" rows from each source. Used to pick the next output row.
-  std::vector<SourceRow> candidates_;
+  std::unique_ptr<TreeOfLosers<SourceRow, SourceCursor>> treeOfLoosers_;
 
-  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-  ContinueFuture future_;
+  vector_size_t outputSize_{0};
+
+  bool finished_{false};
+
+  /// A list of blocking futures for sources. These are populates when a given
+  /// source is blocked waiting for the next batch of data.
+  std::vector<ContinueFuture> sourceBlockingFutures_;
   size_t numSourcesAdded_ = 0;
   size_t currentSourcePos_ = 0;
 };
