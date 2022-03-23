@@ -24,7 +24,6 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::test;
-using namespace facebook::velox::exec::test;
 
 using facebook::velox::exec::test::PlanBuilder;
 
@@ -423,14 +422,15 @@ TEST_F(PlanNodeToStringTest, tableScan) {
                      .add("discount", betweenDouble(0.05, 0.07))
                      .add("quantity", lessThanDouble(24.0))
                      .build();
-  auto tableHandle = HiveConnectorTestBase::makeTableHandle(
+  auto tableHandle = exec::test::HiveConnectorTestBase::makeTableHandle(
       std::move(filters), nullptr, "lineitem");
-  auto plan = PlanBuilder()
-                  .tableScan(
-                      rowType,
-                      tableHandle,
-                      HiveConnectorTestBase::allRegularColumns(rowType))
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .tableScan(
+              rowType,
+              tableHandle,
+              exec::test::HiveConnectorTestBase::allRegularColumns(rowType))
+          .planNode();
 
   ASSERT_EQ("-> TableScan\n", plan->toString());
   ASSERT_EQ(

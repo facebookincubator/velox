@@ -84,7 +84,7 @@ class HiveTableHandle : public ConnectorTableHandle {
     return remainingFilter_;
   }
 
-  std::string toString() const;
+  std::string toString() const override;
 
  private:
   const std::string tableName_;
