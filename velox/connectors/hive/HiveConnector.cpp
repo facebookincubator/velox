@@ -44,14 +44,18 @@ std::string HiveTableHandle::toString() const {
   std::stringstream out;
   out << "Table: " << tableName_;
   if (!subfieldFilters_.empty()) {
+    // sort filters by Subfield to print a deterministic order.
+    std::map<std::string, common::Filter*> orderedFilters;
+    for (const auto& pair : subfieldFilters_) {
+      orderedFilters[pair.first.toString()] = pair.second.get();
+    }
     out << ", Filters: [";
     bool notFirstFilter = false;
-    for (const auto& pair : subfieldFilters_) {
+    for (const auto& pair : orderedFilters) {
       if (notFirstFilter) {
         out << ", ";
       }
-      out << "(" << pair.first.toString() << ", " << pair.second->toString()
-          << ")";
+      out << "(" << pair.first << ", " << pair.second->toString() << ")";
       notFirstFilter = true;
     }
     out << "]";

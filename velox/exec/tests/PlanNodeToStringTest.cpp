@@ -434,6 +434,6 @@ TEST_F(PlanNodeToStringTest, tableScan) {
 
   ASSERT_EQ("-> TableScan\n", plan->toString());
   ASSERT_EQ(
-      "-> TableScan[Table: lineitem, Filters: [(quantity, DoubleRange: (-inf, 24.000000) no nulls), (discount, DoubleRange: [0.050000, 0.070000] no nulls), (shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)]]\n",
+      "-> TableScan[Table: lineitem, Filters: [(discount, DoubleRange: [0.050000, 0.070000] no nulls), (quantity, DoubleRange: (-inf, 24.000000) no nulls), (shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)]]\n",
       plan->toString(true, false));
 }
