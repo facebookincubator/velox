@@ -47,11 +47,11 @@ std::string HiveTableHandle::toString() const {
     out << ", Filters: [";
     bool notFirstFilter = false;
     for (auto& pair : subfieldFilters_) {
-      out << "(" << pair.first.toString() << ", " << pair.second->toString()
-          << ")";
       if (notFirstFilter) {
         out << ", ";
       }
+      out << "(" << pair.first.toString() << ", " << pair.second->toString()
+          << ")";
       notFirstFilter = true;
     }
     out << "]";
