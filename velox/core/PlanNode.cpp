@@ -153,7 +153,7 @@ const std::vector<std::shared_ptr<const PlanNode>>& TableScanNode::sources()
 }
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
-  stream << "name: " << tableHandle_->name();
+  stream << tableHandle_->toString();
 }
 
 const std::vector<std::shared_ptr<const PlanNode>>& ExchangeNode::sources()

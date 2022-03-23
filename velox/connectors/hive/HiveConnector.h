@@ -84,9 +84,7 @@ class HiveTableHandle : public ConnectorTableHandle {
     return remainingFilter_;
   }
 
-  const std::string& name() const {
-    return name_;
-  }
+  std::string toString() const;
 
  private:
   const std::string name_;

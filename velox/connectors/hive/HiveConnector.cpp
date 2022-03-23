@@ -40,6 +40,25 @@ static const char* kPath = "$path";
 static const char* kBucket = "$bucket";
 } // namespace
 
+std::string HiveTableHandle::toString() const {
+  std::stringstream out;
+  out << "Name: " << name_;
+  if (!subfieldFilters_.empty()) {
+    out << ", Filters: [";
+    bool notFirstFilter = false;
+    for (auto& pair : subfieldFilters_) {
+      out << "(" << pair.first.toString() << ", " << pair.second->toString()
+          << ")";
+      if (notFirstFilter) {
+        out << ", ";
+      }
+      notFirstFilter = true;
+    }
+    out << "]";
+  }
+  return out.str();
+}
+
 HiveDataSink::HiveDataSink(
     std::shared_ptr<const RowType> inputType,
     const std::string& filePath,
