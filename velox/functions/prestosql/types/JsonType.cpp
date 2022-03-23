@@ -45,6 +45,8 @@ void generateJsonTyped(
   } else if constexpr (
       std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
     result.append(std::to_string(value));
+  } else if constexpr (std::is_same_v<T, UnknownValue>) {
+    VELOX_FAIL("Vectors of UNKNOWN type should not contain non-null rows");
   } else {
     folly::toAppend<std::string, T>(value, &result);
   }
@@ -146,7 +148,7 @@ struct AsJson {
     BaseVector::ensureWritable(*baseRows, JSON(), context->pool(), &json_);
     jsonStrings_ = json_->as<FlatVector<StringView>>();
 
-    VELOX_DYNAMIC_TYPE_DISPATCH(
+    VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         castToJson,
         input->typeKind(),
         *decoded_->base(),
@@ -368,6 +370,7 @@ bool JsonCastOperator::isSupportedType(const TypePtr& other) const {
     case TypeKind::DOUBLE:
     case TypeKind::REAL:
     case TypeKind::VARCHAR:
+    case TypeKind::UNKNOWN:
     case TypeKind::DATE:
     case TypeKind::TIMESTAMP:
       return true;
@@ -407,9 +410,9 @@ void JsonCastOperator::castTo(
   // result is guaranteed to be a flat writable vector.
   auto* flatResult = result.as<FlatVector<StringView>>();
 
-  // Casting from VARBINARY is not supported and should have been rejected by
-  // isSupportedType() in the caller.
-  VELOX_DYNAMIC_TYPE_DISPATCH(
+  // Casting from VARBINARY or OPAQUE is not supported and should have been
+  // rejected by isSupportedType() in the caller.
+  VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       castToJson, input.typeKind(), input, context, rows, *flatResult);
 }
 

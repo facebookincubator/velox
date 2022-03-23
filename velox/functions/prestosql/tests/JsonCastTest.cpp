@@ -59,7 +59,13 @@ class JsonCastTest : public functions::test::CastBaseTest {
   // Makes a flat vector wrapped in reversed indices.
   template <typename T>
   VectorPtr makeDictionaryVector(const std::vector<std::optional<T>>& data) {
-    auto vector = makeNullableFlatVector<T>(data);
+    VectorPtr vector;
+    if constexpr (std::is_same_v<T, UnknownValue>) {
+      vector = makeFlatUnknownVector(data.size());
+    } else {
+      vector = makeNullableFlatVector<T>(data);
+    }
+
     auto reversedIndices = makeIndicesInReverse(data.size());
     return wrapInDictionary(reversedIndices, data.size(), vector);
   }
@@ -81,9 +87,16 @@ class JsonCastTest : public functions::test::CastBaseTest {
         AlignedBuffer::allocate<vector_size_t>(numOfArray, pool());
     makeOffsetsAndSizes(size, arraySize, offsets, sizes);
 
+    TypePtr type;
+    if constexpr (std::is_same_v<T, UnknownValue>) {
+      type = ARRAY(UNKNOWN());
+    } else {
+      type = ARRAY(CppToType<T>::create());
+    }
+
     return std::make_shared<ArrayVector>(
         pool(),
-        ARRAY(CppToType<T>::create()),
+        type,
         BufferPtr(nullptr),
         numOfArray,
         offsets,
@@ -115,9 +128,16 @@ class JsonCastTest : public functions::test::CastBaseTest {
     BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(numOfMap, pool());
     makeOffsetsAndSizes(size, mapSize, offsets, sizes);
 
+    TypePtr type;
+    if constexpr (std::is_same_v<TValue, UnknownValue>) {
+      type = MAP(CppToType<TKey>::create(), UNKNOWN());
+    } else {
+      type = MAP(CppToType<TKey>::create(), CppToType<TValue>::create());
+    }
+
     return std::make_shared<MapVector>(
         pool(),
-        MAP(CppToType<TKey>::create(), CppToType<TValue>::create()),
+        type,
         BufferPtr(nullptr),
         numOfMap,
         offsets,
@@ -149,6 +169,16 @@ class JsonCastTest : public functions::test::CastBaseTest {
 
     return std::make_shared<RowVector>(
         pool(), rowType, BufferPtr(nullptr), size, dictChildren);
+  }
+
+  VectorPtr makeFlatUnknownVector(int size) {
+    auto vector = std::dynamic_pointer_cast<FlatVector<UnknownValue>>(
+        BaseVector::create(UNKNOWN(), size, pool()));
+    for (int i = 0; i < size; ++i) {
+      vector->setNull(i, true);
+    }
+
+    return vector;
   }
 };
 
@@ -262,6 +292,13 @@ TEST_F(JsonCastTest, fromTimestamp) {
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
 }
 
+TEST_F(JsonCastTest, fromUnknown) {
+  auto input = makeFlatUnknownVector(3);
+  auto expected =
+      makeNullableFlatVector<Json>({std::nullopt, std::nullopt, std::nullopt});
+  evaluateCast<Json>(UNKNOWN(), JSON(), makeRowVector({input}), expected);
+}
+
 TEST_F(JsonCastTest, fromArray) {
   TwoDimVector<StringView> array{
       {"red"_sv, "blue"_sv}, {std::nullopt, std::nullopt, "purple"_sv}, {}};
@@ -272,6 +309,17 @@ TEST_F(JsonCastTest, fromArray) {
   auto expectedVector = makeNullableFlatVector<Json>(expected);
 
   testCast<Json>(ARRAY(VARCHAR()), JSON(), arrayVector, expectedVector);
+
+  // Tests array whose elements are of unknown type.
+  auto arrayOfUnknownElements = makeArrayWithDictionaryElements<UnknownValue>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt}, 2);
+  auto arrayOfUnknownElementsExpected =
+      makeNullableFlatVector<Json>({"[null,null]", "[null,null]"});
+  testCast<Json>(
+      ARRAY(UNKNOWN()),
+      JSON(),
+      arrayOfUnknownElements,
+      arrayOfUnknownElementsExpected);
 
   // Tests array whose elements are wrapped in a dictionary.
   std::vector<std::optional<int64_t>> elements{1, -2, 3, -4, 5, -6, 7};
@@ -307,9 +355,34 @@ TEST_F(JsonCastTest, fromMap) {
 
   testCast<Json>(MAP(VARCHAR(), BIGINT()), JSON(), mapVector, expectedVector);
 
-  // Tests map whose elements are wrapped in a dictionary.
+  // Tests map whose values are of unknown type.
   std::vector<std::optional<StringView>> keys{
       "a"_sv, "b"_sv, "c"_sv, "d"_sv, "e"_sv, "f"_sv, "g"_sv};
+  std::vector<std::optional<UnknownValue>> unknownValues{
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt,
+      std::nullopt};
+  auto mapOfUnknownValues =
+      makeMapWithDictionaryElements<StringView, UnknownValue>(
+          keys, unknownValues, 2);
+
+  auto mapOfUnknownValuesExpected = makeNullableFlatVector<Json>(
+      {R"({"f":null,"g":null})",
+       R"({"d":null,"e":null})",
+       R"({"b":null,"c":null})",
+       R"({"a":null})"});
+
+  testCast<Json>(
+      MAP(VARCHAR(), UNKNOWN()),
+      JSON(),
+      mapOfUnknownValues,
+      mapOfUnknownValuesExpected);
+
+  // Tests map whose elements are wrapped in a dictionary.
   std::vector<std::optional<double>> values{
       1.1e3, 2.2, 3.14e0, -4.4, std::nullopt, -6e-10, -7.7};
   auto mapOfDictElements = makeMapWithDictionaryElements(keys, values, 2);
@@ -353,6 +426,19 @@ TEST_F(JsonCastTest, fromRow) {
 
   testCast<Json>(
       ROW({BIGINT(), VARCHAR(), DOUBLE()}), JSON(), rowVector, expectedVector);
+
+  // Tests row whose children are of unknown type.
+  auto rowOfUnknownChildren = makeRowWithDictionaryElements<UnknownValue>(
+      {{std::nullopt, std::nullopt}, {std::nullopt, std::nullopt}},
+      ROW({UNKNOWN(), UNKNOWN()}));
+  auto rowOfUnknownChildrenExpected =
+      makeNullableFlatVector<Json>({"[null,null]", "[null,null]"});
+
+  testCast<Json>(
+      ROW({UNKNOWN(), UNKNOWN()}),
+      JSON(),
+      rowOfUnknownChildren,
+      rowOfUnknownChildrenExpected);
 
   // Tests row whose children are wrapped in dictionaries.
   auto rowOfDictElements = makeRowWithDictionaryElements<int64_t>(
