@@ -32,6 +32,17 @@ class HivePartitionFunction : public core::PartitionFunction {
   void partition(const RowVector& input, std::vector<uint32_t>& partitions)
       override;
 
+  static void hash(
+      const DecodedVector& values,
+      TypeKind typeKind,
+      vector_size_t size,
+      bool mix,
+      std::vector<uint32_t>& hashes);
+
+  inline static uint32_t mix(uint32_t hash1, uint32_t hash2) {
+    return hash1 * 31 + hash2;
+  }
+
  private:
   const int numBuckets_;
   const std::vector<int> bucketToPartition_;

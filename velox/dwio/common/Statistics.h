@@ -419,11 +419,19 @@ struct RuntimeStatistics {
   // Number of strides (row groups) skipped based on statistics.
   int64_t skippedStrides{0};
 
+  int64_t numSetSelectedBuckets{0};
+  int64_t skippedBuckets{0};
+  int64_t checkedBuckets{0};
+
   std::unordered_map<std::string, int64_t> toMap() {
     return {
         {"skippedSplits", skippedSplits},
         {"skippedSplitBytes", skippedSplitBytes},
-        {"skippedStrides", skippedStrides}};
+        {"skippedStrides", skippedStrides},
+        {"numSetSelectedBuckets", numSetSelectedBuckets},
+        {"skippedBuckets", skippedBuckets},
+        {"checkedBuckets", checkedBuckets},
+    };
   }
 };
 

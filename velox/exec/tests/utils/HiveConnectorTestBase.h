@@ -97,7 +97,11 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys,
       uint64_t start = 0,
-      uint64_t length = std::numeric_limits<uint64_t>::max());
+      uint64_t length = std::numeric_limits<uint64_t>::max(),
+      std::optional<int32_t> tableBucketNumber = std::nullopt,
+      std::optional<int32_t> readBucketNumber = std::nullopt,
+      const std::optional<connector::hive::HiveBucketProperty>& bucketProperty =
+          std::nullopt);
 
   static exec::Split makeHiveSplit(
       const std::string& filePath,

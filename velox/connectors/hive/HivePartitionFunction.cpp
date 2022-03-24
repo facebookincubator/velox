@@ -101,8 +101,19 @@ void hashTyped<TypeKind::VARCHAR>(
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
   }
 }
+} // namespace
 
-void hash(
+HivePartitionFunction::HivePartitionFunction(
+    int numBuckets,
+    std::vector<int> bucketToPartition,
+    std::vector<ChannelIndex> keyChannels)
+    : numBuckets_{numBuckets},
+      bucketToPartition_{bucketToPartition},
+      keyChannels_{std::move(keyChannels)} {
+  decodedVectors_.resize(keyChannels_.size());
+}
+
+void HivePartitionFunction::hash(
     const DecodedVector& values,
     TypeKind typeKind,
     vector_size_t size,
@@ -117,17 +128,6 @@ void hash(
   // implemented, this function will need to change significantly.
 
   VELOX_DYNAMIC_TYPE_DISPATCH(hashTyped, typeKind, values, size, mix, hashes);
-}
-} // namespace
-
-HivePartitionFunction::HivePartitionFunction(
-    int numBuckets,
-    std::vector<int> bucketToPartition,
-    std::vector<ChannelIndex> keyChannels)
-    : numBuckets_{numBuckets},
-      bucketToPartition_{bucketToPartition},
-      keyChannels_{std::move(keyChannels)} {
-  decodedVectors_.resize(keyChannels_.size());
 }
 
 void HivePartitionFunction::partition(

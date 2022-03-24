@@ -608,14 +608,61 @@ TEST_F(HashJoinTest, antiJoin) {
 }
 
 TEST_F(HashJoinTest, TableScanOfJoin) {
-  const std::string baymaxPath =
+  const std::string baymaxPath965 =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/baymax_all/ds=2022-03-02/000965_0_20220320_070152_07445_6nyw7";
+  const std::string baymaxPath173 =
       "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/baymax_all/ds=2022-03-12/000173_0_20220320_071336_13234_druxq";
-  const std::string falconPath =
-      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/falcon_splits_join_baymax_all_v2/ds=2022-03-19/000173_0_20220320_002641_02273_dg39k";
-  const std::shared_ptr<connector::hive::HiveConnectorSplit> baymaxSplit =
-      makeHiveConnectorSplit(baymaxPath, {{"ds", "2022-03-12"}});
-  const std::shared_ptr<connector::hive::HiveConnectorSplit> falconSplit =
-      makeHiveConnectorSplit(falconPath, {{"ds", "2022-03-19"}});
+  const std::string falconPath29 =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/falcon_splits_join_baymax_all_v2/ds=2022-03-23/000029_0_20220324_031425_24754_b4q5f";
+  const std::string falconPath173 =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/falcon_splits_join_baymax_all_v2/ds=2022-03-23/000173_0_20220324_031425_24754_b4q5f";
+  const std::string falconPath366 =
+      "/Users/gaoge/Program/presto_cpp_data/hive_data/tpch/falcon_splits_join_baymax_all_v2/ds=2022-03-23/000366_0_20220324_031425_24754_b4q5f";
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> baymaxSplit965 =
+      makeHiveConnectorSplit(
+          baymaxPath965,
+          {{"ds", "2022-03-02"}},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          965,
+          965,
+          connector::hive::HiveBucketProperty({"admarket_account_id"}, 1024));
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> baymaxSplit173 =
+      makeHiveConnectorSplit(
+          baymaxPath173,
+          {{"ds", "2022-03-12"}},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          173,
+          173,
+          connector::hive::HiveBucketProperty({"admarket_account_id"}, 1024));
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> falconSplit29 =
+      makeHiveConnectorSplit(
+          falconPath29,
+          {{"ds", "2022-03-23"}},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          29,
+          29,
+          connector::hive::HiveBucketProperty({"admarket_id"}, 1024));
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> falconSplit173 =
+      makeHiveConnectorSplit(
+          falconPath173,
+          {{"ds", "2022-03-23"}},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          173,
+          173,
+          connector::hive::HiveBucketProperty({"admarket_id"}, 1024));
+  const std::shared_ptr<connector::hive::HiveConnectorSplit> falconSplit366 =
+      makeHiveConnectorSplit(
+          falconPath366,
+          {{"ds", "2022-03-23"}},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          366,
+          366,
+          connector::hive::HiveBucketProperty({"admarket_id"}, 1024));
 
   RowTypePtr baymaxRowType = ROW(
       {"account_timezone_id", "admarket_account_id"}, {INTEGER(), BIGINT()});
@@ -650,10 +697,9 @@ TEST_F(HashJoinTest, TableScanOfJoin) {
   auto falconValuesOp =
       PlanBuilder(planNodeIdGenerator)
           .values({makeRowVector(
-                                {"admarket_id"},
-                                {makeFlatVector<int64_t>(
-                                    {23848382111580503, 23848382111580503})})})
-                            .planNode();
+              {"admarket_id"},
+              {makeFlatVector<int64_t>({23848382111580503, 6002209919223})})})
+          .planNode();
 
   auto op =
       PlanBuilder(planNodeIdGenerator)
@@ -665,7 +711,7 @@ TEST_F(HashJoinTest, TableScanOfJoin) {
           .hashJoin(
               {"admarket_account_id"},
               {"admarket_id"},
-              falconValuesOp,
+              falconOp,
               "",
               {"account_timezone_id", "admarket_account_id"},
               core::JoinType::kSemi)
@@ -679,10 +725,13 @@ TEST_F(HashJoinTest, TableScanOfJoin) {
   params.planNode = op;
 
   auto cursor = std::make_unique<TaskCursor>(params);
-  cursor->task()->addSplit(baymaxScanId, exec::Split(baymaxSplit));
-  //  cursor->task()->addSplit(falconScanId, exec::Split(falconSplit));
+  cursor->task()->addSplit(baymaxScanId, exec::Split(baymaxSplit173));
+  cursor->task()->addSplit(baymaxScanId, exec::Split(baymaxSplit965));
+  cursor->task()->addSplit(falconScanId, exec::Split(falconSplit29));
+  cursor->task()->addSplit(falconScanId, exec::Split(falconSplit173));
+  cursor->task()->addSplit(falconScanId, exec::Split(falconSplit366));
   cursor->task()->noMoreSplits(baymaxScanId);
-  //  cursor->task()->noMoreSplits(falconScanId);
+  cursor->task()->noMoreSplits(falconScanId);
 
   int32_t totalCnt = 0;
   while (cursor->moveNext()) {

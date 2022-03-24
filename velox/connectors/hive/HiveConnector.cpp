@@ -17,6 +17,7 @@
 
 #include <memory>
 
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/dwrf/common/CachedBufferedInput.h"
@@ -374,6 +375,130 @@ void HiveDataSource::addDynamicFilter(
   }
 }
 
+namespace {
+std::vector<uint32_t> getFilterHashes(
+    const common::Filter* filter,
+    uint32_t maxFilters) {
+  if (filter->kind() == common::FilterKind::kBigintValuesUsingHashTable) {
+    auto in =
+        reinterpret_cast<const common::BigintValuesUsingHashTable*>(filter);
+    auto maybeValues = in->int64Values(maxFilters);
+    if (!maybeValues.has_value()) {
+      // Too many values,
+      return {};
+    }
+    auto& values = maybeValues.value();
+
+    struct Releaser {
+      void release() const {}
+      void addRef() const {}
+    };
+    auto view = BufferView<Releaser>::create(
+        reinterpret_cast<uint8_t*>(values.data()),
+        values.size() * sizeof(values[0]),
+        Releaser());
+    FlatVector<int64_t> vector(
+        &memory::getProcessDefaultMemoryManager().getRoot(),
+        BufferPtr(nullptr),
+        values.size(),
+        view,
+        std::vector<BufferPtr>{});
+    DecodedVector decoded;
+    SelectivityVector rows(values.size());
+    decoded.decode(vector, rows);
+
+    std::vector<uint32_t> hashes(values.size());
+    HivePartitionFunction::hash(
+        decoded, TypeKind::BIGINT, values.size(), false, hashes);
+    return hashes;
+  }
+  return {};
+}
+
+void cartesianMix(
+    const std::vector<std::vector<uint32_t>>& hashes,
+    int32_t level,
+    uint32_t mixedHash,
+    int32_t numBits,
+    std::vector<uint64_t>& bits) {
+  if (level == hashes.size()) {
+    bits::setBit(
+        bits.data(),
+        (mixedHash & std::numeric_limits<int32_t>::max()) % numBits,
+        true);
+    return;
+  }
+  for (auto nextHash : hashes[level]) {
+    nextHash = HivePartitionFunction::mix(mixedHash, nextHash);
+    cartesianMix(hashes, level + 1, nextHash, numBits, bits);
+  }
+}
+} // namespace
+
+bool HiveDataSource::testFiltersOnBucket(
+    const common::ScanSpec* scanSpec,
+    const std::optional<HiveBucketProperty>& bucketProperty,
+    std::optional<uint32_t> bucketNumber) {
+  if (!bucketNumber.has_value() || !bucketProperty.has_value()) {
+    return true;
+  }
+
+  ++runtimeStats_.checkedBuckets;
+
+  if (!hasSetSelectedBuckets_) {
+    runtimeStats_.numSetSelectedBuckets++;
+
+    hasSetSelectedBuckets_ = true;
+    selectedBuckets_.clear();
+
+    //    selectedBuckets_.resize(bits::nwords(bucketProperty->bucketCount));
+    //    bits::negate(
+    //        reinterpret_cast<char*>(selectedBuckets_.data()),
+    //        sizeof(uint64_t) * 8 * selectedBuckets_.size());
+
+    std::vector<std::vector<uint32_t>> allHashes;
+    allHashes.reserve(bucketProperty.value().bucketedBy.size());
+
+    for (const std::string& bucketColumn : bucketProperty.value().bucketedBy) {
+      const common::ScanSpec* child = scanSpec->childByName(bucketColumn);
+      if (!child) {
+        return true;
+      }
+      const common::Filter* filter = child->filter();
+      if (!filter) {
+        return true;
+      }
+
+      std::vector<uint32_t> hashes = getFilterHashes(filter, 10000);
+      if (hashes.empty()) {
+        return true;
+      }
+      allHashes.push_back(std::move(hashes));
+    }
+
+    if (allHashes.empty()) {
+      return true;
+    }
+
+    selectedBuckets_.resize(bits::nwords(bucketProperty->bucketCount));
+    cartesianMix(
+        allHashes, 0, 0, bucketProperty->bucketCount, selectedBuckets_);
+  }
+
+  //  VELOX_CHECK_GT(
+  //      sizeof(uint64_t) * 8 * selectedBuckets_.size(), bucketNumber.value());
+
+  //  bits::forEachSetBit(
+  //      selectedBuckets_.data(),
+  //      0,
+  //      sizeof(uint64_t) * 8 * selectedBuckets_.size(),
+  //      [&](int32_t index) { std::cout << index << std::endl; });
+  if (selectedBuckets_.empty()) {
+    return true;
+  }
+  return bits::isBitSet(selectedBuckets_.data(), bucketNumber.value());
+}
+
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_CHECK(
       split_ == nullptr,
@@ -442,6 +567,14 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
+  if (!testFiltersOnBucket(
+          scanSpec_.get(), split_->bucketProperty, split_->readBucketNumber)) {
+    ++runtimeStats_.skippedBuckets;
+    emptySplit_ = true;
+    ++runtimeStats_.skippedSplits;
+    runtimeStats_.skippedSplitBytes += split_->length;
+    return;
+  }
   // Check filters and see if the whole split can be skipped
   if (!testFilters(scanSpec_.get(), reader_.get(), split_->filePath)) {
     emptySplit_ = true;
