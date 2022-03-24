@@ -19,6 +19,7 @@
 #include <gflags/gflags.h>
 
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
@@ -137,8 +138,11 @@ int main(int argc, char** argv) {
     const auto task = benchmark.run(queryPlan);
     const auto stats = task->taskStats();
     std::cout << fmt::format(
-                     "Execution time: {} ms",
-                     (stats.executionEndTimeMs - stats.executionStartTimeMs))
+                     "Execution time: {}",
+                     prettyPrintTimeInNanos(
+                         (stats.executionEndTimeMs -
+                          stats.executionStartTimeMs) *
+                         1'000'000))
               << std::endl;
     std::cout << fmt::format(
                      "Splits total: {}, finished: {}",

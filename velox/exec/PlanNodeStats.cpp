@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/common/time/Timer.h"
 #include "velox/exec/TaskStats.h"
 
 namespace facebook::velox::exec {
@@ -64,8 +65,8 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
     }
   }
   out << "Output: " << outputRows << " rows (" << outputBytes << " bytes)"
-      << ", Cpu time: " << cpuWallTiming.cpuNanos << "ns"
-      << ", Blocked wall time: " << blockedWallNanos << "ns"
+      << ", Cpu time: " << prettyPrintTimeInNanos(cpuWallTiming.cpuNanos)
+      << ", Blocked wall time: " << prettyPrintTimeInNanos(blockedWallNanos)
       << ", Peak memory: " << peakMemoryBytes << " bytes";
   return out.str();
 }

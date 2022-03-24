@@ -16,6 +16,8 @@
 #pragma once
 
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 
 namespace facebook::velox {
 
@@ -42,5 +44,21 @@ size_t getCurrentTimeMs();
 
 // Returns the current epoch time in microseconds.
 size_t getCurrentTimeMicro();
+
+// Match the input time in nanoseconds to the most appropriate unit and return a
+// string value. Possible units are nanoseconds(ns), microseconds(us),
+// milliseconds(ms), seconds(s). The default precision is 4 decimal digits.
+static std::string prettyPrintTimeInNanos(uint64_t time, int precision = 4) {
+  std::stringstream out;
+  std::string units[4] = {"ns", "us", "ms", "s"};
+  int count = 0;
+  double outTime = static_cast<double>(time);
+  while ((outTime / 1000) > 1 && count < sizeof(units)) {
+    outTime = outTime / 1000;
+    count++;
+  }
+  out << std::fixed << std::setprecision(precision) << outTime << units[count];
+  return out.str();
+}
 
 } // namespace facebook::velox
