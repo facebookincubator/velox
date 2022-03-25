@@ -19,7 +19,7 @@
 
 #include "velox/common/base/SuccinctPrintUtil.h"
 
-namespace facebook::velox::printer {
+namespace facebook::velox::print {
 static constexpr std::string_view timeUnits[4] = {"ns", "us", "ms", "s"};
 static constexpr std::string_view byteUnits[4] = {"B", "KB", "MB", "GB"};
 static int kTimeScale = 1000;
@@ -80,4 +80,4 @@ std::string succinctBytes(uint64_t bytes, int precision) {
       kByteScale);
 }
 
-} // namespace facebook::velox::printer
+} // namespace facebook::velox::print

@@ -59,17 +59,17 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
   std::stringstream out;
   if (includeInputStats) {
     out << "Input: " << inputRows << " rows ("
-        << printer::succinctBytes(inputBytes) << "), ";
+        << print::succinctBytes(inputBytes) << "), ";
     if (rawInputRows != inputRows) {
       out << "Raw Input: " << rawInputRows << " rows ("
-          << printer::succinctBytes(rawInputBytes) << "), ";
+          << print::succinctBytes(rawInputBytes) << "), ";
     }
   }
   out << "Output: " << outputRows << " rows ("
-      << printer::succinctBytes(outputBytes) << ")"
-      << ", Cpu time: " << printer::succinctNanos(cpuWallTiming.cpuNanos)
-      << ", Blocked wall time: " << printer::succinctNanos(blockedWallNanos)
-      << ", Peak memory: " << printer::succinctBytes(peakMemoryBytes);
+      << print::succinctBytes(outputBytes) << ")"
+      << ", Cpu time: " << print::succinctNanos(cpuWallTiming.cpuNanos)
+      << ", Blocked wall time: " << print::succinctNanos(blockedWallNanos)
+      << ", Peak memory: " << print::succinctBytes(peakMemoryBytes);
   return out.str();
 }
 

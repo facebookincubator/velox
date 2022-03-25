@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
     const auto stats = task->taskStats();
     std::cout << fmt::format(
                      "Execution time: {}",
-                     printer::succinctMillis(
+                     print::succinctMillis(
                          stats.executionEndTimeMs - stats.executionStartTimeMs))
               << std::endl;
     std::cout << fmt::format(

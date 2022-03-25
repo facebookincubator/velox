@@ -19,7 +19,7 @@
 
 namespace facebook {
 namespace velox {
-namespace printer {
+namespace print {
 
 // Match the input time in nanoseconds to the most appropriate unit and return a
 // string value. Possible units are nanoseconds(ns), microseconds(us),
@@ -37,6 +37,6 @@ std::string succinctMillis(uint64_t time, int precision = 4);
 // The default precision is 4 decimal digits.
 std::string succinctBytes(uint64_t bytes, int precision = 4);
 
-} // namespace printer
+} // namespace print
 } // namespace velox
 } // namespace facebook

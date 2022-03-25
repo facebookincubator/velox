@@ -20,7 +20,7 @@
 
 namespace facebook {
 namespace velox {
-namespace printer {
+namespace print {
 
 TEST(SuccintPrintTest, testSuccintNanos) {
   EXPECT_EQ(succinctNanos(123), "123ns");
@@ -54,6 +54,6 @@ TEST(SuccintPrintTest, testSuccintBytes) {
   EXPECT_EQ(succinctBytes(1'234'567'890), "1.1498GB");
 }
 
-} // namespace printer
+} // namespace print
 } // namespace velox
 } // namespace facebook
