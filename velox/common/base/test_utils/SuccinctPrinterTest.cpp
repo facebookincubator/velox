@@ -20,7 +20,7 @@
 
 namespace facebook::velox {
 
-TEST(SuccintPrinterTest, testSuccintNanos) {
+TEST(SuccinctPrinterTest, testSuccinctNanos) {
   EXPECT_EQ(succinctNanos(123), "123ns");
   EXPECT_EQ(succinctNanos(1'000), "1.00us");
   EXPECT_EQ(succinctNanos(1'234), "1.23us");
@@ -39,7 +39,7 @@ TEST(SuccintPrinterTest, testSuccintNanos) {
   EXPECT_EQ(succinctNanos(867'661'789'000'000), "10d1h1m2s");
 }
 
-TEST(SuccintPrinterTest, testSuccintMillis) {
+TEST(SuccinctPrinterTest, testSuccinctMillis) {
   EXPECT_EQ(succinctMillis(123), "123ms");
   EXPECT_EQ(succinctMillis(1'000), "1.00s");
   EXPECT_EQ(succinctMillis(1'234), "1.23s");
@@ -53,7 +53,7 @@ TEST(SuccintPrinterTest, testSuccintMillis) {
   EXPECT_EQ(succinctMillis(867'661'789), "10d1h1m2s");
 }
 
-TEST(SuccintPrinterTest, testSuccintBytes) {
+TEST(SuccinctPrinterTest, testSuccinctBytes) {
   EXPECT_EQ(succinctBytes(123), "123B");
   EXPECT_EQ(succinctBytes(1'024), "1.00KB");
   EXPECT_EQ(succinctBytes(123'456), "120.56KB");
