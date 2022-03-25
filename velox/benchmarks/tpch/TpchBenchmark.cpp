@@ -18,7 +18,7 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 
-#include "velox/common/base/SuccinctPrintUtil.h"
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
     const auto stats = task->taskStats();
     std::cout << fmt::format(
                      "Execution time: {}",
-                     print::succinctMillis(
+                     succinctMillis(
                          stats.executionEndTimeMs - stats.executionStartTimeMs))
               << std::endl;
     std::cout << fmt::format(

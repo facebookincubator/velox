@@ -23,7 +23,7 @@ target_link_libraries(
   ${GFLAGS_LIBRARIES})
 
 add_library(velox_common_base BitUtil.cpp RawVector.cpp SimdUtil.cpp
-                              SuccinctPrintUtil.cpp)
+                              SuccinctPrinter.cpp)
 
 target_link_libraries(velox_common_base velox_exception velox_process)
 
