@@ -60,32 +60,35 @@ std::string succinctSeconds(uint64_t seconds) {
   out << seconds << "s";
   return out.str();
 }
-// Print the input time or bytes to the corresponding most appropriate unit.
-// The appropriate units are specified in kTimeUnits and kByteUnits.
+// Match the input 'value' to the most appropriate unit and return
+// a string value. The units are specified in the 'units' array.
+// unitOffset is used to skip the starting units.
+// unitScale is used to determine the unit.
+// precision is used to set the decimal digits in the final output.
 std::string succinctPrint(
     uint64_t value,
     const std::string_view* units,
-    int unitSize,
+    int unitsSize,
     int unitOffset,
-    int precision,
-    int scale) {
+    int unitScale,
+    int precision) {
   std::stringstream out;
   int offset = unitOffset;
-  double outValue = static_cast<double>(value);
-  while ((outValue / scale) >= 1 && offset < (unitSize - 1)) {
-    outValue = outValue / scale;
+  double decimalValue = static_cast<double>(value);
+  while ((decimalValue / unitScale) >= 1 && offset < (unitsSize - 1)) {
+    decimalValue = decimalValue / unitScale;
     offset++;
   }
   if (offset == unitOffset) {
     // Print the default value.
     precision = 0;
   }
-  out << std::fixed << std::setprecision(precision) << outValue
+  out << std::fixed << std::setprecision(precision) << decimalValue
       << units[offset];
   return out.str();
 }
 
-std::string succinctTime(uint64_t time, int precision, int unitOffset) {
+std::string succinctTime(uint64_t time, int unitOffset, int precision) {
   // Print time as days, hours, minutes, seconds if time is more than a minute.
   if (time > (kSecondsInMinute * kTimeUnitsInSecond[unitOffset])) {
     uint64_t seconds =
@@ -97,17 +100,17 @@ std::string succinctTime(uint64_t time, int precision, int unitOffset) {
       &kTimeUnits[0],
       sizeof(kTimeUnits) / sizeof(std::string_view),
       unitOffset,
-      precision,
-      kTimeScale);
+      kTimeScale,
+      precision);
 }
 } // namespace
 
 std::string succinctMillis(uint64_t time, int precision) {
-  return succinctTime(time, precision, 2);
+  return succinctTime(time, 2, precision);
 }
 
 std::string succinctNanos(uint64_t time, int precision) {
-  return succinctTime(time, precision, 0);
+  return succinctTime(time, 0, precision);
 }
 
 std::string succinctBytes(uint64_t bytes, int precision) {
@@ -116,8 +119,8 @@ std::string succinctBytes(uint64_t bytes, int precision) {
       &kByteUnits[0],
       sizeof(kByteUnits) / sizeof(std::string_view),
       0,
-      precision,
-      kByteScale);
+      kByteScale,
+      precision);
 }
 
 } // namespace facebook::velox
