@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/common/time/Timer.h"
+#include "velox/common/base/SuccinctPrintUtil.h"
 #include "velox/exec/TaskStats.h"
 
 namespace facebook::velox::exec {
@@ -58,16 +58,18 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
 std::string PlanNodeStats::toString(bool includeInputStats) const {
   std::stringstream out;
   if (includeInputStats) {
-    out << "Input: " << inputRows << " rows (" << inputBytes << " bytes), ";
+    out << "Input: " << inputRows << " rows ("
+        << printer::succinctBytes(inputBytes) << "), ";
     if (rawInputRows != inputRows) {
-      out << "Raw Input: " << rawInputRows << " rows (" << rawInputBytes
-          << " bytes), ";
+      out << "Raw Input: " << rawInputRows << " rows ("
+          << printer::succinctBytes(rawInputBytes) << "), ";
     }
   }
-  out << "Output: " << outputRows << " rows (" << outputBytes << " bytes)"
-      << ", Cpu time: " << prettyPrintTimeInNanos(cpuWallTiming.cpuNanos)
-      << ", Blocked wall time: " << prettyPrintTimeInNanos(blockedWallNanos)
-      << ", Peak memory: " << peakMemoryBytes << " bytes";
+  out << "Output: " << outputRows << " rows ("
+      << printer::succinctBytes(outputBytes) << ")"
+      << ", Cpu time: " << printer::succinctNanos(cpuWallTiming.cpuNanos)
+      << ", Blocked wall time: " << printer::succinctNanos(blockedWallNanos)
+      << ", Peak memory: " << printer::succinctBytes(peakMemoryBytes);
   return out.str();
 }
 
