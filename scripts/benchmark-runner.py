@@ -18,11 +18,12 @@ import json
 import os
 import subprocess
 import sys
+from pprint import pprint
 
 
 _FIND_BINARIES_CMD = "find %s -maxdepth 1 -type f -executable"
 _FIND_JSON_CMD = "find %s -maxdepth 1 -name '*.json' -type f"
-_BENCHMARK_CMD = "%s --bm_max_secs 15 --bm_max_trials 1000000"
+_BENCHMARK_CMD = "%s --bm_max_secs 5 --bm_max_trials 1000000"
 _BENCHMARK_WITH_DUMP_CMD = _BENCHMARK_CMD + " --bm_json_verbose %s"
 
 _OUTPUT_NUM_COLS = 100
@@ -148,6 +149,56 @@ def compare_file(args, target_data, baseline_data):
     return passes, faster, failures
 
 
+def compare_file2(args, target_map, baseline_map):
+    #baseline_map = {}
+    #for row in baseline_data:
+    #    baseline_map[get_benchmark_handle(row[0], row[1])] = row[2]
+
+    passes = []
+    faster = []
+    failures = []
+
+    for benchmark_handle, target_result in target_map.items():
+        # Folly benchmark exports line separators by mistake as an entry on
+        # the json file.
+        #if row[1] == "-":
+        #    continue
+
+        #benchmark_handle = get_benchmark_handle(row[0], row[1])
+        baseline_result = baseline_map[benchmark_handle]
+        #target_result = row[2]
+
+        if baseline_result == 0 or target_result == 0:
+            delta = 0
+        elif baseline_result > target_result:
+            delta = 1 - (target_result / baseline_result)
+        else:
+            delta = (1 - (baseline_result / target_result)) * -1
+
+        if abs(delta) > args.threshold:
+            if delta > 0:
+                status = color_green("✓ Pass")
+                passes.append(benchmark_handle)
+                faster.append(benchmark_handle)
+            else:
+                status = color_red("✗ Fail")
+                failures.append(benchmark_handle)
+        else:
+            status = color_green("✓ Pass")
+            passes.append(benchmark_handle)
+
+        suffix = "({:.2f}ns vs {:.2f}ns) {:+.2f}%".format(
+            baseline_result, target_result, delta * 100
+        )
+
+        # Prefix length is 12 bytes (considering utf8 and invisible chars).
+        spacing = " " * (_OUTPUT_NUM_COLS - (12 + len(benchmark_handle) + len(suffix)))
+        print("    {}: {}{}{}".format(status, benchmark_handle, spacing, suffix))
+
+    return passes, faster, failures
+
+
+
 def compare(args):
     print(
         "=> Starting comparison using {} ({}%) as threshold.".format(
@@ -168,27 +219,60 @@ def compare(args):
     all_faster = []
     all_failures = []
 
+    target_results_map = {}
+    baseline_results_map = {}
+
     # Compare json results from each file.
     for file_name, target_path in target_map.items():
         print("=" * _OUTPUT_NUM_COLS)
-        print(file_name)
+        print("Reading target '{}'".format(target_path))
         print("=" * _OUTPUT_NUM_COLS)
 
-        if file_name not in baseline_map:
-            print("WARNING: baseline file for '%s' not found. Skipping." % file_name)
-            continue
+        #if file_name not in baseline_map:
+        #    print("WARNING: baseline file for '%s' not found. Skipping." % file_name)
+        #    continue
 
         # Open and read each file.
         with open(target_path) as f:
             target_data = json.load(f)
 
-        with open(baseline_map[file_name]) as f:
+            for row in target_data:
+                if row[1] == "-":
+                    continue
+                key = get_benchmark_handle(row[0], row[1])
+                new_value = row[2]
+                if key in target_results_map:
+                    new_value = min(target_results_map[key], new_value)
+                target_results_map[key] = new_value
+
+
+    for file_name, baseline_path in baseline_map.items():
+        print("=" * _OUTPUT_NUM_COLS)
+        print("Reading baseline '{}'".format(baseline_path))
+        print("=" * _OUTPUT_NUM_COLS)
+
+        with open(baseline_path) as f:
             baseline_data = json.load(f)
 
+            for row in baseline_data:
+                if row[1] == "-":
+                    continue
+                key = get_benchmark_handle(row[0], row[1])
+                new_value = row[2]
+                if key in baseline_results_map:
+                    new_value = min(baseline_results_map[key], new_value)
+                baseline_results_map[key] = new_value
+
+        """
         passes, faster, failures = compare_file(args, target_data, baseline_data)
         all_passes += passes
         all_faster += faster
         all_failures += failures
+        """
+
+    pprint(target_results_map)
+    pprint(baseline_results_map)
+    all_passes, all_faster, all_failures = compare_file2(args, target_results_map, baseline_results_map)
 
     def print_list(names):
         for n in names:

@@ -103,9 +103,9 @@ class SimpleArithmeticBenchmark
 
   // Runs `expression` `times` times.
   size_t run(const std::string& expression, size_t times) {
-    folly::BenchmarkSuspender suspender;
+    // folly::BenchmarkSuspender suspender;
     auto exprSet = compileExpression(expression, inputType_);
-    suspender.dismiss();
+    // suspender.dismiss();
 
     size_t count = 0;
     for (auto i = 0; i < times; i++) {
@@ -121,28 +121,28 @@ class SimpleArithmeticBenchmark
 
 SimpleArithmeticBenchmark benchmark;
 
-BENCHMARK_MULTI(multiply, n) {
-  return benchmark.run("multiply(a, b)", n);
+BENCHMARK(multiply, n) {
+  benchmark.run("multiply(a, b)", n);
 }
 
-BENCHMARK_MULTI(multiplySameColumn, n) {
-  return benchmark.run("multiply(a, a)", n);
+BENCHMARK(multiplySameColumn, n) {
+  benchmark.run("multiply(a, a)", n);
 }
 
-BENCHMARK_MULTI(multiplyHalfNull, n) {
-  return benchmark.run("multiply(a, half_null)", n);
+BENCHMARK(multiplyHalfNull, n) {
+  benchmark.run("multiply(a, half_null)", n);
 }
 
-BENCHMARK_MULTI(multiplyConstant, n) {
-  return benchmark.run("multiply(a, constant)", n);
+BENCHMARK(multiplyConstant, n) {
+  benchmark.run("multiply(a, constant)", n);
 }
 
-BENCHMARK_MULTI(multiplyNested, n) {
-  return benchmark.run("multiply(multiply(a, b), b)", n);
+BENCHMARK(multiplyNested, n) {
+  benchmark.run("multiply(multiply(a, b), b)", n);
 }
 
-BENCHMARK_MULTI(multiplyNestedDeep, n) {
-  return benchmark.run(
+BENCHMARK(multiplyNestedDeep, n) {
+  benchmark.run(
       "multiply(multiply(multiply(a, b), a), "
       "multiply(a, multiply(a, b)))",
       n);
@@ -150,26 +150,26 @@ BENCHMARK_MULTI(multiplyNestedDeep, n) {
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_MULTI(multiplyOutputVoid, n) {
-  return benchmark.run("multiply(a, b)", n);
+BENCHMARK(multiplyOutputVoid, n) {
+  benchmark.run("multiply(a, b)", n);
 }
 
-BENCHMARK_MULTI(multiplyOutputNullable, n) {
-  return benchmark.run("multiply_nullable_output(a, b)", n);
+BENCHMARK(multiplyOutputNullable, n) {
+  benchmark.run("multiply_nullable_output(a, b)", n);
 }
 
-BENCHMARK_MULTI(multiplyOutputAlwaysNull, n) {
-  return benchmark.run("multiply_null_output(a, b)", n);
+BENCHMARK(multiplyOutputAlwaysNull, n) {
+  benchmark.run("multiply_null_output(a, b)", n);
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_MULTI(plusUnchecked, n) {
-  return benchmark.run("plus(c, d)", n);
+BENCHMARK(plusUnchecked, n) {
+  benchmark.run("plus(c, d)", n);
 }
 
-BENCHMARK_MULTI(plusChecked, n) {
-  return benchmark.run("checked_plus(c, d)", n);
+BENCHMARK(plusChecked, n) {
+  benchmark.run("checked_plus(c, d)", n);
 }
 
 } // namespace
