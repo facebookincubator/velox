@@ -33,7 +33,7 @@ std::string succinctMillis(uint64_t time, int precision = 4);
 
 // Match the input bytes to the most appropriate unit and return a
 // string value. Possible units are bytes(B), kilobytes(KB),
-// megabytes(MB), gigabyte(GB), terabytes(TB)
+// megabytes(MB), gigabyte(GB).
 // The default precision is 4 decimal digits.
 std::string succinctBytes(uint64_t bytes, int precision = 4);
 
