@@ -30,13 +30,13 @@ TEST(SuccinctPrinterTest, testSuccinctNanos) {
   EXPECT_EQ(succinctNanos(12'345'678, 6), "12.345678ms");
   EXPECT_EQ(succinctNanos(1'000'000'000), "1.00s");
   EXPECT_EQ(succinctNanos(1'234'567'890), "1.23s");
-  EXPECT_EQ(succinctNanos(60'499'000'000), "1m0s");
-  EXPECT_EQ(succinctNanos(60'555'000'000), "1m1s");
-  EXPECT_EQ(succinctNanos(3'599'499'000'000), "59m59s");
-  EXPECT_EQ(succinctNanos(3'600'000'000'000), "1h0m0s");
-  EXPECT_EQ(succinctNanos(86'399'499'000'000), "23h59m59s");
-  EXPECT_EQ(succinctNanos(86'400'123'000'000), "1d0h0m0s");
-  EXPECT_EQ(succinctNanos(867'661'789'000'000), "10d1h1m2s");
+  EXPECT_EQ(succinctNanos(60'499'000'000), "1m 0s");
+  EXPECT_EQ(succinctNanos(60'555'000'000), "1m 1s");
+  EXPECT_EQ(succinctNanos(3'599'499'000'000), "59m 59s");
+  EXPECT_EQ(succinctNanos(3'600'000'000'000), "1h 0m 0s");
+  EXPECT_EQ(succinctNanos(86'399'499'000'000), "23h 59m 59s");
+  EXPECT_EQ(succinctNanos(86'400'123'000'000), "1d 0h 0m 0s");
+  EXPECT_EQ(succinctNanos(867'661'789'000'000), "10d 1h 1m 2s");
 }
 
 TEST(SuccinctPrinterTest, testSuccinctMillis) {
@@ -44,13 +44,13 @@ TEST(SuccinctPrinterTest, testSuccinctMillis) {
   EXPECT_EQ(succinctMillis(1'000), "1.00s");
   EXPECT_EQ(succinctMillis(1'234), "1.23s");
   EXPECT_EQ(succinctMillis(59'990), "59.99s");
-  EXPECT_EQ(succinctMillis(60'499), "1m0s");
-  EXPECT_EQ(succinctMillis(61'000), "1m1s");
-  EXPECT_EQ(succinctMillis(3'599'456), "59m59s");
-  EXPECT_EQ(succinctMillis(3'600'000), "1h0m0s");
-  EXPECT_EQ(succinctMillis(86'399'498), "23h59m59s");
-  EXPECT_EQ(succinctMillis(86'400'123), "1d0h0m0s");
-  EXPECT_EQ(succinctMillis(867'661'789), "10d1h1m2s");
+  EXPECT_EQ(succinctMillis(60'499), "1m 0s");
+  EXPECT_EQ(succinctMillis(61'000), "1m 1s");
+  EXPECT_EQ(succinctMillis(3'599'456), "59m 59s");
+  EXPECT_EQ(succinctMillis(3'600'000), "1h 0m 0s");
+  EXPECT_EQ(succinctMillis(86'399'498), "23h 59m 59s");
+  EXPECT_EQ(succinctMillis(86'400'123), "1d 0h 0m 0s");
+  EXPECT_EQ(succinctMillis(867'661'789), "10d 1h 1m 2s");
 }
 
 TEST(SuccinctPrinterTest, testSuccinctBytes) {

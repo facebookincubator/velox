@@ -35,36 +35,49 @@ static int kSecondsInHour = 60 * kSecondsInMinute;
 static int kSecondsInDay = 24 * kSecondsInHour;
 
 namespace {
-// Print the input time in seconds as the most appropriate units
-// and return a string value.
-// Possible units are minutes(m), hours(h), days(d), seconds(s).
+/// Print the input time in seconds as the most appropriate units
+/// and return a string value.
+/// Possible units are days(d), hours(h), minutes(m), seconds(s).
 std::string succinctSeconds(uint64_t seconds) {
   std::stringstream out;
   int days = seconds / kSecondsInDay;
+  bool isFirstUnit = true;
   if (days) {
     out << days << "d";
+    isFirstUnit = false;
   }
   seconds -= days * kSecondsInDay;
 
   int hours = seconds / kSecondsInHour;
   if (days || hours) {
+    if (!isFirstUnit) {
+      out << " ";
+    }
     out << hours << "h";
+    isFirstUnit = false;
   }
   seconds -= hours * kSecondsInHour;
 
   int minutes = seconds / kSecondsInMinute;
   if (days || hours || minutes) {
+    if (!isFirstUnit) {
+      out << " ";
+    }
     out << minutes << "m";
+    isFirstUnit = false;
+  }
+  if (!isFirstUnit) {
+    out << " ";
   }
   seconds -= minutes * kSecondsInMinute;
   out << seconds << "s";
   return out.str();
 }
-// Match the input 'value' to the most appropriate unit and return
-// a string value. The units are specified in the 'units' array.
-// unitOffset is used to skip the starting units.
-// unitScale is used to determine the unit.
-// precision is used to set the decimal digits in the final output.
+/// Match the input 'value' to the most appropriate unit and return
+/// a string value. The units are specified in the 'units' array.
+/// unitOffset is used to skip the starting units.
+/// unitScale is used to determine the unit.
+/// precision is used to set the decimal digits in the final output.
 std::string succinctPrint(
     uint64_t value,
     const std::string_view* units,
@@ -88,15 +101,16 @@ std::string succinctPrint(
   return out.str();
 }
 
-std::string succinctTime(uint64_t time, int unitOffset, int precision) {
-  // Print time as days, hours, minutes, seconds if time is more than a minute.
-  if (time > (kSecondsInMinute * kTimeUnitsInSecond[unitOffset])) {
+std::string succinctDuration(uint64_t duration, int unitOffset, int precision) {
+  // Print duration as days, hours, minutes, seconds if duration is more than a
+  // minute.
+  if (duration > (kSecondsInMinute * kTimeUnitsInSecond[unitOffset])) {
     uint64_t seconds =
-        std::round((time * 1.0) / kTimeUnitsInSecond[unitOffset]);
+        std::round((duration * 1.0) / kTimeUnitsInSecond[unitOffset]);
     return succinctSeconds(seconds);
   }
   return succinctPrint(
-      time,
+      duration,
       &kTimeUnits[0],
       sizeof(kTimeUnits) / sizeof(std::string_view),
       unitOffset,
@@ -105,12 +119,12 @@ std::string succinctTime(uint64_t time, int unitOffset, int precision) {
 }
 } // namespace
 
-std::string succinctMillis(uint64_t time, int precision) {
-  return succinctTime(time, 2, precision);
+std::string succinctMillis(uint64_t duration, int precision) {
+  return succinctDuration(duration, 2, precision);
 }
 
-std::string succinctNanos(uint64_t time, int precision) {
-  return succinctTime(time, 0, precision);
+std::string succinctNanos(uint64_t duration, int precision) {
+  return succinctDuration(duration, 0, precision);
 }
 
 std::string succinctBytes(uint64_t bytes, int precision) {

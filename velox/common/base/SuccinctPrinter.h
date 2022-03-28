@@ -17,19 +17,18 @@
 #pragma once
 #include <string>
 
-namespace facebook {
-namespace velox {
+namespace facebook::velox {
 
-/// Match the input time in nanoseconds to the most appropriate unit and return
-/// a string value. Possible units are nanoseconds(ns), microseconds(us),
+/// Match the input duration in nanoseconds to the most appropriate unit and
+/// return a string value. Possible units are nanoseconds(ns), microseconds(us),
 /// milliseconds(ms), seconds(s), minutes(m), hours(h), days(d).
 /// The default precision is 2 decimal digits.
-std::string succinctNanos(uint64_t time, int precision = 2);
+std::string succinctNanos(uint64_t duration, int precision = 2);
 
-/// Match the input time in milliseconds to the most appropriate unit and return
-/// a string value. Possible units are milliseconds(ms), seconds(s), minutes(m),
-/// hours(h), days(d). The default precision is 2 decimal digits.
-std::string succinctMillis(uint64_t time, int precision = 2);
+/// Match the input duration in milliseconds to the most appropriate unit and
+/// return a string value. Possible units are milliseconds(ms), seconds(s),
+/// minutes(m), hours(h), days(d). The default precision is 2 decimal digits.
+std::string succinctMillis(uint64_t duration, int precision = 2);
 
 /// Match the input bytes to the most appropriate unit and return a
 /// string value. Possible units are bytes(B), kilobytes(KB),
@@ -37,5 +36,4 @@ std::string succinctMillis(uint64_t time, int precision = 2);
 /// The default precision is 2 decimal digits.
 std::string succinctBytes(uint64_t bytes, int precision = 2);
 
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox
