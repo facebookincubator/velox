@@ -73,11 +73,11 @@ class RowVector : public BaseVector {
     return VectorEncoding::Simple::ROW;
   }
 
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags) const override;
+      CompareFlagsExtended flags) const override;
 
   uint64_t hashValueAt(vector_size_t index) const override;
 
@@ -271,11 +271,11 @@ class ArrayVector : public BaseVector {
     return VectorEncoding::Simple::ARRAY;
   }
 
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags) const override;
+      CompareFlagsExtended flags) const override;
 
   uint64_t hashValueAt(vector_size_t index) const override;
 
@@ -438,11 +438,11 @@ class MapVector : public BaseVector {
     return VectorEncoding::Simple::MAP;
   }
 
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags) const override;
+      CompareFlagsExtended flags) const override;
 
   uint64_t hashValueAt(vector_size_t index) const override;
 

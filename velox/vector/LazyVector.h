@@ -163,11 +163,11 @@ class LazyVector : public BaseVector {
     loader_->load(rows, hook, &vector_);
   }
 
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags) const override {
+      CompareFlagsExtended flags) const override {
     return loadedVector()->compare(other, index, otherIndex, flags);
   }
 

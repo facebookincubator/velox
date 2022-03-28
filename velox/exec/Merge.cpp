@@ -218,9 +218,7 @@ Merge::Comparator::Comparator(
     keyInfo_.emplace_back(
         channel,
         CompareFlags{
-            sortingOrders[i].isNullsFirst(),
-            sortingOrders[i].isAscending(),
-            false});
+            sortingOrders[i].isNullsFirst(), sortingOrders[i].isAscending()});
   }
 }
 

@@ -516,7 +516,7 @@ TYPED_TEST(SimpleVectorUnaryTypedTest, hashAll) {
 template <typename T>
 class SimpleVectorCompareTest : public SimpleVectorTest {
  protected:
-  void runTest(const CompareFlags& flags) {
+  void runTest(const CompareFlagsExtended& flags) {
     ExpectedData<T> input = {
         max(), std::nullopt, nan(), lowest(), inf(), -1, 1, 0, max(), lowest()};
     auto vector = maker_.encodedVector(VectorEncoding::Simple::FLAT, input);

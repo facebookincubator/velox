@@ -28,6 +28,8 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/CompareFlags.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -44,14 +46,6 @@ namespace velox {
 namespace cdvi {
 const folly::F14FastMap<std::string, std::string> EMPTY_METADATA;
 } // namespace cdvi
-
-// Describes value collation in comparison. If equalsOnly is true, comparison
-// can return non-0 early, for example only after considering string length.
-struct CompareFlags {
-  bool nullsFirst = true;
-  bool ascending = true;
-  bool equalsOnly = false;
-};
 
 template <typename T>
 class SimpleVector;
@@ -253,6 +247,32 @@ class BaseVector {
     return inMemoryBytes_;
   }
 
+  std::optional<int32_t> compareNulls(
+      bool thisNull,
+      bool otherNull,
+      const CompareFlagsExtended& flags) const {
+    DCHECK(thisNull || otherNull);
+    // Null handling.
+    if (flags.stopAtNull) {
+      return std::nullopt;
+    }
+
+    // Both null.
+    if (thisNull && otherNull) {
+      return 0;
+    }
+
+    if (thisNull) {
+      return flags.nullsFirst ? -1 : 1;
+    }
+
+    if (otherNull) {
+      return flags.nullsFirst ? 1 : -1;
+    }
+    VELOX_UNREACHABLE(
+        "The function should be called only if one of the inputs is null");
+  }
+
   /**
    * @return true if this vector has the same value at the given index as the
    * other vector at the other vector's index (including if both are null),
@@ -262,18 +282,27 @@ class BaseVector {
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex) const {
-    static constexpr CompareFlags kEqualValueAtFlags = {
-        false, false, true /*equalOnly*/};
-    return compare(other, index, otherIndex, kEqualValueAtFlags) == 0;
+    static constexpr CompareFlagsExtended kEqualValueAtFlags = {
+        false, false, true /*equalOnly*/, false /*stopAtNull**/};
+    // Will always have value because stopAtNull is false.
+    return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
+  }
+
+  int32_t compare(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex) const {
+    // Default compare flags always generates value.
+    return compare(other, index, otherIndex, CompareFlagsExtended()).value();
   }
 
   // Returns < 0 if 'this' at 'index' is less than 'other' at
   // 'otherIndex', 0 if equal and > 0 otherwise.
-  virtual int32_t compare(
+  virtual std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags = CompareFlags()) const = 0;
+      CompareFlagsExtended flags) const = 0;
 
   /**
    * @return the hash of the value at the given index in this vector
@@ -595,8 +624,8 @@ class BaseVector {
   /// (elements of arrays, keys and values of maps, fields of structs).
   ///
   /// This method takes a non-const reference to a 'vector' and updates it to
-  /// possibly a new flat vector of the specified size that is safe to reuse. If
-  /// input 'vector' is not singly-referenced or not flat, replaces 'vector'
+  /// possibly a new flat vector of the specified size that is safe to reuse.
+  /// If input 'vector' is not singly-referenced or not flat, replaces 'vector'
   /// with a new vector of the same type and specified size. If some of the
   /// buffers cannot be reused, these buffers are reset. Child vectors are
   /// updated by calling this method recursively with size zero.
@@ -673,7 +702,7 @@ class BaseVector {
   bool isCodegenOutput_ = false;
 
   friend class LazyVector;
-};
+}; // namespace velox
 
 template <>
 uint64_t BaseVector::byteSize<bool>(vector_size_t count);

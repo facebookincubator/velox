@@ -389,7 +389,7 @@ int compare<TypeKind::VARBINARY>(
     const BaseVector& right,
     vector_size_t index,
     CompareFlags flags) {
-  auto result = compareStringAsc(left, right, index, flags.equalsOnly);
+  auto result = compareStringAsc(left, right, index, true);
   return flags.ascending ? result : result * -1;
 }
 

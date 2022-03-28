@@ -45,7 +45,11 @@ void applyComplexType(
   BufferPtr indices = allocateIndices(elementsVector->size(), context->pool());
   vector_size_t* rawIndices = indices->asMutable<vector_size_t>();
 
-  const CompareFlags flags{.nullsFirst = nullsFirst, .ascending = ascending};
+  const CompareFlagsExtended flags{
+      .nullsFirst = nullsFirst,
+      .ascending = ascending,
+      false /*equalsOnly*/,
+      false /*stopAtNull*/};
   // Note: Reusing offsets and sizes isn't safe if the input array had two
   // arrays that had overlapping (but not identical) ranges in the input.
   rows.applyToSelected([&](vector_size_t row) {

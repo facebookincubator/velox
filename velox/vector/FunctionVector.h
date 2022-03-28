@@ -128,11 +128,11 @@ class FunctionVector : public BaseVector {
     functions_.push_back(callable);
   }
 
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* /*other*/,
       vector_size_t /*index*/,
       vector_size_t /*otherIndex*/,
-      CompareFlags /*flags*/) const override {
+      CompareFlagsExtended /*flags*/) const override {
     throw std::logic_error("compare not defined for FunctionVector");
   }
 
