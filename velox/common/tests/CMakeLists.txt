@@ -12,18 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_common_test
-  AsyncSourceTest.cpp
-  ExceptionTest.cpp
-  RangeTest.cpp
-  BitUtilTest.cpp
-  BloomFilterTest.cpp
-  CoalesceIoTest.cpp
-  RawVectorTest.cpp
-  StatsReporterTest.cpp
-  SimdUtilTest.cpp
-  TraceContextTest.cpp)
+if(${VELOX_ENABLE_METRICS})
+
+  add_executable(
+    velox_common_test
+    AsyncSourceTest.cpp
+    ExceptionTest.cpp
+    RangeTest.cpp
+    BitUtilTest.cpp
+    BloomFilterTest.cpp
+    CoalesceIoTest.cpp
+    RawVectorTest.cpp
+    StatsReporterTest.cpp
+    MetricsStatsReporterTest.cpp
+    SimdUtilTest.cpp
+    TraceContextTest.cpp)
+else()
+  add_executable(
+    velox_common_test
+    AsyncSourceTest.cpp
+    ExceptionTest.cpp
+    RangeTest.cpp
+    BitUtilTest.cpp
+    BloomFilterTest.cpp
+    CoalesceIoTest.cpp
+    RawVectorTest.cpp
+    StatsReporterTest.cpp
+    SimdUtilTest.cpp
+    TraceContextTest.cpp)
+endif()
 
 add_test(velox_common_test velox_common_test)
 
@@ -35,3 +52,7 @@ target_link_libraries(
   glog::glog
   ${GTEST_BOTH_LIBRARIES}
   pthread)
+
+if(${VELOX_ENABLE_METRICS})
+  target_link_libraries(velox_common_test metrics2)
+endif()

@@ -47,6 +47,11 @@ option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
 option(VELOX_ENABLE_HDFS "Build HDFS Reader" OFF)
+option(VELOX_ON_TCE "Build Velox on Bytedance TCE Environment" OFF)
+
+if(${VELOX_ON_TCE})
+  set(VELOX_ENABLE_METRICS ON)
+endif()
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
