@@ -49,8 +49,8 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
 
   peakMemoryBytes += stats.memoryStats.peakTotalMemoryReservation;
 
-  for (const auto& entry : stats.runtimeStats) {
-    customStats[entry.first].merge(entry.second);
+  for (const auto& [name, metric] : stats.runtimeStats) {
+    customStats[name].merge(metric);
   }
 }
 
@@ -97,19 +97,29 @@ void printCustomStats(
     const std::string& indentation,
     std::stringstream& stream) {
   int width = 0;
-  for (const auto& entry : stats) {
-    if (width < entry.first.size()) {
-      width = entry.first.size();
+  for (const auto& [name, metric] : stats) {
+    if (width < name.size()) {
+      width = name.size();
     }
   }
   width += 3;
 
-  for (const auto& entry : stats) {
+  for (const auto& [name, metric] : stats) {
     stream << std::endl;
-    stream << indentation << std::left << std::setw(width) << entry.first
-           << " sum: " << entry.second.sum << ", count: " << entry.second.count
-           << ", min: " << entry.second.min << ", max: " << entry.second.max;
+    stream << indentation << std::left << std::setw(width) << name
+           << " sum: " << metric.sum << ", count: " << metric.count
+           << ", min: " << metric.min << ", max: " << metric.max;
   }
+}
+
+// Check for leaf plan nodes and join nodes that require input stats.
+// Including input stats for other plan nodes is redundant as it is
+// the same as output of the source nodes.
+inline bool planNodeRequiresInputStats(
+    const core::PlanNode& planNode,
+    const std::unordered_set<core::PlanNodeId>& leafPlanNodes) {
+  return (leafPlanNodes.count(planNode.id()) > 0) ||
+      (dynamic_cast<const core::AbstractJoinNode*>(&planNode) != nullptr);
 }
 } // namespace
 
@@ -123,26 +133,24 @@ std::string printPlanWithStats(
   return plan.toString(
       true,
       true,
-      [&](const auto& planNodeId, const auto& indentation, auto& stream) {
-        const auto& stats = planStats[planNodeId];
+      [&](const auto& planNode, const auto& indentation, auto& stream) {
+        const auto& stats = planStats[planNode.id()];
 
-        // Print input rows and sizes only for leaf plan nodes. Including this
-        // information for other plan nodes is redundant as it is the same as
-        // output of the source nodes.
-        const bool includeInputStats = leafPlanNodes.count(planNodeId) > 0;
+        const bool includeInputStats =
+            planNodeRequiresInputStats(planNode, leafPlanNodes);
         stream << stats.toString(includeInputStats);
 
         // Include break down by operator type if there are more than one of
         // these.
         if (stats.operatorStats.size() > 1) {
-          for (const auto& entry : stats.operatorStats) {
+          for (const auto& [opName, opStats] : stats.operatorStats) {
             stream << std::endl;
-            stream << indentation << entry.first << ": "
-                   << entry.second->toString(includeInputStats);
+            stream << indentation << opName << ": "
+                   << opStats->toString(includeInputStats);
 
             if (includeCustomStats) {
               printCustomStats(
-                  entry.second->customStats, indentation + "   ", stream);
+                  opStats->customStats, indentation + "   ", stream);
             }
           }
         } else {
