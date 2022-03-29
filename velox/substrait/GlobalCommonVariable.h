@@ -20,29 +20,33 @@
 #include "velox/substrait/proto/substrait/type.pb.h"
 
 namespace facebook::velox::substrait {
+/**
+ * a Singleton class that used to store the common variables that will
+ * make them visible for both Velox2SubstraitConvertor and
+ * substrait2VeloxConvertor
+ */
 class GlobalCommonVarSingleton {
  public:
   static GlobalCommonVarSingleton& getInstance();
+
   GlobalCommonVarSingleton(GlobalCommonVarSingleton const&) = delete;
+
   GlobalCommonVarSingleton& operator=(GlobalCommonVarSingleton const&) = delete;
-  ~GlobalCommonVarSingleton(){};
+
+  ~GlobalCommonVarSingleton() {
+    free(sPlan_);
+  };
 
   ::substrait::Plan* getSPlan() const;
+
   void setSPlan(::substrait::Plan* s_plan);
-  const std::unordered_map<uint64_t, std::string>& getFunctionsMap() const;
-  void setFunctionsMap(
-      const std::unordered_map<uint64_t, std::string>& functions_map);
 
  protected:
   // An intermediate variable to help us get the corresponding function mapping
   // relationship when convert from substrait to velox
   ::substrait::Plan* sPlan_;
 
-  // parse the function mapping from substrait plan.
-  std::unordered_map<uint64_t, std::string> functions_map_;
-
  private:
-  GlobalCommonVarSingleton()
-      : sPlan_(new ::substrait::Plan), functions_map_({{0, ""}}){};
+  GlobalCommonVarSingleton() : sPlan_(new ::substrait::Plan){};
 };
 } // namespace facebook::velox::substrait

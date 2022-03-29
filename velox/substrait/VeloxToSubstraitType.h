@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
+
+#include "velox/core/PlanNode.h"
+
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/type.pb.h"
-
-#include "core/PlanNode.h"
 
 using namespace facebook::velox::core;
 
@@ -25,7 +27,7 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitTypeConvertor {
  public:
-  ::substrait::NamedStruct* vRowTypePtrToSNamedStruct(
+  ::substrait::NamedStruct* veloxRowTypePtrToSubstraitNamedStruct(
       velox::RowTypePtr vRow,
       ::substrait::NamedStruct* sNamedStruct);
 

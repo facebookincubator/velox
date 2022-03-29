@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include "velox/substrait/proto/substrait/plan.pb.h"
@@ -21,7 +22,7 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitFuncConvertor {
  public:
-  uint64_t registerSFunction(std::string name);
+  uint64_t registerSubstraitFunction(std::string name);
 
   // the function mapping get from velox node
   std::unordered_map<std::string, uint64_t> function_map_;

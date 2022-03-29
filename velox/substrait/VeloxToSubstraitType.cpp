@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "VeloxToSubstraitType.h"
 
-#include "expression/Expr.h"
+#include "velox/substrait/VeloxToSubstraitType.h"
+
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::substrait {
 
@@ -96,7 +97,7 @@ namespace facebook::velox::substrait {
 }
 
 ::substrait::NamedStruct*
-VeloxToSubstraitTypeConvertor::vRowTypePtrToSNamedStruct(
+VeloxToSubstraitTypeConvertor::veloxRowTypePtrToSubstraitNamedStruct(
     velox::RowTypePtr vRow,
     ::substrait::NamedStruct* sNamedStruct) {
   int64_t vSize = vRow->size();

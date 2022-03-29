@@ -13,23 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <string>
 #include <typeinfo>
 
+#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/core/PlanNode.h"
+#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+#include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/type/Type.h"
+
+#include "velox/substrait/VeloxToSubstraitExpr.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
-
-#include "connectors/hive/HiveConnector.h"
-#include "connectors/hive/HivePartitionFunction.h"
-#include "core/PlanNode.h"
-#include "exec/HashPartitionFunction.h"
-#include "exec/RoundRobinPartitionFunction.h"
-#include "type/Type.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-
-#include "VeloxToSubstraitExpr.h"
 
 using namespace facebook::velox::core;
 
@@ -46,23 +46,23 @@ class VeloxToSubstraitPlanConvertor {
       std::shared_ptr<const PlanNode> vPlanNode,
       ::substrait::Rel* sRel);
 
-  void transformVFilter(
+  void transformVeloxFilter(
       std::shared_ptr<const FilterNode> vFilterNode,
       ::substrait::FilterRel* sFilterRel);
 
-  void transformVValuesNode(
+  void transformVeloxValuesNode(
       std::shared_ptr<const ValuesNode> vValuesNode,
       ::substrait::ReadRel* sReadRel);
 
-  void transformVProjNode(
+  void transformVeloxProjNode(
       std::shared_ptr<const ProjectNode> vProjNode,
       ::substrait::ProjectRel* sProjRel);
 
-  void transformVAggregateNode(
+  void transformVeloxAggregateNode(
       std::shared_ptr<const AggregationNode> vAggNode,
       ::substrait::AggregateRel* sAggRel);
 
-  void transformVOrderBy(
+  void transformVeloxOrderBy(
       std::shared_ptr<const OrderByNode> vOrderbyNode,
       ::substrait::SortRel* sSortRel);
 

@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
+#include "velox/core/PlanNode.h"
+
+#include "velox/substrait/VeloxToSubstraitFunc.h"
+#include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
-
-#include "core/PlanNode.h"
-
-#include "VeloxToSubstraitFunc.h"
-#include "VeloxToSubstraitType.h"
 
 using namespace facebook::velox::core;
 
@@ -28,12 +28,12 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitExprConvertor {
  public:
-  void transformVExpr(
+  void transformVeloxExpr(
       ::substrait::Expression* sExpr,
       const std::shared_ptr<const ITypedExpr>& vExpr,
       RowTypePtr vPreNodeOutPut);
 
-  void transformVConstantExpr(
+  void transformVeloxConstantExpr(
       const velox::variant& vConstExpr,
       ::substrait::Expression_Literal* sLiteralExpr);
 

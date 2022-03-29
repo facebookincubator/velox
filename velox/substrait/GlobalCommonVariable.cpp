@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "GlobalCommonVariable.h"
+#include "velox/substrait/GlobalCommonVariable.h"
 
 namespace facebook::velox::substrait {
 
@@ -26,15 +26,9 @@ GlobalCommonVarSingleton& GlobalCommonVarSingleton::getInstance() {
 ::substrait::Plan* GlobalCommonVarSingleton::getSPlan() const {
   return sPlan_;
 }
+
 void GlobalCommonVarSingleton::setSPlan(::substrait::Plan* s_plan) {
   sPlan_ = s_plan;
 }
-const std::unordered_map<uint64_t, std::string>&
-GlobalCommonVarSingleton::getFunctionsMap() const {
-  return functions_map_;
-}
-void GlobalCommonVarSingleton::setFunctionsMap(
-    const std::unordered_map<uint64_t, std::string>& functions_map) {
-  functions_map_ = functions_map;
-}
+
 } // namespace facebook::velox::substrait

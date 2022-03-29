@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include "VeloxToSubstraitPlan.h"
-#include "GlobalCommonVariable.h"
+#include "velox/substrait/VeloxToSubstraitPlan.h"
 
 namespace facebook::velox::substrait {
 
@@ -35,26 +34,26 @@ void VeloxToSubstraitPlanConvertor::veloxToSubstraitIR(
   if (auto filterNode =
           std::dynamic_pointer_cast<const FilterNode>(vPlanNode)) {
     auto sFilterRel = sRel->mutable_filter();
-    transformVFilter(filterNode, sFilterRel);
+    transformVeloxFilter(filterNode, sFilterRel);
   }
   if (auto aggNode =
           std::dynamic_pointer_cast<const AggregationNode>(vPlanNode)) {
     auto sAggRel = sRel->mutable_aggregate();
-    transformVAggregateNode(aggNode, sAggRel);
+    transformVeloxAggregateNode(aggNode, sAggRel);
   }
   if (auto vValuesNode =
           std::dynamic_pointer_cast<const ValuesNode>(vPlanNode)) {
     ::substrait::ReadRel* sReadRel = sRel->mutable_read();
-    transformVValuesNode(vValuesNode, sReadRel);
+    transformVeloxValuesNode(vValuesNode, sReadRel);
   }
   if (auto vProjNode =
           std::dynamic_pointer_cast<const ProjectNode>(vPlanNode)) {
     ::substrait::ProjectRel* sProjRel = sRel->mutable_project();
-    transformVProjNode(vProjNode, sProjRel);
+    transformVeloxProjNode(vProjNode, sProjRel);
   }
 }
 
-void VeloxToSubstraitPlanConvertor::transformVFilter(
+void VeloxToSubstraitPlanConvertor::transformVeloxFilter(
     std::shared_ptr<const FilterNode> vFilterNode,
     ::substrait::FilterRel* sFilterRel) {
   const PlanNodeId vId = vFilterNode->id();
@@ -82,12 +81,12 @@ void VeloxToSubstraitPlanConvertor::transformVFilter(
 
   RowTypePtr vPreNodeOutPut = vSource->outputType();
   //   Construct substrait expr
-  v2SExprConvertor_.transformVExpr(
+  v2SExprConvertor_.transformVeloxExpr(
       sFilterCondition, vFilterCondition, vPreNodeOutPut);
   sFilterRel->mutable_common()->mutable_direct();
 }
 
-void VeloxToSubstraitPlanConvertor::transformVValuesNode(
+void VeloxToSubstraitPlanConvertor::transformVeloxValuesNode(
     std::shared_ptr<const ValuesNode> vValuesNode,
     ::substrait::ReadRel* sReadRel) {
   const RowTypePtr vOutPut = vValuesNode->outputType();
@@ -96,7 +95,7 @@ void VeloxToSubstraitPlanConvertor::transformVValuesNode(
       sReadRel->mutable_virtual_table();
 
   ::substrait::NamedStruct* sBaseSchema = sReadRel->mutable_base_schema();
-  v2STypeConvertor_.vRowTypePtrToSNamedStruct(vOutPut, sBaseSchema);
+  v2STypeConvertor_.veloxRowTypePtrToSubstraitNamedStruct(vOutPut, sBaseSchema);
 
   const PlanNodeId id = vValuesNode->id();
   // sread.virtual_table().values_size(); multi rows
@@ -124,14 +123,14 @@ void VeloxToSubstraitPlanConvertor::transformVValuesNode(
   sReadRel->mutable_common()->mutable_direct();
 }
 
-void VeloxToSubstraitPlanConvertor::transformVAggregateNode(
+void VeloxToSubstraitPlanConvertor::transformVeloxAggregateNode(
     std::shared_ptr<const AggregationNode> vAggNode,
     ::substrait::AggregateRel* sAggRel) {
   // TODO
   VELOX_NYI("Haven't support AggregationNode convertor now.");
 }
 
-void VeloxToSubstraitPlanConvertor::transformVProjNode(
+void VeloxToSubstraitPlanConvertor::transformVeloxProjNode(
     std::shared_ptr<const ProjectNode> vProjNode,
     ::substrait::ProjectRel* sProjRel) {
   // the info from vProjNode
@@ -178,7 +177,7 @@ void VeloxToSubstraitPlanConvertor::transformVProjNode(
     std::shared_ptr<const ITypedExpr>& vExpr = vProjections.at(i);
     ::substrait::Expression* sExpr = sProjRel->add_expressions();
 
-    v2SExprConvertor_.transformVExpr(sExpr, vExpr, vPreNodeOutPut);
+    v2SExprConvertor_.transformVeloxExpr(sExpr, vExpr, vPreNodeOutPut);
     // add outputMapping for each vExpr
     const std::shared_ptr<const Type> vExprType = vExpr->type();
 
@@ -199,10 +198,11 @@ void VeloxToSubstraitPlanConvertor::transformVProjNode(
   return;
 }
 
-void VeloxToSubstraitPlanConvertor::transformVOrderBy(
+void VeloxToSubstraitPlanConvertor::transformVeloxOrderBy(
     std::shared_ptr<const OrderByNode> vOrderbyNode,
     ::substrait::SortRel* sSortRel) {
   // TODO
   VELOX_NYI("Haven't support OrderByNode convertor now.");
 }
+
 } // namespace facebook::velox::substrait

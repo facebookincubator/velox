@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
-#include "VeloxToSubstraitFunc.h"
+#include "velox/substrait/VeloxToSubstraitFunc.h"
 
-#include "GlobalCommonVariable.h"
+#include "velox/substrait/GlobalCommonVariable.h"
 
 namespace facebook::velox::substrait {
 
-uint64_t VeloxToSubstraitFuncConvertor::registerSFunction(std::string name) {
+uint64_t VeloxToSubstraitFuncConvertor::registerSubstraitFunction(
+    std::string name) {
   GlobalCommonVarSingleton& sGlobSingleton =
       GlobalCommonVarSingleton::getInstance();
+
   ::substrait::Plan* sPlanSingleton = sGlobSingleton.getSPlan();
+
   if (function_map_.find(name) == function_map_.end()) {
     auto function_id = last_function_id++;
     auto sFun = sPlanSingleton->add_extensions()->mutable_extension_function();

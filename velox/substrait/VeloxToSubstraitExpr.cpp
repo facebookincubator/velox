@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-#include "VeloxToSubstraitExpr.h"
+#include "velox/substrait/VeloxToSubstraitExpr.h"
 
 #include "velox/expression/ControlExpr.h"
 
-#include "GlobalCommonVariable.h"
-
 namespace facebook::velox::substrait {
 
-void VeloxToSubstraitExprConvertor::transformVExpr(
+void VeloxToSubstraitExprConvertor::transformVeloxExpr(
     ::substrait::Expression* sExpr,
     const std::shared_ptr<const ITypedExpr>& vExpr,
     RowTypePtr vPreNodeOutPut) {
   if (std::shared_ptr<const ConstantTypedExpr> vConstantExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(vExpr)) {
-    transformVConstantExpr(vConstantExpr->value(), sExpr->mutable_literal());
+    transformVeloxConstantExpr(
+        vConstantExpr->value(), sExpr->mutable_literal());
     return;
   }
   if (auto vCallTypeExpr =
@@ -59,12 +58,12 @@ void VeloxToSubstraitExprConvertor::transformVExpr(
       // TODO need to change yaml file to register functin, now is dummy.
       // the substrait communcity have changed many in this part...
       uint32_t sFunId =
-          v2SFuncConvertor_.registerSFunction(vCallTypeExprFunName);
+          v2SFuncConvertor_.registerSubstraitFunction(vCallTypeExprFunName);
       sFun->set_function_reference(sFunId);
 
       for (auto& vArg : vCallTypeInputs) {
         ::substrait::Expression* sArg = sFun->add_args();
-        transformVExpr(sArg, vArg, vPreNodeOutPut);
+        transformVeloxExpr(sArg, vArg, vPreNodeOutPut);
       }
       ::substrait::Type* sFunType = sFun->mutable_output_type();
       v2STypeConvertor_.veloxTypeToSubstrait(vExprType, sFunType);
@@ -113,7 +112,7 @@ void VeloxToSubstraitExprConvertor::transformVExpr(
         vCastExpr->type(), sCastExpr->mutable_type());
 
     for (auto& vArg : vCastTypeInputs) {
-      transformVExpr(sCastExpr->mutable_input(), vArg, vPreNodeOutPut);
+      transformVeloxExpr(sCastExpr->mutable_input(), vArg, vPreNodeOutPut);
     }
     return;
 
@@ -122,7 +121,7 @@ void VeloxToSubstraitExprConvertor::transformVExpr(
   }
 }
 
-void VeloxToSubstraitExprConvertor::transformVConstantExpr(
+void VeloxToSubstraitExprConvertor::transformVeloxConstantExpr(
     const velox::variant& vConstExpr,
     ::substrait::Expression_Literal* sLiteralExpr) {
   switch (vConstExpr.kind()) {
