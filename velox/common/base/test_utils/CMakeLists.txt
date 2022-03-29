@@ -13,10 +13,3 @@
 # limitations under the License.
 
 add_library(vector_operation_test_utils INTERFACE)
-
-add_executable(velox_succinctprint_test SuccinctPrinterTest.cpp)
-
-add_test(velox_succinctprint_test velox_succinctprint_test)
-
-target_link_libraries(velox_succinctprint_test velox_common_base
-                      ${GTEST_BOTH_LIBRARIES} glog::glog ${gflags_LIBRARIES})
