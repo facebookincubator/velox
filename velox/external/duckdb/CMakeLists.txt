@@ -13,7 +13,9 @@ add_subdirectory(tpch)
 
 add_compile_definitions(DISABLE_DUCKDB_REMOTE_INSTALL)
 add_compile_definitions(BUILD_PARQUET_EXTENSION)
-
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wno-deprecated-declarations)
+endif()
 add_library(duckdb duckdb.cpp parquet-amalgamation.cpp)
 
 set_property(TARGET duckdb PROPERTY JOB_POOL_COMPILE high_memory_pool)
