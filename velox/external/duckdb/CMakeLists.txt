@@ -13,6 +13,10 @@ add_subdirectory(tpch)
 
 add_compile_definitions(DISABLE_DUCKDB_REMOTE_INSTALL)
 add_compile_definitions(BUILD_PARQUET_EXTENSION)
+# Certain Clang compiler versions throw "deprecated declarations" warnings for
+# DuckDB's parquet-amalgamation.h. This warning is from the Thrift library
+# that DuckDB embeds and is also on Thrift master.
+# The workaround, for now, is to disable this warning if the compiler is Clang.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wno-deprecated-declarations)
 endif()

@@ -16,18 +16,14 @@
 
 #pragma once
 
+#include "velox/common/base/macros.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/duckdb/Allocator.h"
 #include "velox/dwio/parquet/reader/duckdb/InputStreamFileSystem.h"
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
+VELOX_SUPPRESS_DEPRECATION_WARNING
 #include "velox/external/duckdb/parquet-amalgamation.hpp"
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
+VELOX_UNSUPPRESS_DEPRECATION_WARNING
 
 namespace facebook::velox::parquet {
 
