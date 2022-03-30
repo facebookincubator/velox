@@ -3,7 +3,7 @@ trigger: change
 jobs:
   build:
     name: unit test
-    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    image: hub.byted.org/base/presto.cpp.ci:d14d1e4af28865f7b5f933a466d9c4e1
     working-directory: velox
     steps:
       - name: Build
@@ -22,7 +22,7 @@ jobs:
 
   format-check:
     name: format check
-    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    image: hub.byted.org/base/presto.cpp.ci:d14d1e4af28865f7b5f933a466d9c4e1
     steps:
       - name: Check formatting
         commands:
