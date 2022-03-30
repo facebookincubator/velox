@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/common/base/macros.h"
+#include "velox/common/base/Macros.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/duckdb/Allocator.h"
