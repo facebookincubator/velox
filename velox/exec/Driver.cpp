@@ -158,7 +158,8 @@ void Driver::enqueue(std::shared_ptr<Driver> driver) {
   if (!task) {
     return;
   }
-  task->queryCtx()->executor()->add([driver]() { Driver::run(driver); });
+  task->queryCtx()->executor()->add(
+      [driver]() { Driver::run(std::move(driver)); });
 }
 
 Driver::Driver(
