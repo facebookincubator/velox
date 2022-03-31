@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <optional>
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/expression/VectorUdfTypeSystem.h"
@@ -324,4 +325,44 @@ TEST_F(NullFreeArrayViewTest, encoded) {
   encodedTest();
 }
 
+TEST_F(NullFreeArrayViewTest, materialize) {
+  auto result = evaluate(
+      "array_constructor(1, 2, 3, 4, 5)",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Array<int64_t>> reader(decode(decoded, *result.get()));
+
+  ASSERT_EQ(
+      reader.readNullFree(0).materialize(),
+      std::vector<int64_t>({1, 2, 3, 4, 5}));
+}
+
+TEST_F(NullableArrayViewTest, materialize) {
+  auto result = evaluate(
+      "array_constructor(1, 2, NULL, 4, NULL)",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Array<int64_t>> reader(decode(decoded, *result.get()));
+
+  ASSERT_EQ(
+      reader[0].materialize(),
+      std::vector<std::optional<int64_t>>(
+          {1, 2, std::nullopt, 4, std::nullopt}));
+}
+
+TEST_F(NullableArrayViewTest, materializeNested) {
+  auto result = evaluate(
+      "array_constructor(array_constructor(1), array_constructor(1, NULL), NULL)",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Array<Array<int64_t>>> reader(
+      decode(decoded, *result.get()));
+  ASSERT_EQ(
+      reader[0].materialize(),
+      std::vector<std::optional<std::vector<std::optional<int64_t>>>>(
+          {{{{1}}, {{1, std::nullopt}}, std::nullopt}}));
+}
 } // namespace
