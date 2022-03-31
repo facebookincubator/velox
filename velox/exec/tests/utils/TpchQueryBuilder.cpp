@@ -138,10 +138,13 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   common::test::SubfieldFiltersBuilder filtersBuilder;
   // DWRF does not support Date type. Use Varchar instead.
   if (selectedRowType->findChild(shipDate)->isVarchar()) {
-    filtersBuilder.add(shipDate, common::test::lessThanOrEqual("1998-09-02"));
+    filtersBuilder.add(
+        columnAliases.at(shipDate),
+        common::test::lessThanOrEqual("1998-09-02"));
   } else {
     filtersBuilder.add(
-        shipDate, common::test::lessThanOrEqual(toDate("1998-09-02")));
+        columnAliases.at(shipDate),
+        common::test::lessThanOrEqual(toDate("1998-09-02")));
   }
   auto filters = filtersBuilder.build();
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
@@ -217,16 +220,21 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   // DWRF does not support Date type. Use Varchar instead.
   if (selectedRowType->findChild(shipDate)->isVarchar()) {
     filtersBuilder.add(
-        shipDate, common::test::between("1994-01-01", "1994-12-31"));
+        columnAliases.at(shipDate),
+        common::test::between("1994-01-01", "1994-12-31"));
   } else {
     filtersBuilder.add(
-        shipDate,
+        columnAliases.at(shipDate),
         common::test::between(toDate("1994-01-01"), toDate("1994-12-31")));
   }
-  auto filters =
-      filtersBuilder.add("l_discount", common::test::betweenDouble(0.05, 0.07))
-          .add("l_quantity", common::test::lessThanDouble(24.0))
-          .build();
+  auto filters = filtersBuilder
+                     .add(
+                         columnAliases.at("l_discount"),
+                         common::test::betweenDouble(0.05, 0.07))
+                     .add(
+                         columnAliases.at("l_quantity"),
+                         common::test::lessThanDouble(24.0))
+                     .build();
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId lineitemPlanNodeId;
