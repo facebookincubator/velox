@@ -109,13 +109,13 @@ std::shared_ptr<connector::hive::HiveColumnHandle> regularColumn(
 
 ColumnHandleMap allRegularColumns(
     const std::shared_ptr<const RowType>& rowType,
-    const std::unordered_map<std::string, std::string>& columnAliases) {
+    const std::unordered_map<std::string, std::string>& fileColumnNames) {
   ColumnHandleMap assignments;
   assignments.reserve(rowType->size());
   for (uint32_t i = 0; i < rowType->size(); ++i) {
     const auto& name = rowType->nameOf(i);
     assignments[name] =
-        regularColumn(columnAliases.at(name), rowType->childAt(i));
+        regularColumn(fileColumnNames.at(name), rowType->childAt(i));
   }
   return assignments;
 }
@@ -272,13 +272,13 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
   std::vector<std::string> customerColumns = {"c_name", "c_custkey"};
 
   auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
-  const auto& lineitemColumnAliases = getFileColumnNames(kLineitem);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
 
   auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
-  const auto& ordersColumnAliases = getFileColumnNames(kOrders);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
 
   auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
-  const auto& customerColumnAliases = getFileColumnNames(kCustomer);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId customerScanNodeId;
@@ -295,7 +295,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                        makeTableHandle(
                            kLineitem, common::test::SubfieldFilters{}),
                        allRegularColumns(
-                           lineitemSelectedRowType, lineitemColumnAliases))
+                           lineitemSelectedRowType, lineitemFileColumns))
                    .capturePlanNodeId(lineitemScanNodeId)
                    .partialAggregation({0}, {"sum(l_quantity) AS partial_sum"})
                    .planNode()})
@@ -313,7 +313,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                        makeTableHandle(
                            kOrders, common::test::SubfieldFilters{}),
                        allRegularColumns(
-                           ordersSelectedRowType, ordersColumnAliases))
+                           ordersSelectedRowType, ordersFileColumns))
                    .capturePlanNodeId(ordersScanNodeId)
                    .hashJoin(
                        {"o_orderkey"},
@@ -336,7 +336,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                                    kCustomer, common::test::SubfieldFilters{}),
                                allRegularColumns(
                                    customerSelectedRowType,
-                                   customerColumnAliases))
+                                   customerFileColumns))
                            .capturePlanNodeId(customerScanNodeId)
                            .planNode(),
                        "",
