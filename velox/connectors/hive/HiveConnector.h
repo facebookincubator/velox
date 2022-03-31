@@ -186,6 +186,11 @@ class HiveDataSource : public DataSource {
   /// Clear split_, reader_ and rowReader_ after split has been fully processed.
   void resetSplit();
 
+  bool testFiltersOnBucket(
+      const common::ScanSpec* FOLLY_NONNULL scanSpec,
+      const std::optional<HiveBucketProperty>& bucketProperty,
+      std::optional<int32_t> bucketNumber);
+
   const std::shared_ptr<const RowType> outputType_;
   // Column handles for the partition key columns keyed on partition key column
   // name.
@@ -204,6 +209,7 @@ class HiveDataSource : public DataSource {
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;
   bool emptySplit_;
+  std::vector<uint64_t> selectedBuckets_;
 
   dwio::common::RuntimeStatistics runtimeStats_;
 

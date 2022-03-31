@@ -32,6 +32,14 @@ class HivePartitionFunction : public core::PartitionFunction {
   void partition(const RowVector& input, std::vector<uint32_t>& partitions)
       override;
 
+  static std::vector<uint32_t> bucket(
+      const std::vector<int64_t>& input,
+      int numBuckets);
+
+  static std::vector<uint32_t> bucket(
+      const std::vector<StringView>& input,
+      int numBuckets);
+
  private:
   const int numBuckets_;
   const std::vector<int> bucketToPartition_;

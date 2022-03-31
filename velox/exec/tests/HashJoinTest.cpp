@@ -128,11 +128,25 @@ class HashJoinTest : public HiveConnectorTestBase {
     return stats[operatorIndex].runtimeStats["replacedWithDynamicFilterRows"];
   }
 
+  static RuntimeMetric getSkippedSplits(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    return stats[operatorIndex].runtimeStats["skippedSplits"];
+  }
+
   static uint64_t getInputPositions(
       const std::shared_ptr<Task>& task,
       int operatorIndex) {
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
     return stats[operatorIndex].inputPositions;
+  }
+
+  static uint64_t getRawInputPositions(
+      const std::shared_ptr<Task>& task,
+      int operatorIndex) {
+    auto stats = task->taskStats().pipelineStats.front().operatorStats;
+    return stats[operatorIndex].rawInputPositions;
   }
 };
 
@@ -879,6 +893,201 @@ TEST_F(HashJoinTest, dynamicFilters) {
     EXPECT_EQ(0, getFiltersAccepted(task, 0).sum);
     EXPECT_EQ(numRowsProbe * numSplits, getInputPositions(task, 1));
   }
+}
+
+TEST_F(HashJoinTest, int64BucketPruning) {
+  const int32_t numSplits = 2;
+  const int64_t numRows = 1024;
+  const int32_t bucketCount = 1024;
+  const int32_t bucketNumber[] = {103, 386};
+  const int64_t bucketColumnValue[] = {6002229726482, 6002209919223};
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numSplits);
+
+  auto files = makeFilePaths(numSplits);
+
+  for (int i = 0; i < numSplits; i++) {
+    auto rowVector = makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int64_t>(
+             numRows, [&](auto row) { return bucketColumnValue[i]; }),
+         makeFlatVector<int64_t>(
+             numRows, [&](auto row) { return row + row; })});
+    vectors.push_back(rowVector);
+    writeToFile(files[i]->path, rowVector);
+  }
+  createDuckDbTable("t", vectors);
+
+  auto testInt64FiltersOnBucket = [&](const std::vector<std::string>&
+                                          bucketedBy,
+                                      common::test::SubfieldFilters filters,
+                                      const std::string& expectedQuery,
+                                      int32_t expectedNumSkippedSplits,
+                                      int64_t expectedNumRawInputRows) {
+    std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
+    splits.reserve(numSplits);
+    for (int i = 0; i < numSplits; i++) {
+      splits.push_back(makeHiveConnectorSplit(
+          files[i]->path,
+          {},
+          0,
+          std::numeric_limits<uint64_t>::max(),
+          bucketNumber[i],
+          bucketNumber[i],
+          connector::hive::HiveBucketProperty(bucketedBy, bucketCount)));
+    }
+
+    auto rowType = ROW({"c0"}, {BIGINT()});
+
+    auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+    core::PlanNodeId scanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      rowType,
+                      makeTableHandle(std::move(filters)),
+                      allRegularColumns(rowType))
+                  .capturePlanNodeId(scanId)
+                  .project({"c0"})
+                  .planNode();
+
+    auto task = assertQuery(op, {{scanId, splits}}, expectedQuery);
+    EXPECT_EQ(expectedNumSkippedSplits, getSkippedSplits(task, 0).sum);
+    EXPECT_EQ(expectedNumRawInputRows, getRawInputPositions(task, 0));
+  };
+
+  // Test BigintValuesUsingHashTable filter on one bucketed-by column. Only one
+  // bucket/split passes the filter.
+  testInt64FiltersOnBucket(
+      {"c0"},
+      common::test::singleSubfieldFilter(
+          "c0",
+          common::test::in({bucketColumnValue[0], bucketColumnValue[1] + 1})),
+      fmt::format(
+          "SELECT c0 FROM t WHERE c0 IN ({}, {})",
+          bucketColumnValue[0],
+          bucketColumnValue[1] + 1),
+      numSplits - 1,
+      numRows);
+
+  // Test BigintValuesUsingBitmask filter on one bucketed-by column. Only one
+  // bucket/split passes the filter.
+  testInt64FiltersOnBucket(
+      {"c0"},
+      common::test::singleSubfieldFilter(
+          "c0",
+          common::test::in({bucketColumnValue[0], bucketColumnValue[0] + 1})),
+      fmt::format(
+          "SELECT c0 FROM t WHERE c0 IN ({}, {})",
+          bucketColumnValue[0],
+          bucketColumnValue[0] + 1),
+      numSplits - 1,
+      numRows);
+
+  // Test BigintRange equal filter on one bucketed-by column. Only one
+  // bucket/split passes the filter
+  testInt64FiltersOnBucket(
+      {"c0"},
+      common::test::singleSubfieldFilter(
+          "c0", common::test::equal(bucketColumnValue[0])),
+      fmt::format("SELECT c0 FROM t WHERE c0 = {}", bucketColumnValue[0]),
+      numSplits - 1,
+      numRows);
+
+  // With two bucketed-by columns, filter testing on bucket number is not
+  // performed. No split is skipped by the file level stats check as well.
+  testInt64FiltersOnBucket(
+      {"c0", "c1"},
+      common::test::singleSubfieldFilter(
+          "c1", common::test::in(std::vector<int64_t>{1})),
+      fmt::format("SELECT c0 FROM t WHERE c0 IN ( 1 )"),
+      0,
+      numRows * numSplits);
+}
+
+TEST_F(HashJoinTest, stringBucketPruning) {
+  const int32_t numSplits = 2;
+  const int32_t numRows = 1024;
+  const int32_t bucketCount = 2048;
+  const int32_t bucketNumber[] = {1952, 1997};
+  const std::string bucketColumnValue[] = {
+      "10003967894|16656758337", "10001688176|5953957996"};
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numSplits);
+
+  auto files = makeFilePaths(numSplits);
+
+  for (int i = 0; i < numSplits; i++) {
+    auto rowVector = makeRowVector(
+        {"c0"}, {makeFlatVector<StringView>(numRows, [&](auto row) {
+          return StringView(bucketColumnValue[i]);
+        })});
+    vectors.push_back(rowVector);
+    writeToFile(files[i]->path, rowVector);
+  }
+  createDuckDbTable("t", vectors);
+
+  std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>> splits;
+  splits.reserve(numSplits);
+  for (int i = 0; i < numSplits; i++) {
+    splits.push_back(makeHiveConnectorSplit(
+        files[i]->path,
+        {},
+        0,
+        std::numeric_limits<uint64_t>::max(),
+        bucketNumber[i],
+        bucketNumber[i],
+        connector::hive::HiveBucketProperty({"c0"}, bucketCount)));
+  }
+
+  auto testStringFiltersOnBucket = [&](common::test::SubfieldFilters filters,
+                                       const std::string& expectedQuery,
+                                       int32_t expectedNumSkippedSplits,
+                                       int64_t expectedNumRawInputRows) {
+    auto rowType = ROW({"c0"}, {VARCHAR()});
+
+    auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+    core::PlanNodeId scanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      rowType,
+                      makeTableHandle(std::move(filters)),
+                      allRegularColumns(rowType))
+                  .capturePlanNodeId(scanId)
+                  .project({"c0"})
+                  .planNode();
+
+    auto task = assertQuery(op, {{scanId, splits}}, expectedQuery);
+    EXPECT_EQ(expectedNumSkippedSplits, getSkippedSplits(task, 0).sum);
+    EXPECT_EQ(expectedNumRawInputRows, getRawInputPositions(task, 0));
+  };
+
+  // Test BytesValues filter on one bucketed-by column. Only one bucket/split
+  // passes the filter.
+  testStringFiltersOnBucket(
+      common::test::singleSubfieldFilter(
+          "c0",
+          common::test::in({bucketColumnValue[0], "x" + bucketColumnValue[1]})),
+      fmt::format(
+          "SELECT c0 FROM t WHERE c0 IN ('{}', '{}')",
+          bucketColumnValue[0],
+          "x" + bucketColumnValue[1]),
+      numSplits - 1,
+      numRows);
+
+  // Test BytesRange equal filter on one bucketed-by column. Only one
+  // bucket/split passes the filter
+  testStringFiltersOnBucket(
+      common::test::singleSubfieldFilter(
+          "c0",
+          common::test::between(bucketColumnValue[0], bucketColumnValue[0])),
+      fmt::format(
+          "SELECT c0 FROM t WHERE c0 BETWEEN '{}' AND '{}'",
+          bucketColumnValue[0],
+          bucketColumnValue[0]),
+      numSplits - 1,
+      numRows);
 }
 
 TEST_F(HashJoinTest, leftJoin) {

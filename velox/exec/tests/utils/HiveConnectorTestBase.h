@@ -67,6 +67,14 @@ class HiveConnectorTestBase : public OperatorTestBase {
           std::vector<std::shared_ptr<TempFilePath>>>& filePaths,
       const std::string& duckDbSql);
 
+  std::shared_ptr<exec::Task> assertQuery(
+      const std::shared_ptr<const core::PlanNode>& plan,
+      const std::unordered_map<
+          core::PlanNodeId,
+          std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>>&
+          splits,
+      const std::string& duckDbSql);
+
   static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
 
   static std::vector<std::shared_ptr<connector::ConnectorSplit>> makeHiveSplits(
@@ -93,7 +101,11 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys,
       uint64_t start = 0,
-      uint64_t length = std::numeric_limits<uint64_t>::max());
+      uint64_t length = std::numeric_limits<uint64_t>::max(),
+      std::optional<int32_t> tableBucketNumber = std::nullopt,
+      std::optional<int32_t> readBucketNumber = std::nullopt,
+      const std::optional<connector::hive::HiveBucketProperty>& bucketProperty =
+          std::nullopt);
 
   static exec::Split makeHiveSplit(
       const std::string& filePath,

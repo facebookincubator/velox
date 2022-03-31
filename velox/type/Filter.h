@@ -613,6 +613,11 @@ class BigintRange final : public Filter {
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
+  std::vector<int64_t> int64Values() const {
+    return isSingleValue_ ? std::vector<int64_t>{lower_}
+                          : std::vector<int64_t>();
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BigintRange: [{}, {}] {}",
@@ -683,6 +688,10 @@ class BigintValuesUsingHashTable final : public Filter {
     return max_;
   }
 
+  const std::vector<int64_t>& int64Values() const {
+    return values_;
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BigintValuesUsingHashTable: [{}, {}] {}",
@@ -745,6 +754,16 @@ class BigintValuesUsingBitmask final : public Filter {
   bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final;
 
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+  std::vector<int64_t> int64Values() const {
+    std::vector<int64_t> values;
+    for (int64_t bit = 0; bit < bitmask_.size(); bit++) {
+      if (bitmask_[bit]) {
+        values.push_back(bit);
+      }
+    }
+    return std::move(values);
+  }
 
  private:
   std::unique_ptr<Filter>
@@ -1124,6 +1143,11 @@ class BytesRange final : public AbstractRange {
     }
   }
 
+  std::vector<StringView> stringValues() const {
+    return singleValue_ ? std::vector<StringView>{StringView(lower_)}
+                        : std::vector<StringView>();
+  }
+
   std::string toString() const final {
     return fmt::format(
         "BytesRange: {}{}, {}{} {}",
@@ -1236,6 +1260,10 @@ class BytesValues final : public Filter {
 
   const folly::F14FastSet<std::string>& values() const {
     return values_;
+  }
+
+  std::vector<StringView> stringValues() const {
+    return std::vector<StringView>(values_.begin(), values_.end());
   }
 
  private:

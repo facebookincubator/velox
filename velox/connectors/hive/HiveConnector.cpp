@@ -17,6 +17,7 @@
 
 #include <memory>
 
+#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/dwrf/common/CachedBufferedInput.h"
@@ -276,7 +277,7 @@ HiveDataSource::HiveDataSource(
 }
 
 namespace {
-bool testFilters(
+bool testFiltersOnFile(
     common::ScanSpec* scanSpec,
     dwio::common::Reader* reader,
     const std::string& filePath) {
@@ -379,6 +380,16 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   VLOG(1) << "Adding split " << split_->toString();
 
+  // Check filters on bucket number and see if the whole split/bucket can be
+  // skipped
+  if (!testFiltersOnBucket(
+          scanSpec_.get(), split_->bucketProperty, split_->readBucketNumber)) {
+    emptySplit_ = true;
+    ++runtimeStats_.skippedSplits;
+    runtimeStats_.skippedSplitBytes += split_->length;
+    return;
+  }
+
   fileHandle_ = fileHandleFactory_->generate(split_->filePath);
   // For DataCache and no cache, the stream keeps track of IO.
   auto asyncCache = dynamic_cast<cache::AsyncDataCache*>(mappedMemory_);
@@ -438,7 +449,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
 
   // Check filters and see if the whole split can be skipped
-  if (!testFilters(scanSpec_.get(), reader_.get(), split_->filePath)) {
+  if (!testFiltersOnFile(scanSpec_.get(), reader_.get(), split_->filePath)) {
     emptySplit_ = true;
     ++runtimeStats_.skippedSplits;
     runtimeStats_.skippedSplitBytes += split_->length;
@@ -613,6 +624,84 @@ void HiveDataSource::setPartitionValue(
   auto constValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
       convertFromString, it->second->dataType()->kind(), value);
   setConstantValue(spec, constValue);
+}
+
+bool HiveDataSource::testFiltersOnBucket(
+    const common::ScanSpec* scanSpec,
+    const std::optional<HiveBucketProperty>& bucketProperty,
+    std::optional<int32_t> bucketNumber) {
+  if (!bucketNumber.has_value() || !bucketProperty.has_value()) {
+    // The table is not bucketed
+    return true;
+  }
+  // Only test filters when the table has a single bucketed-by column for now
+  if (bucketProperty.value().bucketedBy.size() != 1) {
+    return true;
+  }
+
+  // If there is no filter on the bucketed-by column, return true.
+  const common::ScanSpec* child =
+      scanSpec->childByName(bucketProperty.value().bucketedBy[0]);
+  if (!child) {
+    return true;
+  }
+  const common::Filter* filter = child->filter();
+  if (!filter) {
+    return true;
+  }
+
+  if (selectedBuckets_.empty()) {
+    std::vector<uint32_t> buckets;
+
+    switch (filter->kind()) {
+      case common::FilterKind::kBigintValuesUsingHashTable: {
+        const auto values =
+            reinterpret_cast<const common::BigintValuesUsingHashTable*>(filter)
+                ->int64Values();
+        buckets = HivePartitionFunction::bucket(
+            values, bucketProperty.value().bucketCount);
+        break;
+      }
+      case common::FilterKind::kBigintValuesUsingBitmask: {
+        const auto values =
+            reinterpret_cast<const common::BigintValuesUsingBitmask*>(filter)
+                ->int64Values();
+        buckets = HivePartitionFunction::bucket(
+            values, bucketProperty.value().bucketCount);
+        break;
+      }
+      case common::FilterKind::kBigintRange: {
+        const auto values =
+            reinterpret_cast<const common::BigintRange*>(filter)->int64Values();
+        buckets = HivePartitionFunction::bucket(
+            values, bucketProperty.value().bucketCount);
+        break;
+      }
+      case common::FilterKind::kBytesValues: {
+        const auto values = reinterpret_cast<const common::BytesValues*>(filter)
+                                ->stringValues();
+        HivePartitionFunction::bucket(
+            values, bucketProperty.value().bucketCount);
+        break;
+      }
+      case common::FilterKind::kBytesRange: {
+        const auto values =
+            reinterpret_cast<const common::BytesRange*>(filter)->stringValues();
+        HivePartitionFunction::bucket(
+            values, bucketProperty.value().bucketCount);
+        break;
+      }
+      default:
+        return true;
+    }
+
+    selectedBuckets_.resize(bits::nwords(bucketProperty->bucketCount));
+    for (uint32_t bucket : buckets) {
+      bits::setBit(selectedBuckets_.data(), bucket, true);
+    }
+  }
+
+  return bits::isBitSet(selectedBuckets_.data(), bucketNumber.value());
 }
 
 std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {

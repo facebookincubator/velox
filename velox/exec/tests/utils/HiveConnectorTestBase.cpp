@@ -132,6 +132,32 @@ std::shared_ptr<exec::Task> HiveConnectorTestBase::assertQuery(
       duckDbQueryRunner_);
 }
 
+std::shared_ptr<exec::Task> HiveConnectorTestBase::assertQuery(
+    const std::shared_ptr<const core::PlanNode>& plan,
+    const std::unordered_map<
+        core::PlanNodeId,
+        std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>>&
+        splits,
+    const std::string& duckDbSql) {
+  bool noMoreSplits = false;
+  return test::assertQuery(
+      plan,
+      [&](auto* task) {
+        if (!noMoreSplits) {
+          for (const auto& entry : splits) {
+            auto planNodeId = entry.first;
+            for (auto split : entry.second) {
+              addSplit(task, planNodeId, exec::Split(split));
+            }
+            task->noMoreSplits(planNodeId);
+          }
+          noMoreSplits = true;
+        }
+      },
+      duckDbSql,
+      duckDbQueryRunner_);
+}
+
 std::vector<std::shared_ptr<TempFilePath>> HiveConnectorTestBase::makeFilePaths(
     int count) {
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
@@ -178,14 +204,20 @@ HiveConnectorTestBase::makeHiveConnectorSplit(
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKeys,
     uint64_t start,
-    uint64_t length) {
+    uint64_t length,
+    std::optional<int32_t> tableBucketNumber,
+    std::optional<int32_t> readBucketNumber,
+    const std::optional<connector::hive::HiveBucketProperty>& bucketProperty) {
   return std::make_shared<connector::hive::HiveConnectorSplit>(
       kHiveConnectorId,
       "file:" + filePath,
       dwio::common::FileFormat::ORC,
       start,
       length,
-      partitionKeys);
+      partitionKeys,
+      tableBucketNumber,
+      readBucketNumber,
+      bucketProperty);
 }
 
 exec::Split HiveConnectorTestBase::makeHiveSplit(

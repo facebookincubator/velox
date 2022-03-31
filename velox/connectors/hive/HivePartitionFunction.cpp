@@ -118,6 +118,12 @@ void hash(
 
   VELOX_DYNAMIC_TYPE_DISPATCH(hashTyped, typeKind, values, size, mix, hashes);
 }
+
+inline uint32_t hashToBucket(uint32_t hash, int numBuckets) {
+  static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
+  return ((hash & kInt32Max) % numBuckets);
+}
+
 } // namespace
 
 HivePartitionFunction::HivePartitionFunction(
@@ -153,11 +159,36 @@ void HivePartitionFunction::partition(
         hashes_);
   }
 
-  static const int32_t kInt32Max = std::numeric_limits<int32_t>::max();
-
   for (auto i = 0; i < size; ++i) {
-    partitions[i] =
-        bucketToPartition_[((hashes_[i] & kInt32Max) % numBuckets_)];
+    partitions[i] = bucketToPartition_[hashToBucket(hashes_[i], numBuckets_)];
   }
+}
+
+std::vector<uint32_t> HivePartitionFunction::bucket(
+    const std::vector<int64_t>& input,
+    int numBuckets) {
+  auto size = input.size();
+
+  std::vector<uint32_t> buckets(size);
+
+  for (auto i = 0; i < size; i++) {
+    buckets[i] = hashToBucket(hashInt64(input[i]), numBuckets);
+  }
+
+  return std::move(buckets);
+}
+
+std::vector<uint32_t> HivePartitionFunction::bucket(
+    const std::vector<StringView>& input,
+    int numBuckets) {
+  auto size = input.size();
+
+  std::vector<uint32_t> buckets(size);
+
+  for (auto i = 0; i < size; i++) {
+    buckets[i] = hashToBucket(hashBytes(input[i], 0), numBuckets);
+  }
+
+  return std::move(buckets);
 }
 } // namespace facebook::velox::connector::hive
