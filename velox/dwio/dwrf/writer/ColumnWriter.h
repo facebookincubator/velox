@@ -122,10 +122,13 @@ class ColumnWriter {
   // Determine whether dictionary is the right encoding to use when writing
   // the first stripe. We will continue using the same decision for all
   // subsequent stripes.
-  virtual void tryAbandonDictionaries(bool force) {
+  // Returns whether or not an encoding change is performed.
+  virtual bool tryAbandonDictionaries(bool force) {
+    bool result = false;
     for (auto& child : children_) {
-      child->tryAbandonDictionaries(force);
+      result = result || child->tryAbandonDictionaries(force);
     }
+    return result;
   }
 
   static std::unique_ptr<ColumnWriter> create(

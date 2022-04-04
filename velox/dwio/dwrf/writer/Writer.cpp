@@ -39,8 +39,11 @@ void Writer::write(const VectorPtr& slice) {
     length = std::min(length, slice->size() - offset);
     VELOX_CHECK_GT(length, 0);
     if (shouldFlush(context, length)) {
-      abandonLowValueDictionaries();
-      if (shouldFlush(context, length)) {
+      bool decision = true;
+      if (abandonLowValueDictionaries()) {
+        decision = shouldFlush(context, length);
+      }
+      if (decision) {
         flush();
       }
     }
