@@ -415,6 +415,13 @@ struct MaterializeType<Row<T...>> {
   static constexpr bool requiresMaterialization = true;
 };
 
+template <typename T>
+struct MaterializeType<std::shared_ptr<T>> {
+  using nullable_t = T;
+  using null_free_t = T;
+  static constexpr bool requiresMaterialization = false;
+};
+
 template <>
 struct MaterializeType<Varchar> {
   using nullable_t = std::string;
@@ -429,11 +436,19 @@ struct MaterializeType<Varbinary> {
   static constexpr bool requiresMaterialization = false;
 };
 
+template <typename T>
+struct is_shared_ptr : std::false_type {};
+
+template <typename T>
+struct is_shared_ptr<std::shared_ptr<T>> : std::true_type {};
+
 // Helper function that calls materialize on element if it's not primitive.
 template <typename VeloxType, typename T>
 auto materializeElement(const T& element) {
   if constexpr (MaterializeType<VeloxType>::requiresMaterialization) {
     return element.materialize();
+  } else if constexpr (is_shared_ptr<VeloxType>::value) {
+    return *element;
   } else {
     return element;
   }
