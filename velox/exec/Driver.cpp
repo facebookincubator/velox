@@ -457,6 +457,7 @@ void Driver::addStatsToTask() {
   for (auto& op : operators_) {
     auto& stats = op->stats();
     stats.memoryStats.update(op->pool()->getMemoryUsageTracker());
+    stats.driverIds.insert(driverCtx()->driverId);
     task_->addOperatorStats(stats);
   }
 }

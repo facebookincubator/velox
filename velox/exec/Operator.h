@@ -129,6 +129,7 @@ struct OperatorStats {
   MemoryStats memoryStats;
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
+  std::set<int> driverIds;
 
   OperatorStats(
       int32_t _operatorId,
