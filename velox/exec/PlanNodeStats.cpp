@@ -52,14 +52,16 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   for (const auto& entry : stats.runtimeStats) {
     customStats[entry.first].merge(entry.second);
   }
+
   // Populating drivers for plan nodes with multiple operators is not useful.
   // Each operator could have been executed in different pipelines with
   // different number of drivers.
   if (!isMultiOperatorNode()) {
-    driverIds.insert(stats.driverIds.begin(), stats.driverIds.end());
+    driverCount += stats.driverCount;
   } else {
-    driverIds.clear();
+    driverCount = 0;
   }
+
   numSplits += stats.numSplits;
 }
 
@@ -79,12 +81,12 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
       << ", Peak memory: " << succinctBytes(peakMemoryBytes);
 
-  if (!driverIds.empty()) {
-    out << ", Threads: " << driverIds.size();
+  if (driverCount > 0) {
+    out << ", Threads: " << driverCount;
   }
 
   if (numSplits > 0) {
-    out << ", NumSplits: " << numSplits;
+    out << ", Splits: " << numSplits;
   }
   return out.str();
 }
