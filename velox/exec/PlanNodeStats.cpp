@@ -53,8 +53,8 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
     customStats[entry.first].merge(entry.second);
   }
 
-  // Populating drivers for plan nodes with multiple operators is not useful.
-  // Each operator could have been executed in different pipelines with
+  // Populating number of drivers for plan nodes with multiple operators is not
+  // useful. Each operator could have been executed in different pipelines with
   // different number of drivers.
   if (!isMultiOperatorNode()) {
     driverCount += stats.driverCount;
