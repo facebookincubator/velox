@@ -13,24 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VectorFunction.h"
+#pragma once
 
-namespace facebook::velox::functions::sparksql {
-
-// Supported types:
-//   - Bools
-//   - Integer types (byte, short, int, long)
-//   - String, Binary
-//   - Float, Double
-//   - Timestamp
-//   - Date
-//
-// Unsupported:
-//   - Decimal
-//   - Datetime
-//   - Structs, Arrays
-//   - Maps
-
-void registerIn(const std::string& prefix);
-
-} // namespace facebook::velox::functions::sparksql
+#if __has_include("filesystem")
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#endif

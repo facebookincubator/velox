@@ -16,7 +16,7 @@
 set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-export CFLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt -w -std=c++17"  # Used by LZO.
+export CFLAGS="-mavx2 -mfma -mavx -mf16c  -mlzcnt -w -std=c++17"  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 
@@ -85,9 +85,7 @@ wait  # For cmake and source downloads to complete.
 cmake_install gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DLIB_SUFFIX=64 -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install glog -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX:PATH=/usr
 cmake_install snappy -DSNAPPY_BUILD_TESTS=OFF
-# Folly fails to build in release-mode due
-# AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
-cmake_install folly -DCMAKE_BUILD_TYPE=Debug
+cmake_install folly
 # cmake_install ranges-v3
 
 dnf clean all
