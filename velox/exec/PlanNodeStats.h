@@ -85,7 +85,7 @@ struct PlanNodeStats {
   std::unordered_map<std::string, std::unique_ptr<PlanNodeStats>> operatorStats;
 
   /// Number of drivers that executed the pipeline.
-  int driverCount{0};
+  int numDrivers{0};
 
   /// Number of total splits.
   int numSplits{0};

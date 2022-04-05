@@ -705,7 +705,7 @@ TEST_P(TableScanTest, statsBasedSkippingBool) {
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(2, getSkippedStridesStat(task));
   EXPECT_EQ(1, getTableScanStats(task).numSplits);
-  EXPECT_EQ(1, getTableScanStats(task).driverCount);
+  EXPECT_EQ(1, getTableScanStats(task).numDrivers);
 
   subfieldFilters = singleSubfieldFilter("c1", boolEqual(false));
   task = assertQuery("SELECT c0 FROM tmp WHERE c1 = false");

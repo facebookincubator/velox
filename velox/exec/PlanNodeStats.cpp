@@ -57,9 +57,9 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   // useful. Each operator could have been executed in different pipelines with
   // different number of drivers.
   if (!isMultiOperatorNode()) {
-    driverCount += stats.driverCount;
+    numDrivers += stats.numDrivers;
   } else {
-    driverCount = 0;
+    numDrivers = 0;
   }
 
   numSplits += stats.numSplits;
@@ -81,8 +81,8 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
       << ", Peak memory: " << succinctBytes(peakMemoryBytes);
 
-  if (driverCount > 0) {
-    out << ", Threads: " << driverCount;
+  if (numDrivers > 0) {
+    out << ", Threads: " << numDrivers;
   }
 
   if (numSplits > 0) {

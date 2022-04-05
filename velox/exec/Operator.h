@@ -130,7 +130,7 @@ struct OperatorStats {
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
-  int driverCount = 0;
+  int numDrivers = 0;
 
   OperatorStats(
       int32_t _operatorId,

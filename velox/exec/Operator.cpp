@@ -327,7 +327,7 @@ void OperatorStats::add(const OperatorStats& other) {
     runtimeStats[stat.first].merge(stat.second);
   }
 
-  driverCount += other.driverCount;
+  numDrivers += other.numDrivers;
 }
 
 void OperatorStats::clear() {
