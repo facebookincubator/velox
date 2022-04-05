@@ -404,6 +404,10 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
         splitGroupState.clear();
         self->ensureSplitGroupsAreBeingProcessedLocked(self);
       }
+    } else {
+      if (splitGroupState.activeDrivers == 0) {
+        splitGroupState.clear();
+      }
     }
     return;
   }
@@ -889,7 +893,7 @@ static void movePromisesOut(
   from.clear();
 }
 
-void Task::terminate(TaskState terminalState) {
+ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -897,16 +901,25 @@ void Task::terminate(TaskState terminalState) {
       taskStats_.executionEndTimeMs = getCurrentTimeMs();
     }
     if (not isRunningLocked()) {
-      return;
+      return makeFinishFutureLocked("Task::terminate");
     }
     state_ = terminalState;
+    if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
+      try {
+        VELOX_FAIL(
+            state_ == TaskState::kCanceled ? "Cancelled"
+                                           : "Aborted for external error");
+      } catch (const std::exception& e) {
+        exception_ = std::current_exception();
+      }
+    }
+
     // Drivers that are on thread will see this at latest when they go off
     // thread.
     terminateRequested_ = true;
     // The drivers that are on thread will go off thread in time and
-    // finishFuture() allows syncing with this. 'numRunningDrivers_'
-    // is cleared here so that this is 0 right after terminate as
-    // tests expect.
+    // 'numRunningDrivers_' is cleared here so that this is 0 right
+    // after terminate as tests expect.
     numRunningDrivers_ = 0;
     stateChangedLocked();
     for (auto& driver : drivers_) {
@@ -948,7 +961,7 @@ void Task::terminate(TaskState terminalState) {
       for (auto& pair : splitGroupState.second.bridges) {
         oldBridges.emplace_back(std::move(pair.second));
       }
-      splitGroupState.second.bridges.clear();
+      splitGroupState.second.clear();
     }
 
     // Collect all outstanding split promises from all splits state structures.
@@ -965,6 +978,20 @@ void Task::terminate(TaskState terminalState) {
   for (auto& bridge : oldBridges) {
     bridge->cancel();
   }
+
+  std::lock_guard<std::mutex> l(mutex_);
+  return makeFinishFutureLocked("Task::terminate");
+}
+
+ContinueFuture Task::makeFinishFutureLocked(const char* FOLLY_NONNULL comment) {
+  auto [promise, future] = makeVeloxPromiseContract<bool>(comment);
+
+  if (numThreads_ == 0) {
+    promise.setValue(true);
+    return std::move(future);
+  }
+  threadFinishPromises_.push_back(std::move(promise));
+  return std::move(future);
 }
 
 void Task::addOperatorStats(OperatorStats& stats) {
@@ -1312,10 +1339,10 @@ StopReason Task::shouldStop() {
 }
 
 void Task::finished() {
-  for (auto& promise : pausePromises_) {
+  for (auto& promise : threadFinishPromises_) {
     promise.setValue(true);
   }
-  pausePromises_.clear();
+  threadFinishPromises_.clear();
 }
 
 StopReason Task::shouldStopLocked() {
@@ -1334,13 +1361,6 @@ StopReason Task::shouldStopLocked() {
 
 ContinueFuture Task::requestPauseLocked(bool pause) {
   pauseRequested_ = pause;
-
-  auto [promise, future] = makeVeloxPromiseContract<bool>("Task::requestPause");
-  if (numThreads_ == 0) {
-    promise.setValue(true);
-    return std::move(future);
-  }
-  pausePromises_.push_back(std::move(promise));
-  return std::move(future);
+  return makeFinishFutureLocked("Task::requestPause");
 }
 } // namespace facebook::velox::exec

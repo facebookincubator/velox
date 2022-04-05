@@ -100,7 +100,7 @@ class TaskCursor {
   ~TaskCursor() {
     queue_->close();
     if (task_ && !atEnd_) {
-      task_->requestTerminate();
+      task_->requestCancel();
     }
   }
 
@@ -117,7 +117,7 @@ class TaskCursor {
     return current_;
   }
 
-  std::shared_ptr<Task> task() {
+  const std::shared_ptr<Task>& task() {
     return task_;
   }
 
