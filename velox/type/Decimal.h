@@ -213,7 +213,9 @@ class DecimalCasts {
 void parseTo(folly::StringPiece in, Decimal& out);
 
 template <typename T>
-void toAppend(const ::facebook::velox::Decimal& value, T* result) {}
+void toAppend(const ::facebook::velox::Decimal& value, T* result) {
+  result->append(value.toString());
+}
 } // namespace facebook::velox
 
 namespace std {

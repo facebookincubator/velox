@@ -90,7 +90,7 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
-
+class Decimal128;
 class ArrayType;
 class MapType;
 class RowType;
@@ -270,13 +270,13 @@ struct TypeTraits<TypeKind::DATE> {
 
 template <>
 struct TypeTraits<TypeKind::DECIMAL> {
-  using ImplType = ScalarType<TypeKind::DECIMAL>;
-  using NativeType = Decimal;
-  using DeepCopiedType = Decimal;
+  using ImplType = Decimal128;
+  using NativeType = int128_t;
+  using DeepCopiedType = NativeType;
   static constexpr uint32_t minSubTypes = 0;
   static constexpr uint32_t maxSubTypes = 0;
   static constexpr TypeKind typeKind = TypeKind::DECIMAL;
-  static constexpr bool isPrimitiveType = false;
+  static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "DECIMAL";
 };
@@ -515,6 +515,69 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::name;
   }
 };
+
+class Decimal128 : public TypeBase<TypeKind::DECIMAL> {
+ public:
+  /*
+   * typmod=4608 (18, 0). Default precision scale.
+   */
+  Decimal128(int typmod = 4608) : typmod_(typmod) {}
+
+  uint32_t size() const override {
+    return sizeof(Decimal);
+  }
+
+  bool operator==(const Type& other) const override {
+    return (
+        TypeKind::DECIMAL == other.kind() &&
+        this->typmod_ == dynamic_cast<const Decimal128*>(&other)->typmod());
+  }
+
+  // FOLLY_NOINLINE static const std::shared_ptr<const Decimal128> create(int
+  // typmod); FOLLY_NOINLINE static const std::shared_ptr<const Decimal128>
+  // create();
+
+  int typmod() const {
+    return typmod_;
+  }
+
+  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
+    throw std::invalid_argument{"scalar type has no children"};
+  }
+
+  std::string toString() const override {
+    return TypeTraits<TypeKind::DECIMAL>::name;
+  }
+
+  size_t cppSizeInBytes() const override {
+    if (TypeTraits<TypeKind::DECIMAL>::isFixedWidth) {
+      return sizeof(typename TypeTraits<TypeKind::DECIMAL>::NativeType);
+    }
+    // TODO: velox throws here for non fixed width types.
+    return Type::cppSizeInBytes();
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = TypeTraits<TypeKind::DECIMAL>::name;
+    return obj;
+  }
+
+ private:
+  int typmod_;
+};
+
+// const std::shared_ptr<const Decimal128> Decimal128::createDecimal() {
+//   return std::make_shared<const Decimal128>();
+// }
+//
+// const std::shared_ptr<const Decimal128> Decimal128::createDecimal(int typmod)
+// {
+//   // must create a type and store it in a global map with key as typmod and
+//   value as TypePtr.
+//  return std::make_shared<const Decimal128>(typmod);
+// }
 
 template <TypeKind KIND>
 class ScalarType : public TypeBase<KIND> {
@@ -863,7 +926,7 @@ using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
-using DecimalType = ScalarType<TypeKind::DECIMAL>;
+using DecimalType = Decimal128;
 
 // Used as T for SimpleVector subclasses that wrap another vector when
 // the wrapped vector is of a complex type. Applies to
@@ -882,7 +945,6 @@ struct ComplexType {
 
 template <TypeKind KIND>
 struct TypeFactory {
-  // default factory
   static std::shared_ptr<const typename TypeTraits<KIND>::ImplType> create() {
     return TypeTraits<KIND>::ImplType::create();
   }
@@ -1251,7 +1313,7 @@ VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 VELOX_SCALAR_ACCESSOR(DATE);
-VELOX_SCALAR_ACCESSOR(DECIMAL);
+// VELOX_SCALAR_ACCESSOR(DECIMAL);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <TypeKind KIND>
@@ -1509,7 +1571,28 @@ template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
 
 template <>
-struct CppToType<Decimal> : public CppToTypeBase<TypeKind::DECIMAL> {};
+struct CppToType<Decimal> : public CppToTypeBase<TypeKind::DECIMAL> {
+  static auto create() {
+    return std::make_shared<const Decimal128>();
+  }
+
+  static auto create(int typmod) {
+    // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
+    return std::make_shared<const Decimal128>(typmod);
+  }
+};
+
+template <>
+struct CppToType<int128_t> : public CppToTypeBase<TypeKind::DECIMAL> {
+  static auto create(int typmod) {
+    return std::make_shared<const Decimal128>(typmod);
+    // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
+  }
+  static auto create() {
+    return std::make_shared<const Decimal128>();
+    // return TypeFactory<TypeKind::DECIMAL>::create();
+  }
+};
 
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly

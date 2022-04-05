@@ -54,7 +54,7 @@ void generateJsonTyped(
         std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
       result.append(std::to_string(value));
     } else {
-      folly::toAppend<std::string, T>(value, &result);
+      folly::toAppend(value, &result);
     }
 
     if constexpr (isMapKey) {
