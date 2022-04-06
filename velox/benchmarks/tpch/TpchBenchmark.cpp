@@ -51,13 +51,22 @@ static bool validateDataFormat(const char* flagname, const std::string& value) {
       << std::endl;
   return false;
 }
+static bool isFlagSet(const char* flagName) {
+  gflags::CommandLineFlagInfo flagInfo;
+  gflags::GetCommandLineFlagInfo(flagName, &flagInfo);
+  return !flagInfo.is_default;
+}
 } // namespace
 
 DEFINE_string(data_path, "", "Root path of TPC-H data");
 DEFINE_int32(
     run_query_verbose,
     -1,
-    "Run a given query and print execution statistics ");
+    "Run a given query and print execution statistics");
+DEFINE_bool(
+    include_custom_stats,
+    false,
+    "Include custom statistics along with execution statistics");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
@@ -127,15 +136,31 @@ BENCHMARK(q18) {
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
+  bool runQueryVerboseSet = isFlagSet("run_query_verbose");
+  if (!runQueryVerboseSet && isFlagSet("include_custom_stats")) {
+    std::cout
+        << "--include_custom_stats must be specified only with --run_query_verbose"
+        << std::endl;
+    exit(1);
+  }
   benchmark.initialize();
   queryBuilder =
       std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
   queryBuilder->initialize(FLAGS_data_path);
-  if (FLAGS_run_query_verbose == -1) {
+  if (!runQueryVerboseSet) {
     folly::runBenchmarks();
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
+    if (not task->isFinished()) {
+      // The Task can return results before the Driver is finished executing.
+      // Wait for the Task to finish. This will ensure the Drivers are finished
+      // executing and all the stats are updated.
+      auto& executor = folly::QueuedImmediateExecutor::instance();
+      auto future = task->stateChangeFuture(1'000'000).via(&executor);
+      future.wait();
+      EXPECT_TRUE(task->isFinished());
+    }
     const auto stats = task->taskStats();
     std::cout << fmt::format(
                      "Execution time: {}",
@@ -147,6 +172,8 @@ int main(int argc, char** argv) {
                      stats.numTotalSplits,
                      stats.numFinishedSplits)
               << std::endl;
-    std::cout << printPlanWithStats(*queryPlan.plan, stats, true) << std::endl;
+    std::cout << printPlanWithStats(
+                     *queryPlan.plan, stats, FLAGS_include_custom_stats)
+              << std::endl;
   }
 }
