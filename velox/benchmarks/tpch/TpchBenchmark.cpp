@@ -51,12 +51,6 @@ static bool validateDataFormat(const char* flagname, const std::string& value) {
       << std::endl;
   return false;
 }
-
-static bool isFlagSet(const char* flagName) {
-  gflags::CommandLineFlagInfo flagInfo;
-  gflags::GetCommandLineFlagInfo(flagName, &flagInfo);
-  return !flagInfo.is_default;
-}
 } // namespace
 
 DEFINE_string(data_path, "", "Root path of TPC-H data");
@@ -137,18 +131,11 @@ BENCHMARK(q18) {
 
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
-  bool runQueryVerboseSet = isFlagSet("run_query_verbose");
-  if (not runQueryVerboseSet && isFlagSet("include_custom_stats")) {
-    std::cout
-        << "--include_custom_stats must be specified only with --run_query_verbose"
-        << std::endl;
-    exit(1);
-  }
   benchmark.initialize();
   queryBuilder =
       std::make_shared<TpchQueryBuilder>(toFileFormat(FLAGS_data_format));
   queryBuilder->initialize(FLAGS_data_path);
-  if (!runQueryVerboseSet) {
+  if (FLAGS_run_query_verbose == -1) {
     folly::runBenchmarks();
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
