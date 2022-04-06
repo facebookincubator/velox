@@ -764,7 +764,7 @@ std::shared_ptr<Task> assertQuery(
   }
   auto task = cursor->task();
 
-  waitForTaskCompletion(task.get());
+  EXPECT_TRUE(waitForTaskCompletion(task.get()));
 
   return task;
 }
