@@ -704,6 +704,8 @@ TEST_P(TableScanTest, statsBasedSkippingBool) {
   auto task = assertQuery("SELECT c0 FROM tmp WHERE c1 = true");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(2, getSkippedStridesStat(task));
+  EXPECT_EQ(1, getTableScanStats(task).numSplits);
+  EXPECT_EQ(1, getTableScanStats(task).numDrivers);
 
   subfieldFilters = singleSubfieldFilter("c1", boolEqual(false));
   task = assertQuery("SELECT c0 FROM tmp WHERE c1 = false");
@@ -1928,8 +1930,7 @@ TEST_P(TableScanTest, groupedExecutionWithOutputBuffer) {
   // 'Delete results' from output buffer triggers 'set all output consumed',
   // which should finish the task.
   auto outputBufferManager =
-      PartitionedOutputBufferManager::getInstance(task->queryCtx()->host())
-          .lock();
+      PartitionedOutputBufferManager::getInstance().lock();
   outputBufferManager->deleteResults(task->taskId(), 0);
 
   // Task must be finished at this stage.
