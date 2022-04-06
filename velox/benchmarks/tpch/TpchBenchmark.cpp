@@ -51,6 +51,7 @@ static bool validateDataFormat(const char* flagname, const std::string& value) {
       << std::endl;
   return false;
 }
+
 static bool isFlagSet(const char* flagName) {
   gflags::CommandLineFlagInfo flagInfo;
   gflags::GetCommandLineFlagInfo(flagName, &flagInfo);
@@ -137,7 +138,7 @@ BENCHMARK(q18) {
 int main(int argc, char** argv) {
   folly::init(&argc, &argv, false);
   bool runQueryVerboseSet = isFlagSet("run_query_verbose");
-  if (!runQueryVerboseSet && isFlagSet("include_custom_stats")) {
+  if (not runQueryVerboseSet && isFlagSet("include_custom_stats")) {
     std::cout
         << "--include_custom_stats must be specified only with --run_query_verbose"
         << std::endl;
@@ -152,15 +153,10 @@ int main(int argc, char** argv) {
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
-    if (not task->isFinished()) {
-      // The Task can return results before the Driver is finished executing.
-      // Wait for the Task to finish. This will ensure the Drivers are finished
-      // executing and all the stats are updated.
-      auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->stateChangeFuture(1'000'000).via(&executor);
-      future.wait();
-      EXPECT_TRUE(task->isFinished());
-    }
+    // The Task can return results before the Driver is finished executing.
+    // Wait for the Task to finish. This will ensure the Drivers are finished
+    // executing and all the stats are updated.
+    waitForTaskCompletion(task.get());
     const auto stats = task->taskStats();
     std::cout << fmt::format(
                      "Execution time: {}",
