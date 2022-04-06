@@ -40,6 +40,8 @@ void Writer::write(const VectorPtr& slice) {
     VELOX_CHECK_GT(length, 0);
     if (shouldFlush(context, length)) {
       abandonLowValueDictionaries();
+      // D35354681 will avoid unnecessarily churns in the
+      // flush policy.
       if (shouldFlush(context, length)) {
         flush();
       }

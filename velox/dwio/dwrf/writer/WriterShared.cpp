@@ -304,6 +304,8 @@ void WriterShared::flushStripe(bool close) {
     createRowIndexEntry();
   }
 
+  auto preFlushMem = context.getTotalMemoryUsage();
+
   auto& handler = context.getEncryptionHandler();
   EncodingManager encodingManager{handler};
 
@@ -318,6 +320,8 @@ void WriterShared::flushStripe(bool close) {
       preFlushStreamMemoryUsage;
   context.recordFlushOverhead(flushOverhead);
   metrics.flushOverhead = flushOverhead;
+
+  auto postFlushMem = context.getTotalMemoryUsage();
 
   auto& sink = getSink();
   auto stripeOffset = sink.size();
@@ -442,9 +446,13 @@ void WriterShared::flushStripe(bool close) {
   metrics.close = close;
 
   LOG(INFO) << fmt::format(
-      "Flush overhead = {}, data length = {}",
+      "Stripe {}: Flush overhead = {}, data length = {}, pre flush mem = {}, post flush mem = {}. Closing = {}",
+      metrics.stripeIndex,
       metrics.flushOverhead,
-      metrics.stripeSize);
+      metrics.stripeSize,
+      preFlushMem,
+      postFlushMem,
+      metrics.close);
   // Add flush overhead and other ratio logging.
   context.metricLogger->logStripeFlush(metrics);
 
@@ -561,6 +569,8 @@ void WriterShared::flush() {
 
 void WriterShared::close() {
   flushInternal(true);
+  // Use IFlushPolicy::close() in the future.
+  flushPolicy_ = nullptr;
   WriterBase::close();
 }
 
