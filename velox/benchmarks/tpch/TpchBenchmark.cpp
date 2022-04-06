@@ -140,9 +140,6 @@ int main(int argc, char** argv) {
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
-    // The Task can return results before the Driver is finished executing.
-    // Wait for the Task to finish. This will ensure the Drivers are finished
-    // executing and all the stats are updated.
     waitForTaskCompletion(task.get());
     const auto stats = task->taskStats();
     std::cout << fmt::format(

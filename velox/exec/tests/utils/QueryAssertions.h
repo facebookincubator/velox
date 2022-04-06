@@ -111,6 +111,9 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(exec::Task*)> addSplits);
 
+// The Task can return results before the Driver is finished executing.
+// Wait for the Task to finish before returning to ensure it's stable
+// e.g. the Driver isn't updating it anymore.
 void waitForTaskCompletion(exec::Task* task);
 
 std::shared_ptr<Task> assertQuery(

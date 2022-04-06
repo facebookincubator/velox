@@ -720,9 +720,6 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
 
 void waitForTaskCompletion(exec::Task* task) {
   if (not task->isFinished()) {
-    // The Task can return results before the Driver is finished executing.
-    // Wait for the Task to finish before returning it to ensure it's stable
-    // e.g. the Driver isn't updating it anymore.
     auto& executor = folly::QueuedImmediateExecutor::instance();
     auto future = task->stateChangeFuture(1'000'000).via(&executor);
     future.wait();
