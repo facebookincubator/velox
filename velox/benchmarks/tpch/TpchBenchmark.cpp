@@ -51,6 +51,11 @@ static bool validateDataFormat(const char* flagname, const std::string& value) {
       << std::endl;
   return false;
 }
+
+void ensureTaskCompletion(exec::Task* task) {
+  // ASSERT_TRUE requires a function with return type void.
+  ASSERT_TRUE(waitForTaskCompletion(task));
+}
 } // namespace
 
 DEFINE_string(data_path, "", "Root path of TPC-H data");
@@ -140,7 +145,7 @@ int main(int argc, char** argv) {
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
     const auto task = benchmark.run(queryPlan);
-    waitForTaskCompletion(task.get());
+    ensureTaskCompletion(task.get());
     const auto stats = task->taskStats();
     std::cout << fmt::format(
                      "Execution time: {}",

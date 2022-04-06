@@ -114,7 +114,8 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish before returning to ensure
 /// it's stable e.g. the Driver isn't updating it anymore.
-void waitForTaskCompletion(
+/// Returns true if the task is completed before maxWaitMicros expires.
+bool waitForTaskCompletion(
     exec::Task* task,
     uint64_t maxWaitMicros = 1'000'000);
 

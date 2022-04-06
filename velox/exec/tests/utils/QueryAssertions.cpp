@@ -718,13 +718,14 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
   return {std::move(cursor), std::move(result)};
 }
 
-void waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
+bool waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
   if (not task->isFinished()) {
     auto& executor = folly::QueuedImmediateExecutor::instance();
     auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
     future.wait();
-    EXPECT_TRUE(task->isFinished());
+    return task->isFinished();
   }
+  return true;
 }
 
 std::shared_ptr<Task> assertQuery(
