@@ -98,7 +98,7 @@ namespace facebook::velox::substrait {
 
 ::substrait::NamedStruct*
 VeloxToSubstraitTypeConvertor::veloxRowTypePtrToSubstraitNamedStruct(
-    velox::RowTypePtr vRow,
+    const velox::RowTypePtr& vRow,
     ::substrait::NamedStruct* sNamedStruct) {
   int64_t vSize = vRow->size();
   std::vector<std::string> vNames = vRow->names();
@@ -120,7 +120,7 @@ VeloxToSubstraitTypeConvertor::veloxRowTypePtrToSubstraitNamedStruct(
 VeloxToSubstraitTypeConvertor::processVeloxValueByType(
     ::substrait::Expression_Literal_Struct* sLitValue,
     ::substrait::Expression_Literal* sField,
-    VectorPtr children) {
+    const velox::VectorPtr& children) {
   // to handle the null value. TODO need to confirm
   std::optional<vector_size_t> nullCount = children->getNullCount();
   // should be the same with rowValue->type();
@@ -254,7 +254,7 @@ VeloxToSubstraitTypeConvertor::processVeloxValueByType(
 
 ::substrait::Expression_Literal*
 VeloxToSubstraitTypeConvertor::processVeloxNullValueByCount(
-    std::shared_ptr<const Type> childType,
+    const velox::TypePtr& childType,
     std::optional<vector_size_t> nullCount,
     ::substrait::Expression_Literal_Struct* sLitValue,
     ::substrait::Expression_Literal* sField) {
@@ -268,7 +268,7 @@ VeloxToSubstraitTypeConvertor::processVeloxNullValueByCount(
 ::substrait::Expression_Literal*
 VeloxToSubstraitTypeConvertor::processVeloxNullValue(
     ::substrait::Expression_Literal* sField,
-    std::shared_ptr<const Type> childType) {
+    const velox::TypePtr& childType) {
   switch (childType->kind()) {
     case velox::TypeKind::BOOLEAN: {
       ::substrait::Type_Boolean* nullValue = new ::substrait::Type_Boolean();

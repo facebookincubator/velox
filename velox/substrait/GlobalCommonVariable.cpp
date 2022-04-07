@@ -23,12 +23,13 @@ GlobalCommonVarSingleton& GlobalCommonVarSingleton::getInstance() {
   return instance;
 }
 
-::substrait::Plan* GlobalCommonVarSingleton::getSPlan() const {
+std::shared_ptr<::substrait::Plan> GlobalCommonVarSingleton::getSPlan() const {
   return sPlan_;
 }
 
-void GlobalCommonVarSingleton::setSPlan(::substrait::Plan* s_plan) {
-  sPlan_ = s_plan;
+void GlobalCommonVarSingleton::setSPlan(
+    std::shared_ptr<::substrait::Plan> sPlan) {
+  sPlan_ = sPlan;
 }
 
 } // namespace facebook::velox::substrait

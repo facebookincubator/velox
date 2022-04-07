@@ -33,20 +33,18 @@ class GlobalCommonVarSingleton {
 
   GlobalCommonVarSingleton& operator=(GlobalCommonVarSingleton const&) = delete;
 
-  ~GlobalCommonVarSingleton() {
-    free(sPlan_);
-  };
+  ~GlobalCommonVarSingleton(){};
 
-  ::substrait::Plan* getSPlan() const;
+  std::shared_ptr<::substrait::Plan> getSPlan() const;
 
-  void setSPlan(::substrait::Plan* s_plan);
+  void setSPlan(std::shared_ptr<::substrait::Plan> sPlan);
 
  protected:
   // An intermediate variable to help us get the corresponding function mapping
   // relationship when convert from substrait to velox
-  ::substrait::Plan* sPlan_;
+  std::shared_ptr<::substrait::Plan> sPlan_;
 
  private:
-  GlobalCommonVarSingleton() : sPlan_(new ::substrait::Plan){};
+  GlobalCommonVarSingleton() : sPlan_(std::make_shared<::substrait::Plan>()){};
 };
 } // namespace facebook::velox::substrait

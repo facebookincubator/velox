@@ -24,10 +24,11 @@ class VeloxToSubstraitFuncConvertor {
  public:
   uint64_t registerSubstraitFunction(std::string name);
 
+ private:
   // the function mapping get from velox node
-  std::unordered_map<std::string, uint64_t> function_map_;
+  std::unordered_map<std::string, uint64_t> functionMap_;
   // the function id in the function mapping
-  uint64_t last_function_id = 0;
+  uint64_t lastFunctionId_ = 0;
 };
 
 } // namespace facebook::velox::substrait

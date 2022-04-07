@@ -17,30 +17,26 @@
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/tests/VectorMaker.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::test;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::substrait;
 
-using facebook::velox::test::BatchMaker;
+// using facebook::velox::test::BatchMaker;
 
 class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
  protected:
-  std::shared_ptr<const RowType> rowType_{
-      ROW({"c0", "c1", "c2", "c3"},
-          {INTEGER(), INTEGER(), INTEGER(), INTEGER()})};
-
-  /*!
-   *
-   * @param size  the number of RowVectorPtr.
-   * @param childSize the size of rowType_, the number of columns
-   * @param batchSize batch size.
-   * @return std::vector<RowVectorPtr>
-   */
+  /// the function used to make data
+  /// \param size the number of RowVectorPtr.
+  /// \param childSize the size of rowType_, the number of columns
+  /// \param batchSize batch size.
+  /// \return std::vector<RowVectorPtr>
   std::vector<RowVectorPtr>
   makeVector(int64_t size, int64_t childSize, int64_t batchSize) {
     std::vector<RowVectorPtr> vectors;
@@ -63,51 +59,46 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     return vectors;
   };
 
-  void assertVeloxSubstraitRoundTripProject(
-      std::vector<RowVectorPtr>&& vectors) {
-    auto vPlan = PlanBuilder()
-                     .values(vectors)
-                     .project(std::vector<std::string>{"c0", "c1"})
-                     .planNode();
-
-    assertQuery(vPlan, "SELECT c0, c1  FROM tmp");
-
-    // Convert Velox Plan to Substrait Plan
-    v2SPlanConvertor->veloxToSubstraitIR(vPlan, *sPlan);
-
-    // convert back to Velox PlanNode.
-    std::shared_ptr<const PlanNode> vPlan2 =
-        s2VPlanConvertor->toVeloxPlan(*sPlan);
-    assertQuery(vPlan2, "SELECT c0, c1 FROM tmp");
-  }
-
   void assertVeloxToSubstraitProject(std::vector<RowVectorPtr>&& vectors) {
     auto vPlan = PlanBuilder()
                      .values(vectors)
-                     .project(std::vector<std::string>{"c0 + c1", "c1-c2"})
+                     .project({"c0 + c1", "c1 - c2"})
                      .planNode();
 
-    assertQuery(vPlan, "SELECT  c0 + c1, c1-c2 FROM tmp");
+    assertQuery(vPlan, "SELECT  c0 + c1, c1 - c2 FROM tmp");
 
     // Convert Velox Plan to Substrait Plan
-    v2SPlanConvertor->veloxToSubstraitIR(vPlan, *sPlan);
+    v2SPlanConvertor_.veloxToSubstraitIR(vPlan, sPlan_);
+  }
+
+  void assertVeloxToSubstraitFilter(
+      std::vector<RowVectorPtr>&& vectors,
+      const std::string& filter =
+          "(c2 < 1000) and (c1 between 0.6 and 1.6) and (c0 >= 100)") {
+    auto vPlan = PlanBuilder().values(vectors).filter(filter).planNode();
+
+    assertQuery(vPlan, "SELECT * FROM tmp WHERE " + filter);
+    v2SPlanConvertor_.veloxToSubstraitIR(vPlan, sPlan_);
   }
 
   void SetUp() override {
-    v2SPlanConvertor = new VeloxToSubstraitPlanConvertor();
-    s2VPlanConvertor = new SubstraitToVeloxPlanConvertor();
-    sPlan = new ::substrait::Plan();
+    OperatorTestBase::SetUp();
+
+    rowType_ = ROW(
+        {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
   }
 
   void TearDown() override {
-    delete v2SPlanConvertor;
-    delete s2VPlanConvertor;
-    delete sPlan;
+    OperatorTestBase::TearDown();
   }
 
-  VeloxToSubstraitPlanConvertor* v2SPlanConvertor;
-  SubstraitToVeloxPlanConvertor* s2VPlanConvertor;
-  ::substrait::Plan* sPlan;
+  VeloxToSubstraitPlanConvertor v2SPlanConvertor_;
+  ::substrait::Plan sPlan_;
+  std::shared_ptr<const RowType> rowType_;
+  std::unique_ptr<memory::MemoryPool> pool_{
+      memory::getDefaultScopedMemoryPool()};
+  std::unique_ptr<facebook::velox::test::VectorMaker> vectorMaker_{
+      std::make_unique<facebook::velox::test::VectorMaker>(pool_.get())};
 };
 
 TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitProjectNode) {
@@ -116,4 +107,11 @@ TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitProjectNode) {
   createDuckDbTable(vectors);
 
   assertVeloxToSubstraitProject(std::move(vectors));
+}
+
+TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitFilterNode) {
+  std::vector<RowVectorPtr> vectors;
+  vectors = makeVector(3, 4, 2);
+  createDuckDbTable(vectors);
+  assertVeloxToSubstraitFilter(std::move(vectors));
 }

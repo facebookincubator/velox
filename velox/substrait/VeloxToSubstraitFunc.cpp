@@ -25,19 +25,19 @@ uint64_t VeloxToSubstraitFuncConvertor::registerSubstraitFunction(
   GlobalCommonVarSingleton& sGlobSingleton =
       GlobalCommonVarSingleton::getInstance();
 
-  ::substrait::Plan* sPlanSingleton = sGlobSingleton.getSPlan();
+  std::shared_ptr<::substrait::Plan> sPlanSingleton = sGlobSingleton.getSPlan();
 
-  if (function_map_.find(name) == function_map_.end()) {
-    auto function_id = last_function_id++;
+  if (functionMap_.find(name) == functionMap_.end()) {
+    auto functionId = lastFunctionId_++;
     auto sFun = sPlanSingleton->add_extensions()->mutable_extension_function();
-    sFun->set_function_anchor(function_id);
+    sFun->set_function_anchor(functionId);
     sFun->set_name(name);
     sFun->set_extension_uri_reference(44);
 
-    function_map_[name] = function_id;
+    functionMap_[name] = functionId;
   }
   sGlobSingleton.setSPlan(sPlanSingleton);
-  return function_map_[name];
+  return functionMap_[name];
 }
 
 } // namespace facebook::velox::substrait

@@ -163,7 +163,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       JsonToProtoConverter::readFromFile(planPath, substraitPlan);
 
       auto planConverter = std::make_shared<
-          facebook::velox::substrait::SubstraitToVeloxPlanConvertor>();
+          facebook::velox::substrait::SubstraitVeloxPlanConverter>();
       // Convert to Velox PlanNode.
       auto planNode = planConverter->toVeloxPlan(substraitPlan, pool_.get());
 
