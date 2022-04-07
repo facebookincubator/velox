@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <folly/Random.h>
+#include <random>
+
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -35,25 +38,25 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
   /// the function used to make data
   /// \param size the number of RowVectorPtr.
   /// \param childSize the size of rowType_, the number of columns
-  /// \param batchSize batch size.
+  /// \param batchSize batch size.  row number
   /// \return std::vector<RowVectorPtr>
   std::vector<RowVectorPtr>
   makeVector(int64_t size, int64_t childSize, int64_t batchSize) {
     std::vector<RowVectorPtr> vectors;
     for (int i = 0; i < size; i++) {
       std::vector<VectorPtr> children;
+      std::mt19937 gen(std::mt19937::default_seed);
       for (int j = 0; j < childSize; j++) {
-        VectorPtr child = VELOX_DYNAMIC_TYPE_DISPATCH(
-            BatchMaker::createVector,
-            rowType_->childAt(j)->kind(),
-            rowType_->childAt(j),
-            batchSize,
-            *pool_);
+        std::vector<int32_t> childVector(
+            batchSize, static_cast<int32_t>(folly::Random::rand32(gen)));
+        VectorPtr child =
+            createSpecificScalar<int32_t>(batchSize, childVector, *pool_);
         children.emplace_back(child);
       }
 
-      auto rowVector = std::make_shared<RowVector>(
-          pool_.get(), rowType_, BufferPtr(), batchSize, children);
+      std::vector<std::string> childrenNames = rowType_->names();
+      auto rowVector = vectorMaker_->rowVector(childrenNames, children);
+
       vectors.emplace_back(rowVector);
     }
     return vectors;
@@ -79,6 +82,23 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
 
     assertQuery(vPlan, "SELECT * FROM tmp WHERE " + filter);
     v2SPlanConvertor_.veloxToSubstraitIR(vPlan, sPlan_);
+  }
+
+  // This method can be used to create a Fixed-width type of Vector without Null
+  // values.
+  template <typename T>
+  VectorPtr createSpecificScalar(
+      size_t size,
+      std::vector<T> vals,
+      facebook::velox::memory::MemoryPool& pool) {
+    facebook::velox::BufferPtr values = AlignedBuffer::allocate<T>(size, &pool);
+    auto valuesPtr = values->asMutableRange<T>();
+    facebook::velox::BufferPtr nulls = nullptr;
+    for (size_t i = 0; i < size; ++i) {
+      valuesPtr[i] = vals[i];
+    }
+    return std::make_shared<facebook::velox::FlatVector<T>>(
+        &pool, nulls, size, values, std::vector<BufferPtr>{});
   }
 
   void SetUp() override {
