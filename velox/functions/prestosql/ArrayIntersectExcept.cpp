@@ -455,10 +455,10 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures(
     const std::string& returnType) {
   return {exec::FunctionSignatureBuilder()
-              .typeVariable("T")
+              .typeVariable("T") // Decimal
               .returnType(returnType)
-              .argumentType("array(T)")
-              .argumentType("array(T)")
+              .argumentType("array(T)") // decimal(p1,s1)
+              .argumentType("array(T)") // decimal(p2, s2)
               .build()};
 }
 

@@ -48,7 +48,7 @@ struct Int128 {
     this->value = rhs.value;
   }
 
-  Int128 operator+(Int128& rhs) {
+  Int128 operator+(const Int128& rhs) const {
     Int128 sum;
     VELOX_CHECK(!__builtin_add_overflow(this->value, rhs.value, &sum.value));
     return sum;
@@ -98,6 +98,12 @@ class Decimal {
     unscaledValue_ = value;
   }
 
+  inline Decimal operator+(const Decimal& rhs) const {
+    // Test implementation;
+    // Verify if these 2 decimals can be added together.
+    Int128 result = this->unscaledValue_ + rhs.getUnscaledValue();
+    return Decimal(result);
+  }
   // Needed for serialization of FlatVector<Decimal>
   operator StringView() const {VELOX_NYI()}
 

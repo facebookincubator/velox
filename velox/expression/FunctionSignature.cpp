@@ -61,9 +61,17 @@ size_t findNextComma(const std::string& str, size_t start) {
   return std::string::npos;
 }
 
-TypeSignature parseTypeSignature(const std::string& signature) {
+TypeSignature parseTypeSignature(
+    const std::string& signature,
+    std::unordered_set<std::string>* variables) {
   auto parenPos = signature.find('(');
   if (parenPos == std::string::npos) {
+    if (std::isdigit(signature[0])) {
+      return TypeSignature(signature, {}, LONG_LITERAL);
+    }
+    if (variables && variables->find(signature) != variables->end()) {
+      return TypeSignature(signature, {}, VARIABLE);
+    }
     return TypeSignature(signature, {});
   }
 
@@ -81,7 +89,7 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   while (commaPos != std::string::npos) {
     auto token = signature.substr(prevPos, commaPos - prevPos);
     boost::algorithm::trim(token);
-    nestedTypes.emplace_back(parseTypeSignature(token));
+    nestedTypes.emplace_back(parseTypeSignature(token, variables));
 
     prevPos = commaPos + 1;
     commaPos = findNextComma(signature, prevPos);
@@ -89,7 +97,7 @@ TypeSignature parseTypeSignature(const std::string& signature) {
 
   auto token = signature.substr(prevPos, endParenPos - prevPos);
   boost::algorithm::trim(token);
-  nestedTypes.emplace_back(parseTypeSignature(token));
+  nestedTypes.emplace_back(parseTypeSignature(token, variables));
 
   return TypeSignature(baseType, std::move(nestedTypes));
 }
@@ -99,6 +107,10 @@ void validateBaseTypeAndCollectTypeParams(
     const std::unordered_set<std::string>& typeParams,
     const TypeSignature& arg,
     std::unordered_set<std::string>& collectedTypeVariables) {
+  if (arg.kind() == ParameterKind::LONG_LITERAL ||
+      arg.kind() == ParameterKind::VARIABLE) {
+    return;
+  }
   if (!typeParams.count(arg.baseType())) {
     auto typeName = boost::algorithm::to_upper_copy(arg.baseType());
 

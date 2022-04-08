@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace facebook::velox::exec {
@@ -40,11 +41,18 @@ class TypeVariableConstraint {
   const std::string name_;
 };
 
+enum ParameterKind { TYPE, NAMED_TYPE, VARIABLE, LONG_LITERAL };
+
 // Base type (e.g. map) and optional parameters (e.g. K, V).
 class TypeSignature {
  public:
-  TypeSignature(std::string baseType, std::vector<TypeSignature> parameters)
-      : baseType_{std::move(baseType)}, parameters_{std::move(parameters)} {}
+  TypeSignature(
+      std::string baseType,
+      std::vector<TypeSignature> parameters,
+      ParameterKind kind = TYPE)
+      : baseType_{std::move(baseType)},
+        parameters_{std::move(parameters)},
+        kind_(kind) {}
 
   const std::string& baseType() const {
     return baseType_;
@@ -56,6 +64,10 @@ class TypeSignature {
 
   std::string toString() const;
 
+  ParameterKind kind() const {
+    return kind_;
+  }
+
   bool operator==(const TypeSignature& rhs) const {
     return baseType_ == rhs.baseType_ && parameters_ == rhs.parameters_;
   }
@@ -63,6 +75,7 @@ class TypeSignature {
  private:
   const std::string baseType_;
   const std::vector<TypeSignature> parameters_;
+  ParameterKind kind_;
 };
 
 class FunctionSignature {
@@ -152,7 +165,11 @@ class AggregateFunctionSignature : public FunctionSignature {
 ///     - map(K,V)
 ///     - row(bigint,array(tinyint),T)
 ///     - function(S,T,R)
-TypeSignature parseTypeSignature(const std::string& signature);
+///     - decimal(12,3)
+///     - decimal(x,y)
+TypeSignature parseTypeSignature(
+    const std::string& signature,
+    std::unordered_set<std::string>* variables = nullptr);
 
 /// Convenience class for creating FunctionSignature instances.
 /// Example of usage:
@@ -186,6 +203,12 @@ class FunctionSignatureBuilder {
 
   FunctionSignatureBuilder& argumentType(const std::string& type) {
     argumentTypes_.emplace_back(parseTypeSignature(type));
+    return *this;
+  }
+
+  FunctionSignatureBuilder& argumentType(
+      const std::string& type,
+      const std::unordered_set<std::string>& typeParams) {
     return *this;
   }
 

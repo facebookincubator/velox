@@ -90,7 +90,7 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
-class Decimal128;
+class DecimalType;
 class ArrayType;
 class MapType;
 class RowType;
@@ -270,7 +270,7 @@ struct TypeTraits<TypeKind::DATE> {
 
 template <>
 struct TypeTraits<TypeKind::DECIMAL> {
-  using ImplType = Decimal128;
+  using ImplType = DecimalType;
   using NativeType = int128_t;
   using DeepCopiedType = NativeType;
   static constexpr uint32_t minSubTypes = 0;
@@ -516,22 +516,36 @@ class TypeBase : public Type {
   }
 };
 
-class Decimal128 : public TypeBase<TypeKind::DECIMAL> {
+class DecimalType : public TypeBase<TypeKind::DECIMAL> {
  public:
   /*
    * typmod=4608 (18, 0). Default precision scale.
    */
-  Decimal128(int typmod = 4608) : typmod_(typmod) {}
+  DecimalType(int8_t precision = 18, int8_t scale = 0)
+      : typmod_(precision << 8 | scale) {}
 
   uint32_t size() const override {
-    return sizeof(Decimal);
+    // Decimal type accepts 2 parameters (precision and scale).
+    // But doesn't have any child types.
+    return 2;
   }
 
   bool operator==(const Type& other) const override {
     return (
         TypeKind::DECIMAL == other.kind() &&
-        this->typmod_ == dynamic_cast<const Decimal128*>(&other)->typmod());
+        this->typmod_ == dynamic_cast<const DecimalType*>(&other)->typmod());
   }
+
+  bool compareParameter(const int pos, std::string parameter) const {
+    if (pos == 0) {
+      std::string precision = std::to_string(typmod_ >> 8);
+      return precision.compare(parameter) == 0;
+    } else if (pos == 1) {
+      std::string scale = std::to_string(((int8_t)typmod_));
+      return scale.compare(parameter) == 0;
+    }
+    throw std::invalid_argument{"Invalid parameter position"};
+  };
 
   // FOLLY_NOINLINE static const std::shared_ptr<const Decimal128> create(int
   // typmod); FOLLY_NOINLINE static const std::shared_ptr<const Decimal128>
@@ -926,7 +940,6 @@ using TimestampType = ScalarType<TypeKind::TIMESTAMP>;
 using VarcharType = ScalarType<TypeKind::VARCHAR>;
 using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
-using DecimalType = Decimal128;
 
 // Used as T for SimpleVector subclasses that wrap another vector when
 // the wrapped vector is of a complex type. Applies to
@@ -1007,7 +1020,9 @@ std::shared_ptr<const TimestampType> TIMESTAMP();
 
 std::shared_ptr<const DateType> DATE();
 
-std::shared_ptr<const DecimalType> DECIMAL();
+std::shared_ptr<const DecimalType> DECIMAL(
+    const int8_t precision = 18,
+    const int8_t scale = 0);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
@@ -1573,23 +1588,23 @@ struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
 template <>
 struct CppToType<Decimal> : public CppToTypeBase<TypeKind::DECIMAL> {
   static auto create() {
-    return std::make_shared<const Decimal128>();
+    return std::make_shared<const DecimalType>();
   }
 
   static auto create(int typmod) {
     // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
-    return std::make_shared<const Decimal128>(typmod);
+    return std::make_shared<const DecimalType>(typmod);
   }
 };
 
 template <>
 struct CppToType<int128_t> : public CppToTypeBase<TypeKind::DECIMAL> {
   static auto create(int typmod) {
-    return std::make_shared<const Decimal128>(typmod);
+    return std::make_shared<const DecimalType>(typmod);
     // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
   }
   static auto create() {
-    return std::make_shared<const Decimal128>();
+    return std::make_shared<const DecimalType>();
     // return TypeFactory<TypeKind::DECIMAL>::create();
   }
 };

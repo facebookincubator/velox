@@ -80,6 +80,15 @@ bool SignatureBinder::tryBind(
     }
 
     for (auto i = 0; i < params.size(); i++) {
+      if (params[i].kind() == ParameterKind::LONG_LITERAL) {
+        return checkTypesWithLiterals(params[i], actualType, i);
+      }
+
+      if (params[i].kind() == ParameterKind::VARIABLE) {
+        // verify if this position is a parameter in the type
+        return true;
+      }
+
       if (!tryBind(params[i], actualType->childAt(i))) {
         return false;
       }
@@ -111,7 +120,9 @@ TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, TypePtr>& bindings) {
   const auto& params = typeSignature.parameters();
-
+  if (typeSignature.baseType().compare("DECIMAL") == 0) {
+    return resolveDecimalType(typeSignature);
+  }
   std::vector<TypePtr> children;
   children.reserve(params.size());
   for (auto& param : params) {
@@ -148,5 +159,23 @@ TypePtr SignatureBinder::tryResolveType(
   }
 
   return it->second;
+}
+bool SignatureBinder::checkTypesWithLiterals(
+    const TypeSignature& parameterSignature,
+    const TypePtr& baseType,
+    const int pos) {
+  if (baseType->kind() == TypeKind::DECIMAL) {
+    return dynamic_cast<const DecimalType*>(baseType.get())
+        ->compareParameter(pos, parameterSignature.baseType());
+  }
+}
+TypePtr SignatureBinder::resolveDecimalType(const TypeSignature& signature) {
+  int parametersLong[2];
+  int i = 0;
+  for (auto param : signature.parameters()) {
+    parametersLong[i] = stoi(param.baseType());
+    ++i;
+  }
+  return DECIMAL(parametersLong[0], parametersLong[1]);
 }
 } // namespace facebook::velox::exec
