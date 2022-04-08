@@ -108,11 +108,13 @@ namespace {
 void addKeys(
     std::stringstream& stream,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& keys) {
+  bool isNotFirstKey = false;
   for (auto i = 0; i < keys.size(); ++i) {
-    if (i > 0) {
+    if (isNotFirstKey) {
       stream << ", ";
     }
     stream << keys[i]->name();
+    isNotFirstKey = true;
   }
 }
 } // namespace
@@ -126,11 +128,13 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
     stream << "] ";
   }
 
+  bool isNotFirstName = false;
   for (auto i = 0; i < aggregateNames_.size(); ++i) {
-    if (i > 0) {
+    if (isNotFirstName) {
       stream << ", ";
     }
     stream << aggregateNames_[i] << " := " << aggregates_[i]->toString();
+    isNotFirstName = true;
   }
 }
 
@@ -145,6 +149,20 @@ void ValuesNode::addDetails(std::stringstream& stream) const {
     totalCount += vector->size();
   }
   stream << totalCount << " rows in " << values_.size() << " vectors";
+}
+
+void ProjectNode::addDetails(std::stringstream& stream) const {
+  stream << "expressions: ";
+  bool isNotFirstProjection = false;
+  for (auto i = 0; i < projections_.size(); i++) {
+    auto& projection = projections_[i];
+    if (isNotFirstProjection) {
+      stream << ", ";
+    }
+    stream << "(" << names_[i] << ":" << projection->type()->toString() << ", "
+           << projection->toString() << ")";
+    isNotFirstProjection = true;
+  }
 }
 
 const std::vector<std::shared_ptr<const PlanNode>>& TableScanNode::sources()
@@ -285,11 +303,13 @@ AbstractJoinNode::AbstractJoinNode(
 void AbstractJoinNode::addDetails(std::stringstream& stream) const {
   stream << joinTypeName(joinType_) << " ";
 
+  bool isNotFirstKey = false;
   for (auto i = 0; i < leftKeys_.size(); ++i) {
-    if (i > 0) {
+    if (isNotFirstKey) {
       stream << " AND ";
     }
     stream << leftKeys_[i]->name() << "=" << rightKeys_[i]->name();
+    isNotFirstKey = true;
   }
 
   if (filter_) {
@@ -334,11 +354,13 @@ void addSortingKeys(
     std::stringstream& stream,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders) {
+  bool isNotFirstKey = false;
   for (auto i = 0; i < sortingKeys.size(); ++i) {
-    if (i > 0) {
+    if (isNotFirstKey) {
       stream << ", ";
     }
     stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
+    isNotFirstKey = true;
   }
 }
 } // namespace
