@@ -70,11 +70,12 @@ class InTest : public SparkFunctionBaseTest {
   auto in(std::optional<T> lhs, std::vector<std::optional<T>> rhs) {
     // We don't use evaluateOnce() because we can't get NaN through the DuckDB
     // parser.
-    std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
-    const auto argType = CppToType<T>::create();
-    args.push_back(std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"));
 
     auto getExpr = [&](bool asDictionary) {
+      std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
+      const auto argType = CppToType<T>::create();
+      args.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"));
       VectorPtr rhsArrayVector =
           vectorMaker_.arrayVectorNullable<T>({std::optional(rhs)});
       if (asDictionary) {
@@ -95,7 +96,7 @@ class InTest : public SparkFunctionBaseTest {
       exec::EvalCtx evalCtx(&execCtx_, &expr, data.get());
       std::vector<VectorPtr> results(1);
       expr.eval(SelectivityVector(1), &evalCtx, &results);
-      auto last = args.back();
+      // auto last = args.back();
       if (!results[0]->isNullAt(0))
         return results[0]->as<SimpleVector<bool>>()->valueAt(0);
       return std::nullopt;
