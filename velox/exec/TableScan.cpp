@@ -90,7 +90,7 @@ RowVectorPtr TableScan::getOutput() {
 
     const auto ioTimeStartMicros = getCurrentTimeMicro();
     auto data = dataSource_->next(readBatchSize_);
-    stats().addRuntimeStat(
+    stats().addRuntimeNanosStat(
         "dataSourceWallNanos",
         (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000);
     stats_.rawInputPositions = dataSource_->getCompletedRows();

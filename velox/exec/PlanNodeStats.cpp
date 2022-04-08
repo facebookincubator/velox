@@ -125,11 +125,16 @@ void printCustomStats(
   }
   width += 3;
 
-  for (const auto& entry : stats) {
+  // Copy to a map to get a deterministic output
+  std::map<std::string_view, RuntimeMetric> orderedStats;
+  for (const auto& [name, metric] : stats) {
+    orderedStats[name] = metric;
+  }
+
+  for (const auto& [name, metric] : orderedStats) {
     stream << std::endl;
-    stream << indentation << std::left << std::setw(width) << entry.first
-           << " sum: " << entry.second.sum << ", count: " << entry.second.count
-           << ", min: " << entry.second.min << ", max: " << entry.second.max;
+    stream << indentation << std::left << std::setw(width) << name;
+    metric.printMetric(stream);
   }
 }
 } // namespace

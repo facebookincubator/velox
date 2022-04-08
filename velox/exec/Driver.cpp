@@ -261,7 +261,7 @@ StopReason Driver::runInternal(
   // Update the queued time after entering the Task to ensure the stats have not
   // been deleted.
   if (curOpIndex_ < operators_.size()) {
-    operators_[curOpIndex_]->stats().addRuntimeStat(
+    operators_[curOpIndex_]->stats().addRuntimeNanosStat(
         "queuedWallNanos", queuedTime);
   }
 

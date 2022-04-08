@@ -615,17 +615,17 @@ void HiveDataSource::setPartitionValue(
   setConstantValue(spec, constValue);
 }
 
-std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {
+std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
   auto res = runtimeStats_.toMap();
   res.insert(
-      {{"numPrefetch", ioStats_->prefetch().count()},
-       {"prefetchBytes", ioStats_->prefetch().bytes()},
-       {"numStorageRead", ioStats_->read().count()},
-       {"storageReadBytes", ioStats_->read().bytes()},
-       {"numLocalRead", ioStats_->ssdRead().count()},
-       {"localReadBytes", ioStats_->ssdRead().bytes()},
-       {"numRamRead", ioStats_->ramHit().count()},
-       {"ramReadBytes", ioStats_->ramHit().bytes()}});
+      {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count(), kNone)},
+       {"prefetchBytes", RuntimeCounter(ioStats_->prefetch().bytes(), kByte)},
+       {"numStorageRead", RuntimeCounter(ioStats_->read().count(), kNone)},
+       {"storageReadBytes", RuntimeCounter(ioStats_->read().bytes(), kByte)},
+       {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count(), kNone)},
+       {"localReadBytes", RuntimeCounter(ioStats_->ssdRead().bytes(), kByte)},
+       {"numRamRead", RuntimeCounter(ioStats_->ramHit().count(), kNone)},
+       {"ramReadBytes", RuntimeCounter(ioStats_->ramHit().bytes(), kByte)}});
   return res;
 }
 

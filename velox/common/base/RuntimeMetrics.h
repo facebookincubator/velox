@@ -1,0 +1,61 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <sstream>
+
+namespace facebook::velox {
+
+enum RuntimeMetricKind { kNone, kNanos, kByte };
+
+struct RuntimeCounter {
+  RuntimeMetricKind kind{kNone};
+  int64_t value{0};
+
+  RuntimeCounter(int64_t val, RuntimeMetricKind valueKind = kNone)
+      : kind(valueKind), value(val) {}
+
+  RuntimeCounter() = default;
+};
+
+struct RuntimeMetric {
+  // sum, min, max have the same kind, count has kNone.
+  RuntimeMetricKind kind{kNone};
+  int64_t sum{0};
+  int64_t count{0};
+  int64_t min{std::numeric_limits<int64_t>::max()};
+  int64_t max{std::numeric_limits<int64_t>::min()};
+
+  void addValue(int64_t value, RuntimeMetricKind valueKind = kNone);
+
+  void addValue(const RuntimeCounter& value) {
+    addValue(value.value, value.kind);
+  }
+
+  void addByteValue(int64_t value) {
+    addValue(value, kByte);
+  }
+
+  void addNanosValue(int64_t value) {
+    addValue(value, kNanos);
+  }
+
+  void printMetric(std::stringstream& stream) const;
+
+  void merge(const RuntimeMetric& other);
+};
+} // namespace facebook::velox

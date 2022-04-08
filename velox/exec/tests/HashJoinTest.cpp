@@ -653,7 +653,7 @@ TEST_F(HashJoinTest, dynamicFilters) {
     // Inner join.
     core::PlanNodeId leftScanId;
     auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(probeType)
+                  .tableScan(probeType, "projection")
                   .capturePlanNodeId(leftScanId)
                   .hashJoin(
                       {"c0"},
