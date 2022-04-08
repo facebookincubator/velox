@@ -113,6 +113,135 @@ Sridhar Anumandla, Victor Zverovich, Wei He, Wenlei Xie, Yoav Helfman, Yuan
 Chao Chou, Zhenyuan Zhao, tanjialiang</p>
 </section>
 </section>
+<section id="feature-of-the-month">
+<h1>Feature Of The Month<a class="headerlink" href="#feature-of-the-month" title="Permalink to this headline">¶</a></h1>
+<section id="using-vector-readers-writers-to-simplify-dealing-with-velox-vectors">
+<h2>Using vector readers/writers to simplify dealing with Velox vectors.<a class="headerlink" href="#using-vector-readers-writers-to-simplify-dealing-with-velox-vectors" title="Permalink to this headline">¶</a></h2>
+<p>Although vector readers and writers were created originally as part of the simple function’s interface, they are highly
+convenient tools that can be used in isolation in aggregate and vector functions implementations, and in general
+anywhere we want to read or write vectors. Using those constructs reduces code size and simplifies it, without adding
+performance overhead.</p>
+<p>In this note, I will explain how such constructs can be used to read or write vectors in a simple convenient way.</p>
+<p>Using vector readers and vector writers has several benefits:</p>
+<ul class="simple">
+<li><p>Hides the complexity of decoding and significantly reduces code size, especially for nested complex types.</p></li>
+<li><p>Provides the user with STL-like objects that represent elements of maps, arrays, and tuples, making it easier to focus on the logic. E.g. convert an ArrayVector to a sequence of ArrayViews that have std::vector interface.</p></li>
+<li><p>Reduce duplicate code and bugs, especially for engineers without a lot of experience in Velox.</p></li>
+<li><p>VectorReaders and VectorWriters are efficient, lazy, and should always be preferred.</p></li>
+</ul>
+<section id="vector-reader">
+<h3>Vector reader<a class="headerlink" href="#vector-reader" title="Permalink to this headline">¶</a></h3>
+<p>Consider a vector  of type Array&lt;Map&lt;int, int&gt;&gt;. The code below reads the vector and iterates over its content.
+For every row, the code reads an array of maps stored at that row.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Decode the vector for rows of interest.</span>
+<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span><span class="w"></span>
+<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Define a vector reader for an Array&lt;Map&lt;int, int&gt;&gt;.</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span><span class="w"></span>
+
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// Check if the row is null.</span>
+<span class="w">    </span><span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">reader</span><span class="p">.</span><span class="n">isSet</span><span class="p">(</span><span class="n">row</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="k">return</span><span class="p">;</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Read the row as ArrayView. ArrayView has std::vector&lt;std::optional&lt;V&gt;&gt; interface.</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">[</span><span class="n">row</span><span class="p">];</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Elements of the array have std::map&lt;int, std::optional&lt;int&gt;&gt; interface.</span>
+<span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">.</span><span class="n">value</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">      </span><span class="p">...</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The general workflow is to:</p>
+<ol class="arabic simple">
+<li><p>Decode the vector for the rows of interest.</p></li>
+<li><p>Define vectorReader&lt;T&gt; where T is the type of the vector being read, T is expressed in the simple function type system.</p></li>
+<li><p>To read a row, call reader[row] and it will return a STL-like object that represents the elements at the row.</p></li>
+<li><p>The code above can be extended to any type supported in the simple function interface. The type returned by reader[row] will be the same input type in the call function in the simple function interface for that type. (e.g: bool, int, StringView, ArrayView ..etc).</p></li>
+</ol>
+</section>
+<section id="vector-writer">
+<h3>Vector writer<a class="headerlink" href="#vector-writer" title="Permalink to this headline">¶</a></h3>
+<p>Now consider a function that generates Array&lt;int64_t&gt; as an output. The result vector can be written as the following.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">result</span><span class="p">;</span><span class="w"></span>
+<span class="c1">// Here type is ArrayType(BIGINT()).</span>
+<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">pool_</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Define a vector writer. ArrayWriterT is a temp holder. Eventually, Array will be used</span>
+<span class="c1">// once old writers are deprecated.</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorWriter</span><span class="o">&lt;</span><span class="n">ArrayWriterT</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">;</span><span class="w"></span>
+
+<span class="c1">// Initialize the writer to write to result vector.</span>
+<span class="n">vectorWriter</span><span class="p">.</span><span class="n">init</span><span class="p">(</span><span class="o">*</span><span class="n">result</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ArrayVector</span><span class="o">&gt;</span><span class="p">());</span><span class="w"></span>
+
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="c1">// Specify the row to write.</span>
+<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">setOffset</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Get writer to the selected offset.</span>
+<span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">arrayWriter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">current</span><span class="p">();</span><span class="w"></span>
+<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="n">arrayWriter</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="mi">100</span><span class="p">);</span><span class="w"></span>
+<span class="w">    </span><span class="p">..</span><span class="n">etc</span><span class="w"></span>
+
+<span class="w">    </span><span class="c1">// Indicate writing for the row is done.</span>
+<span class="w">    </span><span class="n">vectorWriter</span><span class="p">.</span><span class="n">commit</span><span class="p">();</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+<span class="c1">// Indicate writing result vector is done.</span>
+<span class="n">vectorWriter</span><span class="p">.</span><span class="n">finish</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The general workflow is to:</p>
+<ol class="arabic simple">
+<li><p>Make sure the vector is writable for the rows of interest (ensureWritable).</p></li>
+<li><p>Define vectorWriter&lt;T&gt; where T is the type expressed in the simple function type system.</p></li>
+<li><p>Call init() to initialize the vectorWriter with the vector to write.</p></li>
+<li><p>To write to a specific row call setOffset(row) followed by current() to get the writer at that row.</p></li>
+<li><p>After finishing writing the row call commit(), or commit(false) to write a null.</p></li>
+<li><p>After finishing writing all rows call finish().</p></li>
+</ol>
+<p>Note the following:</p>
+<ul class="simple">
+<li><p>The type returned by current() is the writer type which is the same type that represents the output in the simple function interface. E.g: bool&amp;, int32_t&amp;, StringWriter, ArrayWriter, ..etc.</p></li>
+<li><p>More details about writers of complex types will be added to the documentation.</p></li>
+<li><p>The VectorWriter allows out-of-order writing to rows. E.g, writing row 0 after row 10. However, it does not allow writing to multiple rows in parallel.</p></li>
+</ul>
+</section>
+<section id="reading-optional-free-container">
+<h3>Reading optional-free container<a class="headerlink" href="#reading-optional-free-container" title="Permalink to this headline">¶</a></h3>
+<p>If the user knew that a vector does not have null data, there is an option to read an optional-free container using
+readNullFree(). For the example above, it will return a container similar to std::vector&lt;std::map&lt;int, int&gt;&gt; instead of
+std::vector&lt;std::optional&lt;std::map&lt;int, std::optional&lt;int&gt;&gt;&gt;.</p>
+<p>The type returned by readNullFree is the same input type passed to the callNullFree function in the simple function
+interface. The code below shows an example:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Decode the vector for rows of interest.</span>
+<span class="n">DecodedVector</span><span class="w"> </span><span class="n">decoded</span><span class="p">;</span><span class="w"></span>
+<span class="n">decoded</span><span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="n">vector</span><span class="p">,</span><span class="w"> </span><span class="n">rows</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Define a vector reader for an Array&lt;Map&lt;int, int&gt;&gt;.</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">VectorReader</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="n">reader</span><span class="p">(</span><span class="n">decoded</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Make sure there is no null data.</span>
+<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">decoded</span><span class="p">.</span><span class="n">mayHaveNullsRecursive</span><span class="p">());</span><span class="w"></span>
+
+<span class="n">rows</span><span class="p">.</span><span class="n">applyToSelected</span><span class="p">([</span><span class="o">&amp;</span><span class="p">](</span><span class="n">vector_size_t</span><span class="w"> </span><span class="n">row</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="c1">// Read the row as NullFreeArrayView with interface similar to std::vector&lt;V&gt;.</span>
+<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">arrayView</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">readNullFree</span><span class="p">(</span><span class="n">row</span><span class="p">);</span><span class="w"></span>
+
+<span class="w">  </span><span class="c1">// Elements of the array have std::map&lt;int, int&gt; interface.</span>
+<span class="w">  </span><span class="k">for</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="p">[</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">val</span><span class="p">]</span><span class="o">:</span><span class="w">  </span><span class="n">arrayView</span><span class="p">){</span><span class="w"></span>
+<span class="w">      </span><span class="p">...</span><span class="w"></span>
+<span class="w">  </span><span class="p">}</span><span class="w"></span>
+<span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
 
 
             <div class="clearer"></div>
@@ -131,6 +260,15 @@ Chao Chou, Zhenyuan Zhao, tanjialiang</p>
 <li><a class="reference internal" href="#performance-and-correctness-testing">Performance and Correctness Testing</a></li>
 <li><a class="reference internal" href="#debugging-experience">Debugging Experience</a></li>
 <li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#feature-of-the-month">Feature Of The Month</a><ul>
+<li><a class="reference internal" href="#using-vector-readers-writers-to-simplify-dealing-with-velox-vectors">Using vector readers/writers to simplify dealing with Velox vectors.</a><ul>
+<li><a class="reference internal" href="#vector-reader">Vector reader</a></li>
+<li><a class="reference internal" href="#vector-writer">Vector writer</a></li>
+<li><a class="reference internal" href="#reading-optional-free-container">Reading optional-free container</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
