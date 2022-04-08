@@ -162,7 +162,7 @@ TEST_F(ParquetTpchTest, Q6) {
   assertQuery(6, 2, 10);
 }
 
-TEST_F(ParquetTpchTest, Q18) {
+TEST_F(ParquetTpchTest, DISABLED_Q18) {
   assertQuery(18, 5, 30);
 }
 
