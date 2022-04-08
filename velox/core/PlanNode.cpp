@@ -108,13 +108,11 @@ namespace {
 void addKeys(
     std::stringstream& stream,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& keys) {
-  bool isNotFirstKey = false;
   for (auto i = 0; i < keys.size(); ++i) {
-    if (isNotFirstKey) {
+    if (i > 0) {
       stream << ", ";
     }
     stream << keys[i]->name();
-    isNotFirstKey = true;
   }
 }
 } // namespace
@@ -128,13 +126,11 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
     stream << "] ";
   }
 
-  bool isNotFirstName = false;
   for (auto i = 0; i < aggregateNames_.size(); ++i) {
-    if (isNotFirstName) {
+    if (i > 0) {
       stream << ", ";
     }
     stream << aggregateNames_[i] << " := " << aggregates_[i]->toString();
-    isNotFirstName = true;
   }
 }
 
@@ -153,15 +149,13 @@ void ValuesNode::addDetails(std::stringstream& stream) const {
 
 void ProjectNode::addDetails(std::stringstream& stream) const {
   stream << "expressions: ";
-  bool isNotFirstProjection = false;
   for (auto i = 0; i < projections_.size(); i++) {
     auto& projection = projections_[i];
-    if (isNotFirstProjection) {
+    if (i > 0) {
       stream << ", ";
     }
     stream << "(" << names_[i] << ":" << projection->type()->toString() << ", "
            << projection->toString() << ")";
-    isNotFirstProjection = true;
   }
 }
 
@@ -303,13 +297,11 @@ AbstractJoinNode::AbstractJoinNode(
 void AbstractJoinNode::addDetails(std::stringstream& stream) const {
   stream << joinTypeName(joinType_) << " ";
 
-  bool isNotFirstKey = false;
   for (auto i = 0; i < leftKeys_.size(); ++i) {
-    if (isNotFirstKey) {
+    if (i > 0) {
       stream << " AND ";
     }
     stream << leftKeys_[i]->name() << "=" << rightKeys_[i]->name();
-    isNotFirstKey = true;
   }
 
   if (filter_) {
@@ -354,13 +346,11 @@ void addSortingKeys(
     std::stringstream& stream,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders) {
-  bool isNotFirstKey = false;
   for (auto i = 0; i < sortingKeys.size(); ++i) {
-    if (isNotFirstKey) {
+    if (i > 0) {
       stream << ", ";
     }
     stream << sortingKeys[i]->name() << " " << sortingOrders[i].toString();
-    isNotFirstKey = true;
   }
 }
 } // namespace
