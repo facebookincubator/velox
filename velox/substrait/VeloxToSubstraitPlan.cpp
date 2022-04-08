@@ -19,41 +19,45 @@
 namespace facebook::velox::substrait {
 
 // Velox Plan to Substrait
-void VeloxToSubstraitPlanConvertor::veloxToSubstraitIR(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const PlanNode> vPlan,
     ::substrait::Plan& sPlan) {
   // Assume only accepts a single plan fragment
   // TODO: convert the Split RootNode get from dispatcher to RootRel
   ::substrait::Rel* sRel = sPlan.add_relations()->mutable_rel();
-  veloxToSubstraitIR(vPlan, sRel);
+  toSubstrait(vPlan, sRel);
 }
 
-void VeloxToSubstraitPlanConvertor::veloxToSubstraitIR(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const PlanNode> vPlanNode,
     ::substrait::Rel* sRel) {
   if (auto filterNode =
           std::dynamic_pointer_cast<const FilterNode>(vPlanNode)) {
     auto sFilterRel = sRel->mutable_filter();
-    transformVeloxFilter(filterNode, sFilterRel);
+    toSubstrait(filterNode, sFilterRel);
+    return;
   }
   if (auto aggNode =
           std::dynamic_pointer_cast<const AggregationNode>(vPlanNode)) {
     auto sAggRel = sRel->mutable_aggregate();
-    transformVeloxAggregateNode(aggNode, sAggRel);
+    toSubstrait(aggNode, sAggRel);
+    return;
   }
   if (auto vValuesNode =
           std::dynamic_pointer_cast<const ValuesNode>(vPlanNode)) {
     ::substrait::ReadRel* sReadRel = sRel->mutable_read();
-    transformVeloxValuesNode(vValuesNode, sReadRel);
+    toSubstrait(vValuesNode, sReadRel);
+    return;
   }
   if (auto vProjNode =
           std::dynamic_pointer_cast<const ProjectNode>(vPlanNode)) {
     ::substrait::ProjectRel* sProjRel = sRel->mutable_project();
-    transformVeloxProjNode(vProjNode, sProjRel);
+    toSubstrait(vProjNode, sProjRel);
+    return;
   }
 }
 
-void VeloxToSubstraitPlanConvertor::transformVeloxFilter(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const FilterNode> vFilterNode,
     ::substrait::FilterRel* sFilterRel) {
   const PlanNodeId vId = vFilterNode->id();
@@ -77,16 +81,16 @@ void VeloxToSubstraitPlanConvertor::transformVeloxFilter(
   ::substrait::Rel* sFilterInput = sFilterRel->mutable_input();
   ::substrait::Expression* sFilterCondition = sFilterRel->mutable_condition();
   //   Build source
-  veloxToSubstraitIR(vSource, sFilterInput);
+  toSubstrait(vSource, sFilterInput);
 
   RowTypePtr vPreNodeOutPut = vSource->outputType();
   //   Construct substrait expr
-  v2SExprConvertor_.transformVeloxExpr(
+  v2SExprConvertor_.toSubstraitExpr(
       sFilterCondition, vFilterCondition, vPreNodeOutPut);
   sFilterRel->mutable_common()->mutable_direct();
 }
 
-void VeloxToSubstraitPlanConvertor::transformVeloxValuesNode(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const ValuesNode> vValuesNode,
     ::substrait::ReadRel* sReadRel) {
   const RowTypePtr vOutPut = vValuesNode->outputType();
@@ -95,7 +99,7 @@ void VeloxToSubstraitPlanConvertor::transformVeloxValuesNode(
       sReadRel->mutable_virtual_table();
 
   ::substrait::NamedStruct* sBaseSchema = sReadRel->mutable_base_schema();
-  v2STypeConvertor_.veloxRowTypePtrToSubstraitNamedStruct(vOutPut, sBaseSchema);
+  v2STypeConvertor_.toSubstraitNamedStruct(vOutPut, sBaseSchema);
 
   const PlanNodeId id = vValuesNode->id();
   // sread.virtual_table().values_size(); multi rows
@@ -123,14 +127,14 @@ void VeloxToSubstraitPlanConvertor::transformVeloxValuesNode(
   sReadRel->mutable_common()->mutable_direct();
 }
 
-void VeloxToSubstraitPlanConvertor::transformVeloxAggregateNode(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const AggregationNode> vAggNode,
     ::substrait::AggregateRel* sAggRel) {
   // TODO
   VELOX_NYI("Haven't support AggregationNode convertor now.");
 }
 
-void VeloxToSubstraitPlanConvertor::transformVeloxProjNode(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const ProjectNode> vProjNode,
     ::substrait::ProjectRel* sProjRel) {
   // the info from vProjNode
@@ -158,7 +162,7 @@ void VeloxToSubstraitPlanConvertor::transformVeloxProjNode(
 
   // process the source Node.
   ::substrait::Rel* sProjInput = sProjRel->mutable_input();
-  veloxToSubstraitIR(vSource, sProjInput);
+  toSubstrait(vSource, sProjInput);
 
   // remapping the output
   ::substrait::RelCommon_Emit* sProjEmit =
@@ -177,7 +181,7 @@ void VeloxToSubstraitPlanConvertor::transformVeloxProjNode(
     std::shared_ptr<const ITypedExpr>& vExpr = vProjections.at(i);
     ::substrait::Expression* sExpr = sProjRel->add_expressions();
 
-    v2SExprConvertor_.transformVeloxExpr(sExpr, vExpr, vPreNodeOutPut);
+    v2SExprConvertor_.toSubstraitExpr(sExpr, vExpr, vPreNodeOutPut);
     // add outputMapping for each vExpr
     const std::shared_ptr<const Type> vExprType = vExpr->type();
 
@@ -198,7 +202,7 @@ void VeloxToSubstraitPlanConvertor::transformVeloxProjNode(
   return;
 }
 
-void VeloxToSubstraitPlanConvertor::transformVeloxOrderBy(
+void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const OrderByNode> vOrderbyNode,
     ::substrait::SortRel* sSortRel) {
   // TODO

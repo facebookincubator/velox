@@ -35,34 +35,42 @@ using namespace facebook::velox::core;
 
 namespace facebook::velox::substrait {
 
+// This class is used to convert the Velox plan into substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
-  void veloxToSubstraitIR(
+  // Used to convert Velox PlanNode into Substrait Plan.
+  void toSubstrait(
       std::shared_ptr<const PlanNode> vPlan,
       ::substrait::Plan& sPlan);
 
  private:
-  void veloxToSubstraitIR(
+  // Used to convert Velox PlanNode into Substrait Rel.
+  void toSubstrait(
       std::shared_ptr<const PlanNode> vPlanNode,
       ::substrait::Rel* sRel);
 
-  void transformVeloxFilter(
+  // Used to convert Velox FilterNode into Substrait FilterRel.
+  void toSubstrait(
       std::shared_ptr<const FilterNode> vFilterNode,
       ::substrait::FilterRel* sFilterRel);
 
-  void transformVeloxValuesNode(
+  // Used to convert Velox ValuesNode into Substrait ReadRel.
+  void toSubstrait(
       std::shared_ptr<const ValuesNode> vValuesNode,
       ::substrait::ReadRel* sReadRel);
 
-  void transformVeloxProjNode(
+  // Used to convert Velox ProjectNode into Substrait ProjectRel.
+  void toSubstrait(
       std::shared_ptr<const ProjectNode> vProjNode,
       ::substrait::ProjectRel* sProjRel);
 
-  void transformVeloxAggregateNode(
+  // Used to convert Velox AggregationNode into Substrait AggregateRel.
+  void toSubstrait(
       std::shared_ptr<const AggregationNode> vAggNode,
       ::substrait::AggregateRel* sAggRel);
 
-  void transformVeloxOrderBy(
+  // Used to convert Velox OrderByNode into Substrait SortRel.
+  void toSubstrait(
       std::shared_ptr<const OrderByNode> vOrderbyNode,
       ::substrait::SortRel* sSortRel);
 

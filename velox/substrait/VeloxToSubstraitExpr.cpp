@@ -20,14 +20,13 @@
 
 namespace facebook::velox::substrait {
 
-void VeloxToSubstraitExprConvertor::transformVeloxExpr(
+void VeloxToSubstraitExprConvertor::toSubstraitExpr(
     ::substrait::Expression* sExpr,
     const std::shared_ptr<const ITypedExpr>& vExpr,
     RowTypePtr vPreNodeOutPut) {
   if (std::shared_ptr<const ConstantTypedExpr> vConstantExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(vExpr)) {
-    transformVeloxConstantExpr(
-        vConstantExpr->value(), sExpr->mutable_literal());
+    toSubstraitLiteral(vConstantExpr->value(), sExpr->mutable_literal());
     return;
   }
   if (auto vCallTypeExpr =
@@ -63,10 +62,10 @@ void VeloxToSubstraitExprConvertor::transformVeloxExpr(
 
       for (auto& vArg : vCallTypeInputs) {
         ::substrait::Expression* sArg = sFun->add_args();
-        transformVeloxExpr(sArg, vArg, vPreNodeOutPut);
+        toSubstraitExpr(sArg, vArg, vPreNodeOutPut);
       }
       ::substrait::Type* sFunType = sFun->mutable_output_type();
-      v2STypeConvertor_.veloxTypeToSubstrait(vExprType, sFunType);
+      v2STypeConvertor_.toSubstraitType(vExprType, sFunType);
       return;
     }
   }
@@ -108,11 +107,11 @@ void VeloxToSubstraitExprConvertor::transformVeloxExpr(
     std::vector<std::shared_ptr<const ITypedExpr>> vCastTypeInputs =
         vCastExpr->inputs();
     ::substrait::Expression_Cast* sCastExpr = sExpr->mutable_cast();
-    v2STypeConvertor_.veloxTypeToSubstrait(
+    v2STypeConvertor_.toSubstraitType(
         vCastExpr->type(), sCastExpr->mutable_type());
 
     for (auto& vArg : vCastTypeInputs) {
-      transformVeloxExpr(sCastExpr->mutable_input(), vArg, vPreNodeOutPut);
+      toSubstraitExpr(sCastExpr->mutable_input(), vArg, vPreNodeOutPut);
     }
     return;
 
@@ -121,7 +120,7 @@ void VeloxToSubstraitExprConvertor::transformVeloxExpr(
   }
 }
 
-void VeloxToSubstraitExprConvertor::transformVeloxConstantExpr(
+void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     const velox::variant& vConstExpr,
     ::substrait::Expression_Literal* sLiteralExpr) {
   switch (vConstExpr.kind()) {

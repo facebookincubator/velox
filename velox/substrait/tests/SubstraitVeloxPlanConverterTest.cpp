@@ -15,9 +15,7 @@
  */
 
 #include <folly/Random.h>
-#include <random>
 
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/VectorMaker.h"
@@ -31,8 +29,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::substrait;
 
-// using facebook::velox::test::BatchMaker;
-
 class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
  protected:
   /// the function used to make data
@@ -43,21 +39,17 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
   std::vector<RowVectorPtr>
   makeVector(int64_t size, int64_t childSize, int64_t batchSize) {
     std::vector<RowVectorPtr> vectors;
+    std::mt19937 gen(std::mt19937::default_seed);
     for (int i = 0; i < size; i++) {
       std::vector<VectorPtr> children;
-      std::mt19937 gen(std::mt19937::default_seed);
       for (int j = 0; j < childSize; j++) {
-        std::vector<int32_t> childVector(
-            batchSize, static_cast<int32_t>(folly::Random::rand32(gen)));
-        VectorPtr child =
-            createSpecificScalar<int32_t>(batchSize, childVector, *pool_);
-        children.emplace_back(child);
+        children.emplace_back(makeFlatVector<int32_t>(batchSize, [&](auto row) {
+          return folly::Random::rand32(INT32_MAX / 4, INT32_MAX / 2, gen);
+        }));
       }
 
       std::vector<std::string> childrenNames = rowType_->names();
-      auto rowVector = vectorMaker_->rowVector(childrenNames, children);
-
-      vectors.emplace_back(rowVector);
+      vectors.push_back(makeRowVector({childrenNames}, {children}));
     }
     return vectors;
   };
@@ -71,7 +63,7 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     assertQuery(vPlan, "SELECT  c0 + c1, c1 - c2 FROM tmp");
 
     // Convert Velox Plan to Substrait Plan
-    v2SPlanConvertor_.veloxToSubstraitIR(vPlan, sPlan_);
+    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
   }
 
   void assertVeloxToSubstraitFilter(
@@ -81,24 +73,8 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     auto vPlan = PlanBuilder().values(vectors).filter(filter).planNode();
 
     assertQuery(vPlan, "SELECT * FROM tmp WHERE " + filter);
-    v2SPlanConvertor_.veloxToSubstraitIR(vPlan, sPlan_);
-  }
-
-  // This method can be used to create a Fixed-width type of Vector without Null
-  // values.
-  template <typename T>
-  VectorPtr createSpecificScalar(
-      size_t size,
-      std::vector<T> vals,
-      facebook::velox::memory::MemoryPool& pool) {
-    facebook::velox::BufferPtr values = AlignedBuffer::allocate<T>(size, &pool);
-    auto valuesPtr = values->asMutableRange<T>();
-    facebook::velox::BufferPtr nulls = nullptr;
-    for (size_t i = 0; i < size; ++i) {
-      valuesPtr[i] = vals[i];
-    }
-    return std::make_shared<facebook::velox::FlatVector<T>>(
-        &pool, nulls, size, values, std::vector<BufferPtr>{});
+    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
+    sPlan_.PrintDebugString();
   }
 
   void SetUp() override {
@@ -115,13 +91,9 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
   VeloxToSubstraitPlanConvertor v2SPlanConvertor_;
   ::substrait::Plan sPlan_;
   std::shared_ptr<const RowType> rowType_;
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
-  std::unique_ptr<facebook::velox::test::VectorMaker> vectorMaker_{
-      std::make_unique<facebook::velox::test::VectorMaker>(pool_.get())};
 };
 
-TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitProjectNode) {
+TEST_F(SubstraitVeloxPlanConvertorTest, project) {
   std::vector<RowVectorPtr> vectors;
   vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
@@ -129,7 +101,7 @@ TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitProjectNode) {
   assertVeloxToSubstraitProject(std::move(vectors));
 }
 
-TEST_F(SubstraitVeloxPlanConvertorTest, veloxToSubstraitFilterNode) {
+TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
   std::vector<RowVectorPtr> vectors;
   vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
