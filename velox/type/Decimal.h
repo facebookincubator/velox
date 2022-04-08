@@ -25,11 +25,6 @@
 
 namespace facebook::velox {
 
-#define PRECISION(typmod) ((uint8_t)(typmod >> 8))
-#define SCALE(typmod) ((uint8_t)(typmod))
-#define TYPMOD(X, Y) ((X << 8) | y)
-#define NUM_DECIMAL_PARAMETERS 2
-
 using int128_t = __int128_t;
 static constexpr uint8_t kMaxPrecisionInt128 = 38;
 static constexpr uint8_t kDefaultScale = 0;

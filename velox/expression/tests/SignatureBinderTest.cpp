@@ -43,6 +43,17 @@ TEST(SignatureBinderTest, generics) {
     testSignatureBinder(signature, {ARRAY(BIGINT()), BIGINT()}, BOOLEAN());
   }
 
+  {
+    // Test binding a signature that accepts Types parameters that are long
+    // literals.
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("DECIMAL(10,5)")
+                         .argumentType("DECIMAL(10,5)")
+                         .argumentType("DECIMAL(10,5)")
+                         .build();
+    testSignatureBinder(
+        signature, {DECIMAL(10, 5), DECIMAL(10, 5)}, DECIMAL(10, 5));
+  }
   // array(array(T)), array(T) -> boolean
   {
     auto signature = exec::FunctionSignatureBuilder()

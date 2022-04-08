@@ -364,9 +364,16 @@ bool Type::kindEquals(const std::shared_ptr<const Type>& other) const {
   if (this->size() != other->size()) {
     return false;
   }
-  for (size_t i = 0; i < this->size(); ++i) {
-    if (!this->childAt(i)->kindEquals(other->childAt(i))) {
+  if (this->kind() == TypeKind::DECIMAL) {
+    // special case, the children are parameters and not Types.
+    if(dynamic_cast<const DecimalType*>(this)->typmod() !=
+        dynamic_cast<const DecimalType*>(other.get())->typmod())
       return false;
+  } else {
+    for (size_t i = 0; i < this->size(); ++i) {
+      if (!this->childAt(i)->kindEquals(other->childAt(i))) {
+        return false;
+      }
     }
   }
   return true;
@@ -565,11 +572,12 @@ KOSKI_DEFINE_SCALAR_ACCESSOR(VARCHAR);
 KOSKI_DEFINE_SCALAR_ACCESSOR(VARBINARY);
 KOSKI_DEFINE_SCALAR_ACCESSOR(DATE);
 // KOSKI_DEFINE_SCALAR_ACCESSOR(DECIMAL);
-std::shared_ptr<const DecimalType> DECIMAL() {
-  return std::make_shared<DecimalType>();
-}
 KOSKI_DEFINE_SCALAR_ACCESSOR(UNKNOWN);
-
+std::shared_ptr<const DecimalType> DECIMAL(
+    const uint8_t precision,
+    const uint8_t scale) {
+  return std::make_shared<DecimalType>(TYPMOD(precision, scale));
+}
 #undef KOSKI_DEFINE_SCALAR_ACCESSOR
 
 std::shared_ptr<const Type> createScalarType(TypeKind kind) {

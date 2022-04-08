@@ -44,6 +44,11 @@
 
 namespace facebook::velox {
 
+#define PRECISION(typmod) ((uint8_t)(typmod >> 8))
+#define SCALE(typmod) ((uint8_t)(typmod))
+#define TYPMOD(X, Y) ((X << 8) | Y)
+#define NUM_DECIMAL_PARAMETERS 2
+
 // Velox type system supports a small set of SQL-compatible composeable types:
 // BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
 // VARBINARY, TIMESTAMP, DATE, ARRAY, MAP, ROW
@@ -91,7 +96,6 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
-// template <TypeKind KIND>
 class DecimalType;
 class ArrayType;
 class MapType;
@@ -557,8 +561,8 @@ class DecimalType : public Type {
   }
 
   inline const char* kindName() const override {
-    return isBigDecimal_ ? TypeTraits<TypeKind::DECIMAL>::name
-                         : TypeTraits<TypeKind::DECIMAL128>::name;
+    return isBigDecimal_ ? TypeTraits<TypeKind::DECIMAL128>::name
+                         : TypeTraits<TypeKind::DECIMAL>::name;
   }
 
   inline uint32_t size() const override {
@@ -574,6 +578,16 @@ class DecimalType : public Type {
         this->typmod_ == dynamic_cast<const DecimalType*>(&other)->typmod());
   }
 
+  bool compareParameter(const int pos, std::string parameter) const {
+    if (pos == 0) {
+      std::string precision = std::to_string(typmod_ >> 8);
+      return precision.compare(parameter) == 0;
+    } else if (pos == 1) {
+      std::string scale = std::to_string(((int8_t)typmod_));
+      return scale.compare(parameter) == 0;
+    }
+    throw std::invalid_argument{"Invalid parameter position"};
+  };
   // FOLLY_NOINLINE static const std::shared_ptr<const DecimalType> create(int
   // typmod); FOLLY_NOINLINE static const std::shared_ptr<const DecimalType>
   // create();
@@ -1034,7 +1048,9 @@ std::shared_ptr<const TimestampType> TIMESTAMP();
 
 std::shared_ptr<const DateType> DATE();
 
-std::shared_ptr<const DecimalType> DECIMAL();
+std::shared_ptr<const DecimalType> DECIMAL(
+    const uint8_t precision = 18,
+    const uint8_t scale = 0);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
@@ -1340,7 +1356,6 @@ VELOX_SCALAR_ACCESSOR(TIMESTAMP);
 VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 VELOX_SCALAR_ACCESSOR(DATE);
-// VELOX_SCALAR_ACCESSOR(DECIMAL);
 VELOX_SCALAR_ACCESSOR(UNKNOWN);
 
 template <TypeKind KIND>
@@ -1604,13 +1619,23 @@ struct CppToType<BigDecimal> : public CppToTypeBase<TypeKind::DECIMAL128> {
   }
 
   static auto create(int typmod) {
-    // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
     return std::make_shared<const DecimalType>(typmod);
   }
 };
 
 template <>
-struct CppToType<int128_t> : public CppToTypeBase<TypeKind::DECIMAL> {
+struct CppToType<ShortDecimal> : public CppToTypeBase<TypeKind::DECIMAL> {
+  static auto create() {
+    return std::make_shared<const DecimalType>();
+  }
+
+  static auto create(int typmod) {
+    return std::make_shared<const DecimalType>(typmod);
+  }
+};
+
+template <>
+struct CppToType<int128_t> : public CppToTypeBase<TypeKind::DECIMAL128> {
   static auto create(int typmod) {
     return std::make_shared<const DecimalType>(typmod);
     // return TypeFactory<TypeKind::DECIMAL>::create(typmod);
