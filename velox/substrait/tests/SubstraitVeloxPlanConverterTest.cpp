@@ -74,7 +74,13 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
 
     assertQuery(vPlan, "SELECT * FROM tmp WHERE " + filter);
     v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
-    sPlan_.PrintDebugString();
+  }
+
+  void assertVeloxToSubstraitValues(std::vector<RowVectorPtr>&& vectors) {
+    auto vPlan = PlanBuilder().values(vectors).planNode();
+
+    assertQuery(vPlan, "SELECT * FROM tmp");
+    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
   }
 
   void SetUp() override {
@@ -106,4 +112,11 @@ TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
   vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
   assertVeloxToSubstraitFilter(std::move(vectors));
+}
+
+TEST_F(SubstraitVeloxPlanConvertorTest, values) {
+  std::vector<RowVectorPtr> vectors;
+  vectors = makeVector(3, 4, 2);
+  createDuckDbTable(vectors);
+  assertVeloxToSubstraitValues(std::move(vectors));
 }

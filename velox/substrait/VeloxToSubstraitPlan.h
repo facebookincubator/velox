@@ -64,16 +64,6 @@ class VeloxToSubstraitPlanConvertor {
       std::shared_ptr<const ProjectNode> vProjNode,
       ::substrait::ProjectRel* sProjRel);
 
-  // Used to convert Velox AggregationNode into Substrait AggregateRel.
-  void toSubstrait(
-      std::shared_ptr<const AggregationNode> vAggNode,
-      ::substrait::AggregateRel* sAggRel);
-
-  // Used to convert Velox OrderByNode into Substrait SortRel.
-  void toSubstrait(
-      std::shared_ptr<const OrderByNode> vOrderbyNode,
-      ::substrait::SortRel* sSortRel);
-
   VeloxToSubstraitExprConvertor v2SExprConvertor_;
   VeloxToSubstraitTypeConvertor v2STypeConvertor_;
 };

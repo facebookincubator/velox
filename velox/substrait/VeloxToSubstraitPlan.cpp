@@ -37,12 +37,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     toSubstrait(filterNode, sFilterRel);
     return;
   }
-  if (auto aggNode =
-          std::dynamic_pointer_cast<const AggregationNode>(vPlanNode)) {
-    auto sAggRel = sRel->mutable_aggregate();
-    toSubstrait(aggNode, sAggRel);
-    return;
-  }
   if (auto vValuesNode =
           std::dynamic_pointer_cast<const ValuesNode>(vPlanNode)) {
     ::substrait::ReadRel* sReadRel = sRel->mutable_read();
@@ -128,13 +122,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
-    std::shared_ptr<const AggregationNode> vAggNode,
-    ::substrait::AggregateRel* sAggRel) {
-  // TODO
-  VELOX_NYI("Haven't support AggregationNode convertor now.");
-}
-
-void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const ProjectNode> vProjNode,
     ::substrait::ProjectRel* sProjRel) {
   // the info from vProjNode
@@ -200,13 +187,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   }
 
   return;
-}
-
-void VeloxToSubstraitPlanConvertor::toSubstrait(
-    std::shared_ptr<const OrderByNode> vOrderbyNode,
-    ::substrait::SortRel* sSortRel) {
-  // TODO
-  VELOX_NYI("Haven't support OrderByNode convertor now.");
 }
 
 } // namespace facebook::velox::substrait
