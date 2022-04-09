@@ -18,6 +18,7 @@
 #include <sstream>
 #include "velox/type/Type.h"
 
+
 using namespace facebook::velox;
 
 TEST(StringView, basic) {
