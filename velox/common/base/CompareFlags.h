@@ -13,24 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VectorFunction.h"
 
-namespace facebook::velox::functions::sparksql {
+#pragma once
 
-// Supported types:
-//   - Bools
-//   - Integer types (byte, short, int, long)
-//   - String, Binary
-//   - Float, Double
-//   - Timestamp
-//   - Date
-//
-// Unsupported:
-//   - Decimal
-//   - Datetime
-//   - Structs, Arrays
-//   - Maps
+namespace facebook::velox {
 
-void registerIn(const std::string& prefix);
+// Describes value collation in comparison.
+struct CompareFlags {
+  // This flag will be ignored if stopAtNull is true.
+  bool nullsFirst = true;
 
-} // namespace facebook::velox::functions::sparksql
+  bool ascending = true;
+
+  // When true, comparison should return non-0 early when sizes mismatch.
+  bool equalsOnly = false;
+
+  // When true, the compare returns std::nullopt if null encountered.
+  bool stopAtNull = false;
+};
+
+} // namespace facebook::velox

@@ -230,7 +230,7 @@ class Driver {
   // Returns a subset of channels for which there are operators upstream from
   // filterSource that accept dynamically generated filters.
   std::unordered_set<ChannelIndex> canPushdownFilters(
-      Operator* FOLLY_NONNULL filterSource,
+      const Operator* FOLLY_NONNULL filterSource,
       const std::vector<ChannelIndex>& channels) const;
 
   // Returns the Operator with 'planNodeId.' or nullptr if not
@@ -344,7 +344,7 @@ struct DriverFactory {
 
   /// Returns LocalPartition plan node ID if the pipeline gets data from a local
   /// exchange.
-  std::optional<core::PlanNodeId> needsLocalExchangeSource() const {
+  std::optional<core::PlanNodeId> needsLocalExchange() const {
     VELOX_CHECK(!planNodes.empty());
     if (auto exchangeNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(

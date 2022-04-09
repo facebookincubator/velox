@@ -67,15 +67,15 @@ TEST_F(PlanNodeToStringTest, recursive) {
 
 TEST_F(PlanNodeToStringTest, detailed) {
   ASSERT_EQ(
-      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10)), ]\n",
+      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10))]\n",
       plan_->toString(true, false));
 }
 
 TEST_F(PlanNodeToStringTest, recursiveAndDetailed) {
   ASSERT_EQ(
-      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10)), ]\n"
+      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10))]\n"
       "  -> Filter[expression: lt(mod(cast ROW[\"out1\"] as BIGINT,10),8)]\n"
-      "    -> Project[expressions: (out1:SMALLINT, ROW[\"c0\"]), (out2:BIGINT, plus(mod(cast ROW[\"c0\"] as BIGINT,100),mod(cast ROW[\"c1\"] as BIGINT,50))), ]\n"
+      "    -> Project[expressions: (out1:SMALLINT, ROW[\"c0\"]), (out2:BIGINT, plus(mod(cast ROW[\"c0\"] as BIGINT,100),mod(cast ROW[\"c1\"] as BIGINT,50)))]\n"
       "      -> Filter[expression: lt(mod(cast ROW[\"c0\"] as BIGINT,10),9)]\n"
       "        -> Values[5 rows in 1 vectors]\n",
       plan_->toString(true, true));
@@ -94,7 +94,7 @@ TEST_F(PlanNodeToStringTest, withContext) {
       plan_->toString(false, false, addContext));
 
   ASSERT_EQ(
-      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10)), ]\n"
+      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10))]\n"
       "   Context for 4\n",
       plan_->toString(true, false, addContext));
 
@@ -112,11 +112,11 @@ TEST_F(PlanNodeToStringTest, withContext) {
       plan_->toString(false, true, addContext));
 
   ASSERT_EQ(
-      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10)), ]\n"
+      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10))]\n"
       "   Context for 4\n"
       "  -> Filter[expression: lt(mod(cast ROW[\"out1\"] as BIGINT,10),8)]\n"
       "     Context for 3\n"
-      "    -> Project[expressions: (out1:SMALLINT, ROW[\"c0\"]), (out2:BIGINT, plus(mod(cast ROW[\"c0\"] as BIGINT,100),mod(cast ROW[\"c1\"] as BIGINT,50))), ]\n"
+      "    -> Project[expressions: (out1:SMALLINT, ROW[\"c0\"]), (out2:BIGINT, plus(mod(cast ROW[\"c0\"] as BIGINT,100),mod(cast ROW[\"c1\"] as BIGINT,50)))]\n"
       "       Context for 2\n"
       "      -> Filter[expression: lt(mod(cast ROW[\"c0\"] as BIGINT,10),9)]\n"
       "         Context for 1\n"
@@ -140,7 +140,7 @@ TEST_F(PlanNodeToStringTest, withMultiLineContext) {
       plan_->toString(false, false, addContext));
 
   ASSERT_EQ(
-      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10)), ]\n"
+      "-> Project[expressions: (out3:BIGINT, plus(cast ROW[\"out1\"] as BIGINT,10))]\n"
       "   Context for 4: line 1\n"
       "   Context for 4: line 2\n",
       plan_->toString(true, false, addContext));
@@ -301,18 +301,17 @@ TEST_F(PlanNodeToStringTest, limit) {
 TEST_F(PlanNodeToStringTest, topN) {
   auto plan = PlanBuilder()
                   .values({data_})
-                  .topN({0}, {core::kAscNullsFirst}, 10, true)
+                  .topN({"c0 NULLS FIRST"}, 10, true)
                   .planNode();
 
   ASSERT_EQ("-> TopN\n", plan->toString());
   ASSERT_EQ(
       "-> TopN[PARTIAL 10 c0 ASC NULLS FIRST]\n", plan->toString(true, false));
 
-  plan =
-      PlanBuilder()
-          .values({data_})
-          .topN({1, 0}, {core::kAscNullsFirst, core::kDescNullsLast}, 10, false)
-          .planNode();
+  plan = PlanBuilder()
+             .values({data_})
+             .topN({"c1 NULLS FIRST", "c0 DESC"}, 10, false)
+             .planNode();
 
   ASSERT_EQ("-> TopN\n", plan->toString());
   ASSERT_EQ(
@@ -349,7 +348,7 @@ TEST_F(PlanNodeToStringTest, unnest) {
 TEST_F(PlanNodeToStringTest, localPartition) {
   auto plan =
       PlanBuilder()
-          .localPartition({0}, {PlanBuilder().values({data_}).planNode()})
+          .localPartition({"c0"}, {PlanBuilder().values({data_}).planNode()})
           .planNode();
 
   ASSERT_EQ("-> LocalPartition\n", plan->toString());
@@ -365,7 +364,7 @@ TEST_F(PlanNodeToStringTest, localPartition) {
 
 TEST_F(PlanNodeToStringTest, partitionedOutput) {
   auto plan =
-      PlanBuilder().values({data_}).partitionedOutput({0}, 4).planNode();
+      PlanBuilder().values({data_}).partitionedOutput({"c0"}, 4).planNode();
 
   ASSERT_EQ("-> PartitionedOutput\n", plan->toString());
   ASSERT_EQ("-> PartitionedOutput[HASH(c0) 4]\n", plan->toString(true, false));
@@ -382,7 +381,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
 
   plan = PlanBuilder()
              .values({data_})
-             .partitionedOutput({1, 2}, 5, true)
+             .partitionedOutput({"c1", "c2"}, 5, true)
              .planNode();
 
   ASSERT_EQ("-> PartitionedOutput\n", plan->toString());

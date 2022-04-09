@@ -13,24 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VectorFunction.h"
 
-namespace facebook::velox::functions::sparksql {
+#pragma once
 
-// Supported types:
-//   - Bools
-//   - Integer types (byte, short, int, long)
-//   - String, Binary
-//   - Float, Double
-//   - Timestamp
-//   - Date
-//
-// Unsupported:
-//   - Decimal
-//   - Datetime
-//   - Structs, Arrays
-//   - Maps
+#include <cstdint>
 
-void registerIn(const std::string& prefix);
+namespace facebook::velox::random {
 
-} // namespace facebook::velox::functions::sparksql
+// Set a custom seed to be returned in all following getSeed() calls.
+// Should be only used in unit tests.
+void setSeed(uint32_t);
+
+// Return a true random seed unless setSeed() is called before.
+uint32_t getSeed();
+
+} // namespace facebook::velox::random

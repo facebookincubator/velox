@@ -13,24 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/expression/VectorFunction.h"
 
-namespace facebook::velox::functions::sparksql {
+#include "velox/common/base/RandomUtil.h"
 
-// Supported types:
-//   - Bools
-//   - Integer types (byte, short, int, long)
-//   - String, Binary
-//   - Float, Double
-//   - Timestamp
-//   - Date
-//
-// Unsupported:
-//   - Decimal
-//   - Datetime
-//   - Structs, Arrays
-//   - Maps
+#include <optional>
 
-void registerIn(const std::string& prefix);
+#include <folly/Random.h>
 
-} // namespace facebook::velox::functions::sparksql
+namespace facebook::velox::random {
+
+namespace {
+
+std::optional<uint32_t> customSeed;
+
+}
+
+void setSeed(uint32_t value) {
+  customSeed = value;
+}
+
+uint32_t getSeed() {
+  return customSeed ? *customSeed : folly::Random::rand32();
+}
+
+} // namespace facebook::velox::random
