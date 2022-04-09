@@ -34,7 +34,8 @@ class VeloxToSubstraitExprConvertor {
       const std::shared_ptr<const ITypedExpr>& vExpr,
       RowTypePtr vPreNodeOutPut);
 
-  // Used to convert Velox Constant Expression into Substrait Expression_Literal.
+  // Used to convert Velox Constant Expression into Substrait
+  // Expression_Literal.
   void toSubstraitLiteral(
       const velox::variant& vConstExpr,
       ::substrait::Expression_Literal* sLiteralExpr);
