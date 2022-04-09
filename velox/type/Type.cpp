@@ -43,31 +43,40 @@ bool isColumnNameRequiringEscaping(const std::string& name) {
 } // namespace
 
 namespace facebook::velox {
+static std::unordered_map<std::string, TypeKind> kTypeStringMap{
+    {"BOOLEAN", TypeKind::BOOLEAN},
+    {"TINYINT", TypeKind::TINYINT},
+    {"SMALLINT", TypeKind::SMALLINT},
+    {"INTEGER", TypeKind::INTEGER},
+    {"BIGINT", TypeKind::BIGINT},
+    {"REAL", TypeKind::REAL},
+    {"DOUBLE", TypeKind::DOUBLE},
+    {"VARCHAR", TypeKind::VARCHAR},
+    {"VARBINARY", TypeKind::VARBINARY},
+    {"TIMESTAMP", TypeKind::TIMESTAMP},
+    {"DATE", TypeKind::DATE},
+    {"ARRAY", TypeKind::ARRAY},
+    {"MAP", TypeKind::MAP},
+    {"ROW", TypeKind::ROW},
+    {"FUNCTION", TypeKind::FUNCTION},
+    {"UNKNOWN", TypeKind::UNKNOWN},
+    {"OPAQUE", TypeKind::OPAQUE},
+    {"INVALID", TypeKind::INVALID}};
+
+std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name) {
+  auto found = kTypeStringMap.find(name);
+
+  if (found == kTypeStringMap.end()) {
+    return std::nullopt;
+  }
+
+  return found->second;
+}
 
 TypeKind mapNameToTypeKind(const std::string& name) {
-  static std::unordered_map<std::string, TypeKind> typeStringMap{
-      {"BOOLEAN", TypeKind::BOOLEAN},
-      {"TINYINT", TypeKind::TINYINT},
-      {"SMALLINT", TypeKind::SMALLINT},
-      {"INTEGER", TypeKind::INTEGER},
-      {"BIGINT", TypeKind::BIGINT},
-      {"REAL", TypeKind::REAL},
-      {"DOUBLE", TypeKind::DOUBLE},
-      {"VARCHAR", TypeKind::VARCHAR},
-      {"VARBINARY", TypeKind::VARBINARY},
-      {"TIMESTAMP", TypeKind::TIMESTAMP},
-      {"DATE", TypeKind::DATE},
-      {"ARRAY", TypeKind::ARRAY},
-      {"MAP", TypeKind::MAP},
-      {"ROW", TypeKind::ROW},
-      {"FUNCTION", TypeKind::FUNCTION},
-      {"UNKNOWN", TypeKind::UNKNOWN},
-      {"OPAQUE", TypeKind::OPAQUE},
-      {"INVALID", TypeKind::INVALID}};
+  auto found = kTypeStringMap.find(name);
 
-  auto found = typeStringMap.find(name);
-
-  if (found == typeStringMap.end()) {
+  if (found == kTypeStringMap.end()) {
     VELOX_USER_FAIL("Specified element is not found : {}", name);
   }
 
