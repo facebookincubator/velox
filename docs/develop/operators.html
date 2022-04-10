@@ -146,7 +146,7 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td></td>
 </tr>
 <tr class="row-odd"><td><p>LocalPartitionNode</p></td>
-<td><p>LocalPartition and LocalExchangeSourceOperator</p></td>
+<td><p>LocalPartition and LocalExchange</p></td>
 <td></td>
 </tr>
 <tr class="row-even"><td><p>EnforceSingleRowNode</p></td>
@@ -633,10 +633,13 @@ combines data from multiple streams into a single stream.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>partitionFunctionFactory</p></td>
+<tr class="row-even"><td><p>Type</p></td>
+<td><p>Type of the exchange: gather or repartition.</p></td>
+</tr>
+<tr class="row-odd"><td><p>partitionFunctionFactory</p></td>
 <td><p>Factory to make partition functions to use when calculating partitions for input rows.</p></td>
 </tr>
-<tr class="row-odd"><td><p>outputType</p></td>
+<tr class="row-even"><td><p>outputType</p></td>
 <td><p>A list of output columns. This is a subset of input columns possibly in a different order.</p></td>
 </tr>
 </tbody>
