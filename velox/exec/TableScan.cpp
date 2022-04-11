@@ -97,10 +97,10 @@ RowVectorPtr TableScan::getOutput() {
     const auto ioTimeStartMicros = getCurrentTimeMicro();
     auto data = dataSource_->next(readBatchSize_);
     stats().addRuntimeStat(
-        "dataSourceWallNanos",
+        "dataSourceWallTime",
         RuntimeCounter(
             (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000,
-            RuntimeCounter::kNanos));
+            RuntimeCounter::Unit::kNanos));
     stats_.rawInputPositions = dataSource_->getCompletedRows();
     stats_.rawInputBytes = dataSource_->getCompletedBytes();
     if (data) {

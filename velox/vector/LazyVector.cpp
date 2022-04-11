@@ -33,10 +33,10 @@ void setRunTimeStatWriter(std::unique_ptr<BaseRuntimeStatWriter>&& ptr) {
 static void writeIOWallTimeStat(size_t ioTimeStartMicros) {
   if (BaseRuntimeStatWriter* pWriter = sRunTimeStatWriters.get()) {
     pWriter->addRuntimeStat(
-        "dataSourceLazyWallNanos",
+        "dataSourceLazyWallTime",
         RuntimeCounter(
             (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000,
-            RuntimeCounter::kNanos));
+            RuntimeCounter::Unit::kNanos));
   }
 }
 

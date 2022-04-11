@@ -619,17 +619,20 @@ std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
   auto res = runtimeStats_.toMap();
   res.insert(
       {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
-       {"prefetchBytes",
-        RuntimeCounter(ioStats_->prefetch().bytes(), RuntimeCounter::kBytes)},
+       {"prefetchSize",
+        RuntimeCounter(
+            ioStats_->prefetch().bytes(), RuntimeCounter::Unit::kBytes)},
        {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
-       {"storageReadBytes",
-        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::kBytes)},
+       {"storageReadSize",
+        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::Unit::kBytes)},
        {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
-       {"localReadBytes",
-        RuntimeCounter(ioStats_->ssdRead().bytes(), RuntimeCounter::kBytes)},
+       {"localReadSize",
+        RuntimeCounter(
+            ioStats_->ssdRead().bytes(), RuntimeCounter::Unit::kBytes)},
        {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
-       {"ramReadBytes",
-        RuntimeCounter(ioStats_->ramHit().bytes(), RuntimeCounter::kBytes)}});
+       {"ramReadSize",
+        RuntimeCounter(
+            ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)}});
   return res;
 }
 

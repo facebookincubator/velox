@@ -265,7 +265,8 @@ StopReason Driver::runInternal(
   // been deleted.
   if (curOpIndex_ < operators_.size()) {
     operators_[curOpIndex_]->stats().addRuntimeStat(
-        "queuedWallNanos", RuntimeCounter(queuedTime, RuntimeCounter::kNanos));
+        "queuedWallTime",
+        RuntimeCounter(queuedTime, RuntimeCounter::Unit::kNanos));
   }
 
   CancelGuard guard(task().get(), &state_, [&](StopReason reason) {

@@ -49,11 +49,12 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
 
   peakMemoryBytes += stats.memoryStats.peakTotalMemoryReservation;
 
-  for (const auto& [name, stats] : stats.runtimeStats) {
+  for (const auto& [name, runtimeStats] : stats.runtimeStats) {
     if (UNLIKELY(customStats.count(name) == 0)) {
-      customStats.insert(std::make_pair(name, RuntimeMetric(stats.unit)));
+      customStats.insert(std::make_pair(name, runtimeStats));
+    } else {
+      customStats.at(name).merge(runtimeStats);
     }
-    customStats.at(name).merge(stats);
   }
 
   // Populating number of drivers for plan nodes with multiple operators is not

@@ -325,9 +325,10 @@ void OperatorStats::add(const OperatorStats& other) {
 
   for (const auto& [name, stats] : other.runtimeStats) {
     if (UNLIKELY(runtimeStats.count(name) == 0)) {
-      runtimeStats.insert(std::make_pair(name, RuntimeMetric(stats.unit)));
+      runtimeStats.insert(std::make_pair(name, stats));
+    } else {
+      runtimeStats.at(name).merge(stats);
     }
-    runtimeStats.at(name).merge(stats);
   }
 
   numDrivers += other.numDrivers;

@@ -28,26 +28,26 @@ void RuntimeMetric::addValue(int64_t value) {
 }
 
 void RuntimeMetric::merge(const RuntimeMetric& other) {
+  VELOX_CHECK_EQ(unit, other.unit);
   sum += other.sum;
   count += other.count;
   min = std::min(min, other.min);
   max = std::max(max, other.max);
-  VELOX_CHECK_EQ(unit, other.unit);
 }
 
 void RuntimeMetric::printMetric(std::stringstream& stream) const {
   switch (unit) {
-    case RuntimeCounter::kNanos:
+    case RuntimeCounter::Unit::kNanos:
       stream << " sum: " << succinctNanos(sum) << ", count: " << count
              << ", min: " << succinctNanos(min)
              << ", max: " << succinctNanos(max);
       break;
-    case RuntimeCounter::kBytes:
+    case RuntimeCounter::Unit::kBytes:
       stream << " sum: " << succinctBytes(sum) << ", count: " << count
              << ", min: " << succinctBytes(min)
              << ", max: " << succinctBytes(max);
       break;
-    case RuntimeCounter::kNone:
+    case RuntimeCounter::Unit::kNone:
     default:
       stream << " sum: " << sum << ", count: " << count << ", min: " << min
              << ", max: " << max;

@@ -21,23 +21,24 @@
 namespace facebook::velox {
 
 struct RuntimeCounter {
-  enum Unit { kNone, kNanos, kBytes };
-  int64_t value{0};
-  Unit unit{kNone};
+  enum class Unit { kNone, kNanos, kBytes };
+  int64_t value;
+  Unit unit{Unit::kNone};
 
-  explicit RuntimeCounter(int64_t _value, Unit _unit = kNone)
+  explicit RuntimeCounter(int64_t _value, Unit _unit = Unit::kNone)
       : value(_value), unit(_unit) {}
 };
 
 struct RuntimeMetric {
   // Sum, min, max have the same unit, count has kNone.
-  RuntimeCounter::Unit unit{RuntimeCounter::kNone};
+  RuntimeCounter::Unit unit{RuntimeCounter::Unit::kNone};
   int64_t sum{0};
   int64_t count{0};
   int64_t min{std::numeric_limits<int64_t>::max()};
   int64_t max{std::numeric_limits<int64_t>::min()};
 
-  explicit RuntimeMetric(RuntimeCounter::Unit _unit = RuntimeCounter::kNone)
+  explicit RuntimeMetric(
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
       : unit(_unit) {}
 
   void addValue(int64_t value);

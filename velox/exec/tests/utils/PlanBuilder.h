@@ -54,9 +54,7 @@ class PlanBuilder {
   explicit PlanBuilder(memory::MemoryPool* pool = nullptr)
       : PlanBuilder(std::make_shared<PlanNodeIdGenerator>(), pool) {}
 
-  PlanBuilder& tableScan(
-      const RowTypePtr& outputType,
-      const std::string& tableName = "hive-table");
+  PlanBuilder& tableScan(const RowTypePtr& outputType);
 
   PlanBuilder& tableScan(
       const RowTypePtr& outputType,

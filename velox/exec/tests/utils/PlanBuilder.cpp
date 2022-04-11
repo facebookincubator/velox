@@ -38,9 +38,7 @@ std::shared_ptr<const core::ITypedExpr> parseExpr(
 }
 } // namespace
 
-PlanBuilder& PlanBuilder::tableScan(
-    const RowTypePtr& outputType,
-    const std::string& tableName) {
+PlanBuilder& PlanBuilder::tableScan(const RowTypePtr& outputType) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
   for (uint32_t i = 0; i < outputType->size(); ++i) {
@@ -53,7 +51,7 @@ PlanBuilder& PlanBuilder::tableScan(
   }
 
   auto tableHandle = std::make_shared<HiveTableHandle>(
-      tableName, true, SubfieldFilters{}, nullptr);
+      "hive_table", true, SubfieldFilters{}, nullptr);
   return tableScan(outputType, tableHandle, assignments);
 }
 
