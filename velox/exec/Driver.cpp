@@ -265,7 +265,7 @@ StopReason Driver::runInternal(
   // been deleted.
   if (curOpIndex_ < operators_.size()) {
     operators_[curOpIndex_]->stats().addRuntimeStat(
-        "queuedWallTime",
+        "queuedWallNanos",
         RuntimeCounter(queuedTime, RuntimeCounter::Unit::kNanos));
   }
 
