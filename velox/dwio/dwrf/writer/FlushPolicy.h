@@ -17,9 +17,29 @@
 #pragma once
 
 #include <cstdint>
+#include "velox/dwio/common/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 
 namespace facebook::velox::dwrf {
+enum FlushDecision {
+  SKIP,
+  FLUSH_DICTIONARY,
+  ABANDON_DICTIONARY,
+};
+
+class IDWRFFlushPolicy : virtual public dwio::common::IFlushPolicy {
+ public:
+  virtual ~IDWRFFlushPolicy() = default;
+  virtual bool shouldFlush(
+      const dwio::common::StripeProgress& stripeProgress) override = 0;
+  // Test combination of shouldFlush and checkAdditionalCriteria through gmock.
+  // Check additional criteria to supplement the main flush decision.
+  virtual FlushDecision checkAdditionalCriteria(
+      bool stripeProgressDecision,
+      bool overMemoryBudget,
+      const WriterContext& context) = 0;
+  virtual void close() override = 0;
+};
 
 class DefaultFlushPolicy {
  public:
