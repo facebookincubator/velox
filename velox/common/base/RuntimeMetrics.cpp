@@ -15,16 +15,16 @@
  */
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox {
 
-void RuntimeMetric::addValue(int64_t value, RuntimeMetricKind valueKind) {
+void RuntimeMetric::addValue(int64_t value) {
   sum += value;
   count++;
   min = std::min(min, value);
   max = std::max(max, value);
-  kind = valueKind;
 }
 
 void RuntimeMetric::merge(const RuntimeMetric& other) {
@@ -32,22 +32,22 @@ void RuntimeMetric::merge(const RuntimeMetric& other) {
   count += other.count;
   min = std::min(min, other.min);
   max = std::max(max, other.max);
-  kind = other.kind;
+  VELOX_CHECK_EQ(unit, other.unit);
 }
 
 void RuntimeMetric::printMetric(std::stringstream& stream) const {
-  switch (kind) {
-    case kNanos:
+  switch (unit) {
+    case RuntimeCounter::kNanos:
       stream << " sum: " << succinctNanos(sum) << ", count: " << count
              << ", min: " << succinctNanos(min)
              << ", max: " << succinctNanos(max);
       break;
-    case kByte:
+    case RuntimeCounter::kBytes:
       stream << " sum: " << succinctBytes(sum) << ", count: " << count
              << ", min: " << succinctBytes(min)
              << ", max: " << succinctBytes(max);
       break;
-    case kNone:
+    case RuntimeCounter::kNone:
     default:
       stream << " sum: " << sum << ", count: " << count << ", min: " << min
              << ", max: " << max;

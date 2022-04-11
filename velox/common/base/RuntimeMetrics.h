@@ -20,39 +20,27 @@
 
 namespace facebook::velox {
 
-enum RuntimeMetricKind { kNone, kNanos, kByte };
-
 struct RuntimeCounter {
-  RuntimeMetricKind kind{kNone};
+  enum Unit { kNone, kNanos, kBytes };
   int64_t value{0};
+  Unit unit{kNone};
 
-  RuntimeCounter(int64_t val, RuntimeMetricKind valueKind = kNone)
-      : kind(valueKind), value(val) {}
-
-  RuntimeCounter() = default;
+  explicit RuntimeCounter(int64_t _value, Unit _unit = kNone)
+      : value(_value), unit(_unit) {}
 };
 
 struct RuntimeMetric {
-  // sum, min, max have the same kind, count has kNone.
-  RuntimeMetricKind kind{kNone};
+  // Sum, min, max have the same kind, count has kNone.
+  RuntimeCounter::Unit unit{RuntimeCounter::kNone};
   int64_t sum{0};
   int64_t count{0};
   int64_t min{std::numeric_limits<int64_t>::max()};
   int64_t max{std::numeric_limits<int64_t>::min()};
 
-  void addValue(int64_t value, RuntimeMetricKind valueKind = kNone);
+  explicit RuntimeMetric(RuntimeCounter::Unit _unit = RuntimeCounter::kNone)
+      : unit(_unit) {}
 
-  void addValue(const RuntimeCounter& value) {
-    addValue(value.value, value.kind);
-  }
-
-  void addByteValue(int64_t value) {
-    addValue(value, kByte);
-  }
-
-  void addNanosValue(int64_t value) {
-    addValue(value, kNanos);
-  }
+  void addValue(int64_t value);
 
   void printMetric(std::stringstream& stream) const;
 

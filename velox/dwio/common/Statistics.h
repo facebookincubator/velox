@@ -421,9 +421,10 @@ struct RuntimeStatistics {
 
   std::unordered_map<std::string, RuntimeCounter> toMap() {
     return {
-        {"skippedSplits", RuntimeCounter(skippedSplits, kNone)},
-        {"skippedSplitBytes", RuntimeCounter(skippedSplitBytes, kByte)},
-        {"skippedStrides", RuntimeCounter(skippedStrides, kNone)}};
+        {"skippedSplits", RuntimeCounter(skippedSplits)},
+        {"skippedSplitBytes",
+         RuntimeCounter(skippedSplitBytes, RuntimeCounter::kBytes)},
+        {"skippedStrides", RuntimeCounter(skippedStrides)}};
   }
 };
 

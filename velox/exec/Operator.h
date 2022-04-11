@@ -123,19 +123,12 @@ struct OperatorStats {
         operatorType(std::move(_operatorType)) {}
 
   void addRuntimeStat(const std::string& name, const RuntimeCounter& value) {
-    runtimeStats[name].addValue(value);
-  }
-
-  void addRuntimeStat(const std::string& name, int64_t value) {
-    runtimeStats[name].addValue(value);
-  }
-
-  void addRuntimeNanosStat(const std::string& name, int64_t value) {
-    runtimeStats[name].addNanosValue(value);
-  }
-
-  void addRuntimeByteStat(const std::string& name, int64_t value) {
-    runtimeStats[name].addByteValue(value);
+    if (UNLIKELY(runtimeStats.count(name) == 0)) {
+      runtimeStats.insert(std::pair(name, RuntimeMetric(value.unit)));
+    } else {
+      VELOX_CHECK_EQ(runtimeStats.at(name).unit, value.unit);
+    }
+    runtimeStats.at(name).addValue(value.value);
   }
 
   void add(const OperatorStats& other);
