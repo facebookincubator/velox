@@ -30,7 +30,7 @@ struct RuntimeCounter {
 };
 
 struct RuntimeMetric {
-  // Sum, min, max have the same kind, count has kNone.
+  // Sum, min, max have the same unit, count has kNone.
   RuntimeCounter::Unit unit{RuntimeCounter::kNone};
   int64_t sum{0};
   int64_t count{0};

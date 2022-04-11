@@ -128,7 +128,7 @@ void printCustomStats(
   }
   width += 3;
 
-  // Copy to a map to get a deterministic output
+  // Copy to a map to get a deterministic output.
   std::map<std::string_view, RuntimeMetric> orderedStats;
   for (const auto& [name, metric] : stats) {
     orderedStats[name] = metric;
