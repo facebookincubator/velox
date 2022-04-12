@@ -82,7 +82,13 @@ enum class TypeKind : int8_t {
   INVALID = 36
 };
 
+// Returns the typekind represented by the `name`. Throws if no match found.
 TypeKind mapNameToTypeKind(const std::string& name);
+
+// Returns the typekind represented by the `name` and std::nullopt if no
+// match found.
+std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name);
+
 std::string mapTypeKindToName(const TypeKind& typeKind);
 
 std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
@@ -1477,6 +1483,9 @@ struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
+
+template <typename T>
+struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly
