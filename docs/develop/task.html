@@ -1,0 +1,339 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>What’s in the Task? &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Debugging Tools" href="debugging.html" />
+    <link rel="prev" title="Plan Nodes and Operators" href="operators.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="debugging.html" title="Debugging Tools"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="operators.html" title="Plan Nodes and Operators"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" accesskey="U">Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">What’s in the Task?</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="what-s-in-the-task">
+<h1>What’s in the Task?<a class="headerlink" href="#what-s-in-the-task" title="Permalink to this headline">¶</a></h1>
+<p>Some operators need to coordinate their work with other operators.</p>
+<ul class="simple">
+<li><p>Table scan operators running in parallel need to pull splits from a shared
+queue.</p></li>
+<li><p>The HashProbe operator needs to wait for the HashBuild operator to create a
+hash table.</p></li>
+<li><p>Multiple HashBuild operators building different sections of the hash table in
+parallel need to coordinate to combine the pieces into one final hash
+table.</p></li>
+<li><p>Exchange operators running in parallel need to pull data from shared remote
+sources.</p></li>
+<li><p>Local exchange operators need to write and read data into shared data
+partitions.</p></li>
+</ul>
+<p>Task enables coordination between these operators by maintaining a shared
+state.</p>
+<section id="pipelines-and-drivers">
+<h2>Pipelines and Drivers<a class="headerlink" href="#pipelines-and-drivers" title="Permalink to this headline">¶</a></h2>
+<p>Task is responsible for converting a query plan into a set of pipelines
+consisting of multiple operators stacked on top of each other.
+See <a class="reference internal" href="operators.html"><span class="doc">Plan Nodes and Operators</span></a> for the mapping between plan
+nodes and operators. Each plan node with multiple sources introduces a new
+pipeline or pipelines. These plan nodes include HashJoinNode, CrossJoinNode,
+MergeJoinNode, LocalMergeNode, LocalPartitionNode. Join nodes have two sources
+and introduce one new pipeline that ends at the right-side source.
+LocalMergeNode and LocalPartitionNode introduce one pipeline for each source.
+LocalPartitionNode is an exception as it may have a single source in which case
+it still introduces a new pipeline to allow for different parallelism before
+and after. Each pipeline may run multi-threaded and the number of threads used
+for each pipeline can be different.</p>
+<p>Driver refers to a single thread of execution of a single pipeline.</p>
+<p>Let’s look at a few examples.</p>
+<p>A query plan with a HashJoinNode is converted into two pipelines. One pipeline
+contains a HashProbe operator. Another pipeline contains a HashBuild operator.
+HashBuild operator is the last operator in the pipeline. The number of threads
+processing HashBuild pipeline can be different from the number of threads
+processing HashProbe pipeline.</p>
+<a class="reference internal image-reference" href="../_images/task-join-plan.png"><img alt="../_images/task-join-plan.png" class="align-center" src="../_images/task-join-plan.png" style="width: 400px;" /></a>
+<p>LocalPartitionNode is used to (1) repartition the data, or (2) gather data from
+multiple threads into a single thread, or (3) split the data produced by a
+single thread to allow for multi-threaded processing. A query plan with a
+LocalPartitionNode is converted into two pipelines: a producer pipeline that
+ends with LocalPartition operator and a consumer pipeline that starts with a
+LocalExchange. These pipelines may run with same or different
+parallelism allowing for N:1, 1:N and N:M local exchange.</p>
+<a class="reference internal image-reference" href="../_images/task-local-exchange-plan.png"><img alt="../_images/task-local-exchange-plan.png" class="align-center" src="../_images/task-local-exchange-plan.png" style="width: 400px;" /></a>
+<p>LocalMergeNode is used to combine multiple sorted inputs while preserving
+sortedness. A query plan with a LocalMergeNode with two sources is translated
+into three pipelines: one producer pipeline per source node and one consumer
+pipeline. Producer pipelines end with a CallbackSink operator. Consumer
+pipeline starts with a LocalMerge operator. A pipeline with a LocalMerge
+operator always runs single-threaded. Consumer pipelines produce sorted output
+and typically run single-threaded as well.</p>
+<a class="reference internal image-reference" href="../_images/task-local-merge-plan.png"><img alt="../_images/task-local-merge-plan.png" class="align-center" src="../_images/task-local-merge-plan.png" style="width: 400px;" /></a>
+<p>To summarize, a query plan is converted into multiple pipelines and each
+pipeline is executed using multiple Drivers. A given plan node is converted
+into one or more operators. Some plan nodes are converted into multiple
+Operators of different types. For example, TableScanNode is converted into
+multiple TableScan operators, one per thread of execution (Driver), while
+HashJoinNode is converted into multiple HashProbe operators and multiple
+HashBuild operators. The number of HashProbe and HashBuild operators may or may
+not match.</p>
+<p>Task creates Drivers and Operators, then transfers the ownership of Operators to
+the corresponding Drivers. Each Driver is assigned a pipeline ID and a driver
+ID. Pipeline IDs are zero-based sequential numbers. Driver IDs are also
+zero-based sequential numbers scoped to a pipeline. Driver IDs are unique
+within a pipeline, but repeat across pipelines. Each Operator is provided with
+the plan node ID of the corresponding plan node and a DriverCtx specifying
+pipeline ID and driver ID. Operators of the same type with matching pipeline
+IDs are called peers. These operators are running concurrently in different
+Drivers. Each Operator is assigned a zero-based sequential operator ID unique
+within a Driver.</p>
+</section>
+<section id="splits">
+<h2>Splits<a class="headerlink" href="#splits" title="Permalink to this headline">¶</a></h2>
+<p>Task is responsible for receiving splits from the application, storing these,
+and providing access to the operators.</p>
+<p>Splits can be added only for leaf plan nodes. Operators corresponding to leaf
+plan nodes fetch and process splits. These operators are called source
+operators and include TableScan, Exchange and MergeExchange.</p>
+<p>Task::addSplit(planNodeId, split) API allows the application to add a split for
+a particular plan node. The application calls addSplit() API multiple times to
+add multiple splits for multiple plan nodes. Task::noMoreSplits() API allows
+the application to signal that it added all the splits. The Task will complete
+once it processed all the splits and received no-more-splits signal.</p>
+<p>Task stores the splits in queues: one queue per plan node ID.</p>
+<p>Task::getSplitOrFuture(planNodeId) API allows an operator to fetch a split from
+the corresponding queue for processing. This API returns a split if one is
+available or Future if the queue is empty, but no-more-splits signal hasn’t
+arrived yet. The Future completes when a split or no-more-splits message is
+received.</p>
+<a class="reference internal image-reference" href="../_images/task-splits.png"><img alt="../_images/task-splits.png" class="align-center" src="../_images/task-splits.png" style="width: 400px;" /></a>
+</section>
+<section id="join-bridges-and-barriers">
+<h2>Join Bridges and Barriers<a class="headerlink" href="#join-bridges-and-barriers" title="Permalink to this headline">¶</a></h2>
+<p>HashProbe operators need to wait for the corresponding HashBuild operators to
+create a hash table. For each HashJoinNode and CrossJoinNode, the Task creates
+a bridge object, either HashJoinBridge or a CrossJoinBridge. HashProbe and
+HashBuild operators use Task::getHashJoinBridge() API to get access to a shared
+bridge. HashBuild operator adds the hash table to the bridge. HashProbe
+operator fetches the hash table from the bridge. Similarly, CrossJoinProbe and
+CrossJoinBuild operators use Task::getCrossJoinBridge() API to access a shared
+bridge to pass the build-side data to the probe-side.</p>
+<p>HashBuilder operators running in parallel need to coordinate among themselves to
+wait until all are finished processing input to combine the results into a
+single hash table. When an operator finishes processing, it calls
+Task::allPeersFinished() API which returns false for all but the last operator.
+Last operator receives true and is responsible for assembling the hash table
+and sending it over the bridge to the probe side.</p>
+<p>Task::allPeersFinished() API uses BarrierState structure to maintain state to
+know which operator is the last one.</p>
+<p>Similarly, CrossJoinBuild operators running in parallel use
+Task::allPeersFinished() API to choose a single operator to combine the results
+and send them over the bridge to the probe side.</p>
+<p>In addition, in case of RIGHT and FULL OUTER join, HashProbe operators use
+Task::allPeersFinished() API to choose a single operator that would emit
+build-side rows with no match after all probe rows have been processed.</p>
+<a class="reference internal image-reference" href="../_images/task-join-bridges.png"><img alt="../_images/task-join-bridges.png" class="align-center" src="../_images/task-join-bridges.png" style="width: 400px;" /></a>
+</section>
+<section id="exchange-clients">
+<h2>Exchange Clients<a class="headerlink" href="#exchange-clients" title="Permalink to this headline">¶</a></h2>
+<p>Exchange operator is designed to fetch a single partition of data from multiple
+remote workers. The exact mechanism of how to fetch the data is not included in
+the Velox library and expected to be provided by the application. The
+application implements an ExchangeSource and an ExchangeSource::Factory. The
+factory takes a string identifying the remote worker, a partition number, an
+instance of the ExchangeQueue and returns an instance of ExchangeSource that
+can fetch partition data from the remote workers and put that data into the
+provided queue.</p>
+<p>ExchangeClient is responsible for creating ExchangeSources and maintaining the
+queue of incoming data. Multiple Exchange operators are pulling data from a
+shared ExchangeClient, each operator receiving some subset of the data.</p>
+<p>A single Exchange operator (with driverId == 0) is responsible for fetching
+splits from the Task and initializing the shared ExchangeClient using task ID
+information found in the splits.</p>
+<p>Task is responsible for creating and storing shared ExchangeClient instances,
+one per ExchangeNode. Task is passing the reference to the shared
+ExchangeClient for the corresponding ExchangeNode when creating Exchange
+operators.</p>
+<p>The following diagram shows the first Exhange operator (driverId == 0) fetching
+splits from the Task and initializing ExchangeClient, then all Exchange
+operators fetching data from the shared ExchangeClient. For each split,
+ExchangeClient creates an ExchangeSource which pulls data for a single
+partition (#15 in the diagram) from a single upstream task. All ExchangeSources
+pull data for the same partition, but from different upstream tasks. The queue
+in ExchangeClient is used to accumulate the data for partition #15 from all the
+upstream tasks and distribute it among multiple Exchange operators allowing for
+parallel processing.</p>
+<a class="reference internal image-reference" href="../_images/task-exchange.png"><img alt="../_images/task-exchange.png" class="align-center" src="../_images/task-exchange.png" style="width: 400px;" /></a>
+<p>MergeExchange operator is similar to Exchange operator, but it receives sorted
+data from multiple workers and must merge the data to preserve sortedness. This
+operator must run single-threaded and therefore doesn’t require any shared
+state to be maintained in the task.</p>
+</section>
+<section id="local-exchange-queues">
+<h2>Local Exchange Queues<a class="headerlink" href="#local-exchange-queues" title="Permalink to this headline">¶</a></h2>
+<p>Local exchange is used to change parallelism or re-partition data between the
+pipelines. The exchange consists of a LocalPartition operator installed at the
+end of the producing pipeline, a LocalExchange installed at the source of the
+consuming pipelines and one or more LocalExchangeQueues that accumulate data.
+LocalExchangeQueues are shared among multiple LocalPartition and
+LocalExchangeQueues operators and therefore must be stored in the Task.</p>
+<p>For each LocalPartitionNode, Task creates multiple LocalExchangeQueues, as many
+as the number of threads used to run the consuming pipeline. LocalPartition and
+LocalExchangeQueues operators use Task::getLocalExchangeQueue() API to get
+access to shared queues to read and write data to. LocalPartition operator
+partitions the data and puts it into LocalExchangeQueues. LocalExchange reads
+data from a single LocalExchangeQueue.</p>
+<a class="reference internal image-reference" href="../_images/task-local-exchange.png"><img alt="../_images/task-local-exchange.png" class="align-center" src="../_images/task-local-exchange.png" style="width: 400px;" /></a>
+</section>
+<section id="local-merge-sources">
+<h2>Local Merge Sources<a class="headerlink" href="#local-merge-sources" title="Permalink to this headline">¶</a></h2>
+<p>LocalMerge operator is similar to LocalExchange, but it receives
+sorted data from multiple threads and must merge the data to preserve
+sortedness. This operator must run single-threaded. It uses
+Task::getLocalMergeSources() API to get access to LocalMergeSource instances
+the producing pipeline is writing to. For each LocalMergeNode, Task creates
+multiple LocalMergeSource instances to match the parallelism of the producing
+pipeline.</p>
+</section>
+<section id="merge-join-sources">
+<h2>Merge Join Sources<a class="headerlink" href="#merge-join-sources" title="Permalink to this headline">¶</a></h2>
+<p>MergeJoin operator needs a way to receive right-side data. It relies on the Task
+to create a MergeJoinSource and install a CallbackSink operator at the end of
+the right-side pipeline to write data to the MergeJoinSource. MergeJoin
+operator uses Task::getMergeJoinSource() API to get access to the
+MergeJoinSource() to read right-side data from.</p>
+</section>
+<section id="extensibility">
+<h2>Extensibility<a class="headerlink" href="#extensibility" title="Permalink to this headline">¶</a></h2>
+<p>Velox allows applications to define custom plan nodes and operators. These
+operators can access splits and use barriers as these constructs are generic
+and not tied to any particular plan node or operator. Exchange clients, local
+exchange queues and local merge sources as well as merge join sources are not
+generic and therefore not available to custom operators.</p>
+</section>
+<section id="summary">
+<h2>Summary<a class="headerlink" href="#summary" title="Permalink to this headline">¶</a></h2>
+<p>Task is responsible for maintaining shared state and enabling coordination
+between operators. The shared state consists of:</p>
+<ul class="simple">
+<li><p>Splits</p></li>
+<li><p>Join bridges and barriers</p></li>
+<li><p>Exchange clients</p></li>
+<li><p>Local exchange queues</p></li>
+<li><p>Local merge sources</p></li>
+<li><p>Merge join sources</p></li>
+</ul>
+<p>Each piece of shared state is associated with a particular plan node. Operators
+use plan node IDs when accessing shared state. Custom operators have access to
+splits and barriers. Other pieces of shared state are not available to custom
+operators.</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">What’s in the Task?</a><ul>
+<li><a class="reference internal" href="#pipelines-and-drivers">Pipelines and Drivers</a></li>
+<li><a class="reference internal" href="#splits">Splits</a></li>
+<li><a class="reference internal" href="#join-bridges-and-barriers">Join Bridges and Barriers</a></li>
+<li><a class="reference internal" href="#exchange-clients">Exchange Clients</a></li>
+<li><a class="reference internal" href="#local-exchange-queues">Local Exchange Queues</a></li>
+<li><a class="reference internal" href="#local-merge-sources">Local Merge Sources</a></li>
+<li><a class="reference internal" href="#merge-join-sources">Merge Join Sources</a></li>
+<li><a class="reference internal" href="#extensibility">Extensibility</a></li>
+<li><a class="reference internal" href="#summary">Summary</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="operators.html"
+                          title="previous chapter">Plan Nodes and Operators</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="debugging.html"
+                          title="next chapter">Debugging Tools</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/develop/task.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="debugging.html" title="Debugging Tools"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="operators.html" title="Plan Nodes and Operators"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../develop.html" >Developer Guide</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">What’s in the Task?</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
