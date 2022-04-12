@@ -26,17 +26,19 @@ uint64_t VeloxToSubstraitFuncConvertor::registerSubstraitFunction(
       GlobalCommonVarSingleton::getInstance();
 
   std::shared_ptr<::substrait::Plan> sPlanSingleton = sGlobSingleton.getSPlan();
+  uint64_t lastFunctionId = sGlobSingleton.getLastFunctionReference();
 
   if (functionMap_.find(name) == functionMap_.end()) {
-    auto functionId = lastFunctionId_++;
+    auto functionId = lastFunctionId;
     auto sFun = sPlanSingleton->add_extensions()->mutable_extension_function();
     sFun->set_function_anchor(functionId);
     sFun->set_name(name);
     sFun->set_extension_uri_reference(44);
 
     functionMap_[name] = functionId;
+    sGlobSingleton.setSPlan(sPlanSingleton);
+    sGlobSingleton.setLastFunctionReference();
   }
-  sGlobSingleton.setSPlan(sPlanSingleton);
   return functionMap_[name];
 }
 

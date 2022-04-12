@@ -27,31 +27,15 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitTypeConvertor {
  public:
-  // Used to convert Velox RowTypePtr into Substrait NamedStruct.
-  ::substrait::NamedStruct* toSubstraitNamedStruct(
+  // Convert Velox RowType to Substrait NamedStruct.
+  void toSubstraitNamedStruct(
       const velox::RowTypePtr& vRow,
-      ::substrait::NamedStruct* sNamedStruct);
+      std::shared_ptr<::substrait::NamedStruct> sNamedStruct);
 
-  ::substrait::Expression_Literal* processVeloxValueByType(
-      ::substrait::Expression_Literal_Struct* sLitValue,
-      ::substrait::Expression_Literal* sField,
-      const velox::VectorPtr& children);
-
-  // Used to convert Velox TypePtr into Substrait Type.
-  ::substrait::Type toSubstraitType(
+  // Convert Velox Type to Substrait Type.
+  void toSubstraitType(
       const velox::TypePtr& vType,
-      ::substrait::Type* sType);
-
- private:
-  ::substrait::Expression_Literal* processVeloxNullValueByCount(
-      const velox::TypePtr& childType,
-      std::optional<vector_size_t> nullCount,
-      ::substrait::Expression_Literal_Struct* sLitValue,
-      ::substrait::Expression_Literal* sField);
-
-  ::substrait::Expression_Literal* processVeloxNullValue(
-      ::substrait::Expression_Literal* sField,
-      const velox::TypePtr& childType);
+      std::shared_ptr<::substrait::Type> sType);
 };
 
 } // namespace facebook::velox::substrait

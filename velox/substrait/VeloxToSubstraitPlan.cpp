@@ -80,7 +80,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   RowTypePtr vPreNodeOutPut = vSource->outputType();
   //   Construct substrait expr
   v2SExprConvertor_.toSubstraitExpr(
-      sFilterCondition, vFilterCondition, vPreNodeOutPut);
+      vFilterCondition, vPreNodeOutPut, sFilterCondition);
   sFilterRel->mutable_common()->mutable_direct();
 }
 
@@ -92,7 +92,8 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   ::substrait::ReadRel_VirtualTable* sVirtualTable =
       sReadRel->mutable_virtual_table();
 
-  ::substrait::NamedStruct* sBaseSchema = sReadRel->mutable_base_schema();
+  auto sBaseSchema = std::make_shared<::substrait::NamedStruct>(
+      *(sReadRel->mutable_base_schema()));
   v2STypeConvertor_.toSubstraitNamedStruct(vOutPut, sBaseSchema);
 
   const PlanNodeId id = vValuesNode->id();
@@ -114,8 +115,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       ::substrait::Expression_Literal* sField;
 
       VectorPtr children = rowValue->childAt(column);
-      sField = v2STypeConvertor_.processVeloxValueByType(
-          sLitValue, sField, children);
+      v2SExprConvertor_.toSubstraitLiteral(children, sLitValue, sField);
     }
   }
   sReadRel->mutable_common()->mutable_direct();
@@ -168,7 +168,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     std::shared_ptr<const ITypedExpr>& vExpr = vProjections.at(i);
     ::substrait::Expression* sExpr = sProjRel->add_expressions();
 
-    v2SExprConvertor_.toSubstraitExpr(sExpr, vExpr, vPreNodeOutPut);
+    v2SExprConvertor_.toSubstraitExpr(vExpr, vPreNodeOutPut, sExpr);
     // add outputMapping for each vExpr
     const std::shared_ptr<const Type> vExprType = vExpr->type();
 

@@ -43,9 +43,12 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     for (int i = 0; i < size; i++) {
       std::vector<VectorPtr> children;
       for (int j = 0; j < childSize; j++) {
-        children.emplace_back(makeFlatVector<int32_t>(batchSize, [&](auto row) {
-          return folly::Random::rand32(INT32_MAX / 4, INT32_MAX / 2, gen);
-        }));
+        children.emplace_back(makeFlatVector<int32_t>(
+            batchSize,
+            [&](auto row) {
+              return folly::Random::rand32(INT32_MAX / 4, INT32_MAX / 2, gen);
+            },
+            nullEvery(2)));
       }
 
       std::vector<std::string> childrenNames = rowType_->names();
@@ -54,33 +57,13 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     return vectors;
   };
 
-  void assertVeloxToSubstraitProject(std::vector<RowVectorPtr>&& vectors) {
-    auto vPlan = PlanBuilder()
-                     .values(vectors)
-                     .project({"c0 + c1", "c1 - c2"})
-                     .planNode();
-
-    assertQuery(vPlan, "SELECT  c0 + c1, c1 - c2 FROM tmp");
-
+  void assertPlanConversion(
+      const std::shared_ptr<const core::PlanNode>& vPlan,
+      const std::string& duckDbSql) {
+    assertQuery(vPlan, duckDbSql);
     // Convert Velox Plan to Substrait Plan
     v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
-  }
-
-  void assertVeloxToSubstraitFilter(
-      std::vector<RowVectorPtr>&& vectors,
-      const std::string& filter =
-          "(c2 < 1000) and (c1 between 0.6 and 1.6) and (c0 >= 100)") {
-    auto vPlan = PlanBuilder().values(vectors).filter(filter).planNode();
-
-    assertQuery(vPlan, "SELECT * FROM tmp WHERE " + filter);
-    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
-  }
-
-  void assertVeloxToSubstraitValues(std::vector<RowVectorPtr>&& vectors) {
-    auto vPlan = PlanBuilder().values(vectors).planNode();
-
-    assertQuery(vPlan, "SELECT * FROM tmp");
-    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
+    sPlan_.PrintDebugString();
   }
 
   void SetUp() override {
@@ -96,27 +79,33 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
 
   VeloxToSubstraitPlanConvertor v2SPlanConvertor_;
   ::substrait::Plan sPlan_;
-  std::shared_ptr<const RowType> rowType_;
+  RowTypePtr rowType_;
 };
 
 TEST_F(SubstraitVeloxPlanConvertorTest, project) {
-  std::vector<RowVectorPtr> vectors;
-  vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
-
-  assertVeloxToSubstraitProject(std::move(vectors));
+  auto plan =
+      PlanBuilder().values(vectors).project({"c0 + c1", "c1 - c2"}).planNode();
+  assertPlanConversion(plan, "SELECT  c0 + c1, c1 - c2 FROM tmp");
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
-  std::vector<RowVectorPtr> vectors;
-  vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
-  assertVeloxToSubstraitFilter(std::move(vectors));
+
+  const std::string& filter =
+      "(c2 < 1000) and (c1 between 0.6 and 1.6) and (c0 >= 100)";
+  auto vPlan = PlanBuilder().values(vectors).filter(filter).planNode();
+
+  assertPlanConversion(vPlan, "SELECT * FROM tmp WHERE " + filter);
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, values) {
-  std::vector<RowVectorPtr> vectors;
-  vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 4, 2);
   createDuckDbTable(vectors);
-  assertVeloxToSubstraitValues(std::move(vectors));
+
+  auto vPlan = PlanBuilder().values(vectors).planNode();
+
+  assertPlanConversion(vPlan, "SELECT * FROM tmp");
 }

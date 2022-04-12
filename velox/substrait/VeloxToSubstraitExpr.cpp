@@ -21,9 +21,9 @@
 namespace facebook::velox::substrait {
 
 void VeloxToSubstraitExprConvertor::toSubstraitExpr(
-    ::substrait::Expression* sExpr,
     const std::shared_ptr<const ITypedExpr>& vExpr,
-    RowTypePtr vPreNodeOutPut) {
+    RowTypePtr vPreNodeOutPut,
+    ::substrait::Expression* sExpr) {
   if (std::shared_ptr<const ConstantTypedExpr> vConstantExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(vExpr)) {
     toSubstraitLiteral(vConstantExpr->value(), sExpr->mutable_literal());
@@ -62,10 +62,11 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
 
       for (auto& vArg : vCallTypeInputs) {
         ::substrait::Expression* sArg = sFun->add_args();
-        toSubstraitExpr(sArg, vArg, vPreNodeOutPut);
+        toSubstraitExpr(vArg, vPreNodeOutPut, sArg);
       }
       ::substrait::Type* sFunType = sFun->mutable_output_type();
-      v2STypeConvertor_.toSubstraitType(vExprType, sFunType);
+      v2STypeConvertor_.toSubstraitType(
+          vExprType, std::make_shared<::substrait::Type>(*sFunType));
       return;
     }
   }
@@ -95,7 +96,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
         break;
       }
     }
-    // cannot go to here???
+
     if (sCurrentColId == -1) {
       sCurrentColId = vPreNodeColNums + 1;
     }
@@ -108,15 +109,16 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
         vCastExpr->inputs();
     ::substrait::Expression_Cast* sCastExpr = sExpr->mutable_cast();
     v2STypeConvertor_.toSubstraitType(
-        vCastExpr->type(), sCastExpr->mutable_type());
+        vCastExpr->type(),
+        std::make_shared<::substrait::Type>(*(sCastExpr->mutable_type())));
 
     for (auto& vArg : vCastTypeInputs) {
-      toSubstraitExpr(sCastExpr->mutable_input(), vArg, vPreNodeOutPut);
+      toSubstraitExpr(vArg, vPreNodeOutPut, sCastExpr->mutable_input());
     }
     return;
 
   } else {
-    VELOX_NYI("Unsupport Expr '{}' in Substrait", vExpr->toString());
+    VELOX_UNSUPPORTED("Unsupport Expr '{}' in Substrait", vExpr->toString());
   }
 }
 
@@ -171,6 +173,212 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       VELOX_NYI(
           "Unsupported constant Type '{}' ",
           mapTypeKindToName(vConstExpr.kind()));
+  }
+}
+
+void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+    const velox::VectorPtr& vVectorValue,
+    ::substrait::Expression_Literal_Struct* sLitValue,
+    ::substrait::Expression_Literal* sField) {
+  const TypePtr& childType = vVectorValue->type();
+
+  switch (childType->kind()) {
+    case velox::TypeKind::BOOLEAN: {
+      auto childToFlatVec = vVectorValue->asFlatVector<bool>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_boolean(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::TINYINT: {
+      auto childToFlatVec = vVectorValue->asFlatVector<int8_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_i8(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::SMALLINT: {
+      auto childToFlatVec = vVectorValue->asFlatVector<int16_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_i16(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::INTEGER: {
+      auto childToFlatVec = vVectorValue->asFlatVector<int32_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_i32(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::BIGINT: {
+      auto childToFlatVec = vVectorValue->asFlatVector<int64_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_i64(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::REAL: {
+      auto childToFlatVec = vVectorValue->asFlatVector<float_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_fp32(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::DOUBLE: {
+      auto childToFlatVec = vVectorValue->asFlatVector<double_t>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          sField->set_fp64(childToFlatVec->valueAt(i));
+        }
+      }
+      break;
+    }
+    case velox::TypeKind::VARCHAR: {
+      auto childToFlatVec = vVectorValue->asFlatVector<StringView>();
+      // get the batchSize and convert each value in it.
+      vector_size_t flatVecSize = childToFlatVec->size();
+      for (int64_t i = 0; i < flatVecSize; i++) {
+        sField = sLitValue->add_fields();
+        if (childToFlatVec->isNullAt(i)) {
+          // process the null value
+          toSubstraitNullLiteral(childType, sField);
+        } else {
+          ::substrait::Expression_Literal::VarChar* sVarChar =
+              new ::substrait::Expression_Literal::VarChar();
+          StringView vChildValueAt = childToFlatVec->valueAt(i);
+          sVarChar->set_value(vChildValueAt);
+          sVarChar->set_length(vChildValueAt.size());
+          sField->set_allocated_var_char(sVarChar);
+        }
+      }
+      break;
+    }
+    default: {
+      VELOX_UNSUPPORTED(
+          "Unsupported type '{}'", std::string(childType->kindName()));
+    }
+  }
+}
+
+void VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
+    const velox::TypePtr& vValueType,
+    ::substrait::Expression_Literal* sField) {
+  switch (vValueType->kind()) {
+    case velox::TypeKind::BOOLEAN: {
+      ::substrait::Type_Boolean* nullValue = new ::substrait::Type_Boolean();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_bool_(nullValue);
+      break;
+    }
+    case velox::TypeKind::TINYINT: {
+      ::substrait::Type_I8* nullValue = new ::substrait::Type_I8();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_i8(nullValue);
+      break;
+    }
+    case velox::TypeKind::SMALLINT: {
+      ::substrait::Type_I16* nullValue = new ::substrait::Type_I16();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_i16(nullValue);
+      break;
+    }
+    case velox::TypeKind::INTEGER: {
+      ::substrait::Type_I32* nullValue = new ::substrait::Type_I32();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_i32(nullValue);
+      break;
+    }
+    case velox::TypeKind::BIGINT: {
+      ::substrait::Type_I64* nullValue = new ::substrait::Type_I64();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_i64(nullValue);
+      break;
+    }
+    case velox::TypeKind::VARCHAR: {
+      ::substrait::Type_VarChar* nullValue = new ::substrait::Type_VarChar();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_varchar(nullValue);
+      break;
+    }
+    case velox::TypeKind::REAL: {
+      ::substrait::Type_FP32* nullValue = new ::substrait::Type_FP32();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_fp32(nullValue);
+      break;
+    }
+    case velox::TypeKind::DOUBLE: {
+      ::substrait::Type_FP64* nullValue = new ::substrait::Type_FP64();
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      sField->mutable_null()->set_allocated_fp64(nullValue);
+      break;
+    }
+    default: {
+      VELOX_UNSUPPORTED(
+          "Unsupported type '{}'", std::string(vValueType->kindName()));
+    }
   }
 }
 

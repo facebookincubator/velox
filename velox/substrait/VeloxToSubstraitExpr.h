@@ -28,19 +28,30 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitExprConvertor {
  public:
-  // Used to convert Velox Expression into Substrait Expression.
+  // Convert Velox Expression to Substrait Expression.
   void toSubstraitExpr(
-      ::substrait::Expression* sExpr,
       const std::shared_ptr<const ITypedExpr>& vExpr,
-      RowTypePtr vPreNodeOutPut);
+      RowTypePtr vPreNodeOutPut,
+      ::substrait::Expression* sExpr);
 
-  // Used to convert Velox Constant Expression into Substrait
-  // Expression_Literal.
+  // Convert Velox Constant Expression to Substrait
+  // Literal Expression.
   void toSubstraitLiteral(
       const velox::variant& vConstExpr,
       ::substrait::Expression_Literal* sLiteralExpr);
 
+  // Convert Velox vector to Substrait literal.
+  void toSubstraitLiteral(
+      const velox::VectorPtr& vVectorValue,
+      ::substrait::Expression_Literal_Struct* sLitValue,
+      ::substrait::Expression_Literal* sField);
+
  private:
+  // Convert Velox null literal to Substrait null literal.
+  void toSubstraitNullLiteral(
+      const velox::TypePtr& vValueType,
+      ::substrait::Expression_Literal* sField);
+
   VeloxToSubstraitTypeConvertor v2STypeConvertor_;
   VeloxToSubstraitFuncConvertor v2SFuncConvertor_;
 };

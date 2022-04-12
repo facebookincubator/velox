@@ -32,4 +32,12 @@ void GlobalCommonVarSingleton::setSPlan(
   sPlan_ = sPlan;
 }
 
+uint64_t GlobalCommonVarSingleton::getLastFunctionReference() const {
+  return lastFunctionReference_;
+}
+
+void GlobalCommonVarSingleton::setLastFunctionReference() {
+  lastFunctionReference_ += 1;
+}
+
 } // namespace facebook::velox::substrait
