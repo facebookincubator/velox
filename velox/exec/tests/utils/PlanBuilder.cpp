@@ -142,6 +142,8 @@ std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
       return common::test::lessThanOrEqualFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
       return common::test::lessThanOrEqual(singleValue<StringView>(upper));
+    case TypeKind::DATE:
+      return common::test::lessThanOrEqual(singleValue<Date>(upper).days());
     default:
       VELOX_NYI(
           "Unsupported value for less than or equals filter: {} <= {}",
@@ -165,6 +167,8 @@ std::unique_ptr<common::Filter> makeLessThanFilter(
       return common::test::lessThanFloat(singleValue<float>(upper));
     case TypeKind::VARCHAR:
       return common::test::lessThan(singleValue<StringView>(upper));
+    case TypeKind::DATE:
+      return common::test::lessThan(singleValue<Date>(upper).days());
     default:
       VELOX_NYI(
           "Unsupported value for less than filter: {} <= {}",
@@ -188,6 +192,8 @@ std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
       return common::test::greaterThanOrEqualFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
       return common::test::greaterThanOrEqual(singleValue<StringView>(lower));
+    case TypeKind::DATE:
+      return common::test::greaterThanOrEqual(singleValue<Date>(lower).days());
     default:
       VELOX_NYI(
           "Unsupported value for greater than or equals filter: {} >= {}",
@@ -211,6 +217,8 @@ std::unique_ptr<common::Filter> makeGreaterThanFilter(
       return common::test::greaterThanFloat(singleValue<float>(lower));
     case TypeKind::VARCHAR:
       return common::test::greaterThan(singleValue<StringView>(lower));
+    case TypeKind::DATE:
+      return common::test::greaterThan(singleValue<Date>(lower).days());
     default:
       VELOX_NYI(
           "Unsupported value for greater than filter: {} > {}",
@@ -232,6 +240,8 @@ std::unique_ptr<common::Filter> makeEqualFilter(
       return common::test::equal(singleValue<int64_t>(value));
     case TypeKind::VARCHAR:
       return common::test::equal(singleValue<StringView>(value));
+    case TypeKind::DATE:
+      return common::test::equal(singleValue<Date>(value).days());
     default:
       VELOX_NYI(
           "Unsupported value for equals filter: {} = {}",
@@ -256,6 +266,9 @@ std::unique_ptr<common::Filter> makeBetweenFilter(
     case TypeKind::REAL:
       return common::test::betweenFloat(
           singleValue<float>(lower), singleValue<float>(upper));
+    case TypeKind::DATE:
+      return common::test::between(
+          singleValue<Date>(lower).days(), singleValue<Date>(upper).days());
     default:
       VELOX_NYI(
           "Unsupported value for 'between' filter: {} BETWEEN {} AND {}",
@@ -331,15 +344,32 @@ PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& outputType,
     const std::vector<std::string>& subfieldFilters,
     const std::string& remainingFilter) {
+  return tableScan(
+      "hive_table", outputType, {}, subfieldFilters, remainingFilter);
+}
+
+PlanBuilder& PlanBuilder::tableScan(
+    const std::string& tableName,
+    const RowTypePtr& outputType,
+    const std::unordered_map<std::string, std::string>& columnAliases,
+    const std::vector<std::string>& subfieldFilters,
+    const std::string& remainingFilter) {
   std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
       assignments;
   for (uint32_t i = 0; i < outputType->size(); ++i) {
     const auto& name = outputType->nameOf(i);
     const auto& type = outputType->childAt(i);
+
+    std::string hiveColumnName = name;
+    auto it = columnAliases.find(name);
+    if (it != columnAliases.end()) {
+      hiveColumnName = it->second;
+    }
+
     assignments.insert(
         {name,
          std::make_shared<HiveColumnHandle>(
-             name, HiveColumnHandle::ColumnType::kRegular, type)});
+             hiveColumnName, HiveColumnHandle::ColumnType::kRegular, type)});
   }
 
   SubfieldFilters filters;
@@ -348,16 +378,22 @@ PlanBuilder& PlanBuilder::tableScan(
     auto filterExpr = parseExpr(filter, outputType, pool_);
     auto [subfield, subfieldFilter] = toSubfieldFilter(filterExpr);
 
+    auto it = columnAliases.find(subfield.toString());
+    if (it != columnAliases.end()) {
+      subfield = common::Subfield(it->second);
+    }
+
     filters[std::move(subfield)] = std::move(subfieldFilter);
   }
 
   std::shared_ptr<const core::ITypedExpr> remainingFilterExpr;
   if (!remainingFilter.empty()) {
-    remainingFilterExpr = parseExpr(remainingFilter, outputType, pool_);
+    remainingFilterExpr = parseExpr(remainingFilter, outputType, pool_)
+                              ->rewriteInputNames(columnAliases);
   }
 
   auto tableHandle = std::make_shared<HiveTableHandle>(
-      "hive_table", true, std::move(filters), remainingFilterExpr);
+      tableName, true, std::move(filters), remainingFilterExpr);
   return tableScan(outputType, tableHandle, assignments);
 }
 
