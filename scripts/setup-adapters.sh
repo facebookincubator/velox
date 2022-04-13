@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+SCRIPTDIR=$(dirname "$0")
+source $SCRIPTDIR/setup-helper-functions.sh
+
 # Propagate errors and improve debugging.
 set -eufx -o pipefail
 
@@ -51,11 +54,21 @@ function install_aws-sdk-cpp {
   ninja install
 }
 
+function install_libhdfs3 {
+  github_checkout apache/hawq master
+  cd depends/libhdfs3
+  cmake_install
+}
+
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 cd "${DEPENDENCY_DIR}" || exit
 # aws-sdk-cpp missing dependencies
-yum install -y curl-devel
-
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+   yum install -y curl-devel
+fi
 install_aws-sdk-cpp
+install_libhdfs3
+
 _ret=$?
 if [ $_ret -eq 0 ] ; then
    echo "All deps for Velox adapters installed!"

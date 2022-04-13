@@ -18,7 +18,7 @@ workflows:
     jobs:
       - linux-build
       - linux-build-options
-      - linux-parquet-s3-build
+      - linux-parquet-hive-storage-adapters-build
       - macos-build
       - format-check
       - header-check
@@ -49,7 +49,7 @@ workflows:
       - linux-build
       - linux-build-release
       - linux-build-options
-      - linux-parquet-s3-build
+      - linux-parquet-hive-storage-adapters-build
       - macos-build
 
 executors:
@@ -316,7 +316,7 @@ jobs:
           paths:
             - .ccache/
 
-  linux-parquet-s3-build:
+  linux-parquet-hive-storage-adapters-build:
     executor: build
     steps:
       - checkout
@@ -347,13 +347,21 @@ jobs:
             wget https://dl.min.io/server/minio/release/linux-amd64/minio
             chmod +x minio
       - run:
+          name: "Install Hadoop dependency"
+          command: |
+            set -xu
+            cd ~/adapter-deps/install/bin/
+            wget https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz
+            tar xf hadoop-2.10.1.tar.gz
+            chmod +x hadoop-2.10.1
+      - run:
           name: Build
           command: |
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
             source /opt/rh/gcc-toolset-9/enable
-            make release EXTRA_CMAKE_FLAGS=" -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_S3=ON " AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - store_artifacts:
