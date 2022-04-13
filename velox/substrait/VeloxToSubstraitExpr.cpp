@@ -65,8 +65,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
         toSubstraitExpr(vArg, vPreNodeOutPut, sArg);
       }
       ::substrait::Type* sFunType = sFun->mutable_output_type();
-      v2STypeConvertor_.toSubstraitType(
-          vExprType, std::make_shared<::substrait::Type>(*sFunType));
+      v2STypeConvertor_.toSubstraitType(vExprType, sFunType);
       return;
     }
   }
@@ -109,8 +108,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
         vCastExpr->inputs();
     ::substrait::Expression_Cast* sCastExpr = sExpr->mutable_cast();
     v2STypeConvertor_.toSubstraitType(
-        vCastExpr->type(),
-        std::make_shared<::substrait::Type>(*(sCastExpr->mutable_type())));
+        vCastExpr->type(), sCastExpr->mutable_type());
 
     for (auto& vArg : vCastTypeInputs) {
       toSubstraitExpr(vArg, vPreNodeOutPut, sCastExpr->mutable_input());

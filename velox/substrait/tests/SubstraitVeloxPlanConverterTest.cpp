@@ -63,7 +63,6 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     assertQuery(vPlan, duckDbSql);
     // Convert Velox Plan to Substrait Plan
     v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
-    sPlan_.PrintDebugString();
   }
 
   void SetUp() override {

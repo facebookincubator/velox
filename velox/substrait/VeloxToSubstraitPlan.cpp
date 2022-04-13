@@ -92,8 +92,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   ::substrait::ReadRel_VirtualTable* sVirtualTable =
       sReadRel->mutable_virtual_table();
 
-  auto sBaseSchema = std::make_shared<::substrait::NamedStruct>(
-      *(sReadRel->mutable_base_schema()));
+  ::substrait::NamedStruct* sBaseSchema = sReadRel->mutable_base_schema();
   v2STypeConvertor_.toSubstraitNamedStruct(vOutPut, sBaseSchema);
 
   const PlanNodeId id = vValuesNode->id();

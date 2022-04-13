@@ -22,7 +22,7 @@ namespace facebook::velox::substrait {
 
 void VeloxToSubstraitTypeConvertor::toSubstraitType(
     const velox::TypePtr& vType,
-    std::shared_ptr<::substrait::Type> sType) {
+    ::substrait::Type* sType) {
   switch (vType->kind()) {
     case velox::TypeKind::BOOLEAN: {
       sType->set_allocated_bool_(new ::substrait::Type_Boolean());
@@ -65,29 +65,36 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
       break;
     }
     case velox::TypeKind::ARRAY: {
+      google::protobuf::Arena* arena;
       ::substrait::Type_List* sTList = new ::substrait::Type_List();
+      arena->Own(sTList);
+
       const TypePtr vElementType = vType->asArray().elementType();
+      try {
+        toSubstraitType(vElementType, sTList->mutable_type());
+        sType->set_allocated_list(sTList);
+      } catch (std::exception& e) {
+        arena->OwnDestructor(sTList);
+      }
 
-      toSubstraitType(
-          vElementType,
-          std::make_shared<::substrait::Type>(*(sTList->mutable_type())));
-
-      sType->set_allocated_list(sTList);
       break;
     }
     case velox::TypeKind::MAP: {
+      google::protobuf::Arena* arena;
       ::substrait::Type_Map* sMap = new ::substrait::Type_Map();
+      arena->Own(sMap);
+
       const TypePtr& vMapKeyType = vType->asMap().keyType();
       const TypePtr& vMapValueType = vType->asMap().valueType();
+      try {
+        toSubstraitType(vMapKeyType, sMap->mutable_key());
+        toSubstraitType(vMapValueType, sMap->mutable_value());
 
-      toSubstraitType(
-          vMapKeyType,
-          std::make_shared<::substrait::Type>(*(sMap->mutable_key())));
-      toSubstraitType(
-          vMapValueType,
-          std::make_shared<::substrait::Type>(*(sMap->mutable_value())));
+        sType->set_allocated_map(sMap);
+      } catch (std::exception& e) {
+        arena->OwnDestructor(sMap);
+      }
 
-      sType->set_allocated_map(sMap);
       break;
     }
     case velox::TypeKind::UNKNOWN:
@@ -101,21 +108,18 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
 
 void VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     const velox::RowTypePtr& vRow,
-    std::shared_ptr<::substrait::NamedStruct> sNamedStruct) {
+    ::substrait::NamedStruct* sNamedStruct) {
   const int64_t vSize = vRow->size();
   const std::vector<std::string>& vNames = vRow->names();
   const std::vector<TypePtr>& vTypes = vRow->children();
-  auto sTypeStruct = std::make_shared<::substrait::Type_Struct>(
-      *(sNamedStruct->mutable_struct_()));
+  ::substrait::Type_Struct* sTypeStruct = sNamedStruct->mutable_struct_();
 
   for (int64_t i = 0; i < vSize; ++i) {
     const std::string& vName = vNames.at(i);
     const TypePtr& vType = vTypes.at(i);
     sNamedStruct->add_names(vName);
 
-    toSubstraitType(
-        vType,
-        std::make_shared<::substrait::Type>(*(sTypeStruct->add_types())));
+    toSubstraitType(vType, sTypeStruct->add_types());
   }
 }
 
