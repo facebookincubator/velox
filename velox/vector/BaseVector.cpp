@@ -345,13 +345,26 @@ VectorPtr BaseVector::create(
 }
 
 void BaseVector::addNulls(const uint64_t* bits, const SelectivityVector& rows) {
-  VELOX_CHECK(mayAddNulls());
-  VELOX_CHECK(length_ >= rows.end());
-  ensureNulls();
+  VELOX_CHECK(isNullsWritable());
+
+  // Resize the vector and nulls_ to fit the added nulls if necessary.
+  if (length_ < rows.end()) {
+    // If not all rows are null between the end of the current vector and the
+    // end of rows, this resize will produce non-null undefined values.
+    VELOX_CHECK(
+        rows.begin() <= length_ &&
+        rows.countSelected(length_, rows.end()) == rows.end() - length_ &&
+        (!bits || bits::countBits(bits, length_, rows.end()) == 0));
+    setSize(rows.end());
+    ensureNullsCapacity(rows.end());
+  } else {
+    ensureNulls();
+  }
+
   auto target = nulls_->asMutable<uint64_t>();
   const uint64_t* selected = rows.asRange().bits();
   if (!bits) {
-    // A A 1 in rows makes a 0 in nulls.
+    // A 1 in rows makes a 0 in nulls.
     bits::andWithNegatedBits(target, selected, rows.begin(), rows.end());
     return;
   }
@@ -368,7 +381,7 @@ void BaseVector::addNulls(const uint64_t* bits, const SelectivityVector& rows) {
 }
 
 void BaseVector::clearNulls(const SelectivityVector& rows) {
-  VELOX_CHECK(mayAddNulls());
+  VELOX_CHECK(isNullsWritable());
   if (!nulls_) {
     return;
   }
@@ -390,7 +403,7 @@ void BaseVector::clearNulls(const SelectivityVector& rows) {
 }
 
 void BaseVector::clearNulls(vector_size_t begin, vector_size_t end) {
-  VELOX_CHECK(mayAddNulls());
+  VELOX_CHECK(isNullsWritable());
   if (!nulls_) {
     return;
   }

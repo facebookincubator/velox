@@ -1530,3 +1530,105 @@ TEST_F(VectorTest, constantSetNull) {
 
   EXPECT_THROW(vector->setNull(0, true), VeloxRuntimeError);
 }
+
+TEST_F(VectorTest, addNullsWithRows) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+  auto flatVector = vectorMaker->flatVector<int32_t>({1, 2, 3, 4});
+
+  SelectivityVector rows(flatVector->size(), false);
+  rows.setValid(2, true);
+  rows.setValid(3, true);
+  rows.updateBounds();
+
+  flatVector->addNulls(nullptr, rows);
+  ASSERT_FALSE(flatVector->isNullAt(0));
+  ASSERT_FALSE(flatVector->isNullAt(1));
+  ASSERT_TRUE(flatVector->isNullAt(2));
+  ASSERT_TRUE(flatVector->isNullAt(3));
+
+  // Grow the vector to add more nulls.
+  rows.clearAll();
+  rows.resize(6);
+  rows.setValid(4, true);
+  rows.setValid(5, true);
+  rows.updateBounds();
+
+  flatVector->addNulls(nullptr, rows);
+  ASSERT_EQ(flatVector->size(), 6);
+  ASSERT_FALSE(flatVector->isNullAt(0));
+  ASSERT_FALSE(flatVector->isNullAt(1));
+  ASSERT_TRUE(flatVector->isNullAt(2));
+  ASSERT_TRUE(flatVector->isNullAt(3));
+  ASSERT_TRUE(flatVector->isNullAt(4));
+  ASSERT_TRUE(flatVector->isNullAt(5));
+}
+
+TEST_F(VectorTest, addNullsWithBitsAndRows) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+  auto flatVector = vectorMaker->flatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8});
+
+  SelectivityVector rows(flatVector->size(), false);
+  rows.setValidRange(0, 4, true);
+  rows.updateBounds();
+
+  SelectivityVector bits(flatVector->size(), true);
+  bits.setValid(0, false);
+  bits.setValid(2, false);
+  bits.setValid(4, false);
+  bits.setValid(6, false);
+
+  flatVector->addNulls(bits.asRange().bits(), rows);
+  // Only indices 0 and 2 should be NULL, since those are the only places where
+  // rows is 1 and bits is 0.
+  ASSERT_TRUE(flatVector->isNullAt(0));
+  ASSERT_FALSE(flatVector->isNullAt(1));
+  ASSERT_TRUE(flatVector->isNullAt(2));
+  ASSERT_FALSE(flatVector->isNullAt(3));
+  ASSERT_FALSE(flatVector->isNullAt(4));
+  ASSERT_FALSE(flatVector->isNullAt(5));
+  ASSERT_FALSE(flatVector->isNullAt(6));
+  ASSERT_FALSE(flatVector->isNullAt(7));
+}
+
+TEST_F(VectorTest, addNullsBoundsViolations) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+  auto flatVector = vectorMaker->flatVector<int32_t>({1, 2, 3, 4});
+
+  SelectivityVector rows(8, false);
+  rows.setValid(6, true);
+  rows.updateBounds();
+
+  // rows.begin_ is after flatVector.length_.
+  EXPECT_THROW(flatVector->addNulls(nullptr, rows), VeloxRuntimeError);
+
+  rows.clearAll();
+  rows.setValid(5, true);
+  rows.setValid(7, true);
+  rows.updateBounds();
+
+  // This would set idx 6 to be non-null but undefined.
+  EXPECT_THROW(flatVector->addNulls(nullptr, rows), VeloxRuntimeError);
+
+  rows.clearAll();
+  rows.setValidRange(5, 7, true);
+  rows.updateBounds();
+
+  SelectivityVector bits(8, true);
+  bits.setValid(5, false);
+  bits.setValid(7, false);
+
+  // Although rows nulls out a valid range, with bits, it again leaves idx 6 as
+  // non-null but undefined.
+  EXPECT_THROW(
+      flatVector->addNulls(bits.asRange().bits(), rows), VeloxRuntimeError);
+}
+
+TEST_F(VectorTest, addNullsNotWritable) {
+  auto vector =
+      BaseVector::createConstant(variant(TypeKind::UNKNOWN), 123, pool_.get());
+
+  SelectivityVector rows(1, true);
+
+  // ConstantVector doesn't support addNulls.
+  EXPECT_THROW(vector->addNulls(nullptr, rows), VeloxRuntimeError);
+}

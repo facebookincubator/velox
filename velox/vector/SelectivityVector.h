@@ -261,11 +261,22 @@ class SelectivityVector {
         bits::isAllSet(bits_.data(), 0, size_, true);
     return allSelected_.value();
   }
+
   /**
    * Iterate and count the number of selected values in this SelectivityVector
+   * in the provided range.
    */
+  vector_size_t countSelected(vector_size_t begin, vector_size_t end) const {
+    if (begin >= end_ || end <= begin_) {
+      return 0;
+    }
+
+    return bits::countBits(
+        bits_.data(), std::max(begin, begin_), std::min(end, end_));
+  }
+
   vector_size_t countSelected() const {
-    return bits::countBits(bits_.data(), begin_, end_);
+    return countSelected(begin_, end_);
   }
 
   vector_size_t size() const {

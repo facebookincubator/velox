@@ -197,7 +197,7 @@ class SimpleVector : public BaseVector {
     return elementSize_;
   }
 
-  bool mayAddNulls() const override {
+  bool isNullsWritable() const override {
     return false;
   }
 

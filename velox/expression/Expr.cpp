@@ -632,13 +632,11 @@ void Expr::addNulls(
     return;
   }
 
-  if (!result->unique() || !(*result)->mayAddNulls()) {
+  if (!result->unique() || !(*result)->isNullsWritable()) {
     BaseVector::ensureWritable(
         SelectivityVector::empty(), type(), context->pool(), result);
   }
-  if ((*result)->size() < rows.end()) {
-    (*result)->resize(rows.end());
-  }
+
   (*result)->addNulls(rawNulls, rows);
 }
 

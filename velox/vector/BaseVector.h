@@ -191,15 +191,7 @@ class BaseVector {
   }
 
   virtual BufferPtr mutableNulls(vector_size_t size) {
-    if (nulls_ && nulls_->capacity() >= bits::nbytes(size)) {
-      return nulls_;
-    }
-    if (nulls_) {
-      AlignedBuffer::reallocate<bool>(&nulls_, size, false);
-    } else {
-      nulls_ = AlignedBuffer::allocate<bool>(size, pool_, false);
-    }
-    rawNulls_ = nulls_->as<uint64_t>();
+    ensureNullsCapacity(size);
     return nulls_;
   }
 
@@ -346,7 +338,7 @@ class BaseVector {
     return countNulls(nulls, 0, size);
   }
 
-  virtual bool mayAddNulls() const {
+  virtual bool isNullsWritable() const {
     return true;
   }
 
@@ -677,6 +669,22 @@ class BaseVector {
     nulls_ = nulls;
     rawNulls_ = nulls ? nulls->as<uint64_t>() : nullptr;
     nullCount_ = std::nullopt;
+  }
+
+  /*
+   * Allocates or reallocates nulls_ with the given size if nulls_ hasn't
+   * been allocated yet or has been allocated with a smaller capacity.
+   */
+  void ensureNullsCapacity(vector_size_t size) {
+    if (nulls_ && nulls_->capacity() >= bits::nbytes(size)) {
+      return;
+    }
+    if (nulls_) {
+      AlignedBuffer::reallocate<bool>(&nulls_, size, bits::kNull);
+    } else {
+      nulls_ = AlignedBuffer::allocate<bool>(size, pool_, bits::kNull);
+    }
+    rawNulls_ = nulls_->as<uint64_t>();
   }
 
   std::shared_ptr<const Type> type_;

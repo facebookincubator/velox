@@ -167,3 +167,51 @@ TEST_F(EvalSimplifiedTest, queryParameter) {
   auto* ptr = dynamic_cast<exec::ExprSetSimplified*>(exprSet.get());
   EXPECT_TRUE(ptr != nullptr) << "expected ExprSetSimplified derived object.";
 }
+
+TEST_F(EvalSimplifiedTest, specialFormPropagateNulls) {
+  // This test verifies an edge case where applyFunctionWithPeeling may produce
+  // a result vector which is dictionary encoded and has fewer values than
+  // are rows.
+  // This can happen when the last value in a column used in an expression is
+  // null which causes removeSureNulls to move the end of the SelectivityVector
+  // forward.  When we incorrectly use rows.end() as the size of the
+  // dictionary when rewrapping the results.
+  // Normally this is masked when this vector is used in a function call which
+  // produces a new output vector.  However, in SpecialForm expressions, we may
+  // return the output untouched, and when we try to add back in the nulls, we
+  // get an exception trying to resize the DictionaryVector.
+  // This happens with evalSimplified in particular because the nulls are
+  // removed early in evaluation.
+
+  // Create a vector with a null in the last position.
+  auto c0 = makeFlatVector<int64_t>(
+      5,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 4; });
+  // Create a constant vector, it's important that this vector uses an encoding
+  // that can be peeled.
+  auto c1 = vectorMaker_.constantVector<int32_t>({10});
+
+  // Indices for dictionary encoding the vector, it's important that this
+  // vector is dictionary encoded so the output is dictionary encoded.
+  auto c0Indices = makeIndices(5, [](auto row) { return row; });
+
+  auto rowType = ROW({"c0", "c1"}, {c0->type(), c1->type()});
+  // Use try which is a SpecialForm expresssion to wrap the expression to
+  // trigger the bug.
+  auto expr = makeTypedExpr("try(round(\"c0\",\"c1\"))", rowType);
+  exec::ExprSetSimplified exprSetSimplified({expr}, &execCtx_);
+  auto rowVector = makeRowVector(
+      {BaseVector::wrapInDictionary(nullptr, c0Indices, 5, c0), c1});
+  exec::EvalCtx evalCtxSimplified(
+      &execCtx_, &exprSetSimplified, rowVector.get());
+  std::vector<VectorPtr> simplifiedEvalResult{nullptr};
+  SelectivityVector rows(5);
+  exprSetSimplified.eval(rows, &evalCtxSimplified, &simplifiedEvalResult);
+
+  auto expectedResult = makeFlatVector<int64_t>(
+      5,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 4; });
+  assertEqualVectors(expectedResult, simplifiedEvalResult[0]);
+}
