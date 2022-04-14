@@ -17,6 +17,7 @@
 #pragma once
 #include <iterator>
 #include <optional>
+#include <variant>
 
 #include "folly/container/F14Map.h"
 #include "velox/common/base/CompareFlags.h"
@@ -921,27 +922,177 @@ inline auto get(const RowView<returnsOptionalValues, Types...>& row) {
   return row.template at<I>();
 }
 
+template <typename T>
+using reader_ptr_t = std::shared_ptr<VectorReader<T>>;
+
+// TODO: Enable users to define the additional types they are interested in. For
+// example by defining this type variable anywhere gloablly before including
+// this file. Or passing some types through the Generic type as template args.
+using readers_variant_t = std::variant<
+    std::monostate,
+    reader_ptr_t<int8_t>,
+    reader_ptr_t<int16_t>,
+    reader_ptr_t<int32_t>,
+    reader_ptr_t<int64_t>,
+    reader_ptr_t<bool>,
+    reader_ptr_t<double>,
+    reader_ptr_t<float>,
+    reader_ptr_t<Varchar>,
+    reader_ptr_t<Varbinary>,
+    reader_ptr_t<Array<Generic<>>>,
+    reader_ptr_t<Map<Generic<>, Generic<>>>,
+    reader_ptr_t<Row<Generic<>>>,
+    reader_ptr_t<Row<Generic<>, Generic<>>>,
+    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>>>,
+    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>, Generic<>>>,
+    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>, Generic<>, Generic<>>>>;
+
 class GenericView {
  public:
-  GenericView(const BaseVector* vector, vector_size_t index)
-      : vector_(vector), index_(index) {}
+  GenericView(
+      const DecodedVector& decoded,
+      readers_variant_t& variant,
+      vector_size_t index)
+      : decoded_(decoded), castedToReader_(variant), index_(index) {}
 
   uint64_t hash() const {
-    return vector_->hashValueAt(index_);
+    return decoded_.base()->hashValueAt(index_);
   }
 
   bool operator==(const GenericView& other) const {
-    return vector_->equalValueAt(other.vector_, index_, other.index_);
+    return decoded_.base()->equalValueAt(
+        other.decoded_.base(), index_, other.index_);
   }
 
   std::optional<int64_t> compare(
       const GenericView& other,
       const CompareFlags flags) const {
-    return vector_->compare(other.vector_, index_, other.index_, flags);
+    return decoded_.base()->compare(
+        other.decoded_.base(), index_, other.index_, flags);
+  }
+
+  TypeKind kind() const {
+    return decoded_.base()->typeKind();
+  }
+
+  const TypePtr type() const {
+    return decoded_.base()->type();
+  }
+
+  // If conversion is invalid, behaviour is undefined. However, debug time
+  // checks will throw an exception.
+  template <typename ToType>
+  typename VectorReader<ToType>::exec_in_t castTo() const {
+    // static_assert avoided to avoid long compiler messages that prints all
+    // possible types.
+    if constexpr (!IsSupportedVariant<ToType, readers_variant_t>()) {
+      CastToTypeNotSupported(CppToType<ToType>::create());
+      VELOX_UNREACHABLE();
+    } else {
+      VELOX_DCHECK(
+          CastTypeChecker<ToType>::check(type()),
+          fmt::format(
+              "castTo type does not match type of vector, vector type is {}, casted to type is {}",
+              type()->toString(),
+              CppToType<ToType>::create()->toString()));
+
+      // TODO: We can distiguish if this is a null-free or not null-free
+      // generic. And based on that determine if we want to call operator[] or
+      // readNullFree. For now we always return nullable.
+      return ensureReader<ToType>()->operator[](index_);
+    }
+  }
+
+  template <typename ToType>
+  std::optional<typename VectorReader<ToType>::exec_in_t> tryCastTo() const {
+    if constexpr (!IsSupportedVariant<ToType, readers_variant_t>()) {
+      CastToTypeNotSupported(CppToType<ToType>::create());
+      VELOX_UNREACHABLE();
+    } else {
+      if (!CastTypeChecker<ToType>::check(type())) {
+        return std::nullopt;
+      }
+
+      return ensureReader<ToType>()->operator[](index_);
+    }
   }
 
  private:
-  const BaseVector* vector_;
+  void CastToTypeNotSupported(const TypePtr& type) const {
+    VELOX_USER_CHECK(
+        false,
+        fmt::format(
+            "castTo type is not supported: {}. Consider adding the type to readers_variant_t",
+            type->toString()));
+  }
+
+  // Utility class that checks that vectorType matches T.
+  template <typename T>
+  struct CastTypeChecker {
+    static bool check(const TypePtr& vectorType) {
+      return CppToType<T>::typeKind == vectorType->kind();
+    }
+  };
+
+  template <typename T>
+  struct CastTypeChecker<Generic<T>> {
+    static bool check(const TypePtr&) {
+      return true;
+    }
+  };
+
+  template <typename T>
+  struct CastTypeChecker<Array<T>> {
+    static bool check(const TypePtr& vectorType) {
+      return TypeKind::ARRAY == vectorType->kind() &&
+          CastTypeChecker<T>::check(vectorType->childAt(0));
+    }
+  };
+
+  template <typename K, typename V>
+  struct CastTypeChecker<Map<K, V>> {
+    static bool check(const TypePtr& vectorType) {
+      return TypeKind::MAP == vectorType->kind() &&
+          CastTypeChecker<K>::check(vectorType->childAt(0)) &&
+          CastTypeChecker<V>::check(vectorType->childAt(1));
+    }
+  };
+
+  template <typename... T>
+  struct CastTypeChecker<Row<T...>> {
+    static bool check(const TypePtr& vectorType) {
+      int index = 0;
+      return TypeKind::ROW == vectorType->kind() &&
+          (CastTypeChecker<T>::check(vectorType->childAt(index++)) && ... &&
+           true);
+    }
+  };
+
+  // Utility class that checks if the T is a valid variant type of U.
+  template <class T, class U>
+  struct IsSupportedVariant;
+
+  template <class T, class... Ts>
+  struct IsSupportedVariant<T, std::variant<Ts...>>
+      : std::bool_constant<(std::is_same_v<reader_ptr_t<T>, Ts> || ...)> {};
+
+  template <typename B>
+  const reader_ptr_t<B>& ensureReader() const {
+    auto* reader = std::get_if<reader_ptr_t<B>>(&castedToReader_);
+    if (LIKELY(reader != nullptr)) {
+      return *reader;
+    } else {
+      VELOX_DCHECK(
+          std::holds_alternative<std::monostate>(castedToReader_),
+          "different rows are casted to different types");
+
+      castedToReader_ = std::make_shared<VectorReader<B>>(&decoded_);
+      return *std::get_if<reader_ptr_t<B>>(&castedToReader_);
+    }
+  }
+
+  const DecodedVector& decoded_;
+  readers_variant_t& castedToReader_;
   vector_size_t index_;
 };
 
