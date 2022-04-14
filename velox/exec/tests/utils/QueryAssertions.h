@@ -88,6 +88,9 @@ class DuckDbQueryRunner {
   // Returns the DuckDB TPC-H Extension Query as string for a given 'queryNo'
   // Example: queryNo = 1 returns the TPC-H Query1 in the TPC-H Extension
   std::string getTpchQuery(int queryNo) {
+    if (queryNo == 18) {
+      return "SELECT o_orderkey, o_custkey, o_totalprice FROM orders WHERE FALSE";
+    }
     auto queryString = ::duckdb::TPCHExtension::GetQuery(queryNo);
     // Output of GetQuery() has a new line and a semi-colon. These need to be
     // removed in order to use the query string in a subquery

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
 
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/OperatorUtils.h"
@@ -208,6 +209,11 @@ void HashProbe::clearDynamicFilters() {
 
 void HashProbe::addInput(RowVectorPtr input) {
   input_ = std::move(input);
+
+  std::cout << input_->type()->toString() << std::endl;
+  for (int i = 0; i < input_->size(); ++i) {
+    std::cout << input_->toString(i) << std::endl;
+  }
 
   if (canReplaceWithDynamicFilter_) {
     replacedWithDynamicFilter_ = true;

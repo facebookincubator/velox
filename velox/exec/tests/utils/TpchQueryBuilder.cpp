@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
+#include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/base/tests/Fs.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/type/tests/FilterBuilder.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 namespace facebook::velox::exec::test {
 
@@ -81,7 +84,7 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
     case 6:
       return getQ6Plan();
     case 18:
-      return getQ18Plan();
+      return getQ180Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
@@ -208,6 +211,109 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ180Plan() const {
+  static const std::string kLineitem = "lineitem";
+  static const std::string kOrders = "orders";
+  static const std::string kCustomer = "customer";
+  std::vector<std::string> lineitemColumns = {"l_orderkey", "l_quantity"};
+  std::vector<std::string> ordersColumns = {
+      "o_orderkey", "o_custkey", "o_orderdate", "o_totalprice"};
+  std::vector<std::string> customerColumns = {"c_name", "c_custkey"};
+
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId customerScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+  core::PlanNodeId lineitemScanNodeId;
+
+  auto bigOrders =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"l_orderkey"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(
+                       lineitemSelectedRowType,
+                       makeTableHandle(
+                           kLineitem, common::test::SubfieldFilters{}),
+                       allRegularColumns(
+                           lineitemSelectedRowType, lineitemFileColumns))
+                   .capturePlanNodeId(lineitemScanNodeId)
+                   .partialAggregation({0}, {"sum(l_quantity) AS partial_sum"})
+                   .planNode()})
+          .finalAggregation({0}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
+          .filter("quantity > 300.0")
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              ordersSelectedRowType,
+              //              makeTableHandle(kOrders,
+              //              common::test::SubfieldFilters{}),
+              makeTableHandle(
+                  kOrders,
+                  common::test::singleSubfieldFilter(
+                      "o_custkey", common::test::between(1, 1500))),
+              //              makeTableHandle(
+              //                  kOrders,
+              //                  common::test::SubfieldFiltersBuilder()
+              //                      .add("o_custkey", common::test::between(1,
+              //                      1500)) .add("o_orderkey",
+              //                      common::test::in({6882, 29158}))
+              //                      .build()),
+              allRegularColumns(ordersSelectedRowType, ordersFileColumns))
+          .capturePlanNodeId(ordersScanNodeId)
+          .hashJoin(
+              {"o_orderkey"},
+              {"l_orderkey"},
+              bigOrders,
+              "",
+              {"o_orderkey",
+               "o_custkey",
+               //               "o_orderdate",
+               //               "o_totalprice",
+               //               "l_orderkey",
+               "quantity"})
+          //          .hashJoin(
+          //              {"o_custkey"},
+          //              {"c_custkey"},
+          //              PlanBuilder(planNodeIdGenerator)
+          //                  .tableScan(
+          //                      customerSelectedRowType,
+          //                      makeTableHandle(
+          //                          kCustomer,
+          //                          common::test::SubfieldFilters{}),
+          //                      allRegularColumns(
+          //                          customerSelectedRowType,
+          //                          customerFileColumns))
+          //                  .capturePlanNodeId(customerScanNodeId)
+          //                  .planNode(),
+          //              "",
+          //              {"c_custkey",
+          //               "o_orderkey",
+          //               "c_name",
+          //               //               "o_orderdate",
+          //               //               "o_totalprice",
+          //               "quantity"})
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  //  context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFileFormat = format_;
   return context;
 }

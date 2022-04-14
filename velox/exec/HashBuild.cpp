@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <iostream>
 
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/OperatorUtils.h"
@@ -123,6 +124,11 @@ HashBuild::HashBuild(
 }
 
 void HashBuild::addInput(RowVectorPtr input) {
+  std::cout << input->type()->toString() << std::endl;
+  for (int i = 0; i < input->size(); ++i) {
+    std::cout << input->toString(i) << std::endl;
+  }
+
   activeRows_.resize(input->size());
   activeRows_.setAll();
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_)) {

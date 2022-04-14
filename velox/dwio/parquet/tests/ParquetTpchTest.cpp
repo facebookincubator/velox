@@ -24,6 +24,7 @@
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/exec/PlanNodeStats.h"
 
 #include <vector>
 
@@ -31,7 +32,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
-static const int kNumDrivers = 4;
+static const int kNumDrivers = 1;
 
 class ParquetTpchTest : public testing::Test {
  protected:
@@ -86,7 +87,7 @@ class ParquetTpchTest : public testing::Test {
       const TpchPlan& tpchPlan,
       const std::string& duckQuery) const {
     bool noMoreSplits = false;
-    constexpr int kNumSplits = 10;
+    constexpr int kNumSplits = 1;
     auto addSplits = [&](exec::Task* task) {
       if (!noMoreSplits) {
         for (const auto& entry : tpchPlan.dataFiles) {
@@ -116,6 +117,9 @@ class ParquetTpchTest : public testing::Test {
     auto duckDbSql = duckDb_->getTpchQuery(queryId);
     auto task = assertQuery(tpchPlan, duckDbSql);
     const auto& stats = task->taskStats();
+
+    std::cout << printPlanWithStats(*tpchPlan.plan, stats, true) << std::endl;
+
     ASSERT_EQ(expectedPipelineCount, stats.pipelineStats.size());
     ASSERT_EQ(expectedFinishedSplits, stats.numFinishedSplits);
   }
