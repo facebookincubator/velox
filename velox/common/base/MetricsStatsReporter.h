@@ -66,7 +66,7 @@ class MetricsStatsReporter : public facebook::velox::BaseStatsReporter {
     std::string tag = "cluster=" + clusterName;
     switch (type) {
       case facebook::velox::StatType::AVG:
-        LOG(WARNING) << "Metrics: AVG metrics type not supported";
+        cpputil::metrics2::Metrics::emit_store(key, (double)value, tag);
         break;
       case facebook::velox::StatType::COUNT:
         cpputil::metrics2::Metrics::emit_store(key, (double)value, tag);
@@ -89,11 +89,6 @@ class MetricsStatsReporter : public facebook::velox::BaseStatsReporter {
     addStatValue(key.str(), value);
   }
 };
-
-// Registering to folly Singleton with intended reporter type
-folly::Singleton<MetricsStatsReporter> metricsReporter([]() {
-  return new MetricsStatsReporter();
-});
 
 #define METRICS_REPORT_ADD_STAT_VALUE(k, ...)                   \
   {                                                             \

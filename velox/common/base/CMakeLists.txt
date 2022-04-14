@@ -30,6 +30,7 @@ add_subdirectory(test_utils)
 
 if(${VELOX_ENABLE_METRICS})
   add_subdirectory(metrics_client)
+  target_link_libraries(velox_common_base metrics2)
 endif()
 
 if(${VELOX_BUILD_TESTING})
