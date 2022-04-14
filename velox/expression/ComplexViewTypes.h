@@ -939,13 +939,13 @@ using readers_variant_t = std::variant<
     reader_ptr_t<float>,
     reader_ptr_t<Varchar>,
     reader_ptr_t<Varbinary>,
-    reader_ptr_t<Array<Generic<>>>,
-    reader_ptr_t<Map<Generic<>, Generic<>>>,
-    reader_ptr_t<Row<Generic<>>>,
-    reader_ptr_t<Row<Generic<>, Generic<>>>,
-    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>>>,
-    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>, Generic<>>>,
-    reader_ptr_t<Row<Generic<>, Generic<>, Generic<>, Generic<>, Generic<>>>>;
+    reader_ptr_t<Array<Any>>,
+    reader_ptr_t<Map<Any, Any>>,
+    reader_ptr_t<Row<Any>>,
+    reader_ptr_t<Row<Any, Any>>,
+    reader_ptr_t<Row<Any, Any, Any>>,
+    reader_ptr_t<Row<Any, Any, Any, Any>>,
+    reader_ptr_t<Row<Any, Any, Any, Any, Any>>>;
 
 class GenericView {
  public:

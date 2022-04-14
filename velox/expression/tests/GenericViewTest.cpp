@@ -82,8 +82,8 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
       const DataT& data2) {
     DecodedVector decoded1;
     DecodedVector decoded2;
-    exec::VectorReader<Generic<>> reader1(decode(decoded1, *vector1));
-    exec::VectorReader<Generic<>> reader2(decode(decoded2, *vector2));
+    exec::VectorReader<Any> reader1(decode(decoded1, *vector1));
+    exec::VectorReader<Any> reader2(decode(decoded2, *vector2));
 
     for (auto i = 0; i < vector1->size(); i++) {
       ASSERT_EQ(data1[i].has_value(), reader1.isSet(i));
@@ -97,7 +97,7 @@ class GenericViewTest : public functions::test::FunctionBaseTest {
 
   void testHash(const VectorPtr& vector) {
     DecodedVector decoded;
-    exec::VectorReader<Generic<>> reader(decode(decoded, *vector));
+    exec::VectorReader<Any> reader(decode(decoded, *vector));
     for (auto i = 0; i < vector->size(); i++) {
       if (reader.isSet(i)) {
         ASSERT_EQ(
@@ -125,7 +125,7 @@ TEST_F(GenericViewTest, testCompare) {
 
   auto vector = vectorMaker_.flatVectorNullable<int64_t>(data);
   DecodedVector decoded;
-  exec::VectorReader<Generic<>> reader(decode(decoded, *vector));
+  exec::VectorReader<Any> reader(decode(decoded, *vector));
   CompareFlags flags;
   ASSERT_EQ(reader[0].compare(reader[0], flags).value(), 0);
   ASSERT_EQ(reader[0].compare(reader[3], flags).value(), 0);
@@ -153,8 +153,8 @@ TEST_F(GenericViewTest, testArrayOfGeneric) {
 
   DecodedVector decoded1;
   DecodedVector decoded2;
-  exec::VectorReader<Array<Generic<>>> reader1(decode(decoded1, *vector1));
-  exec::VectorReader<Array<Generic<>>> reader2(decode(decoded2, *vector2));
+  exec::VectorReader<Array<Any>> reader1(decode(decoded1, *vector1));
+  exec::VectorReader<Array<Any>> reader2(decode(decoded2, *vector2));
 
   // Reader will return std::vector<std::optional<Generic>> like object.
   for (auto i = 0; i < vector1->size(); i++) {
@@ -187,7 +187,7 @@ struct CompareFunc {
 };
 
 TEST_F(GenericViewTest, e2eCompareInts) {
-  registerFunction<CompareFunc, bool, Generic<>, Generic<>>({"func1"});
+  registerFunction<CompareFunc, bool, Any, Any>({"func1"});
   registerFunction<CompareFunc, bool, Generic<T1>, Generic<T2>>({"func2"});
   registerFunction<CompareFunc, bool, Generic<T1>, Generic<T1>>({"func3"});
 
@@ -245,8 +245,7 @@ TEST_F(GenericViewTest, e2eHashAddSameType) {
 TEST_F(GenericViewTest, e2eHashDifferentTypes) {
   registerFunction<HashFunc, int64_t, Generic<T1>, Generic<T2>>(
       {"add_hash_diff_type"});
-  registerFunction<HashFunc, int64_t, Generic<>, Generic<>>(
-      {"add_hash_diff_type2"});
+  registerFunction<HashFunc, int64_t, Any, Any>({"add_hash_diff_type2"});
 
   auto vectorInt = vectorMaker_.flatVector<int64_t>({1, 2, 3});
   auto vectorDouble = vectorMaker_.flatVector<double>({4, 5, 6});
@@ -306,7 +305,7 @@ TEST_F(GenericViewTest, e2eHashVariadicSameType) {
 }
 
 TEST_F(GenericViewTest, e2eHashVariadicAnyType) {
-  registerFunction<HashAllArgs, int64_t, Variadic<Generic<>>>({"func1"});
+  registerFunction<HashAllArgs, int64_t, Variadic<Any>>({"func1"});
   registerFunction<HashAllArgs, int64_t, Variadic<Generic<AnyType>>>({"func2"});
 
   auto vectorInt1 = vectorMaker_.flatVector<int64_t>({1, 2, 3});
@@ -337,7 +336,7 @@ TEST_F(GenericViewTest, testCastToInt) {
 
   auto vector = vectorMaker_.flatVectorNullable<int64_t>(data);
   DecodedVector decoded;
-  exec::VectorReader<Generic<>> reader(decode(decoded, *vector));
+  exec::VectorReader<Any> reader(decode(decoded, *vector));
   ASSERT_EQ(reader[0].castTo<int64_t>(), 1);
   ASSERT_EQ(reader[0].tryCastTo<int64_t>().value(), 1);
 
@@ -349,14 +348,14 @@ TEST_F(GenericViewTest, castToArrayViewOfGeneric) {
   VectorPtr vector = vectorMaker_.arrayVectorNullable(arrayData1);
 
   DecodedVector decoded;
-  exec::VectorReader<Generic<>> reader(decode(decoded, *vector));
+  exec::VectorReader<Any> reader(decode(decoded, *vector));
 
   auto generic = reader[4]; //    {{0, 1, 2, 4}}
   ASSERT_EQ(generic.kind(), TypeKind::ARRAY);
 
   // Test cast to.
   {
-    auto arrayView = generic.castTo<Array<Generic<>>>();
+    auto arrayView = generic.castTo<Array<Any>>();
     auto i = 0;
     for (auto genericItem : arrayView) {
       if (genericItem.has_value()) {
@@ -370,7 +369,7 @@ TEST_F(GenericViewTest, castToArrayViewOfGeneric) {
 
   // Test try cast to.
   {
-    auto arrayView = generic.tryCastTo<Array<Generic<>>>().value();
+    auto arrayView = generic.tryCastTo<Array<Any>>().value();
 
     auto i = 0;
     for (auto genericItem : arrayView) {
@@ -390,32 +389,30 @@ TEST_F(GenericViewTest, testTryCastTo) {
 
   { // Reader for vector of bigint.
     auto vector = vectorMaker_.flatVectorNullable<int64_t>({1});
-    exec::VectorReader<Generic<>> reader(decode(decoded, *vector));
+    exec::VectorReader<Any> reader(decode(decoded, *vector));
 
     ASSERT_FALSE(reader[0].tryCastTo<int8_t>().has_value());
     ASSERT_FALSE(reader[0].tryCastTo<float>().has_value());
     ASSERT_FALSE(reader[0].tryCastTo<double>().has_value());
-    ASSERT_FALSE(reader[0].tryCastTo<Array<Generic<>>>().has_value());
-    ASSERT_FALSE(
-        (reader[0].tryCastTo<Map<Generic<>, Generic<>>>().has_value()));
-    ASSERT_FALSE(reader[0].tryCastTo<Row<Generic<>>>().has_value());
+    ASSERT_FALSE(reader[0].tryCastTo<Array<Any>>().has_value());
+    ASSERT_FALSE((reader[0].tryCastTo<Map<Any, Any>>().has_value()));
+    ASSERT_FALSE(reader[0].tryCastTo<Row<Any>>().has_value());
 
     ASSERT_EQ(reader[0].tryCastTo<int64_t>().value(), 1);
   }
 
   { // Reader for vector of array(bigint).
     auto arrayVector = vectorMaker_.arrayVectorNullable(arrayData1);
-    exec::VectorReader<Generic<>> reader(decode(decoded, *arrayVector));
+    exec::VectorReader<Any> reader(decode(decoded, *arrayVector));
 
     ASSERT_FALSE(reader[0].tryCastTo<int8_t>().has_value());
     ASSERT_FALSE(reader[0].tryCastTo<float>().has_value());
     ASSERT_FALSE(reader[0].tryCastTo<double>().has_value());
-    ASSERT_FALSE(
-        (reader[0].tryCastTo<Map<Generic<>, Generic<>>>().has_value()));
+    ASSERT_FALSE((reader[0].tryCastTo<Map<Any, Any>>().has_value()));
 
-    ASSERT_TRUE(reader[0].tryCastTo<Array<Generic<>>>().has_value());
+    ASSERT_TRUE(reader[0].tryCastTo<Array<Any>>().has_value());
     ASSERT_EQ(
-        reader[0].tryCastTo<Array<Generic<>>>().value().size(),
+        reader[0].tryCastTo<Array<Any>>().value().size(),
         arrayData1[0].value().size());
   }
 }
@@ -431,11 +428,11 @@ TEST_F(GenericViewTest, testCasToMap) {
   auto mapVector = makeMapVector<int64_t, int64_t>(mapsData);
 
   DecodedVector decoded;
-  exec::VectorReader<Generic<>> reader(decode(decoded, *mapVector));
+  exec::VectorReader<Any> reader(decode(decoded, *mapVector));
 
   {
     auto generic = reader[0];
-    auto map = generic.tryCastTo<Map<Generic<>, Generic<>>>();
+    auto map = generic.tryCastTo<Map<Any, Any>>();
     ASSERT_TRUE(map.has_value());
     auto mapView = map.value();
     ASSERT_EQ(mapView.size(), 0);
@@ -443,7 +440,7 @@ TEST_F(GenericViewTest, testCasToMap) {
 
   {
     auto generic = reader[1];
-    auto mapView = generic.castTo<Map<Generic<>, Generic<>>>();
+    auto mapView = generic.castTo<Map<Any, Any>>();
     ASSERT_EQ(mapView.size(), 3);
     ASSERT_EQ(mapView.begin()->first.castTo<int64_t>(), 1);
     ASSERT_EQ(mapView.begin()->second.value().castTo<int64_t>(), 4);
@@ -502,7 +499,7 @@ struct ToStringFuncCastTo {
     out += ")";
   }
 
-  void print(out_type<Varchar>& out, const arg_type<Generic<>>& arg) {
+  void print(out_type<Varchar>& out, const arg_type<Any>& arg) {
     // Note: VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH can be used to simplify
     // iterating over all primitive types.
     switch (arg.kind()) {
@@ -519,19 +516,19 @@ struct ToStringFuncCastTo {
         out += arg.template castTo<Varchar>();
         break;
       case TypeKind::ARRAY: {
-        auto arrayView = arg.template castTo<Array<Generic<>>>();
+        auto arrayView = arg.template castTo<Array<Any>>();
         printArray(out, arrayView);
         break;
       }
       case TypeKind::MAP: {
-        auto mapView = arg.template castTo<Map<Generic<>, Generic<>>>();
+        auto mapView = arg.template castTo<Map<Any, Any>>();
         printMap(out, mapView);
         break;
       }
       case TypeKind::ROW: {
         auto rowSize = arg.type()->asRow().size();
         VELOX_CHECK(rowSize == 2, "print only supports rows of width 2");
-        auto rowView = arg.template castTo<Row<Generic<>, Generic<>>>();
+        auto rowView = arg.template castTo<Row<Any, Any>>();
         printRow(out, rowView);
         break;
       }
@@ -540,7 +537,7 @@ struct ToStringFuncCastTo {
     }
   }
 
-  void call(out_type<Varchar>& out, const arg_type<Variadic<Generic<>>>& args) {
+  void call(out_type<Varchar>& out, const arg_type<Variadic<Any>>& args) {
     auto i = 0;
     for (const auto& arg : args) {
       out += "arg " + std::to_string(i++) + " : ";
@@ -551,7 +548,7 @@ struct ToStringFuncCastTo {
 };
 
 TEST_F(GenericViewTest, testCastE2E) {
-  registerFunction<ToStringFuncCastTo, Varchar, Variadic<Generic<>>>(
+  registerFunction<ToStringFuncCastTo, Varchar, Variadic<Any>>(
       {"to_string_cast"});
 
   auto test = [&](const std::string& args, const std::string& expected) {
@@ -627,29 +624,27 @@ struct ToStringFuncTryCastTo {
     out += ")";
   }
 
-  void print(out_type<Varchar>& out, const arg_type<Generic<>>& arg) {
+  void print(out_type<Varchar>& out, const arg_type<Any>& arg) {
     if (auto bigIntValue = arg.template tryCastTo<int64_t>()) {
       out += std::to_string(*bigIntValue);
     } else if (auto doubleValue = arg.template tryCastTo<double>()) {
       out += std::to_string(*doubleValue);
     } else if (auto boolValue = arg.template tryCastTo<bool>()) {
       out += std::to_string(*boolValue);
-    } else if (auto arrayView = arg.template tryCastTo<Array<Generic<>>>()) {
+    } else if (auto arrayView = arg.template tryCastTo<Array<Any>>()) {
       printArray(out, *arrayView);
-    } else if (
-        auto mapView = arg.template tryCastTo<Map<Generic<>, Generic<>>>()) {
+    } else if (auto mapView = arg.template tryCastTo<Map<Any, Any>>()) {
       printMap(out, *mapView);
     } else if (auto stringView = arg.template tryCastTo<Varchar>()) {
       out += *stringView;
-    } else if (
-        auto rowView = arg.template tryCastTo<Row<Generic<>, Generic<>>>()) {
+    } else if (auto rowView = arg.template tryCastTo<Row<Any, Any>>()) {
       printRow(out, *rowView);
     } else {
       VELOX_UNREACHABLE("type not supported in this function");
     }
   }
 
-  void call(out_type<Varchar>& out, const arg_type<Variadic<Generic<>>>& args) {
+  void call(out_type<Varchar>& out, const arg_type<Variadic<Any>>& args) {
     auto i = 0;
     for (const auto& arg : args) {
       out += "arg " + std::to_string(i++) + " : ";
@@ -660,7 +655,7 @@ struct ToStringFuncTryCastTo {
 };
 
 TEST_F(GenericViewTest, testTryCastE2E) {
-  registerFunction<ToStringFuncTryCastTo, Varchar, Variadic<Generic<>>>(
+  registerFunction<ToStringFuncTryCastTo, Varchar, Variadic<Any>>(
       {"to_string_try_cast"});
 
   auto test = [&](const std::string& args, const std::string& expected) {
@@ -687,8 +682,8 @@ TEST_F(GenericViewTest, testTryCastE2E) {
 template <typename T>
 struct ArrayHasDuplicateFunc {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  bool call(bool& out, const arg_type<Array<Generic<>>>& input) {
-    std::unordered_set<arg_type<Generic<>>> set;
+  bool call(bool& out, const arg_type<Array<Any>>& input) {
+    std::unordered_set<arg_type<Any>> set;
     for (auto item : input) {
       if (!item.has_value()) {
         // Return null if null is encountered.
@@ -708,7 +703,7 @@ struct ArrayHasDuplicateFunc {
 };
 
 TEST_F(GenericViewTest, testHasDuplicate) {
-  registerFunction<ArrayHasDuplicateFunc, bool, Array<Generic<>>>(
+  registerFunction<ArrayHasDuplicateFunc, bool, Array<Any>>(
       {"has_duplicate_func"});
 
   auto test = [&](const std::string& arg, bool expected) {
