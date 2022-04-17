@@ -24,6 +24,7 @@ add_library(
   ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   ArrayPosition.cpp
+  ArrayUnion.cpp
   Coalesce.cpp
   ElementAt.cpp
   FilterFunctions.cpp

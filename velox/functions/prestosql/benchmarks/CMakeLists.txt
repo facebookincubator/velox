@@ -31,6 +31,11 @@ add_executable(velox_functions_prestosql_benchmarks_array_contains
 target_link_libraries(velox_functions_prestosql_benchmarks_array_contains
                       ${BENCHMARK_DEPENDENCIES})
 
+add_executable(velox_functions_prestosql_benchmarks_array_union
+               ArrayUnionBenchmark.cpp)
+target_link_libraries(velox_functions_prestosql_benchmarks_array_union
+                      ${BENCHMARK_DEPENDENCIES})
+
 add_executable(velox_functions_prestosql_benchmarks_array_min_max
                ArrayMinMaxBenchmark.cpp)
 target_link_libraries(velox_functions_prestosql_benchmarks_array_min_max

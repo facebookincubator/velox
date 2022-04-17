@@ -74,6 +74,14 @@ Array Functions
         SELECT array_join(ARRAY [1, NULL, 2], ",") -- "1,2"
         SELECT array_join(ARRAY [1, NULL, 2], ",", "0") -- "1,0,2"
 
+.. function:: array_union(array(E) x, array(E) y) -> array(E)
+
+    Returns an array of the elements in the union of array ``x`` and array ``y``, without duplicates. ::
+
+        SELECT array_union(ARRAY [1, 2, 3], ARRAY[4, 5, 6]); -- [1, 2, 3, 4, 5, 6]
+        SELECT array_union(ARRAY [1, 2, 2], ARRAY[1, 1, 2]); -- [1, 2]
+        SELECT array_union(ARRAY [1, NULL, NULL], ARRAY[1, 1, NULL]); -- [1, NULL]
+
 .. function:: cardinality(x) -> bigint
 
     Returns the cardinality (size) of the array ``x``.
