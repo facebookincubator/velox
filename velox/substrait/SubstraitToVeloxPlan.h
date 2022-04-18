@@ -126,6 +126,10 @@ class SubstraitVeloxPlanConverter {
   void flattenConditions(
       const ::substrait::Expression& sFilter,
       std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions);
+
+  std::unique_ptr<velox::memory::ScopedMemoryPool> scopedPool_ =
+      velox::memory::getDefaultScopedMemoryPool();
+  velox::memory::MemoryPool* pool_;
 };
 
 } // namespace facebook::velox::substrait

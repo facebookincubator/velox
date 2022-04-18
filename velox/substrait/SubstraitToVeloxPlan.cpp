@@ -16,8 +16,71 @@
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/substrait/TypeUtils.h"
+#include "velox/type/Type.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::substrait {
+
+namespace {
+
+template <TypeKind KIND>
+VectorPtr setCellFromVariantByKind(
+
+    const std::vector<velox::variant>& value,
+    velox::memory::MemoryPool* pool,
+    std::function<bool(vector_size_t /*row*/)> isNullAt) {
+  using T = typename TypeTraits<KIND>::NativeType;
+
+  auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
+      BaseVector::create(CppToType<T>::create(), value.size(), pool));
+
+  for (vector_size_t i = 0; i < value.size(); i++) {
+    if ((isNullAt && isNullAt(i)) || value[i].isNull()) {
+      flatVector->setNull(i, true);
+    } else {
+      flatVector->set(i, value[i].value<T>());
+    }
+  }
+
+  return flatVector;
+}
+
+template <>
+VectorPtr setCellFromVariantByKind<TypeKind::VARBINARY>(
+    const std::vector<velox::variant>& value,
+    velox::memory::MemoryPool* pool,
+    std::function<bool(vector_size_t /*row*/)> isNullAt) {
+  throw std::invalid_argument("Return of VARBINARY data is not supported");
+}
+
+template <>
+VectorPtr setCellFromVariantByKind<TypeKind::VARCHAR>(
+    const std::vector<velox::variant>& value,
+    velox::memory::MemoryPool* pool,
+    std::function<bool(vector_size_t /*row*/)> isNullAt) {
+  auto flatVector = std::dynamic_pointer_cast<FlatVector<StringView>>(
+      BaseVector::create(CppToType<StringView>::create(), value.size(), pool));
+
+  for (vector_size_t i = 0; i < value.size(); i++) {
+    if (isNullAt && isNullAt(i) || value[i].isNull()) {
+      flatVector->setNull(i, true);
+    } else {
+      flatVector->set(i, StringView(value[i].value<Varchar>()));
+    }
+  }
+  return flatVector;
+}
+
+VectorPtr setCellFromVariant(
+    const TypePtr& colType,
+    const std::vector<velox::variant>& value,
+    velox::memory::MemoryPool* pool,
+    std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+      setCellFromVariantByKind, colType->kind(), value, pool, isNullAt);
+}
+} // namespace
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& sAgg) {
@@ -288,9 +351,67 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   }
   auto outputType = ROW(std::move(outNames), std::move(veloxTypeList));
 
-  auto tableScanNode = std::make_shared<core::TableScanNode>(
-      nextPlanNodeId(), outputType, tableHandle, assignments);
-  return tableScanNode;
+  if (sRead.has_virtual_table()) {
+    pool_ = scopedPool_.get();
+
+    ::substrait::ReadRel_VirtualTable sReadVirtualTable = sRead.virtual_table();
+    int64_t numRows = sReadVirtualTable.values_size();
+    int64_t numColumns = outputType->size();
+    int64_t valueFieldNums =
+        sReadVirtualTable.values(numRows - 1).fields_size();
+
+    std::vector<RowVectorPtr> vectors;
+    vectors.reserve(numRows);
+
+    int64_t batchSize = valueFieldNums / numColumns;
+
+    for (int64_t row = 0; row < numRows; ++row) {
+      std::vector<VectorPtr> children;
+      ::substrait::Expression_Literal_Struct sRowValue =
+          sRead.virtual_table().values(row);
+      auto sFieldSize = sRowValue.fields_size();
+      VELOX_CHECK_EQ(sFieldSize, batchSize * numColumns);
+
+      auto vChildrenSize = outputType->children().size();
+      for (int64_t col = 0; col < vChildrenSize; ++col) {
+        std::shared_ptr<const Type> vOutputChildType = outputType->childAt(col);
+        std::vector<variant> batchChild;
+        batchChild.reserve(batchSize);
+        for (int64_t batchId = 0; batchId < batchSize; batchId++) {
+          // each value in the batch
+          auto fieldIdx = col * batchSize + batchId;
+          ::substrait::Expression_Literal sField = sRowValue.fields(fieldIdx);
+
+          auto expr = exprConverter_->toVeloxExpr(sField);
+          if (auto constantExpr =
+                  std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+                      expr)) {
+            if (!constantExpr->hasValueVector()) {
+              batchChild.emplace_back(constantExpr->value());
+            } else {
+              VELOX_UNSUPPORTED(
+                  "Values node with complex type values is not supported yet");
+            }
+          } else {
+            VELOX_FAIL("Expected constant expression");
+          }
+        }
+        children.emplace_back(
+            setCellFromVariant(vOutputChildType, batchChild, pool_));
+      }
+
+      // make rowVectors
+      const size_t vectorSize = children.empty() ? 0 : children.front()->size();
+      vectors.emplace_back(std::make_shared<RowVector>(
+          pool_, outputType, BufferPtr(nullptr), vectorSize, children));
+    }
+
+    return std::make_shared<core::ValuesNode>(nextPlanNodeId(), move(vectors));
+  } else {
+    auto tableScanNode = std::make_shared<core::TableScanNode>(
+        nextPlanNodeId(), outputType, tableHandle, assignments);
+    return tableScanNode;
+  }
 }
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
