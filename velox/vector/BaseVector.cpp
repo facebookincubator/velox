@@ -338,6 +338,10 @@ VectorPtr BaseVector::create(
           true /*isSorted*/,
           0 /*representedBytes*/);
     }
+    case TypeKind::SHORT_DECIMAL:
+    case TypeKind::LONG_DECIMAL: {
+      return createEmpty<TypeKind::SHORT_DECIMAL>(size, pool, type);
+    }
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
           createEmpty, kind, size, pool, type);

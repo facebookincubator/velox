@@ -515,7 +515,11 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
 #undef VELOX_FLUENT_CAST
 
+using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
+using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 using TypePtr = std::shared_ptr<const Type>;
+using ShortDecimalTypePtr = std::shared_ptr<const ShortDecimalType>;
+using LongDecimalTypePtr = std::shared_ptr<const LongDecimalType>;
 
 template <TypeKind KIND>
 class TypeBase : public Type {
@@ -536,9 +540,6 @@ class TypeBase : public Type {
     return TypeTraits<KIND>::name;
   }
 };
-
-using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
-using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 
 /// This class represents the Decimal Type to represent the fixed-point numbers
 /// in Velox. The parameter "precision" represents the number of digits the
@@ -587,6 +588,15 @@ class DecimalType : public ScalarType<KIND> {
     obj["name"] = "Type";
     obj["type"] = toString();
     return obj;
+  }
+
+  static void getDecimalParameters(
+      const TypePtr& actualType,
+      std::vector<uint8_t>& parameters) {
+    auto decimalType =
+        std::dynamic_pointer_cast<const DecimalType<KIND>>(actualType);
+    parameters.push_back(decimalType->precision());
+    parameters.push_back(decimalType->scale());
   }
 
  private:
@@ -1028,6 +1038,8 @@ std::shared_ptr<const ShortDecimalType> SHORT_DECIMAL(
 std::shared_ptr<const LongDecimalType> LONG_DECIMAL(
     const uint8_t precision,
     const uint8_t scale);
+
+TypePtr DECIMAL(const uint8_t precision, const uint8_t scale);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {

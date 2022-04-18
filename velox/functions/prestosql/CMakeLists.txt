@@ -25,6 +25,7 @@ add_library(
   ArrayMinMax.cpp
   ArrayPosition.cpp
   Coalesce.cpp
+  DecimalOperators.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp

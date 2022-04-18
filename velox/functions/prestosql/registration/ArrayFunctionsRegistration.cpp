@@ -50,6 +50,7 @@ void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_duplicates, "array_duplicates");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_arrays_overlap, "arrays_overlap");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_add_short_short, "add_short_short");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_slice, "slice");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, "array_position");

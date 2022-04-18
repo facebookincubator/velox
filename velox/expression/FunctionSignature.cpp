@@ -61,10 +61,12 @@ size_t findNextComma(const std::string& str, size_t start) {
   return std::string::npos;
 }
 
-TypeSignature parseTypeSignature(const std::string& signature) {
+TypeSignature parseTypeSignature(
+    const std::string& signature,
+    const std::vector<std::string>& longVariables) {
   auto parenPos = signature.find('(');
   if (parenPos == std::string::npos) {
-    return TypeSignature(signature, {});
+    return TypeSignature(signature, {}, longVariables);
   }
 
   auto baseType = signature.substr(0, parenPos);
@@ -81,7 +83,7 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   while (commaPos != std::string::npos) {
     auto token = signature.substr(prevPos, commaPos - prevPos);
     boost::algorithm::trim(token);
-    nestedTypes.emplace_back(parseTypeSignature(token));
+    nestedTypes.emplace_back(parseTypeSignature(token, longVariables));
 
     prevPos = commaPos + 1;
     commaPos = findNextComma(signature, prevPos);
@@ -89,9 +91,9 @@ TypeSignature parseTypeSignature(const std::string& signature) {
 
   auto token = signature.substr(prevPos, endParenPos - prevPos);
   boost::algorithm::trim(token);
-  nestedTypes.emplace_back(parseTypeSignature(token));
+  nestedTypes.emplace_back(parseTypeSignature(token, longVariables));
 
-  return TypeSignature(baseType, std::move(nestedTypes));
+  return TypeSignature(baseType, std::move(nestedTypes), longVariables);
 }
 
 namespace {
@@ -107,7 +109,6 @@ void validateBaseTypeAndCollectTypeParams(
           arg.parameters().empty(), "Type 'Any' cannot have parameters")
       return;
     }
-
     if (!typeExists(typeName)) {
       // Check to ensure base type is supported.
       mapNameToTypeKind(typeName);
@@ -146,11 +147,16 @@ void validate(
   std::unordered_set<std::string> usedTypeVariables;
   // Validate the argument types.
   for (const auto& arg : argumentTypes) {
+    // piggy-back long variables to the set of typeNames
+    // This can be a separate set if required.
+    typeNames.insert(arg.longVariables().begin(), arg.longVariables().end());
     // Is base type a type parameter or a built in type ?
     validateBaseTypeAndCollectTypeParams(typeNames, arg, usedTypeVariables);
   }
 
   // Similarly validate for return type.
+  typeNames.insert(
+      returnType.longVariables().begin(), returnType.longVariables().end());
   validateBaseTypeAndCollectTypeParams(
       typeNames, returnType, usedTypeVariables);
 
@@ -166,11 +172,13 @@ FunctionSignature::FunctionSignature(
     std::vector<TypeVariableConstraint> typeVariableConstants,
     TypeSignature returnType,
     std::vector<TypeSignature> argumentTypes,
-    bool variableArity)
+    bool variableArity,
+    exec::computeLongVariablesFtor computeFtor)
     : typeVariableConstants_{std::move(typeVariableConstants)},
       returnType_{std::move(returnType)},
       argumentTypes_{std::move(argumentTypes)},
-      variableArity_{variableArity} {
+      variableArity_{variableArity},
+      computeLongVariablesBindings_(computeFtor) {
   validate(typeVariableConstants_, returnType_, argumentTypes_);
 }
 
@@ -180,7 +188,8 @@ FunctionSignaturePtr FunctionSignatureBuilder::build() {
       std::move(typeVariableConstants_),
       returnType_.value(),
       std::move(argumentTypes_),
-      variableArity_);
+      variableArity_,
+      computeLongVariablesBinding_);
 }
 
 std::shared_ptr<AggregateFunctionSignature>

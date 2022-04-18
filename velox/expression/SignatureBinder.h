@@ -58,5 +58,10 @@ class SignatureBinder {
   const exec::FunctionSignature& signature_;
   const std::vector<TypePtr>& actualTypes_;
   std::unordered_map<std::string, TypePtr> bindings_;
+  std::unordered_map<std::string, int32_t> longVariableBindings_;
+  bool tryBindDecimalTypes(
+      const TypeSignature& decimalSignature,
+      const TypePtr& decimalType);
+  TypePtr tryResolveDecimalType() const;
 };
 } // namespace facebook::velox::exec

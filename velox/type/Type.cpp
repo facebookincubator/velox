@@ -596,6 +596,13 @@ std::shared_ptr<const LongDecimalType> LONG_DECIMAL(
   return std::make_shared<LongDecimalType>(precision, scale);
 }
 
+TypePtr DECIMAL(const uint8_t precision, const uint8_t scale) {
+  if (precision <= DecimalType<TypeKind::SHORT_DECIMAL>::kMaxPrecision) {
+    return SHORT_DECIMAL(precision, scale);
+  }
+  return LONG_DECIMAL(precision, scale);
+}
+
 std::shared_ptr<const Type> createScalarType(TypeKind kind) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(createScalarType, kind);
 }

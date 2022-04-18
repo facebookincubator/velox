@@ -18,9 +18,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace facebook::velox::exec {
+
+typedef void (*computeLongVariablesFtor)(
+    const std::unordered_map<std::string, int32_t>& longVariableBindings_,
+    std::vector<int32_t>& output);
 
 // A type name (e.g. K or V in map(K, V)) and optionally constraints, e.g.
 // orderable, sortable, etc.
@@ -43,8 +48,13 @@ class TypeVariableConstraint {
 // Base type (e.g. map) and optional parameters (e.g. K, V).
 class TypeSignature {
  public:
-  TypeSignature(std::string baseType, std::vector<TypeSignature> parameters)
-      : baseType_{std::move(baseType)}, parameters_{std::move(parameters)} {}
+  TypeSignature(
+      std::string baseType,
+      std::vector<TypeSignature> parameters,
+      const std::vector<std::string>& longVariables = {})
+      : baseType_{std::move(baseType)},
+        parameters_{std::move(parameters)},
+        longVariables_{std::move(longVariables)} {}
 
   const std::string& baseType() const {
     return baseType_;
@@ -52,6 +62,10 @@ class TypeSignature {
 
   const std::vector<TypeSignature>& parameters() const {
     return parameters_;
+  }
+
+  const std::vector<std::string>& longVariables() const {
+    return longVariables_;
   }
 
   std::string toString() const;
@@ -63,6 +77,8 @@ class TypeSignature {
  private:
   const std::string baseType_;
   const std::vector<TypeSignature> parameters_;
+  const std::vector<std::string>
+      longVariables_; // stores list of variable parameters.
 };
 
 class FunctionSignature {
@@ -83,7 +99,8 @@ class FunctionSignature {
       std::vector<TypeVariableConstraint> typeVariableConstants,
       TypeSignature returnType,
       std::vector<TypeSignature> argumentTypes,
-      bool variableArity);
+      bool variableArity,
+      computeLongVariablesFtor computeLongVariablesBindings = nullptr);
 
   const std::vector<TypeVariableConstraint>& typeVariableConstants() const {
     return typeVariableConstants_;
@@ -101,6 +118,10 @@ class FunctionSignature {
     return variableArity_;
   }
 
+  const computeLongVariablesFtor computeLongVariablestFunction() const {
+    return computeLongVariablesBindings_;
+  }
+
   std::string toString() const;
 
   // This tests syntactic equality not semantic equality
@@ -115,9 +136,11 @@ class FunctionSignature {
 
  private:
   const std::vector<TypeVariableConstraint> typeVariableConstants_;
+  const std::vector<std::string> longVariables_;
   const TypeSignature returnType_;
   const std::vector<TypeSignature> argumentTypes_;
   const bool variableArity_;
+  const exec::computeLongVariablesFtor computeLongVariablesBindings_;
 };
 
 using FunctionSignaturePtr = std::shared_ptr<FunctionSignature>;
@@ -154,7 +177,9 @@ class AggregateFunctionSignature : public FunctionSignature {
 ///     - map(K,V)
 ///     - row(bigint,array(tinyint),T)
 ///     - function(S,T,R)
-TypeSignature parseTypeSignature(const std::string& signature);
+TypeSignature parseTypeSignature(
+    const std::string& signature,
+    const std::vector<std::string>& longVariables = {});
 
 /// Convenience class for creating FunctionSignature instances.
 /// Example of usage:
@@ -181,13 +206,17 @@ class FunctionSignatureBuilder {
     return *this;
   }
 
-  FunctionSignatureBuilder& returnType(const std::string& type) {
-    returnType_.emplace(parseTypeSignature(type));
+  FunctionSignatureBuilder& returnType(
+      const std::string& type,
+      const std::vector<std::string>& longVariables = {}) {
+    returnType_.emplace(parseTypeSignature(type, longVariables));
     return *this;
   }
 
-  FunctionSignatureBuilder& argumentType(const std::string& type) {
-    argumentTypes_.emplace_back(parseTypeSignature(type));
+  FunctionSignatureBuilder& argumentType(
+      const std::string& type,
+      const std::vector<std::string>& longVariables = {}) {
+    argumentTypes_.emplace_back(parseTypeSignature(type, longVariables));
     return *this;
   }
 
@@ -198,10 +227,17 @@ class FunctionSignatureBuilder {
 
   FunctionSignaturePtr build();
 
+  FunctionSignatureBuilder& computeLongVariablesBinding(
+      exec::computeLongVariablesFtor bindingFunction) {
+    computeLongVariablesBinding_ = bindingFunction;
+    return *this;
+  }
+
  private:
   std::vector<TypeVariableConstraint> typeVariableConstants_;
   std::optional<TypeSignature> returnType_;
   std::vector<TypeSignature> argumentTypes_;
+  computeLongVariablesFtor computeLongVariablesBinding_;
   bool variableArity_{false};
 };
 

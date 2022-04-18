@@ -148,6 +148,14 @@ class VectorTestBase {
     return vectorMaker_.flatVectorNullable(data, type);
   }
 
+  FlatVectorPtr<int64_t> makeShortDecimalFaltVector(
+      std::vector<std::optional<int64_t>>& vec,
+      const uint8_t precision,
+      uint8_t scale) {
+    const TypePtr& type = SHORT_DECIMAL(precision, scale);
+    return vectorMaker_.flatVectorNullable<int64_t>(vec, type);
+  }
+
   template <typename T, int TupleIndex, typename TupleType>
   FlatVectorPtr<T> makeFlatVector(const std::vector<TupleType>& data) {
     return vectorMaker_.flatVector<T, TupleIndex, TupleType>(data);

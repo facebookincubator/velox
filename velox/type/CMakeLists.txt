@@ -24,6 +24,7 @@ add_library(
   Timestamp.cpp
   TimestampConversion.cpp
   Date.cpp
+  DecimalUtils.cpp
   Filter.cpp
   Subfield.cpp
   Tokenizer.cpp)
