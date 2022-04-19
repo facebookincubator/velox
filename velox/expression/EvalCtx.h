@@ -237,6 +237,7 @@ struct ContextSaver {
   BufferPtr wrap;
   BufferPtr wrapNulls;
   VectorEncoding::Simple wrapEncoding;
+  vector_size_t constantWrapIndex;
   bool nullsPruned = false;
   // The selection of the context being saved.
   const SelectivityVector* rows;

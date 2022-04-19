@@ -2639,3 +2639,69 @@ TEST_F(ExprTest, specialFormPropagateNulls) {
       [](vector_size_t row) { return row == 4; });
   assertEqualVectors(expectedResult, evalResult);
 }
+
+namespace {
+template <typename T>
+struct AlwaysThrowsFunction {
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult& /* out */, const TInput& /* in */) {
+    VELOX_CHECK(false);
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, tryWithConstantFailure) {
+  // This test verifies the behavior of constant peeling on a function wrapped
+  // in a TRY.  Specifically the case when the UDF executed on the peeled
+  // Vector throws an exception on the constant value.
+
+  // When wrapping a peeled ConstantVector, the result is wrapped in a
+  // ConstantVector.  ConstantVector has special handling logic to copy the
+  // underlying string when the type is Varchar.  When an exception is thrown
+  // and the StringView isn't initialized, without special handling logic in
+  // EvalCtx this results in reading uninitialized memory triggering ASAN
+  // errors.
+  registerFunction<AlwaysThrowsFunction, Varchar, Varchar>({"always_throws"});
+  auto c0 = makeConstantVector("test", 5);
+  auto c1 = makeFlatVector<int64_t>(5, [](vector_size_t row) { return row; });
+  auto rowVector = makeRowVector({c0, c1});
+
+  // We use strpos and c1 to ensure that the constant is peeled before calling
+  // always_throws, not before the try.
+  auto evalResult =
+      evaluate("try(strpos(always_throws(\"c0\"), 't', c1))", rowVector);
+
+  auto expectedResult = makeFlatVector<int64_t>(
+      5, [](vector_size_t) { return 0; }, [](vector_size_t) { return true; });
+  assertEqualVectors(expectedResult, evalResult);
+}
+
+TEST_F(ExprTest, applySingleConstantArg) {
+  // This test verifies the behavior of applySingleConstArgVectorFunction,
+  // particularly in the case where the single input row doesn't match the
+  // wrappedRow in the ConstantVector.
+
+  // Exceptions combined with TRY are useful for exposing issues in the
+  // translation between the input row and the wrappedRow.  In particular,
+  // if the translation is not done, the exception may be associated with the
+  // wrappedRow instead of the input row after execution, meaning that it gets
+  // lost.
+  registerFunction<AlwaysThrowsFunction, int64_t, int64_t>({"always_throws"});
+  // Using a dictionary wrapped constant scalar vector is very intentional.
+  // Using a scalar vector means that the wrappedRow is always 0.
+  // Using a dictionary vector with indices that never point to the value at
+  // position 0 ensures that the input row is 1.
+  // Hence we get the mismatch we're trying to test.
+  auto c0 = makeConstantVector((int64_t)1, 5);
+  auto c0Indices = makeIndices(5, [](auto row) { return row == 0 ? 1 : row; });
+  auto rowVector =
+      makeRowVector({BaseVector::wrapInDictionary(nullptr, c0Indices, 5, c0)});
+
+  auto evalResult = evaluate("try(always_throws(\"c0\"))", rowVector);
+
+  // If the translation is done incorrectly we will get garbage data in the
+  // output instead of NULL.
+  auto expectedResult = makeFlatVector<int64_t>(
+      5, [](vector_size_t) { return 0; }, [](vector_size_t) { return true; });
+  assertEqualVectors(expectedResult, evalResult);
+}
