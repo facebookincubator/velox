@@ -1170,6 +1170,10 @@ void Expr::applySingleConstArgVectorFunction(
     args = {inputValue->valueVector()};
   }
 
+  ContextSaver saver;
+  context->saveAndReset(&saver, rows);
+  context->setConstantWrap(inputRow);
+
   VectorPtr tempResult;
   vectorFunction_->apply(*inputRows, args, type(), context, &tempResult);
 

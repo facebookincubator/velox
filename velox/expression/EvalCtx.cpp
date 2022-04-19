@@ -128,6 +128,7 @@ void EvalCtx::saveAndReset(ContextSaver* saver, const SelectivityVector& rows) {
   saver->wrap = std::move(wrap_);
   saver->wrapNulls = std::move(wrapNulls_);
   saver->wrapEncoding = wrapEncoding_;
+  saver->constantWrapIndex = constantWrapIndex_;
   wrapEncoding_ = VectorEncoding::Simple::FLAT;
   saver->nullsPruned = nullsPruned_;
   nullsPruned_ = false;
@@ -199,6 +200,7 @@ void EvalCtx::restore(ContextSaver* saver) {
   wrap_ = std::move(saver->wrap);
   wrapNulls_ = std::move(saver->wrapNulls);
   wrapEncoding_ = saver->wrapEncoding;
+  constantWrapIndex_ = saver->constantWrapIndex;
   finalSelection_ = saver->finalSelection;
 }
 
