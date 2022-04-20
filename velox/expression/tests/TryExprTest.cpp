@@ -195,4 +195,19 @@ TEST_F(TryExprTest, evalSimplified) {
 
   assertEqualVectors(makeNullableFlatVector(expected), result);
 }
+
+TEST_F(TryExprTest, skipExecutionEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>(
+      {"count_calls"}, BIGINT());
+
+  std::vector<std::optional<int64_t>> expected{
+      0, std::nullopt, 1, std::nullopt, 2};
+  auto flatVector = makeFlatVector<StringView>(expected.size(), [&](auto row) {
+    return expected[row].has_value() ? "1" : "a";
+  });
+  auto result = evaluateSimplified<FlatVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  assertEqualVectors(makeNullableFlatVector(expected), result);
+}
 } // namespace facebook::velox
