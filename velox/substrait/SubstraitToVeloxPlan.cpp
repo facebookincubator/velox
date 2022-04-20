@@ -288,7 +288,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     u_int32_t& index,
     std::vector<std::string>& paths,
     std::vector<u_int64_t>& starts,
-    std::vector<u_int64_t>& lengths) {
+    std::vector<u_int64_t>& lengths,
+    std::vector<RowVectorPtr>& vectors) {
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
@@ -360,7 +361,6 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     int64_t valueFieldNums =
         sReadVirtualTable.values(numRows - 1).fields_size();
 
-    std::vector<RowVectorPtr> vectors;
     vectors.reserve(numRows);
 
     int64_t batchSize = valueFieldNums / numColumns;
@@ -406,7 +406,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
           pool_, outputType, BufferPtr(nullptr), vectorSize, children));
     }
 
-    return std::make_shared<core::ValuesNode>(nextPlanNodeId(), move(vectors));
+    return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
   } else {
     auto tableScanNode = std::make_shared<core::TableScanNode>(
         nextPlanNodeId(), outputType, tableHandle, assignments);
@@ -426,7 +426,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     return toVeloxPlan(sRel.filter());
   }
   if (sRel.has_read()) {
-    return toVeloxPlan(sRel.read(), partitionIndex_, paths_, starts_, lengths_);
+    return toVeloxPlan(
+        sRel.read(), partitionIndex_, paths_, starts_, lengths_, vectors_);
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

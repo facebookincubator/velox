@@ -45,7 +45,8 @@ class SubstraitVeloxPlanConverter {
       u_int32_t& index,
       std::vector<std::string>& paths,
       std::vector<u_int64_t>& starts,
-      std::vector<u_int64_t>& lengths);
+      std::vector<u_int64_t>& lengths,
+      std::vector<RowVectorPtr>& vectors);
 
   /// Used to convert Substrait Rel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
@@ -79,6 +80,11 @@ class SubstraitVeloxPlanConverter {
     return lengths_;
   }
 
+  /// return the vectors to be read for values node.
+  const std::vector<RowVectorPtr>& getVectors() {
+    return vectors_;
+  }
+
  private:
   /// The Partition index.
   u_int32_t partitionIndex_;
@@ -91,6 +97,9 @@ class SubstraitVeloxPlanConverter {
 
   /// The lengths to be scanned.
   std::vector<u_int64_t> lengths_;
+
+  /// The rowVector of the velox ValuesNode to be read
+  std::vector<RowVectorPtr> vectors_;
 
   /// The unique identification for each PlanNode.
   int planNodeId_ = 0;
