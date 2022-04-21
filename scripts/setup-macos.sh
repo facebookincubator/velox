@@ -92,11 +92,29 @@ function cmake_install {
     -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS}" \
     -DBUILD_TESTING=OFF \
     "$@"
-  ninja -C "${BINARY_DIR}" install
+  sudo ninja -C "${BINARY_DIR}" install
 }
 
 function update_brew {
   /usr/local/bin/brew update --force --quiet
+}
+
+function link_brew_package_install_dir {
+  expected_brew_package_install_dir=/usr/local/opt
+  if [ ! -d "${expected_brew_package_install_dir}" ]; then
+    echo "The expected brew package install dir: '${expected_brew_package_install_dir}' not exists, start detecting...";
+
+    # we use icu4c to detect, since icu4c is installed using brew by this script
+    icu4c_install_path=`brew --prefix icu4c`
+    if [[ "x$icu4c_install_path" == "x" ]]; then
+      echo "Detect brew package install dir failed!"
+      exit 1;
+    fi
+
+    brew_package_install_dir=`dirname ${icu4c_install_path}`
+    echo "Brew package install dir is: ${brew_package_install_dir}, Linking it to ${expected_brew_package_install_dir}. (Need sudo)"
+    sudo ln -s ${brew_package_install_dir} /usr/local
+  fi
 }
 
 function install_build_prerequisites {
@@ -116,6 +134,7 @@ function install_build_prerequisites {
     fi
   done
 
+  link_brew_package_install_dir
   pip3 install --user cmake-format regex
 }
 
