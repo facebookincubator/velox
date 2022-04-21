@@ -80,6 +80,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ1Plan();
     case 6:
       return getQ6Plan();
+    case 13:
+      return getQ13Plan();
     case 18:
       return getQ18Plan();
     default:
@@ -191,6 +193,66 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ13Plan() const {
+  static const std::string kOrders = "orders";
+  static const std::string kCustomer = "customer";
+  std::vector<std::string> ordersColumns = {
+      "o_custkey", "o_comment", "o_orderkey"};
+  std::vector<std::string> customerColumns = {"c_custkey"};
+
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId customerScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+
+  auto notSpecialRequestOrders =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kOrders,
+              ordersSelectedRowType,
+              ordersFileColumns,
+              {},
+              "o_comment not like '%special%requests%'")
+          .capturePlanNodeId(ordersScanNodeId)
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(
+                       kCustomer, customerSelectedRowType, customerFileColumns)
+                   .capturePlanNodeId(customerScanNodeId)
+                   .hashJoin(
+                       {"c_custkey"},
+                       {"o_custkey"},
+                       notSpecialRequestOrders,
+                       "",
+                       {"c_custkey", "o_orderkey"},
+                       core::JoinType::kLeft)
+                   .partialAggregation(
+                       {"c_custkey"}, {"count(o_orderkey) as pc_count"})
+                   .planNode()})
+          .finalAggregation(
+              {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
+          .singleAggregation({"c_count"}, {"count(0) as custdist"})
+          .orderBy({"custdist DESC", "c_count DESC"}, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFileFormat = format_;
   return context;
 }
@@ -326,7 +388,7 @@ const std::unordered_map<std::string, std::vector<std::string>>
             std::vector<std::string>{
                 "c_custkey",
                 "c_name",
-                "c_addres",
+                "c_address",
                 "c_nationkey",
                 "c_phone",
                 "c_acctbal",
