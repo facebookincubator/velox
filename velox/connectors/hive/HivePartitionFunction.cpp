@@ -42,6 +42,24 @@ void hashTyped<TypeKind::BOOLEAN>(
   }
 }
 
+template <>
+void hashTyped<TypeKind::TINYINT>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+    for (auto i = 0; i < size; ++i) {
+        uint32_t hash;
+        if (values.isNullAt(i)) {
+            hash = 0;
+        } else {
+            hash = static_cast<uint32_t>(values.valueAt<int8_t>(i));
+        }
+
+        hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+    }
+}
+
 int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
 }

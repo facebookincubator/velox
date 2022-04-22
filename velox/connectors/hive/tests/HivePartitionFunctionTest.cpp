@@ -83,3 +83,17 @@ TEST_F(HivePartitionFunctionTest, bool) {
   assertPartitions(values, 500, {0, 1, 0, 0, 1});
   assertPartitions(values, 997, {0, 1, 0, 0, 1});
 }
+
+TEST_F(HivePartitionFunctionTest, int8_t) {
+  auto values =
+      vm_.flatVectorNullable<int8_t>(
+          {std::nullopt,
+           64,
+           std::numeric_limits<int8_t>::min(),
+           std::numeric_limits<int8_t>::max()});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 1});
+  assertPartitions(values, 500, {0, 64, 20, 127});
+  assertPartitions(values, 997, {0, 64, 355, 127});
+}
