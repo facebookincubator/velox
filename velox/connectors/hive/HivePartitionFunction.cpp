@@ -103,14 +103,14 @@ void hashTyped<TypeKind::REAL>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-    static_assert(sizeof(float) == sizeof(uint32_t));
+  static_assert(sizeof(float) == sizeof(uint32_t));
   for (auto i = 0; i < size; ++i) {
     uint32_t hash;
     if (values.isNullAt(i)) {
       hash = 0;
     } else {
-        auto val = values.valueAt<float>(i);
-        memcpy(&hash, &val, sizeof hash);
+      auto val = values.valueAt<float>(i);
+      memcpy(&hash, &val, sizeof hash);
     }
 
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
@@ -127,16 +127,16 @@ void hashTyped<TypeKind::DOUBLE>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-    static_assert(sizeof(float) == sizeof(uint32_t));
+  static_assert(sizeof(float) == sizeof(uint32_t));
   for (auto i = 0; i < size; ++i) {
     int32_t hash;
     if (values.isNullAt(i)) {
       hash = 0;
     } else {
-        auto val_double = values.valueAt<double>(i);
-        int64_t val_int64;
-        memcpy(&val_int64, &val_double, sizeof val_int64);
-        hash = hashInt64(val_int64);
+      auto val_double = values.valueAt<double>(i);
+      int64_t val_int64;
+      memcpy(&val_int64, &val_double, sizeof val_int64);
+      hash = hashInt64(val_int64);
     }
 
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
@@ -189,7 +189,7 @@ void hashTyped<TypeKind::VARCHAR>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-    hashTypedStringView(values, size, mix, hashes);
+  hashTypedStringView(values, size, mix, hashes);
 }
 
 template <>
@@ -198,11 +198,11 @@ void hashTyped<TypeKind::VARBINARY>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-    hashTypedStringView(values, size, mix, hashes);
+  hashTypedStringView(values, size, mix, hashes);
 }
 
 int32_t hashTimestamp(Timestamp ts) {
-    return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
+  return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
 }
 
 template <>

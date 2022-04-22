@@ -154,8 +154,12 @@ TEST_F(HivePartitionFunctionTest, Timestamp) {
   std::vector<std::optional<Timestamp>> values = {
       std::nullopt,
       Timestamp(100'000, 900'000),
-      Timestamp(std::numeric_limits<int64_t>::min(), std::numeric_limits<uint64_t>::min()),
-      Timestamp(std::numeric_limits<int64_t>::max(), std::numeric_limits<uint64_t>::max()),
+      Timestamp(
+          std::numeric_limits<int64_t>::min(),
+          std::numeric_limits<uint64_t>::min()),
+      Timestamp(
+          std::numeric_limits<int64_t>::max(),
+          std::numeric_limits<uint64_t>::max()),
   };
   auto vector = vm_.flatVectorNullable(values);
 
@@ -168,9 +172,9 @@ TEST_F(HivePartitionFunctionTest, Timestamp) {
 TEST_F(HivePartitionFunctionTest, Date) {
   auto values = vm_.flatVectorNullable<Date>(
       {std::nullopt,
-    Date(2'000'000'000),
-      Date(std::numeric_limits<int32_t>::min()),
-      Date(std::numeric_limits<int32_t>::max())});
+       Date(2'000'000'000),
+       Date(std::numeric_limits<int32_t>::min()),
+       Date(std::numeric_limits<int32_t>::max())});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 1});
