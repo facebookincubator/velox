@@ -195,9 +195,10 @@ since the number of input rows equals the number of output rows of the immediate
 
 	Input: 2000 rows (118.12KB), Output: 2000 rows (118.12KB)
 
-For TableScan, Velox also reports the number of raw input rows, their sizes,
-and the number of splits assigned.
-These are the rows processed before applying a pushed down filter.
+When rows are pruned for a TableScan with filters, Velox reports the number
+of raw input rows and their total size. These are the rows processed before
+applying the pushed down filters.
+TableScan also reports the number of splits assigned.
 
 .. code-block::
 
