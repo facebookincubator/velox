@@ -30,17 +30,27 @@ void hashTyped(
       TypeTraits<kind>::name);
 }
 
+template <typename T>
+void abstractHashTyped(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes,
+    std::function<uint32_t(const T&)> f) {
+  for (auto i = 0; i < size; ++i) {
+    const uint32_t hash = (values.isNullAt(i)) ? 0 : f(values.valueAt<T>(i));
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
 template <>
 void hashTyped<TypeKind::BOOLEAN>(
     const DecodedVector& values,
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    const int32_t hash =
-        (values.isNullAt(i)) ? 0 : (values.valueAt<bool>(i) ? 1 : 0);
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](bool value) { return value ? 1 : 0; };
+    abstractHashTyped<bool>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -49,16 +59,8 @@ void hashTyped<TypeKind::TINYINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    uint32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      hash = static_cast<uint32_t>(values.valueAt<int8_t>(i));
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](int8_t value) { return static_cast<uint32_t>(value); };
+    abstractHashTyped<int8_t>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -67,16 +69,8 @@ void hashTyped<TypeKind::SMALLINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    uint32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      hash = static_cast<uint32_t>(values.valueAt<int16_t>(i));
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](int16_t value) { return static_cast<uint32_t>(value); };
+    abstractHashTyped<int16_t>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -85,16 +79,8 @@ void hashTyped<TypeKind::INTEGER>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    uint32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      hash = static_cast<uint32_t>(values.valueAt<int32_t>(i));
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](int32_t value) { return static_cast<uint32_t>(value); };
+    abstractHashTyped<int32_t>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -104,17 +90,12 @@ void hashTyped<TypeKind::REAL>(
     bool mix,
     std::vector<uint32_t>& hashes) {
   static_assert(sizeof(float) == sizeof(uint32_t));
-  for (auto i = 0; i < size; ++i) {
-    uint32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      auto val = values.valueAt<float>(i);
-      memcpy(&hash, &val, sizeof hash);
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](float value) {
+        uint32_t ret;
+        memcpy(&ret, &value, sizeof ret);
+        return ret;
+    };
+    abstractHashTyped<float>(values, size, mix, hashes, f);
 }
 
 int32_t hashInt64(int64_t value) {
@@ -128,19 +109,12 @@ void hashTyped<TypeKind::DOUBLE>(
     bool mix,
     std::vector<uint32_t>& hashes) {
   static_assert(sizeof(float) == sizeof(uint32_t));
-  for (auto i = 0; i < size; ++i) {
-    int32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      auto val_double = values.valueAt<double>(i);
-      int64_t val_int64;
-      memcpy(&val_int64, &val_double, sizeof val_int64);
-      hash = hashInt64(val_int64);
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+  auto f = [](double value) {
+      int64_t buff;
+      memcpy(&buff, &value, sizeof buff);
+      return hashInt64(buff);
+  };
+    abstractHashTyped<double>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -149,11 +123,8 @@ void hashTyped<TypeKind::BIGINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    const int32_t hash =
-        (values.isNullAt(i)) ? 0 : hashInt64(values.valueAt<int64_t>(i));
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](int64_t value) { return hashInt64(value); };
+    abstractHashTyped<int64_t>(values, size, mix, hashes, f);
 }
 
 #if defined(__has_feature)
@@ -176,11 +147,8 @@ void hashTypedStringView(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    const uint32_t hash =
-        (values.isNullAt(i)) ? 0 : hashBytes(values.valueAt<StringView>(i), 0);
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](const StringView & value) { return hashBytes(value, 0); };
+    abstractHashTyped<StringView>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -201,7 +169,7 @@ void hashTyped<TypeKind::VARBINARY>(
   hashTypedStringView(values, size, mix, hashes);
 }
 
-int32_t hashTimestamp(Timestamp ts) {
+int32_t hashTimestamp(const Timestamp& ts) {
   return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
 }
 
@@ -211,16 +179,8 @@ void hashTyped<TypeKind::TIMESTAMP>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    int32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      hash = hashTimestamp(values.valueAt<Timestamp>(i));
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](const Timestamp & value) { return hashTimestamp(value); };
+    abstractHashTyped<Timestamp>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -229,16 +189,8 @@ void hashTyped<TypeKind::DATE>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  for (auto i = 0; i < size; ++i) {
-    int32_t hash;
-    if (values.isNullAt(i)) {
-      hash = 0;
-    } else {
-      hash = values.valueAt<Date>(i).days();
-    }
-
-    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
-  }
+    auto f = [](const Date & value) { return value.days(); };
+    abstractHashTyped<Date>(values, size, mix, hashes, f);
 }
 
 void hash(
