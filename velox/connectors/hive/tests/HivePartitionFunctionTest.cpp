@@ -85,15 +85,95 @@ TEST_F(HivePartitionFunctionTest, bool) {
 }
 
 TEST_F(HivePartitionFunctionTest, int8_t) {
-  auto values =
-      vm_.flatVectorNullable<int8_t>(
-          {std::nullopt,
-           64,
-           std::numeric_limits<int8_t>::min(),
-           std::numeric_limits<int8_t>::max()});
+  auto values = vm_.flatVectorNullable<int8_t>(
+      {std::nullopt,
+       64,
+       std::numeric_limits<int8_t>::min(),
+       std::numeric_limits<int8_t>::max()});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 1});
   assertPartitions(values, 500, {0, 64, 20, 127});
   assertPartitions(values, 997, {0, 64, 355, 127});
+}
+
+TEST_F(HivePartitionFunctionTest, int16_t) {
+  auto values = vm_.flatVectorNullable<int16_t>(
+      {std::nullopt,
+       30'000,
+       std::numeric_limits<int16_t>::min(),
+       std::numeric_limits<int16_t>::max()});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 1});
+  assertPartitions(values, 500, {0, 0, 380, 267});
+  assertPartitions(values, 997, {0, 90, 616, 863});
+}
+
+TEST_F(HivePartitionFunctionTest, int32_t) {
+  auto values = vm_.flatVectorNullable<int32_t>(
+      {std::nullopt,
+       2'000'000'000,
+       std::numeric_limits<int32_t>::min(),
+       std::numeric_limits<int32_t>::max()});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 1});
+  assertPartitions(values, 500, {0, 0, 0, 147});
+  assertPartitions(values, 997, {0, 54, 0, 482});
+}
+
+TEST_F(HivePartitionFunctionTest, float) {
+  auto values = vm_.flatVectorNullable<float>(
+      {std::nullopt,
+       2'000'000'000.0,
+       std::numeric_limits<float>::min(),
+       std::numeric_limits<float>::max()});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 1});
+  assertPartitions(values, 500, {0, 348, 108, 39});
+  assertPartitions(values, 997, {0, 544, 847, 632});
+}
+
+TEST_F(HivePartitionFunctionTest, double) {
+  auto values = vm_.flatVectorNullable<double>(
+      {std::nullopt,
+       300'000'000'000.5,
+       std::numeric_limits<double>::min(),
+       std::numeric_limits<double>::max()});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 1, 0, 0});
+  assertPartitions(values, 500, {0, 349, 76, 76});
+  assertPartitions(values, 997, {0, 63, 729, 729});
+}
+
+TEST_F(HivePartitionFunctionTest, Timestamp) {
+  // TODO Fix flatVectorNullable to set Timestamp.
+  std::vector<std::optional<Timestamp>> values = {
+      std::nullopt,
+      Timestamp(100'000, 900'000),
+      Timestamp(std::numeric_limits<int64_t>::min(), std::numeric_limits<uint64_t>::min()),
+      Timestamp(std::numeric_limits<int64_t>::max(), std::numeric_limits<uint64_t>::max()),
+  };
+  auto vector = vm_.flatVectorNullable(values);
+
+  assertPartitions(vector, 1, {0, 0, 0, 0});
+  assertPartitions(vector, 2, {0, 0, 0, 0});
+  assertPartitions(vector, 500, {0, 284, 0, 0});
+  assertPartitions(vector, 997, {0, 514, 0, 0});
+}
+
+TEST_F(HivePartitionFunctionTest, Date) {
+  auto values = vm_.flatVectorNullable<Date>(
+      {std::nullopt,
+    Date(2'000'000'000),
+      Date(std::numeric_limits<int32_t>::min()),
+      Date(std::numeric_limits<int32_t>::max())});
+
+  assertPartitions(values, 1, {0, 0, 0, 0});
+  assertPartitions(values, 2, {0, 0, 0, 1});
+  assertPartitions(values, 500, {0, 0, 0, 147});
+  assertPartitions(values, 997, {0, 54, 0, 482});
 }

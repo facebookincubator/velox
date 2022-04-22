@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include <bit>
 
 namespace facebook::velox::connector::hive {
 
@@ -48,20 +49,98 @@ void hashTyped<TypeKind::TINYINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-    for (auto i = 0; i < size; ++i) {
-        uint32_t hash;
-        if (values.isNullAt(i)) {
-            hash = 0;
-        } else {
-            hash = static_cast<uint32_t>(values.valueAt<int8_t>(i));
-        }
-
-        hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  for (auto i = 0; i < size; ++i) {
+    uint32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+      hash = static_cast<uint32_t>(values.valueAt<int8_t>(i));
     }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
+template <>
+void hashTyped<TypeKind::SMALLINT>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+  for (auto i = 0; i < size; ++i) {
+    uint32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+      hash = static_cast<uint32_t>(values.valueAt<int16_t>(i));
+    }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
+template <>
+void hashTyped<TypeKind::INTEGER>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+  for (auto i = 0; i < size; ++i) {
+    uint32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+      hash = static_cast<uint32_t>(values.valueAt<int32_t>(i));
+    }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
+template <>
+void hashTyped<TypeKind::REAL>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+    static_assert(sizeof(float) == sizeof(uint32_t));
+  for (auto i = 0; i < size; ++i) {
+    uint32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+        auto val = values.valueAt<float>(i);
+        memcpy(&hash, &val, sizeof hash);
+    }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
 }
 
 int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
+}
+
+template <>
+void hashTyped<TypeKind::DOUBLE>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+    static_assert(sizeof(float) == sizeof(uint32_t));
+  for (auto i = 0; i < size; ++i) {
+    int32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+        auto val_double = values.valueAt<double>(i);
+        int64_t val_int64;
+        memcpy(&val_int64, &val_double, sizeof val_int64);
+        hash = hashInt64(val_int64);
+    }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
 }
 
 template <>
@@ -92,8 +171,7 @@ hashBytes(StringView bytes, int32_t initialValue) {
   return hash;
 }
 
-template <>
-void hashTyped<TypeKind::VARCHAR>(
+void hashTypedStringView(
     const DecodedVector& values,
     vector_size_t size,
     bool mix,
@@ -101,6 +179,64 @@ void hashTyped<TypeKind::VARCHAR>(
   for (auto i = 0; i < size; ++i) {
     const uint32_t hash =
         (values.isNullAt(i)) ? 0 : hashBytes(values.valueAt<StringView>(i), 0);
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
+template <>
+void hashTyped<TypeKind::VARCHAR>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+    hashTypedStringView(values, size, mix, hashes);
+}
+
+template <>
+void hashTyped<TypeKind::VARBINARY>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+    hashTypedStringView(values, size, mix, hashes);
+}
+
+int32_t hashTimestamp(Timestamp ts) {
+    return hashInt64((ts.getSeconds() << 30) | ts.getNanos());
+}
+
+template <>
+void hashTyped<TypeKind::TIMESTAMP>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+  for (auto i = 0; i < size; ++i) {
+    int32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+      hash = hashTimestamp(values.valueAt<Timestamp>(i));
+    }
+
+    hashes[i] = mix ? hashes[i] * 31 + hash : hash;
+  }
+}
+
+template <>
+void hashTyped<TypeKind::DATE>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+  for (auto i = 0; i < size; ++i) {
+    int32_t hash;
+    if (values.isNullAt(i)) {
+      hash = 0;
+    } else {
+      hash = values.valueAt<Date>(i).days();
+    }
+
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
   }
 }
