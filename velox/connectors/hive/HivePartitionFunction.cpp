@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HivePartitionFunction.h"
-#include <bit>
 
 namespace facebook::velox::connector::hive {
 
