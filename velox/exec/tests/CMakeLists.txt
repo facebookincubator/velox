@@ -16,6 +16,7 @@ add_subdirectory(utils)
 add_executable(
   velox_exec_test
   CrossJoinTest.cpp
+  CustomizedJoinBridgeTest.cpp
   DriverTest.cpp
   EnforceSingleRowTest.cpp
   FilterProjectTest.cpp
@@ -86,5 +87,6 @@ target_link_libraries(
   ${DOUBLE_CONVERSION}
   ${gflags_LIBRARIES}
   glog::glog
+  gmock
   ${FMT}
   ${FILESYSTEM})

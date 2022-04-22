@@ -154,6 +154,18 @@ Task::~Task() {
   }
 }
 
+// static
+std::vector<std::unique_ptr<Task::JoinBridgeTranslator>>& Task::translators() {
+  static std::vector<std::unique_ptr<Task::JoinBridgeTranslator>> translators;
+  return translators;
+}
+
+// static
+void Task::registerJoinBridgeTranslator(
+    std::unique_ptr<JoinBridgeTranslator> translator) {
+  translators().emplace_back(std::move(translator));
+};
+
 velox::memory::MemoryPool* FOLLY_NONNULL Task::addDriverPool() {
   childPools_.push_back(pool_->addScopedChild("driver_root"));
   auto* driverPool = childPools_.back().get();
@@ -367,6 +379,7 @@ void Task::createSplitGroupStateLocked(
         splitGroupId, factory->needsHashJoinBridges());
     self->addCrossJoinBridgesLocked(
         splitGroupId, factory->needsCrossJoinBridges());
+    self->addCustomizedJoinBridgesLocked(splitGroupId, factory->planNodes);
   }
 }
 
@@ -933,6 +946,31 @@ void Task::addHashJoinBridgesLocked(
     splitGroupState.bridges.emplace(
         planNodeId, std::make_shared<HashJoinBridge>());
   }
+}
+
+void Task::addCustomizedJoinBridgesLocked(
+    uint32_t splitGroupId,
+    const std::vector<std::shared_ptr<const core::PlanNode>> planNodes) {
+  auto& translators = Task::translators();
+  if (0 == translators.size()) {
+    return;
+  }
+
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  for (const auto& planNode : planNodes) {
+    for (const auto& t : translators) {
+      if (auto joinBridge = t->translate(planNode)) {
+        splitGroupState.bridges.emplace(planNode->id(), joinBridge);
+      }
+    }
+  }
+}
+
+// Returns a Customized Join Bridge for 'planNodeId'.
+std::shared_ptr<JoinBridge> Task::getCustomizedJoinBridge(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  return getJoinBridgeInternal<JoinBridge>(splitGroupId, planNodeId);
 }
 
 void Task::addCrossJoinBridgesLocked(

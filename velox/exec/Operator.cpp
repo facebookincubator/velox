@@ -102,6 +102,18 @@ std::unique_ptr<Operator> Operator::fromPlanNode(
 }
 
 // static
+OperatorSupplier Operator::operatorSupplierFromPlanNode(
+    const std::shared_ptr<const core::PlanNode>& planNode) {
+  for (auto& translator : translators()) {
+    auto supplier = translator->translateToOpSupplier(planNode);
+    if (supplier) {
+      return supplier;
+    }
+  }
+  return nullptr;
+}
+
+// static
 void Operator::registerOperator(
     std::unique_ptr<PlanNodeTranslator> translator) {
   translators().emplace_back(std::move(translator));

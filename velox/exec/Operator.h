@@ -194,6 +194,11 @@ class Operator {
         int32_t id,
         const std::shared_ptr<const core::PlanNode>& node) = 0;
 
+    virtual OperatorSupplier translateToOpSupplier(
+        const std::shared_ptr<const core::PlanNode>& node) {
+      return nullptr;
+    };
+
     // Returns max driver count for the plan node. Returns std::nullopt if the
     // plan node cannot be handled by this factory.
     virtual std::optional<uint32_t> maxDrivers(
@@ -341,6 +346,12 @@ class Operator {
   static std::unique_ptr<Operator> fromPlanNode(
       DriverCtx* ctx,
       int32_t id,
+      const std::shared_ptr<const core::PlanNode>& planNode);
+
+  // Calls all the registered PlanNodeTranslators on 'planNode' and
+  // returns the result of the first one that returns non-nullptr
+  // or nullptr if all return nullptr.
+  static OperatorSupplier operatorSupplierFromPlanNode(
       const std::shared_ptr<const core::PlanNode>& planNode);
 
   // Calls `maxDrivers` on all the registered PlanNodeTranslators and returns
