@@ -36,7 +36,7 @@ void abstractHashTyped(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes,
-    std::function<uint32_t(const T&)> f) {
+    std::function<uint32_t(const T&)> const& f) {
   for (auto i = 0; i < size; ++i) {
     const uint32_t hash = (values.isNullAt(i)) ? 0 : f(values.valueAt<T>(i));
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
@@ -123,7 +123,11 @@ void hashTyped<TypeKind::BIGINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
+<<<<<<< HEAD
     auto f = [](int64_t value) { return hashInt64(value); };
+=======
+  auto f = [](int64_t value) { return hashInt64(value); };
+>>>>>>> remove redundent
     abstractHashTyped<int64_t>(values, size, mix, hashes, f);
 }
 
@@ -147,7 +151,11 @@ void hashTypedStringView(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
+<<<<<<< HEAD
     auto f = [](const StringView & value) { return hashBytes(value, 0); };
+=======
+  auto f = [](const StringView & value) { return hashBytes(value, 0); };
+>>>>>>> remove redundent
     abstractHashTyped<StringView>(values, size, mix, hashes, f);
 }
 
@@ -179,7 +187,11 @@ void hashTyped<TypeKind::TIMESTAMP>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
+<<<<<<< HEAD
     auto f = [](const Timestamp & value) { return hashTimestamp(value); };
+=======
+  auto f = [](const Timestamp & value) { return hashTimestamp(value); };
+>>>>>>> remove redundent
     abstractHashTyped<Timestamp>(values, size, mix, hashes, f);
 }
 
@@ -189,7 +201,11 @@ void hashTyped<TypeKind::DATE>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
+<<<<<<< HEAD
     auto f = [](const Date & value) { return value.days(); };
+=======
+  auto f = [](const Date & value) { return value.days(); };
+>>>>>>> remove redundent
     abstractHashTyped<Date>(values, size, mix, hashes, f);
 }
 
