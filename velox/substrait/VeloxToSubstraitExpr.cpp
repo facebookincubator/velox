@@ -21,12 +21,13 @@
 namespace facebook::velox::substrait {
 
 void VeloxToSubstraitExprConvertor::toSubstraitExpr(
+    google::protobuf::Arena& arena,
     const std::shared_ptr<const ITypedExpr>& vExpr,
     RowTypePtr vPreNodeOutPut,
     ::substrait::Expression* sExpr) {
   if (std::shared_ptr<const ConstantTypedExpr> vConstantExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(vExpr)) {
-    toSubstraitLiteral(vConstantExpr->value(), sExpr->mutable_literal());
+    toSubstraitLiteral(arena, vConstantExpr->value(), sExpr->mutable_literal());
     return;
   }
   if (auto vCallTypeExpr =
@@ -62,10 +63,10 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
 
       for (auto& vArg : vCallTypeInputs) {
         ::substrait::Expression* sArg = sFun->add_args();
-        toSubstraitExpr(vArg, vPreNodeOutPut, sArg);
+        toSubstraitExpr(arena, vArg, vPreNodeOutPut, sArg);
       }
       ::substrait::Type* sFunType = sFun->mutable_output_type();
-      v2STypeConvertor_.toSubstraitType(vExprType, sFunType);
+      v2STypeConvertor_.toSubstraitType(arena, vExprType, sFunType);
       return;
     }
   }
@@ -108,10 +109,10 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
         vCastExpr->inputs();
     ::substrait::Expression_Cast* sCastExpr = sExpr->mutable_cast();
     v2STypeConvertor_.toSubstraitType(
-        vCastExpr->type(), sCastExpr->mutable_type());
+        arena, vCastExpr->type(), sCastExpr->mutable_type());
 
     for (auto& vArg : vCastTypeInputs) {
-      toSubstraitExpr(vArg, vPreNodeOutPut, sCastExpr->mutable_input());
+      toSubstraitExpr(arena, vArg, vPreNodeOutPut, sCastExpr->mutable_input());
     }
     return;
 
@@ -121,6 +122,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitExpr(
 }
 
 void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+    google::protobuf::Arena& arena,
     const velox::variant& vConstExpr,
     ::substrait::Expression_Literal* sLiteralExpr) {
   switch (vConstExpr.kind()) {
@@ -129,9 +131,10 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       break;
     }
     case velox::TypeKind::VARCHAR: {
-      auto vCharValue = vConstExpr.value<StringView>();
       ::substrait::Expression_Literal::VarChar* sVarChar =
-          new ::substrait::Expression_Literal::VarChar();
+          google::protobuf::Arena::CreateMessage<
+              ::substrait::Expression_Literal::VarChar>(&arena);
+      auto vCharValue = vConstExpr.value<StringView>();
       sVarChar->set_value(vCharValue.data());
       sVarChar->set_length(vCharValue.size());
       sLiteralExpr->set_allocated_var_char(sVarChar);
@@ -175,6 +178,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
 }
 
 void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+    google::protobuf::Arena& arena,
     const velox::VectorPtr& vVectorValue,
     ::substrait::Expression_Literal_Struct* sLitValue,
     ::substrait::Expression_Literal* sField) {
@@ -189,7 +193,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_boolean(childToFlatVec->valueAt(i));
         }
@@ -204,7 +208,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_i8(childToFlatVec->valueAt(i));
         }
@@ -219,7 +223,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_i16(childToFlatVec->valueAt(i));
         }
@@ -234,7 +238,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_i32(childToFlatVec->valueAt(i));
         }
@@ -249,7 +253,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_i64(childToFlatVec->valueAt(i));
         }
@@ -264,7 +268,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_fp32(childToFlatVec->valueAt(i));
         }
@@ -279,7 +283,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           sField->set_fp64(childToFlatVec->valueAt(i));
         }
@@ -294,10 +298,11 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(childType, sField);
+          toSubstraitNullLiteral(arena, childType, sField);
         } else {
           ::substrait::Expression_Literal::VarChar* sVarChar =
-              new ::substrait::Expression_Literal::VarChar();
+              google::protobuf::Arena::CreateMessage<
+                  ::substrait::Expression_Literal::VarChar>(&arena);
           StringView vChildValueAt = childToFlatVec->valueAt(i);
           sVarChar->set_value(vChildValueAt);
           sVarChar->set_length(vChildValueAt.size());
@@ -314,60 +319,74 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
 }
 
 void VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
+    google::protobuf::Arena& arena,
     const velox::TypePtr& vValueType,
     ::substrait::Expression_Literal* sField) {
   switch (vValueType->kind()) {
     case velox::TypeKind::BOOLEAN: {
-      ::substrait::Type_Boolean* nullValue = new ::substrait::Type_Boolean();
+      ::substrait::Type_Boolean* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_Boolean>(
+              &arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_bool_(nullValue);
       break;
     }
     case velox::TypeKind::TINYINT: {
-      ::substrait::Type_I8* nullValue = new ::substrait::Type_I8();
+      ::substrait::Type_I8* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I8>(&arena);
+
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_i8(nullValue);
       break;
     }
     case velox::TypeKind::SMALLINT: {
-      ::substrait::Type_I16* nullValue = new ::substrait::Type_I16();
+      ::substrait::Type_I16* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I16>(&arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_i16(nullValue);
       break;
     }
     case velox::TypeKind::INTEGER: {
-      ::substrait::Type_I32* nullValue = new ::substrait::Type_I32();
+      ::substrait::Type_I32* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I32>(&arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_i32(nullValue);
       break;
     }
     case velox::TypeKind::BIGINT: {
-      ::substrait::Type_I64* nullValue = new ::substrait::Type_I64();
+      ::substrait::Type_I64* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I64>(&arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_i64(nullValue);
       break;
     }
     case velox::TypeKind::VARCHAR: {
-      ::substrait::Type_VarChar* nullValue = new ::substrait::Type_VarChar();
+      ::substrait::Type_VarChar* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_VarChar>(
+              &arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_varchar(nullValue);
       break;
     }
     case velox::TypeKind::REAL: {
-      ::substrait::Type_FP32* nullValue = new ::substrait::Type_FP32();
+      ::substrait::Type_FP32* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_FP32>(
+              &arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_fp32(nullValue);
       break;
     }
     case velox::TypeKind::DOUBLE: {
-      ::substrait::Type_FP64* nullValue = new ::substrait::Type_FP64();
+      ::substrait::Type_FP64* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_FP64>(
+              &arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       sField->mutable_null()->set_allocated_fp64(nullValue);

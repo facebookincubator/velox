@@ -21,79 +21,91 @@
 namespace facebook::velox::substrait {
 
 void VeloxToSubstraitTypeConvertor::toSubstraitType(
+    google::protobuf::Arena& arena,
     const velox::TypePtr& vType,
     ::substrait::Type* sType) {
   switch (vType->kind()) {
     case velox::TypeKind::BOOLEAN: {
-      sType->set_allocated_bool_(new ::substrait::Type_Boolean());
+      sType->set_allocated_bool_(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_Boolean>(
+              &arena));
       break;
     }
     case velox::TypeKind::TINYINT: {
-      sType->set_allocated_i8(new ::substrait::Type_I8());
+      sType->set_allocated_i8(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I8>(&arena));
       break;
     }
     case velox::TypeKind::SMALLINT: {
-      sType->set_allocated_i16(new ::substrait::Type_I16());
+      sType->set_allocated_i16(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I16>(
+              &arena));
       break;
     }
     case velox::TypeKind::INTEGER: {
-      sType->set_allocated_i32(new ::substrait::Type_I32());
+      sType->set_allocated_i32(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I32>(
+              &arena));
       break;
     }
     case velox::TypeKind::BIGINT: {
-      sType->set_allocated_i64(new ::substrait::Type_I64());
+      sType->set_allocated_i64(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_I64>(
+              &arena));
       break;
     }
     case velox::TypeKind::REAL: {
-      sType->set_allocated_fp32(new ::substrait::Type_FP32());
+      sType->set_allocated_fp32(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_FP32>(
+              &arena));
       break;
     }
     case velox::TypeKind::DOUBLE: {
-      sType->set_allocated_fp64(new ::substrait::Type_FP64());
+      sType->set_allocated_fp64(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_FP64>(
+              &arena));
       break;
     }
     case velox::TypeKind::VARCHAR: {
-      sType->set_allocated_varchar(new ::substrait::Type_VarChar());
+      sType->set_allocated_varchar(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_VarChar>(
+              &arena));
       break;
     }
     case velox::TypeKind::VARBINARY: {
-      sType->set_allocated_binary(new ::substrait::Type_Binary());
+      sType->set_allocated_binary(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_Binary>(
+              &arena));
       break;
     }
     case velox::TypeKind::TIMESTAMP: {
-      sType->set_allocated_timestamp(new ::substrait::Type_Timestamp());
+      sType->set_allocated_timestamp(
+          google::protobuf::Arena::CreateMessage<::substrait::Type_Timestamp>(
+              &arena));
       break;
     }
     case velox::TypeKind::ARRAY: {
-      google::protobuf::Arena* arena;
-      ::substrait::Type_List* sTList = new ::substrait::Type_List();
-      arena->Own(sTList);
+      ::substrait::Type_List* sTList =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_List>(
+              &arena);
 
       const TypePtr vElementType = vType->asArray().elementType();
-      try {
-        toSubstraitType(vElementType, sTList->mutable_type());
-        sType->set_allocated_list(sTList);
-      } catch (std::exception& e) {
-        arena->OwnDestructor(sTList);
-      }
+      toSubstraitType(arena, vElementType, sTList->mutable_type());
+      sType->set_allocated_list(sTList);
 
       break;
     }
     case velox::TypeKind::MAP: {
-      google::protobuf::Arena* arena;
-      ::substrait::Type_Map* sMap = new ::substrait::Type_Map();
-      arena->Own(sMap);
+      ::substrait::Type_Map* sMap =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_Map>(&arena);
 
       const TypePtr& vMapKeyType = vType->asMap().keyType();
       const TypePtr& vMapValueType = vType->asMap().valueType();
-      try {
-        toSubstraitType(vMapKeyType, sMap->mutable_key());
-        toSubstraitType(vMapValueType, sMap->mutable_value());
 
-        sType->set_allocated_map(sMap);
-      } catch (std::exception& e) {
-        arena->OwnDestructor(sMap);
-      }
+      toSubstraitType(arena, vMapKeyType, sMap->mutable_key());
+      toSubstraitType(arena, vMapValueType, sMap->mutable_value());
+
+      sType->set_allocated_map(sMap);
 
       break;
     }
@@ -107,6 +119,7 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
 }
 
 void VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
+    google::protobuf::Arena& arena,
     const velox::RowTypePtr& vRow,
     ::substrait::NamedStruct* sNamedStruct) {
   const int64_t vSize = vRow->size();
@@ -119,7 +132,7 @@ void VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     const TypePtr& vType = vTypes.at(i);
     sNamedStruct->add_names(vName);
 
-    toSubstraitType(vType, sTypeStruct->add_types());
+    toSubstraitType(arena, vType, sTypeStruct->add_types());
   }
 }
 

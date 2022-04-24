@@ -30,6 +30,7 @@ class VeloxToSubstraitExprConvertor {
  public:
   // Convert Velox Expression to Substrait Expression.
   void toSubstraitExpr(
+      google::protobuf::Arena& arena,
       const std::shared_ptr<const ITypedExpr>& vExpr,
       RowTypePtr vPreNodeOutPut,
       ::substrait::Expression* sExpr);
@@ -37,11 +38,13 @@ class VeloxToSubstraitExprConvertor {
   // Convert Velox Constant Expression to Substrait
   // Literal Expression.
   void toSubstraitLiteral(
+      google::protobuf::Arena& arena,
       const velox::variant& vConstExpr,
       ::substrait::Expression_Literal* sLiteralExpr);
 
   // Convert Velox vector to Substrait literal.
   void toSubstraitLiteral(
+      google::protobuf::Arena& arena,
       const velox::VectorPtr& vVectorValue,
       ::substrait::Expression_Literal_Struct* sLitValue,
       ::substrait::Expression_Literal* sField);
@@ -49,6 +52,7 @@ class VeloxToSubstraitExprConvertor {
  private:
   // Convert Velox null literal to Substrait null literal.
   void toSubstraitNullLiteral(
+      google::protobuf::Arena& arena,
       const velox::TypePtr& vValueType,
       ::substrait::Expression_Literal* sField);
 

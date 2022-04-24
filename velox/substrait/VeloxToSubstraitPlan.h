@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <google/protobuf/arena.h>
 #include <string>
 #include <typeinfo>
 
@@ -38,30 +39,38 @@ namespace facebook::velox::substrait {
 // This class is used to convert the Velox plan into substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
-  // Used to convert Velox PlanNode into Substrait Plan.
-  void toSubstrait(
-      std::shared_ptr<const PlanNode> vPlan,
-      ::substrait::Plan& sPlan);
+  /// Convert Velox PlanNode into Substrait Plan.
+  /// \param vPlan Velox query plan to conver.
+  /// \param arena Arena to use for allocating Substrait plan objects.
+  /// \return A pointer to Substrait plan object allocated on the arena and
+  /// representing the input Velox plan.
+  ::substrait::Plan* toSubstrait(
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const PlanNode>& vPlan);
 
  private:
-  // Used to convert Velox PlanNode into Substrait Rel.
+  // Convert Velox PlanNode into Substrait Rel.
   void toSubstrait(
-      std::shared_ptr<const PlanNode> vPlanNode,
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const PlanNode>& vPlanNode,
       ::substrait::Rel* sRel);
 
-  // Used to convert Velox FilterNode into Substrait FilterRel.
+  // Convert Velox FilterNode into Substrait FilterRel.
   void toSubstrait(
-      std::shared_ptr<const FilterNode> vFilterNode,
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const FilterNode>& vFilterNode,
       ::substrait::FilterRel* sFilterRel);
 
-  // Used to convert Velox ValuesNode into Substrait ReadRel.
+  // Convert Velox ValuesNode into Substrait ReadRel.
   void toSubstrait(
-      std::shared_ptr<const ValuesNode> vValuesNode,
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const ValuesNode>& vValuesNode,
       ::substrait::ReadRel* sReadRel);
 
-  // Used to convert Velox ProjectNode into Substrait ProjectRel.
+  // Convert Velox ProjectNode into Substrait ProjectRel.
   void toSubstrait(
-      std::shared_ptr<const ProjectNode> vProjNode,
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const ProjectNode>& vProjNode,
       ::substrait::ProjectRel* sProjRel);
 
   VeloxToSubstraitExprConvertor v2SExprConvertor_;

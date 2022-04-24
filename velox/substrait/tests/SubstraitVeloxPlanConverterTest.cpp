@@ -62,7 +62,8 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
       const std::string& duckDbSql) {
     assertQuery(vPlan, duckDbSql);
     // Convert Velox Plan to Substrait Plan
-    v2SPlanConvertor_.toSubstrait(vPlan, sPlan_);
+    auto arena = std::make_shared<google::protobuf::Arena>();
+    v2SPlanConvertor_.toSubstrait(*arena, vPlan);
   }
 
   void SetUp() override {
@@ -77,7 +78,6 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
   }
 
   VeloxToSubstraitPlanConvertor v2SPlanConvertor_;
-  ::substrait::Plan sPlan_;
   RowTypePtr rowType_;
 };
 
