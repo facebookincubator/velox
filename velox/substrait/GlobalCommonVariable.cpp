@@ -32,12 +32,12 @@ void GlobalCommonVarSingleton::setSPlan(
   sPlan_ = sPlan;
 }
 
-uint64_t GlobalCommonVarSingleton::getLastFunctionReference() const {
-  return lastFunctionReference_;
+uint64_t GlobalCommonVarSingleton::getPreFunctionReference() const {
+  return preFunctionReference_;
 }
 
-void GlobalCommonVarSingleton::setLastFunctionReference() {
-  lastFunctionReference_ += 1;
+void GlobalCommonVarSingleton::setPreFunctionReference() {
+  preFunctionReference_ += 1;
 }
 
 } // namespace facebook::velox::substrait

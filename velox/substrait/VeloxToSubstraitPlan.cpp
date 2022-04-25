@@ -18,7 +18,7 @@
 
 namespace facebook::velox::substrait {
 
-// Velox Plan to Substrait
+/// Velox Plan to Substrait
 ::substrait::Plan* VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const PlanNode>& vPlan) {
@@ -80,14 +80,15 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   std::shared_ptr<const ITypedExpr> vFilterCondition = vFilterNode->filter();
 
   ::substrait::Rel* sFilterInput = sFilterRel->mutable_input();
-  ::substrait::Expression* sFilterCondition = sFilterRel->mutable_condition();
   //   Build source
   toSubstrait(arena, vSource, sFilterInput);
 
   RowTypePtr vPreNodeOutPut = vSource->outputType();
-  //   Construct substrait expr
-  v2SExprConvertor_.toSubstraitExpr(
-      arena, vFilterCondition, vPreNodeOutPut, sFilterCondition);
+  //   Construct substrait expr(Filter condition)
+
+  sFilterRel->set_allocated_condition(v2SExprConvertor_.toSubstraitExpr(
+      arena, vFilterCondition, vPreNodeOutPut));
+
   sFilterRel->mutable_common()->mutable_direct();
 }
 
@@ -122,7 +123,12 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       ::substrait::Expression_Literal* sField;
 
       VectorPtr children = rowValue->childAt(column);
-      v2SExprConvertor_.toSubstraitLiteral(arena, children, sLitValue, sField);
+
+      sField->MergeFrom(*v2SExprConvertor_.toSubstraitExpr(
+          arena,
+          std::make_shared<ConstantTypedExpr>(children),
+          vOutPut,
+          sLitValue));
     }
   }
   sReadRel->mutable_common()->mutable_direct();
@@ -166,32 +172,18 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   int64_t vProjectionSize = vProjections.size();
 
   RowTypePtr vPreNodeOutPut = vSource->outputType();
-  std::vector<std::string> vPreNodeColNames = vPreNodeOutPut->names();
-  std::vector<std::shared_ptr<const velox::Type>> vPreNodeColTypes =
-      vPreNodeOutPut->children();
-  int64_t vPreNodeColNums = vPreNodeColNames.size();
-  int64_t sProjEmitReMapId = vPreNodeColNums;
+  int64_t sProjEmitReMapId = vPreNodeOutPut->size();
 
   for (int64_t i = 0; i < vProjectionSize; i++) {
     std::shared_ptr<const ITypedExpr>& vExpr = vProjections.at(i);
-    ::substrait::Expression* sExpr = sProjRel->add_expressions();
 
-    v2SExprConvertor_.toSubstraitExpr(arena, vExpr, vPreNodeOutPut, sExpr);
+    sProjRel->add_expressions()->MergeFrom(
+        *v2SExprConvertor_.toSubstraitExpr(arena, vExpr, vPreNodeOutPut));
     // add outputMapping for each vExpr
-    const std::shared_ptr<const Type> vExprType = vExpr->type();
 
-    bool sProjEmitReMap = false;
-    for (int64_t j = 0; j < vPreNodeColNums; j++) {
-      if (vExprType == vPreNodeColTypes[j] &&
-          vOutput->nameOf(i) == vPreNodeColNames[j]) {
-        sProjEmit->add_output_mapping(j);
-        sProjEmitReMap = true;
-        break;
-      }
-    }
-    if (!sProjEmitReMap) {
-      sProjEmit->add_output_mapping(sProjEmitReMapId++);
-    }
+    // add outputMapping for each vExpr
+    sProjEmit->add_output_mapping(sProjEmitReMapId);
+    sProjEmitReMapId += 1;
   }
 
   return;

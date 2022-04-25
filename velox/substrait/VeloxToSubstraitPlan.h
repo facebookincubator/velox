@@ -36,7 +36,7 @@ using namespace facebook::velox::core;
 
 namespace facebook::velox::substrait {
 
-// This class is used to convert the Velox plan into substrait plan.
+/// This class is used to convert the Velox plan into substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
   /// Convert Velox PlanNode into Substrait Plan.
@@ -49,25 +49,25 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const PlanNode>& vPlan);
 
  private:
-  // Convert Velox PlanNode into Substrait Rel.
+  /// Convert Velox PlanNode into Substrait Rel.
   void toSubstrait(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const PlanNode>& vPlanNode,
       ::substrait::Rel* sRel);
 
-  // Convert Velox FilterNode into Substrait FilterRel.
+  /// Convert Velox FilterNode into Substrait FilterRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const FilterNode>& vFilterNode,
       ::substrait::FilterRel* sFilterRel);
 
-  // Convert Velox ValuesNode into Substrait ReadRel.
+  /// Convert Velox ValuesNode into Substrait ReadRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const ValuesNode>& vValuesNode,
       ::substrait::ReadRel* sReadRel);
 
-  // Convert Velox ProjectNode into Substrait ProjectRel.
+  /// Convert Velox ProjectNode into Substrait ProjectRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const ProjectNode>& vProjNode,

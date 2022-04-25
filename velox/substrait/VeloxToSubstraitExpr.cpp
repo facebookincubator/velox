@@ -20,111 +20,152 @@
 
 namespace facebook::velox::substrait {
 
-void VeloxToSubstraitExprConvertor::toSubstraitExpr(
+::substrait::Expression* VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const ITypedExpr>& vExpr,
-    RowTypePtr vPreNodeOutPut,
-    ::substrait::Expression* sExpr) {
-  if (std::shared_ptr<const ConstantTypedExpr> vConstantExpr =
+    const RowTypePtr& vPreNodeOutPut) {
+  ::substrait::Expression* sExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+  if (auto vConstExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(vExpr)) {
-    toSubstraitLiteral(arena, vConstantExpr->value(), sExpr->mutable_literal());
-    return;
+    sExpr->set_allocated_literal(
+        toSubstraitExpr(arena, vConstExpr, vPreNodeOutPut));
+    return sExpr;
   }
   if (auto vCallTypeExpr =
           std::dynamic_pointer_cast<const CallTypedExpr>(vExpr)) {
-    std::shared_ptr<const Type> vExprType = vCallTypeExpr->type();
-    std::vector<std::shared_ptr<const ITypedExpr>> vCallTypeInputs =
-        vCallTypeExpr->inputs();
-    std::string vCallTypeExprFunName = vCallTypeExpr->name();
-    // different by function names.
-    if (vCallTypeExprFunName == exec::kIf) {
-      ::substrait::Expression_IfThen* sFun = sExpr->mutable_if_then();
-      int64_t vCallTypeInputSize = vCallTypeInputs.size();
-      for (int64_t i = 0; i < vCallTypeInputSize; i++) {
-        std::shared_ptr<const ITypedExpr> vCallTypeInput =
-            vCallTypeInputs.at(i);
-        // TODO
-        //  need to judge according the names in the expr, and then set them to
-        //  the if or then or else expr can debug to find when process project
-        //  node
-      }
-    } else if (vCallTypeExprFunName == exec::kSwitch) {
-      ::substrait::Expression_SwitchExpression* sFun =
-          sExpr->mutable_switch_expression();
-      // TODO
-    } else {
-      ::substrait::Expression_ScalarFunction* sFun =
-          sExpr->mutable_scalar_function();
-      // TODO need to change yaml file to register functin, now is dummy.
-      // the substrait communcity have changed many in this part...
-      uint32_t sFunId =
-          v2SFuncConvertor_.registerSubstraitFunction(vCallTypeExprFunName);
-      sFun->set_function_reference(sFunId);
-
-      for (auto& vArg : vCallTypeInputs) {
-        ::substrait::Expression* sArg = sFun->add_args();
-        toSubstraitExpr(arena, vArg, vPreNodeOutPut, sArg);
-      }
-      ::substrait::Type* sFunType = sFun->mutable_output_type();
-      v2STypeConvertor_.toSubstraitType(arena, vExprType, sFunType);
-      return;
-    }
+    sExpr->MergeFrom(*toSubstraitExpr(arena, vCallTypeExpr, vPreNodeOutPut));
+    return sExpr;
   }
   if (auto vFieldExpr =
           std::dynamic_pointer_cast<const FieldAccessTypedExpr>(vExpr)) {
-    // kSelection
-    const std::shared_ptr<const Type> vExprType = vFieldExpr->type();
-    std::string vExprName = vFieldExpr->name();
-
-    ::substrait::Expression_ReferenceSegment_StructField* sDirectStruct =
-        sExpr->mutable_selection()
-            ->mutable_direct_reference()
-            ->mutable_struct_field();
-
-    std::vector<std::string> vPreNodeColNames = vPreNodeOutPut->names();
-    std::vector<std::shared_ptr<const velox::Type>> vPreNodeColTypes =
-        vPreNodeOutPut->children();
-    int64_t vPreNodeColNums = vPreNodeColNames.size();
-    int64_t sCurrentColId = -1;
-
-    VELOX_CHECK_EQ(vPreNodeColNums, vPreNodeColTypes.size());
-
-    for (int64_t i = 0; i < vPreNodeColNums; i++) {
-      if (vPreNodeColNames[i] == vExprName &&
-          vPreNodeColTypes[i] == vExprType) {
-        sCurrentColId = i;
-        break;
-      }
-    }
-
-    if (sCurrentColId == -1) {
-      sCurrentColId = vPreNodeColNums + 1;
-    }
-    sDirectStruct->set_field(sCurrentColId);
-
-    return;
+    sExpr->set_allocated_selection(
+        toSubstraitExpr(arena, vFieldExpr, vPreNodeOutPut));
+    return sExpr;
   }
   if (auto vCastExpr = std::dynamic_pointer_cast<const CastTypedExpr>(vExpr)) {
-    std::vector<std::shared_ptr<const ITypedExpr>> vCastTypeInputs =
-        vCastExpr->inputs();
-    ::substrait::Expression_Cast* sCastExpr = sExpr->mutable_cast();
-    v2STypeConvertor_.toSubstraitType(
-        arena, vCastExpr->type(), sCastExpr->mutable_type());
-
-    for (auto& vArg : vCastTypeInputs) {
-      toSubstraitExpr(arena, vArg, vPreNodeOutPut, sCastExpr->mutable_input());
-    }
-    return;
-
+    sExpr->set_allocated_cast(
+        toSubstraitExpr(arena, vCastExpr, vPreNodeOutPut));
+    return sExpr;
   } else {
     VELOX_UNSUPPORTED("Unsupport Expr '{}' in Substrait", vExpr->toString());
   }
 }
 
-void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+::substrait::Expression_Cast* VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
-    const velox::variant& vConstExpr,
-    ::substrait::Expression_Literal* sLiteralExpr) {
+    const std::shared_ptr<const CastTypedExpr>& vCastExpr,
+    const RowTypePtr& vPreNodeOutPut) {
+  ::substrait::Expression_Cast* sCastExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression_Cast>(
+          &arena);
+  std::vector<std::shared_ptr<const ITypedExpr>> vCastTypeInputs =
+      vCastExpr->inputs();
+
+  v2STypeConvertor_.toSubstraitType(
+      arena, vCastExpr->type(), sCastExpr->mutable_type());
+
+  for (auto& vArg : vCastTypeInputs) {
+    sCastExpr->set_allocated_input(
+        toSubstraitExpr(arena, vArg, vPreNodeOutPut));
+  }
+  return sCastExpr;
+}
+
+::substrait::Expression_FieldReference*
+VeloxToSubstraitExprConvertor::toSubstraitExpr(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const FieldAccessTypedExpr>& vFieldExpr,
+    const RowTypePtr& vPreNodeOutPut) {
+  ::substrait::Expression_FieldReference* sFieldExpr =
+      google::protobuf::Arena::CreateMessage<
+          ::substrait::Expression_FieldReference>(&arena);
+  // kSelection
+  const std::shared_ptr<const Type> vExprType = vFieldExpr->type();
+  std::string vExprName = vFieldExpr->name();
+
+  ::substrait::Expression_ReferenceSegment_StructField* sDirectStruct =
+      sFieldExpr->mutable_direct_reference()->mutable_struct_field();
+
+  std::vector<std::string> vPreNodeColNames = vPreNodeOutPut->names();
+  std::vector<std::shared_ptr<const velox::Type>> vPreNodeColTypes =
+      vPreNodeOutPut->children();
+  int64_t vPreNodeColNums = vPreNodeColNames.size();
+  int64_t sCurrentColId = -1;
+
+  VELOX_CHECK_EQ(vPreNodeColNums, vPreNodeColTypes.size());
+
+  for (int64_t i = 0; i < vPreNodeColNums; i++) {
+    if (vPreNodeColNames[i] == vExprName && vPreNodeColTypes[i] == vExprType) {
+      sCurrentColId = i;
+      break;
+    }
+  }
+
+  if (sCurrentColId == -1) {
+    sCurrentColId = vPreNodeColNums + 1;
+  }
+  sDirectStruct->set_field(sCurrentColId);
+
+  return sFieldExpr;
+}
+
+::substrait::Expression* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const CallTypedExpr>& vCallTypeExpr,
+    const RowTypePtr& vPreNodeOutPut) {
+  ::substrait::Expression* sExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+
+  auto vExprType = vCallTypeExpr->type();
+  auto vCallTypeInputs = vCallTypeExpr->inputs();
+  std::string vCallTypeExprFunName = vCallTypeExpr->name();
+
+  // different by function names.
+  // TODO add support for if Expr and switch Expr
+  if (vCallTypeExprFunName != exec::kIf &&
+      vCallTypeExprFunName != exec::kSwitch) {
+    ::substrait::Expression_ScalarFunction* sScalaExpr =
+        sExpr->mutable_scalar_function();
+
+    // TODO need to change yaml file to register function, now is dummy.
+
+    uint32_t sFunId =
+        v2SFuncConvertor_.registerSubstraitFunction(vCallTypeExprFunName);
+    sScalaExpr->set_function_reference(sFunId);
+
+    for (auto& vArg : vCallTypeInputs) {
+      sScalaExpr->add_args()->MergeFrom(
+          *toSubstraitExpr(arena, vArg, vPreNodeOutPut));
+    }
+    ::substrait::Type* sFunType = sScalaExpr->mutable_output_type();
+    v2STypeConvertor_.toSubstraitType(arena, vExprType, sFunType);
+  } else {
+    VELOX_NYI("Unsupport CallTypeExpr with FunName '{}'", vCallTypeExprFunName);
+  }
+
+  return sExpr;
+}
+
+::substrait::Expression_Literal* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const ConstantTypedExpr>& vConstExpr,
+    const RowTypePtr& vPreNodeOutPut,
+    ::substrait::Expression_Literal_Struct* sLitValue) {
+  if (vConstExpr->hasValueVector()) {
+    return toSubstraitLiteral(arena, vConstExpr->valueVector(), sLitValue);
+  } else {
+    return toSubstraitLiteral(arena, vConstExpr->value());
+  }
+}
+
+::substrait::Expression_Literal*
+VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+    google::protobuf::Arena& arena,
+    const velox::variant& vConstExpr) {
+  ::substrait::Expression_Literal* sLiteralExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
+          &arena);
   switch (vConstExpr.kind()) {
     case velox::TypeKind::DOUBLE: {
       sLiteralExpr->set_fp64(vConstExpr.value<TypeKind::DOUBLE>());
@@ -165,7 +206,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       break;
     }
     case velox::TypeKind::TIMESTAMP: {
-      // TODO
+      // TODO make sure the type convertor is equal
       sLiteralExpr->set_timestamp(
           vConstExpr.value<TypeKind::TIMESTAMP>().getNanos());
       break;
@@ -175,13 +216,18 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
           "Unsupported constant Type '{}' ",
           mapTypeKindToName(vConstExpr.kind()));
   }
+
+  return sLiteralExpr;
 }
 
-void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
+::substrait::Expression_Literal*
+VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
     const velox::VectorPtr& vVectorValue,
-    ::substrait::Expression_Literal_Struct* sLitValue,
-    ::substrait::Expression_Literal* sField) {
+    ::substrait::Expression_Literal_Struct* sLitValue) {
+  ::substrait::Expression_Literal* sField =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
+          &arena);
   const TypePtr& childType = vVectorValue->type();
 
   switch (childType->kind()) {
@@ -193,7 +239,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_boolean(childToFlatVec->valueAt(i));
         }
@@ -208,7 +254,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_i8(childToFlatVec->valueAt(i));
         }
@@ -223,7 +269,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_i16(childToFlatVec->valueAt(i));
         }
@@ -238,7 +284,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_i32(childToFlatVec->valueAt(i));
         }
@@ -253,7 +299,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_i64(childToFlatVec->valueAt(i));
         }
@@ -268,7 +314,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_fp32(childToFlatVec->valueAt(i));
         }
@@ -283,7 +329,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           sField->set_fp64(childToFlatVec->valueAt(i));
         }
@@ -298,7 +344,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         sField = sLitValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // process the null value
-          toSubstraitNullLiteral(arena, childType, sField);
+          sField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
         } else {
           ::substrait::Expression_Literal::VarChar* sVarChar =
               google::protobuf::Arena::CreateMessage<
@@ -316,12 +362,16 @@ void VeloxToSubstraitExprConvertor::toSubstraitLiteral(
           "Unsupported type '{}'", std::string(childType->kindName()));
     }
   }
+  return sField;
 }
 
-void VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
+::substrait::Expression_Literal*
+VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& vValueType,
-    ::substrait::Expression_Literal* sField) {
+    const velox::TypePtr& vValueType) {
+  ::substrait::Expression_Literal* sField =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
+          &arena);
   switch (vValueType->kind()) {
     case velox::TypeKind::BOOLEAN: {
       ::substrait::Type_Boolean* nullValue =
@@ -397,6 +447,7 @@ void VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
           "Unsupported type '{}'", std::string(vValueType->kindName()));
     }
   }
+  return sField;
 }
 
 } // namespace facebook::velox::substrait
