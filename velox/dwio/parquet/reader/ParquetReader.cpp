@@ -53,8 +53,8 @@ std::unique_ptr<::duckdb::ConstantFilter> constantEqualFilter(
 void buildConjunctOrFilter(
     uint64_t colIdx,
     ::duckdb::LogicalType type,
-    ::duckdb::TableFilterSet& filters,
-    const std::vector<int64_t>& values) {
+    const std::vector<int64_t>& values,
+    ::duckdb::TableFilterSet& filters) {
   if (values.size() == 1) {
     filters.PushFilter(
         colIdx, constantEqualFilter(makeValue(type, *values.begin())));
@@ -162,14 +162,14 @@ void toDuckDbFilter(
       auto valuesFilter =
           static_cast<common::BigintValuesUsingBitmask*>(filter);
       const auto values = valuesFilter->values();
-      buildConjunctOrFilter(colIdx, type, filters, values);
+      buildConjunctOrFilter(colIdx, type, values, filters);
       break;
     }
     case common::FilterKind::kBigintValuesUsingHashTable: {
       auto valuesFilter =
           static_cast<common::BigintValuesUsingHashTable*>(filter);
       const auto& values = valuesFilter->values();
-      buildConjunctOrFilter(colIdx, type, filters, values);
+      buildConjunctOrFilter(colIdx, type, values, filters);
       break;
     }
     case common::FilterKind::kAlwaysFalse:
