@@ -85,7 +85,7 @@ memory usage for each plan node.
           Output: 2000 rows (136.88KB), Cpu time: 320.15us, Blocked wall time: 117.00us, Peak memory: 2.00MB
           HashBuild: Input: 100 rows (1.31KB), Output: 0 rows (0B), Cpu time: 114.15us, Blocked wall time: 0ns, Peak memory: 1.00MB, Threads: 1
           HashProbe: Input: 2000 rows (118.12KB), Output: 2000 rows (136.88KB), Cpu time: 206.01us, Blocked wall time: 117.00us, Peak memory: 1.00MB, Threads: 1
-         -> TableScan[Table: Projection]
+         -> TableScan[Table: Orders]
             Input: 2000 rows (118.12KB), Raw Input: 20480 rows (72.31KB), Output: 2000 rows (118.12KB), Cpu time: 4.08ms, Blocked wall time: 5.00us, Peak memory: 1.00MB, Threads: 1, Splits: 20
          -> Project[expressions: (u_c0:INTEGER, ROW["c0"]), (u_c1:BIGINT, ROW["c1"])]
             Output: 100 rows (1.31KB), Cpu time: 17.99us, Blocked wall time: 0ns, Peak memory: 0B, Threads: 1
@@ -116,7 +116,7 @@ Here is the output for the join query from above.
          HashProbe: Input: 2000 rows (118.12KB), Output: 2000 rows (136.88KB), Cpu time: 324.97us, Blocked wall time: 223.00us, Peak memory: 1.00MB, Threads: 1
             dynamicFiltersProduced    sum: 1, count: 1, min: 1, max: 1
             queuedWallNanos           sum: 24.00us, count: 1, min: 24.00us, max: 24.00us
-        -> TableScan[Table: Projection]
+        -> TableScan[Table: Orders]
            Input: 2000 rows (118.12KB), Raw Input: 20480 rows (72.31KB), Output: 2000 rows (118.12KB), Cpu time: 5.50ms, Blocked wall time: 10.00us, Peak memory: 1.00MB, Threads: 1, Splits: 20
               dataSourceWallNanos       sum: 2.52ms, count: 40, min: 12.00us, max: 250.00us
               dynamicFiltersAccepted    sum: 1, count: 1, min: 1, max: 1
@@ -182,7 +182,7 @@ their estimated sizes, cpu time, blocked wall time, and the number of threads us
 
 .. code-block::
 
-    -> TableScan[Table: Projection]
+    -> TableScan[Table: Orders]
            Input: 2000 rows (118.12KB), Raw Input: 20480 rows (72.31KB), Output: 2000 rows (118.12KB), Cpu time: 5.50ms, Blocked wall time: 10.00us, Peak memory: 1.00MB, Threads: 1, Splits: 20
 
 
@@ -230,7 +230,7 @@ groups were skipped via stats-based pruning.
 
 .. code-block::
 
-   -> TableScan[Table = Projection]
+   -> TableScan[Table = Orders]
            localReadBytes            sum: 0B, count: 1, min: 0B, max: 0B
            numLocalRead              sum: 0, count: 1, min: 0, max: 0
            numPrefetch               sum: 28, count: 1, min: 28, max: 28
