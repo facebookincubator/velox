@@ -55,7 +55,7 @@ HiveTableHandle::~HiveTableHandle() {}
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
   out << "Table: " << tableName_;
-  if (!subfieldFilters_.empty()) {
+  if (!subfieldFilters_.empty() || remainingFilter_) {
     // Sort filters by subfield for deterministic output.
     std::map<std::string, common::Filter*> orderedFilters;
     for (const auto& [field, filter] : subfieldFilters_) {
@@ -69,6 +69,12 @@ std::string HiveTableHandle::toString() const {
       }
       out << "(" << field << ", " << filter->toString() << ")";
       notFirstFilter = true;
+    }
+    if (remainingFilter_) {
+      if (notFirstFilter) {
+        out << ", ";
+      }
+      out << "(" << remainingFilter_->toString() << ")";
     }
     out << "]";
   }
