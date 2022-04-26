@@ -214,40 +214,38 @@ TpchPlan TpchQueryBuilder::getQ13Plan() const {
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId ordersScanNodeId;
 
-  auto notSpecialRequestOrders =
+  auto customers =
       PlanBuilder(planNodeIdGenerator)
-          .tableScan(
-              kOrders,
-              ordersSelectedRowType,
-              ordersFileColumns,
-              {},
-              "o_comment not like '%special%requests%'")
-          .capturePlanNodeId(ordersScanNodeId)
+          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {},
-              {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(
-                       kCustomer, customerSelectedRowType, customerFileColumns)
-                   .capturePlanNodeId(customerScanNodeId)
-                   .hashJoin(
-                       {"c_custkey"},
-                       {"o_custkey"},
-                       notSpecialRequestOrders,
-                       "",
-                       {"c_custkey", "o_orderkey"},
-                       core::JoinType::kLeft)
-                   .partialAggregation(
-                       {"c_custkey"}, {"count(o_orderkey) as pc_count"})
-                   .planNode()})
-          .finalAggregation(
-              {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
-          .singleAggregation({"c_count"}, {"count(0) as custdist"})
-          .orderBy({"custdist DESC", "c_count DESC"}, false)
-          .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {},
+                      {PlanBuilder(planNodeIdGenerator)
+                           .tableScan(
+                               kOrders,
+                               ordersSelectedRowType,
+                               ordersFileColumns,
+                               {},
+                               "o_comment not like '%special%requests%'")
+                           .capturePlanNodeId(ordersScanNodeId)
+                           .hashJoin(
+                               {"o_custkey"},
+                               {"c_custkey"},
+                               customers,
+                               "",
+                               {"c_custkey", "o_orderkey"},
+                               core::JoinType::kRight)
+                           .partialAggregation(
+                               {"c_custkey"}, {"count(o_orderkey) as pc_count"})
+                           .planNode()})
+                  .finalAggregation(
+                      {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
+                  .singleAggregation({"c_count"}, {"count(0) as custdist"})
+                  .orderBy({"custdist DESC", "c_count DESC"}, false)
+                  .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);
