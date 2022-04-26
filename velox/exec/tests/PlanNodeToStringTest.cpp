@@ -14,14 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/type/tests/FilterBuilder.h"
-#include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/vector/tests/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -428,44 +424,33 @@ TEST_F(PlanNodeToStringTest, tableScan) {
   RowTypePtr rowType{
       ROW({"discount", "quantity", "shipdate", "comment"},
           {DOUBLE(), DOUBLE(), VARCHAR(), VARCHAR()})};
-  auto filters = SubfieldFiltersBuilder()
-                     .add("shipdate", between("1994-01-01", "1994-12-31"))
-                     .add("discount", betweenDouble(0.05, 0.07))
-                     .add("quantity", lessThanDouble(24.0))
-                     .build();
-  auto untyped = facebook::velox::duckdb::parseExpr(
-      "comment NOT LIKE '%special%request%'");
-  auto remainingFilter =
-      core::Expressions::inferTypes(untyped, rowType, nullptr);
   {
-    auto tableHandle = exec::test::HiveConnectorTestBase::makeTableHandle(
-        std::move(filters), remainingFilter, "lineitem");
-    auto plan =
-        PlanBuilder()
-            .tableScan(
-                rowType,
-                tableHandle,
-                exec::test::HiveConnectorTestBase::allRegularColumns(rowType))
-            .planNode();
+    auto plan = PlanBuilder()
+                    .tableScan(
+                        rowType,
+                        {"shipdate between '1994-01-01' and '1994-12-31'",
+                         "discount between 0.05 and 0.07",
+                         "quantity < 24.0::DOUBLE"},
+                        "comment NOT LIKE '%special%request%'")
+                    .planNode();
 
     ASSERT_EQ("-> TableScan\n", plan->toString());
-    ASSERT_EQ(
-        "-> TableScan[Table: lineitem, Filters: [(discount, DoubleRange: [0.050000, 0.070000] no nulls), (quantity, DoubleRange: (-inf, 24.000000) no nulls), (shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls), (not(like(ROW[\"comment\"],\"%special%request%\")))]]\n",
-        plan->toString(true, false));
+    const char* output =
+        "-> TableScan[table: hive_table, "
+        "range filters: [(discount, DoubleRange: [0.050000, 0.070000] no nulls), "
+        "(quantity, DoubleRange: (-inf, 24.000000) no nulls), "
+        "(shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)], "
+        "remaining filters: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n";
+    ASSERT_EQ(output, plan->toString(true, false));
   }
   {
-    auto tableHandle = exec::test::HiveConnectorTestBase::makeTableHandle(
-        {}, remainingFilter, "lineitem");
     auto plan =
         PlanBuilder()
-            .tableScan(
-                rowType,
-                tableHandle,
-                exec::test::HiveConnectorTestBase::allRegularColumns(rowType))
+            .tableScan(rowType, {}, "comment NOT LIKE '%special%request%'")
             .planNode();
 
     ASSERT_EQ(
-        "-> TableScan[Table: lineitem, Filters: [(not(like(ROW[\"comment\"],\"%special%request%\")))]]\n",
+        "-> TableScan[table: hive_table, remaining filters: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n",
         plan->toString(true, false));
   }
 }
