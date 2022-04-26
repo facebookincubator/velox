@@ -440,7 +440,7 @@ TEST_F(PlanNodeToStringTest, tableScan) {
         "range filters: [(discount, DoubleRange: [0.050000, 0.070000] no nulls), "
         "(quantity, DoubleRange: (-inf, 24.000000) no nulls), "
         "(shipdate, BytesRange: [1994-01-01, 1994-12-31] no nulls)], "
-        "remaining filters: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n";
+        "remaining filter: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n";
     ASSERT_EQ(output, plan->toString(true, false));
   }
   {
@@ -450,7 +450,7 @@ TEST_F(PlanNodeToStringTest, tableScan) {
             .planNode();
 
     ASSERT_EQ(
-        "-> TableScan[table: hive_table, remaining filters: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n",
+        "-> TableScan[table: hive_table, remaining filter: (not(like(ROW[\"comment\"],\"%special%request%\")))]\n",
         plan->toString(true, false));
   }
 }

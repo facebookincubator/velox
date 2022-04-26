@@ -73,7 +73,7 @@ std::string HiveTableHandle::toString() const {
     out << "]";
   }
   if (remainingFilter_) {
-    out << ", remaining filters: (" << remainingFilter_->toString() << ")";
+    out << ", remaining filter: (" << remainingFilter_->toString() << ")";
   }
   return out.str();
 }
