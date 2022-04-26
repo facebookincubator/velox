@@ -31,8 +31,6 @@ class PartitionedOutputBufferManager;
 class HashJoinBridge;
 class CrossJoinBridge;
 
-using ContinuePromise = VeloxPromise<bool>;
-
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
@@ -70,6 +68,11 @@ class Task : public std::enable_shared_from_this<Task> {
   ~Task();
 
   std::string toString() const;
+
+  /// Returns universally unique identifier of the task.
+  const std::string& uuid() const {
+    return uuid_;
+  }
 
   /// Returns task ID specified in the constructor.
   const std::string& taskId() const {
@@ -205,6 +208,12 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns time (ms) since the task execution ended or zero, if not finished.
   uint64_t timeSinceEndMs() const;
 
+  /// Returns the total number of drivers in the output pipeline, e.g. the
+  /// pipeline that produces the results.
+  uint32_t numOutputDrivers() const {
+    return numDrivers(getOutputPipelineId());
+  }
+
   /// Returns the number of running drivers.
   uint32_t numRunningDrivers() const {
     std::lock_guard<std::mutex> taskLock(mutex_);
@@ -322,7 +331,7 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       Driver* FOLLY_NONNULL caller,
       ContinueFuture* FOLLY_NONNULL future,
-      std::vector<VeloxPromise<bool>>& promises,
+      std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
 
   // Adds HashJoinBridge's for all the specified plan node IDs.
@@ -470,15 +479,20 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void driverClosedLocked();
 
-  /// Checks if the Task is finished due to all drivers done and all output
-  /// consumed.
-  void checkIfFinishedLocked();
+  /// Returns true if Task is in kRunning state, but all drivers finished
+  /// processing and all output has been consumed. In other words, returns true
+  /// if task should transition to kFinished state.
+  bool checkIfFinishedLocked();
 
   /// Check if we have no more split groups coming and adjust the total number
-  /// of drivers if more split groups coming.
-  void checkNoMoreSplitGroupsLocked();
+  /// of drivers if more split groups coming. Returns true if Task is in
+  /// kRunning state, but no more split groups are commit and all drivers
+  /// finished processing and all output has been consumed. In other words,
+  /// returns true if task should transition to kFinished state.
+  bool checkNoMoreSplitGroupsLocked();
 
-  void stateChangedLocked();
+  /// Notifies listeners that the task is now complete.
+  void onTaskCompletion();
 
   // Returns true if all splits are finished processing and there are no more
   // splits coming for the task.
@@ -492,7 +506,7 @@ class Task : public std::enable_shared_from_this<Task> {
       SplitsStore& splitsStore,
       exec::Split&& split);
 
-  void finished();
+  void finishedLocked();
 
   StopReason shouldStopLocked();
 
@@ -515,6 +529,52 @@ class Task : public std::enable_shared_from_this<Task> {
   // the promise/future pair.
   ContinueFuture makeFinishFutureLocked(const char* FOLLY_NONNULL comment);
 
+  bool isOutputPipeline(int pipelineId) const {
+    return driverFactories_[pipelineId]->outputDriver;
+  }
+
+  uint32_t numDrivers(int pipelineId) const {
+    return driverFactories_[pipelineId]->numDrivers;
+  }
+
+  int getOutputPipelineId() const;
+
+  // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
+  // that task is complete outside of the mutex. Inactive on creation. Must be
+  // activated explicitly by calling 'activate'.
+  class TaskCompletionNotifier {
+   public:
+    /// Calls notify() if it hasn't been called yet.
+    ~TaskCompletionNotifier();
+
+    /// Activates the notifier and provides a callback to invoke and promises to
+    /// satisfy on destruction or a call to 'notify'.
+    void activate(
+        std::function<void()> callback,
+        std::vector<ContinuePromise> promises);
+
+    /// Satisfies the promises passed to 'activate' and invokes the callback.
+    /// Does nothing if 'activate' hasn't been called or 'notify' has been
+    /// called already.
+    void notify();
+
+   private:
+    bool active_{false};
+    std::function<void()> callback_;
+    std::vector<ContinuePromise> promises_;
+  };
+
+  void activateTaskCompletionNotifier(TaskCompletionNotifier& notifier) {
+    notifier.activate(
+        [&]() { onTaskCompletion(); }, std::move(stateChangePromises_));
+  }
+
+  /// Universally unique identifier of the task. Used to identify the task when
+  /// calling TaskListener.
+  const std::string uuid_;
+
+  /// Application specific task ID specified at construction time. May not be
+  /// unique or universally unique.
   const std::string taskId_;
   core::PlanFragment planFragment_;
   const int destination_;
@@ -592,7 +652,7 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Stores separate splits state for each plan node.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
-  std::vector<VeloxPromise<bool>> stateChangePromises_;
+  std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
   std::unique_ptr<memory::MemoryPool> pool_;
@@ -624,7 +684,30 @@ class Task : public std::enable_shared_from_this<Task> {
   // Promises for the futures returned to callers of requestPause() or
   // terminate(). They are fulfilled when the last thread stops
   // running for 'this'.
-  std::vector<VeloxPromise<bool>> threadFinishPromises_;
+  std::vector<ContinuePromise> threadFinishPromises_;
 };
+
+/// Listener invoked on task completion.
+class TaskListener {
+ public:
+  virtual ~TaskListener() = default;
+
+  /// Called on task completion. Provides the information about success or
+  /// failure as well as runtime statistics about task execution.
+  virtual void onTaskCompletion(
+      const std::string& taskUuid,
+      TaskState state,
+      std::exception_ptr error,
+      TaskStats stats) = 0;
+};
+
+/// Register a listener to be invoked on task completion. Returns true if
+/// listener was successfully registered, false if listener is already
+/// registered.
+bool registerTaskListener(std::shared_ptr<TaskListener> listener);
+
+/// Unregister a listener registered earlier. Returns true if listener was
+/// unregistered successfuly, false if listener was not found.
+bool unregisterTaskListener(const std::shared_ptr<TaskListener>& listener);
 
 } // namespace facebook::velox::exec

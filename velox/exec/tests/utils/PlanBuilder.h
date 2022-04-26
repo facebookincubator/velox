@@ -54,7 +54,42 @@ class PlanBuilder {
   explicit PlanBuilder(memory::MemoryPool* pool = nullptr)
       : PlanBuilder(std::make_shared<PlanNodeIdGenerator>(), pool) {}
 
-  PlanBuilder& tableScan(const RowTypePtr& outputType);
+  /// Add a TableScanNode to scan a Hive table.
+  ///
+  /// @param outputType List of column names and types to read from the table.
+  /// @param subfieldFilters A list of SQL expressions for the range filters to
+  /// apply to individual columns. Supported filters are: column <= value,
+  /// column < value, column >= value, column > value, column = value, column IN
+  /// (v1, v2,.. vN), column < v1 OR column >= v2.
+  /// @param remainingFilter SQL expression for the additional conjunct. May
+  /// include multiple columns and SQL functions. The remainingFilter is AND'ed
+  /// with all the subfieldFilters.
+  PlanBuilder& tableScan(
+      const RowTypePtr& outputType,
+      const std::vector<std::string>& subfieldFilters = {},
+      const std::string& remainingFilter = "");
+
+  /// Add a TableScanNode to scan a Hive table.
+  ///
+  /// @param tableName The name of the table to scan.
+  /// @param outputType List of column names and types to read from the table.
+  /// @param columnAliases Optional aliases for the column names. The key is the
+  /// alias (name in 'outputType'), value is the name in the files.
+  /// @param subfieldFilters A list of SQL expressions for the range filters to
+  /// apply to individual columns. Should use column name aliases, not column
+  /// names in the files. Supported filters are: column <= value, column <
+  /// value, column >= value, column > value, column = value, column IN (v1,
+  /// v2,.. vN), column < v1 OR column >= v2.
+  /// @param remainingFilter SQL expression for the additional conjunct. May
+  /// include multiple columns and SQL functions. Should use column name
+  /// aliases, not column names in the files. The remainingFilter is AND'ed
+  /// with all the subfieldFilters.
+  PlanBuilder& tableScan(
+      const std::string& tableName,
+      const RowTypePtr& outputType,
+      const std::unordered_map<std::string, std::string>& columnAliases = {},
+      const std::vector<std::string>& subfieldFilters = {},
+      const std::string& remainingFilter = "");
 
   PlanBuilder& tableScan(
       const RowTypePtr& outputType,
@@ -137,7 +172,7 @@ class PlanBuilder {
   /// will produce output columns k1, k2, min_a and a1, assuming the names of
   /// the first two input columns are k1 and k2.
   PlanBuilder& partialAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks = {}) {
     return aggregation(
@@ -159,7 +194,7 @@ class PlanBuilder {
   // to specify the result types for aggregates which cannot infer result type
   // solely from the types of the intermediate results.
   PlanBuilder& finalAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<TypePtr>& resultTypes) {
     return aggregation(
@@ -178,7 +213,7 @@ class PlanBuilder {
   PlanBuilder& intermediateAggregation();
 
   PlanBuilder& intermediateAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<TypePtr>& resultTypes) {
     return aggregation(
@@ -192,7 +227,7 @@ class PlanBuilder {
   }
 
   PlanBuilder& singleAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates) {
     return aggregation(
         groupingKeys,
@@ -204,7 +239,7 @@ class PlanBuilder {
   }
 
   PlanBuilder& aggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
@@ -215,8 +250,8 @@ class PlanBuilder {
   }
 
   PlanBuilder& aggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
-      const std::vector<ChannelIndex>& preGroupedKeys,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& preGroupedKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
@@ -224,7 +259,7 @@ class PlanBuilder {
       const std::vector<TypePtr>& resultTypes = {});
 
   PlanBuilder& partialStreamingAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks = {}) {
     return streamingAggregation(
@@ -236,7 +271,7 @@ class PlanBuilder {
   }
 
   PlanBuilder& finalStreamingAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<TypePtr>& resultTypes = {}) {
     return streamingAggregation(
@@ -249,7 +284,7 @@ class PlanBuilder {
   }
 
   PlanBuilder& streamingAggregation(
-      const std::vector<ChannelIndex>& groupingKeys,
+      const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
@@ -318,6 +353,10 @@ class PlanBuilder {
 
   PlanBuilder& localPartition(
       const std::vector<std::string>& keys,
+      const std::vector<std::shared_ptr<const core::PlanNode>>& sources,
+      const std::vector<std::string>& outputLayout = {});
+
+  PlanBuilder& localPartitionRoundRobin(
       const std::vector<std::shared_ptr<const core::PlanNode>>& sources,
       const std::vector<std::string>& outputLayout = {});
 

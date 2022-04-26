@@ -157,18 +157,60 @@ TEST_F(HashStringAllocatorTest, multipart) {
   instance_->checkConsistency();
 }
 
+TEST_F(HashStringAllocatorTest, rewrite) {
+  ByteStream stream(instance_.get());
+  auto header = instance_->allocate(5);
+  EXPECT_EQ(16, header->size()); // Rounds up to kMinAlloc.
+  HashStringAllocator::Position current{header, header->begin()};
+  for (auto i = 0; i < 10; ++i) {
+    instance_->extendWrite(current, stream);
+    stream.appendOne(123456789012345LL);
+    current = instance_->finishWrite(stream, 0);
+    auto offset = HashStringAllocator::offset(header, current);
+    EXPECT_EQ((i + 1) * sizeof(int64_t), offset);
+    // The allocated writable space from 'header' is at least the amount
+    // written.
+    auto avail = HashStringAllocator::available({header, header->begin()});
+    EXPECT_LE((i + 1) * sizeof(int64_t), avail);
+  }
+  EXPECT_EQ(-1, HashStringAllocator::offset(header, {nullptr, nullptr}));
+  for (auto repeat = 0; repeat < 2; ++repeat) {
+    auto position = HashStringAllocator::seek(header, sizeof(int64_t));
+    // We write the words at index 1 and 2.
+    instance_->extendWrite(position, stream);
+    stream.appendOne(12345LL);
+    stream.appendOne(67890LL);
+    position = instance_->finishWrite(stream, 0);
+    EXPECT_EQ(
+        3 * sizeof(int64_t), HashStringAllocator::offset(header, position));
+    HashStringAllocator::prepareRead(header, stream);
+    EXPECT_EQ(123456789012345LL, stream.read<int64_t>());
+    EXPECT_EQ(12345LL, stream.read<int64_t>());
+    EXPECT_EQ(67890LL, stream.read<int64_t>());
+  }
+  // The stream contains 3 int64_t's.
+  auto end = HashStringAllocator::seek(header, 3 * sizeof(int64_t));
+  EXPECT_EQ(0, HashStringAllocator::available(end));
+  instance_->ensureAvailable(32, end);
+  EXPECT_EQ(32, HashStringAllocator::available(end));
+}
+
 TEST_F(HashStringAllocatorTest, stlAllocator) {
   {
     std::vector<double, StlAllocator<double>> data(
         StlAllocator<double>(instance_.get()));
+    uint32_t counter{0};
+    {
+      RowSizeTracker trackSize(counter, *instance_);
 
-    // The contiguous size goes to 80K, rounded to 128K by
-    // std::vector. This covers making an extra-large slab in the
-    // allocator.
-    for (auto i = 0; i < 10'000; i++) {
-      data.push_back(i);
+      // The contiguous size goes to 80K, rounded to 128K by
+      // std::vector. This covers making an extra-large slab in the
+      // allocator.
+      for (auto i = 0; i < 10'000; i++) {
+        data.push_back(i);
+      }
     }
-
+    EXPECT_LE(128 * 1024, counter);
     for (auto i = 0; i < 10'000; i++) {
       ASSERT_EQ(i, data[i]);
     }

@@ -22,12 +22,6 @@
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::aggregate::test {
-namespace {
-int64_t decodeChecksum(const std::string& checksum) {
-  auto decoded = encoding::Base64::decode(checksum);
-  return *reinterpret_cast<const int64_t*>(decoded.data());
-}
-} // namespace
 
 class ChecksumAggregateTest : public AggregationTestBase {
  protected:
@@ -44,43 +38,13 @@ class ChecksumAggregateTest : public AggregationTestBase {
       const std::string& expectedChecksum) {
     auto rowVectors = std::vector{makeRowVector({inputVector})};
 
-    // DuckDB doesnt have checksum aggregation, so we will just pass in
+    // DuckDB doesn't have checksum aggregation, so we will just pass in
     // expected values to compare.
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .partialAggregation({}, {"checksum(c0)"})
-                     .finalAggregation()
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
+    const auto expectedDuckDbSql =
+        fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
 
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .singleAggregation({}, {"checksum(c0)"})
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
-
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .partialAggregation({}, {"checksum(c0)"})
-                     .intermediateAggregation()
-                     .finalAggregation()
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
+    testAggregations(
+        rowVectors, {}, {"checksum(c0)"}, {"to_base64(a0)"}, expectedDuckDbSql);
   }
 
   template <typename G, typename T>
@@ -98,41 +62,15 @@ class ChecksumAggregateTest : public AggregationTestBase {
       expectedResults.push_back(fmt::format("(\'{}\')", checksum));
     }
 
-    auto agg = PlanBuilder()
-                   .values(rowVectors)
-                   .partialAggregation({0}, {"checksum(c1)"})
-                   .finalAggregation()
-                   .project({"to_base64(a0) AS c0"})
-                   .planNode();
-    assertQuery(agg, "VALUES " + boost::algorithm::join(expectedResults, ","));
+    const auto expectedDuckDbSql =
+        "VALUES " + boost::algorithm::join(expectedResults, ",");
 
-    // Add local exchange before intermediate aggregation.
-    {
-      std::vector<std::string> expectedInts;
-      expectedInts.reserve(expectedChecksums.size());
-      for (const auto& checksum : expectedChecksums) {
-        expectedInts.push_back(
-            fmt::format("({}::bigint)", decodeChecksum(checksum)));
-      }
-
-      auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
-
-      CursorParameters params;
-      params.planNode = PlanBuilder(planNodeIdGenerator)
-                            .localPartition(
-                                {"c0"},
-                                {PlanBuilder(planNodeIdGenerator)
-                                     .values(rowVectors)
-                                     .partialAggregation({0}, {"checksum(c1)"})
-                                     .planNode()})
-                            .intermediateAggregation()
-                            .project({"a0"})
-                            .planNode();
-      params.maxDrivers = 2;
-
-      assertQuery(
-          params, "VALUES " + boost::algorithm::join(expectedInts, ","));
-    }
+    testAggregations(
+        rowVectors,
+        {"c0"},
+        {"checksum(c1)"},
+        {"to_base64(a0)"},
+        expectedDuckDbSql);
   }
 
   template <typename T>

@@ -111,7 +111,7 @@ static VectorPtr addDictionary(
       std::move(vector),
       TypeKind::INTEGER,
       std::move(indices),
-      cdvi::EMPTY_METADATA,
+      SimpleVectorStats<typename KindToFlatVector<kind>::WrapperType>{},
       indicesBuffer->size() / sizeof(vector_size_t) /*distinctValueCount*/,
       base->getNullCount(),
       false /*isSorted*/,
@@ -144,7 +144,7 @@ addSequence(BufferPtr lengths, vector_size_t size, VectorPtr vector) {
       size,
       std::move(vector),
       std::move(lengths),
-      cdvi::EMPTY_METADATA,
+      SimpleVectorStats<typename KindToFlatVector<kind>::WrapperType>{},
       std::nullopt /*distinctCount*/,
       std::nullopt,
       false /*sorted*/,
@@ -177,7 +177,7 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
       auto singleNull = BaseVector::create(vector->type(), 1, pool);
       singleNull->setNull(0, true);
       return std::make_shared<ConstantVector<T>>(
-          pool, size, 0, singleNull, cdvi::EMPTY_METADATA);
+          pool, size, 0, singleNull, SimpleVectorStats<T>{});
     } else {
       return std::make_shared<ConstantVector<T>>(
           pool, size, true, vector->type(), T());
@@ -207,7 +207,7 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
   }
 
   return std::make_shared<ConstantVector<T>>(
-      pool, size, index, std::move(vector), cdvi::EMPTY_METADATA);
+      pool, size, index, std::move(vector), SimpleVectorStats<T>{});
 }
 
 // static
@@ -234,7 +234,7 @@ static VectorPtr createEmpty(
       size,
       std::move(values),
       std::vector<BufferPtr>(),
-      cdvi::EMPTY_METADATA,
+      SimpleVectorStats<T>{},
       0 /*distinctValueCount*/,
       0 /*nullCount*/,
       false /*isSorted*/,
@@ -332,7 +332,7 @@ VectorPtr BaseVector::create(
           size,
           BufferPtr(nullptr),
           std::vector<BufferPtr>(),
-          cdvi::EMPTY_METADATA,
+          SimpleVectorStats<UnknownValue>{},
           1 /*distinctValueCount*/,
           size /*nullCount*/,
           true /*isSorted*/,
@@ -345,13 +345,13 @@ VectorPtr BaseVector::create(
 }
 
 void BaseVector::addNulls(const uint64_t* bits, const SelectivityVector& rows) {
-  VELOX_CHECK(mayAddNulls());
+  VELOX_CHECK(isNullsWritable());
   VELOX_CHECK(length_ >= rows.end());
   ensureNulls();
   auto target = nulls_->asMutable<uint64_t>();
   const uint64_t* selected = rows.asRange().bits();
   if (!bits) {
-    // A A 1 in rows makes a 0 in nulls.
+    // A 1 in rows makes a 0 in nulls.
     bits::andWithNegatedBits(target, selected, rows.begin(), rows.end());
     return;
   }
@@ -368,7 +368,7 @@ void BaseVector::addNulls(const uint64_t* bits, const SelectivityVector& rows) {
 }
 
 void BaseVector::clearNulls(const SelectivityVector& rows) {
-  VELOX_CHECK(mayAddNulls());
+  VELOX_CHECK(isNullsWritable());
   if (!nulls_) {
     return;
   }
@@ -390,7 +390,7 @@ void BaseVector::clearNulls(const SelectivityVector& rows) {
 }
 
 void BaseVector::clearNulls(vector_size_t begin, vector_size_t end) {
-  VELOX_CHECK(mayAddNulls());
+  VELOX_CHECK(isNullsWritable());
   if (!nulls_) {
     return;
   }
@@ -539,7 +539,7 @@ VectorPtr newConstant(
       value.isNull(),
       Type::create<kind>(),
       std::move(copy),
-      cdvi::EMPTY_METADATA,
+      SimpleVectorStats<T>{},
       sizeof(T) /*representedByteCount*/);
 }
 
@@ -557,7 +557,7 @@ VectorPtr newConstant<TypeKind::OPAQUE>(
       value.isNull(),
       capsule.type,
       std::shared_ptr<void>(capsule.obj),
-      cdvi::EMPTY_METADATA,
+      SimpleVectorStats<std::shared_ptr<void>>{},
       sizeof(std::shared_ptr<void>) /*representedByteCount*/);
 }
 

@@ -45,10 +45,14 @@ class TableScanTest : public virtual HiveConnectorTestBase,
     HiveConnectorTestBase::SetUpTestCase();
   }
 
+  static RowTypePtr asRowType(const TypePtr& type) {
+    return std::dynamic_pointer_cast<const RowType>(type);
+  }
+
   std::vector<RowVectorPtr> makeVectors(
       int32_t count,
       int32_t rowsPerVector,
-      const std::shared_ptr<const RowType>& rowType = nullptr) {
+      const RowTypePtr& rowType = nullptr) {
     auto inputs = rowType ? rowType : rowType_;
     return HiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
@@ -79,7 +83,7 @@ class TableScanTest : public virtual HiveConnectorTestBase,
   }
 
   static std::shared_ptr<facebook::velox::core::PlanNode> tableScanNode(
-      const std::shared_ptr<const RowType>& outputType) {
+      const RowTypePtr& outputType) {
     return PlanBuilder().tableScan(outputType).planNode();
   }
 
@@ -216,30 +220,21 @@ TEST_P(TableScanTest, columnAliases) {
   writeToFile(filePath->path, vectors);
   createDuckDbTable(vectors);
 
-  ColumnHandleMap assignments = {{"a", regularColumn("c0", BIGINT())}};
+  std::string tableName = "t";
+  std::unordered_map<std::string, std::string> aliases = {{"a", "c0"}};
   auto outputType = ROW({"a"}, {BIGINT()});
-  auto op = PlanBuilder()
-                .tableScan(
-                    outputType, makeTableHandle(SubfieldFilters{}), assignments)
-                .planNode();
+  auto op = PlanBuilder().tableScan(tableName, outputType, aliases).planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp");
 
   // Use aliased column in a range filter.
-  auto filters = singleSubfieldFilter("c0", lessThanOrEqual(10));
-
   op = PlanBuilder()
-           .tableScan(
-               outputType, makeTableHandle(std::move(filters)), assignments)
+           .tableScan(tableName, outputType, aliases, {"a < 10"})
            .planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp WHERE c0 <= 10");
 
   // Use aliased column in remaining filter.
   op = PlanBuilder()
-           .tableScan(
-               outputType,
-               makeTableHandle(
-                   SubfieldFilters{}, parseExpr("c0 % 2 = 1", rowType_)),
-               assignments)
+           .tableScan(tableName, outputType, aliases, {}, "a % 2 = 1")
            .planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp WHERE c0 % 2 = 1");
 }
@@ -315,28 +310,22 @@ TEST_P(TableScanTest, missingColumns) {
   createDuckDbTable({oldDataWithNull, newData});
 
   auto outputType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
-  auto assignments = allRegularColumns(outputType);
 
-  auto tableHandle = makeTableHandle(SubfieldFilters{});
-
-  auto op =
-      PlanBuilder().tableScan(outputType, tableHandle, assignments).planNode();
+  auto op = PlanBuilder().tableScan(outputType).planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp");
 
   // Use missing column in a tuple domain filter.
-  auto filters = singleSubfieldFilter("c1", lessThanOrEqualDouble(100.1));
-  op = PlanBuilder()
-           .tableScan(
-               outputType, makeTableHandle(std::move(filters)), assignments)
-           .planNode();
+  op = PlanBuilder().tableScan(outputType, {"c1 <= 100.1"}).planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp WHERE c1 <= 100.1");
 
   // Use column aliases.
   outputType = ROW({"a", "b"}, {BIGINT(), DOUBLE()});
 
-  assignments.clear();
+  ColumnHandleMap assignments;
   assignments["a"] = regularColumn("c0", BIGINT());
   assignments["b"] = regularColumn("c1", DOUBLE());
+
+  auto tableHandle = makeTableHandle(SubfieldFilters{});
 
   op = PlanBuilder().tableScan(outputType, tableHandle, assignments).planNode();
   assertQuery(op, filePaths, "SELECT * FROM tmp");
@@ -359,34 +348,27 @@ TEST_P(TableScanTest, constDictLazy) {
 
   createDuckDbTable({rowVector});
 
-  auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-  auto assignments = allRegularColumns(rowType);
+  auto rowType = asRowType(rowVector->type());
 
   // Orchestrate a Const(Dict(Lazy)) by using remaining filter that passes on
   // exactly one row.
-  auto tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c0 % 1000 = 5", rowType));
   auto op = PlanBuilder()
-                .tableScan(rowType, tableHandle, assignments)
+                .tableScan(rowType, {}, "c0 % 1000 = 5")
                 .project({"c1 + 10"})
                 .planNode();
 
   assertQuery(op, {filePath}, "SELECT c1 + 10 FROM tmp WHERE c0 = 5");
 
   // Orchestrate a Const(Dict(Lazy)) for a complex type (map)
-  tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c0 = 0", rowType));
   op = PlanBuilder()
-           .tableScan(rowType, tableHandle, assignments)
+           .tableScan(rowType, {}, "c0 = 0")
            .project({"cardinality(c2)"})
            .planNode();
 
   assertQuery(op, {filePath}, "SELECT 0 FROM tmp WHERE c0 = 5");
 
-  tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c0 = 2", rowType));
   op = PlanBuilder()
-           .tableScan(rowType, tableHandle, assignments)
+           .tableScan(rowType, {}, "c0 = 2")
            .project({"cardinality(c2)"})
            .planNode();
 
@@ -689,26 +671,19 @@ TEST_P(TableScanTest, statsBasedSkippingBool) {
   writeToFile(filePaths[0]->path, rowVector);
   createDuckDbTable({rowVector});
 
-  auto subfieldFilters = singleSubfieldFilter("c1", boolEqual(true));
-  std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
-      assignments = {{"c0", regularColumn("c0", INTEGER())}};
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(subfieldFilters));
+  auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
-        PlanBuilder()
-            .tableScan(ROW({"c0"}, {INTEGER()}), tableHandle, assignments)
-            .planNode(),
+        PlanBuilder().tableScan(rowType, {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT c0, c1 FROM tmp WHERE " + filter);
   };
-  auto task = assertQuery("SELECT c0 FROM tmp WHERE c1 = true");
+  auto task = assertQuery("c1 = true");
   EXPECT_EQ(20'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(2, getSkippedStridesStat(task));
   EXPECT_EQ(1, getTableScanStats(task).numSplits);
   EXPECT_EQ(1, getTableScanStats(task).numDrivers);
 
-  subfieldFilters = singleSubfieldFilter("c1", boolEqual(false));
-  task = assertQuery("SELECT c0 FROM tmp WHERE c1 = false");
+  task = assertQuery("c1 = false");
   EXPECT_EQ(size - 20'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(2, getSkippedStridesStat(task));
 }
@@ -723,45 +698,30 @@ TEST_P(TableScanTest, statsBasedSkippingDouble) {
   createDuckDbTable({rowVector});
 
   // c0 <= -1.05 -> whole file should be skipped based on stats
-  auto subfieldFilters =
-      singleSubfieldFilter("c0", lessThanOrEqualDouble(-1.05));
-
-  ColumnHandleMap assignments = {{"c0", regularColumn("c0", DOUBLE())}};
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(subfieldFilters));
+  auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
-        PlanBuilder()
-            .tableScan(ROW({"c0"}, {DOUBLE()}), tableHandle, assignments)
-            .planNode(),
+        PlanBuilder().tableScan(ROW({"c0"}, {DOUBLE()}), {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT c0 FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= -1.05");
+  auto task = assertQuery("c0 <= -1.05");
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
-  subfieldFilters =
-      singleSubfieldFilter("c0", greaterThanOrEqualDouble(11'111.06));
-  task = assertQuery("SELECT c0 FROM tmp WHERE c0 >= 11111.06");
+  task = assertQuery("c0 >= 11111.06");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
-  subfieldFilters =
-      singleSubfieldFilter("c0", betweenDouble(10'100.06, 10'500.08));
-  task =
-      assertQuery("SELECT c0 FROM tmp WHERE c0 between 10100.06 AND 10500.08");
+  task = assertQuery("c0 between 10100.06 AND 10500.08");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
-  subfieldFilters =
-      singleSubfieldFilter("c0", lessThanOrEqualDouble(1'234.005));
-  task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= 1234.005");
+  task = assertQuery("c0 <= 1234.005");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
 }
@@ -776,44 +736,31 @@ TEST_P(TableScanTest, statsBasedSkippingFloat) {
   createDuckDbTable({rowVector});
 
   // c0 <= -1.05 -> whole file should be skipped based on stats
-  auto subfieldFilters =
-      singleSubfieldFilter("c0", lessThanOrEqualFloat(-1.05));
 
-  ColumnHandleMap assignments = {{"c0", regularColumn("c0", REAL())}};
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(subfieldFilters));
+  auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
-        PlanBuilder()
-            .tableScan(ROW({"c0"}, {REAL()}), tableHandle, assignments)
-            .planNode(),
+        PlanBuilder().tableScan(ROW({"c0"}, {REAL()}), {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT c0 FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= -1.05");
+  auto task = assertQuery("c0 <= '-1.05'::REAL");
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
-  subfieldFilters =
-      singleSubfieldFilter("c0", greaterThanOrEqualFloat(11'111.06));
-  task = assertQuery("SELECT c0 FROM tmp WHERE c0 >= 11111.06");
+  task = assertQuery("c0 >= 11111.06::REAL");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedStridesStat(task));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
-  subfieldFilters =
-      singleSubfieldFilter("c0", betweenFloat(10'100.06, 10'500.08));
-  task =
-      assertQuery("SELECT c0 FROM tmp WHERE c0 between 10100.06 AND 10500.08");
+  task = assertQuery("c0 between 10100.06::REAL AND 10500.08::REAL");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
-  subfieldFilters = singleSubfieldFilter("c0", lessThanOrEqualFloat(1'234.005));
-  task = assertQuery("SELECT c0 FROM tmp WHERE c0 <= 1234.005");
+  task = assertQuery("c0 <= 1234.005::REAL");
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
 }
@@ -1025,19 +972,16 @@ TEST_P(TableScanTest, statsBasedSkippingNulls) {
   createDuckDbTable({rowVector});
 
   // c0 IS NULL - whole file should be skipped based on stats
-  auto filters = singleSubfieldFilter("c0", isNull());
-
   auto assignments = allRegularColumns(rowType);
 
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(filters));
+  auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+        PlanBuilder().tableScan(rowType, {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT * FROM tmp WHERE c0 IS NULL");
+  auto task = assertQuery("c0 IS NULL");
 
   auto stats = getTableScanStats(task);
   EXPECT_EQ(0, stats.rawInputRows);
@@ -1045,8 +989,7 @@ TEST_P(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(0, stats.outputRows);
 
   // c1 IS NULL - first stride should be skipped based on stats
-  filters = singleSubfieldFilter("c1", isNull());
-  task = assertQuery("SELECT * FROM tmp WHERE c1 IS NULL");
+  task = assertQuery("c1 IS NULL");
 
   stats = getTableScanStats(task);
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
@@ -1054,8 +997,7 @@ TEST_P(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(size - 11'111, stats.outputRows);
 
   // c1 IS NOT NULL - 3rd and 4th strides should be skipped based on stats
-  filters = singleSubfieldFilter("c1", isNotNull());
-  task = assertQuery("SELECT * FROM tmp WHERE c1 IS NOT NULL");
+  task = assertQuery("c1 IS NOT NULL");
 
   stats = getTableScanStats(task);
   EXPECT_EQ(20'000, stats.rawInputRows);
@@ -1082,39 +1024,25 @@ TEST_P(TableScanTest, statsBasedSkippingWithoutDecompression) {
   writeToFile(filePaths[0]->path, rowVector);
   createDuckDbTable({rowVector});
 
-  // skip 1st row group
-  auto filters = singleSubfieldFilter(
-      "c0", greaterThanOrEqual("com.facebook.presto.orc.stream.11111"));
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(filters));
-    auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-    auto assignments = allRegularColumns(rowType);
+  // Skip 1st row group.
+  auto assertQuery = [&](const std::string& filter) {
+    auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+        PlanBuilder().tableScan(rowType, {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery(
-      "SELECT * FROM tmp WHERE c0 >= 'com.facebook.presto.orc.stream.11111'");
+  auto task = assertQuery("c0 >= 'com.facebook.presto.orc.stream.11111'");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
-  // skip 2nd row group
-  filters = singleSubfieldFilter(
-      "c0",
-      orFilter(
-          lessThanOrEqual("com.facebook.presto.orc.stream.01234"),
-          greaterThanOrEqual("com.facebook.presto.orc.stream.20123")));
+  // Skip 2nd row group.
   task = assertQuery(
-      "SELECT * FROM tmp WHERE c0 <= 'com.facebook.presto.orc.stream.01234' or c0 >= 'com.facebook.presto.orc.stream.20123'");
+      "c0 <= 'com.facebook.presto.orc.stream.01234' or c0 >= 'com.facebook.presto.orc.stream.20123'");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
-  // skip first 3 row groups
-  filters = singleSubfieldFilter(
-      "c0", greaterThanOrEqual("com.facebook.presto.orc.stream.30123"));
-  task = assertQuery(
-      "SELECT * FROM tmp WHERE c0 >= 'com.facebook.presto.orc.stream.30123'");
+  // Skip first 3 row groups.
+  task = assertQuery("c0 >= 'com.facebook.presto.orc.stream.30123'");
   EXPECT_EQ(size - 30'000, getTableScanStats(task).rawInputRows);
 }
 
@@ -1135,24 +1063,20 @@ TEST_P(TableScanTest, filterBasedSkippingWithoutDecompression) {
       {makeFlatVector<int64_t>(size, [](auto row) { return row; }),
        makeFlatVector(strings)});
 
-  auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
+  auto rowType = asRowType(rowVector->type());
 
   auto filePaths = makeFilePaths(1);
   writeToFile(filePaths[0]->path, rowVector);
   createDuckDbTable({rowVector});
 
-  auto tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c0 % 11111 = 7", rowType));
-
-  auto assertQuery = [&](const std::string& query) {
-    auto assignments = allRegularColumns(rowType);
+  auto assertQuery = [&](const std::string& remainingFilter) {
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+        PlanBuilder().tableScan(rowType, {}, remainingFilter).planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + remainingFilter);
   };
 
-  auto task = assertQuery("SELECT * FROM tmp WHERE c0 % 11111 = 7");
+  auto task = assertQuery("c0 % 11111 = 7");
   EXPECT_EQ(size, getTableScanStats(task).rawInputRows);
 }
 
@@ -1194,36 +1118,28 @@ TEST_P(TableScanTest, statsBasedSkippingNumerics) {
   writeToFile(filePaths[0]->path, rowVector);
   createDuckDbTable({rowVector});
 
-  // skip whole file
-  auto filters = singleSubfieldFilter("c0", lessThanOrEqual(-1));
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(filters));
-    auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-    auto assignments = allRegularColumns(rowType);
+  // Skip whole file.
+  auto assertQuery = [&](const std::string& filter) {
+    auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+        PlanBuilder().tableScan(rowType, {filter}).planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT * FROM tmp WHERE c0 <= -1");
+  auto task = assertQuery("c0 <= -1");
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
 
-  // skip 1st rowgroup
-  filters = singleSubfieldFilter("c0", greaterThanOrEqual(11'111));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 >= 11111");
+  // Skip 1st rowgroup.
+  task = assertQuery("c0 >= 11111");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
-  // skip 2nd rowgroup
-  filters = singleSubfieldFilter(
-      "c0", bigintOr(lessThanOrEqual(1'000), greaterThanOrEqual(23'456)));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 <= 1000 OR c0 >= 23456");
+  // Skip 2nd rowgroup.
+  task = assertQuery("c0 <= 1000 OR c0 >= 23456");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
-  // skip last 2 rowgroups
-  filters = singleSubfieldFilter("c0", greaterThanOrEqual(20'123));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 >= 20123");
+  // Skip last 2 rowgroups.
+  task = assertQuery("c0 >= 20123");
   EXPECT_EQ(size - 20'000, getTableScanStats(task).rawInputRows);
 }
 
@@ -1275,40 +1191,32 @@ TEST_P(TableScanTest, statsBasedSkippingComplexTypes) {
            size, [](auto row) { return row * 2 + 0.01; }, nullEvery(11))})});
 
   // skip whole file
-  auto filters = singleSubfieldFilter("c0", lessThanOrEqual(-1));
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(filters));
-    auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-    auto assignments = allRegularColumns(rowType);
+  auto assertQuery = [&](const std::string& filter) {
+    auto rowType = asRowType(rowVector->type());
     return TableScanTest::assertQuery(
         PlanBuilder()
-            .tableScan(rowType, tableHandle, assignments)
+            .tableScan(rowType, {filter})
             // Project row-number column, first element of each array and map
             // elements for key zero.
             .project({"c0", "c1[1]", "c2[1]", "c3[0]", "c4[0]"})
             .planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT * FROM tmp WHERE c0 <= -1");
+  auto task = assertQuery("c0 <= -1");
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
 
   // skip 1st rowgroup
-  filters = singleSubfieldFilter("c0", greaterThanOrEqual(11'111));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 >= 11111");
+  task = assertQuery("c0 >= 11111");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
   // skip 2nd rowgroup
-  filters = singleSubfieldFilter(
-      "c0", bigintOr(lessThanOrEqual(1'000), greaterThanOrEqual(23'456)));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 <= 1000 OR c0 >= 23456");
+  task = assertQuery("c0 <= 1000 OR c0 >= 23456");
   EXPECT_EQ(size - 10'000, getTableScanStats(task).rawInputRows);
 
   // skip last 2 rowgroups
-  filters = singleSubfieldFilter("c0", greaterThanOrEqual(20'123));
-  task = assertQuery("SELECT * FROM tmp WHERE c0 >= 20123");
+  task = assertQuery("c0 >= 20123");
   EXPECT_EQ(size - 20'000, getTableScanStats(task).rawInputRows);
 }
 
@@ -1357,13 +1265,14 @@ TEST_P(TableScanTest, statsBasedAndRegularSkippingComplexTypes) {
       bigintOr(
           lessThanOrEqual(10), between(600, 650), greaterThanOrEqual(21'234)));
 
-  auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-  auto tableHandle = makeTableHandle(std::move(filters));
+  auto rowType = asRowType(rowVector->type());
 
-  auto op = PlanBuilder()
-                .tableScan(rowType, tableHandle, allRegularColumns(rowType))
-                .project({"c0", "c1[1]", "c2[0]"})
-                .planNode();
+  auto op =
+      PlanBuilder()
+          .tableScan(
+              rowType, {"c0 <= 10 OR c0 between 600 AND 650 OR c0 >= 21234"})
+          .project({"c0", "c1[1]", "c2[0]"})
+          .planNode();
 
   assertQuery(
       op,
@@ -1512,8 +1421,7 @@ TEST_P(TableScanTest, bucket) {
   createDuckDbTable(rowVectors);
 
   static const char* kBucket = "$bucket";
-  auto rowType =
-      std::dynamic_pointer_cast<const RowType>(rowVectors.front()->type());
+  auto rowType = asRowType(rowVectors.front()->type());
 
   auto assignments = allRegularColumns(rowType);
   assignments[kBucket] = synthesizedColumn(kBucket, INTEGER());
@@ -1554,6 +1462,28 @@ TEST_P(TableScanTest, bucket) {
   }
 }
 
+TEST_P(TableScanTest, floatingPointNotEqualFilter) {
+  auto vectors = makeVectors(1, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, vectors);
+  createDuckDbTable(vectors);
+
+  const std::string tableName = "t";
+
+  auto outputType = ROW({"c4"}, {DOUBLE()});
+  auto op = PlanBuilder()
+                .tableScan(tableName, outputType, {}, {"c4 != 0.0"})
+                .planNode();
+  assertQuery(op, {filePath}, "SELECT c4 FROM tmp WHERE c4 != 0.0");
+
+  outputType = ROW({"c3"}, {REAL()});
+  op = PlanBuilder()
+           .tableScan(tableName, outputType, {}, {"c3 != cast(0.0 as REAL)"})
+           .planNode();
+  assertQuery(
+      op, {filePath}, "SELECT c3 FROM tmp WHERE c3 != cast(0.0 as REAL)");
+}
+
 TEST_P(TableScanTest, remainingFilter) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), DOUBLE(), BOOLEAN()});
@@ -1564,39 +1494,28 @@ TEST_P(TableScanTest, remainingFilter) {
   }
   createDuckDbTable(vectors);
 
-  auto tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c1 > c0", rowType));
-
-  auto assignments = allRegularColumns(rowType);
-
   assertQuery(
-      PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+      PlanBuilder().tableScan(rowType, {}, "c1 > c0").planNode(),
       filePaths,
       "SELECT * FROM tmp WHERE c1 > c0");
 
   // filter that never passes
-  tableHandle =
-      makeTableHandle(SubfieldFilters{}, parseExpr("c1 % 5 = 6", rowType));
-
   assertQuery(
-      PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+      PlanBuilder().tableScan(rowType, {}, "c1 % 5 = 6").planNode(),
       filePaths,
       "SELECT * FROM tmp WHERE c1 % 5 = 6");
 
   // range filter + remaining filter: c0 >= 0 AND c1 > c0
-  auto subfieldFilters = singleSubfieldFilter("c0", greaterThanOrEqual(0));
-
-  tableHandle = makeTableHandle(
-      std::move(subfieldFilters), parseExpr("c1 > c0", rowType));
-
   assertQuery(
-      PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+      PlanBuilder()
+          .tableScan(rowType, {"c0 >= 0::INTEGER"}, "c1 > c0")
+          .planNode(),
       filePaths,
       "SELECT * FROM tmp WHERE c1 > c0 AND c0 >= 0");
 
   // Remaining filter uses columns that are not used otherwise.
-  assignments = {{"c2", regularColumn("c2", DOUBLE())}};
-  tableHandle =
+  ColumnHandleMap assignments = {{"c2", regularColumn("c2", DOUBLE())}};
+  auto tableHandle =
       makeTableHandle(SubfieldFilters{}, parseExpr("c1 > c0", rowType));
   assertQuery(
       PlanBuilder()
@@ -1628,7 +1547,6 @@ TEST_P(TableScanTest, aggregationPushdown) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->path, vectors);
   createDuckDbTable(vectors);
-  auto tableHandle = makeTableHandle(SubfieldFilters());
 
   // Get the number of values processed via aggregation pushdown into scan.
   auto loadedToValueHook = [](const std::shared_ptr<Task> task,
@@ -1641,13 +1559,11 @@ TEST_P(TableScanTest, aggregationPushdown) {
     return it != stats.end() ? it->second.sum : 0;
   };
 
-  auto assignments = allRegularColumns(rowType_);
-
   auto op =
       PlanBuilder()
-          .tableScan(rowType_, tableHandle, assignments)
+          .tableScan(rowType_)
           .partialAggregation(
-              {5}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
+              {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
           .planNode();
 
   auto task = assertQuery(
@@ -1658,9 +1574,9 @@ TEST_P(TableScanTest, aggregationPushdown) {
   EXPECT_EQ(5 * 10'000, loadedToValueHook(task));
 
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .singleAggregation(
-               {5}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+               {"c5"}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
            .planNode();
 
   task = assertQuery(
@@ -1671,9 +1587,9 @@ TEST_P(TableScanTest, aggregationPushdown) {
   EXPECT_EQ(5 * 10'000, loadedToValueHook(task));
 
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .singleAggregation(
-               {5}, {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
+               {"c5"}, {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
            .planNode();
 
   task = assertQuery(
@@ -1686,9 +1602,9 @@ TEST_P(TableScanTest, aggregationPushdown) {
   // Pushdown should also happen if there is a FilterProject node that doesn't
   // touch columns being aggregated
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .project({"c0 % 5", "c1"})
-           .singleAggregation({0}, {"sum(c1)"})
+           .singleAggregation({"p0"}, {"sum(c1)"})
            .planNode();
 
   task =
@@ -1699,11 +1615,9 @@ TEST_P(TableScanTest, aggregationPushdown) {
 
   // Add remaining filter to scan to expose LazyVectors wrapped in Dictionary to
   // aggregation.
-  tableHandle = makeTableHandle(
-      SubfieldFilters(), parseExpr("length(c5) % 2 = 0", rowType_));
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
-           .singleAggregation({5}, {"max(c0)"})
+           .tableScan(rowType_, {}, "length(c5) % 2 = 0")
+           .singleAggregation({"c5"}, {"max(c0)"})
            .planNode();
   task = assertQuery(
       op,
@@ -1715,28 +1629,27 @@ TEST_P(TableScanTest, aggregationPushdown) {
 
   // No pushdown if two aggregates use the same column or a column is not a
   // LazyVector
-  tableHandle = makeTableHandle(SubfieldFilters(), nullptr);
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
-           .singleAggregation({5}, {"min(c0)", "max(c0)"})
+           .tableScan(rowType_)
+           .singleAggregation({"c5"}, {"min(c0)", "max(c0)"})
            .planNode();
   task = assertQuery(
       op, {filePath}, "SELECT c5, min(c0), max(c0) FROM tmp GROUP BY 1");
   EXPECT_EQ(0, loadedToValueHook(task));
 
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .project({"c5", "c0", "c0 + c1 AS c0_plus_c1"})
-           .singleAggregation({0}, {"min(c0)", "max(c0_plus_c1)"})
+           .singleAggregation({"c5"}, {"min(c0)", "max(c0_plus_c1)"})
            .planNode();
   task = assertQuery(
       op, {filePath}, "SELECT c5, min(c0), max(c0 + c1) FROM tmp GROUP BY 1");
   EXPECT_EQ(0, loadedToValueHook(task));
 
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .project({"c5", "c0 + 1 as a", "c1 + 2 as b", "c2 + 3 as c"})
-           .singleAggregation({0}, {"min(a)", "max(b)", "sum(c)"})
+           .singleAggregation({"c5"}, {"min(a)", "max(b)", "sum(c)"})
            .planNode();
   task = assertQuery(
       op,
@@ -1750,14 +1663,11 @@ TEST_P(TableScanTest, bitwiseAggregationPushdown) {
   auto filePath = TempFilePath::create();
   writeToFile(filePath->path, vectors);
   createDuckDbTable(vectors);
-  auto tableHandle = makeTableHandle(SubfieldFilters(), nullptr);
-
-  auto assignments = allRegularColumns(rowType_);
 
   auto op = PlanBuilder()
-                .tableScan(rowType_, tableHandle, assignments)
+                .tableScan(rowType_)
                 .singleAggregation(
-                    {5},
+                    {"c5"},
                     {"bitwise_and_agg(c0)",
                      "bitwise_and_agg(c1)",
                      "bitwise_and_agg(c2)",
@@ -1770,9 +1680,9 @@ TEST_P(TableScanTest, bitwiseAggregationPushdown) {
       "SELECT c5, bit_and(c0), bit_and(c1), bit_and(c2), bit_and(c6) FROM tmp group by c5");
 
   op = PlanBuilder()
-           .tableScan(rowType_, tableHandle, assignments)
+           .tableScan(rowType_)
            .singleAggregation(
-               {5},
+               {"c5"},
                {"bitwise_or_agg(c0)",
                 "bitwise_or_agg(c1)",
                 "bitwise_or_agg(c2)",
@@ -1803,12 +1713,9 @@ TEST_P(TableScanTest, structLazy) {
   createDuckDbTable(
       {makeRowVector({rowVector->childAt(0), rowVector->childAt(1)})});
 
-  auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
-  auto assignments = allRegularColumns(rowType);
-
-  auto tableHandle = makeTableHandle(SubfieldFilters{});
+  auto rowType = asRowType(rowVector->type());
   auto op = PlanBuilder()
-                .tableScan(rowType, tableHandle, assignments)
+                .tableScan(rowType)
                 .project({"cardinality(c2.c0)"})
                 .planNode();
 
@@ -1852,7 +1759,7 @@ TEST_P(TableScanTest, structInArrayOrMap) {
   createDuckDbTable(
       {makeRowVector({rowVector->childAt(0), rowVector->childAt(1)})});
 
-  auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
+  auto rowType = asRowType(rowVector->type());
   auto op = PlanBuilder()
                 .tableScan(rowType)
                 .project({"c2[1].c0", "c3[1].c0"})
@@ -1875,8 +1782,8 @@ TEST_P(TableScanTest, groupedExecutionWithOutputBuffer) {
           .tableScan(rowType_)
           .partitionedOutput({}, 1, {"c0", "c1", "c2", "c3", "c4", "c5"})
           .planFragment();
-  planFragment.numSplitGroups = 10;
   planFragment.executionStrategy = core::ExecutionStrategy::kGrouped;
+  planFragment.numSplitGroups = 10;
   auto queryCtx = core::QueryCtx::createForTest();
   auto task = std::make_shared<exec::Task>(
       "0", std::move(planFragment), 0, std::move(queryCtx));
@@ -1951,16 +1858,14 @@ TEST_P(TableScanTest, groupedExecution) {
   CursorParameters params;
   params.planNode = tableScanNode(ROW({}, {}));
   params.maxDrivers = 2;
-  params.concurrentSplitGroups = 2;
   // We will have 10 split groups 'in total', but our task will only handle
   // three of them: 1, 5 and 8.
   // Split 0 is from split group 1.
   // Splits 1 and 2 are from split group 5.
   // Splits 3, 4 and 5 are from split group 8.
   params.executionStrategy = core::ExecutionStrategy::kGrouped;
-  params.numSplitGroups = 10;
-  // We'll only run 3 split groups, 2 drivers each.
-  params.numResultDrivers = 3 * 2;
+  params.numSplitGroups = 3;
+  params.numConcurrentSplitGroups = 2;
 
   // Create the cursor with the task underneath. It is not started yet.
   auto cursor = std::make_unique<TaskCursor>(params);

@@ -96,6 +96,16 @@ bool BigintValuesUsingBitmask::testInt64(int64_t value) const {
   return bitmask_[value - min_];
 }
 
+std::vector<int64_t> BigintValuesUsingBitmask::values() const {
+  std::vector<int64_t> values;
+  for (int i = 0; i < bitmask_.size(); i++) {
+    if (bitmask_[i]) {
+      values.push_back(min_ + i);
+    }
+  }
+  return values;
+}
+
 bool BigintValuesUsingBitmask::testInt64Range(
     int64_t min,
     int64_t max,
@@ -555,6 +565,20 @@ bool MultiRange::testBytesRange(
 
   for (const auto& filter : filters_) {
     if (filter->testBytesRange(min, max, hasNull)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool MultiRange::testDoubleRange(double min, double max, bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  for (const auto& filter : filters_) {
+    if (filter->testDoubleRange(min, max, hasNull)) {
       return true;
     }
   }
