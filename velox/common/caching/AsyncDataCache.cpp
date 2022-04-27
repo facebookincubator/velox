@@ -729,7 +729,7 @@ CoalesceIoStats readPins(
         VELOX_CHECK_EQ(offsetInRuns, size);
       },
       [&](int32_t size, std::vector<folly::Range<char*>>& ranges) {
-        ranges.push_back(folly::Range<char*>(nullptr, size));
+        ranges.push_back(folly::Range<char*>(ReadFile::skipMarker(), size));
       },
       readFunc);
 }

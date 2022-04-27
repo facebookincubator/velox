@@ -116,7 +116,7 @@ class S3ReadFile final : public ReadFile {
     preadInternal(offset, length, static_cast<char*>(result.data()));
     size_t resultOffset = 0;
     for (auto range : buffers) {
-      if (range.data()) {
+      if (!shouldSkip(range.data())) {
         memcpy(range.data(), &(result.data()[resultOffset]), range.size());
       }
       resultOffset += range.size();

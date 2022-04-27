@@ -108,7 +108,7 @@ class InputStream {
       common::LogType logType) {
     uint64_t bufferOffset = 0;
     for (auto& range : buffers) {
-      if (range.data()) {
+      if (!ReadFile::shouldSkip(range.data())) {
         read(range.data(), range.size(), offset + bufferOffset, logType);
       }
       bufferOffset += range.size();

@@ -56,10 +56,10 @@ void readData(ReadFile* readFile) {
   char tail[7];
   std::vector<folly::Range<char*>> buffers = {
       folly::Range<char*>(head, sizeof(head)),
-      folly::Range<char*>(nullptr, 500000),
+      folly::Range<char*>(ReadFile::skipMarker(), 500000),
       folly::Range<char*>(middle, sizeof(middle)),
       folly::Range<char*>(
-          nullptr,
+          ReadFile::skipMarker(),
           15 + kOneMB - 500000 - sizeof(head) - sizeof(middle) - sizeof(tail)),
       folly::Range<char*>(tail, sizeof(tail))};
   ASSERT_EQ(15 + kOneMB, readFile->preadv(0, buffers));

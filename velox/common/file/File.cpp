@@ -26,6 +26,11 @@
 
 namespace facebook::velox {
 
+char* FOLLY_NONNULL ReadFile::skipMarker() {
+  static char skipMarker;
+  return &skipMarker;
+}
+
 std::string_view
 InMemoryReadFile::pread(uint64_t offset, uint64_t length, void* buf) const {
   bytesRead_ += length;
@@ -47,7 +52,7 @@ uint64_t InMemoryReadFile::preadv(
   }
   for (auto& range : buffers) {
     auto copySize = std::min<size_t>(range.size(), file_.size() - offset);
-    if (range.data()) {
+    if (!shouldSkip(range.data())) {
       memcpy(range.data(), file_.data() + offset, copySize);
     }
     offset += copySize;
@@ -108,7 +113,7 @@ uint64_t LocalReadFile::preadv(
   std::vector<struct iovec> iovecs;
   iovecs.reserve(buffers.size());
   for (auto& range : buffers) {
-    if (!range.data()) {
+    if (shouldSkip(range.data())) {
       auto skipSize = range.size();
       while (skipSize) {
         auto bytes = std::min<size_t>(sizeof(droppedBytes), skipSize);
