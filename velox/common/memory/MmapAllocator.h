@@ -87,6 +87,10 @@ class MmapAllocator : public MappedMemory {
     return numMapped_;
   }
 
+  MachinePageCount numExternalMapped() const {
+    return numExternalMapped_;
+  }
+
   std::string toString() const override;
 
  private:

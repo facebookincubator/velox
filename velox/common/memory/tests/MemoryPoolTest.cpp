@@ -18,10 +18,12 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MmapAllocator.h"
 
 using namespace ::testing;
 
-constexpr int64_t MB = 1024L * 1024L;
+constexpr int64_t KB = 1024L;
+constexpr int64_t MB = 1024L * KB;
 constexpr int64_t GB = 1024L * MB;
 
 namespace facebook {
@@ -228,125 +230,220 @@ TEST(MemoryPoolTest, UncapMemory) {
   // caps are supported again.
 }
 
-// Mainly tests how it updates the memory usage in MemoryPool.
-TEST(MemoryPoolTest, AllocTest) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+std::vector<std::shared_ptr<IMemoryManager>> createManagers(int64_t quota) {
+  std::vector<std::shared_ptr<IMemoryManager>> managers;
+  managers.emplace_back(
+      std::make_shared<MemoryManager<MemoryAllocator>>(quota));
+  managers.emplace_back(
+      std::make_shared<MemoryManager<MmapMemoryAllocator>>(quota));
+  return managers;
+}
 
+MachinePageCount calculatePageNeeded(
+    const MappedMemory* mappedMemory,
+    MachinePageCount pageNeeded) {
+  auto& sizeClasses = mappedMemory->sizeClasses();
+  if (pageNeeded > sizeClasses.back()) {
+    return pageNeeded;
+  }
+  for (auto& sizeClass : sizeClasses) {
+    if (sizeClass >= pageNeeded) {
+      return sizeClass;
+    }
+  }
+  VELOX_UNREACHABLE();
+}
+
+void testMmapMemoryAllocation(
+    const MmapAllocator* mmapAllocator,
+    MachinePageCount allocPages,
+    size_t allocCount) {
+  MemoryManager<MmapMemoryAllocator> manager(8 * GB);
+  const auto kPageSize = 4 * KB;
+
+  auto& root = manager.getRoot();
   auto& child = root.addChild("elastic_quota");
 
-  const int64_t kChunkSize{32L * MB};
+  std::vector<void*> allocations;
+  uint64_t totalPageAllocated = 0;
+  uint64_t totalPageMapped = 0;
+  const auto pageIncremental = calculatePageNeeded(mmapAllocator, allocPages);
+  const auto isSmallAlloc = allocPages <= mmapAllocator->sizeClasses().back();
+  const auto byteSize = allocPages * kPageSize;
+  const std::string buffer(byteSize, 'x');
+  for (size_t i = 0; i < allocCount; i++) {
+    void* allocResult = nullptr;
+    EXPECT_NO_THROW(allocResult = child.allocate(byteSize));
+    EXPECT_TRUE(allocResult != nullptr);
 
-  void* oneChunk = child.allocate(kChunkSize);
-  EXPECT_EQ(kChunkSize, child.getCurrentBytes());
-  EXPECT_EQ(kChunkSize, child.getMaxBytes());
+    // Write data to let mapped address to be backed by physical memory
+    memcpy(allocResult, buffer.data(), byteSize);
+    allocations.emplace_back(allocResult);
+    totalPageAllocated += pageIncremental;
+    totalPageMapped += pageIncremental;
+    EXPECT_EQ(mmapAllocator->numAllocated(), totalPageAllocated);
+    EXPECT_EQ(
+        isSmallAlloc ? mmapAllocator->numMapped()
+                     : mmapAllocator->numExternalMapped(),
+        totalPageMapped);
+  }
+  for (size_t i = 0; i < allocCount; i++) {
+    EXPECT_NO_THROW(child.free(allocations[i], byteSize));
+    totalPageAllocated -= pageIncremental;
+    EXPECT_EQ(mmapAllocator->numAllocated(), totalPageAllocated);
+    if (isSmallAlloc) {
+      EXPECT_EQ(mmapAllocator->numMapped(), totalPageMapped);
+    } else {
+      totalPageMapped -= pageIncremental;
+      EXPECT_EQ(mmapAllocator->numExternalMapped(), totalPageMapped);
+    }
+  }
+}
 
-  void* threeChunks = child.allocate(3 * kChunkSize);
-  EXPECT_EQ(4 * kChunkSize, child.getCurrentBytes());
-  EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+TEST(MemoryPoolTest, SmallMmapMemoryAllocationTest) {
+  MmapAllocatorOptions options = {8 * GB};
+  auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
+  MappedMemory::setDefaultInstance(mmapAllocator.get());
+  testMmapMemoryAllocation(mmapAllocator.get(), 6, 100);
+}
 
-  child.free(threeChunks, 3 * kChunkSize);
-  EXPECT_EQ(kChunkSize, child.getCurrentBytes());
-  EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+TEST(MemoryPoolTest, BigMmapMemoryAllocationTest) {
+  MmapAllocatorOptions options = {8 * GB};
+  auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
+  MappedMemory::setDefaultInstance(mmapAllocator.get());
+  testMmapMemoryAllocation(
+      mmapAllocator.get(), mmapAllocator->sizeClasses().back() + 56, 20);
+}
 
-  child.free(oneChunk, kChunkSize);
-  EXPECT_EQ(0, child.getCurrentBytes());
-  EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+// Mainly tests how it updates the memory usage in MemoryPool.
+TEST(MemoryPoolTest, AllocTest) {
+  auto managers = createManagers(8 * GB);
+  for (auto& manager : managers) {
+    auto& root = manager->getRoot();
+
+    auto& child = root.addChild("elastic_quota");
+
+    const int64_t kChunkSize{32L * MB};
+
+    void* oneChunk = child.allocate(kChunkSize);
+    EXPECT_EQ(kChunkSize, child.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, child.getMaxBytes());
+
+    void* threeChunks = child.allocate(3 * kChunkSize);
+    EXPECT_EQ(4 * kChunkSize, child.getCurrentBytes());
+    EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+
+    child.free(threeChunks, 3 * kChunkSize);
+    EXPECT_EQ(kChunkSize, child.getCurrentBytes());
+    EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+
+    child.free(oneChunk, kChunkSize);
+    EXPECT_EQ(0, child.getCurrentBytes());
+    EXPECT_EQ(4 * kChunkSize, child.getMaxBytes());
+  }
 }
 
 TEST(MemoryPoolTest, ReallocTestSameSize) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+  auto managers = createManagers(8 * GB);
+  for (auto& manager : managers) {
+    auto& root = manager->getRoot();
 
-  auto& pool = root.addChild("elastic_quota");
+    auto& pool = root.addChild("elastic_quota");
 
-  const int64_t kChunkSize{32L * MB};
+    const int64_t kChunkSize{32L * MB};
 
-  // Realloc the same size.
+    // Realloc the same size.
 
-  void* oneChunk = pool.allocate(kChunkSize);
-  EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(kChunkSize, pool.getMaxBytes());
+    void* oneChunk = pool.allocate(kChunkSize);
+    EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, pool.getMaxBytes());
 
-  void* anotherChunk = pool.reallocate(oneChunk, kChunkSize, kChunkSize);
-  EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(kChunkSize, pool.getMaxBytes());
+    void* anotherChunk = pool.reallocate(oneChunk, kChunkSize, kChunkSize);
+    EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, pool.getMaxBytes());
 
-  pool.free(anotherChunk, kChunkSize);
-  EXPECT_EQ(0, pool.getCurrentBytes());
-  EXPECT_EQ(kChunkSize, pool.getMaxBytes());
+    pool.free(anotherChunk, kChunkSize);
+    EXPECT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, pool.getMaxBytes());
+  }
 }
 
 TEST(MemoryPoolTest, ReallocTestHigher) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+  auto managers = createManagers(8 * GB);
+  for (auto& manager : managers) {
+    auto& root = manager->getRoot();
 
-  auto& pool = root.addChild("elastic_quota");
+    auto& pool = root.addChild("elastic_quota");
 
-  const int64_t kChunkSize{32L * MB};
-  // Realloc higher.
-  void* oneChunk = pool.allocate(kChunkSize);
-  EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(kChunkSize, pool.getMaxBytes());
+    const int64_t kChunkSize{32L * MB};
+    // Realloc higher.
+    void* oneChunk = pool.allocate(kChunkSize);
+    EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(kChunkSize, pool.getMaxBytes());
 
-  void* threeChunks = pool.reallocate(oneChunk, kChunkSize, 3 * kChunkSize);
-  EXPECT_EQ(3 * kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+    void* threeChunks = pool.reallocate(oneChunk, kChunkSize, 3 * kChunkSize);
+    EXPECT_EQ(3 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
 
-  pool.free(threeChunks, 3 * kChunkSize);
-  EXPECT_EQ(0, pool.getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+    pool.free(threeChunks, 3 * kChunkSize);
+    EXPECT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+  }
 }
 
 TEST(MemoryPoolTest, ReallocTestLower) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
-  auto& pool = root.addChild("elastic_quota");
+  auto managers = createManagers(8 * GB);
+  for (auto& manager : managers) {
+    auto& root = manager->getRoot();
+    auto& pool = root.addChild("elastic_quota");
 
-  const int64_t kChunkSize{32L * MB};
-  // Realloc lower.
-  void* threeChunks = pool.allocate(3 * kChunkSize);
-  EXPECT_EQ(3 * kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+    const int64_t kChunkSize{32L * MB};
+    // Realloc lower.
+    void* threeChunks = pool.allocate(3 * kChunkSize);
+    EXPECT_EQ(3 * kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
 
-  void* oneChunk = pool.reallocate(threeChunks, 3 * kChunkSize, kChunkSize);
-  EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+    void* oneChunk = pool.reallocate(threeChunks, 3 * kChunkSize, kChunkSize);
+    EXPECT_EQ(kChunkSize, pool.getCurrentBytes());
+    EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
 
-  pool.free(oneChunk, kChunkSize);
-  EXPECT_EQ(0, pool.getCurrentBytes());
-  EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+    pool.free(oneChunk, kChunkSize);
+    EXPECT_EQ(0, pool.getCurrentBytes());
+    EXPECT_EQ(3 * kChunkSize, pool.getMaxBytes());
+  }
 }
 
 TEST(MemoryPoolTest, CapAllocation) {
-  MemoryManager<MemoryAllocator> manager{8 * GB};
-  auto& root = manager.getRoot();
+  auto managers = createManagers(8 * GB);
+  for (auto& manager : managers) {
+    auto& root = manager->getRoot();
 
-  auto& pool = root.addChild("static_quota", 64L * MB);
+    auto& pool = root.addChild("static_quota", 64L * MB);
 
-  // Capping malloc.
-  {
-    ASSERT_EQ(0, pool.getCurrentBytes());
-    ASSERT_FALSE(pool.isMemoryCapped());
-    void* oneChunk = pool.allocate(32L * MB);
-    ASSERT_EQ(32L * MB, pool.getCurrentBytes());
-    EXPECT_THROW(pool.allocate(34L * MB), velox::VeloxRuntimeError);
-    EXPECT_FALSE(pool.isMemoryCapped());
+    // Capping malloc.
+    {
+      ASSERT_EQ(0, pool.getCurrentBytes());
+      ASSERT_FALSE(pool.isMemoryCapped());
+      void* oneChunk = pool.allocate(32L * MB);
+      ASSERT_EQ(32L * MB, pool.getCurrentBytes());
+      EXPECT_THROW(pool.allocate(34L * MB), velox::VeloxRuntimeError);
+      EXPECT_FALSE(pool.isMemoryCapped());
 
-    pool.free(oneChunk, 32L * MB);
-  }
-  // Capping realloc.
-  {
-    ASSERT_EQ(0, pool.getCurrentBytes());
-    ASSERT_FALSE(pool.isMemoryCapped());
-    void* oneChunk = pool.allocate(32L * MB);
-    ASSERT_EQ(32L * MB, pool.getCurrentBytes());
-    EXPECT_THROW(
-        pool.reallocate(oneChunk, 32L * MB, 66L * MB),
-        velox::VeloxRuntimeError);
-    EXPECT_FALSE(pool.isMemoryCapped());
+      pool.free(oneChunk, 32L * MB);
+    }
+    // Capping realloc.
+    {
+      ASSERT_EQ(0, pool.getCurrentBytes());
+      ASSERT_FALSE(pool.isMemoryCapped());
+      void* oneChunk = pool.allocate(32L * MB);
+      ASSERT_EQ(32L * MB, pool.getCurrentBytes());
+      EXPECT_THROW(
+          pool.reallocate(oneChunk, 32L * MB, 66L * MB),
+          velox::VeloxRuntimeError);
+      EXPECT_FALSE(pool.isMemoryCapped());
 
-    pool.free(oneChunk, 32L * MB);
+      pool.free(oneChunk, 32L * MB);
+    }
   }
 }
 
