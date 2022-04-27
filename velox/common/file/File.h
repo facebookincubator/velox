@@ -55,11 +55,19 @@ class ReadFile {
 
   // Reads starting at 'offset' into the memory referenced by the
   // Ranges in 'buffers'. The buffers are filled left to right. A
-  // buffer with nullptr data will cause its size worth of bytes to be skipped.
+  // buffer with skip() in data will cause its size worth of bytes to be
+  // skipped.
   virtual uint64_t preadv(
       uint64_t /*offset*/,
       const std::vector<folly::Range<char*>>& /*buffers*/) const {
     VELOX_NYI("preadv not supported");
+  }
+
+  // Returns a special char* that indicates that a range that begins
+  // with this should be skipped in preadv.
+  static char* FOLLY_NONNULL skip() {
+    static char skipMarker;
+    return &skipMarker;
   }
 
   // Like preadv but may execute asynchronously and returns the read
@@ -103,6 +111,12 @@ class ReadFile {
   }
 
  protected:
+  // True if the range starting at 'begin' should be skipped in preadv().
+  // Accepts nullptr and the special value skip().
+  static bool shouldSkip(char* FOLLY_NULLABLE begin) {
+    return !begin || begin == skip();
+  }
+
   mutable std::atomic<uint64_t> bytesRead_ = 0;
 };
 
