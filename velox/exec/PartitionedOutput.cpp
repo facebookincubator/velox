@@ -78,9 +78,14 @@ BlockingReason Destination::flush(
   }
   // Upper limit of message size with no columns.
   constexpr int32_t kMinMessageSize = 128;
+  auto scopedMappedMemory =
+      dynamic_cast<memory::ScopedMappedMemory*>(current_->mappedMemory());
+  VELOX_CHECK(
+      scopedMappedMemory,
+      "The mappedMemory for outgoing data in PartitionedOutput must be scoped");
   auto listener = bufferManager.newListener();
   IOBufOutputStream stream(
-      *current_->mappedMemory(),
+      scopedMappedMemory->shared_from_this(),
       listener.get(),
       std::max<int64_t>(kMinMessageSize, current_->size()));
   current_->flush(&stream);

@@ -377,7 +377,9 @@ class MappedMemory {
 // be a child of the Driver/Task level tracker. in this way
 // MappedMemory activity can be attributed to individual operators and
 // these operators can be requested to spill or limit their memory utilization.
-class ScopedMappedMemory final : public MappedMemory {
+class ScopedMappedMemory final
+    : public MappedMemory,
+      public std::enable_shared_from_this<ScopedMappedMemory> {
  public:
   ScopedMappedMemory(
       MappedMemory* FOLLY_NONNULL parent,

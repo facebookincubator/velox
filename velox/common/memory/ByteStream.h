@@ -402,6 +402,16 @@ class IOBufOutputStream : public OutputStream {
     out_->startWrite(initialSize);
   }
 
+  explicit IOBufOutputStream(
+      std::shared_ptr<memory::MappedMemory> mappedMemory,
+      OutputStreamListener* listener = nullptr,
+      int32_t initialSize = memory::MappedMemory::kPageSize)
+      : OutputStream(listener),
+        arena_(std::make_shared<StreamArena>(std::move(mappedMemory))),
+        out_(std::make_unique<ByteStream>(arena_.get())) {
+    out_->startWrite(initialSize);
+  }
+
   void write(const char* s, std::streamsize count) override {
     out_->appendStringPiece(folly::StringPiece(s, count));
     if (listener_) {

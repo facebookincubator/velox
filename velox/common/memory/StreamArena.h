@@ -32,6 +32,11 @@ class StreamArena {
   explicit StreamArena(memory::MappedMemory* mappedMemory)
       : mappedMemory_(mappedMemory), allocation_(mappedMemory) {}
 
+  explicit StreamArena(std::shared_ptr<memory::MappedMemory> mappedMemory)
+      : mappedMemoryShared_(std::move(mappedMemory)),
+        mappedMemory_(mappedMemoryShared_.get()),
+        allocation_(mappedMemory_) {}
+
   virtual ~StreamArena() = default;
 
   // Sets range to refer  to at least one page of writable memory owned by
@@ -53,6 +58,10 @@ class StreamArena {
   }
 
  private:
+  // if 'this' has an indefinite lifetime, e.g. is passed to an IO
+  // executor and the MappedMemory is a scoped one, then the lifetime
+  // of the MappedMemory must be extended to outlive 'this'.
+  std::shared_ptr<memory::MappedMemory> mappedMemoryShared_;
   memory::MappedMemory* mappedMemory_;
   // All allocations.
   std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
