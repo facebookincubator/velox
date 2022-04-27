@@ -140,7 +140,8 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     int32_t start,
     const int32_t* rows,
     int32_t row) {
-  const char* data = bufferStart_ + start + bytesToSkip_;
+  const char* data =
+      bufferStart_ == nullptr ? nullptr : bufferStart_ + start + bytesToSkip_;
   if (!data || bufferEnd_ - data < start + 8 * 12) {
     return false;
   }
@@ -251,7 +252,7 @@ folly::StringPiece SelectiveStringDirectColumnReader::readValue(
     int32_t length) {
   skipBytes(bytesToSkip_, blobStream_.get(), bufferStart_, bufferEnd_);
   bytesToSkip_ = 0;
-  if (bufferStart_ + length <= bufferEnd_) {
+  if (bufferStart_ != nullptr && bufferStart_ + length <= bufferEnd_) {
     bytesToSkip_ = length;
     return folly::StringPiece(bufferStart_, length);
   }

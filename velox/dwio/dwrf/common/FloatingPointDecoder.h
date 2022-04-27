@@ -30,7 +30,7 @@ class FloatingPointDecoder {
       : input_(std::move(input)) {}
 
   TData readValue() {
-    if (bufferStart_ + sizeof(TData) <= bufferEnd_) {
+    if (bufferStart_ != nullptr && bufferStart_ + sizeof(TData) <= bufferEnd_) {
       TData value = *reinterpret_cast<const TData*>(bufferStart_);
       bufferStart_ += sizeof(TData);
       return value;
