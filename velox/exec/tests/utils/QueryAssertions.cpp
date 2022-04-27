@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <chrono>
 
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/tests/utils/Cursor.h"
@@ -719,13 +720,21 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
 }
 
 bool waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
+  // Wait for task to transition to finished state.
   if (not task->isFinished()) {
     auto& executor = folly::QueuedImmediateExecutor::instance();
     auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
     future.wait();
-    return task->isFinished();
   }
-  return true;
+
+  // Wait for all drivers to finish.
+  if (task->isFinished()) {
+    if (task->numFinishedDrivers() < task->numTotalDrivers()) {
+      std::this_thread::sleep_for(std::chrono::microseconds(maxWaitMicros));
+    }
+  }
+
+  return task->isFinished();
 }
 
 std::shared_ptr<Task> assertQuery(
