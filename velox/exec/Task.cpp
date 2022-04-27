@@ -154,18 +154,6 @@ Task::~Task() {
   }
 }
 
-// static
-std::vector<std::unique_ptr<Task::JoinBridgeTranslator>>& Task::translators() {
-  static std::vector<std::unique_ptr<Task::JoinBridgeTranslator>> translators;
-  return translators;
-}
-
-// static
-void Task::registerJoinBridgeTranslator(
-    std::unique_ptr<JoinBridgeTranslator> translator) {
-  translators().emplace_back(std::move(translator));
-};
-
 velox::memory::MemoryPool* FOLLY_NONNULL Task::addDriverPool() {
   childPools_.push_back(pool_->addScopedChild("driver_root"));
   auto* driverPool = childPools_.back().get();
@@ -379,7 +367,7 @@ void Task::createSplitGroupStateLocked(
         splitGroupId, factory->needsHashJoinBridges());
     self->addCrossJoinBridgesLocked(
         splitGroupId, factory->needsCrossJoinBridges());
-    self->addCustomizedJoinBridgesLocked(splitGroupId, factory->planNodes);
+    self->addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
   }
 }
 
@@ -948,26 +936,27 @@ void Task::addHashJoinBridgesLocked(
   }
 }
 
-void Task::addCustomizedJoinBridgesLocked(
+void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
-    const std::vector<std::shared_ptr<const core::PlanNode>> planNodes) {
-  auto& translators = Task::translators();
+    const std::vector<std::shared_ptr<const core::PlanNode>>& planNodes) {
+  auto& translators = Operator::translators();
   if (0 == translators.size()) {
     return;
   }
 
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNode : planNodes) {
-    for (const auto& t : translators) {
-      if (auto joinBridge = t->translate(planNode)) {
+    for (const auto& translator : translators) {
+      if (auto joinBridge = translator->translate(planNode)) {
         splitGroupState.bridges.emplace(planNode->id(), joinBridge);
+        return;
       }
     }
   }
 }
 
 // Returns a Customized Join Bridge for 'planNodeId'.
-std::shared_ptr<JoinBridge> Task::getCustomizedJoinBridge(
+std::shared_ptr<JoinBridge> Task::getCustomJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
   return getJoinBridgeInternal<JoinBridge>(splitGroupId, planNodeId);

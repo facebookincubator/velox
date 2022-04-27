@@ -16,7 +16,7 @@ add_subdirectory(utils)
 add_executable(
   velox_exec_test
   CrossJoinTest.cpp
-  CustomizedJoinBridgeTest.cpp
+  CustomJoinBridgeTest.cpp
   DriverTest.cpp
   EnforceSingleRowTest.cpp
   FilterProjectTest.cpp

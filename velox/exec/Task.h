@@ -33,16 +33,6 @@ class CrossJoinBridge;
 
 class Task : public std::enable_shared_from_this<Task> {
  public:
-  class JoinBridgeTranslator {
-   public:
-    virtual ~JoinBridgeTranslator() = default;
-
-    // Translates plan node to join bridge. Returns nullptr if the plan node
-    // cannot be handled by this factory.
-    virtual std::shared_ptr<JoinBridge> translate(
-        const std::shared_ptr<const core::PlanNode>& node) = 0;
-  };
-
   /// Creates a task to execute a plan fragment, but doesn't start execution
   /// until Task::start() method is called.
   /// @param taskId Unique task identifier.
@@ -92,13 +82,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // Convenience function for shortening a Presto taskId. To be used
   // in debugging messages and listings.
   static std::string shortId(const std::string& id);
-
-  // Register user-defined join bridge implementation for user-define join
-  // operator
-  static void registerJoinBridgeTranslator(
-      std::unique_ptr<JoinBridgeTranslator> translator);
-
-  static std::vector<std::unique_ptr<JoinBridgeTranslator>>& translators();
 
   /// Returns QueryCtx specified in the constructor.
   const std::shared_ptr<core::QueryCtx>& queryCtx() const {
@@ -361,10 +344,10 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
-  // Adds Customized Hash Joinbridge for all the specified plan node IDs.
-  void addCustomizedJoinBridgesLocked(
+  // Adds custom join bridges for all the specified plan node IDs.
+  void addCustomJoinBridgesLocked(
       uint32_t splitGroupId,
-      const std::vector<std::shared_ptr<const core::PlanNode>> planNodes);
+      const std::vector<std::shared_ptr<const core::PlanNode>>& planNodes);
 
   // Returns a HashJoinBridge for 'planNodeId'. This is used for synchronizing
   // start of probe with completion of build for a join that has a
@@ -379,8 +362,8 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  // Returns a Customized Join Bridge for 'planNodeId'.
-  std::shared_ptr<JoinBridge> getCustomizedJoinBridge(
+  // Returns a custom join bridge for 'planNodeId'.
+  std::shared_ptr<JoinBridge> getCustomJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 

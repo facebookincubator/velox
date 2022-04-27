@@ -18,6 +18,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/JoinBridge.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::exec {
@@ -194,6 +195,13 @@ class Operator {
         int32_t id,
         const std::shared_ptr<const core::PlanNode>& node) = 0;
 
+    // Translates plan node to join bridge. Returns nullptr if the plan node
+    // cannot be handled by this factory.
+    virtual std::shared_ptr<JoinBridge> translate(
+        const std::shared_ptr<const core::PlanNode>& node) {
+      return nullptr;
+    };
+
     virtual OperatorSupplier translateToOpSupplier(
         const std::shared_ptr<const core::PlanNode>& node) {
       return nullptr;
@@ -359,9 +367,9 @@ class Operator {
   static std::optional<uint32_t> maxDrivers(
       const std::shared_ptr<const core::PlanNode>& planNode);
 
- protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
 
+ protected:
   // Clears the columns of 'output_' that are projected from
   // 'input_'. This should be done when preparing to produce a next
   // batch of output to drop any lingering references to row
