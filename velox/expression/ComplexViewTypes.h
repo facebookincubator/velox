@@ -674,6 +674,14 @@ class ArrayView {
         "efficient to use the standard iterator interface.");
   }
 
+  const BaseVector* elementsVector() const {
+    return reader_->baseVector();
+  }
+
+  vector_size_t offset() const {
+    return offset_;
+  }
+
  private:
   const reader_t* reader_;
   vector_size_t offset_;
@@ -843,6 +851,18 @@ class MapView {
       }
     }
     return result;
+  }
+
+  const BaseVector* keysVector() const {
+    return keyReader_->baseVector();
+  }
+
+  const BaseVector* valuesVector() const {
+    return valueReader_->baseVector();
+  }
+
+  vector_size_t offset() const {
+    return offset_;
   }
 
  private:
