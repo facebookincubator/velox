@@ -11,5 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# add_subdirectory(googletest)
-add_subdirectory(xsimd)
+
+
+cmake_minimum_required(VERSION 3.10)
+
+project(${DD_ARGS_PROJ}-download NONE)
+
+include(ExternalProject)
+ExternalProject_Add(${DD_ARGS_PROJ}-download
+                    ${DD_ARGS_UNPARSED_ARGUMENTS}
+                    SOURCE_DIR          "${DD_ARGS_SOURCE_DIR}"
+                    BINARY_DIR          "${DD_ARGS_BINARY_DIR}"
+                    INSTALL_COMMAND     ""
+                    TEST_COMMAND ""
+)
