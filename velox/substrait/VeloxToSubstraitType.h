@@ -28,16 +28,14 @@ namespace facebook::velox::substrait {
 class VeloxToSubstraitTypeConvertor {
  public:
   /// Convert Velox RowType to Substrait NamedStruct.
-  void toSubstraitNamedStruct(
+  ::substrait::NamedStruct* toSubstraitNamedStruct(
       google::protobuf::Arena& arena,
-      const velox::RowTypePtr& vRow,
-      ::substrait::NamedStruct* sNamedStruct);
+      const velox::RowTypePtr& rowType);
 
   /// Convert Velox Type to Substrait Type.
-  void toSubstraitType(
+  ::substrait::Type* toSubstraitType(
       google::protobuf::Arena& arena,
-      const velox::TypePtr& vType,
-      ::substrait::Type* sType);
+      const velox::TypePtr& type);
 };
 
 } // namespace facebook::velox::substrait

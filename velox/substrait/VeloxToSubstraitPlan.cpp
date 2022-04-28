@@ -18,172 +18,138 @@
 
 namespace facebook::velox::substrait {
 
-/// Velox Plan to Substrait
 ::substrait::Plan* VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const PlanNode>& vPlan) {
-  // Assume only accepts a single plan fragment
-  // TODO: convert the Split RootNode get from dispatcher to RootRel
-
-  ::substrait::Plan* sPlan =
+    const std::shared_ptr<const PlanNode>& plan) {
+  // Assume only accepts a single plan fragment.
+  // TODO add root_rel
+  ::substrait::Plan* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-  ::substrait::Rel* sRel = sPlan->add_relations()->mutable_rel();
-  toSubstrait(arena, vPlan, sRel);
+  ::substrait::Rel* rel = substraitPlan->add_relations()->mutable_rel();
+  toSubstrait(arena, plan, rel);
 
-  return sPlan;
+  return substraitPlan;
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const PlanNode>& vPlanNode,
-    ::substrait::Rel* sRel) {
-  if (auto filterNode =
-          std::dynamic_pointer_cast<const FilterNode>(vPlanNode)) {
-    auto sFilterRel = sRel->mutable_filter();
-    toSubstrait(arena, filterNode, sFilterRel);
+    const std::shared_ptr<const PlanNode>& planNode,
+    ::substrait::Rel* rel) {
+  if (auto filterNode = std::dynamic_pointer_cast<const FilterNode>(planNode)) {
+    auto filterRel = rel->mutable_filter();
+    toSubstrait(arena, filterNode, filterRel);
     return;
   }
-  if (auto vValuesNode =
-          std::dynamic_pointer_cast<const ValuesNode>(vPlanNode)) {
-    ::substrait::ReadRel* sReadRel = sRel->mutable_read();
-    toSubstrait(arena, vValuesNode, sReadRel);
+  if (auto valuesNode = std::dynamic_pointer_cast<const ValuesNode>(planNode)) {
+    ::substrait::ReadRel* readRel = rel->mutable_read();
+    toSubstrait(arena, valuesNode, readRel);
     return;
   }
-  if (auto vProjNode =
-          std::dynamic_pointer_cast<const ProjectNode>(vPlanNode)) {
-    ::substrait::ProjectRel* sProjRel = sRel->mutable_project();
-    toSubstrait(arena, vProjNode, sProjRel);
+  if (auto projectNode =
+          std::dynamic_pointer_cast<const ProjectNode>(planNode)) {
+    ::substrait::ProjectRel* projectRel = rel->mutable_project();
+    toSubstrait(arena, projectNode, projectRel);
     return;
   }
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const FilterNode>& vFilterNode,
-    ::substrait::FilterRel* sFilterRel) {
-  const PlanNodeId vId = vFilterNode->id();
-  std::shared_ptr<const PlanNode> vSource;
-  std::vector<std::shared_ptr<const PlanNode>> vSources =
-      vFilterNode->sources();
-  // check how many inputs there have
-  int64_t vSourceSize = vSources.size();
-  if (vSourceSize == 0) {
-    VELOX_FAIL("Filter Node must have input");
-  } else if (vSourceSize == 1) {
-    vSource = vSources[0];
-  } else {
-    // TODO
-    // select one in the plan fragment pass to transformVExpr
-    //  and the other change into root or simpleCapture.
-    VELOX_NYI("Haven't support multiple inputs now.");
-  }
-  std::shared_ptr<const ITypedExpr> vFilterCondition = vFilterNode->filter();
+    const std::shared_ptr<const FilterNode>& filterNode,
+    ::substrait::FilterRel* filterRel) {
+  std::vector<std::shared_ptr<const PlanNode>> sources = filterNode->sources();
 
-  ::substrait::Rel* sFilterInput = sFilterRel->mutable_input();
-  //   Build source
-  toSubstrait(arena, vSource, sFilterInput);
+  // Check there only have one input.
+  VELOX_USER_CHECK_EQ(
+      1, sources.size(), "Filter plan node must have extract one source.");
+  auto source = sources[0];
 
-  RowTypePtr vPreNodeOutPut = vSource->outputType();
-  //   Construct substrait expr(Filter condition)
+  ::substrait::Rel* filterInput = filterRel->mutable_input();
+  // Build source.
+  toSubstrait(arena, source, filterInput);
 
-  sFilterRel->set_allocated_condition(v2SExprConvertor_.toSubstraitExpr(
-      arena, vFilterCondition, vPreNodeOutPut));
+  // Construct substrait expr(Filter condition).
+  auto filterCondition = filterNode->filter();
+  auto inputType = source->outputType();
+  filterRel->set_allocated_condition(
+      exprConvertor_.toSubstraitExpr(arena, filterCondition, inputType));
 
-  sFilterRel->mutable_common()->mutable_direct();
+  filterRel->mutable_common()->mutable_direct();
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const ValuesNode>& vValuesNode,
-    ::substrait::ReadRel* sReadRel) {
-  const RowTypePtr vOutPut = vValuesNode->outputType();
+    const std::shared_ptr<const ValuesNode>& valuesNode,
+    ::substrait::ReadRel* readRel) {
+  const auto& outputType = valuesNode->outputType();
 
-  ::substrait::ReadRel_VirtualTable* sVirtualTable =
-      sReadRel->mutable_virtual_table();
+  ::substrait::ReadRel_VirtualTable* virtualTable =
+      readRel->mutable_virtual_table();
 
-  ::substrait::NamedStruct* sBaseSchema = sReadRel->mutable_base_schema();
-  v2STypeConvertor_.toSubstraitNamedStruct(arena, vOutPut, sBaseSchema);
+  readRel->set_allocated_base_schema(
+      typeConvertor_.toSubstraitNamedStruct(arena, outputType));
+  // The row number of the input data.
+  int64_t numRows = valuesNode->values().size();
 
-  const PlanNodeId id = vValuesNode->id();
-  // sread.virtual_table().values_size(); multi rows
-  int64_t numRows = vValuesNode->values().size();
-  // should be the same value.kFieldsFieldNumber  = vOutputType->size();
-  int64_t numColumns;
-  // multi rows, each row is a RowVectorPrt
-
+  // There have multiple rows in the data and each row is a RowVectorPtr.
   for (int64_t row = 0; row < numRows; ++row) {
-    // the specfic row
-    ::substrait::Expression_Literal_Struct* sLitValue =
-        sVirtualTable->add_values();
-    RowVectorPtr rowValue = vValuesNode->values().at(row);
-    // the column numbers in the specfic row.
-    numColumns = rowValue->childrenSize();
+    // The row data.
+    ::substrait::Expression_Literal_Struct* litValue =
+        virtualTable->add_values();
+    const auto& rowValue = valuesNode->values().at(row);
+    // The column number of the row data.
+    int64_t numColumns = rowValue->childrenSize();
 
     for (int64_t column = 0; column < numColumns; ++column) {
-      ::substrait::Expression_Literal* sField;
+      ::substrait::Expression_Literal* substraitField =
+          google::protobuf::Arena::CreateMessage<
+              ::substrait::Expression_Literal>(&arena);
 
       VectorPtr children = rowValue->childAt(column);
 
-      sField->MergeFrom(*v2SExprConvertor_.toSubstraitExpr(
-          arena,
-          std::make_shared<ConstantTypedExpr>(children),
-          vOutPut,
-          sLitValue));
+      substraitField->MergeFrom(*exprConvertor_.toSubstraitExpr(
+          arena, std::make_shared<ConstantTypedExpr>(children), litValue));
     }
   }
-  sReadRel->mutable_common()->mutable_direct();
+  readRel->mutable_common()->mutable_direct();
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const ProjectNode>& vProjNode,
-    ::substrait::ProjectRel* sProjRel) {
-  // the info from vProjNode
-  const PlanNodeId vId = vProjNode->id();
-  std::vector<std::string> vNames = vProjNode->names();
-  std::vector<std::shared_ptr<const ITypedExpr>> vProjections =
-      vProjNode->projections();
-  const RowTypePtr vOutput = vProjNode->outputType();
+    const std::shared_ptr<const ProjectNode>& projectNode,
+    ::substrait::ProjectRel* projectRel) {
+  std::vector<std::shared_ptr<const ITypedExpr>> projections =
+      projectNode->projections();
 
-  // check how many inputs there have
-  std::vector<std::shared_ptr<const PlanNode>> vSources = vProjNode->sources();
-  // the PreNode
-  std::shared_ptr<const PlanNode> vSource;
-  int64_t vSourceSize = vSources.size();
-  if (vSourceSize == 0) {
-    VELOX_FAIL("Project Node must have input");
-  } else if (vSourceSize == 1) {
-    vSource = vSources[0];
-  } else {
-    // TODO
-    // select one in the plan fragment pass to transformVExpr
-    //  and the other change into root or simpleCapture.
-    VELOX_NYI("Haven't support multiple inputs now.");
-  }
+  std::vector<std::shared_ptr<const PlanNode>> sources = projectNode->sources();
+  // Check there only have one input.
+  VELOX_USER_CHECK_EQ(
+      1, sources.size(), "Project plan node must have extract one source.");
+  // The previous node.
+  std::shared_ptr<const PlanNode> source = sources[0];
 
-  // process the source Node.
-  ::substrait::Rel* sProjInput = sProjRel->mutable_input();
-  toSubstrait(arena, vSource, sProjInput);
+  // Process the source Node.
+  ::substrait::Rel* projectRelInput = projectRel->mutable_input();
+  toSubstrait(arena, source, projectRelInput);
 
-  // remapping the output
-  ::substrait::RelCommon_Emit* sProjEmit =
-      sProjRel->mutable_common()->mutable_emit();
+  // Remap the output.
+  ::substrait::RelCommon_Emit* projRelEmit =
+      projectRel->mutable_common()->mutable_emit();
 
-  int64_t vProjectionSize = vProjections.size();
+  int64_t projectionSize = projections.size();
 
-  RowTypePtr vPreNodeOutPut = vSource->outputType();
-  int64_t sProjEmitReMapId = vPreNodeOutPut->size();
+  auto inputType = source->outputType();
+  int64_t projectEmitReMapId = inputType->size();
 
-  for (int64_t i = 0; i < vProjectionSize; i++) {
-    std::shared_ptr<const ITypedExpr>& vExpr = vProjections.at(i);
+  for (int64_t i = 0; i < projectionSize; i++) {
+    std::shared_ptr<const ITypedExpr>& veloxExpr = projections.at(i);
 
-    sProjRel->add_expressions()->MergeFrom(
-        *v2SExprConvertor_.toSubstraitExpr(arena, vExpr, vPreNodeOutPut));
-    // add outputMapping for each vExpr
+    projectRel->add_expressions()->MergeFrom(
+        *exprConvertor_.toSubstraitExpr(arena, veloxExpr, inputType));
 
-    // add outputMapping for each vExpr
-    sProjEmit->add_output_mapping(sProjEmitReMapId);
-    sProjEmitReMapId += 1;
+    // Add outputMapping for each expression.
+    projRelEmit->add_output_mapping(projectEmitReMapId);
+    projectEmitReMapId += 1;
   }
 
   return;

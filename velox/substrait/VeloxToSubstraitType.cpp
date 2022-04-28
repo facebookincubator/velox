@@ -20,66 +20,67 @@
 
 namespace facebook::velox::substrait {
 
-void VeloxToSubstraitTypeConvertor::toSubstraitType(
+::substrait::Type* VeloxToSubstraitTypeConvertor::toSubstraitType(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& vType,
-    ::substrait::Type* sType) {
-  switch (vType->kind()) {
+    const velox::TypePtr& type) {
+  ::substrait::Type* substraitType =
+      google::protobuf::Arena::CreateMessage<::substrait::Type>(&arena);
+  switch (type->kind()) {
     case velox::TypeKind::BOOLEAN: {
-      sType->set_allocated_bool_(
+      substraitType->set_allocated_bool_(
           google::protobuf::Arena::CreateMessage<::substrait::Type_Boolean>(
               &arena));
       break;
     }
     case velox::TypeKind::TINYINT: {
-      sType->set_allocated_i8(
+      substraitType->set_allocated_i8(
           google::protobuf::Arena::CreateMessage<::substrait::Type_I8>(&arena));
       break;
     }
     case velox::TypeKind::SMALLINT: {
-      sType->set_allocated_i16(
+      substraitType->set_allocated_i16(
           google::protobuf::Arena::CreateMessage<::substrait::Type_I16>(
               &arena));
       break;
     }
     case velox::TypeKind::INTEGER: {
-      sType->set_allocated_i32(
+      substraitType->set_allocated_i32(
           google::protobuf::Arena::CreateMessage<::substrait::Type_I32>(
               &arena));
       break;
     }
     case velox::TypeKind::BIGINT: {
-      sType->set_allocated_i64(
+      substraitType->set_allocated_i64(
           google::protobuf::Arena::CreateMessage<::substrait::Type_I64>(
               &arena));
       break;
     }
     case velox::TypeKind::REAL: {
-      sType->set_allocated_fp32(
+      substraitType->set_allocated_fp32(
           google::protobuf::Arena::CreateMessage<::substrait::Type_FP32>(
               &arena));
       break;
     }
     case velox::TypeKind::DOUBLE: {
-      sType->set_allocated_fp64(
+      substraitType->set_allocated_fp64(
           google::protobuf::Arena::CreateMessage<::substrait::Type_FP64>(
               &arena));
       break;
     }
     case velox::TypeKind::VARCHAR: {
-      sType->set_allocated_varchar(
+      substraitType->set_allocated_varchar(
           google::protobuf::Arena::CreateMessage<::substrait::Type_VarChar>(
               &arena));
       break;
     }
     case velox::TypeKind::VARBINARY: {
-      sType->set_allocated_binary(
+      substraitType->set_allocated_binary(
           google::protobuf::Arena::CreateMessage<::substrait::Type_Binary>(
               &arena));
       break;
     }
     case velox::TypeKind::TIMESTAMP: {
-      sType->set_allocated_timestamp(
+      substraitType->set_allocated_timestamp(
           google::protobuf::Arena::CreateMessage<::substrait::Type_Timestamp>(
               &arena));
       break;
@@ -89,9 +90,10 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
           google::protobuf::Arena::CreateMessage<::substrait::Type_List>(
               &arena);
 
-      const TypePtr vElementType = vType->asArray().elementType();
-      toSubstraitType(arena, vElementType, sTList->mutable_type());
-      sType->set_allocated_list(sTList);
+      sTList->set_allocated_type(
+          toSubstraitType(arena, type->asArray().elementType()));
+
+      substraitType->set_allocated_list(sTList);
 
       break;
     }
@@ -99,13 +101,11 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
       ::substrait::Type_Map* sMap =
           google::protobuf::Arena::CreateMessage<::substrait::Type_Map>(&arena);
 
-      const TypePtr& vMapKeyType = vType->asMap().keyType();
-      const TypePtr& vMapValueType = vType->asMap().valueType();
+      sMap->set_allocated_key(toSubstraitType(arena, type->asMap().keyType()));
+      sMap->set_allocated_value(
+          toSubstraitType(arena, type->asMap().valueType()));
 
-      toSubstraitType(arena, vMapKeyType, sMap->mutable_key());
-      toSubstraitType(arena, vMapValueType, sMap->mutable_value());
-
-      sType->set_allocated_map(sMap);
+      substraitType->set_allocated_map(sMap);
 
       break;
     }
@@ -114,26 +114,31 @@ void VeloxToSubstraitTypeConvertor::toSubstraitType(
     case velox::TypeKind::OPAQUE:
     case velox::TypeKind::INVALID:
     default:
-      VELOX_UNSUPPORTED("Unsupported type '{}'", std::string(vType->kindName()))
+      VELOX_UNSUPPORTED("Unsupported velox type '{}'", type->toString());
   }
+  return substraitType;
 }
 
-void VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
+::substrait::NamedStruct* VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     google::protobuf::Arena& arena,
-    const velox::RowTypePtr& vRow,
-    ::substrait::NamedStruct* sNamedStruct) {
-  const int64_t vSize = vRow->size();
-  const std::vector<std::string>& vNames = vRow->names();
-  const std::vector<TypePtr>& vTypes = vRow->children();
-  ::substrait::Type_Struct* sTypeStruct = sNamedStruct->mutable_struct_();
+    const velox::RowTypePtr& rowType) {
+  ::substrait::NamedStruct* substraitNamedStruct =
+      google::protobuf::Arena::CreateMessage<::substrait::NamedStruct>(&arena);
 
-  for (int64_t i = 0; i < vSize; ++i) {
-    const std::string& vName = vNames.at(i);
-    const TypePtr& vType = vTypes.at(i);
-    sNamedStruct->add_names(vName);
+  const int64_t size = rowType->size();
+  const std::vector<std::string>& names = rowType->names();
+  const std::vector<TypePtr>& veloxTypes = rowType->children();
+  ::substrait::Type_Struct* substraitType =
+      substraitNamedStruct->mutable_struct_();
 
-    toSubstraitType(arena, vType, sTypeStruct->add_types());
+  for (int64_t i = 0; i < size; ++i) {
+    const std::string& name = names.at(i);
+    const TypePtr& veloxType = veloxTypes.at(i);
+    substraitNamedStruct->add_names(name);
+
+    substraitType->add_types()->MergeFrom(*toSubstraitType(arena, veloxType));
   }
+  return substraitNamedStruct;
 }
 
 } // namespace facebook::velox::substrait

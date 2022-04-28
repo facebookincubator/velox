@@ -25,7 +25,7 @@ class VeloxToSubstraitFuncConvertor {
   uint64_t registerSubstraitFunction(std::string name);
 
  private:
-  /// The function mapping get from velox node
+  /// The function mapping get from velox node.
   std::unordered_map<std::string, uint64_t> functionMap_;
 };
 

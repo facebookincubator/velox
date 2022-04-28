@@ -23,7 +23,6 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/PlanNode.h"
-#include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/type/Type.h"
@@ -36,44 +35,44 @@ using namespace facebook::velox::core;
 
 namespace facebook::velox::substrait {
 
-/// This class is used to convert the Velox plan into substrait plan.
+/// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
   /// Convert Velox PlanNode into Substrait Plan.
-  /// \param vPlan Velox query plan to conver.
+  /// \param vPlan Velox query plan to convert.
   /// \param arena Arena to use for allocating Substrait plan objects.
   /// \return A pointer to Substrait plan object allocated on the arena and
   /// representing the input Velox plan.
   ::substrait::Plan* toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const PlanNode>& vPlan);
+      const std::shared_ptr<const PlanNode>& planNode);
 
  private:
   /// Convert Velox PlanNode into Substrait Rel.
   void toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const PlanNode>& vPlanNode,
-      ::substrait::Rel* sRel);
+      const std::shared_ptr<const PlanNode>& planNode,
+      ::substrait::Rel* rel);
 
   /// Convert Velox FilterNode into Substrait FilterRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const FilterNode>& vFilterNode,
-      ::substrait::FilterRel* sFilterRel);
+      const std::shared_ptr<const FilterNode>& filterNode,
+      ::substrait::FilterRel* filterRel);
 
   /// Convert Velox ValuesNode into Substrait ReadRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const ValuesNode>& vValuesNode,
-      ::substrait::ReadRel* sReadRel);
+      const std::shared_ptr<const ValuesNode>& valuesNode,
+      ::substrait::ReadRel* readRel);
 
   /// Convert Velox ProjectNode into Substrait ProjectRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const ProjectNode>& vProjNode,
-      ::substrait::ProjectRel* sProjRel);
+      const std::shared_ptr<const ProjectNode>& projectNode,
+      ::substrait::ProjectRel* projectRel);
 
-  VeloxToSubstraitExprConvertor v2SExprConvertor_;
-  VeloxToSubstraitTypeConvertor v2STypeConvertor_;
+  VeloxToSubstraitExprConvertor exprConvertor_;
+  VeloxToSubstraitTypeConvertor typeConvertor_;
 };
 } // namespace facebook::velox::substrait

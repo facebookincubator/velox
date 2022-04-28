@@ -31,15 +31,13 @@ using namespace facebook::velox::substrait;
 
 class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
  protected:
-  /// the function used to make data
-  /// \param size the number of RowVectorPtr.
-  /// \param childSize the size of rowType_, the number of columns
-  /// \param batchSize batch size.  row number
-  /// \return std::vector<RowVectorPtr>
-  std::vector<RowVectorPtr>
-  makeVector(int64_t size, int64_t childSize, int64_t batchSize) {
+  /// The function to make RowVectorPtr data which use the specific rowType_ and
+  /// batchSize. \param size the number of RowVectorPtr. \param batchSize The
+  /// batch Size of the data.
+  std::vector<RowVectorPtr> makeVector(int64_t size, int64_t batchSize) {
     std::vector<RowVectorPtr> vectors;
     std::mt19937 gen(std::mt19937::default_seed);
+    int64_t childSize = rowType_->size();
     for (int i = 0; i < size; i++) {
       std::vector<VectorPtr> children;
       for (int j = 0; j < childSize; j++) {
@@ -51,38 +49,28 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
             nullEvery(2)));
       }
 
-      std::vector<std::string> childrenNames = rowType_->names();
-      vectors.push_back(makeRowVector({childrenNames}, {children}));
+      vectors.push_back(makeRowVector({children}));
     }
     return vectors;
   };
 
   void assertPlanConversion(
-      const std::shared_ptr<const core::PlanNode>& vPlan,
+      const std::shared_ptr<const core::PlanNode>& plan,
       const std::string& duckDbSql) {
-    assertQuery(vPlan, duckDbSql);
-    // Convert Velox Plan to Substrait Plan
-    auto arena = std::make_shared<google::protobuf::Arena>();
-    v2SPlanConvertor_.toSubstrait(*arena, vPlan);
+    assertQuery(plan, duckDbSql);
+    // Convert Velox Plan to Substrait Plan.
+    google::protobuf::Arena arena;
+    convertor_.toSubstrait(arena, plan);
   }
 
-  void SetUp() override {
-    OperatorTestBase::SetUp();
-
-    rowType_ = ROW(
-        {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), INTEGER(), INTEGER()});
-  }
-
-  void TearDown() override {
-    OperatorTestBase::TearDown();
-  }
-
-  VeloxToSubstraitPlanConvertor v2SPlanConvertor_;
-  RowTypePtr rowType_;
+  VeloxToSubstraitPlanConvertor convertor_;
+  RowTypePtr rowType_{
+      ROW({"c0", "c1", "c2", "c3"},
+          {INTEGER(), INTEGER(), INTEGER(), INTEGER()})};
 };
 
 TEST_F(SubstraitVeloxPlanConvertorTest, project) {
-  auto vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 2);
   createDuckDbTable(vectors);
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 - c2"}).planNode();
@@ -90,21 +78,21 @@ TEST_F(SubstraitVeloxPlanConvertorTest, project) {
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
-  auto vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 2);
   createDuckDbTable(vectors);
 
   const std::string& filter =
       "(c2 < 1000) and (c1 between 0.6 and 1.6) and (c0 >= 100)";
-  auto vPlan = PlanBuilder().values(vectors).filter(filter).planNode();
+  auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
 
-  assertPlanConversion(vPlan, "SELECT * FROM tmp WHERE " + filter);
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE " + filter);
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, values) {
-  auto vectors = makeVector(3, 4, 2);
+  auto vectors = makeVector(3, 2);
   createDuckDbTable(vectors);
 
-  auto vPlan = PlanBuilder().values(vectors).planNode();
+  auto plan = PlanBuilder().values(vectors).planNode();
 
-  assertPlanConversion(vPlan, "SELECT * FROM tmp");
+  assertPlanConversion(plan, "SELECT * FROM tmp");
 }
