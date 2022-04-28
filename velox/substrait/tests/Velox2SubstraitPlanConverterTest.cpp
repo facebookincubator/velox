@@ -61,8 +61,7 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     assertQuery(plan, duckDbSql);
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
-    auto s = convertor_.toSubstrait(arena, plan);
-    s->PrintDebugString();
+    convertor_.toSubstrait(arena, plan);
   }
 
   VeloxToSubstraitPlanConvertor convertor_;
