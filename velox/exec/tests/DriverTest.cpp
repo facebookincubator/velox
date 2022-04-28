@@ -612,7 +612,7 @@ class PauserNodeFactory : public Operator::PlanNodeTranslator {
         sequence_{sequence},
         testInstance_{testInstance} {}
 
-  std::unique_ptr<Operator> translate(
+  std::unique_ptr<Operator> toOperator(
       DriverCtx* ctx,
       int32_t id,
       const std::shared_ptr<const core::PlanNode>& node) override {
@@ -762,7 +762,7 @@ class ThrowNodeFactory : public Operator::PlanNodeTranslator {
  public:
   ThrowNodeFactory() = default;
 
-  std::unique_ptr<Operator> translate(
+  std::unique_ptr<Operator> toOperator(
       DriverCtx* ctx,
       int32_t id,
       const std::shared_ptr<const core::PlanNode>& node) override {

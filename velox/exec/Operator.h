@@ -190,19 +190,21 @@ class Operator {
 
     // Translates plan node to operator. Returns nullptr if the plan node cannot
     // be handled by this factory.
-    virtual std::unique_ptr<Operator> translate(
+    virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* ctx,
         int32_t id,
         const std::shared_ptr<const core::PlanNode>& node) = 0;
 
     // Translates plan node to join bridge. Returns nullptr if the plan node
     // cannot be handled by this factory.
-    virtual std::shared_ptr<JoinBridge> translate(
+    virtual std::unique_ptr<JoinBridge> toJoinBridge(
         const std::shared_ptr<const core::PlanNode>& node) {
       return nullptr;
     };
 
-    virtual OperatorSupplier translateToOpSupplier(
+    // Translates plan node to operator supplier. Returns nullptr if the plan
+    // node cannot be handled by this factory.
+    virtual OperatorSupplier toOperatorSupplier(
         const std::shared_ptr<const core::PlanNode>& node) {
       return nullptr;
     };
@@ -359,6 +361,12 @@ class Operator {
   // Calls all the registered PlanNodeTranslators on 'planNode' and
   // returns the result of the first one that returns non-nullptr
   // or nullptr if all return nullptr.
+  static std::unique_ptr<JoinBridge> joinBridgeFromPlanNode(
+      const std::shared_ptr<const core::PlanNode>& planNode);
+
+  // Calls all the registered PlanNodeTranslators on 'planNode' and
+  // returns the result of the first one that returns non-nullptr
+  // or nullptr if all return nullptr.
   static OperatorSupplier operatorSupplierFromPlanNode(
       const std::shared_ptr<const core::PlanNode>& planNode);
 
@@ -367,9 +375,9 @@ class Operator {
   static std::optional<uint32_t> maxDrivers(
       const std::shared_ptr<const core::PlanNode>& planNode);
 
+ protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
 
- protected:
   // Clears the columns of 'output_' that are projected from
   // 'input_'. This should be done when preparing to produce a next
   // batch of output to drop any lingering references to row

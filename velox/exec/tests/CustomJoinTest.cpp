@@ -49,17 +49,18 @@ class MockJoinNode : public core::PlanNode {
 };
 
 class CustomJoinBridgeTranslator : public Operator::PlanNodeTranslator {
-  std::unique_ptr<Operator> translate(
+  std::unique_ptr<Operator> toOperator(
       DriverCtx* ctx,
       int32_t id,
       const std::shared_ptr<const core::PlanNode>& node) {
     return nullptr;
   }
 
-  std::shared_ptr<JoinBridge> translate(
+  std::unique_ptr<JoinBridge> toJoinBridge(
       const std::shared_ptr<const core::PlanNode>& node) {
     if (auto joinNode = std::dynamic_pointer_cast<const MockJoinNode>(node)) {
-      return std::shared_ptr<JoinBridge>(std::make_shared<MockJoinBridge>());
+      auto joinBridge = std::make_unique<MockJoinBridge>();
+      return joinBridge;
     }
     return nullptr;
   }
@@ -76,26 +77,3 @@ class MockJoinBridgeTest : public OperatorTestBase {
     Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
   }
 };
-
-TEST_F(MockJoinBridgeTest, singleJoinBridge) {
-  auto planNode = std::make_shared<MockJoinNode>("0");
-
-  auto& joinTranslators = Operator::translators();
-  auto joinBridge = joinTranslators[0]->translate(planNode);
-  auto mockJoinBridge = std::dynamic_pointer_cast<MockJoinBridge>(joinBridge);
-  EXPECT_TRUE(mockJoinBridge->isMockJoinBridge());
-}
-
-TEST_F(MockJoinBridgeTest, MultiJoinBridge) {
-  registerJoinBridge();
-  auto planNode = std::make_shared<MockJoinNode>("0");
-
-  auto& translators = Operator::translators();
-  for (const auto& translator : translators) {
-    if (auto joinBridge = translator->translate(planNode)) {
-      auto mockJoinBridge =
-          std::dynamic_pointer_cast<MockJoinBridge>(joinBridge);
-      EXPECT_TRUE(mockJoinBridge->isMockJoinBridge());
-    }
-  }
-}

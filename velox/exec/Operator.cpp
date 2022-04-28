@@ -93,9 +93,21 @@ std::unique_ptr<Operator> Operator::fromPlanNode(
     int32_t id,
     const std::shared_ptr<const core::PlanNode>& planNode) {
   for (auto& translator : translators()) {
-    auto op = translator->translate(ctx, id, planNode);
+    auto op = translator->toOperator(ctx, id, planNode);
     if (op) {
       return op;
+    }
+  }
+  return nullptr;
+}
+
+// static
+std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
+    const std::shared_ptr<const core::PlanNode>& planNode) {
+  for (auto& translator : translators()) {
+    auto joinBridge = translator->toJoinBridge(planNode);
+    if (joinBridge) {
+      return joinBridge;
     }
   }
   return nullptr;
@@ -105,7 +117,7 @@ std::unique_ptr<Operator> Operator::fromPlanNode(
 OperatorSupplier Operator::operatorSupplierFromPlanNode(
     const std::shared_ptr<const core::PlanNode>& planNode) {
   for (auto& translator : translators()) {
-    auto supplier = translator->translateToOpSupplier(planNode);
+    auto supplier = translator->toOperatorSupplier(planNode);
     if (supplier) {
       return supplier;
     }

@@ -939,23 +939,15 @@ void Task::addHashJoinBridgesLocked(
 void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
     const std::vector<std::shared_ptr<const core::PlanNode>>& planNodes) {
-  auto& translators = Operator::translators();
-  if (0 == translators.size()) {
-    return;
-  }
-
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNode : planNodes) {
-    for (const auto& translator : translators) {
-      if (auto joinBridge = translator->translate(planNode)) {
-        splitGroupState.bridges.emplace(planNode->id(), joinBridge);
-        return;
-      }
+    if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
+      splitGroupState.bridges.emplace(planNode->id(), std::move(joinBridge));
+      return;
     }
   }
 }
 
-// Returns a Customized Join Bridge for 'planNodeId'.
 std::shared_ptr<JoinBridge> Task::getCustomJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
