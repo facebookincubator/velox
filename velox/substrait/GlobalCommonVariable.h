@@ -34,25 +34,15 @@ class GlobalCommonVarSingleton {
 
   ~GlobalCommonVarSingleton(){};
 
-  std::shared_ptr<::substrait::Plan> getSPlan() const;
-
-  void setSPlan(std::shared_ptr<::substrait::Plan> sPlan);
-
   uint64_t getPreFunctionReference() const;
 
   void setPreFunctionReference();
 
  protected:
-  /// An intermediate variable to help us get the corresponding function mapping
-  /// relationship when convert from substrait to velox
-  std::shared_ptr<::substrait::Plan> sPlan_;
-
   /// The function id in the extension function mapping
   uint64_t preFunctionReference_;
 
  private:
-  GlobalCommonVarSingleton()
-      : sPlan_(std::make_shared<::substrait::Plan>()),
-        preFunctionReference_(0){};
+  GlobalCommonVarSingleton() : preFunctionReference_(0){};
 };
 } // namespace facebook::velox::substrait

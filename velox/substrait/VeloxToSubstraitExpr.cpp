@@ -20,7 +20,7 @@
 
 namespace facebook::velox::substrait {
 
-::substrait::Expression* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const ITypedExpr>& expr,
     const RowTypePtr& inputType) {
@@ -28,30 +28,34 @@ namespace facebook::velox::substrait {
       google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
   if (auto constExpr =
           std::dynamic_pointer_cast<const ConstantTypedExpr>(expr)) {
-    substraitExpr->set_allocated_literal(toSubstraitExpr(arena, constExpr));
-    return substraitExpr;
+    substraitExpr->mutable_literal()->MergeFrom(
+        toSubstraitExpr(arena, constExpr));
+    return *substraitExpr;
   }
   if (auto callTypeExpr =
           std::dynamic_pointer_cast<const CallTypedExpr>(expr)) {
-    substraitExpr->MergeFrom(*toSubstraitExpr(arena, callTypeExpr, inputType));
-    return substraitExpr;
+    substraitExpr->MergeFrom(toSubstraitExpr(arena, callTypeExpr, inputType));
+    return *substraitExpr;
   }
   if (auto fieldExpr =
           std::dynamic_pointer_cast<const FieldAccessTypedExpr>(expr)) {
-    substraitExpr->set_allocated_selection(
+    substraitExpr->mutable_selection()->MergeFrom(
         toSubstraitExpr(arena, fieldExpr, inputType));
-    return substraitExpr;
+
+    return *substraitExpr;
   }
   if (auto castExpr = std::dynamic_pointer_cast<const CastTypedExpr>(expr)) {
-    substraitExpr->set_allocated_cast(
+    substraitExpr->mutable_cast()->MergeFrom(
         toSubstraitExpr(arena, castExpr, inputType));
-    return substraitExpr;
+
+    return *substraitExpr;
   } else {
     VELOX_UNSUPPORTED("Unsupport Expr '{}' in Substrait", expr->toString());
   }
 }
 
-::substrait::Expression_Cast* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+const ::substrait::Expression_Cast&
+VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const CastTypedExpr>& castExpr,
     const RowTypePtr& inputType) {
@@ -61,17 +65,17 @@ namespace facebook::velox::substrait {
   std::vector<std::shared_ptr<const ITypedExpr>> castExprInputs =
       castExpr->inputs();
 
-  substraitCastExpr->set_allocated_type(
+  substraitCastExpr->mutable_type()->MergeFrom(
       typeConvertor_.toSubstraitType(arena, castExpr->type()));
 
   for (auto& arg : castExprInputs) {
-    substraitCastExpr->set_allocated_input(
+    substraitCastExpr->mutable_input()->MergeFrom(
         toSubstraitExpr(arena, arg, inputType));
   }
-  return substraitCastExpr;
+  return *substraitCastExpr;
 }
 
-::substrait::Expression_FieldReference*
+const ::substrait::Expression_FieldReference&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const FieldAccessTypedExpr>& fieldExpr,
@@ -105,10 +109,10 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   }
   directStruct->set_field(currentColId);
 
-  return substraitFieldExpr;
+  return *substraitFieldExpr;
 }
 
-::substrait::Expression* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const CallTypedExpr>& callTypeExpr,
     const RowTypePtr& inputType) {
@@ -131,19 +135,21 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
         funcConvertor_.registerSubstraitFunction(callTypeExprFunName));
 
     for (auto& arg : callTypeExprInputs) {
-      scalaExpr->add_args()->MergeFrom(*toSubstraitExpr(arena, arg, inputType));
+      scalaExpr->add_args()->MergeFrom(toSubstraitExpr(arena, arg, inputType));
     }
 
-    scalaExpr->set_allocated_output_type(
+    scalaExpr->mutable_output_type()->MergeFrom(
         typeConvertor_.toSubstraitType(arena, callTypeExpr->type()));
+
   } else {
     VELOX_NYI("Unsupport CallTypeExpr with FunName '{}'", callTypeExprFunName);
   }
 
-  return substraitExpr;
+  return *substraitExpr;
 }
 
-::substrait::Expression_Literal* VeloxToSubstraitExprConvertor::toSubstraitExpr(
+const ::substrait::Expression_Literal&
+VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const ConstantTypedExpr>& constExpr,
     ::substrait::Expression_Literal_Struct* litValue) {
@@ -154,7 +160,7 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
   }
 }
 
-::substrait::Expression_Literal*
+const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
     const velox::variant& variantValue) {
@@ -212,10 +218,10 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
           mapTypeKindToName(variantValue.kind()));
   }
 
-  return literalExpr;
+  return *literalExpr;
 }
 
-::substrait::Expression_Literal*
+const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
     const velox::VectorPtr& vectorValue,
@@ -234,7 +240,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_boolean(childToFlatVec->valueAt(i));
         }
@@ -249,7 +255,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_i8(childToFlatVec->valueAt(i));
         }
@@ -264,7 +270,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_i16(childToFlatVec->valueAt(i));
         }
@@ -279,7 +285,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_i32(childToFlatVec->valueAt(i));
         }
@@ -294,7 +300,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_i64(childToFlatVec->valueAt(i));
         }
@@ -309,7 +315,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_fp32(childToFlatVec->valueAt(i));
         }
@@ -324,7 +330,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           substraitField->set_fp64(childToFlatVec->valueAt(i));
         }
@@ -339,7 +345,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
         substraitField = litValue->add_fields();
         if (childToFlatVec->isNullAt(i)) {
           // Process the null value.
-          substraitField->MergeFrom(*toSubstraitNullLiteral(arena, childType));
+          substraitField->MergeFrom(toSubstraitNullLiteral(arena, childType));
         } else {
           ::substrait::Expression_Literal::VarChar* sVarChar =
               google::protobuf::Arena::CreateMessage<
@@ -356,10 +362,10 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       VELOX_UNSUPPORTED("Unsupported type '{}'", childType->toString());
     }
   }
-  return substraitField;
+  return *substraitField;
 }
 
-::substrait::Expression_Literal*
+const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
     google::protobuf::Arena& arena,
     const velox::TypePtr& type) {
@@ -440,7 +446,7 @@ VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
       VELOX_UNSUPPORTED("Unsupported type '{}'", std::string(type->kindName()));
     }
   }
-  return substraitField;
+  return *substraitField;
 }
 
 } // namespace facebook::velox::substrait

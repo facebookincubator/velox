@@ -31,13 +31,14 @@ using namespace facebook::velox::substrait;
 
 class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
  protected:
-  /// The function to make RowVectorPtr data which use the specific rowType_ and
-  /// batchSize. \param size the number of RowVectorPtr. \param batchSize The
-  /// batch Size of the data.
-  std::vector<RowVectorPtr> makeVector(int64_t size, int64_t batchSize) {
+  /// Makes a vector of INTEGER type with 'size' RowVectorPtr.
+  /// @param size The number of RowVectorPtr.
+  /// @param childSize The number of columns for each row.
+  /// @param batchSize The batch Size of the data.
+  std::vector<RowVectorPtr>
+  makeVectors(int64_t size, int64_t childSize, int64_t batchSize) {
     std::vector<RowVectorPtr> vectors;
     std::mt19937 gen(std::mt19937::default_seed);
-    int64_t childSize = rowType_->size();
     for (int i = 0; i < size; i++) {
       std::vector<VectorPtr> children;
       for (int j = 0; j < childSize; j++) {
@@ -60,17 +61,15 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     assertQuery(plan, duckDbSql);
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
-    convertor_.toSubstrait(arena, plan);
+    auto s = convertor_.toSubstrait(arena, plan);
+    s->PrintDebugString();
   }
 
   VeloxToSubstraitPlanConvertor convertor_;
-  RowTypePtr rowType_{
-      ROW({"c0", "c1", "c2", "c3"},
-          {INTEGER(), INTEGER(), INTEGER(), INTEGER()})};
 };
 
 TEST_F(SubstraitVeloxPlanConvertorTest, project) {
-  auto vectors = makeVector(3, 2);
+  auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
   auto plan =
       PlanBuilder().values(vectors).project({"c0 + c1", "c1 - c2"}).planNode();
@@ -78,7 +77,7 @@ TEST_F(SubstraitVeloxPlanConvertorTest, project) {
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
-  auto vectors = makeVector(3, 2);
+  auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
 
   const std::string& filter =
@@ -89,7 +88,7 @@ TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
 }
 
 TEST_F(SubstraitVeloxPlanConvertorTest, values) {
-  auto vectors = makeVector(3, 2);
+  auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder().values(vectors).planNode();

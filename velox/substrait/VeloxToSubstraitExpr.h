@@ -35,7 +35,7 @@ class VeloxToSubstraitExprConvertor {
   /// which also equals the output row type of the previous node of the current.
   /// \return A pointer to Substrait expression object allocated on the arena
   /// and representing the input Velox expression.
-  ::substrait::Expression* toSubstraitExpr(
+  const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const ITypedExpr>& expr,
       const RowTypePtr& inputType);
@@ -49,43 +49,43 @@ class VeloxToSubstraitExprConvertor {
   /// \param litValue The Struct that the returned literal expression belong
   /// to. \return A pointer to Substrait Literal expression object allocated on
   /// the arena and representing the input Velox Constant expression.
-  ::substrait::Expression_Literal* toSubstraitExpr(
+  const ::substrait::Expression_Literal& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const ConstantTypedExpr>& constExpr,
       ::substrait::Expression_Literal_Struct* litValue = nullptr);
 
  private:
   /// Convert Velox Cast Expression to Substrait Cast Expression.
-  ::substrait::Expression_Cast* toSubstraitExpr(
+  const ::substrait::Expression_Cast& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const CastTypedExpr>& castExpr,
       const RowTypePtr& inputType);
 
   /// Convert Velox FieldAccessTypedExpr to Substrait FieldReference Expression.
-  ::substrait::Expression_FieldReference* toSubstraitExpr(
+  const ::substrait::Expression_FieldReference& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const FieldAccessTypedExpr>& fieldExpr,
       const RowTypePtr& inputType);
 
   /// Convert Velox CallTypedExpr Expression to Substrait Expression.
-  ::substrait::Expression* toSubstraitExpr(
+  const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const CallTypedExpr>& callTypeExpr,
       const RowTypePtr& inputType);
 
   /// Convert Velox variant to Substrait Literal Expression.
-  ::substrait::Expression_Literal* toSubstraitLiteral(
+  const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
       const velox::variant& variantValue);
 
   /// Convert Velox vector to Substrait literal.
-  ::substrait::Expression_Literal* toSubstraitLiteral(
+  const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
       const velox::VectorPtr& vectorValue,
       ::substrait::Expression_Literal_Struct* litValue);
 
   /// Convert Velox null literal to Substrait null literal.
-  ::substrait::Expression_Literal* toSubstraitNullLiteral(
+  const ::substrait::Expression_Literal& toSubstraitNullLiteral(
       google::protobuf::Arena& arena,
       const velox::TypePtr& type);
 

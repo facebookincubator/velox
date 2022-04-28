@@ -61,8 +61,8 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   // Check there only have one input.
   VELOX_USER_CHECK_EQ(
-      1, sources.size(), "Filter plan node must have extract one source.");
-  auto source = sources[0];
+      1, sources.size(), "Filter plan node must have exactly one source.");
+  const auto& source = sources[0];
 
   ::substrait::Rel* filterInput = filterRel->mutable_input();
   // Build source.
@@ -71,7 +71,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   // Construct substrait expr(Filter condition).
   auto filterCondition = filterNode->filter();
   auto inputType = source->outputType();
-  filterRel->set_allocated_condition(
+  filterRel->mutable_condition()->MergeFrom(
       exprConvertor_.toSubstraitExpr(arena, filterCondition, inputType));
 
   filterRel->mutable_common()->mutable_direct();
@@ -86,29 +86,30 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   ::substrait::ReadRel_VirtualTable* virtualTable =
       readRel->mutable_virtual_table();
 
-  readRel->set_allocated_base_schema(
+  readRel->mutable_base_schema()->MergeFrom(
       typeConvertor_.toSubstraitNamedStruct(arena, outputType));
-  // The row number of the input data.
-  int64_t numRows = valuesNode->values().size();
 
-  // There have multiple rows in the data and each row is a RowVectorPtr.
-  for (int64_t row = 0; row < numRows; ++row) {
+  // The row number of the input data.
+  int64_t numVectors = valuesNode->values().size();
+
+  // There can be multiple rows in the data and each row is a RowVectorPtr.
+  for (int64_t row = 0; row < numVectors; ++row) {
     // The row data.
     ::substrait::Expression_Literal_Struct* litValue =
         virtualTable->add_values();
-    const auto& rowValue = valuesNode->values().at(row);
+    const auto& rowVector = valuesNode->values().at(row);
     // The column number of the row data.
-    int64_t numColumns = rowValue->childrenSize();
+    int64_t numColumns = rowVector->childrenSize();
 
     for (int64_t column = 0; column < numColumns; ++column) {
       ::substrait::Expression_Literal* substraitField =
           google::protobuf::Arena::CreateMessage<
               ::substrait::Expression_Literal>(&arena);
 
-      VectorPtr children = rowValue->childAt(column);
+      const VectorPtr& child = rowVector->childAt(column);
 
-      substraitField->MergeFrom(*exprConvertor_.toSubstraitExpr(
-          arena, std::make_shared<ConstantTypedExpr>(children), litValue));
+      substraitField->MergeFrom(exprConvertor_.toSubstraitExpr(
+          arena, std::make_shared<ConstantTypedExpr>(child), litValue));
     }
   }
   readRel->mutable_common()->mutable_direct();
@@ -124,9 +125,9 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   std::vector<std::shared_ptr<const PlanNode>> sources = projectNode->sources();
   // Check there only have one input.
   VELOX_USER_CHECK_EQ(
-      1, sources.size(), "Project plan node must have extract one source.");
+      1, sources.size(), "Project plan node must have exactly one source.");
   // The previous node.
-  std::shared_ptr<const PlanNode> source = sources[0];
+  const auto& source = sources[0];
 
   // Process the source Node.
   ::substrait::Rel* projectRelInput = projectRel->mutable_input();
@@ -139,17 +140,16 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   int64_t projectionSize = projections.size();
 
   auto inputType = source->outputType();
-  int64_t projectEmitReMapId = inputType->size();
+  int64_t inputTypeSize = inputType->size();
 
   for (int64_t i = 0; i < projectionSize; i++) {
-    std::shared_ptr<const ITypedExpr>& veloxExpr = projections.at(i);
+    const auto& veloxExpr = projections.at(i);
 
     projectRel->add_expressions()->MergeFrom(
-        *exprConvertor_.toSubstraitExpr(arena, veloxExpr, inputType));
+        exprConvertor_.toSubstraitExpr(arena, veloxExpr, inputType));
 
     // Add outputMapping for each expression.
-    projRelEmit->add_output_mapping(projectEmitReMapId);
-    projectEmitReMapId += 1;
+    projRelEmit->add_output_mapping(inputTypeSize + i);
   }
 
   return;

@@ -20,7 +20,7 @@
 
 namespace facebook::velox::substrait {
 
-::substrait::Type* VeloxToSubstraitTypeConvertor::toSubstraitType(
+const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
     google::protobuf::Arena& arena,
     const velox::TypePtr& type) {
   ::substrait::Type* substraitType =
@@ -90,7 +90,7 @@ namespace facebook::velox::substrait {
           google::protobuf::Arena::CreateMessage<::substrait::Type_List>(
               &arena);
 
-      sTList->set_allocated_type(
+      sTList->mutable_type()->MergeFrom(
           toSubstraitType(arena, type->asArray().elementType()));
 
       substraitType->set_allocated_list(sTList);
@@ -101,8 +101,9 @@ namespace facebook::velox::substrait {
       ::substrait::Type_Map* sMap =
           google::protobuf::Arena::CreateMessage<::substrait::Type_Map>(&arena);
 
-      sMap->set_allocated_key(toSubstraitType(arena, type->asMap().keyType()));
-      sMap->set_allocated_value(
+      sMap->mutable_key()->MergeFrom(
+          toSubstraitType(arena, type->asMap().keyType()));
+      sMap->mutable_value()->MergeFrom(
           toSubstraitType(arena, type->asMap().valueType()));
 
       substraitType->set_allocated_map(sMap);
@@ -116,10 +117,11 @@ namespace facebook::velox::substrait {
     default:
       VELOX_UNSUPPORTED("Unsupported velox type '{}'", type->toString());
   }
-  return substraitType;
+  return *substraitType;
 }
 
-::substrait::NamedStruct* VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
+const ::substrait::NamedStruct&
+VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     google::protobuf::Arena& arena,
     const velox::RowTypePtr& rowType) {
   ::substrait::NamedStruct* substraitNamedStruct =
@@ -136,9 +138,9 @@ namespace facebook::velox::substrait {
     const TypePtr& veloxType = veloxTypes.at(i);
     substraitNamedStruct->add_names(name);
 
-    substraitType->add_types()->MergeFrom(*toSubstraitType(arena, veloxType));
+    substraitType->add_types()->MergeFrom(toSubstraitType(arena, veloxType));
   }
-  return substraitNamedStruct;
+  return *substraitNamedStruct;
 }
 
 } // namespace facebook::velox::substrait

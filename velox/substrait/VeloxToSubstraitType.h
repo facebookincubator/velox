@@ -28,12 +28,12 @@ namespace facebook::velox::substrait {
 class VeloxToSubstraitTypeConvertor {
  public:
   /// Convert Velox RowType to Substrait NamedStruct.
-  ::substrait::NamedStruct* toSubstraitNamedStruct(
+  const ::substrait::NamedStruct& toSubstraitNamedStruct(
       google::protobuf::Arena& arena,
       const velox::RowTypePtr& rowType);
 
   /// Convert Velox Type to Substrait Type.
-  ::substrait::Type* toSubstraitType(
+  const ::substrait::Type& toSubstraitType(
       google::protobuf::Arena& arena,
       const velox::TypePtr& type);
 };

@@ -23,15 +23,6 @@ GlobalCommonVarSingleton& GlobalCommonVarSingleton::getInstance() {
   return instance;
 }
 
-std::shared_ptr<::substrait::Plan> GlobalCommonVarSingleton::getSPlan() const {
-  return sPlan_;
-}
-
-void GlobalCommonVarSingleton::setSPlan(
-    std::shared_ptr<::substrait::Plan> sPlan) {
-  sPlan_ = sPlan;
-}
-
 uint64_t GlobalCommonVarSingleton::getPreFunctionReference() const {
   return preFunctionReference_;
 }
