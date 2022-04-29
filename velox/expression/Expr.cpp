@@ -956,24 +956,24 @@ void Expr::evalAll(
         return;
       }
     }
-  }
 
-  // If any errors occurred evaluating the arguments, it's possible (even
-  // likely) that the values for those arguments were not defined which could
-  // lead to undefined behavior if we try to evaluate the current function on
-  // them.  It's safe to skip evaluating them since the value for this branch
-  // of the expression tree will be NULL for those rows anyway.
-  if (context->errors()) {
-    if (remainingRows == &rows) {
-      nonNulls.allocate(rows.end());
-      *nonNulls.get() = rows;
-      remainingRows = nonNulls.get();
-    }
-    deselectErrors(context, *nonNulls.get());
-    if (!remainingRows->hasSelections()) {
-      inputValues_.clear();
-      setAllNulls(rows, context, result);
-      return;
+    // If any errors occurred evaluating the arguments, it's possible (even
+    // likely) that the values for those arguments were not defined which could
+    // lead to undefined behavior if we try to evaluate the current function on
+    // them.  It's safe to skip evaluating them since the value for this branch
+    // of the expression tree will be NULL for those rows anyway.
+    if (context->errors()) {
+      if (remainingRows == &rows) {
+        nonNulls.allocate(rows.end());
+        *nonNulls.get() = rows;
+        remainingRows = nonNulls.get();
+      }
+      deselectErrors(context, *nonNulls.get());
+      if (!remainingRows->hasSelections()) {
+        inputValues_.clear();
+        setAllNulls(rows, context, result);
+        return;
+      }
     }
   }
 

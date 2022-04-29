@@ -25,7 +25,73 @@ namespace facebook::velox {
 
 using namespace facebook::velox::test;
 
-class TryExprTest : public functions::test::FunctionBaseTest {};
+// Returns the number of times this function has been called so far.
+template <typename T>
+struct CountCallsFunction {
+  int64_t numCalls = 0;
+
+  bool callNullable(int64_t& out, const int64_t*) {
+    out = numCalls++;
+
+    return true;
+  }
+};
+
+class TryExprTest : public functions::test::FunctionBaseTest {
+ public:
+  void testSkipExecution(bool simplified) {
+    registerFunction<CountCallsFunction, int64_t, int64_t>(
+        {"count_calls"}, BIGINT());
+
+    std::vector<std::optional<int64_t>> expected{
+        0, std::nullopt, 1, std::nullopt, 2};
+    auto flatVector = makeFlatVector<StringView>(
+        expected.size(),
+        [&](auto row) { return expected[row].has_value() ? "1" : "a"; });
+    std::shared_ptr<RowVector> row = makeRowVector({flatVector});
+    auto expr = "try(count_calls(cast(c0 as integer)))";
+    VectorPtr result;
+
+    if (simplified) {
+      result = evaluateSimplified<FlatVector<int64_t>>(expr, row);
+    } else {
+      result = evaluate<FlatVector<int64_t>>(expr, row);
+    }
+
+    assertEqualVectors(makeNullableFlatVector(expected), result);
+  }
+
+  void testSkipExecutionOfArgs(bool simplified) {
+    registerFunction<CountCallsFunction, int64_t, int64_t>(
+        {"count_calls"}, BIGINT());
+
+    // 1 + the number of times count_call has been evaluated, or null if cast
+    // throws an exception on that row.
+    std::vector<std::optional<int64_t>> expected{
+        1, std::nullopt, 2, std::nullopt, 3};
+    auto flatVector = makeFlatVector<StringView>(
+        expected.size(),
+        [&](auto row) { return expected[row].has_value() ? "1" : "a"; });
+    // Dictionary encode c1 so that peeling removes the errors from the
+    // context when evaluating count_calls.
+    auto c1 = makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5});
+    auto c1Indices = makeIndices(5, [](auto row) { return row; });
+    std::shared_ptr<RowVector> row = makeRowVector(
+        {flatVector, BaseVector::wrapInDictionary(nullptr, c1Indices, 5, c1)});
+    // Cast should throw exceptions on rows 1 and 3, when this happens, the
+    // other argument to +, namely count_calls, shouldn't be evaluated.
+    auto expr = "try(cast(c0 as integer) + count_calls(c1))";
+    VectorPtr result;
+
+    if (simplified) {
+      result = evaluateSimplified<FlatVector<int64_t>>(expr, row);
+    } else {
+      result = evaluate<FlatVector<int64_t>>(expr, row);
+    }
+
+    assertEqualVectors(makeNullableFlatVector(expected), result);
+  }
+};
 
 TEST_F(TryExprTest, tryExpr) {
   auto a = makeFlatVector<int32_t>({10, 20, 30, 20, 50, 30});
@@ -47,31 +113,12 @@ TEST_F(TryExprTest, tryExpr) {
   }
 }
 
-// Returns the number of times this function has been called so far.
-template <typename T>
-struct CountCallsFunction {
-  int64_t numCalls = 0;
-
-  bool callNullable(int64_t& out, const int64_t*) {
-    out = numCalls++;
-
-    return true;
-  }
-};
-
 TEST_F(TryExprTest, skipExecution) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  testSkipExecution(false);
+}
 
-  std::vector<std::optional<int64_t>> expected{
-      0, std::nullopt, 1, std::nullopt, 2};
-  auto flatVector = makeFlatVector<StringView>(expected.size(), [&](auto row) {
-    return expected[row].has_value() ? "1" : "a";
-  });
-  auto result = evaluate<FlatVector<int64_t>>(
-      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
-
-  assertEqualVectors(makeNullableFlatVector(expected), result);
+TEST_F(TryExprTest, skipExecutionOfArgs) {
+  testSkipExecutionOfArgs(false);
 }
 
 TEST_F(TryExprTest, nestedTryChildErrors) {
@@ -197,17 +244,10 @@ TEST_F(TryExprTest, evalSimplified) {
 }
 
 TEST_F(TryExprTest, skipExecutionEvalSimplified) {
-  registerFunction<CountCallsFunction, int64_t, int64_t>(
-      {"count_calls"}, BIGINT());
+  testSkipExecution(true);
+}
 
-  std::vector<std::optional<int64_t>> expected{
-      0, std::nullopt, 1, std::nullopt, 2};
-  auto flatVector = makeFlatVector<StringView>(expected.size(), [&](auto row) {
-    return expected[row].has_value() ? "1" : "a";
-  });
-  auto result = evaluateSimplified<FlatVector<int64_t>>(
-      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
-
-  assertEqualVectors(makeNullableFlatVector(expected), result);
+TEST_F(TryExprTest, skipExecutionOfArgsEvalSimplified) {
+  testSkipExecutionOfArgs(true);
 }
 } // namespace facebook::velox
