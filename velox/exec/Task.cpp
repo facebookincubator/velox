@@ -938,7 +938,7 @@ void Task::addHashJoinBridgesLocked(
 
 void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
-    const std::vector<std::shared_ptr<const core::PlanNode>>& planNodes) {
+    const std::vector<core::PlanNodePtr>& planNodes) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNode : planNodes) {
     if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {

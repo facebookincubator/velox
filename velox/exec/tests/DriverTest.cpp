@@ -615,7 +615,7 @@ class PauserNodeFactory : public Operator::PlanNodeTranslator {
   std::unique_ptr<Operator> toOperator(
       DriverCtx* ctx,
       int32_t id,
-      const std::shared_ptr<const core::PlanNode>& node) override {
+      const core::PlanNodePtr& node) override {
     if (auto pauser =
             std::dynamic_pointer_cast<const TestingPauserNode>(node)) {
       return std::make_unique<TestingPauser>(
@@ -765,7 +765,7 @@ class ThrowNodeFactory : public Operator::PlanNodeTranslator {
   std::unique_ptr<Operator> toOperator(
       DriverCtx* ctx,
       int32_t id,
-      const std::shared_ptr<const core::PlanNode>& node) override {
+      const core::PlanNodePtr& node) override {
     if (std::dynamic_pointer_cast<const ThrowNode>(node)) {
       VELOX_CHECK_EQ(driversCreated, 0, "Can only create 1 'throw driver'.");
       ++driversCreated;
