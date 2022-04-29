@@ -169,7 +169,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       auto planConverter = std::make_shared<
           facebook::velox::substrait::SubstraitVeloxPlanConverter>();
       // Convert to Velox PlanNode.
-      auto planNode = planConverter->toVeloxPlan(subPlan,pool_.get());
+      auto planNode = planConverter->toVeloxPlan(subPlan, pool_.get());
 
       // Get the information for TableScan.
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
