@@ -209,12 +209,31 @@ one and must be constant for all input rows.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="id2">
-<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">accuracy</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#id2" title="Permalink to this definition">¶</a></dt>
+<dd><p>As <code class="docutils literal notranslate"><span class="pre">approx_percentile(x,</span> <span class="pre">percentage)</span></code>, but with a maximum rank
+error of <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>. The value of <code class="docutils literal notranslate"><span class="pre">accuracy</span></code> must be between
+zero and one (exclusive) and must be constant for all input rows.
+Note that a lower “accuracy” is really a lower error threshold,
+and thus more accurate.  The default accuracy is 0.0133.  The
+underlying implementation is KLL sketch thus has a stronger
+guarantee for accuracy than T-Digest.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id3">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#id3" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the approximate weighed percentile for all input values of <code class="docutils literal notranslate"><span class="pre">x</span></code>
 using the per-item weight <code class="docutils literal notranslate"><span class="pre">w</span></code> at the percentage <code class="docutils literal notranslate"><span class="pre">p</span></code>. The weight must be
 an integer value of at least one. It is effectively a replication count for
 the value <code class="docutils literal notranslate"><span class="pre">x</span></code> in the percentile set. The value of <code class="docutils literal notranslate"><span class="pre">p</span></code> must be between
 zero and one and must be constant for all input rows.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="id4">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">w</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">accuracy</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#id4" title="Permalink to this definition">¶</a></dt>
+<dd><p>As <code class="docutils literal notranslate"><span class="pre">approx_percentile(x,</span> <span class="pre">w,</span> <span class="pre">percentage)</span></code>, but with a maximum
+rank error of <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>.</p>
 </dd></dl>
 
 </section>

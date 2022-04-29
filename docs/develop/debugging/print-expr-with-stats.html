@@ -1,0 +1,240 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>printExprWithStats &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Monthly Updates" href="../../monthly-updates.html" />
+    <link rel="prev" title="printPlanWithStats" href="print-plan-with-stats.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="print-plan-with-stats.html" title="printPlanWithStats"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">printExprWithStats</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="printexprwithstats">
+<h1>printExprWithStats<a class="headerlink" href="#printexprwithstats" title="Permalink to this headline">¶</a></h1>
+<p>Velox collects a number of statistics during query execution that allow us to
+reason about the execution dynamic and troubleshoot performance issues.
+Initially these statistics were collected at the operator level and accessed
+via Task::taskStats(). Recently we started collecting runtime statistics for
+individual expressions and introduced a helper function printExprWithStats to
+print the expression tree annotated with runtime stats. This allows us to
+identify bottlenecks in the individual functions.</p>
+<section id="id1">
+<h2>printExprWithStats<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
+<p>This is a helper method that can be used to print out the expression tree
+annotated with runtime statistics for individual expressions. The stats include
+CPU time and number of processed rows.</p>
+<p>For example, here is what the output of printExprWithStats may look like for an
+expression (c0 + 3) * c1 evaluated on 1024 rows represented using flat
+vectors.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">multiply</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">52.77</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">1024</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">plus</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">83.77</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">1024</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#3]</span>
+      <span class="mi">3</span><span class="p">:</span><span class="n">BIGINT</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#4]</span>
+   <span class="n">c1</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#5]</span>
+</pre></div>
+</div>
+<p>If the same expression was evaluated on dictionary-encoded data, the stats would
+show that evaluation processed fewer rows (i.e. number of rows with unique
+values) and used less CPU time:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">multiply</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">21.46</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">205</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">plus</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">32.34</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">205</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#3]</span>
+      <span class="mi">3</span><span class="p">:</span><span class="n">BIGINT</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#4]</span>
+   <span class="n">c1</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#5]</span>
+</pre></div>
+</div>
+<p>printExprWithStats can be used to explore various optimizations in the
+expression evaluation and investigate whether these applied in a particular
+run.</p>
+<p>For example, we can demonstrate common sub-expression elimination using an
+expression set with two expressions: (c0 + c1) % 5, (c0 + c1) % 3. Here,
+(c0 + c1) is a common sub-expression that is evaluated only once. The output of
+printExprWithStats shows that the second instance is a duplicate. It is
+annotated with [CSE #2] which allows us to identify the original expression.
+Runtime stats for duplicate expressions are not displayed.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">mod</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">49.98</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">1024</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">plus</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">53.75</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">1024</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#3]</span>
+      <span class="n">c1</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#4]</span>
+   <span class="mi">5</span><span class="p">:</span><span class="n">BIGINT</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#5]</span>
+
+<span class="n">mod</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">53.46</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">1024</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#6]</span>
+   <span class="n">plus</span><span class="p">(</span><span class="n">c0</span><span class="p">,</span> <span class="n">c1</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="n">CSE</span> <span class="c1">#2]</span>
+   <span class="mi">3</span><span class="p">:</span><span class="n">BIGINT</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#7]</span>
+</pre></div>
+</div>
+<p>Another example is dictionary memoization. If we evaluate an expression over
+multiple batches of data of the column using the same base dictionary, the
+evaluation remembers the results for the dictionary rows it has seen and
+evaluates only the new rows.</p>
+<p>For example, we evaluated log2(c0) * 1.5 expressions on 3 batches of data. Each
+batch had 1024 rows dictionary encoded using the same dictionary. The
+dictionary also has 1024 rows. First batch referenced first ⅕ of the dictionary
+rows repeating each 5 times. Second batch referenced the first  ⅓ of the
+dictionary rows repeating each 3 times. Third batch referenced the first 1/10
+of the dictionary rows repeating each 10 times.</p>
+<p>After evaluating the first batch printExprWithStats showed that expression was
+evaluated on 205 rows ( ⅕ of 1024).</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">multiply</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">29.63</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">205</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">log2</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">45.80</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">205</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#3]</span>
+   <span class="mf">1.5</span><span class="p">:</span><span class="n">DOUBLE</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#4]</span>
+</pre></div>
+</div>
+<p>After evaluating the second batch printExprWithStats showed that expression was
+evaluated on 137 additional rows (137 = ⅓ - ⅕ of 1024). This is expected as we
+have already computed the results for the first 205 rows and only need to
+compute the results for the remaining 137 rows.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">multiply</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">46.30</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">342</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">log2</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">68.59</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">342</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#3]</span>
+   <span class="mf">1.5</span><span class="p">:</span><span class="n">DOUBLE</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#4]</span>
+</pre></div>
+</div>
+<p>After evaluating the third batch printExprWithStats shows that expression was
+not evaluated on any additional rows. This is expected as we have already
+computed the results on all the necessary rows.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">multiply</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">46.30</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">342</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">log2</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mf">68.59</span><span class="n">us</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">342</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">c0</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#3]</span>
+   <span class="mf">1.5</span><span class="p">:</span><span class="n">DOUBLE</span> <span class="p">[</span><span class="n">cpu</span> <span class="n">time</span><span class="p">:</span> <span class="mi">0</span><span class="n">ns</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="mi">0</span><span class="p">]</span> <span class="o">-&gt;</span> <span class="n">DOUBLE</span> <span class="p">[</span><span class="c1">#4]</span>
+</pre></div>
+</div>
+</section>
+<section id="exprsetlistener">
+<h2>ExprSetListener<a class="headerlink" href="#exprsetlistener" title="Permalink to this headline">¶</a></h2>
+<p>One can register a listener that is invoked on destruction of the ExprSet and
+receives the aggregated runtime statistics for the whole expression tree. The
+statistics of the individual expressions as combined based on the expression
+name, i.e. function name or built-in expression name such as AND, OR, IF,
+SWITCH, etc. The listener can be used to log the runtime stats for offline
+analysis.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Listener invoked on ExprSet destruction.</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ExprSetListener</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w"> </span><span class="k">public</span><span class="o">:</span><span class="w"></span>
+<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="o">~</span><span class="n">ExprSetListener</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">default</span><span class="p">;</span><span class="w"></span>
+
+<span class="w">  </span><span class="c1">/// Called on ExprSet destruction. Provides runtime statistics about</span>
+<span class="w">  </span><span class="c1">/// expression evaluation.</span>
+<span class="w">  </span><span class="c1">/// @param uuid Universally unique identifier of the set of expressions.</span>
+<span class="w">  </span><span class="c1">/// @param event Runtime stats.</span>
+<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">onCompletion</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">uuid</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">ExprSetCompletionEvent</span><span class="o">&amp;</span><span class="w"> </span><span class="n">event</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+<span class="p">};</span><span class="w"></span>
+
+<span class="c1">/// Register a listener to be invoked on ExprSet destruction. Returns true if</span>
+<span class="c1">/// listener was successfully registered, false if listener is already</span>
+<span class="c1">/// registered.</span>
+<span class="kt">bool</span><span class="w"> </span><span class="nf">registerExprSetListener</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ExprSetListener</span><span class="o">&gt;</span><span class="w"> </span><span class="n">listener</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">printExprWithStats</a><ul>
+<li><a class="reference internal" href="#id1">printExprWithStats</a></li>
+<li><a class="reference internal" href="#exprsetlistener">ExprSetListener</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="print-plan-with-stats.html"
+                          title="previous chapter">printPlanWithStats</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../../monthly-updates.html"
+                          title="next chapter">Monthly Updates</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/debugging/print-expr-with-stats.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="print-plan-with-stats.html" title="printPlanWithStats"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">printExprWithStats</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
