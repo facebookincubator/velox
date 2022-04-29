@@ -24,63 +24,77 @@ namespace facebook::velox::substrait {
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  /// Used to convert Substrait AggregateRel into Velox PlanNode.
+  /// Convert Substrait AggregateRel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::AggregateRel& sAgg);
+      const ::substrait::AggregateRel& aggRel,
+      facebook::velox::memory::MemoryPool* pool);
 
-  /// Used to convert Substrait ProjectRel into Velox PlanNode.
+  /// Convert Substrait ProjectRel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::ProjectRel& sProject);
+      const ::substrait::ProjectRel& projectRel,
+      facebook::velox::memory::MemoryPool* pool);
 
-  /// Used to convert Substrait FilterRel into Velox PlanNode.
+  /// Convert Substrait FilterRel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::FilterRel& sFilter);
+      const ::substrait::FilterRel& filterRel,
+      facebook::velox::memory::MemoryPool* pool);
 
-  /// Used to convert Substrait ReadRel into Velox PlanNode.
+  /// Convert Substrait ReadRel into Velox PlanNode.
   /// Index: the index of the partition this item belongs to.
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::ReadRel& sRead,
+      const ::substrait::ReadRel& readRel,
+      facebook::velox::memory::MemoryPool* pool,
       u_int32_t& index,
       std::vector<std::string>& paths,
       std::vector<u_int64_t>& starts,
       std::vector<u_int64_t>& lengths,
       std::vector<RowVectorPtr>& vectors);
 
-  /// Used to convert Substrait Rel into Velox PlanNode.
+  /// Convert Substrait ReadRel into Velox Values Node.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::Rel& sRel);
+      const ::substrait::ReadRel& readRel,
+      facebook::velox::memory::MemoryPool* pool,
+      std::shared_ptr<const RowType> type,
+      std::vector<RowVectorPtr>& vectors);
 
-  /// Used to convert Substrait RelRoot into Velox PlanNode.
+  /// Convert Substrait Rel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::RelRoot& sRoot);
+      const ::substrait::Rel& rel,
+      facebook::velox::memory::MemoryPool* pool);
 
-  /// Used to convert Substrait Plan into Velox PlanNode.
+  /// Convert Substrait RelRoot into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::Plan& sPlan);
+      const ::substrait::RelRoot& root,
+      facebook::velox::memory::MemoryPool* pool);
 
-  /// Will return the index of Partition to be scanned.
+  /// Convert Substrait Plan into Velox PlanNode.
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const ::substrait::Plan& substraitPlan,
+      facebook::velox::memory::MemoryPool* pool);
+
+  /// Return the index of Partition to be scanned.
   u_int32_t getPartitionIndex() {
     return partitionIndex_;
   }
 
-  /// Will return the paths of the files to be scanned.
+  /// Return the paths of the files to be scanned.
   const std::vector<std::string>& getPaths() {
     return paths_;
   }
 
-  /// Will return the starts of the files to be scanned.
+  /// Return the starts of the files to be scanned.
   const std::vector<u_int64_t>& getStarts() {
     return starts_;
   }
 
-  /// Will return the lengths to be scanned for each file.
+  /// Return the lengths to be scanned for each file.
   const std::vector<u_int64_t>& getLengths() {
     return lengths_;
   }
 
-  /// return the vectors to be read for values node.
+  /// Return the vectors to be read for values node.
   const std::vector<RowVectorPtr>& getVectors() {
     return vectors_;
   }
@@ -135,10 +149,6 @@ class SubstraitVeloxPlanConverter {
   void flattenConditions(
       const ::substrait::Expression& sFilter,
       std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions);
-
-  std::unique_ptr<velox::memory::ScopedMemoryPool> scopedPool_ =
-      velox::memory::getDefaultScopedMemoryPool();
-  velox::memory::MemoryPool* pool_;
 };
 
 } // namespace facebook::velox::substrait

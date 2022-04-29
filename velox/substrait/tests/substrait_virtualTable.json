@@ -1,0 +1,183 @@
+{
+ "extension_uris": [
+  {
+   "extension_uri_anchor": 1,
+   "uri": "/workspace/veloxPlugin/velox/substrait/extensions/functions_comparison.yaml"
+  },
+  {
+   "extension_uri_anchor": 2,
+   "uri": "/workspace/veloxPlugin/velox/substrait/extensions/functions_arithmetic.yaml"
+  }
+ ],
+ "extensions": [],
+ "relations": [
+  {
+   "root": {
+    "input": {
+     "read": {
+      "common": {
+       "direct": {}
+      },
+      "base_schema": {
+       "names": [
+        "c0",
+        "c1",
+        "c2",
+        "c3"
+       ],
+       "struct": {
+        "types": [
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_REQUIRED"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_REQUIRED"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_REQUIRED"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_REQUIRED"
+          }
+         }
+        ],
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_REQUIRED"
+       }
+      },
+      "virtual_table": {
+       "values": [
+        {
+         "fields": [
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          }
+         ]
+        },
+        {
+         "fields": [
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          }
+         ]
+        },
+        {
+         "fields": [
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          },
+          {
+           "nullable": false,
+           "fp64": 0.90579193414549275
+          },
+          {
+           "nullable": false,
+           "fp64": 0.96886777112423139
+          }
+         ]
+        }
+       ]
+      }
+     }
+    },
+    "names": [
+     "c0",
+     "c1",
+     "c2",
+     "c3"
+    ]
+   }
+  }
+ ],
+ "expected_type_urls": []
+}

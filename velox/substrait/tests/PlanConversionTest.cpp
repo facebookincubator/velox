@@ -156,6 +156,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
     // Velox computing will be returned.
     std::shared_ptr<WholeComputeResultIterator> getResIter(
         const std::string& subPlanPath) {
+      std::unique_ptr<facebook::velox::memory::ScopedMemoryPool> pool_{
+          memory::getDefaultScopedMemoryPool()};
       // Read sub.json and resume the Substrait plan.
       std::ifstream subJson(subPlanPath);
       std::stringstream buffer;
@@ -167,7 +169,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       auto planConverter = std::make_shared<
           facebook::velox::substrait::SubstraitVeloxPlanConverter>();
       // Convert to Velox PlanNode.
-      auto planNode = planConverter->toVeloxPlan(subPlan);
+      auto planNode = planConverter->toVeloxPlan(subPlan,pool_.get());
 
       // Get the information for TableScan.
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
