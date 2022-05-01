@@ -2748,3 +2748,33 @@ TEST_F(ExprTest, lambdaExceptionContext) {
       "divide(x, 0:BIGINT)",
       "filter(c0, lambda)");
 }
+
+TEST_F(ExprTest, applySingleConstantArg) {
+  // This test verifies the behavior of applySingleConstArgVectorFunction,
+  // particularly in the case where the single input row doesn't match the
+  // wrappedRow in the ConstantVector.
+
+  // Exceptions combined with TRY are useful for exposing issues in the
+  // translation between the input row and the wrappedRow.  In particular,
+  // if the translation is not done, the exception may be associated with the
+  // wrappedRow instead of the input row after execution, meaning that it gets
+  // lost.
+  registerFunction<AlwaysThrowsFunction, int64_t, int64_t>({"always_throws"});
+  // Using a dictionary wrapped constant scalar vector is very intentional.
+  // Using a scalar vector means that the wrappedRow is always 0.
+  // Using a dictionary vector with indices that never point to the value at
+  // position 0 ensures that the input row is 1.
+  // Hence we get the mismatch we're trying to test.
+  auto c0 = makeConstantVector((int64_t)1, 5);
+  auto c0Indices = makeIndices(5, [](auto row) { return row == 0 ? 1 : row; });
+  auto rowVector =
+      makeRowVector({BaseVector::wrapInDictionary(nullptr, c0Indices, 5, c0)});
+
+  auto evalResult = evaluate("try(always_throws(\"c0\"))", rowVector);
+
+  // If the translation is done incorrectly we will get garbage data in the
+  // output instead of NULL.
+  auto expectedResult = makeFlatVector<int64_t>(
+      5, [](vector_size_t) { return 0; }, [](vector_size_t) { return true; });
+  assertEqualVectors(expectedResult, evalResult);
+}
