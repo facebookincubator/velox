@@ -15,7 +15,6 @@ struct IsEmpty {
   }
 
   VELOX_DEFINE_FUNCTION_TYPES(T);
-  template <>
   FOLLY_ALWAYS_INLINE void callNullable(
       bool& result,
       const arg_type<Varchar>* a) {
