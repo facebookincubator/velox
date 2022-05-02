@@ -53,6 +53,7 @@ class CustomJoinBridge : public JoinBridge {
     std::vector<ContinuePromise> promises;
     {
       std::lock_guard<std::mutex> l(mutex_);
+      VELOX_CHECK(!numRows_.has_value(), "setNumRows may be called only once");
       numRows_ = numRows;
       promises = std::move(promises_);
     }
@@ -278,22 +279,23 @@ class CustomJoinTest : public OperatorTestBase {
 
   void testCustomJoin(
       int32_t numThreads,
-      const std::vector<RowVectorPtr>& leftBatch,
-      const std::vector<RowVectorPtr>& rightBatch,
+      const std::vector<RowVectorPtr>& leftBatches,
+      const std::vector<RowVectorPtr>& rightBatches,
       const std::string& referenceQuery) {
-    createDuckDbTable("t", {leftBatch});
+    createDuckDbTable("t", {leftBatches});
 
     auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
     auto leftNode =
-        PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
-    auto rightNode =
-        PlanBuilder(planNodeIdGenerator).values({rightBatch}, true).planNode();
+        PlanBuilder(planNodeIdGenerator).values({leftBatches}, true).planNode();
+    auto rightNode = PlanBuilder(planNodeIdGenerator)
+                         .values({rightBatches}, true)
+                         .planNode();
 
     CursorParameters params;
     params.maxDrivers = numThreads;
     params.planNode =
         PlanBuilder(planNodeIdGenerator)
-            .values({leftBatch}, true)
+            .values({leftBatches}, true)
             .addNode([&leftNode, &rightNode](
                          std::string id, core::PlanNodePtr input) {
               return std::make_shared<CustomJoinNode>(
@@ -319,17 +321,17 @@ TEST_F(CustomJoinTest, emptyBuild) {
 }
 
 TEST_F(CustomJoinTest, parallelism) {
-  auto leftBatch = {
+  auto leftBatches = {
       makeSimpleRowVector(30),
       makeSimpleRowVector(40),
       makeSimpleRowVector(50)};
-  auto rightBatch = {
+  auto rightBatches = {
       makeSimpleRowVector(5), makeSimpleRowVector(10), makeSimpleRowVector(15)};
 
   testCustomJoin(
       3,
-      leftBatch,
-      rightBatch,
+      leftBatches,
+      rightBatches,
       "(SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90)");
