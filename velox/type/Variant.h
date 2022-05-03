@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -38,6 +39,21 @@ constexpr double kEpsilon{0.00001};
 struct VariantConverter;
 
 class variant;
+
+struct DecimalVariantValue {
+  uint8_t precision;
+  uint8_t scale;
+  int128_t unscaledValue;
+
+  // 123456789
+  std::string toString() const {
+    if (precision <= 18) {
+      return DecimalCasts::ShortDecimalToString(
+          precision, scale, (int64_t)unscaledValue);
+    }
+    return DecimalCasts::LongDecimalToString(precision, scale, unscaledValue);
+  }
+};
 
 template <TypeKind KIND>
 struct VariantEquality;
@@ -124,6 +140,16 @@ struct OpaqueCapsule {
 template <>
 struct VariantTypeTraits<TypeKind::OPAQUE> {
   using stored_type = OpaqueCapsule;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::SHORT_DECIMAL> {
+  using stored_type = DecimalVariantValue;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::LONG_DECIMAL> {
+  using stored_type = DecimalVariantValue;
 };
 } // namespace detail
 
