@@ -48,7 +48,7 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
       strideDictStream_->seekToRowGroup(positionsProvider);
       strideDictLengthDecoder_->seekToRowGroup(positionsProvider);
       // skip row group dictionary size
-      positionsProvider.next();
+      strideDictSize_ = positionsProvider.next();
     }
 
     dictIndex_->seekToRowGroup(positionsProvider);
@@ -68,8 +68,16 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   void getValues(RowSet rows, VectorPtr* result) override;
 
  private:
+  void ensureInitialized();
+  bool isRowGroupOpen();
+  void openRowGroup();
+
+  void loadDictionary(
+      uint64_t count,
+      SeekableInputStream& data,
+      IntDecoder</*isSigned*/ false>& lengthDecoder,
+      DictionaryValues& values);
   void loadStrideDictionary();
-  void makeDictionaryBaseVector();
 
   template <typename TVisitor>
   void readWithVisitor(RowSet rows, TVisitor visitor);
@@ -85,11 +93,8 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
 
   // Fills 'values' from 'data' and 'lengthDecoder'. The count of
   // values is in 'values.numValues'.
-  void loadDictionary(
-      SeekableInputStream& data,
-      IntDecoder</*isSigned*/ false>& lengthDecoder,
-      DictionaryValues& values);
-  void ensureInitialized();
+  void makeDictionaryBaseVector();
+
   std::unique_ptr<IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
   std::unique_ptr<SeekableInputStream> strideDictStream_;
@@ -98,8 +103,9 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   FlatVectorPtr<StringView> dictionaryValues_;
 
   int64_t lastStrideIndex_;
-  size_t positionOffset_;
-  size_t strideDictSizeOffset_;
+  bool strideDictLoaded_;
+  size_t strideDictSize_;
+  size_t dictSize_;
 
   const StrideIndexProvider& provider_;
 

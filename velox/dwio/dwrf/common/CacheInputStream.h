@@ -45,8 +45,6 @@ class CacheInputStream : public SeekableInputStream {
   google::protobuf::int64 ByteCount() const override;
   void seekToRowGroup(PositionProvider& position) override;
   std::string getName() const override;
-  size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
 
  private:
   // Ensures that the current position is covered by 'pin_'.

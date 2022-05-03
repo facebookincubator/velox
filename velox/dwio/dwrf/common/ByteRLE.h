@@ -122,15 +122,6 @@ class ByteRleDecoder {
    */
   virtual void next(char* data, uint64_t numValues, const uint64_t* nulls);
 
-  /**
-   * Load the RowIndex values for the stream this is reading.
-   */
-  virtual size_t loadIndices(
-      const proto::RowIndex& rowIndex,
-      size_t startIndex) {
-    return inputStream->loadIndices(rowIndex, startIndex) + 1;
-  }
-
   void skipBytes(size_t bytes);
 
   template <bool hasNulls>
@@ -263,11 +254,6 @@ class BooleanRleDecoder : public ByteRleDecoder {
   void skip(uint64_t numValues) override;
 
   void next(char* data, uint64_t numValues, const uint64_t* nulls) override;
-
-  size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override {
-    return ByteRleDecoder::loadIndices(rowIndex, startIndex) + 1;
-  }
 
   // Advances 'dataPosition' by 'numValue' non-nulls, where 'current'
   // is the position in 'nulls'.

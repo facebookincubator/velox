@@ -330,11 +330,6 @@ void SelectiveColumnReader::resetFilterCaches() {
   }
 }
 
-std::vector<uint64_t> toPositions(const proto::RowIndexEntry& entry) {
-  return std::vector<uint64_t>(
-      entry.positions().begin(), entry.positions().end());
-}
-
 std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
     FlatMapContext flatMapContext,

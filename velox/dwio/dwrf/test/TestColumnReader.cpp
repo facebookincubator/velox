@@ -191,11 +191,11 @@ class StringReaderTests
   const bool expectMemoryReuse_;
   const bool returnFlatVector_;
 
- private:
   bool useSelectiveReader() const {
     return GetParam().useSelectiveReader;
   }
 
+ private:
   SelectiveColumnReaderBuilder builder_;
 };
 
@@ -974,6 +974,11 @@ TEST_P(StringReaderTests, testDictionaryWithNulls) {
 }
 
 TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
@@ -1125,6 +1130,11 @@ TEST_P(StringReaderTests, testStringDictSkipNoNulls) {
 }
 
 TEST_P(StringReaderTests, testStringDictSkipWithNulls) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
@@ -1614,6 +1624,11 @@ TEST_P(StringReaderTests, testBinaryDirectWithNulls) {
 }
 
 TEST_P(TestColumnReader, testShortBlobError) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
@@ -3759,6 +3774,11 @@ void validateStringDictBatches(
 }
 
 TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // sum(range(1..26))
   const size_t BLOB_SIZE = 351;
   const size_t DICT_SIZE = 26;
@@ -3874,6 +3894,11 @@ TEST_P(StringReaderTests, testStringDictUseBatchAfterClose) {
 }
 
 TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
@@ -4034,6 +4059,11 @@ TEST_P(StringReaderTests, testStringDictStrideDictDoesntExist) {
 }
 
 TEST_P(StringReaderTests, testStringDictZeroLengthStrideDict) {
+  if (useSelectiveReader()) {
+    GTEST_SKIP()
+        << "This test needs to provide full positions list for all streams";
+  }
+
   // set getEncoding
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);

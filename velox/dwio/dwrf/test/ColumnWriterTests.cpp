@@ -777,8 +777,16 @@ void testMapWriter(
       VectorPtr out;
 
       // Read map
-      for (auto& writtenBatch : writtenBatches) {
+      for (int strideIndex = 0; strideIndex < strideCount; strideIndex++) {
+        auto& writtenBatch = writtenBatches[strideIndex];
+
+        // Set strideIndex before calling reader->next()
+        EXPECT_CALL(streams.getMockStrideIndexProvider(), getStrideIndex())
+            .Times(::testing::AtMost(2)) // Stride index will be pulled twice
+            .WillRepeatedly(Return(strideIndex));
+
         reader->next(writtenBatch->size(), out);
+
         ASSERT_EQ(out->size(), writtenBatch->size()) << "Batch size mismatch";
 
         if (printMaps) {
@@ -2927,9 +2935,11 @@ struct StringColumnWriterTestCase {
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         if (!writeDirect) {
+          // Set the stride index before calling
+          // columnReader->next()
           EXPECT_CALL(streams.getMockStrideIndexProvider(), getStrideIndex())
-              .Times(::testing::AtMost(1)) // Stride dictionary is optional
-              .WillOnce(Return(j));
+              .Times(::testing::AtMost(2)) // Stride index will be pulled twice
+              .WillRepeatedly(Return(j)); // j is the stride index
         }
 
         // TODO Make reuse work

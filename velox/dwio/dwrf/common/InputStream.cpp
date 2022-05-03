@@ -178,13 +178,6 @@ std::string SeekableArrayInputStream::getName() const {
       "SeekableArrayInputStream ", position, " of ", length);
 }
 
-size_t SeekableArrayInputStream::loadIndices(
-    const proto::RowIndex& /*rowIndex*/,
-    size_t startIndex) {
-  // not compressed, so only need to skip 1 value (uncompressed position)
-  return startIndex + 1;
-}
-
 static uint64_t computeBlock(uint64_t request, uint64_t length) {
   return std::min(length, request == 0 ? 256 * 1024 : request);
 }
@@ -258,13 +251,6 @@ void SeekableFileInputStream::seekToRowGroup(PositionProvider& location) {
 std::string SeekableFileInputStream::getName() const {
   return folly::to<std::string>(
       input.getName(), " from ", start, " for ", length);
-}
-
-size_t SeekableFileInputStream::loadIndices(
-    const proto::RowIndex& /*rowIndex*/,
-    size_t startIndex) {
-  // not compressed, so only need to skip 1 value: uncompressed position
-  return startIndex + 1;
 }
 
 } // namespace facebook::velox::dwrf

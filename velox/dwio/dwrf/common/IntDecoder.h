@@ -95,15 +95,6 @@ class IntDecoder {
   }
 
   /**
-   * Load RowIndex values for the stream being read.
-   * @return updated start index after this stream's index values.
-   */
-  size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex) {
-    size_t updatedStartIndex = inputStream->loadIndices(rowIndex, startIndex);
-    return updatedStartIndex + 1;
-  }
-
-  /**
    * Create an RLE decoder.
    * @param input the input stream to read from
    * @param version version of RLE decoding to do

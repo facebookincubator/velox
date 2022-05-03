@@ -54,10 +54,6 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
 
   virtual std::string getName() const = 0;
 
-  virtual size_t loadIndices(
-      const proto::RowIndex& rowIndex,
-      size_t startIndex) = 0;
-
   void readFully(char* buffer, size_t bufferSize);
 };
 
@@ -101,8 +97,6 @@ class SeekableArrayInputStream : public SeekableInputStream {
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToRowGroup(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
 };
 
 /**
@@ -136,8 +130,6 @@ class SeekableFileInputStream : public SeekableInputStream {
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToRowGroup(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
 };
 
 } // namespace facebook::velox::dwrf

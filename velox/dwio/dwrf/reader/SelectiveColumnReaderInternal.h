@@ -361,6 +361,4 @@ void SelectiveColumnReader::filterNulls(
   readOffset_ += rows.back() + 1;
 }
 
-std::vector<uint64_t> toPositions(const proto::RowIndexEntry& entry);
-
 } // namespace facebook::velox::dwrf
