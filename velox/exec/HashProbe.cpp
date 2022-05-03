@@ -81,14 +81,14 @@ HashProbe::HashProbe(
     initializeFilter(joinNode->filter(), probeType, tableType);
   }
 
-  bool isIdentityProjection = true;
+  size_t countIdentityProjection = 0;
   for (auto i = 0; i < probeType->size(); ++i) {
     auto name = probeType->nameOf(i);
     auto outIndex = outputType_->getChildIdxIfExists(name);
     if (outIndex.has_value()) {
       identityProjections_.emplace_back(i, outIndex.value());
-      if (outIndex.value() != i) {
-        isIdentityProjection = false;
+      if (outIndex.value() == i) {
+        countIdentityProjection++;
       }
     }
   }
@@ -100,7 +100,8 @@ HashProbe::HashProbe(
     }
   }
 
-  if (isIdentityProjection && tableResultProjections_.empty()) {
+  if (countIdentityProjection == probeType->size() &&
+      tableResultProjections_.empty()) {
     isIdentityProjection_ = true;
   }
 }
@@ -383,6 +384,15 @@ RowVectorPtr HashProbe::getNonMatchingOutputForRightJoin() {
       pool(),
       output_);
   return output_;
+}
+
+void HashProbe::clearIdentityProjectedOutput() {
+  if (!output_ || !output_.unique()) {
+    return;
+  }
+  for (auto& projection : identityProjections_) {
+    output_->childAt(projection.outputChannel) = nullptr;
+  }
 }
 
 RowVectorPtr HashProbe::getOutput() {

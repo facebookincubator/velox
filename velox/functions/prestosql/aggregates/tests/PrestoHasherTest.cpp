@@ -88,7 +88,7 @@ class PrestoHasherTest : public testing::Test,
 
     for (size_t i = 0; i < vectorSize; ++i) {
       rawIndices[i] = i / 2;
-      modifiedExpected[i] = expected[i / 2];
+      modifiedExpected.push_back(expected[i / 2]);
     }
 
     dictionaryVector = BaseVector::wrapInDictionary(
@@ -98,6 +98,7 @@ class PrestoHasherTest : public testing::Test,
 
     // Subset of rows.
     auto subsetSize = vectorSize / 2;
+    modifiedExpected.resize(subsetSize);
     for (size_t i = 0; i < subsetSize; ++i) {
       rawIndices[i] = i * 2;
       modifiedExpected[i] = expected[i * 2];
@@ -211,7 +212,7 @@ TEST_F(PrestoHasherTest, floats) {
 
 TEST_F(PrestoHasherTest, varchars) {
   assertHash<StringView>(
-      {"abcd"_sv, ""_sv, std::nullopt, u8"Thanks \u0020\u007F"_sv},
+      {"abcd"_sv, ""_sv, std::nullopt, "Thanks \u0020\u007F"_sv},
       {-2449070131962342708, -1205034819632174695, 0, 2911531567394159200});
 }
 

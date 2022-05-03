@@ -18,6 +18,7 @@
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/functions/Udf.h"
@@ -683,6 +684,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
       rawIndices[i] = indices[i];
     }
     return indicesBuffer;
+  }
+
+  void assertErrorContext(
+      const std::string& expression,
+      const VectorPtr& input,
+      const std::string& context,
+      const std::string& topLevelContext) {
+    try {
+      evaluate(expression, makeRowVector({input}));
+      ASSERT_TRUE(false) << "Expected an error";
+    } catch (VeloxException& e) {
+      ASSERT_EQ(context, e.context());
+      ASSERT_EQ(topLevelContext, e.topLevelContext());
+    }
   }
 
   std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
@@ -2538,10 +2553,13 @@ TEST_F(ExprTest, exceptionContext) {
   });
 
   try {
-    evaluate("(c0 + c1) % 0", data);
+    evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        e.topLevelContext());
   }
 
   try {
@@ -2549,6 +2567,9 @@ TEST_F(ExprTest, exceptionContext) {
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        e.topLevelContext());
   }
 }
 
@@ -2674,4 +2695,56 @@ TEST_F(ExprTest, tryWithConstantFailure) {
   auto expectedResult = makeFlatVector<int64_t>(
       5, [](vector_size_t) { return 0; }, [](vector_size_t) { return true; });
   assertEqualVectors(expectedResult, evalResult);
+}
+
+TEST_F(ExprTest, castExceptionContext) {
+  assertErrorContext(
+      "cast(c0 as bigint)",
+      makeFlatVector({"a"}),
+      "cast((c0) as BIGINT)",
+      "Same as context.");
+}
+
+TEST_F(ExprTest, switchExceptionContext) {
+  assertErrorContext(
+      "case c0 when 7 then c0 / 0 else 0 end",
+      makeFlatVector<int64_t>({7}),
+      "divide(c0, 0:BIGINT)",
+      "switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)");
+}
+
+TEST_F(ExprTest, conjunctExceptionContext) {
+  fillVectorAndReference<int64_t>(
+      {EncodingOptions::flat(20, 2)},
+      [](int32_t row) { return std::optional(static_cast<int64_t>(row)); },
+      &testData_.bigint1);
+
+  try {
+    run<int64_t>(
+        "if (bigint1 % 409 < 300 and bigint1 / 0 < 30, 1, 2)",
+        [&](int32_t /*row*/) { return 0; });
+    ASSERT_TRUE(false) << "Expected an error";
+  } catch (VeloxException& e) {
+    ASSERT_EQ("divide(bigint1, 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "switch(and(lt(mod(bigint1, 409:BIGINT), 300:BIGINT), lt(divide(bigint1, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
+        e.topLevelContext());
+  }
+}
+
+TEST_F(ExprTest, lambdaExceptionContext) {
+  auto array = makeArrayVector<int64_t>(
+      10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
+  core::Expressions::registerLambda(
+      "lambda",
+      ROW({"x"}, {BIGINT()}),
+      ROW({ARRAY(BIGINT())}),
+      parse::parseExpr("x / 0 > 1"),
+      execCtx_->pool());
+
+  assertErrorContext(
+      "filter(c0, function('lambda'))",
+      array,
+      "divide(x, 0:BIGINT)",
+      "filter(c0, lambda)");
 }

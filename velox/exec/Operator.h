@@ -33,12 +33,13 @@ struct IdentityProjection {
 };
 
 struct MemoryStats {
-  uint64_t userMemoryReservation = {};
-  uint64_t revocableMemoryReservation = {};
-  uint64_t systemMemoryReservation = {};
-  uint64_t peakUserMemoryReservation = {};
-  uint64_t peakSystemMemoryReservation = {};
-  uint64_t peakTotalMemoryReservation = {};
+  uint64_t userMemoryReservation{0};
+  uint64_t revocableMemoryReservation{0};
+  uint64_t systemMemoryReservation{0};
+  uint64_t peakUserMemoryReservation{0};
+  uint64_t peakSystemMemoryReservation{0};
+  uint64_t peakTotalMemoryReservation{0};
+  uint64_t numMemoryAllocations{0};
 
   void update(const std::shared_ptr<memory::MemoryUsageTracker>& tracker) {
     if (!tracker) {
@@ -49,6 +50,7 @@ struct MemoryStats {
     peakUserMemoryReservation = tracker->getPeakUserBytes();
     peakSystemMemoryReservation = tracker->getPeakSystemBytes();
     peakTotalMemoryReservation = tracker->getPeakTotalBytes();
+    numMemoryAllocations = tracker->getNumAllocs();
   }
 
   void add(const MemoryStats& other) {
@@ -61,6 +63,7 @@ struct MemoryStats {
         peakSystemMemoryReservation, other.peakSystemMemoryReservation);
     peakTotalMemoryReservation =
         std::max(peakTotalMemoryReservation, other.peakTotalMemoryReservation);
+    numMemoryAllocations += other.numMemoryAllocations;
   }
 
   void clear() {
@@ -70,6 +73,7 @@ struct MemoryStats {
     peakUserMemoryReservation = 0;
     peakSystemMemoryReservation = 0;
     peakTotalMemoryReservation = 0;
+    numMemoryAllocations = 0;
   }
 };
 
@@ -302,7 +306,6 @@ class Operator {
   // should be called after this.
   virtual void close() {
     input_ = nullptr;
-    output_ = nullptr;
     results_.clear();
   }
 
@@ -351,31 +354,9 @@ class Operator {
  protected:
   static std::vector<std::unique_ptr<PlanNodeTranslator>>& translators();
 
-  // Clears the columns of 'output_' that are projected from
-  // 'input_'. This should be done when preparing to produce a next
-  // batch of output to drop any lingering references to row
-  // number mappings or input vectors. In this way input vectors do
-  // not have to be copied and will be singly referenced by their
-  // producer.
-  void clearIdentityProjectedOutput();
-
-  // Returns a previously used result vector if it exists and is suitable for
-  // reuse, nullptr otherwise.
-  VectorPtr getResultVector(ChannelIndex index);
-
-  // Fills 'result' with a vector for each input of
-  // 'resultProjection_'. These are recycled from 'output_' if
-  // suitable for reuse.
-  void getResultVectors(std::vector<VectorPtr>* result);
-
-  // Copies 'input_' and 'results_' into 'output_' according to
+  // Creates output vector from 'input_' and 'results_' according to
   // 'identityProjections_' and 'resultProjections_'.
   RowVectorPtr fillOutput(vector_size_t size, BufferPtr mapping);
-
-  // Drops references to identity projected columns from 'output_' and
-  // clears 'input_'. The producer will see its vectors as singly
-  // referenced.
-  void inputProcessed();
 
   std::unique_ptr<OperatorCtx> operatorCtx_;
   OperatorStats stats_;
@@ -384,10 +365,6 @@ class Operator {
   // Holds the last data from addInput until it is processed. Reset after the
   // input is processed.
   RowVectorPtr input_;
-
-  // Holds the last data returned by getOutput. References vectors
-  // from 'input_' and from 'results_'. Reused if singly referenced.
-  RowVectorPtr output_;
 
   bool noMoreInput_ = false;
   std::vector<IdentityProjection> identityProjections_;

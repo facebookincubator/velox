@@ -38,7 +38,7 @@ namespace facebook::velox::tpch {
 enum class Table {
   TBL_PART,
   TBL_SUPPLIER,
-  TBL_PARTSUP,
+  TBL_PARTSUPP,
   TBL_CUSTOMER,
   TBL_ORDERS,
   TBL_LINEITEM,
@@ -73,6 +73,122 @@ RowVectorPtr genTpchOrders(
     memory::MemoryPool* pool =
         &velox::memory::getProcessDefaultMemoryManager().getRoot());
 
+/// NOTE: This function's parameters have different semantic from the function
+/// above. Dbgen does not provide deterministic random access to lineitem
+/// generated rows (like it does for all other tables), because the number of
+/// lineitems in an order is chosen at random (between 1 and 7, 4 on average).
+//
+/// In order to make this function reproducible and deterministic, the
+/// parameters (maxRows and offset) refer to orders, not lineitems, and thus the
+/// number of linteitem returned rows will be on average 4 * maxOrderRows.
+///
+/// Returns a row vector containing on average `maxOrderRows * 4` (from
+/// `maxOrderRows` to `maxOrderRows * 7`) rows of the "lineitem" table. The
+/// offset is controlled based on the orders table, starting at `ordersOffset`,
+/// and given the scale factor. The row vector returned has the following
+/// schema:
+///
+///  l_orderkey: BIGINT
+///  l_partkey: BIGINT
+///  l_suppkey: BIGINT
+///  l_linenumber: INTEGER
+///  l_quantity: DOUBLE
+///  l_extendedprice: DOUBLE
+///  l_discount: DOUBLE
+///  l_tax: DOUBLE
+///  l_returnflag: VARCHAR
+///  l_linestatus: VARCHAR
+///  l_shipdate: VARCHAR
+///  l_commitdate: VARCHAR
+///  l_receiptdate: VARCHAR
+///  l_shipinstruct: VARCHAR
+///  l_shipmode: VARCHAR
+///  l_comment: VARCHAR
+///
+RowVectorPtr genTpchLineItem(
+    size_t maxOrdersRows = 10000,
+    size_t ordersOffset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+/// Returns a row vector containing at most `maxRows` rows of the "part"
+/// table, starting at `offset`, and given the scale factor. The row vector
+/// returned has the following schema:
+///
+///  p_partkey: BIGINT
+///  p_name: VARCHAR
+///  p_mfgr: VARCHAR
+///  p_brand: VARCHAR
+///  p_type: VARCHAR
+///  p_size: INTEGER
+///  p_container: VARCHAR
+///  p_retailprice: DOUBLE
+///  p_comment: VARCHAR
+///
+RowVectorPtr genTpchPart(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+/// Returns a row vector containing at most `maxRows` rows of the "supplier"
+/// table, starting at `offset`, and given the scale factor. The row vector
+/// returned has the following schema:
+///
+///  s_suppkey: BIGINT
+///  s_name: VARCHAR
+///  s_address: VARCHAR
+///  s_nationkey: BIGINT
+///  s_phone: VARCHAR
+///  s_acctbal: DOUBLE
+///  s_comment: VARCHAR
+///
+RowVectorPtr genTpchSupplier(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+/// Returns a row vector containing at most `maxRows` rows of the "partsupp"
+/// table, starting at `offset`, and given the scale factor. The row vector
+/// returned has the following schema:
+///
+///  ps_partkey: BIGINT
+///  ps_suppkey: BIGINT
+///  ps_availqty: INTEGER
+///  ps_supplycost: DOUBLE
+///  ps_comment: VARCHAR
+///
+RowVectorPtr genTpchPartSupp(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+/// Returns a row vector containing at most `maxRows` rows of the "customer"
+/// table, starting at `offset`, and given the scale factor. The row vector
+/// returned has the following schema:
+///
+///  c_custkey: BIGINT
+///  c_name: VARCHAR
+///  c_addressname: VARCHAR
+///  c_nationkey: BIGINT
+///  c_phone: VARCHAR
+///  c_acctbal: DOUBLE
+///  c_mktsegment: VARCHAR
+///  c_comment: VARCHAR
+///
+RowVectorPtr genTpchCustomer(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
 /// Returns a row vector containing at most `maxRows` rows of the "nation"
 /// table, starting at `offset`, and given the scale factor. The row vector
 /// returned has the following schema:
@@ -83,6 +199,21 @@ RowVectorPtr genTpchOrders(
 ///  n_comment: VARCHAR
 ///
 RowVectorPtr genTpchNation(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+/// Returns a row vector containing at most `maxRows` rows of the "region"
+/// table, starting at `offset`, and given the scale factor. The row vector
+/// returned has the following schema:
+///
+///  r_regionkey: BIGINT
+///  r_name: VARCHAR
+///  r_comment: VARCHAR
+///
+RowVectorPtr genTpchRegion(
     size_t maxRows = 10000,
     size_t offset = 0,
     size_t scaleFactor = 1,
