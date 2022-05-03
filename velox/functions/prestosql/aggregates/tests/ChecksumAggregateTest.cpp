@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string/join.hpp>
+#include "velox/common/encode/Base64.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
-using facebook::velox::exec::test::PlanBuilder;
+using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::aggregate::test {
 
@@ -37,43 +38,13 @@ class ChecksumAggregateTest : public AggregationTestBase {
       const std::string& expectedChecksum) {
     auto rowVectors = std::vector{makeRowVector({inputVector})};
 
-    // DuckDB doesnt have checksum aggregation, so we will just pass in
+    // DuckDB doesn't have checksum aggregation, so we will just pass in
     // expected values to compare.
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .partialAggregation({}, {"checksum(c0)"})
-                     .finalAggregation()
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
+    const auto expectedDuckDbSql =
+        fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
 
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .singleAggregation({}, {"checksum(c0)"})
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
-
-    {
-      auto agg = PlanBuilder()
-                     .values(rowVectors)
-                     .partialAggregation({}, {"checksum(c0)"})
-                     .intermediateAggregation()
-                     .finalAggregation()
-                     .project({"to_base64(a0) as c0"})
-                     .planNode();
-      assertQuery(
-          agg,
-          fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum));
-    }
+    testAggregations(
+        rowVectors, {}, {"checksum(c0)"}, {"to_base64(a0)"}, expectedDuckDbSql);
   }
 
   template <typename G, typename T>
@@ -85,25 +56,21 @@ class ChecksumAggregateTest : public AggregationTestBase {
     auto dataVector = makeNullableFlatVector<T>(data);
     auto rowVectors = std::vector{makeRowVector({groupVector, dataVector})};
 
-    auto expectedResults = std::vector<std::string>();
+    std::vector<std::string> expectedResults;
     expectedResults.reserve(expectedChecksums.size());
-    for (auto& str : expectedChecksums) {
-      expectedResults.push_back(fmt::format("(\'{}\')", str));
+    for (const auto& checksum : expectedChecksums) {
+      expectedResults.push_back(fmt::format("(\'{}\')", checksum));
     }
-    auto joinedResults = boost::algorithm::join(expectedResults, ",");
 
-    auto agg = PlanBuilder()
-                   .values(rowVectors)
-                   .partialAggregation({0}, {"checksum(c1)"})
-                   .finalAggregation()
-                   .project({"to_base64(a0) AS c0"})
-                   .planNode();
-    assertQuery(
-        agg,
-        fmt::format(
-            "SELECT cast(x as VARCHAR) "
-            "FROM (values {}) t(x);",
-            joinedResults));
+    const auto expectedDuckDbSql =
+        "VALUES " + boost::algorithm::join(expectedResults, ",");
+
+    testAggregations(
+        rowVectors,
+        {"c0"},
+        {"checksum(c1)"},
+        {"to_base64(a0)"},
+        expectedDuckDbSql);
   }
 
   template <typename T>
@@ -185,7 +152,7 @@ TEST_F(ChecksumAggregateTest, varchars) {
   assertSingleGroupChecksum<StringView>({{}}, "h8rrhbF5N54=");
   assertSingleGroupChecksum<StringView>({"abcd"_sv}, "lGFxgnIYgPw=");
   assertSingleGroupChecksum<StringView>(
-      {u8"Thanks \u0020\u007F"_sv}, "oEh7YyEV+dM=");
+      {"Thanks \u0020\u007F"_sv}, "oEh7YyEV+dM=");
 }
 
 TEST_F(ChecksumAggregateTest, arrays) {

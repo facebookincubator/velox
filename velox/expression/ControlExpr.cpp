@@ -25,6 +25,9 @@ void ConstantExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   if (!sharedSubexprValues_) {
     sharedSubexprValues_ =
         BaseVector::createConstant(value_, 1, context->execCtx()->pool());
@@ -55,6 +58,9 @@ void ConstantExpr::evalSpecialFormSimplified(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   // Simplified path should never ask us to write to a vector that was already
   // pre-allocated.
   VELOX_CHECK(*result == nullptr);
@@ -66,7 +72,7 @@ void ConstantExpr::evalSpecialFormSimplified(
   }
 }
 
-std::string ConstantExpr::toString() const {
+std::string ConstantExpr::toString(bool /*recursive*/) const {
   if (sharedSubexprValues_ == nullptr) {
     return fmt::format("{}:{}", value_.toJson(), type()->toString());
   } else {
@@ -79,6 +85,9 @@ void FieldReference::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   if (*result) {
     BaseVector::ensureWritable(rows, type_, context->pool(), result);
   }
@@ -149,6 +158,9 @@ void FieldReference::evalSpecialFormSimplified(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   auto row = context->row();
   *result = row->childAt(index(context));
   BaseVector::flattenVector(result, rows.end());
@@ -158,6 +170,9 @@ void SwitchExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   LocalSelectivityVector remainingRows(context, rows.end());
   *remainingRows.get() = rows;
 
@@ -352,6 +367,9 @@ void ConjunctExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   // TODO Revisit error handling
   bool throwOnError = *context->mutableThrowOnError();
   VarSetter saveError(context->mutableThrowOnError(), false);
@@ -702,6 +720,9 @@ void LambdaExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   if (!typeWithCapture_) {
     makeTypeWithCapture(context);
   }
@@ -754,6 +775,9 @@ void TryExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   VarSetter throwOnError(context->mutableThrowOnError(), false);
   // It's possible with nested TRY expressions that some rows already threw
   // exceptions in earlier expressions that haven't been handled yet. To avoid
@@ -767,6 +791,33 @@ void TryExpr::evalSpecialForm(
       context->errorsPtr(), nullptr);
   inputs_[0]->eval(rows, context, result);
 
+  nullOutErrors(rows, context, result);
+}
+
+void TryExpr::evalSpecialFormSimplified(
+    const SelectivityVector& rows,
+    EvalCtx* context,
+    VectorPtr* result) {
+  VarSetter throwOnError(context->mutableThrowOnError(), false);
+  // It's possible with nested TRY expressions that some rows already threw
+  // exceptions in earlier expressions that haven't been handled yet. To avoid
+  // incorrectly handling them here, store those errors and temporarily reset
+  // the errors in context to nullptr, so we only handle errors coming from
+  // expressions that are children of this TRY expression.
+  // This also prevents this TRY expression from leaking exceptions to the
+  // parent TRY expression, so the parent won't incorrectly null out rows that
+  // threw exceptions which this expression already handled.
+  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
+      context->errorsPtr(), nullptr);
+  inputs_[0]->evalSimplified(rows, context, result);
+
+  nullOutErrors(rows, context, result);
+}
+
+void TryExpr::nullOutErrors(
+    const SelectivityVector& rows,
+    EvalCtx* context,
+    VectorPtr* result) {
   auto errors = context->errors();
   if (errors) {
     if ((*result)->encoding() == VectorEncoding::Simple::CONSTANT) {

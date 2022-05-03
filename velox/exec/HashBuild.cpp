@@ -23,21 +23,29 @@ namespace facebook::velox::exec {
 void HashJoinBridge::setHashTable(std::unique_ptr<BaseHashTable> table) {
   VELOX_CHECK(table, "setHashTable called with null table");
 
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!table_, "setHashTable may be called only once");
-  // Ownership becomes shared.
-  table_.reset(table.release());
-  notifyConsumersLocked();
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(!table_, "setHashTable may be called only once");
+    // Ownership becomes shared.
+    table_.reset(table.release());
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
 }
 
 void HashJoinBridge::setAntiJoinHasNullKeys() {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(
-      !table_,
-      "Only one of setAntiJoinHasNullKeys or setHashTable may be called");
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(
+        !table_,
+        "Only one of setAntiJoinHasNullKeys or setHashTable may be called");
 
-  antiJoinHasNullKeys_ = true;
-  notifyConsumersLocked();
+    antiJoinHasNullKeys_ = true;
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
 }
 
 std::optional<HashJoinBridge::HashBuildResult> HashJoinBridge::tableOrFuture(
@@ -183,7 +191,7 @@ void HashBuild::noMoreInput() {
   }
 
   Operator::noMoreInput();
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   // The last Driver to hit HashBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
@@ -243,10 +251,12 @@ void HashBuild::addRuntimeStats() {
   for (auto i = 0; i < hashers.size(); i++) {
     hashers[i]->cardinality(asRange, asDistinct);
     if (asRange != VectorHasher::kRangeTooLarge) {
-      stats_.addRuntimeStat(fmt::format("rangeKey{}", i), asRange);
+      stats_.addRuntimeStat(
+          fmt::format("rangeKey{}", i), RuntimeCounter(asRange));
     }
     if (asDistinct != VectorHasher::kRangeTooLarge) {
-      stats_.addRuntimeStat(fmt::format("distinctKey{}", i), asDistinct);
+      stats_.addRuntimeStat(
+          fmt::format("distinctKey{}", i), RuntimeCounter(asDistinct));
     }
   }
 }

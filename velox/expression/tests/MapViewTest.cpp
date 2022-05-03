@@ -15,6 +15,7 @@
  */
 
 #include <optional>
+#include "folly/container/F14Map.h"
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/Exceptions.h"
@@ -133,6 +134,161 @@ class MapViewTest : public functions::test::FunctionBaseTest {
         count++;
       }
       ASSERT_EQ(count, mapsData[i].size());
+    }
+  }
+
+  void iteratorDecrementTest() {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> map{
+        {{1, 101}},
+        {{2, 102}, {3, 103}},
+        {{4, 104}, {5, 105}, {6, 106}},
+        {{7, 107}, {8, 108}, {9, 109}, {10, 110}},
+        {{11, 111}, {12, 112}, {13, 113}, {14, 114}, {15, 115}}};
+    auto mapVector = makeMapVector(map);
+
+    DecodedVector decoded;
+    exec::VectorReader<Map<int64_t, int64_t>> reader(
+        decode(decoded, *mapVector.get()));
+
+    for (auto i = 0; i < map.size(); i++) {
+      auto mapView = read(reader, i);
+      // Test using post decrement on the iterator.
+      auto j = mapView.size() - 1;
+      for (auto it = mapView.end() - 1; it >= mapView.begin(); it--) {
+        ASSERT_EQ(it->first, map[i][j].first);
+        ASSERT_EQ(it->second, map[i][j].second);
+        j--;
+      }
+      ASSERT_EQ(j, -1);
+
+      // Test using pre decrement on the iterator.
+      j = mapView.size() - 1;
+      for (auto it = mapView.end() - 1; it >= mapView.begin(); --it) {
+        ASSERT_EQ(it->first, map[i][j].first);
+        ASSERT_EQ(it->second, map[i][j].second);
+        j--;
+      }
+      ASSERT_EQ(j, -1);
+    }
+  }
+
+  void iteratorDifferenceTest() {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> map{
+        {{1, 101}},
+        {{2, 102}, {3, 103}},
+        {{4, 104}, {5, 105}, {6, 106}},
+        {{7, 107}, {8, 108}, {9, 109}, {10, 110}},
+        {{11, 111}, {12, 112}, {13, 113}, {14, 114}, {15, 115}}};
+    auto mapVector = makeMapVector(map);
+
+    DecodedVector decoded;
+    exec::VectorReader<Map<int64_t, int64_t>> reader(
+        decode(decoded, *mapVector.get()));
+
+    for (auto i = 0; i < map.size(); i++) {
+      auto mapView = read(reader, i);
+      auto it = mapView.begin();
+
+      for (int j = 0; j < mapView.size(); j++) {
+        auto it2 = mapView.begin();
+        for (int k = 0; k <= j; k++) {
+          ASSERT_EQ(it - it2, j - k);
+          ASSERT_EQ(it2 - it, k - j);
+          it2++;
+        }
+        it++;
+      }
+    }
+  }
+
+  void iteratorAdditionTest() {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> map{
+        {{1, 101}},
+        {{2, 102}, {3, 103}},
+        {{4, 104}, {5, 105}, {6, 106}},
+        {{7, 107}, {8, 108}, {9, 109}, {10, 110}},
+        {{11, 111}, {12, 112}, {13, 113}, {14, 114}, {15, 115}}};
+    auto mapVector = makeMapVector(map);
+
+    DecodedVector decoded;
+    exec::VectorReader<Map<int64_t, int64_t>> reader(
+        decode(decoded, *mapVector.get()));
+
+    for (auto i = 0; i < map.size(); i++) {
+      auto mapView = read(reader, i);
+      auto it = mapView.begin();
+
+      for (int j = 0; j < mapView.size(); j++) {
+        auto it2 = mapView.begin();
+        for (int k = 0; k < mapView.size(); k++) {
+          ASSERT_EQ(it, it2 + (j - k));
+          ASSERT_EQ(it, (j - k) + it2);
+          auto it3 = it2;
+          it3 += j - k;
+          ASSERT_EQ(it, it3);
+          it2++;
+        }
+        it++;
+      }
+    }
+  }
+
+  void iteratorSubtractionTest() {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> map{
+        {{1, 101}},
+        {{2, 102}, {3, 103}},
+        {{4, 104}, {5, 105}, {6, 106}},
+        {{7, 107}, {8, 108}, {9, 109}, {10, 110}},
+        {{11, 111}, {12, 112}, {13, 113}, {14, 114}, {15, 115}}};
+    auto mapVector = makeMapVector(map);
+
+    DecodedVector decoded;
+    exec::VectorReader<Map<int64_t, int64_t>> reader(
+        decode(decoded, *mapVector.get()));
+
+    for (auto i = 0; i < map.size(); i++) {
+      auto mapView = read(reader, i);
+      auto it = mapView.begin();
+
+      for (int j = 0; j < mapView.size(); j++) {
+        auto it2 = mapView.begin();
+        for (int k = 0; k < mapView.size(); k++) {
+          ASSERT_EQ(it, it2 - (k - j));
+          auto it3 = it2;
+          it3 -= k - j;
+          ASSERT_EQ(it, it3);
+          it2++;
+        }
+        it++;
+      }
+    }
+  }
+
+  void iteratorSubscriptTest() {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> map{
+        {{1, 101}},
+        {{2, 102}, {3, 103}},
+        {{4, 104}, {5, 105}, {6, 106}},
+        {{7, 107}, {8, 108}, {9, 109}, {10, 110}},
+        {{11, 111}, {12, 112}, {13, 113}, {14, 114}, {15, 115}}};
+    auto mapVector = makeMapVector(map);
+
+    DecodedVector decoded;
+    exec::VectorReader<Map<int64_t, int64_t>> reader(
+        decode(decoded, *mapVector.get()));
+
+    for (auto i = 0; i < map.size(); i++) {
+      auto mapView = read(reader, i);
+      auto it = mapView.begin();
+
+      for (int j = 0; j < mapView.size(); j++) {
+        auto it2 = mapView.begin();
+        for (int k = 0; k < mapView.size(); k++) {
+          ASSERT_EQ(*it, it2[j - k]);
+          it2++;
+        }
+        it++;
+      }
     }
   }
 
@@ -500,6 +656,26 @@ TEST_F(NullableMapViewTest, testSubscript) {
   ASSERT_EQ(read(reader, 1)[1], 4);
 }
 
+TEST_F(NullableMapViewTest, iteratorDecrement) {
+  iteratorDecrementTest();
+}
+
+TEST_F(NullableMapViewTest, iteratorDifference) {
+  iteratorDifferenceTest();
+}
+
+TEST_F(NullableMapViewTest, iteratorAddition) {
+  iteratorAdditionTest();
+}
+
+TEST_F(NullableMapViewTest, iteratorSubtraction) {
+  iteratorSubtractionTest();
+}
+
+TEST_F(NullableMapViewTest, iteratorSubscript) {
+  iteratorSubscriptTest();
+}
+
 TEST_F(NullFreeMapViewTest, testReadingRangeLoop) {
   readingRangeLoopTest();
 }
@@ -550,4 +726,64 @@ TEST_F(NullFreeMapViewTest, testSubscript) {
   ASSERT_EQ(read(reader, 1)[3], 3);
 }
 
+TEST_F(NullFreeMapViewTest, materialize) {
+  auto result = evaluate(
+      "map(array_constructor(1, 2), array_constructor(1, 3))",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Map<int64_t, int64_t>> reader(
+      decode(decoded, *result.get()));
+
+  folly::F14FastMap<int64_t, int64_t> expected{{1, 1}, {2, 3}};
+  ASSERT_EQ(reader.readNullFree(0).materialize(), expected);
+}
+
+TEST_F(NullableMapViewTest, materialize) {
+  auto result = evaluate(
+      "map(array_constructor(1, 2),array_constructor(1, NULL))",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Map<int64_t, int64_t>> reader(
+      decode(decoded, *result.get()));
+
+  folly::F14FastMap<int64_t, std::optional<int64_t>> expected{
+      {1, 1}, {2, std::nullopt}};
+  ASSERT_EQ(reader[0].materialize(), expected);
+}
+
+TEST_F(NullableMapViewTest, materializeNested) {
+  auto result = evaluate(
+      "map(array_constructor(1, 2), array_constructor(array_constructor(1, null), null))",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  DecodedVector decoded;
+  exec::VectorReader<Map<int64_t, Array<int64_t>>> reader(
+      decode(decoded, *result.get()));
+
+  folly::F14FastMap<int64_t, std::optional<std::vector<std::optional<int64_t>>>>
+      expected{{1, {{1, std::nullopt}}}, {2, std::nullopt}};
+  ASSERT_EQ(reader[0].materialize(), expected);
+}
+
+TEST_F(NullFreeMapViewTest, iteratorDecrement) {
+  iteratorDecrementTest();
+}
+
+TEST_F(NullFreeMapViewTest, iteratorDifference) {
+  iteratorDifferenceTest();
+}
+
+TEST_F(NullFreeMapViewTest, iteratorAddition) {
+  iteratorAdditionTest();
+}
+
+TEST_F(NullFreeMapViewTest, iteratorSubtraction) {
+  iteratorSubtractionTest();
+}
+
+TEST_F(NullFreeMapViewTest, iteratorSubscript) {
+  iteratorSubscriptTest();
+}
 } // namespace

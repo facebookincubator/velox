@@ -138,7 +138,7 @@ namespace {
 // producers which will allocate more memory.
 void releaseAfterAcknowledge(
     std::vector<std::shared_ptr<SerializedPage>>& freed,
-    std::vector<VeloxPromise<bool>>& promises) {
+    std::vector<ContinuePromise>& promises) {
   freed.clear();
   for (auto& promise : promises) {
     promise.setValue(true);
@@ -167,7 +167,7 @@ void PartitionedOutputBuffer::updateBroadcastOutputBuffers(
     bool noMoreBuffers) {
   VELOX_CHECK(broadcast_);
 
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -316,7 +316,7 @@ bool PartitionedOutputBuffer::isFinishedLocked() {
 
 void PartitionedOutputBuffer::acknowledge(int destination, int64_t sequence) {
   std::vector<std::shared_ptr<SerializedPage>> freed;
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK_LT(destination, buffers_.size());
@@ -334,7 +334,7 @@ void PartitionedOutputBuffer::acknowledge(int destination, int64_t sequence) {
 
 void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
     const std::vector<std::shared_ptr<SerializedPage>>& freed,
-    std::vector<VeloxPromise<bool>>& promises) {
+    std::vector<ContinuePromise>& promises) {
   uint64_t totalFreed = 0;
   for (const auto& free : freed) {
     if (free.unique()) {
@@ -359,7 +359,7 @@ void PartitionedOutputBuffer::updateAfterAcknowledgeLocked(
 
 bool PartitionedOutputBuffer::deleteResults(int destination) {
   std::vector<std::shared_ptr<SerializedPage>> freed;
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   bool isFinished;
   {
     std::lock_guard<std::mutex> l(mutex_);
@@ -393,7 +393,7 @@ void PartitionedOutputBuffer::getData(
     DataAvailableCallback notify) {
   std::vector<std::shared_ptr<SerializedPage>> data;
   std::vector<std::shared_ptr<SerializedPage>> freed;
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -419,9 +419,13 @@ void PartitionedOutputBuffer::getData(
 }
 
 void PartitionedOutputBuffer::terminate() {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(not task_->isRunning());
-  for (auto& promise : promises_) {
+  std::vector<ContinuePromise> outstandingPromises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(not task_->isRunning());
+    outstandingPromises.swap(promises_);
+  }
+  for (auto& promise : outstandingPromises) {
     promise.setValue(true);
   }
 }
@@ -443,20 +447,9 @@ std::string PartitionedOutputBuffer::toString() {
 
 // static
 std::weak_ptr<PartitionedOutputBufferManager>
-PartitionedOutputBufferManager::getInstance(const std::string& host) {
-  static std::mutex mutex;
-  static std::unordered_map<
-      std::string,
-      std::shared_ptr<PartitionedOutputBufferManager>>
-      instances;
-  std::lock_guard<std::mutex> l(mutex);
-  auto it = instances.find(host);
-  if (it != instances.end()) {
-    return it->second;
-  }
-  auto instance = std::make_shared<PartitionedOutputBufferManager>();
-  instances[host] = instance;
-  return instance;
+PartitionedOutputBufferManager::getInstance() {
+  static auto kInstance = std::make_shared<PartitionedOutputBufferManager>();
+  return kInstance;
 }
 
 std::shared_ptr<PartitionedOutputBuffer>
@@ -467,6 +460,10 @@ PartitionedOutputBufferManager::getBuffer(const std::string& taskId) {
         it != buffers.end(), "Output buffers for task not found: {}", taskId);
     return it->second;
   });
+}
+
+uint64_t PartitionedOutputBufferManager::numBuffers() const {
+  return buffers_.lock()->size();
 }
 
 BlockingReason PartitionedOutputBufferManager::enqueue(

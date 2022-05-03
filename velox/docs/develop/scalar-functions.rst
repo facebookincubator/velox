@@ -142,7 +142,7 @@ an array:
   template <typename TExecParams>
   struct ArrayMinFunction {
     VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
-    
+
     template <typename TInput>
     FOLLY_ALWAYS_INLINE bool callNullFree(
         TInput& out,
@@ -182,7 +182,7 @@ An example of such function is rand():
   template <typename TExecParams>
   struct RandFunction {
     static constexpr bool is_deterministic = false;
-    
+
     FOLLY_ALWAYS_INLINE bool call(double& result) {
       result = folly::Random::randDouble01();
       return true;
@@ -214,10 +214,10 @@ Here is an example of a trim function:
   template <typename TExecParams>
   struct TrimFunction {
     VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
-    
+
     // ASCII input always produces ASCII result.
     static constexpr bool is_default_ascii_behavior = true;
-    
+
     // Properly handles multi-byte characters.
     FOLLY_ALWAYS_INLINE bool call(
         out_type<Varchar>& result,
@@ -225,7 +225,7 @@ Here is an example of a trim function:
       stringImpl::trimUnicodeWhiteSpace<leftTrim, rightTrim>(result, input);
       return true;
     }
-    
+
     // Assumes input is all ASCII.
     FOLLY_ALWAYS_INLINE bool callAscii(
         out_type<Varchar>& result,
@@ -276,15 +276,15 @@ properties and using it when processing inputs.
   template <typename TExecParams>
   struct HourFunction {
     VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
-    
+
     const date::time_zone* timeZone_ = nullptr;
-    
+
     FOLLY_ALWAYS_INLINE void initialize(
         const core::QueryConfig& config,
         const arg_type<Timestamp>* /*timestamp*/) {
       timeZone_ = getTimeZoneFromConfig(config);
     }
-    
+
     FOLLY_ALWAYS_INLINE bool call(
         int64_t& result,
         const arg_type<Timestamp>& timestamp) {
@@ -305,10 +305,10 @@ individual rows.
   template <typename TExecParams>
   struct DateTruncFunction {
     VELOX_DEFINE_FUNCTION_TYPES(TExecParams);
-    
+
     const date::time_zone* timeZone_ = nullptr;
     std::optional<DateTimeUnit> unit_;
-    
+
     FOLLY_ALWAYS_INLINE void initialize(
         const core::QueryConfig& config,
         const arg_type<Varchar>* unitString,
@@ -318,7 +318,7 @@ individual rows.
         unit_ = fromDateTimeUnitString(*unitString);
       }
     }
-    
+
     FOLLY_ALWAYS_INLINE bool call(
         out_type<Timestamp>& result,
         const arg_type<Varchar>& unitString,
@@ -371,7 +371,7 @@ Here is an example with ceil function.
 .. code-block:: c++
 
   #include "velox/functions/prestosql/ArithmeticImpl.h"
-  
+
   template <typename TExecParams>
   struct CeilFunction {
     template <typename T>
@@ -504,7 +504,7 @@ ArrayView supports the following:
   template <typename T>
   struct ArraySum {
     VELOX_DEFINE_FUNCTION_TYPES(T);
-    
+
     bool call(const int64_t& output, const arg_type<Array<int64_t>>& array) {
       output = 0;
       for (const auto& value : array.skipNulls()) {
@@ -717,7 +717,7 @@ examples,
 - :func:`is_null` function copies the “nulls” buffer of the input vector, flips the bits in bulk and returns the result.
 - :func:`element_at` function and subscript operator for arrays and maps use dictionary encoding to represent a subset of the input “elements” or “values” vector without copying.
 
-To define a vector function, make a subclass of f4d::exec::VectorFunction and
+To define a vector function, make a subclass of exec::VectorFunction and
 implement the “apply” method.
 
 .. code-block:: c++
@@ -1017,33 +1017,33 @@ using context->setError.
 Registration
 ^^^^^^^^^^^^
 
-Use f4d::exec::registerVectorFunction to register a stateless vector function.
+Use exec::registerVectorFunction to register a stateless vector function.
 
 .. code-block:: c++
 
     bool registerVectorFunction(
         const std::string& name,
-        std::vector<std::shared_ptr<FunctionSignature>> signatures,
+        std::vector<FunctionSignaturePtr> signatures,
         std::unique_ptr<VectorFunction> func,
         bool overwrite = true)
 
-f4d::exec::registerVectorFunction takes a name, a list of supported signatures
+exec::registerVectorFunction takes a name, a list of supported signatures
 and unique_ptr to an instance of the function. An optional “overwrite” flag
 specifies whether to overwrite a function if a function with the specified
 name already exists.
 
-Use f4d::exec::registerStatefulVectorFunction to register a stateful vector
+Use exec::registerStatefulVectorFunction to register a stateful vector
 function.
 
 .. code-block:: c++
 
     bool registerStatefulVectorFunction(
         const std::string& name,
-        std::vector<std::shared_ptr<FunctionSignature>> signatures,
+        std::vector<FunctionSignaturePtr> signatures,
         VectorFunctionFactory factory,
         bool overwrite = true)
 
-f4d::exec::registerStatefulVectorFunction takes a name, a list of supported
+exec::registerStatefulVectorFunction takes a name, a list of supported
 signatures and a factory function that can be used to create an instance of
 the vector function. Expression evaluation engine uses a factory function to
 create a new instance of the vector function for each thread of execution. In

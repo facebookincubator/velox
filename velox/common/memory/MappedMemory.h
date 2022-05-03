@@ -46,15 +46,19 @@ using MachinePageCount = uint64_t;
 // by. Implementations may use malloc or mmap/madvise. Caches
 // subclass this to provide allocation that is fungible with cached
 // capacity, i.e. a cache can evict data to make space for non-cache
-// memory users. The point if to have all large allocation come from
+// memory users. The point is to have all large allocation come from
 // a single source to have dynamic balancing between different
 // users. Proxy subclasses may provide context specific tracking
 // while delegating the allocation to a root allocator.
-class MappedMemory {
+class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
  public:
   static constexpr uint64_t kPageSize = 4096;
   static constexpr int32_t kMaxSizeClasses = 12;
   static constexpr int32_t kNoOwner = -1;
+  // Marks allocation via allocateBytes, e.g. StlMappedMemoryAllocator.
+  static constexpr int32_t kMallocOwner = -14;
+  // Allocations smaller than 3K should  go to malloc.
+  static constexpr int32_t kMaxMallocBytes = 3072;
 
   // Represents a number of consecutive pages of kPageSize bytes.
   class PageRun {
@@ -206,6 +210,16 @@ class MappedMemory {
     uint64_t size_{0};
   };
 
+  // Stats on memory allocated by allocateBytes().
+  struct AllocateBytesCounters {
+    // Total size of small allocations.
+    uint64_t totalSmall;
+    // Total size of allocations from some size class.
+    uint64_t totalInSizeClasses;
+    // Total in standalone large allocations via allocateContiguous().
+    uint64_t totalLarge;
+  };
+
   MappedMemory() {}
 
   virtual ~MappedMemory() {}
@@ -216,7 +230,7 @@ class MappedMemory {
 
   // Creates a default MappedMemory instance but does not set this to process
   // default.
-  static std::unique_ptr<MappedMemory> createDefaultInstance();
+  static std::shared_ptr<MappedMemory> createDefaultInstance();
 
   // Overrides the process-wide default instance. The caller keeps
   // ownership and must not destroy the instance until it is
@@ -263,6 +277,24 @@ class MappedMemory {
 
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
 
+  // Allocates 'size'contiguous bytes and returns the pointer to the
+  // first byte. If 'size' is less than 'maxMallocSize', delegates the
+  // allocation to malloc. If the size is above that and below the
+  // largest size class, allocates one element of the next size
+  // class. If 'size' is greater than the largest size class, calls
+  // allocateContiguous(). Returns nullptr if there is no space. The
+  // amount to allocate is subject to the size limit of 'this'. This
+  // function is not virtual but calls the virtual functions allocate
+  // and allocateContiguous, which can track sizes and enforce caps etc.
+  void* FOLLY_NULLABLE
+  allocateBytes(uint64_t bytes, uint64_t maxMallocSize = kMaxMallocBytes);
+
+  // Frees memory allocated with allocateBytes().
+  void freeBytes(
+      void* FOLLY_NONNULL p,
+      uint64_t size,
+      uint64_t maxMallocSize = kMaxMallocBytes) noexcept;
+
   // Checks internal consistency of allocation data
   // structures. Returns true if OK.
   virtual bool checkConsistency() const = 0;
@@ -279,6 +311,19 @@ class MappedMemory {
 
   virtual std::shared_ptr<MappedMemory> addChild(
       std::shared_ptr<MemoryUsageTracker> tracker);
+
+  virtual MemoryUsageTracker* FOLLY_NULLABLE tracker() const {
+    return nullptr;
+  }
+
+  // Returns static counters for allocateBytes usage.
+
+  static AllocateBytesCounters allocateBytesStats() {
+    return {
+        totalSmallAllocateBytes_,
+        totalSizeClassAllocateBytes_,
+        totalLargeAllocateBytes_};
+  }
 
   virtual std::string toString() const;
 
@@ -311,11 +356,19 @@ class MappedMemory {
 
  private:
   // Singleton instance.
-  static std::unique_ptr<MappedMemory> instance_;
+  static std::shared_ptr<MappedMemory> instance_;
   // Application-supplied custom implementation of MappedMemory to be returned
   // by getInstance().
   static MappedMemory* FOLLY_NULLABLE customInstance_;
   static std::mutex initMutex_;
+  // Static counters for STL and memoryPool users of
+  // MappedMemory. Updated by allocateBytes() and freeBytes(). These
+  // are intended to be exported via StatsReporter. These are
+  // respectively backed by malloc, allocate from a single size class
+  // and standalone mmap.
+  static std::atomic<uint64_t> totalSmallAllocateBytes_;
+  static std::atomic<uint64_t> totalSizeClassAllocateBytes_;
+  static std::atomic<uint64_t> totalLargeAllocateBytes_;
 };
 
 // Wrapper around MappedMemory for scoped tracking of activity. We
@@ -388,10 +441,58 @@ class ScopedMappedMemory final : public MappedMemory {
     return std::make_shared<ScopedMappedMemory>(this, tracker);
   }
 
+  MemoryUsageTracker* FOLLY_NULLABLE tracker() const override {
+    return tracker_.get();
+  }
+
  private:
   std::shared_ptr<MappedMemory> parentPtr_;
   MappedMemory* FOLLY_NONNULL parent_;
   std::shared_ptr<MemoryUsageTracker> tracker_;
+};
+
+// An Allocator backed by MappedMemory for for STL containers.
+template <class T>
+struct StlMappedMemoryAllocator {
+  using value_type = T;
+
+  explicit StlMappedMemoryAllocator(MappedMemory* FOLLY_NONNULL allocator)
+      : allocator_{allocator} {
+    VELOX_CHECK(allocator);
+  }
+
+  template <class U>
+  explicit StlMappedMemoryAllocator(
+      const StlMappedMemoryAllocator<U>& allocator)
+      : allocator_{allocator.allocator()} {
+    VELOX_CHECK(allocator_);
+  }
+
+  T* FOLLY_NONNULL allocate(std::size_t n) {
+    return reinterpret_cast<T*>(allocator_->allocateBytes(n * sizeof(T)));
+  }
+
+  void deallocate(T* FOLLY_NONNULL p, std::size_t n) noexcept {
+    allocator_->freeBytes(p, n * sizeof(T));
+  }
+
+  MappedMemory* FOLLY_NONNULL allocator() const {
+    return allocator_;
+  }
+
+  friend bool operator==(
+      const StlMappedMemoryAllocator& lhs,
+      const StlMappedMemoryAllocator& rhs) {
+    return lhs.allocator_ == rhs.allocator_;
+  }
+  friend bool operator!=(
+      const StlMappedMemoryAllocator& lhs,
+      const StlMappedMemoryAllocator& rhs) {
+    return !(lhs == rhs);
+  }
+
+ private:
+  MappedMemory* FOLLY_NONNULL allocator_;
 };
 
 } // namespace facebook::velox::memory

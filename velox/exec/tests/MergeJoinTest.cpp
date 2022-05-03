@@ -24,7 +24,6 @@ using namespace facebook::velox::exec::test;
 class MergeJoinTest : public HiveConnectorTestBase {
  protected:
   using OperatorTestBase::assertQuery;
-  static constexpr const char* kWriter = "MergeJoinTest.Writer";
 
   static CursorParameters makeCursorParameters(
       const std::shared_ptr<const core::PlanNode>& planNode,
@@ -128,7 +127,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         {"u_c0"},
                         PlanBuilder(planNodeIdGenerator)
                             .values(right)
-                            .project({"c0 AS u_c0", "c1 AS u_c1"})
+                            .project({"c1 AS u_c1", "c0 AS u_c0"})
                             .planNode(),
                         "",
                         {"c0", "c1", "u_c1"},
@@ -159,7 +158,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
                    {"u_c0"},
                    PlanBuilder(planNodeIdGenerator)
                        .values(right)
-                       .project({"c0 as u_c0", "c1 as u_c1"})
+                       .project({"c1 as u_c1", "c0 as u_c0"})
                        .planNode(),
                    "",
                    {"c0", "c1", "u_c1"},
@@ -439,7 +438,6 @@ TEST_F(MergeJoinTest, numDrivers) {
   CursorParameters params;
   params.planNode = plan;
   params.maxDrivers = 5;
-  params.numResultDrivers = 1;
   auto task = assertQuery(params, "SELECT 2, 2");
   // We have two pipelines in the task and each must have 1 driver.
   EXPECT_EQ(2, task->numTotalDrivers());
@@ -468,11 +466,11 @@ TEST_F(MergeJoinTest, lazyVectors) {
        makeFlatVector<int64_t>(10'000, [](auto row) { return row % 31; })});
 
   auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->path, kWriter, leftVectors);
+  writeToFile(leftFile->path, leftVectors);
   createDuckDbTable("t", {leftVectors});
 
   auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->path, kWriter, rightVectors);
+  writeToFile(rightFile->path, rightVectors);
   createDuckDbTable("u", {rightVectors});
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();

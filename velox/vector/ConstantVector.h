@@ -45,8 +45,7 @@ class ConstantVector final : public SimpleVector<T> {
       size_t length,
       bool isNull,
       T&& val,
-      const folly::F14FastMap<std::string, std::string>& metaData =
-          cdvi::EMPTY_METADATA,
+      const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt)
       : ConstantVector(
@@ -55,7 +54,7 @@ class ConstantVector final : public SimpleVector<T> {
             isNull,
             CppToType<T>::create(),
             std::move(val),
-            metaData,
+            stats,
             representedBytes,
             storageByteCount) {}
 
@@ -65,8 +64,7 @@ class ConstantVector final : public SimpleVector<T> {
       bool isNull,
       std::shared_ptr<const Type> type,
       T&& val,
-      const folly::F14FastMap<std::string, std::string>& metaData =
-          cdvi::EMPTY_METADATA,
+      const SimpleVectorStats<T>& stats = {},
       std::optional<ByteCount> representedBytes = std::nullopt,
       std::optional<ByteCount> storageByteCount = std::nullopt)
       : SimpleVector<T>(
@@ -74,7 +72,7 @@ class ConstantVector final : public SimpleVector<T> {
             type,
             BufferPtr(nullptr),
             length,
-            metaData,
+            stats,
             isNull ? 0 : 1 /* distinctValueCount */,
             isNull ? length : 0 /* nullCount */,
             true /*isSorted*/,
@@ -114,14 +112,13 @@ class ConstantVector final : public SimpleVector<T> {
       vector_size_t length,
       vector_size_t index,
       VectorPtr base,
-      const folly::F14FastMap<std::string, std::string>& metaData =
-          cdvi::EMPTY_METADATA)
+      const SimpleVectorStats<T>& stats = {})
       : SimpleVector<T>(
             pool,
             base->type(),
             BufferPtr(nullptr),
             length,
-            metaData,
+            stats,
             std::nullopt,
             std::nullopt,
             true /*isSorted*/,
@@ -306,6 +303,28 @@ class ConstantVector final : public SimpleVector<T> {
     // nothing to do
   }
 
+  std::optional<int32_t> compare(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex,
+      CompareFlags flags) const override {
+    if constexpr (!std::is_same_v<T, ComplexType>) {
+      if (other->isConstantEncoding()) {
+        auto otherConstant = other->asUnchecked<ConstantVector<T>>();
+        if (isNull_ || otherConstant->isNull_) {
+          return BaseVector::compareNulls(
+              isNull_, otherConstant->isNull_, flags);
+        }
+
+        auto result =
+            SimpleVector<T>::comparePrimitiveAsc(value_, otherConstant->value_);
+        return flags.ascending ? result : result * -1;
+      }
+    }
+
+    return SimpleVector<T>::compare(other, index, otherIndex, flags);
+  }
+
   std::string toString() const override {
     std::stringstream out;
     out << "[" << encoding() << " " << this->type()->toString() << ": "
@@ -390,6 +409,9 @@ void ConstantVector<StringView>::setValue(const std::string& string);
 
 template <>
 void ConstantVector<std::shared_ptr<void>>::setValue(const std::string& string);
+
+template <>
+void ConstantVector<ComplexType>::setValue(const std::string& string);
 
 template <typename T>
 using ConstantVectorPtr = std::shared_ptr<ConstantVector<T>>;

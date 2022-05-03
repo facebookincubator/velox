@@ -42,6 +42,11 @@ openssl
 openssl
 zlib
 
+# xz depends on autoconf which does not build on 
+# Windows
+[dependencies.not(os=windows)]
+xz
+
 [shipit.pathmap]
 fbcode/folly/public_tld = .
 fbcode/folly = folly

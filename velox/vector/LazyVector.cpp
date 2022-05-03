@@ -34,7 +34,9 @@ static void writeIOWallTimeStat(size_t ioTimeStartMicros) {
   if (BaseRuntimeStatWriter* pWriter = sRunTimeStatWriters.get()) {
     pWriter->addRuntimeStat(
         "dataSourceLazyWallNanos",
-        (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000);
+        RuntimeCounter(
+            (getCurrentTimeMicro() - ioTimeStartMicros) * 1'000,
+            RuntimeCounter::Unit::kNanos));
   }
 }
 
@@ -48,7 +50,7 @@ void VectorLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {
     // materialization into vector. This counter can be used to understand
     // whether aggregation pushdown is happening or not.
     if (auto* pWriter = sRunTimeStatWriters.get()) {
-      pWriter->addRuntimeStat("loadedToValueHook", rows.size());
+      pWriter->addRuntimeStat("loadedToValueHook", RuntimeCounter(rows.size()));
     }
   }
 }
@@ -117,6 +119,7 @@ void LazyVector::ensureLoadedRows(
   RowSet rowSet;
   if (decoded.isConstantMapping()) {
     rowNumbers.push_back(decoded.index(rows.begin()));
+    rowSet = RowSet(rowNumbers);
   } else if (decoded.isIdentityMapping()) {
     if (rows.isAllSelected()) {
       auto iota = velox::iota(rows.end(), rowNumbers);
@@ -129,7 +132,7 @@ void LazyVector::ensureLoadedRows(
     }
   } else {
     baseRows.resize(0);
-    baseRows.resize(lazyVector->size()), false;
+    baseRows.resize(lazyVector->size(), false);
     rows.applyToSelected([&](auto row) {
       if (!decoded.isNullAt(row)) {
         baseRows.setValid(decoded.index(row), true);

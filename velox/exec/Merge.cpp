@@ -16,7 +16,6 @@
 
 #include <boost/circular_buffer.hpp>
 
-#include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/Task.h"
 
@@ -24,139 +23,227 @@ namespace facebook::velox::exec {
 
 Merge::Merge(
     int32_t operatorId,
-    DriverCtx* ctx,
-    std::shared_ptr<const RowType> outputType,
+    DriverCtx* driverCtx,
+    RowTypePtr outputType,
     const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
         sortingKeys,
     const std::vector<core::SortOrder>& sortingOrders,
     const std::string& planNodeId,
     const std::string& operatorType)
-    : SourceOperator(ctx, outputType, operatorId, planNodeId, operatorType),
-      planNodeId_(planNodeId),
-      rowContainer_(std::make_unique<RowContainer>(
-          outputType_->children(),
-          operatorCtx_->mappedMemory())),
-      candidates_(Comparator(
-          outputType_,
-          sortingKeys,
-          sortingOrders,
-          rowContainer_.get())),
-      extractedCols_(std::dynamic_pointer_cast<RowVector>(
-          BaseVector::create(outputType_, 1, operatorCtx_->pool()))),
-      future_(false) {}
+    : SourceOperator(
+          driverCtx,
+          std::move(outputType),
+          operatorId,
+          planNodeId,
+          operatorType),
+      outputBatchSize_{driverCtx->queryConfig().preferredOutputBatchSize()} {
+  auto numKeys = sortingKeys.size();
+  sortingKeys_.reserve(numKeys);
+  for (int i = 0; i < numKeys; ++i) {
+    auto channel = exprToChannel(sortingKeys[i].get(), outputType_);
+    VELOX_CHECK_NE(
+        channel,
+        kConstantChannel,
+        "Merge doesn't allow constant grouping keys");
+    sortingKeys_.emplace_back(
+        channel,
+        CompareFlags{
+            sortingOrders[i].isNullsFirst(),
+            sortingOrders[i].isAscending(),
+            false});
+  }
+}
+
+void Merge::initializeTreeOfLosers() {
+  std::vector<std::unique_ptr<SourceStream>> sourceCursors;
+  sourceCursors.reserve(sources_.size());
+  for (auto& source : sources_) {
+    sourceCursors.push_back(std::make_unique<SourceStream>(
+        source.get(), sortingKeys_, outputBatchSize_));
+  }
+
+  // Save the pointers to cursors before moving these into the TreeOfLosers.
+  streams_.reserve(sources_.size());
+  for (auto& cursor : sourceCursors) {
+    streams_.push_back(cursor.get());
+  }
+
+  treeOfLosers_ =
+      std::make_unique<TreeOfLosers<SourceStream>>(std::move(sourceCursors));
+}
 
 BlockingReason Merge::isBlocked(ContinueFuture* future) {
-  BlockingReason reason = blockingReason_;
-  if (blockingReason_ != BlockingReason::kNotBlocked) {
-    *future = std::move(future_);
-  } else {
-    reason = addMergeSources(future);
-  }
-  blockingReason_ = BlockingReason::kNotBlocked;
-  return reason;
-}
-
-BlockingReason Merge::pushSource(ContinueFuture* future, size_t sourceId) {
-  char* row = nullptr;
-  auto reason = sources_[sourceId]->next(future, &row);
-  if (reason == BlockingReason::kNotBlocked && row) {
-    candidates_.emplace(sourceId, row);
-  }
-  return reason;
-}
-
-// Returns kNotBlocked if all sources ready and the priority queue has
-// their top rows.
-BlockingReason Merge::ensureSourcesReady(ContinueFuture* future) {
   auto reason = addMergeSources(future);
   if (reason != BlockingReason::kNotBlocked) {
     return reason;
   }
 
-  if (numSourcesAdded_ < sources_.size()) {
-    // We have not considered some of the sources yet. Push top rows of
-    // sources into the priority queue. If they are not available yet, then
-    // block.
-    while (currentSourcePos_ < sources_.size()) {
-      reason = pushSource(future, currentSourcePos_);
-      if (reason != BlockingReason::kNotBlocked) {
-        return reason;
-      }
-      ++currentSourcePos_;
-      ++numSourcesAdded_;
+  // No merging is needed if there is only one source.
+  if (streams_.empty() && sources_.size() > 1) {
+    initializeTreeOfLosers();
+  }
+
+  if (sourceBlockingFutures_.empty()) {
+    for (auto& cursor : streams_) {
+      cursor->isBlocked(sourceBlockingFutures_);
     }
   }
 
-  // Finally, push any outstanding rows into the priority queue.
-  if (currentSourcePos_ < sources_.size()) {
-    reason = pushSource(future, currentSourcePos_);
-    if (reason != BlockingReason::kNotBlocked) {
-      return reason;
-    }
-    currentSourcePos_ = sources_.size();
+  if (!sourceBlockingFutures_.empty()) {
+    *future = std::move(sourceBlockingFutures_.back());
+    sourceBlockingFutures_.pop_back();
+    return BlockingReason::kWaitForExchange;
   }
 
   return BlockingReason::kNotBlocked;
 }
 
 bool Merge::isFinished() {
-  return blockingReason_ == BlockingReason::kNotBlocked && candidates_.empty();
+  return finished_;
 }
 
 RowVectorPtr Merge::getOutput() {
-  blockingReason_ = ensureSourcesReady(&future_);
-  if (blockingReason_ != BlockingReason::kNotBlocked) {
+  if (finished_) {
     return nullptr;
   }
 
-  const auto numRowsPerBatch =
-      rowContainer_->estimatedNumRowsPerBatch(kBatchSizeInBytes);
-  rows_.reserve(numRowsPerBatch);
-
-  while (!candidates_.empty()) {
-    auto entry = candidates_.top();
-    candidates_.pop();
-
-    rows_.push_back(rowContainer_->addRow(entry.second, extractedCols_));
-
-    blockingReason_ = pushSource(&future_, entry.first);
-    if (blockingReason_ != BlockingReason::kNotBlocked) {
-      currentSourcePos_ = entry.first;
-      break;
+  // No merging is needed if there is only one source.
+  if (sources_.size() == 1) {
+    ContinueFuture future{false};
+    RowVectorPtr data;
+    auto reason = sources_[0]->next(data, &future);
+    if (reason != BlockingReason::kNotBlocked) {
+      sourceBlockingFutures_.emplace_back(std::move(future));
+      return nullptr;
     }
-    if (rows_.size() >= numRowsPerBatch) {
-      break;
+
+    finished_ = data == nullptr;
+    return data;
+  }
+
+  if (!output_) {
+    output_ = std::dynamic_pointer_cast<RowVector>(BaseVector::create(
+        outputType_, outputBatchSize_, operatorCtx_->pool()));
+    for (auto& child : output_->children()) {
+      child->resize(outputBatchSize_);
     }
   }
 
-  if (rows_.size() >= numRowsPerBatch ||
-      (!rows_.empty() && candidates_.empty())) {
-    auto result = std::dynamic_pointer_cast<RowVector>(
-        BaseVector::create(outputType_, rows_.size(), operatorCtx_->pool()));
+  for (;;) {
+    auto stream = treeOfLosers_->next();
 
-    rowContainer_->extractRows(rows_, result);
-    rowContainer_->clear();
-    rows_.clear();
-    return result;
+    if (!stream) {
+      output_->resize(outputSize_);
+      finished_ = true;
+      return std::move(output_);
+    }
+
+    if (stream->setOutputRow(outputSize_)) {
+      // The stream is at end of input batch. Need to copy out the rows before
+      // fetching next batch in 'pop'.
+      stream->copyToOutput(output_);
+    }
+
+    ++outputSize_;
+
+    // Advance the stream.
+    stream->pop(sourceBlockingFutures_);
+
+    if (outputSize_ == outputBatchSize_) {
+      // Copy out data from all sources.
+      for (auto& s : streams_) {
+        s->copyToOutput(output_);
+      }
+
+      outputSize_ = 0;
+      return std::move(output_);
+    }
+
+    if (!sourceBlockingFutures_.empty()) {
+      return nullptr;
+    }
   }
-  return nullptr;
 }
 
-Merge::Comparator::Comparator(
-    std::shared_ptr<const RowType> type,
-    const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
-        sortingKeys,
-    const std::vector<core::SortOrder>& sortingOrders,
-    RowContainer* rowContainer)
-    : rowContainer_(rowContainer) {
-  auto numKeys = sortingKeys.size();
-  for (int i = 0; i < numKeys; ++i) {
-    auto channel = exprToChannel(sortingKeys[i].get(), type);
-    VELOX_CHECK(
-        channel != kConstantChannel,
-        "Merge doesn't allow constant grouping keys");
-    keyInfo_.emplace_back(channel, sortingOrders[i]);
+bool SourceStream::operator<(const MergeStream& other) const {
+  const auto& otherCursor = static_cast<const SourceStream&>(other);
+  for (auto i = 0; i < sortingKeys_.size(); ++i) {
+    const auto& [_, compareFlags] = sortingKeys_[i];
+    VELOX_DCHECK(
+        !compareFlags.stopAtNull,
+        "stopAtNull not supported for merge compare flags");
+    if (auto result = keyColumns_[i]
+                          ->compare(
+                              otherCursor.keyColumns_[i],
+                              currentSourceRow_,
+                              otherCursor.currentSourceRow_,
+                              compareFlags)
+                          .value()) {
+      return result < 0;
+    }
   }
+  return false;
+}
+
+bool SourceStream::pop(std::vector<ContinueFuture>& futures) {
+  ++currentSourceRow_;
+  if (currentSourceRow_ == data_->size()) {
+    // Make sure all current data has been copied out.
+    VELOX_CHECK(!outputRows_.hasSelections());
+    return fetchMoreData(futures);
+  }
+
+  return false;
+}
+
+void SourceStream::copyToOutput(RowVectorPtr& output) {
+  outputRows_.updateBounds();
+
+  if (!outputRows_.hasSelections()) {
+    return;
+  }
+
+  vector_size_t sourceRow = firstSourceRow_;
+  outputRows_.applyToSelected(
+      [&](auto row) { sourceRows_[row] = sourceRow++; });
+
+  for (auto i = 0; i < output->type()->size(); ++i) {
+    output->childAt(i)->copy(
+        data_->childAt(i).get(), outputRows_, sourceRows_.data());
+  }
+
+  outputRows_.clearAll();
+
+  if (currentSourceRow_ == data_->size() - 1) {
+    firstSourceRow_ = 0;
+  } else {
+    firstSourceRow_ = currentSourceRow_;
+  }
+}
+
+bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
+  ContinueFuture future{false};
+  auto reason = source_->next(data_, &future);
+  if (reason != BlockingReason::kNotBlocked) {
+    needData_ = true;
+    futures.emplace_back(std::move(future));
+    return true;
+  }
+
+  atEnd_ = !data_ || data_->size() == 0;
+  needData_ = false;
+  currentSourceRow_ = 0;
+
+  if (!atEnd_) {
+    for (auto& child : data_->children()) {
+      child = BaseVector::loadedVectorShared(child);
+    }
+    keyColumns_.clear();
+    for (const auto& key : sortingKeys_) {
+      keyColumns_.push_back(data_->childAt(key.first).get());
+    }
+  }
+  return false;
 }
 
 LocalMerge::LocalMerge(
@@ -178,8 +265,10 @@ LocalMerge::LocalMerge(
 }
 
 BlockingReason LocalMerge::addMergeSources(ContinueFuture* /* future */) {
-  sources_ = operatorCtx_->task()->getLocalMergeSources(
-      operatorCtx_->driverCtx()->splitGroupId, planNodeId());
+  if (sources_.empty()) {
+    sources_ = operatorCtx_->task()->getLocalMergeSources(
+        operatorCtx_->driverCtx()->splitGroupId, planNodeId());
+  }
   return BlockingReason::kNotBlocked;
 }
 
@@ -208,7 +297,7 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
   for (;;) {
     exec::Split split;
     auto reason = operatorCtx_->task()->getSplitOrFuture(
-        operatorCtx_->driverCtx()->splitGroupId, planNodeId_, split, *future);
+        operatorCtx_->driverCtx()->splitGroupId, planNodeId(), split, *future);
     if (reason == BlockingReason::kNotBlocked) {
       if (split.hasConnectorSplit()) {
         auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(

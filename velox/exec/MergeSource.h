@@ -24,15 +24,15 @@ class MergeExchange;
 class MergeSource {
  public:
   virtual ~MergeSource() {}
-  virtual BlockingReason next(ContinueFuture* future, char** row) = 0;
+
+  virtual BlockingReason next(RowVectorPtr& data, ContinueFuture* future) = 0;
+
   virtual BlockingReason enqueue(
       RowVectorPtr input,
       ContinueFuture* future) = 0;
 
   // Factory methods to create MergeSources.
-  static std::shared_ptr<MergeSource> createLocalMergeSource(
-      const std::shared_ptr<const RowType>& rowType,
-      memory::MappedMemory* mappedMemory);
+  static std::shared_ptr<MergeSource> createLocalMergeSource();
 
   static std::shared_ptr<MergeSource> createMergeExchangeSource(
       MergeExchange* mergeExchange,
@@ -65,11 +65,11 @@ class MergeJoinSource {
   // Satisfied when data becomes available or the producer reports that it
   // finished producing, e.g. state_.data is not nullptr or state_.atEnd is
   // true.
-  std::optional<VeloxPromise<bool>> consumerPromise_;
+  std::optional<ContinuePromise> consumerPromise_;
 
   // Satisfied when previously enqueued data has been consumed, e.g. state_.data
   // is nullptr.
-  std::optional<VeloxPromise<bool>> producerPromise_;
+  std::optional<ContinuePromise> producerPromise_;
 };
 
 } // namespace facebook::velox::exec

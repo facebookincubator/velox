@@ -126,31 +126,15 @@ struct SimpleGeneralInterface {
   }
 };
 
-template <typename T>
-struct SimpleOld {
-  template <typename TOut>
-  bool call(TOut& out, const int64_t& n) {
-    for (int i = 0; i < n; i++) {
-      if (WITH_NULLS && i % 5) {
-        out.append(std::nullopt);
-      } else {
-        out.append(i);
-      }
-    }
-    return true;
-  }
-};
-
 class ArrayWriterBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
   ArrayWriterBenchmark() : FunctionBenchmarkBase() {
-    registerFunction<SimpleFunctionResize, ArrayWriterT<int64_t>, int64_t>(
+    registerFunction<SimpleFunctionResize, Array<int64_t>, int64_t>(
         {"simpl_resize"});
-    registerFunction<SimpleFunctionPushBack, ArrayWriterT<int64_t>, int64_t>(
+    registerFunction<SimpleFunctionPushBack, Array<int64_t>, int64_t>(
         {"simple_push_back"});
-    registerFunction<SimpleGeneralInterface, ArrayWriterT<int64_t>, int64_t>(
+    registerFunction<SimpleGeneralInterface, Array<int64_t>, int64_t>(
         {"simple_general"});
-    registerFunction<SimpleOld, Array<int64_t>, int64_t>({"simple_old"});
 
     facebook::velox::exec::registerVectorFunction(
         "vector_resize_optimized",
@@ -224,7 +208,6 @@ class ArrayWriterBenchmark : public functions::test::FunctionBenchmarkBase {
         "vector_resize_optimized",
         "simple_push_back",
         "simple_resize",
-        "simple_old",
         "simple_general",
     };
 
@@ -282,11 +265,6 @@ BENCHMARK_MULTI(simple_push_back) {
 BENCHMARK_MULTI(simple_general) {
   ArrayWriterBenchmark benchmark;
   return benchmark.run("simple_general");
-}
-
-BENCHMARK_MULTI(simple_old) {
-  ArrayWriterBenchmark benchmark;
-  return benchmark.run("simple_old");
 }
 
 BENCHMARK_MULTI(std_reference) {

@@ -13,8 +13,13 @@
 # limitations under the License.
 add_executable(
   velox_functions_lib_test
-  ArrayBuilderTest.cpp DateTimeFormatterTest.cpp IsNullTest.cpp
-  IsNotNullTest.cpp JodaDateTimeTest.cpp Re2FunctionsTest.cpp)
+  ArrayBuilderTest.cpp
+  DateTimeFormatterTest.cpp
+  IsNullTest.cpp
+  IsNotNullTest.cpp
+  JodaDateTimeTest.cpp
+  KllSketchTest.cpp
+  Re2FunctionsTest.cpp)
 
 add_test(velox_functions_lib_test velox_functions_lib_test)
 
@@ -24,5 +29,7 @@ target_link_libraries(
   velox_functions_test_lib
   velox_exec_test_util
   velox_expression
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
+  gmock
   ${gflags_LIBRARIES})

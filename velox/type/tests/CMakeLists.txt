@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(
-  velox_type_test StringViewTest.cpp TypeTest.cpp FilterTest.cpp
-                  SubfieldTest.cpp TimestampConversionTest.cpp VariantTest.cpp)
+  velox_type_test
+  StringViewTest.cpp
+  TypeTest.cpp
+  FilterTest.cpp
+  SubfieldTest.cpp
+  TimestampConversionTest.cpp
+  VariantTest.cpp
+  TimestampTest.cpp)
 
 add_test(velox_type_test velox_type_test)
 
@@ -24,7 +30,9 @@ target_link_libraries(
   velox_external_date
   ${FOLLY}
   ${DOUBLE_CONVERSION}
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
+  gmock
   ${gflags_LIBRARIES}
   glog::glog)
 
@@ -37,6 +45,7 @@ target_link_libraries(
   ${FOLLY}
   ${FOLLY_BENCHMARK}
   ${DOUBLE_CONVERSION}
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
   ${gflags_LIBRARIES}
   glog::glog)

@@ -23,7 +23,7 @@ const SortOrder kDescNullsFirst(false, true);
 const SortOrder kDescNullsLast(false, false);
 
 namespace {
-const std::vector<std::shared_ptr<const PlanNode>> kEmptySources;
+const std::vector<PlanNodePtr> kEmptySources;
 
 std::shared_ptr<RowType> getAggregationOutputType(
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
@@ -67,7 +67,7 @@ AggregationNode::AggregationNode(
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
         aggregateMasks,
     bool ignoreNullKeys,
-    std::shared_ptr<const PlanNode> source)
+    PlanNodePtr source)
     : PlanNode(id),
       step_(step),
       groupingKeys_(groupingKeys),
@@ -134,6 +134,7 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+<<<<<<< HEAD
 WindowNode::WindowNode(
     const PlanNodeId& id,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
@@ -202,8 +203,7 @@ void WindowNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
 }
 
-const std::vector<std::shared_ptr<const PlanNode>>& ValuesNode::sources()
-    const {
+const std::vector<PlanNodePtr>& ValuesNode::sources() const {
   return kEmptySources;
 }
 
@@ -215,17 +215,27 @@ void ValuesNode::addDetails(std::stringstream& stream) const {
   stream << totalCount << " rows in " << values_.size() << " vectors";
 }
 
-const std::vector<std::shared_ptr<const PlanNode>>& TableScanNode::sources()
-    const {
+void ProjectNode::addDetails(std::stringstream& stream) const {
+  stream << "expressions: ";
+  for (auto i = 0; i < projections_.size(); i++) {
+    auto& projection = projections_[i];
+    if (i > 0) {
+      stream << ", ";
+    }
+    stream << "(" << names_[i] << ":" << projection->type()->toString() << ", "
+           << projection->toString() << ")";
+  }
+}
+
+const std::vector<PlanNodePtr>& TableScanNode::sources() const {
   return kEmptySources;
 }
 
-void TableScanNode::addDetails(std::stringstream& /* stream */) const {
-  // TODO Add connector details.
+void TableScanNode::addDetails(std::stringstream& stream) const {
+  stream << tableHandle_->toString();
 }
 
-const std::vector<std::shared_ptr<const PlanNode>>& ExchangeNode::sources()
-    const {
+const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
   return kEmptySources;
 }
 
@@ -239,7 +249,7 @@ UnnestNode::UnnestNode(
     std::vector<std::shared_ptr<const FieldAccessTypedExpr>> unnestVariables,
     const std::vector<std::string>& unnestNames,
     const std::optional<std::string>& ordinalityName,
-    const std::shared_ptr<const PlanNode>& source)
+    const PlanNodePtr& source)
     : PlanNode(id),
       replicateVariables_{std::move(replicateVariables)},
       unnestVariables_{std::move(unnestVariables)},
@@ -291,9 +301,9 @@ AbstractJoinNode::AbstractJoinNode(
     JoinType joinType,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& leftKeys,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& rightKeys,
-    std::shared_ptr<const ITypedExpr> filter,
-    std::shared_ptr<const PlanNode> left,
-    std::shared_ptr<const PlanNode> right,
+    TypedExprPtr filter,
+    PlanNodePtr left,
+    PlanNodePtr right,
     const RowTypePtr outputType)
     : PlanNode(id),
       joinType_(joinType),
@@ -367,8 +377,8 @@ void AbstractJoinNode::addDetails(std::stringstream& stream) const {
 
 CrossJoinNode::CrossJoinNode(
     const PlanNodeId& id,
-    std::shared_ptr<const PlanNode> left,
-    std::shared_ptr<const PlanNode> right,
+    PlanNodePtr left,
+    PlanNodePtr right,
     RowTypePtr outputType)
     : PlanNode(id),
       sources_({std::move(left), std::move(right)}),
@@ -382,7 +392,7 @@ AssignUniqueIdNode::AssignUniqueIdNode(
     const PlanNodeId& id,
     const std::string& idName,
     const int32_t taskUniqueId,
-    std::shared_ptr<const PlanNode> source)
+    PlanNodePtr source)
     : PlanNode(id), taskUniqueId_(taskUniqueId), sources_{std::move(source)} {
   std::vector<std::string> names(sources_[0]->outputType()->names());
   std::vector<TypePtr> types(sources_[0]->outputType()->children());
@@ -423,8 +433,16 @@ void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(stream, sortingKeys_, sortingOrders_);
 }
 
-void LocalPartitionNode::addDetails(std::stringstream& /* stream */) const {
+void LocalPartitionNode::addDetails(std::stringstream& stream) const {
   // Nothing to add.
+  switch (type_) {
+    case Type::kGather:
+      stream << "GATHER";
+      break;
+    case Type::kRepartition:
+      stream << "REPARTITION";
+      break;
+  }
 }
 
 void EnforceSingleRowNode::addDetails(std::stringstream& /* stream */) const {

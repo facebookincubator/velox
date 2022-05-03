@@ -156,7 +156,10 @@ int32_t MergeJoin::compare(
   return 0;
 }
 
-bool MergeJoin::findEndOfMatch(Match& match, const RowVectorPtr& input) {
+bool MergeJoin::findEndOfMatch(
+    Match& match,
+    const RowVectorPtr& input,
+    const std::vector<ChannelIndex>& keys) {
   if (match.complete) {
     return true;
   }
@@ -168,7 +171,7 @@ bool MergeJoin::findEndOfMatch(Match& match, const RowVectorPtr& input) {
 
   vector_size_t endIndex = 0;
   while (endIndex < numInput &&
-         compareLeft(input, endIndex, prevInput, prevIndex) == 0) {
+         compare(keys, input, endIndex, keys, prevInput, prevIndex) == 0) {
     ++endIndex;
   }
 
@@ -197,9 +200,9 @@ void copyRow(
     const RowVectorPtr& target,
     vector_size_t targetIndex,
     const std::vector<IdentityProjection>& projections) {
-  for (auto& projection : projections) {
-    auto sourceChild = source->childAt(projection.inputChannel);
-    auto targetChild = target->childAt(projection.outputChannel);
+  for (const auto& projection : projections) {
+    const auto& sourceChild = source->childAt(projection.inputChannel);
+    const auto& targetChild = target->childAt(projection.outputChannel);
     targetChild->copy(sourceChild.get(), targetIndex, sourceIndex, 1);
   }
 }
@@ -208,8 +211,8 @@ void copyRow(
 void MergeJoin::addOutputRowForLeftJoin() {
   copyRow(input_, index_, output_, outputSize_, leftProjections_);
 
-  for (auto& projection : rightProjections_) {
-    auto target = output_->childAt(projection.outputChannel);
+  for (const auto& projection : rightProjections_) {
+    const auto& target = output_->childAt(projection.outputChannel);
     target->setNull(outputSize_, true);
   }
 
@@ -417,7 +420,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
 
     if (input_) {
       // Look for continuation of a match on the left and/or right sides.
-      if (!findEndOfMatch(leftMatch_.value(), input_)) {
+      if (!findEndOfMatch(leftMatch_.value(), input_, leftKeys_)) {
         // Continue looking for the end of the match.
         input_ = nullptr;
         return nullptr;
@@ -434,7 +437,7 @@ RowVectorPtr MergeJoin::doGetOutput() {
     }
 
     if (rightInput_) {
-      if (!findEndOfMatch(rightMatch_.value(), rightInput_)) {
+      if (!findEndOfMatch(rightMatch_.value(), rightInput_, rightKeys_)) {
         // Continue looking for the end of the match.
         rightInput_ = nullptr;
         return nullptr;

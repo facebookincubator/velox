@@ -120,18 +120,18 @@ struct TypeAnalysisResults {
     // rank 2: has variadic but generic free.
     //    e.g: Variadic<int> -> int.
     // rank 3: has generic but no variadic of generic.
-    //    e.g: Generic<>, Generic<>, -> int.
+    //    e.g: Any, Any, -> int.
     // rank 4: has variadic of generic.
-    //    e.g: Variadic<Generic<>> -> int.
+    //    e.g: Variadic<Any> -> int.
 
     // If two functions have the same rank, then concreteCount is used to
     // to resolve the ordering.
     // e.g: consider the two functions:
-    //    1. int, Generic<>, Variadic<int> -> has rank 3. concreteCount =2
-    //    2. int, Generic<>, Generic<>     -> has rank 3. concreteCount =1
+    //    1. int, Any, Variadic<int> -> has rank 3. concreteCount =2
+    //    2. int, Any, Any     -> has rank 3. concreteCount =1
     // in this case (1) is picked.
-    // e.g: (Generic<>, int) will be picked before (Generic<>, Generic<>)
-    // e.g: Variadic<Array<Generic<>>> is picked before Variadic<Generic<>>.
+    // e.g: (Any, int) will be picked before (Any, Any)
+    // e.g: Variadic<Array<Any>> is picked before Variadic<Any>.
     uint32_t getRank() {
       if (!hasGeneric && !hasVariadic) {
         return 1;
@@ -272,28 +272,6 @@ struct TypeAnalysis<Row<T...>> {
   }
 };
 
-// TODO: remove once old writers deprecated.
-template <typename V>
-struct TypeAnalysis<ArrayWriterT<V>> {
-  void run(TypeAnalysisResults& results) {
-    TypeAnalysis<Array<V>>().run(results);
-  }
-};
-
-template <typename K, typename V>
-struct TypeAnalysis<MapWriterT<K, V>> {
-  void run(TypeAnalysisResults& results) {
-    TypeAnalysis<Map<K, V>>().run(results);
-  }
-};
-
-template <typename... T>
-struct TypeAnalysis<RowWriterT<T...>> {
-  void run(TypeAnalysisResults& results) {
-    TypeAnalysis<Row<T...>>().run(results);
-  }
-};
-
 // todo(youknowjack): need a better story for types for UDFs. Mapping
 //                    c++ types <-> Velox types is imprecise (e.g. string vs
 //                    binary) and difficult to change.
@@ -327,13 +305,6 @@ template <typename Underlying>
 struct CreateType<Variadic<Underlying>> {
   static std::shared_ptr<const Type> create() {
     return CreateType<Underlying>::create();
-  }
-};
-
-template <typename T>
-struct CreateType<Generic<T>> {
-  static std::shared_ptr<const Type> create() {
-    return std::make_shared<UnknownType>();
   }
 };
 

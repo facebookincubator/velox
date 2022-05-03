@@ -22,10 +22,12 @@ target_link_libraries(
   velox_exec_test_util
   velox_codegen_utils_resource_path
   velox_codegen_code_generator
+  velox_hive_connector
   ${FOLLY_BENCHMARK}
   ${FOLLY_WITH_DEPENDENCIES}
   ${Boost_FILESYSTEM_LIBRARIES}
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
   ${GFLAGS_LIBRARIES}
   ${FMT}
   velox_core
@@ -39,6 +41,8 @@ add_test(velox_codegen_benchmark_single_output
          velox_codegen_benchmark_single_output)
 
 add_executable(velox_codegen_benchmark CodegenBenchmarks.cpp)
+target_link_libraries(velox_codegen_benchmark velox_hive_connector)
+
 add_compile_definitions(velox_codegen_test BASEFOLDER="${PROJECT_SOURCE_DIR}")
 add_compile_definitions(velox_codegen_test COMPFLAGS="${CMAKE_CXX_FLAGS}")
 add_compile_definitions(velox_codegen_test MYFOLLY="${GFLAGS_LIBRARIES}")
@@ -86,7 +90,8 @@ target_link_libraries(
   ${FOLLY_BENCHMARK}
   ${FOLLY_WITH_DEPENDENCIES}
   ${Boost_FILESYSTEM_LIBRARIES}
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
   ${GFLAGS_LIBRARIES}
   glog::glog
   ${FMT}

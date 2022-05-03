@@ -169,15 +169,7 @@ uint32_t maxDrivers(const DriverFactory& driverFactory) {
     return count;
   }
   for (auto& node : driverFactory.planNodes) {
-    if (auto aggregation =
-            std::dynamic_pointer_cast<const core::AggregationNode>(node)) {
-      if (aggregation->step() == core::AggregationNode::Step::kFinal ||
-          aggregation->step() == core::AggregationNode::Step::kSingle) {
-        // final aggregations must run single-threaded
-        return 1;
-      }
-    } else if (
-        auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
+    if (auto topN = std::dynamic_pointer_cast<const core::TopNNode>(node)) {
       if (!topN->isPartial()) {
         // final topN must run single-threaded
         return 1;
@@ -202,17 +194,20 @@ uint32_t maxDrivers(const DriverFactory& driverFactory) {
         return 1;
       }
     } else if (
-        auto localMerge =
-            std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
+        auto localExchange =
+            std::dynamic_pointer_cast<const core::LocalPartitionNode>(node)) {
+      // Local gather must run single-threaded.
+      if (localExchange->type() == core::LocalPartitionNode::Type::kGather) {
+        return 1;
+      }
+    } else if (std::dynamic_pointer_cast<const core::LocalMergeNode>(node)) {
       // Local merge must run single-threaded.
       return 1;
-    } else if (
-        auto mergeExchange =
-            std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
-      // MergeExchange must run single-threaded.
+    } else if (std::dynamic_pointer_cast<const core::MergeExchangeNode>(node)) {
+      // Merge exchange must run single-threaded.
       return 1;
     } else if (std::dynamic_pointer_cast<const core::MergeJoinNode>(node)) {
-      // MergeJoinNode must run single-threaded.
+      // Merge join must run single-threaded.
       return 1;
     } else if (
         auto tableWrite =
@@ -388,7 +383,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto localPartitionNode =
             std::dynamic_pointer_cast<const core::LocalPartitionNode>(
                 planNode)) {
-      operators.push_back(std::make_unique<LocalExchangeSourceOperator>(
+      operators.push_back(std::make_unique<LocalExchange>(
           id,
           ctx.get(),
           localPartitionNode->outputType(),

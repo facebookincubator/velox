@@ -19,8 +19,6 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
-static const std::string kWriter = "LocalPartitionTest.Writer";
-
 class LocalPartitionTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
@@ -42,7 +40,7 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       const std::vector<RowVectorPtr>& vectors) {
     auto filePaths = makeFilePaths(vectors.size());
     for (auto i = 0; i < vectors.size(); i++) {
-      writeToFile(filePaths[i]->path, kWriter, vectors[i]);
+      writeToFile(filePaths[i]->path, vectors[i]);
     }
     return filePaths;
   }
@@ -59,6 +57,28 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     ASSERT_EQ(stats.outputPositions, expectedPositions);
     ASSERT_TRUE(stats.inputBytes > 0);
     ASSERT_EQ(stats.inputBytes, stats.outputBytes);
+  }
+
+  void assertTaskReferenceCount(
+      const std::shared_ptr<exec::Task>& task,
+      int expected) {
+    // Make sure there is only one reference to Task left, i.e. no Driver is
+    // blocked forever. Wait for a bit if that's not immediately the case.
+    if (task.use_count() > expected) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    ASSERT_EQ(expected, task.use_count());
+  }
+
+  void waitForTaskState(
+      const std::shared_ptr<exec::Task>& task,
+      exec::TaskState expected) {
+    if (task->state() != expected) {
+      auto& executor = folly::QueuedImmediateExecutor::instance();
+      auto future = task->stateChangeFuture(1'000'000).via(&executor);
+      future.wait();
+      EXPECT_EQ(expected, task->state());
+    }
   }
 };
 
@@ -148,18 +168,18 @@ TEST_F(LocalPartitionTest, partition) {
     auto builder = PlanBuilder(planNodeIdGenerator);
     auto scanNode = builder.tableScan(rowType).planNode();
     scanNodeIds.push_back(scanNode->id());
-    return builder.partialAggregation({0}, {"count(1)"}).planNode();
+    return builder.partialAggregation({"c0"}, {"count(1)"}).planNode();
   };
 
   auto op = PlanBuilder(planNodeIdGenerator)
                 .localPartition(
-                    {0},
+                    {"c0"},
                     {
                         scanAggNode(),
                         scanAggNode(),
                         scanAggNode(),
                     })
-                .partialAggregation({0}, {"count(1)"})
+                .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
   createDuckDbTable(vectors);
@@ -253,13 +273,13 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   auto op = PlanBuilder(planNodeIdGenerator)
                 .localPartition(
-                    {0},
+                    {"c0"},
                     {
                         scanNode(),
                         scanNode(),
                         scanNode(),
                     })
-                .partialAggregation({0}, {"count(1)"})
+                .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
   CursorParameters params;
@@ -333,7 +353,7 @@ TEST_F(LocalPartitionTest, outputLayoutGather) {
                         valuesNode(2),
                     },
                     // Change column order: (c0, c1) -> (c1, c0).
-                    {1, 0})
+                    {"c1", "c0"})
                 .singleAggregation({}, {"count(1)", "min(c0)", "max(c1)"})
                 .planNode();
 
@@ -350,7 +370,7 @@ TEST_F(LocalPartitionTest, outputLayoutGather) {
                    valuesNode(2),
                },
                // Drop column: (c0, c1) -> (c1).
-               {1})
+               {"c1"})
            .singleAggregation({}, {"count(1)", "min(c1)", "max(c1)"})
            .planNode();
 
@@ -402,14 +422,14 @@ TEST_F(LocalPartitionTest, outputLayoutPartition) {
   params.planNode =
       PlanBuilder(planNodeIdGenerator)
           .localPartition(
-              {0},
+              {"c0"},
               {
                   valuesNode(0),
                   valuesNode(1),
                   valuesNode(2),
               },
               // Change column order: (c0, c1) -> (c1, c0).
-              {1, 0})
+              {"c1", "c0"})
           .partialAggregation({}, {"count(1)", "min(c0)", "max(c1)"})
           .planNode();
 
@@ -421,14 +441,14 @@ TEST_F(LocalPartitionTest, outputLayoutPartition) {
   params.planNode =
       PlanBuilder(planNodeIdGenerator)
           .localPartition(
-              {0},
+              {"c0"},
               {
                   valuesNode(0),
                   valuesNode(1),
                   valuesNode(2),
               },
               // Drop column: (c0, c1) -> (c1).
-              {1})
+              {"c1"})
           .partialAggregation({}, {"count(1)", "min(c1)", "max(c1)"})
           .planNode();
 
@@ -439,7 +459,7 @@ TEST_F(LocalPartitionTest, outputLayoutPartition) {
   planNodeIdGenerator->reset();
   params.planNode = PlanBuilder(planNodeIdGenerator)
                         .localPartition(
-                            {0},
+                            {"c0"},
                             {
                                 valuesNode(0),
                                 valuesNode(1),
@@ -489,18 +509,18 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
   // exchange re-partitions the results on just the first key.
   auto op = PlanBuilder(planNodeIdGenerator)
                 .localPartition(
-                    {0},
+                    {"c0"},
                     {PlanBuilder(planNodeIdGenerator)
                          .localPartition(
-                             {0, 1},
+                             {"c0", "c1"},
                              {
                                  tableScanNode(),
                                  tableScanNode(),
                                  tableScanNode(),
                              })
-                         .partialAggregation({0, 1}, {"count(1)"})
+                         .partialAggregation({"c0", "c1"}, {"count(1)"})
                          .planNode()})
-                .partialAggregation({0}, {"count(1)", "sum(a0)"})
+                .partialAggregation({"c0"}, {"count(1)", "sum(a0)"})
                 .planNode();
 
   createDuckDbTable(vectors);
@@ -524,4 +544,115 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
       "   SELECT c0, c1, count(1) as cnt FROM tmp GROUP BY 1, 2"
       ") t GROUP BY 1",
       duckDbQueryRunner_);
+}
+
+TEST_F(LocalPartitionTest, earlyCompletion) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({makeFlatSequence(3, 100)}),
+      makeRowVector({makeFlatSequence(7, 100)}),
+      makeRowVector({makeFlatSequence(11, 100)}),
+      makeRowVector({makeFlatSequence(13, 100)}),
+  };
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
+          .limit(0, 2, true)
+          .planNode();
+
+  auto task = assertQuery(plan, "VALUES (3), (4)");
+
+  verifyExchangeSourceOperatorStats(task, 100);
+
+  // Make sure there is only one reference to Task left, i.e. no Driver is
+  // blocked forever.
+  assertTaskReferenceCount(task, 1);
+}
+
+TEST_F(LocalPartitionTest, earlyCancelation) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({makeFlatSequence(3, 100)}),
+      makeRowVector({makeFlatSequence(7, 100)}),
+      makeRowVector({makeFlatSequence(11, 100)}),
+      makeRowVector({makeFlatSequence(13, 100)}),
+  };
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
+          .limit(0, 2'000, true)
+          .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+  // Make sure results are queued one batch a a time.
+  params.bufferedBytes = 100;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  const auto& task = cursor->task();
+
+  // Fetch first batch of data.
+  ASSERT_TRUE(cursor->moveNext());
+  ASSERT_EQ(100, cursor->current()->size());
+
+  // Cancel the task.
+  task->requestCancel();
+
+  // Fetch the remaining results. This will throw since only one vector can be
+  // buffered in the cursor.
+  try {
+    while (cursor->moveNext()) {
+      ;
+      FAIL() << "Expected a throw due to cancellation";
+    }
+  } catch (const std::exception& e) {
+  }
+
+  // Wait for task to transition to final state.
+  waitForTaskState(task, exec::kCanceled);
+
+  // Make sure there is only one reference to Task left, i.e. no Driver is
+  // blocked forever.
+  assertTaskReferenceCount(task, 1);
+}
+
+TEST_F(LocalPartitionTest, producerError) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({makeFlatSequence(3, 100)}),
+      makeRowVector({makeFlatSequence(7, 100)}),
+      makeRowVector({makeFlatSequence(-11, 100)}),
+      makeRowVector({makeFlatSequence(-13, 100)}),
+  };
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {},
+                      {PlanBuilder(planNodeIdGenerator)
+                           .values(data)
+                           .project({"7 / c0"})
+                           .planNode()})
+                  .limit(0, 2'000, true)
+                  .planNode();
+
+  CursorParameters params;
+  params.planNode = plan;
+
+  auto cursor = std::make_unique<TaskCursor>(params);
+  const auto& task = cursor->task();
+
+  // Expect division by zero error.
+  ASSERT_THROW(
+      while (cursor->moveNext()) { ; }, VeloxException);
+
+  // Wait for task to transition to failed state.
+  waitForTaskState(task, exec::kFailed);
+
+  // Make sure there is only one reference to Task left, i.e. no Driver is
+  // blocked forever.
+  assertTaskReferenceCount(task, 1);
 }

@@ -350,6 +350,16 @@ inline uint64_t mixNormalizedKey(uint64_t k, uint8_t bits) {
   auto h = (k ^ ((k >> 32))) * prime1;
   return h + (h >> bits) * prime2 + (h >> (2 * bits)) * prime3;
 }
+
+void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
+  lookup.normalizedKeys.resize(lookup.rows.back() + 1);
+  auto hashes = lookup.hashes.data();
+  for (auto row : lookup.rows) {
+    auto hash = hashes[row];
+    lookup.normalizedKeys[row] = hash; // NOLINT
+    hashes[row] = mixNormalizedKey(hash, sizeBits);
+  }
+}
 } // namespace
 
 template <bool ignoreNullKeys>
@@ -359,20 +369,10 @@ void HashTable<ignoreNullKeys>::groupProbe(HashLookup& lookup) {
     return;
   }
   // Do size-based rehash before mixing hashes from normalized keys
-  // because The
-  // size of the table affects the mixing.
+  // because the size of the table affects the mixing.
   checkSize(lookup.rows.size());
   if (hashMode_ == HashMode::kNormalizedKey) {
-    auto numRows = lookup.rows.size();
-    lookup.normalizedKeys.resize(numRows);
-    auto rows = lookup.rows.data();
-    for (int i = 0; i < numRows; ++i) {
-      auto row = rows[i];
-      auto hashes = lookup.hashes.data();
-      auto hash = hashes[row];
-      lookup.normalizedKeys[row] = hash; // NOLINT
-      hashes[row] = mixNormalizedKey(hash, sizeBits_);
-    }
+    populateNormalizedKeys(lookup, sizeBits_);
   }
   ProbeState state1;
   ProbeState state2;
@@ -410,12 +410,12 @@ void HashTable<ignoreNullKeys>::groupProbe(HashLookup& lookup) {
 
 template <bool ignoreNullKeys>
 void HashTable<ignoreNullKeys>::arrayGroupProbe(HashLookup& lookup) {
+  VELOX_DCHECK(!lookup.hashes.empty());
+  VELOX_DCHECK(!lookup.hits.empty());
+
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
-  assert(!lookup.hashes.empty());
-  assert(!lookup.hits.empty());
   auto hashes = lookup.hashes.data();
-  assert(!lookup.hits.empty());
   auto groups = lookup.hits.data();
   int32_t i = 0;
   if (process::hasAvx2() && simd::isDense(rows, numProbes)) {
@@ -471,13 +471,7 @@ void HashTable<ignoreNullKeys>::joinProbe(HashLookup& lookup) {
     return;
   }
   if (hashMode_ == HashMode::kNormalizedKey) {
-    lookup.normalizedKeys.resize(lookup.rows.back() + 1);
-    auto hashes = lookup.hashes.data();
-    for (auto row : lookup.rows) {
-      auto hash = hashes[row];
-      lookup.normalizedKeys[row] = hash; // NOLINT
-      hashes[row] = mixNormalizedKey(hash, sizeBits_);
-    }
+    populateNormalizedKeys(lookup, sizeBits_);
   }
   int32_t probeIndex = 0;
   int32_t numProbes = lookup.rows.size();
@@ -619,8 +613,8 @@ void HashTable<ignoreNullKeys>::insertForGroupBy(
   if (hashMode_ == HashMode::kArray) {
     for (auto i = 0; i < numGroups; ++i) {
       auto index = hashes[i];
-      VELOX_CHECK(index < size_);
-      VELOX_CHECK(table_[index] == nullptr);
+      VELOX_CHECK_LT(index, size_);
+      VELOX_CHECK_NULL(table_[index]);
       table_[index] = groups[i];
     }
   } else {
@@ -746,7 +740,7 @@ void HashTable<ignoreNullKeys>::insertForJoin(
   if (hashMode_ == HashMode::kArray) {
     for (auto i = 0; i < numGroups; ++i) {
       auto index = hashes[i];
-      VELOX_CHECK(index < size_);
+      VELOX_CHECK_LT(index, size_);
       arrayPushRow(groups[i], index);
     }
     return;
@@ -875,25 +869,43 @@ void HashTable<ignoreNullKeys>::enableRangeWhereCan(
     const std::vector<uint64_t>& rangeSizes,
     const std::vector<uint64_t>& distinctSizes,
     std::vector<bool>& useRange) {
-  uint64_t product = 1;
-  for (auto i = 0; i < rangeSizes.size(); ++i) {
-    auto kind = hashers_[i]->typeKind();
-    // NOLINT
-    product = safeMul(
-        product,
-        addReserve(useRange[i] ? rangeSizes[i] : distinctSizes[i], kind));
+  // Sort non-range keys by the cardinality increase going from distinct to
+  // range.
+  std::vector<size_t> indices(rangeSizes.size());
+  std::vector<uint64_t> rangeMultipliers(
+      rangeSizes.size(), std::numeric_limits<uint64_t>::max());
+  for (auto i = 0; i < rangeSizes.size(); i++) {
+    indices[i] = i;
+    if (!useRange[i]) {
+      rangeMultipliers[i] = rangeSizes[i] / distinctSizes[i];
+    }
   }
-  // Now switch distinct to range if the cardinality increase does not overflow
+
+  std::sort(indices.begin(), indices.end(), [&](auto i, auto j) {
+    return rangeMultipliers[i] < rangeMultipliers[j];
+  });
+
+  auto calculateNewMultipler = [&]() {
+    uint64_t multipler = 1;
+    for (auto i = 0; i < rangeSizes.size(); ++i) {
+      auto kind = hashers_[i]->typeKind();
+      // NOLINT
+      multipler = safeMul(
+          multipler,
+          addReserve(useRange[i] ? rangeSizes[i] : distinctSizes[i], kind));
+    }
+    return multipler;
+  };
+
+  // Switch distinct to range if the cardinality increase does not overflow
   // 64 bits.
   for (auto i = 0; i < rangeSizes.size(); ++i) {
-    assert(!useRange.empty());
-    if (!useRange[i]) { // NOLINT
-      // addReserve simplifies away, since it multiplies both the
-      // multiplier and divisor by the same quantity.
-      uint64_t newProduct = safeMul(rangeSizes[i], product / distinctSizes[i]);
-      if (newProduct != VectorHasher::kRangeTooLarge) {
-        useRange[i] = true;
-        product = newProduct;
+    if (!useRange[indices[i]]) {
+      useRange[indices[i]] = true;
+      auto newProduct = calculateNewMultipler();
+      if (newProduct == VectorHasher::kRangeTooLarge) {
+        useRange[indices[i]] = false;
+        return;
       }
     }
   }
@@ -931,7 +943,7 @@ uint64_t HashTable<ignoreNullKeys>::setHasherMode(
     const std::vector<bool>& useRange,
     const std::vector<uint64_t>& rangeSizes,
     const std::vector<uint64_t>& distinctSizes) {
-  int64_t multiplier = 1;
+  uint64_t multiplier = 1;
   for (int i = 0; i < hashers.size(); ++i) {
     auto kind = hashers[i]->typeKind();
     multiplier = useRange.size() > i && useRange[i]
@@ -1149,7 +1161,9 @@ int32_t HashTable<ignoreNullKeys>::listJoinResults(
       char* next = nullptr;
       if (nextOffset_) {
         next = nextRow(iter.nextHit);
-        __builtin_prefetch(reinterpret_cast<char*>(next) + nextOffset_);
+        if (next) {
+          __builtin_prefetch(reinterpret_cast<char*>(next) + nextOffset_);
+        }
       }
       inputRows[numOut] = (*iter.rows)[iter.lastRowIndex]; // NOLINT
       hits[numOut] = iter.nextHit;

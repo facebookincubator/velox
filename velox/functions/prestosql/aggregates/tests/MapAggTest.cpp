@@ -36,7 +36,7 @@ TEST_F(MapAggTest, finalGroupBy) {
 
   auto op = PlanBuilder()
                 .values(vectors)
-                .partialAggregation({0}, {"map_agg(c1, c2)"})
+                .partialAggregation({"c0"}, {"map_agg(c1, c2)"})
                 .finalAggregation()
                 .planNode();
 
@@ -66,7 +66,7 @@ TEST_F(MapAggTest, groupBy) {
 
   auto op = PlanBuilder()
                 .values(vectors)
-                .singleAggregation({0}, {"map_agg(c1, c2)"})
+                .singleAggregation({"c0"}, {"map_agg(c1, c2)"})
                 .planNode();
 
   auto expectedResult = {makeRowVector(
@@ -80,6 +80,24 @@ TEST_F(MapAggTest, groupBy) {
            nullEvery(7))})};
 
   exec::test::assertQuery(op, expectedResult);
+
+  // Add local exchange before intermediate aggregation.
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"c0"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .values(vectors)
+                   .partialAggregation({"c0"}, {"map_agg(c1, c2)"})
+                   .planNode()})
+          .intermediateAggregation()
+          .planNode();
+  params.maxDrivers = 2;
+
+  exec::test::assertQuery(params, expectedResult);
 }
 
 TEST_F(MapAggTest, global) {
@@ -112,6 +130,42 @@ TEST_F(MapAggTest, global) {
            .finalAggregation()
            .planNode();
   ASSERT_EQ(mapExpected, readSingleValue(op));
+
+  // Add local exchange before intermediate aggregation. Expect the same result.
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  op = PlanBuilder(planNodeIdGenerator)
+           .localPartition(
+               {},
+               {PlanBuilder(planNodeIdGenerator)
+                    .localPartitionRoundRobin(
+                        {PlanBuilder(planNodeIdGenerator)
+                             .values(vectors)
+                             .partialAggregation({}, {"map_agg(c0, c1)"})
+                             .planNode()})
+                    .intermediateAggregation()
+                    .planNode()})
+           .finalAggregation()
+           .planNode();
+
+  ASSERT_EQ(mapExpected, readSingleValue(op, 2));
+}
+
+TEST_F(MapAggTest, globalNoData) {
+  std::vector<RowVectorPtr> vectors = {
+      vectorMaker_.rowVector(ROW({"c0", "c1"}, {INTEGER(), DOUBLE()}), 0)};
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .partialAggregation({}, {"map_agg(c0, c1)"})
+                .planNode();
+  ASSERT_EQ(velox::variant::map({}), readSingleValue(op));
+
+  op = PlanBuilder()
+           .values(vectors)
+           .partialAggregation({}, {"map_agg(c0, c1)"})
+           .finalAggregation()
+           .planNode();
+  ASSERT_EQ(velox::variant::map({}), readSingleValue(op));
 }
 
 TEST_F(MapAggTest, globalDuplicateKeys) {

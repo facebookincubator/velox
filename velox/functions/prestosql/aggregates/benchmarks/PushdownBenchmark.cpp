@@ -31,7 +31,6 @@ using facebook::velox::exec::Task;
 
 static constexpr int32_t kNumVectors = 10;
 static constexpr int32_t kRowsPerVector = 100'000;
-static const std::string kTableBenchmarkTest = "TableBenchMarkTest.Write";
 
 namespace facebook::velox::aggregate::test {
 
@@ -39,13 +38,12 @@ namespace {
 
 class PushdownBenchmark : public HiveConnectorTestBase {
  public:
-  explicit PushdownBenchmark(const std::shared_ptr<const RowType>& rowType)
-      : rowType_(rowType) {
+  explicit PushdownBenchmark(const RowTypePtr& rowType) : rowType_(rowType) {
     HiveConnectorTestBase::SetUp();
     vectors_ = HiveConnectorTestBase::makeVectors(
         rowType_, kNumVectors, kRowsPerVector);
     filePath_ = TempFilePath::create();
-    writeToFile(filePath_->path, kTableBenchmarkTest, vectors_);
+    writeToFile(filePath_->path, vectors_);
   }
 
   ~PushdownBenchmark() override {
@@ -61,7 +59,7 @@ class PushdownBenchmark : public HiveConnectorTestBase {
   std::shared_ptr<core::PlanNode> makePushdownGroupByPlan(
       const std::string& aggName) {
     auto tableHandle = std::make_shared<connector::hive::HiveTableHandle>(
-        true, SubfieldFilters(), nullptr);
+        "hive_table", true, SubfieldFilters(), nullptr);
 
     std::unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
         assignments;
@@ -97,7 +95,7 @@ class PushdownBenchmark : public HiveConnectorTestBase {
 
  private:
   std::vector<RowVectorPtr> vectors_;
-  std::shared_ptr<const RowType> rowType_;
+  RowTypePtr rowType_;
   std::shared_ptr<TempFilePath> filePath_;
 };
 

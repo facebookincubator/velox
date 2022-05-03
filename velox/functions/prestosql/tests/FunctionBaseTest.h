@@ -21,7 +21,6 @@
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Type.h"
-#include "velox/vector/tests/VectorMaker.h"
 #include "velox/vector/tests/VectorTestBase.h"
 
 namespace facebook::velox::functions::test {
@@ -67,7 +66,7 @@ class FunctionBaseTest : public testing::Test,
 
   std::shared_ptr<const core::ITypedExpr> makeTypedExpr(
       const std::string& text,
-      const std::shared_ptr<const RowType>& rowType) {
+      const RowTypePtr& rowType) {
     auto untyped = parse::parseExpr(text);
     return core::Expressions::inferTypes(untyped, rowType, execCtx_.pool());
   }
@@ -179,20 +178,6 @@ class FunctionBaseTest : public testing::Test,
                                : ReturnType(result->valueAt(0));
   }
 
-  // TODO: Enable ASSERT_EQ for vectors
-  static void assertEqualVectors(
-      const VectorPtr& expected,
-      const VectorPtr& actual,
-      const std::string& additionalContext = "") {
-    ASSERT_EQ(expected->size(), actual->size());
-
-    for (auto i = 0; i < expected->size(); i++) {
-      ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
-          << "at " << i << ": " << expected->toString(i) << " vs. "
-          << actual->toString(i) << additionalContext;
-    }
-  }
-
   // Asserts that `func` throws `VeloxUserError`. Optionally, checks if
   // `expectedErrorMessage` is a substr of the exception message thrown.
   template <typename TFunc>
@@ -238,7 +223,7 @@ class FunctionBaseTest : public testing::Test,
   /// @param body Body of the lambda as SQL expression.
   void registerLambda(
       const std::string& name,
-      const std::shared_ptr<const RowType>& signature,
+      const RowTypePtr& signature,
       TypePtr rowType,
       const std::string& body) {
     core::Expressions::registerLambda(

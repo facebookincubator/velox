@@ -16,6 +16,7 @@
 
 #include <limits>
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/VeloxException.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/expression/VectorFunction.h"
@@ -25,19 +26,9 @@
 #include "velox/vector/TypeAliases.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::test;
 
 namespace {
-
-/// Returns indices buffer with sequential values going from size - 1 to 0.
-BufferPtr makeIndicesInReverse(vector_size_t size, memory::MemoryPool* pool) {
-  auto indices = allocateIndices(size, pool);
-  auto rawIndices = indices->asMutable<vector_size_t>();
-  for (auto i = 0; i < size; i++) {
-    rawIndices[i] = size - 1 - i;
-  }
-  return indices;
-}
-
 /// Wraps input in a dictionary that reverses the order of rows.
 class TestingDictionaryFunction : public exec::VectorFunction {
  public:
@@ -196,7 +187,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
       EXPECT_THROW(
           evaluate<FlatVector<typename CppToType<TTo>::NativeType>>(
               castFunction + "(c0 as " + typeString + ")", rowVector),
-          std::invalid_argument);
+          VeloxException);
       return;
     }
     // run try cast and get the result vector
@@ -221,7 +212,6 @@ TEST_F(CastExprTest, basics) {
   // Testing non-null or error cases
   const std::vector<std::optional<int32_t>> ii = {1, 2, 3, 100, -100};
   const std::vector<std::optional<double>> oo = {1.0, 2.0, 3.0, 100.0, -100.0};
-  std::cout << oo[2].has_value();
   testCast<int32_t, double>(
       "double", {1, 2, 3, 100, -100}, {1.0, 2.0, 3.0, 100.0, -100.0});
   testCast<int32_t, std::string>(
@@ -390,7 +380,7 @@ TEST_F(CastExprTest, truncateVsRound) {
   EXPECT_THROW(
       (testCast<int32_t, int8_t>(
           "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5})),
-      std::invalid_argument);
+      folly::ConversionError);
 }
 
 TEST_F(CastExprTest, nullInputs) {
@@ -621,8 +611,7 @@ TEST_F(CastExprTest, testNullOnFailure) {
   testComplexCast("c0", input, expected, true);
 
   // nullOnFailure is false, so we should throw.
-  EXPECT_THROW(
-      testComplexCast("c0", input, expected, false), std::invalid_argument);
+  EXPECT_THROW(testComplexCast("c0", input, expected, false), VeloxUserError);
 }
 
 TEST_F(CastExprTest, toString) {

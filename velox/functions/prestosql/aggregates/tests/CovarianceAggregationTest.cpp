@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/base/test_utils/GTestUtils.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 
@@ -30,74 +30,20 @@ class CovarianceAggregationTest
     auto sql = fmt::format(
         "SELECT c0, round({}(c1, c2), 2) FROM tmp GROUP BY 1", aggName);
 
-    auto op = PlanBuilder()
-                  .values({data})
-                  .partialAggregation({0}, {partialAgg})
-                  .finalAggregation()
-                  .project({"c0", "round(a0, cast(2 as integer))"})
-                  .planNode();
-
-    assertQuery(op, sql);
-
-    op = PlanBuilder()
-             .values({data})
-             .singleAggregation({0}, {partialAgg})
-             .project({"c0", "round(a0, cast(2 as integer))"})
-             .planNode();
-
-    assertQuery(op, sql);
-
-    op = PlanBuilder()
-             .values({data})
-             .partialAggregation({0}, {partialAgg})
-             .planNode();
-
-    auto partialResults = getResults(op);
-
-    op =
-        PlanBuilder()
-            .values({partialResults})
-            .finalAggregation({0}, {fmt::format("{}(a0)", aggName)}, {DOUBLE()})
-            .project({"c0", "round(a0, cast(2 as integer))"})
-            .planNode();
-    assertQuery(op, sql);
+    testAggregations(
+        {data},
+        {"c0"},
+        {partialAgg},
+        {"c0", "round(a0, cast(2 as integer))"},
+        sql);
   }
 
   void testGlobalAgg(const std::string& aggName, const RowVectorPtr& data) {
     auto partialAgg = fmt::format("{}(c1, c2)", aggName);
     auto sql = fmt::format("SELECT round({}(c1, c2), 2) FROM tmp", aggName);
 
-    auto op = PlanBuilder()
-                  .values({data})
-                  .partialAggregation({}, {partialAgg})
-                  .finalAggregation()
-                  .project({"round(a0, cast(2 as integer))"})
-                  .planNode();
-
-    assertQuery(op, sql);
-
-    op = PlanBuilder()
-             .values({data})
-             .singleAggregation({}, {partialAgg})
-             .project({"round(a0, cast(2 as integer))"})
-             .planNode();
-
-    assertQuery(op, sql);
-
-    op = PlanBuilder()
-             .values({data})
-             .partialAggregation({}, {partialAgg})
-             .planNode();
-
-    auto partialResults = getResults(op);
-
-    op = PlanBuilder()
-             .values({partialResults})
-             .finalAggregation({}, {fmt::format("{}(a0)", aggName)}, {DOUBLE()})
-             .project({"round(a0, cast(2 as integer))"})
-             .planNode();
-
-    assertQuery(op, sql);
+    testAggregations(
+        {data}, {}, {partialAgg}, {"round(a0, cast(2 as integer))"}, sql);
   }
 };
 

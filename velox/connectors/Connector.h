@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/caching/DataCache.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/core/Context.h"
@@ -60,6 +61,7 @@ class ColumnHandle {
 class ConnectorTableHandle {
  public:
   virtual ~ConnectorTableHandle() = default;
+  virtual std::string toString() const = 0;
 };
 
 /**
@@ -116,7 +118,7 @@ class DataSource {
   // Returns the number of input rows processed so far.
   virtual uint64_t getCompletedRows() = 0;
 
-  virtual std::unordered_map<std::string, int64_t> runtimeStats() = 0;
+  virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
 
   // Returns a connector dependent row size if available. This can be
   // called after addSplit().  This estimates uncompressed data

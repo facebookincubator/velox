@@ -58,6 +58,14 @@ class OperatorTestBase : public testing::Test,
   }
 
   std::shared_ptr<Task> assertQueryOrdered(
+      const CursorParameters& params,
+      const std::string& duckDbSql,
+      const std::vector<uint32_t>& sortingKeys) {
+    return test::assertQuery(
+        params, [&](auto*) {}, duckDbSql, duckDbQueryRunner_, sortingKeys);
+  }
+
+  std::shared_ptr<Task> assertQueryOrdered(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
       const std::string& duckDbSql,
@@ -122,11 +130,6 @@ class OperatorTestBase : public testing::Test,
 
   // Used as default MappedMemory if 'useAsyncCache_' is true. Created on first
   // use.
-  static std::unique_ptr<cache::AsyncDataCache> asyncDataCache_;
-
-  void assertEqualVectors(
-      const VectorPtr& expected,
-      const VectorPtr& actual,
-      const std::string& additionalContext = "");
+  static std::shared_ptr<cache::AsyncDataCache> asyncDataCache_;
 };
 } // namespace facebook::velox::exec::test

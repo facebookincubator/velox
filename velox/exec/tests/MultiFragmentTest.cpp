@@ -13,13 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/caching/DataCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/DataSink.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-#include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -32,28 +29,8 @@ using namespace facebook::velox::connector::hive;
 
 using facebook::velox::test::BatchMaker;
 
-class MultiFragmentTest : public OperatorTestBase {
+class MultiFragmentTest : public HiveConnectorTestBase {
  protected:
-  void SetUp() override {
-    OperatorTestBase::SetUp();
-    rowType_ =
-        ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
-            {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()});
-    filesystems::registerLocalFileSystem();
-    auto dataCache = std::make_unique<SimpleLRUDataCache>(/*size=*/1 << 30);
-    auto hiveConnector =
-        connector::getConnectorFactory(HiveConnectorFactory::kHiveConnectorName)
-            ->newConnector(kHiveConnectorId, nullptr, std::move(dataCache));
-    connector::registerConnector(hiveConnector);
-    dwrf::registerDwrfReaderFactory();
-  }
-
-  void TearDown() override {
-    dwrf::unregisterDwrfReaderFactory();
-    connector::unregisterConnector(kHiveConnectorId);
-    OperatorTestBase::TearDown();
-  }
-
   static std::string makeTaskId(const std::string& prefix, int num) {
     return fmt::format("local://{}-{}", prefix, num);
   }
@@ -67,36 +44,6 @@ class MultiFragmentTest : public OperatorTestBase {
     core::PlanFragment planFragment{planNode};
     return std::make_shared<Task>(
         taskId, std::move(planFragment), destination, std::move(queryCtx));
-  }
-
-  void writeToFile(const std::string& filePath, RowVectorPtr vector) {
-    writeToFile(filePath, std::vector{vector});
-  }
-
-  void writeToFile(
-      const std::string& filePath,
-      const std::vector<RowVectorPtr>& vectors) {
-    facebook::velox::dwrf::WriterOptions options;
-    options.config = std::make_shared<facebook::velox::dwrf::Config>();
-    options.schema = rowType_;
-    auto sink = std::make_unique<facebook::velox::dwio::common::FileSink>(
-        filePath, facebook::velox::dwio::common::MetricsLog::voidLog());
-    facebook::velox::dwrf::Writer writer{options, std::move(sink), *pool_};
-
-    for (size_t i = 0; i < vectors.size(); ++i) {
-      writer.write(vectors[i]);
-    }
-    writer.close();
-  }
-
-  static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count) {
-    std::vector<std::shared_ptr<TempFilePath>> filePaths;
-
-    filePaths.reserve(count);
-    for (auto i = 0; i < count; ++i) {
-      filePaths.emplace_back(TempFilePath::create());
-    }
-    return filePaths;
   }
 
   std::vector<RowVectorPtr> makeVectors(int count, int rowsPerVector) {
@@ -165,7 +112,9 @@ class MultiFragmentTest : public OperatorTestBase {
     createDuckDbTable(vectors_);
   }
 
-  std::shared_ptr<const RowType> rowType_;
+  RowTypePtr rowType_{
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {BIGINT(), INTEGER(), SMALLINT(), REAL(), DOUBLE(), VARCHAR()})};
   std::unordered_map<std::string, std::string> configSettings_;
   std::vector<std::shared_ptr<TempFilePath>> filePaths_;
   std::vector<RowVectorPtr> vectors_;
@@ -180,8 +129,8 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
     partialAggPlan = PlanBuilder()
                          .tableScan(rowType_)
                          .project({"c0 % 10 AS c0", "c1"})
-                         .partialAggregation({0}, {"sum(c1)"})
-                         .partitionedOutput({0}, 3)
+                         .partialAggregation({"c0"}, {"sum(c1)"})
+                         .partitionedOutput({"c0"}, 3)
                          .planNode();
 
     auto leafTask = makeTask(leafTaskId, partialAggPlan, 0);
@@ -195,7 +144,7 @@ TEST_F(MultiFragmentTest, aggregationSingleKey) {
   for (int i = 0; i < 3; i++) {
     finalAggPlan = PlanBuilder()
                        .exchange(partialAggPlan->outputType())
-                       .finalAggregation({0}, {"sum(a0)"}, {BIGINT()})
+                       .finalAggregation({"c0"}, {"sum(a0)"}, {BIGINT()})
                        .partitionedOutput({}, 1)
                        .planNode();
 
@@ -221,8 +170,8 @@ TEST_F(MultiFragmentTest, aggregationMultiKey) {
     partialAggPlan = PlanBuilder()
                          .tableScan(rowType_)
                          .project({"c0 % 10 AS c0", "c1 % 2 AS c1", "c2"})
-                         .partialAggregation({0, 1}, {"sum(c2)"})
-                         .partitionedOutput({0, 1}, 3)
+                         .partialAggregation({"c0", "c1"}, {"sum(c2)"})
+                         .partitionedOutput({"c0", "c1"}, 3)
                          .planNode();
 
     auto leafTask = makeTask(leafTaskId, partialAggPlan, 0);
@@ -236,7 +185,7 @@ TEST_F(MultiFragmentTest, aggregationMultiKey) {
   for (int i = 0; i < 3; i++) {
     finalAggPlan = PlanBuilder()
                        .exchange(partialAggPlan->outputType())
-                       .finalAggregation({0, 1}, {"sum(a0)"}, {BIGINT()})
+                       .finalAggregation({"c0", "c1"}, {"sum(a0)"}, {BIGINT()})
                        .partitionedOutput({}, 1)
                        .planNode();
 
@@ -266,7 +215,7 @@ TEST_F(MultiFragmentTest, distributedTableScan) {
       PlanBuilder builder;
       leafPlan = builder.tableScan(rowType_)
                      .project({"c0 % 10", "c1 % 2", "c2"})
-                     .partitionedOutput({}, 1, {2, 1, 0})
+                     .partitionedOutput({}, 1, {"c2", "p1", "p0"})
                      .planNode();
 
       auto leafTask = makeTask(leafTaskId, leafPlan, 0);
@@ -320,7 +269,7 @@ TEST_F(MultiFragmentTest, mergeExchange) {
 
   auto finalSortTaskId = makeTaskId("orderby", tasks.size());
   auto finalSortPlan = PlanBuilder()
-                           .mergeExchange(outputType, {0}, {kAscNullsLast})
+                           .mergeExchange(outputType, {"c0"})
                            .partitionedOutput({}, 1)
                            .planNode();
 
@@ -343,7 +292,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto leafTaskId = makeTaskId("leaf", 0);
     auto leafPlan = PlanBuilder()
                         .values(vectors_)
-                        .partitionedOutput({}, 1, {0, 1})
+                        .partitionedOutput({}, 1, {"c0", "c1"})
                         .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
@@ -357,7 +306,7 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto leafTaskId = makeTaskId("leaf", 0);
     auto leafPlan = PlanBuilder()
                         .values(vectors_)
-                        .partitionedOutput({}, 1, {3, 0, 2})
+                        .partitionedOutput({}, 1, {"c3", "c0", "c2"})
                         .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
@@ -369,10 +318,12 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
   // Test producing duplicate columns
   {
     auto leafTaskId = makeTaskId("leaf", 0);
-    auto leafPlan = PlanBuilder()
-                        .values(vectors_)
-                        .partitionedOutput({}, 1, {0, 1, 2, 3, 4, 3, 2, 1, 0})
-                        .planNode();
+    auto leafPlan =
+        PlanBuilder()
+            .values(vectors_)
+            .partitionedOutput(
+                {}, 1, {"c0", "c1", "c2", "c3", "c4", "c3", "c2", "c1", "c0"})
+            .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
     auto op = PlanBuilder().exchange(leafPlan->outputType()).planNode();
@@ -387,14 +338,14 @@ TEST_F(MultiFragmentTest, partitionedOutput) {
     auto leafTaskId = makeTaskId("leaf", 0);
     auto leafPlan = PlanBuilder()
                         .values(vectors_)
-                        .partitionedOutput({5}, kFanout, {2, 0, 3})
+                        .partitionedOutput({"c5"}, kFanout, {"c2", "c0", "c3"})
                         .planNode();
     auto leafTask = makeTask(leafTaskId, leafPlan, 0);
     Task::start(leafTask, 4);
 
     auto intermediatePlan = PlanBuilder()
                                 .exchange(leafPlan->outputType())
-                                .partitionedOutput({}, 1, {2, 1, 0})
+                                .partitionedOutput({}, 1, {"c3", "c0", "c2"})
                                 .planNode();
     std::vector<std::string> intermediateTaskIds;
     for (auto i = 0; i < kFanout; ++i) {
@@ -465,8 +416,10 @@ TEST_F(MultiFragmentTest, replicateNullsAndAny) {
 
   // Make leaf task: Values -> Repartitioning (3-way)
   auto leafTaskId = makeTaskId("leaf", 0);
-  auto leafPlan =
-      PlanBuilder().values({data}).partitionedOutput({0}, 3, true).planNode();
+  auto leafPlan = PlanBuilder()
+                      .values({data})
+                      .partitionedOutput({"c0"}, 3, true)
+                      .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
   addTask(leafTask, {});
 
@@ -506,20 +459,31 @@ TEST_F(MultiFragmentTest, limit) {
   auto data = makeRowVector({makeFlatVector<int32_t>(
       1'000, [](auto row) { return row; }, nullEvery(7))});
 
+  auto file = TempFilePath::create();
+  writeToFile(file->path, {data});
+
   // Make leaf task: Values -> PartialLimit(1) -> Repartitioning(0).
   auto leafTaskId = makeTaskId("leaf", 0);
-  auto leafPlan = PlanBuilder()
-                      .values({data})
-                      .limit(0, 1, false)
-                      .partitionedOutput({}, 1)
-                      .planNode();
+  auto leafPlan =
+      PlanBuilder()
+          .tableScan(std::dynamic_pointer_cast<const RowType>(data->type()))
+          .limit(0, 10, false)
+          .partitionedOutput({}, 1)
+          .planNode();
   auto leafTask = makeTask(leafTaskId, leafPlan, 0);
   Task::start(leafTask, 1);
 
+  addSplit(leafTask.get(), "0", makeHiveSplit(file->path));
+
   // Make final task: Exchange -> FinalLimit(1).
-  auto plan = PlanBuilder()
-                  .exchange(leafPlan->outputType())
-                  .limit(0, 1, false)
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {},
+                      {PlanBuilder(planNodeIdGenerator)
+                           .exchange(leafPlan->outputType())
+                           .planNode()})
+                  .limit(0, 10, false)
                   .planNode();
 
   auto split =
@@ -536,6 +500,9 @@ TEST_F(MultiFragmentTest, limit) {
         task->addSplit("0", std::move(split));
         splitAdded = true;
       },
-      "SELECT null",
+      "VALUES (null), (1), (2), (3), (4), (5), (6), (7), (8), (9)",
       duckDbQueryRunner_);
+
+  ASSERT_TRUE(waitForTaskCompletion(task.get()));
+  ASSERT_TRUE(waitForTaskCompletion(leafTask.get()));
 }

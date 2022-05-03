@@ -350,6 +350,56 @@ TEST(MemoryPoolTest, CapAllocation) {
   }
 }
 
+TEST(MemoryPoolTest, MemoryCapExceptions) {
+  MemoryManager<MemoryAllocator> manager{127L * MB};
+  auto& root = manager.getRoot();
+
+  auto& pool = root.addChild("static_quota", 63L * MB);
+
+  // Capping locally.
+  {
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    ASSERT_FALSE(pool.isMemoryCapped());
+    try {
+      pool.allocate(64L * MB);
+    } catch (const velox::VeloxRuntimeError& ex) {
+      EXPECT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
+      EXPECT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
+      EXPECT_TRUE(ex.isRetriable());
+      EXPECT_EQ("Exceeded memory cap of 63 MB", ex.message());
+    }
+    ASSERT_FALSE(pool.isMemoryCapped());
+  }
+  // Capping memory manager.
+  {
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    ASSERT_FALSE(pool.isMemoryCapped());
+    try {
+      pool.allocate(128L * MB);
+    } catch (const velox::VeloxRuntimeError& ex) {
+      EXPECT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
+      EXPECT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
+      EXPECT_TRUE(ex.isRetriable());
+      EXPECT_EQ("Exceeded memory manager cap of 127 MB", ex.message());
+    }
+    ASSERT_FALSE(pool.isMemoryCapped());
+  }
+  // Capping manually.
+  {
+    ASSERT_EQ(0, pool.getCurrentBytes());
+    pool.capMemoryAllocation();
+    ASSERT_TRUE(pool.isMemoryCapped());
+    try {
+      pool.allocate(8L * MB);
+    } catch (const velox::VeloxRuntimeError& ex) {
+      EXPECT_EQ(error_source::kErrorSourceRuntime.c_str(), ex.errorSource());
+      EXPECT_EQ(error_code::kMemCapExceeded.c_str(), ex.errorCode());
+      EXPECT_TRUE(ex.isRetriable());
+      EXPECT_EQ("Memory allocation manually capped", ex.message());
+    }
+  }
+}
+
 TEST(MemoryPoolTest, GetAlignment) {
   {
     EXPECT_EQ(
@@ -508,6 +558,33 @@ TEST(MemoryPoolTest, scopedChildUsageTest) {
     EXPECT_GE(trackers[i]->getCurrentUserBytes(), expectedCurrentBytes[i]);
     EXPECT_GE(trackers[i]->getPeakTotalBytes(), expectedMaxBytes[i]);
   }
+}
+
+TEST(MemoryPoolTest, getPreferredSize) {
+  MemoryManager<MemoryAllocator, 64> manager{};
+  auto& pool =
+      dynamic_cast<MemoryPoolImpl<MemoryAllocator, 64>&>(manager.getRoot());
+
+  // size < 8
+  EXPECT_EQ(8, pool.getPreferredSize(1));
+  EXPECT_EQ(8, pool.getPreferredSize(2));
+  EXPECT_EQ(8, pool.getPreferredSize(4));
+  EXPECT_EQ(8, pool.getPreferredSize(7));
+  // size >=8, pick 2^k or 1.5 * 2^k
+  EXPECT_EQ(8, pool.getPreferredSize(8));
+  EXPECT_EQ(24, pool.getPreferredSize(24));
+  EXPECT_EQ(32, pool.getPreferredSize(25));
+  EXPECT_EQ(1024 * 1536, pool.getPreferredSize(1024 * 1024 + 1));
+  EXPECT_EQ(1024 * 1024 * 2, pool.getPreferredSize(1024 * 1536 + 1));
+}
+
+TEST(MemoryPoolTest, getPreferredSizeOverflow) {
+  MemoryManager<MemoryAllocator, 64> manager{};
+  auto& pool =
+      dynamic_cast<MemoryPoolImpl<MemoryAllocator, 64>&>(manager.getRoot());
+
+  EXPECT_EQ(1ULL << 32, pool.getPreferredSize((1ULL << 32) - 1));
+  EXPECT_EQ(1ULL << 63, pool.getPreferredSize((1ULL << 62) - 1 + (1ULL << 62)));
 }
 } // namespace memory
 } // namespace velox

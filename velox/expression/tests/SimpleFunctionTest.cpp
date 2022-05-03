@@ -32,6 +32,7 @@
 namespace {
 
 using namespace facebook::velox;
+using namespace facebook::velox::test;
 
 class SimpleFunctionTest : public functions::test::FunctionBaseTest {
  protected:
@@ -98,7 +99,7 @@ struct ArrayWriterFunction {
     const size_t size = arrayData[input].size();
     out.reserve(size);
     for (const auto i : arrayData[input]) {
-      out.append(i);
+      out.push_back(i);
     }
   }
 };
@@ -135,7 +136,7 @@ struct ArrayOfStringsWriterFunction {
     const size_t size = stringArrayData[input].size();
     out.reserve(size);
     for (const auto value : stringArrayData[input]) {
-      out.append(out_type<Varchar>(StringView(value)));
+      out.add_item().copy_from(value);
     }
   }
 };
@@ -339,9 +340,9 @@ struct ArrayRowWriterFunction {
       const arg_type<int32_t>& input) {
     // Appends each row three times.
     auto tuple = std::make_tuple(rowVectorCol1[input], rowVectorCol2[input]);
-    out.append(std::optional(tuple));
-    out.append(std::optional(tuple));
-    out.append(std::optional(tuple));
+    out.add_item() = tuple;
+    out.add_item() = tuple;
+    out.add_item() = tuple;
     return true;
   }
 };
@@ -424,9 +425,9 @@ struct RowOpaqueWriterFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Row<std::shared_ptr<MyType>, int64_t>>& out,
       const arg_type<int64_t>& input) {
-    out = std::make_tuple(
-        std::make_shared<MyType>(rowVectorCol1[input], rowVectorCol2[input]),
-        input + 10);
+    out.template get_writer_at<0>() =
+        std::make_shared<MyType>(rowVectorCol1[input], rowVectorCol2[input]);
+    out.template get_writer_at<1>() = input + 10;
     return true;
   }
 };
@@ -736,7 +737,7 @@ struct MyArrayStringReuseFunction {
 
     do {
       cur = std::find(start, input.end(), ' ');
-      out.append(std::optional{StringView(start, cur - start)});
+      out.add_item().copy_from(StringView(start, cur - start));
       start = cur + 1;
     } while (cur < input.end());
   }
@@ -773,7 +774,9 @@ struct MapStringOut {
 
   void call(out_type<Map<Varchar, Varchar>>& out, int64_t n) {
     auto string = std::to_string(n);
-    out.emplace(StringView(string), std::optional{StringView(string)});
+    auto [key, value] = out.add_item();
+    key.copy_from(string);
+    value.copy_from(string);
   }
 };
 

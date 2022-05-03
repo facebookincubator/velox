@@ -23,7 +23,8 @@ target_link_libraries(
   velox_functions_lib
   velox_functions_prestosql_impl
   ${FOLLY_WITH_DEPENDENCIES}
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
   ${GFLAGS_LIBRARIES}
   glog::glog
   ${FMT})
@@ -33,5 +34,5 @@ if(${VELOX_BUILD_TESTING})
 endif()
 add_library(velox_codegen_code_generator ExprCodeGenerator.cpp)
 target_link_libraries(velox_codegen_code_generator velox_codegen_ast
-                      velox_codegen_udf_manager)
+                      velox_codegen_udf_manager velox_memory)
 target_link_libraries(velox_codegen_code_generator velox_codegen_proto)

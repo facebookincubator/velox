@@ -242,7 +242,7 @@ void Operator::recordBlockingTime(uint64_t start) {
   stats_.blockedWallNanos += (now - start) * 1000;
 }
 
-std::string Operator::toString() {
+std::string Operator::toString() const {
   std::stringstream out;
   if (auto task = operatorCtx_->task()) {
     auto driverCtx = operatorCtx_->driverCtx();
@@ -268,7 +268,7 @@ std::vector<ChannelIndex> toChannels(
   return channels;
 }
 
-ChannelIndex exprToChannel(const core::ITypedExpr* expr, TypePtr type) {
+ChannelIndex exprToChannel(const core::ITypedExpr* expr, const TypePtr& type) {
   if (auto field = dynamic_cast<const core::FieldAccessTypedExpr*>(expr)) {
     return type->as<TypeKind::ROW>().getChildIdx(field->name());
   }
@@ -323,9 +323,15 @@ void OperatorStats::add(const OperatorStats& other) {
 
   memoryStats.add(other.memoryStats);
 
-  for (const auto& stat : other.runtimeStats) {
-    runtimeStats[stat.first].merge(stat.second);
+  for (const auto& [name, stats] : other.runtimeStats) {
+    if (UNLIKELY(runtimeStats.count(name) == 0)) {
+      runtimeStats.insert(std::make_pair(name, stats));
+    } else {
+      runtimeStats.at(name).merge(stats);
+    }
   }
+
+  numDrivers += other.numDrivers;
 }
 
 void OperatorStats::clear() {

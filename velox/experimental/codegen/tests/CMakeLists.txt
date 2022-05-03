@@ -16,12 +16,14 @@ add_executable(velox_experimental_codegen_test CodegenTest.cpp)
 add_dependencies(velox_experimental_codegen_test velox_codegen_expression_test)
 target_link_libraries(
   velox_experimental_codegen_test
-  ${GTEST_BOTH_LIBRARIES}
+  gtest
+  gtest_main
   velox_core
   velox_exec
   velox_experimental_codegen
   velox_exec_test_util
   velox_functions_prestosql
+  velox_hive_connector
   velox_codegen_utils_resource_path)
 
 add_test(velox_experimental_codegen_test velox_experimental_codegen_test)

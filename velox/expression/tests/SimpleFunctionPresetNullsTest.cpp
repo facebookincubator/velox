@@ -34,6 +34,9 @@
 // null.
 
 namespace facebook::velox {
+
+using namespace facebook::velox::test;
+
 namespace {
 
 class SimpleFunctionPresetNullsTest : public functions::test::FunctionBaseTest {
@@ -47,7 +50,7 @@ class SimpleFunctionPresetNullsTest : public functions::test::FunctionBaseTest {
         if constexpr (std::is_same<T, Varchar>::value) {
           out.setEmpty();
         } else if constexpr (std::is_same<T, Array<int64_t>>::value) {
-          out.append({1});
+          out.push_back(1);
         } else {
           out = in;
         }

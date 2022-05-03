@@ -28,7 +28,7 @@
 set -e # Exit on error.
 set -x # Print commands that are executed.
 
-FB_OS_VERSION=v2021.05.10.00
+FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
@@ -119,13 +119,8 @@ function install_build_prerequisites {
   pip3 install --user cmake-format regex
 }
 
-function install_googletest {
-  github_checkout google/googletest release-1.10.0
-  cmake_install
-}
-
 function install_fmt {
-  github_checkout fmtlib/fmt 7.1.3
+  github_checkout fmtlib/fmt 8.0.0
   cmake_install -DFMT_TEST=OFF
 }
 
@@ -155,7 +150,6 @@ function install_velox_deps {
     run_and_time install_build_prerequisites
   fi
   run_and_time install_ranges_v3
-  run_and_time install_googletest
   run_and_time install_fmt
   run_and_time install_double_conversion
   run_and_time install_folly

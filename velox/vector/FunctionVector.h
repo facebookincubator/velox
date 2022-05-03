@@ -128,14 +128,7 @@ class FunctionVector : public BaseVector {
     functions_.push_back(callable);
   }
 
-  bool equalValueAt(
-      const BaseVector* /*other*/,
-      vector_size_t /*index*/,
-      vector_size_t /*otherIndex*/) const override {
-    throw std::logic_error("equalValueAt not defined for FunctionVector");
-  }
-
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* /*other*/,
       vector_size_t /*index*/,
       vector_size_t /*otherIndex*/,

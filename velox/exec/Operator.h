@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #pragma once
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Driver.h"
@@ -72,27 +73,6 @@ struct MemoryStats {
   }
 };
 
-struct RuntimeMetric {
-  int64_t sum{0};
-  int64_t count{0};
-  int64_t min{std::numeric_limits<int64_t>::max()};
-  int64_t max{std::numeric_limits<int64_t>::min()};
-
-  void addValue(int64_t value) {
-    sum += value;
-    count++;
-    min = std::min(min, value);
-    max = std::max(max, value);
-  }
-
-  void merge(const RuntimeMetric& other) {
-    sum += other.sum;
-    count += other.count;
-    min = std::min(min, other.min);
-    max = std::max(max, other.max);
-  }
-};
-
 struct OperatorStats {
   // Initial ordinal position in the operator's pipeline.
   int32_t operatorId = 0;
@@ -130,6 +110,8 @@ struct OperatorStats {
 
   std::unordered_map<std::string, RuntimeMetric> runtimeStats;
 
+  int numDrivers = 0;
+
   OperatorStats(
       int32_t _operatorId,
       int32_t _pipelineId,
@@ -140,8 +122,13 @@ struct OperatorStats {
         planNodeId(std::move(_planNodeId)),
         operatorType(std::move(_operatorType)) {}
 
-  void addRuntimeStat(const std::string& name, int64_t value) {
-    runtimeStats[name].addValue(value);
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value) {
+    if (UNLIKELY(runtimeStats.count(name) == 0)) {
+      runtimeStats.insert(std::pair(name, RuntimeMetric(value.unit)));
+    } else {
+      VELOX_CHECK_EQ(runtimeStats.at(name).unit, value.unit);
+    }
+    runtimeStats.at(name).addValue(value.value);
   }
 
   void add(const OperatorStats& other);
@@ -334,7 +321,7 @@ class Operator {
 
   void recordBlockingTime(uint64_t start);
 
-  virtual std::string toString();
+  virtual std::string toString() const;
 
   velox::memory::MemoryPool* pool() {
     return operatorCtx_->pool();
@@ -427,7 +414,7 @@ std::vector<ChannelIndex> toChannels(
     const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
         fields);
 
-ChannelIndex exprToChannel(const core::ITypedExpr* expr, TypePtr type);
+ChannelIndex exprToChannel(const core::ITypedExpr* expr, const TypePtr& type);
 
 /// Given an input type and output type that contains a subset of the input type
 /// columns possibly in different order returns the indices of the output
@@ -472,7 +459,8 @@ class OperatorRuntimeStatWriter : public BaseRuntimeStatWriter {
  public:
   explicit OperatorRuntimeStatWriter(Operator* op) : operator_{op} {}
 
-  void addRuntimeStat(const std::string& name, int64_t value) override {
+  void addRuntimeStat(const std::string& name, const RuntimeCounter& value)
+      override {
     if (operator_) {
       operator_->stats().addRuntimeStat(name, value);
     }

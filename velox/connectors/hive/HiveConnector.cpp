@@ -40,6 +40,44 @@ static const char* kPath = "$path";
 static const char* kBucket = "$bucket";
 } // namespace
 
+HiveTableHandle::HiveTableHandle(
+    const std::string& tableName,
+    bool filterPushdownEnabled,
+    SubfieldFilters subfieldFilters,
+    const std::shared_ptr<const core::ITypedExpr>& remainingFilter)
+    : tableName_(tableName),
+      filterPushdownEnabled_(filterPushdownEnabled),
+      subfieldFilters_(std::move(subfieldFilters)),
+      remainingFilter_(remainingFilter) {}
+
+HiveTableHandle::~HiveTableHandle() {}
+
+std::string HiveTableHandle::toString() const {
+  std::stringstream out;
+  out << "table: " << tableName_;
+  if (!subfieldFilters_.empty()) {
+    // Sort filters by subfield for deterministic output.
+    std::map<std::string, common::Filter*> orderedFilters;
+    for (const auto& [field, filter] : subfieldFilters_) {
+      orderedFilters[field.toString()] = filter.get();
+    }
+    out << ", range filters: [";
+    bool notFirstFilter = false;
+    for (const auto& [field, filter] : orderedFilters) {
+      if (notFirstFilter) {
+        out << ", ";
+      }
+      out << "(" << field << ", " << filter->toString() << ")";
+      notFirstFilter = true;
+    }
+    out << "]";
+  }
+  if (remainingFilter_) {
+    out << ", remaining filter: (" << remainingFilter_->toString() << ")";
+  }
+  return out.str();
+}
+
 HiveDataSink::HiveDataSink(
     std::shared_ptr<const RowType> inputType,
     const std::string& filePath,
@@ -333,8 +371,6 @@ void HiveDataSource::addDynamicFilter(
     fieldSpec.setFilter(filter->clone());
   }
   scanSpec_->resetCachedValues();
-
-  rowReader_->resetFilterCaches();
 }
 
 void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -582,17 +618,24 @@ void HiveDataSource::setPartitionValue(
   setConstantValue(spec, constValue);
 }
 
-std::unordered_map<std::string, int64_t> HiveDataSource::runtimeStats() {
+std::unordered_map<std::string, RuntimeCounter> HiveDataSource::runtimeStats() {
   auto res = runtimeStats_.toMap();
   res.insert(
-      {{"numPrefetch", ioStats_->prefetch().count()},
-       {"prefetchBytes", ioStats_->prefetch().bytes()},
-       {"numStorageRead", ioStats_->read().count()},
-       {"storageReadBytes", ioStats_->read().bytes()},
-       {"numLocalRead", ioStats_->ssdRead().count()},
-       {"localReadBytes", ioStats_->ssdRead().bytes()},
-       {"numRamRead", ioStats_->ramHit().count()},
-       {"ramReadBytes", ioStats_->ramHit().bytes()}});
+      {{"numPrefetch", RuntimeCounter(ioStats_->prefetch().count())},
+       {"prefetchBytes",
+        RuntimeCounter(
+            ioStats_->prefetch().bytes(), RuntimeCounter::Unit::kBytes)},
+       {"numStorageRead", RuntimeCounter(ioStats_->read().count())},
+       {"storageReadBytes",
+        RuntimeCounter(ioStats_->read().bytes(), RuntimeCounter::Unit::kBytes)},
+       {"numLocalRead", RuntimeCounter(ioStats_->ssdRead().count())},
+       {"localReadBytes",
+        RuntimeCounter(
+            ioStats_->ssdRead().bytes(), RuntimeCounter::Unit::kBytes)},
+       {"numRamRead", RuntimeCounter(ioStats_->ramHit().count())},
+       {"ramReadBytes",
+        RuntimeCounter(
+            ioStats_->ramHit().bytes(), RuntimeCounter::Unit::kBytes)}});
   return res;
 }
 

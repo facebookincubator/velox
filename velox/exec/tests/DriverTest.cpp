@@ -185,9 +185,9 @@ class DriverTest : public OperatorTestBase {
           LOG(INFO) << "Task::toString() while probably blocked: "
                     << tasks_[0]->toString();
         } else if (operation == ResultOperation::kCancel) {
-          cursor->task()->requestTerminate();
+          cancelFuture_ = cursor->task()->requestCancel();
         } else if (operation == ResultOperation::kTerminate) {
-          cursor->task()->terminate(TaskState::kAborted);
+          cancelFuture_ = cursor->task()->requestAbort();
         } else if (operation == ResultOperation::kYield) {
           cursor->task()->requestYield();
         } else if (operation == ResultOperation::kPause) {
@@ -307,6 +307,7 @@ class DriverTest : public OperatorTestBase {
   std::shared_ptr<const RowType> rowType_;
   std::mutex mutex_;
   std::vector<std::shared_ptr<Task>> tasks_;
+  ContinueFuture cancelFuture_{false};
   std::unordered_map<int32_t, folly::Future<bool>> stateFutures_;
 
   // Mutex for randomTask()
@@ -322,7 +323,8 @@ class DriverTest : public OperatorTestBase {
 
 TEST_F(DriverTest, error) {
   CursorParameters params;
-  params.planNode = makeValuesFilterProject(rowType_, "m1 % 0", "", 100, 10);
+  params.planNode =
+      makeValuesFilterProject(rowType_, "m1 % 0 > 0", "", 100, 10);
   params.maxDrivers = 20;
   int32_t numRead = 0;
   try {
@@ -359,6 +361,9 @@ TEST_F(DriverTest, cancel) {
   auto future = tasks_[0]->stateChangeFuture(1'000'000).via(&executor);
   future.wait();
   EXPECT_TRUE(stateFutures_.at(0).isReady());
+
+  std::move(cancelFuture_).via(&executor).wait();
+
   EXPECT_EQ(tasks_[0]->numRunningDrivers(), 0);
 }
 
@@ -377,7 +382,7 @@ TEST_F(DriverTest, terminate) {
     // Not necessarily an exception.
   } catch (const std::exception& e) {
     // If this is an exception, it will be a cancellation.
-    EXPECT_EQ("Cancelled", std::string(e.what()));
+    EXPECT_TRUE(strstr(e.what(), "Aborted") != nullptr) << e.what();
   }
   EXPECT_GE(numRead, 1'000'000);
   EXPECT_TRUE(stateFutures_.at(0).isReady());
@@ -669,7 +674,6 @@ TEST_F(DriverTest, pauserNode) {
         true);
     params[i].maxDrivers =
         kThreadsPerTask * 2; // a number larger than kThreadsPerTask
-    params[i].numResultDrivers = kThreadsPerTask;
   }
   std::vector<std::thread> threads;
   threads.reserve(kNumTasks);
@@ -807,7 +811,6 @@ TEST_F(DriverTest, driverCreationThrow) {
     CursorParameters params;
     params.planNode = std::move(plan);
     params.maxDrivers = 5;
-    params.numResultDrivers = 1;
     getResults(params);
     FAIL() << "Expected exception.";
   } catch (const VeloxException& ex) {

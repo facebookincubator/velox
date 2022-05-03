@@ -39,9 +39,11 @@ class Unnest : public Operator {
   bool isFinished() override;
 
  private:
-  ChannelIndex unnestChannel_;
+  std::vector<ChannelIndex> unnestChannels_;
 
   SelectivityVector inputRows_;
-  DecodedVector unnestDecoded_;
+  std::vector<DecodedVector> unnestDecoded_;
+
+  const bool withOrdinality_;
 };
 } // namespace facebook::velox::exec

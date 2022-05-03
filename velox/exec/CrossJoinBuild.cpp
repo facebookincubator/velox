@@ -19,10 +19,14 @@
 namespace facebook::velox::exec {
 
 void CrossJoinBridge::setData(std::vector<VectorPtr> data) {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!data_.has_value(), "setData may be called only once");
-  data_ = std::move(data);
-  notifyConsumersLocked();
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(!data_.has_value(), "setData may be called only once");
+    data_ = std::move(data);
+    promises = std::move(promises_);
+  }
+  notify(std::move(promises));
 }
 
 std::optional<std::vector<VectorPtr>> CrossJoinBridge::dataOrFuture(
@@ -68,7 +72,7 @@ BlockingReason CrossJoinBuild::isBlocked(ContinueFuture* future) {
 
 void CrossJoinBuild::noMoreInput() {
   Operator::noMoreInput();
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Driver>> peers;
   // The last Driver to hit CrossJoinBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this

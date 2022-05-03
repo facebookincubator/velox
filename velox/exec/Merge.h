@@ -15,12 +15,13 @@
  */
 #pragma once
 
-#include <memory>
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
-#include "velox/exec/RowContainer.h"
+#include "velox/exec/TreeOfLosers.h"
 
 namespace facebook::velox::exec {
+
+class SourceStream;
 
 // Merge operator Implementation: This implementation uses priority queue
 // to perform a k-way merge of its inputs. It stops merging if any one of
@@ -29,8 +30,8 @@ class Merge : public SourceOperator {
  public:
   Merge(
       int32_t operatorId,
-      DriverCtx* ctx,
-      std::shared_ptr<const RowType> outputType,
+      DriverCtx* driverCtx,
+      RowTypePtr outputType,
       const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
           sortingKeys,
       const std::vector<core::SortOrder>& sortingOrders,
@@ -43,7 +44,7 @@ class Merge : public SourceOperator {
 
   RowVectorPtr getOutput() override;
 
-  const std::shared_ptr<const RowType> outputType() const {
+  const RowTypePtr& outputType() const {
     return outputType_;
   }
 
@@ -53,61 +54,122 @@ class Merge : public SourceOperator {
 
  protected:
   virtual BlockingReason addMergeSources(ContinueFuture* future) = 0;
+
   std::vector<std::shared_ptr<MergeSource>> sources_;
-  const core::PlanNodeId planNodeId_;
 
  private:
-  static const size_t kBatchSizeInBytes{2 * 1024 * 1024};
-  using SourceRow = std::pair<size_t, char*>;
+  void initializeTreeOfLosers();
 
-  class Comparator {
-   public:
-    Comparator(
-        std::shared_ptr<const RowType> outputType,
-        const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
-            sortingKeys,
-        const std::vector<core::SortOrder>& sortingOrders,
-        RowContainer* rowContainer);
+  /// Maximum number of rows in the output batch.
+  const uint32_t outputBatchSize_;
 
-    // Returns true if lhs > rhs, false otherwise.
-    bool operator()(const SourceRow& lhs, const SourceRow& rhs) {
-      for (auto& key : keyInfo_) {
-        if (auto result = rowContainer_->compare(
-                lhs.second,
-                rhs.second,
-                key.first,
-                {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-          return result > 0;
-        }
-      }
-      return false;
-    }
+  std::vector<std::pair<ChannelIndex, CompareFlags>> sortingKeys_;
 
-   private:
-    std::vector<std::pair<ChannelIndex, core::SortOrder>> keyInfo_;
-    RowContainer* rowContainer_;
-  };
+  /// A list of cursors over batches of ordered source data. One per source.
+  /// Aligned with 'sources'.
+  std::vector<SourceStream*> streams_;
 
-  BlockingReason pushSource(ContinueFuture* future, size_t sourceId);
-  BlockingReason ensureSourcesReady(ContinueFuture* future);
+  /// Used to merge data from two or more sources.
+  std::unique_ptr<TreeOfLosers<SourceStream>> treeOfLosers_;
 
-  std::vector<char*> rows_;
-  std::unique_ptr<RowContainer> rowContainer_;
-  std::priority_queue<SourceRow, std::vector<SourceRow>, Comparator>
-      candidates_;
+  /// Number of rows accumulated in 'output_' so far.
+  vector_size_t outputSize_{0};
 
-  RowVectorPtr extractedCols_;
+  bool finished_{false};
 
-  BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-  ContinueFuture future_;
-
-  size_t numSourcesAdded_ = 0;
-  size_t currentSourcePos_ = 0;
+  /// A list of blocking futures for sources. These are populates when a given
+  /// source is blocked waiting for the next batch of data.
+  std::vector<ContinueFuture> sourceBlockingFutures_;
 };
 
-// LocalMerge merges its sources' output into a single stream of
-// sorted rows. It runs single threaded. The sources may run multi-threaded
-// and run in the merge's task itself.
+class SourceStream final : public MergeStream {
+ public:
+  SourceStream(
+      MergeSource* source,
+      const std::vector<std::pair<ChannelIndex, CompareFlags>>& sortingKeys,
+      uint32_t outputBatchSize)
+      : source_{source},
+        sortingKeys_{sortingKeys},
+        outputRows_(outputBatchSize, false),
+        sourceRows_(outputBatchSize) {
+    keyColumns_.reserve(sortingKeys.size());
+  }
+
+  /// Returns true and appends a future to 'futures' if needs to wait for the
+  /// source to produce data.
+  bool isBlocked(std::vector<ContinueFuture>& futures) {
+    if (needData_) {
+      return fetchMoreData(futures);
+    }
+    return false;
+  }
+
+  bool hasData() const override {
+    return !atEnd_;
+  }
+
+  /// Returns true if current source row is less then current source row in
+  /// 'other'.
+  bool operator<(const MergeStream& other) const override;
+
+  /// Advances to the next row. Returns true and appends a future to 'futures'
+  /// if runs out of rows in the current batch and needs to wait for the
+  /// source to produce the next batch. The return flag has the meaning of
+  /// 'is-blocked'.
+  bool pop(std::vector<ContinueFuture>& futures);
+
+  /// Records the output row number for the current row. Returns true if
+  /// current row is the last row in the current batch, in which case the
+  /// caller must call 'copyToOutput' before calling pop(). The caller must
+  /// call 'setOutputRow' before calling 'pop'. The output rows must
+  /// monotonically increase in between calls to 'copyToOutput'.
+  bool setOutputRow(vector_size_t row) {
+    outputRows_.setValid(row, true);
+    return currentSourceRow_ == data_->size() - 1;
+  }
+
+  /// Called if either current row is the last row in the current batch or the
+  /// caller accumulated enough output rows across all sources to produce an
+  /// output batch.
+  void copyToOutput(RowVectorPtr& output);
+
+ private:
+  bool fetchMoreData(std::vector<ContinueFuture>& futures);
+
+  MergeSource* source_;
+
+  const std::vector<std::pair<ChannelIndex, CompareFlags>>& sortingKeys_;
+
+  /// Ordered source rows.
+  RowVectorPtr data_;
+
+  /// Raw pointers to vectors corresponding to sorting key columns in the same
+  /// order as 'sortingKeys_'.
+  std::vector<BaseVector*> keyColumns_;
+
+  /// Index of the current row.
+  vector_size_t currentSourceRow_{0};
+
+  /// True if source has been exhausted.
+  bool atEnd_{false};
+
+  /// True if ran out of rows in 'data_' and needs to wait for the future
+  /// returned by 'source_->next()'.
+  bool needData_{true};
+
+  /// First source row that hasn't been copied out yet.
+  vector_size_t firstSourceRow_{0};
+
+  /// Output row numbers for source rows that haven't been copied out yet.
+  SelectivityVector outputRows_;
+
+  /// Reusable memory.
+  std::vector<vector_size_t> sourceRows_;
+};
+
+// LocalMerge merges its source's output into a single stream of
+// sorted rows. It runs single threaded. The sources may run multi-threaded and
+// in the same task.
 class LocalMerge : public Merge {
  public:
   LocalMerge(

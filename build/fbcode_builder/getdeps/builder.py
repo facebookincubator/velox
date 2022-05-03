@@ -7,6 +7,7 @@
 import glob
 import json
 import os
+import pathlib
 import shutil
 import stat
 import subprocess
@@ -38,6 +39,8 @@ class BuilderBase(object):
         if subdir:
             src_dir = os.path.join(src_dir, subdir)
 
+        self.patchfile = manifest.get("build", "patchfile", ctx=ctx)
+        self.patchfile_opts = manifest.get("build", "patchfile_opts", ctx=ctx) or ""
         self.ctx = ctx
         self.src_dir = src_dir
         self.build_dir = build_dir or src_dir
@@ -93,14 +96,39 @@ class BuilderBase(object):
                 reconfigure = True
         return reconfigure
 
+    def _apply_patchfile(self) -> None:
+        # Only implemented patch support for linux
+        if not self.build_opts.is_linux() or self.patchfile is None:
+            return
+        patched_sentinel_file = pathlib.Path(self.src_dir + "/.getdeps_patched")
+        if patched_sentinel_file.exists():
+            return
+        old_wd = os.getcwd()
+        os.chdir(self.src_dir)
+        print(f"Patching {self.manifest.name} with {self.patchfile} in {self.src_dir}")
+        retval = os.system(
+            "patch "
+            + self.patchfile_opts
+            + " < "
+            + self.build_opts.fbcode_builder_dir
+            + "/patches/"
+            + self.patchfile
+        )
+        if retval != 0:
+            raise ValueError(f"Failed to apply patch to {self.manifest.name}")
+        os.chdir(old_wd)
+        patched_sentinel_file.touch()
+
     def prepare(self, install_dirs, reconfigure: bool) -> None:
         print("Preparing %s..." % self.manifest.name)
         reconfigure = self._reconfigure(reconfigure)
+        self._apply_patchfile()
         self._prepare(install_dirs=install_dirs, reconfigure=reconfigure)
 
     def build(self, install_dirs, reconfigure: bool) -> None:
         print("Building %s..." % self.manifest.name)
         reconfigure = self._reconfigure(reconfigure)
+        self._apply_patchfile()
         self._prepare(install_dirs=install_dirs, reconfigure=reconfigure)
         self._build(install_dirs=install_dirs, reconfigure=reconfigure)
 
@@ -353,56 +381,6 @@ class Iproute2Builder(BuilderBase):
                 )
 
         self._run_cmd(install_cmd, env=env)
-
-
-class BistroBuilder(BuilderBase):
-    def _build(self, install_dirs, reconfigure) -> None:
-        p = os.path.join(self.src_dir, "bistro", "bistro")
-        env = self._compute_env(install_dirs)
-        env["PATH"] = env["PATH"] + ":" + os.path.join(p, "bin")
-        env["TEMPLATES_PATH"] = os.path.join(p, "include", "thrift", "templates")
-        self._run_cmd(
-            [
-                os.path.join(".", "cmake", "run-cmake.sh"),
-                "Release",
-                "-DCMAKE_INSTALL_PREFIX=" + self.inst_dir,
-            ],
-            cwd=p,
-            env=env,
-        )
-        self._run_cmd(
-            [
-                "make",
-                "install",
-                "-j",
-                str(self.num_jobs),
-            ],
-            cwd=os.path.join(p, "cmake", "Release"),
-            env=env,
-        )
-
-    def run_tests(
-        self, install_dirs, schedule_type, owner, test_filter, retry, no_testpilot
-    ) -> None:
-        env = self._compute_env(install_dirs)
-        build_dir = os.path.join(self.src_dir, "bistro", "bistro", "cmake", "Release")
-        NUM_RETRIES = 5
-        for i in range(NUM_RETRIES):
-            cmd = ["ctest", "--output-on-failure"]
-            if i > 0:
-                cmd.append("--rerun-failed")
-            cmd.append(build_dir)
-            try:
-                self._run_cmd(
-                    cmd,
-                    cwd=build_dir,
-                    env=env,
-                )
-            except Exception:
-                print(f"Tests failed... retrying ({i+1}/{NUM_RETRIES})")
-            else:
-                return
-        raise Exception(f"Tests failed even after {NUM_RETRIES} retries")
 
 
 class CMakeBuilder(BuilderBase):
@@ -1146,7 +1124,7 @@ class OpenNSABuilder(NopBuilder):
             build_opts, ctx, manifest, src_dir, inst_dir
         )
 
-    def build(self, install_dirs, reconfigure) -> None:
+    def build(self, install_dirs, reconfigure: bool) -> None:
         env = self._compute_env(install_dirs)
         self._run_cmd(["git", "lfs", "install", "--local"], cwd=self.src_dir, env=env)
         self._run_cmd(["git", "lfs", "pull"], cwd=self.src_dir, env=env)

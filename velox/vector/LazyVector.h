@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/SimpleVector.h"
 
@@ -104,7 +105,9 @@ class BaseRuntimeStatWriter {
  public:
   virtual ~BaseRuntimeStatWriter() = default;
 
-  virtual void addRuntimeStat(const std::string& name, int64_t value){};
+  virtual void addRuntimeStat(
+      const std::string& /* name */,
+      const RuntimeCounter& /* value */) {}
 };
 
 // Setting a concrete runtime stats writer on the thread will ensure that lazy
@@ -163,14 +166,7 @@ class LazyVector : public BaseVector {
     loader_->load(rows, hook, &vector_);
   }
 
-  bool equalValueAt(
-      const BaseVector* other,
-      vector_size_t index,
-      vector_size_t otherIndex) const override {
-    return loadedVector()->equalValueAt(other, index, otherIndex);
-  }
-
-  int32_t compare(
+  std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,

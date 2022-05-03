@@ -15,6 +15,7 @@
  */
 
 #include <folly/init/Init.h>
+#include "velox/common/base/tests/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -68,7 +69,7 @@ class ParquetTpchTest : public testing::Test {
       fs::create_directory(tableDirectory);
       auto filePath = fmt::format("{}/file.parquet", tableDirectory);
       auto query = fmt::format(
-          duckDbParquetWriteSQL_.at(tableName),
+          fmt::runtime(duckDbParquetWriteSQL_.at(tableName)),
           tableName,
           filePath,
           kRowGroupSize);
@@ -83,7 +84,8 @@ class ParquetTpchTest : public testing::Test {
 
   std::shared_ptr<Task> assertQuery(
       const TpchPlan& tpchPlan,
-      const std::string& duckQuery) const {
+      const std::string& duckQuery,
+      std::optional<std::vector<uint32_t>> sortingKeys) const {
     bool noMoreSplits = false;
     constexpr int kNumSplits = 10;
     auto addSplits = [&](exec::Task* task) {
@@ -103,18 +105,19 @@ class ParquetTpchTest : public testing::Test {
     };
     CursorParameters params;
     params.maxDrivers = kNumDrivers;
-    params.numResultDrivers = 1;
     params.planNode = tpchPlan.plan;
-    return exec::test::assertQuery(params, addSplits, duckQuery, *duckDb_);
+    return exec::test::assertQuery(
+        params, addSplits, duckQuery, *duckDb_, sortingKeys);
   }
 
   void assertQuery(
       int queryId,
       const int expectedPipelineCount,
-      const int expectedFinishedSplits) const {
+      const int expectedFinishedSplits,
+      std::optional<std::vector<uint32_t>> sortingKeys = {}) const {
     auto tpchPlan = tpchBuilder_.getQueryPlan(queryId);
     auto duckDbSql = duckDb_->getTpchQuery(queryId);
-    auto task = assertQuery(tpchPlan, duckDbSql);
+    auto task = assertQuery(tpchPlan, duckDbSql, sortingKeys);
     const auto& stats = task->taskStats();
     ASSERT_EQ(expectedPipelineCount, stats.pipelineStats.size());
     ASSERT_EQ(expectedFinishedSplits, stats.numFinishedSplits);
@@ -137,8 +140,8 @@ std::unordered_map<std::string, std::string>
         std::make_pair(
             "lineitem",
             R"(COPY (SELECT l_orderkey, l_partkey, l_suppkey, l_linenumber,
-        l_quantity::DOUBLE as l_quantity, l_extendedprice::DOUBLE as l_extendedprice, l_discount::DOUBLE as l_discount,
-        l_tax::DOUBLE as l_tax, l_returnflag, l_linestatus, l_shipdate, l_commitdate, l_receiptdate,
+        l_quantity::DOUBLE as quantity, l_extendedprice::DOUBLE as extendedprice, l_discount::DOUBLE as discount,
+        l_tax::DOUBLE as tax, l_returnflag, l_linestatus, l_shipdate AS shipdate, l_commitdate, l_receiptdate,
         l_shipinstruct, l_shipmode, l_comment FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
         std::make_pair(
             "orders",
@@ -159,6 +162,11 @@ TEST_F(ParquetTpchTest, Q1) {
 
 TEST_F(ParquetTpchTest, Q6) {
   assertQuery(6, 2, 10);
+}
+
+TEST_F(ParquetTpchTest, Q13) {
+  std::vector<uint32_t> sortingKeys{0, 1};
+  assertQuery(13, 3, 20, std::move(sortingKeys));
 }
 
 TEST_F(ParquetTpchTest, Q18) {

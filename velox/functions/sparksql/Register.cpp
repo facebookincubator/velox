@@ -55,7 +55,6 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_replace, prefix + "replace");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_upper, prefix + "upper");
   // Logical.
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_coalesce, prefix + "coalesce");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_is_null, prefix + "isnull");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_is_not_null, prefix + "isnotnull");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_not, prefix + "not");
@@ -102,7 +101,9 @@ void registerFunctions(const std::string& prefix) {
       prefix + "hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(
       prefix + "murmur3hash", hashSignatures(), makeHash);
-  exec::registerStatefulVectorFunction(prefix + "in", inSignatures(), makeIn);
+
+  // Register 'in' functions.
+  registerIn(prefix);
 
   // Compare nullsafe functions
   exec::registerStatefulVectorFunction(

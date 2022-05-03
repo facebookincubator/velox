@@ -21,7 +21,7 @@
 namespace facebook::velox::exec {
 
 /// Keeps track of the total size in bytes of the data buffered in all
-/// LocalExchangeSources.
+/// LocalExchangeQueues.
 class LocalExchangeMemoryManager {
  public:
   explicit LocalExchangeMemoryManager(int64_t maxBufferSize)
@@ -37,7 +37,7 @@ class LocalExchangeMemoryManager {
   const int64_t maxBufferSize_;
   std::mutex mutex_;
   int64_t bufferedBytes_{0};
-  std::vector<VeloxPromise<bool>> promises_;
+  std::vector<ContinuePromise> promises_;
 };
 
 /// Buffers data for a single partition produced by local exchange. Allows
@@ -46,13 +46,15 @@ class LocalExchangeMemoryManager {
 /// must be called after all producers have been registered. A producer calls
 /// 'enqueue' multiple time to put the data and calls 'noMoreData' when done.
 /// Consumers call 'next' repeatedly to fetch the data.
-class LocalExchangeSource {
+class LocalExchangeQueue {
  public:
-  LocalExchangeSource(LocalExchangeMemoryManager* memoryManager, int partition)
-      : memoryManager_{memoryManager}, partition_{partition} {}
+  LocalExchangeQueue(
+      std::shared_ptr<LocalExchangeMemoryManager> memoryManager,
+      int partition)
+      : memoryManager_{std::move(memoryManager)}, partition_{partition} {}
 
   std::string toString() const {
-    return fmt::format("LocalExchangeSource({})", partition_);
+    return fmt::format("LocalExchangeQueue({})", partition_);
   }
 
   void addProducer();
@@ -87,43 +89,42 @@ class LocalExchangeSource {
 
   bool isFinished();
 
-  void close() {
-    queue_.withWLock([](auto& queue) {
-      while (!queue.empty()) {
-        queue.pop();
-      }
-    });
-  }
+  /// Drop remaining data from the queue and notify consumers and producers if
+  /// called before all the data has been processed. No-op otherwise.
+  void close();
 
  private:
-  LocalExchangeMemoryManager* memoryManager_;
+  bool isFinishedLocked(const std::queue<RowVectorPtr>& queue) const;
+
+  std::shared_ptr<LocalExchangeMemoryManager> memoryManager_;
   const int partition_;
   folly::Synchronized<std::queue<RowVectorPtr>> queue_;
   // Satisfied when data becomes available or all producers report that they
   // finished producing, e.g. queue_ is not empty or noMoreProducers_ is true
   // and pendingProducers_ is zero.
-  std::vector<VeloxPromise<bool>> consumerPromises_;
+  std::vector<ContinuePromise> consumerPromises_;
   // Satisfied when all data has been fetched and no more data will be produced,
   // e.g. queue_ is empty, noMoreProducers_ is true and pendingProducers_ is
   // zero.
-  std::vector<VeloxPromise<bool>> producerPromises_;
+  std::vector<ContinuePromise> producerPromises_;
   int pendingProducers_{0};
   bool noMoreProducers_{false};
+  bool closed_{false};
 };
 
 /// Fetches data for a single partition produced by local exchange from
-/// LocalExchangeSource.
-class LocalExchangeSourceOperator : public SourceOperator {
+/// LocalExchangeQueue.
+class LocalExchange : public SourceOperator {
  public:
-  LocalExchangeSourceOperator(
+  LocalExchange(
       int32_t operatorId,
       DriverCtx* ctx,
       RowTypePtr outputType,
       const std::string& planNodeId,
       int partition);
 
-  std::string toString() override {
-    return fmt::format("LocalExchangeSourceOperator({})", partition_);
+  std::string toString() const override {
+    return fmt::format("LocalExchange({})", partition_);
   }
 
   BlockingReason isBlocked(ContinueFuture* future) override;
@@ -132,15 +133,24 @@ class LocalExchangeSourceOperator : public SourceOperator {
 
   bool isFinished() override;
 
+  /// Close exchange queue. If called before all data has been processed,
+  /// notifies the producer that no more data is needed.
+  void close() override {
+    Operator::close();
+    if (queue_) {
+      queue_->close();
+    }
+  }
+
  private:
   const int partition_;
-  const std::shared_ptr<LocalExchangeSource> source_{nullptr};
+  const std::shared_ptr<LocalExchangeQueue> queue_{nullptr};
   ContinueFuture future_{false};
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 };
 
 /// Hash partitions the data using specified keys. The number of partitions is
-/// determined by the number of LocalExchangeSources(s) found in the task.
+/// determined by the number of LocalExchangeQueues(s) found in the task.
 class LocalPartition : public Operator {
  public:
   LocalPartition(
@@ -148,7 +158,7 @@ class LocalPartition : public Operator {
       DriverCtx* ctx,
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
-  std::string toString() override {
+  std::string toString() const override {
     return fmt::format("LocalPartition({})", numPartitions_);
   }
 
@@ -172,8 +182,8 @@ class LocalPartition : public Operator {
 
   void close() override {
     Operator::close();
-    for (auto& source : localExchangeSources_) {
-      source->close();
+    for (auto& queue : queues_) {
+      queue->close();
     }
   }
 
@@ -181,7 +191,7 @@ class LocalPartition : public Operator {
   BlockingReason
   enqueue(int32_t source, RowVectorPtr data, ContinueFuture* future);
 
-  const std::vector<std::shared_ptr<LocalExchangeSource>> localExchangeSources_;
+  const std::vector<std::shared_ptr<LocalExchangeQueue>> queues_;
   const size_t numPartitions_;
   std::unique_ptr<core::PartitionFunction> partitionFunction_;
   // Empty if column order in the output is exactly the same as in input.

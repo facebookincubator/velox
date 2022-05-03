@@ -25,13 +25,15 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
+
+using namespace facebook::velox::test;
 namespace {
 // Function that creates array with values 0...n-1.
 // Uses all possible functions in the array proxy interface.
 template <typename T>
 struct Func {
   template <typename TOut>
-  bool call(TOut& out, const int64_t& n) {
+  void call(TOut& out, const int64_t& n) {
     for (int i = 0; i < n; i++) {
       switch (i % 5) {
         case 0:
@@ -53,7 +55,6 @@ struct Func {
           break;
       }
     }
-    return true;
   }
 };
 
@@ -68,7 +69,7 @@ class ArrayWriterTest : public functions::test::FunctionBaseTest {
 
   template <typename T>
   void testE2E(const std::string& testFunctionName) {
-    registerFunction<Func, ArrayWriterT<T>, int64_t>({testFunctionName});
+    registerFunction<Func, Array<T>, int64_t>({testFunctionName});
 
     auto result = evaluate(
         fmt::format("{}(c0)", testFunctionName),
@@ -104,8 +105,8 @@ class ArrayWriterTest : public functions::test::FunctionBaseTest {
 
   struct TestWriter {
     VectorPtr result;
-    std::unique_ptr<exec::VectorWriter<ArrayWriterT<int64_t>>> writer =
-        std::make_unique<exec::VectorWriter<ArrayWriterT<int64_t>>>();
+    std::unique_ptr<exec::VectorWriter<Array<int64_t>>> writer =
+        std::make_unique<exec::VectorWriter<Array<int64_t>>>();
   };
 
   TestWriter makeTestWriter() {
@@ -224,7 +225,7 @@ TEST_F(ArrayWriterTest, multipleRows) {
   auto result = prepareResult(
       std::make_shared<ArrayType>(ArrayType(BIGINT())), expected.size());
 
-  exec::VectorWriter<ArrayWriterT<int64_t>> vectorWriter;
+  exec::VectorWriter<Array<int64_t>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
 
   for (auto i = 0; i < expected.size(); i++) {
@@ -255,7 +256,7 @@ TEST_F(ArrayWriterTest, testTimeStamp) {
   auto result =
       prepareResult(std::make_shared<ArrayType>(ArrayType(TIMESTAMP())));
 
-  exec::VectorWriter<ArrayWriterT<Timestamp>> vectorWriter;
+  exec::VectorWriter<Array<Timestamp>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
   vectorWriter.setOffset(0);
   auto& arrayWriter = vectorWriter.current();
@@ -287,7 +288,7 @@ TEST_F(ArrayWriterTest, testVarChar) {
   auto result =
       prepareResult(std::make_shared<ArrayType>(ArrayType(VARCHAR())));
 
-  exec::VectorWriter<ArrayWriterT<Varchar>> vectorWriter;
+  exec::VectorWriter<Array<Varchar>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
   vectorWriter.setOffset(0);
   auto& arrayWriter = vectorWriter.current();
@@ -325,7 +326,7 @@ TEST_F(ArrayWriterTest, testVarBinary) {
   auto result =
       prepareResult(std::make_shared<ArrayType>(ArrayType(VARBINARY())));
 
-  exec::VectorWriter<ArrayWriterT<Varbinary>> vectorWriter;
+  exec::VectorWriter<Array<Varbinary>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
   vectorWriter.setOffset(0);
   auto& arrayWriter = vectorWriter.current();
@@ -373,7 +374,7 @@ TEST_F(ArrayWriterTest, nestedArray) {
       ArrayType(std::make_shared<ArrayType>(ArrayType(INTEGER())));
   auto result = prepareResult(std::make_shared<ArrayType>(elementType));
 
-  exec::VectorWriter<ArrayWriterT<ArrayWriterT<int32_t>>> vectorWriter;
+  exec::VectorWriter<Array<Array<int32_t>>> vectorWriter;
   vectorWriter.init(*result.get()->as<ArrayVector>());
   vectorWriter.setOffset(0);
   auto& arrayWriter = vectorWriter.current();
@@ -410,7 +411,7 @@ TEST_F(ArrayWriterTest, nestedArray) {
 template <typename T>
 struct MakeMatrixFunc {
   template <typename TOut>
-  bool call(TOut& out, const int64_t& n) {
+  void call(TOut& out, const int64_t& n) {
     int count = 0;
     for (auto i = 0; i < n; i++) {
       auto& matrixRow = out.add_item();
@@ -425,15 +426,12 @@ struct MakeMatrixFunc {
       }
     }
     VELOX_DCHECK(count == n * n);
-    return true;
   }
 };
 
 TEST_F(ArrayWriterTest, nestedArrayE2E) {
-  registerFunction<
-      MakeMatrixFunc,
-      ArrayWriterT<ArrayWriterT<int64_t>>,
-      int64_t>({"make_matrix"});
+  registerFunction<MakeMatrixFunc, Array<Array<int64_t>>, int64_t>(
+      {"make_matrix"});
 
   auto result = evaluate(
       "make_matrix(c0)",
@@ -500,7 +498,7 @@ TEST_F(ArrayWriterTest, copyFromStringArray) {
   auto result =
       prepareResult(std::make_shared<ArrayType>(ArrayType(VARCHAR())));
 
-  exec::VectorWriter<ArrayWriterT<Varchar>> vectorWriter;
+  exec::VectorWriter<Array<Varchar>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
   vectorWriter.setOffset(0);
 
@@ -520,7 +518,7 @@ TEST_F(ArrayWriterTest, copyFromNestedArray) {
       ArrayType(std::make_shared<ArrayType>(ArrayType(BIGINT())));
   auto result = prepareResult(std::make_shared<ArrayType>(elementType));
 
-  exec::VectorWriter<ArrayWriterT<ArrayWriterT<int64_t>>> vectorWriter;
+  exec::VectorWriter<Array<Array<int64_t>>> vectorWriter;
   vectorWriter.init(*result.get()->as<ArrayVector>());
   vectorWriter.setOffset(0);
 
@@ -557,15 +555,13 @@ auto makeCopyFromTestData() {
 template <typename T>
 struct CopyFromFunc {
   template <typename TOut>
-  bool call(TOut& out) {
+  void call(TOut& out) {
     out.copy_from(makeCopyFromTestData());
-    return true;
   }
 };
 
 TEST_F(ArrayWriterTest, copyFromE2EMapArray) {
-  registerFunction<CopyFromFunc, ArrayWriterT<MapWriterT<int64_t, int64_t>>>(
-      {"copy_from"});
+  registerFunction<CopyFromFunc, Array<Map<int64_t, int64_t>>>({"copy_from"});
 
   auto result =
       evaluate("copy_from()", makeRowVector({makeFlatVector<int64_t>(1)}));
@@ -593,6 +589,72 @@ TEST_F(ArrayWriterTest, copyFromE2EMapArray) {
       auto dataMapValue = it2->second;
       ASSERT_EQ(*mapViewValue, dataMapValue);
     }
+  }
+}
+
+template <typename T>
+struct CopyFromInputFunc {
+  template <typename TOut, typename TIn>
+  void callNullFree(TOut& out, const TIn& input) {
+    out.copy_from(input);
+  }
+};
+
+TEST_F(ArrayWriterTest, copyFromNullFreeNestedViewType) {
+  registerFunction<
+      CopyFromInputFunc,
+      Array<Map<int64_t, int64_t>>,
+      Array<Map<int64_t, int64_t>>>({"copy_from_input1"});
+
+  auto mapVector1 = makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}});
+  auto mapVector2 = makeMapVector<int64_t, int64_t>({{}});
+  auto mapVector3 = makeMapVector<int64_t, int64_t>({{{5, 6}}});
+
+  auto result = evaluate(
+      "copy_from_input1(array_constructor(c0, c1, c2))",
+      makeRowVector({mapVector1, mapVector2, mapVector3}));
+
+  // Test results.
+  DecodedVector decoded;
+  SelectivityVector rows(1);
+  decoded.decode(*result, rows);
+  exec::VectorReader<Array<Map<int64_t, int64_t>>> reader(&decoded);
+
+  auto arrayView = reader.readNullFree(0);
+  ASSERT_EQ(arrayView.size(), 3);
+
+  auto map1 = arrayView[0];
+  ASSERT_EQ(map1.size(), 2);
+  ASSERT_EQ(map1[1], 2);
+  ASSERT_EQ(map1[3], 4);
+
+  auto map2 = arrayView[1];
+  ASSERT_EQ(map2.size(), 0);
+
+  auto map3 = arrayView[2];
+  ASSERT_EQ(map3.size(), 1);
+  ASSERT_EQ(map3[5], 6);
+}
+
+TEST_F(ArrayWriterTest, copyFromNullFreeArrayView) {
+  registerFunction<CopyFromInputFunc, Array<int64_t>, Array<int64_t>>(
+      {"copy_from_input2"});
+
+  auto result = evaluate(
+      "copy_from_input2(array_constructor(1, 2, 3, 4, 5))",
+      makeRowVector({makeFlatVector<int64_t>(1)}));
+
+  // Test results.
+  DecodedVector decoded;
+  SelectivityVector rows(1);
+  decoded.decode(*result, rows);
+  exec::VectorReader<Array<int64_t>> reader(&decoded);
+
+  auto arrayView = reader.readNullFree(0);
+  ASSERT_EQ(arrayView.size(), 5);
+
+  for (auto i = 0; i < 5; i++) {
+    ASSERT_EQ(arrayView[i], i + 1);
   }
 }
 } // namespace

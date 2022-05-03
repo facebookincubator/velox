@@ -15,20 +15,13 @@
  */
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/common/base/tests/Fs.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
-
-#if __has_include("filesystem")
-#include <filesystem>
-namespace fs = std::filesystem;
-#else
-#include <experimental/filesystem>
-namespace fs = std::experimental::filesystem;
-#endif
 
 namespace facebook::velox::exec::test {
 
@@ -67,16 +60,16 @@ void HiveConnectorTestBase::TearDown() {
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    const std::string& name,
     RowVectorPtr vector) {
-  writeToFile(filePath, name, std::vector{vector});
+  writeToFile(filePath, std::vector{vector});
 }
 
 void HiveConnectorTestBase::writeToFile(
     const std::string& filePath,
-    const std::string& name,
     const std::vector<RowVectorPtr>& vectors,
     std::shared_ptr<dwrf::Config> config) {
+  static const auto kWriter = "HiveConnectorTestBase.Writer";
+
   facebook::velox::dwrf::WriterOptions options;
   options.config = config;
   options.schema = vectors[0]->type();
@@ -85,7 +78,7 @@ void HiveConnectorTestBase::writeToFile(
   facebook::velox::dwrf::Writer writer{
       options,
       std::move(sink),
-      pool_->addChild(name, std::numeric_limits<int64_t>::max())};
+      pool_->addChild(kWriter, std::numeric_limits<int64_t>::max())};
 
   for (size_t i = 0; i < vectors.size(); ++i) {
     writer.write(vectors[i]);

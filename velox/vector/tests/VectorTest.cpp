@@ -19,11 +19,14 @@
 #include <stdio.h>
 #include "velox/common/memory/ByteStream.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
+#include "velox/vector/SimpleVector.h"
+#include "velox/vector/TypeAliases.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/VectorMaker.h"
 
@@ -146,15 +149,14 @@ class VectorTest : public testing::Test {
         rawValues[i] = testValue<TBias>(i, buffer) - kBias;
       }
     }
-    folly::F14FastMap<std::string, std::string> metadata;
-    metadata[BiasVector<T>::BIAS_VALUE] = folly::to<std::string>(kBias);
     return std::make_shared<BiasVector<T>>(
         pool_.get(),
         nulls,
         size,
         BiasKind,
         std::move(values),
-        std::move(metadata),
+        kBias,
+        SimpleVectorStats<T>{},
         std::nullopt,
         numNulls,
         false,
@@ -319,7 +321,6 @@ class VectorTest : public testing::Test {
   template <TypeKind KIND>
   void testFlat(TypePtr type, vector_size_t size, bool withNulls) {
     using T = typename TypeTraits<KIND>::NativeType;
-    BufferPtr buffer;
     VectorPtr base = BaseVector::create(type, size, pool_.get());
     auto flat = std::dynamic_pointer_cast<FlatVector<T>>(base);
     ASSERT_NE(flat.get(), nullptr);
@@ -338,6 +339,7 @@ class VectorTest : public testing::Test {
       EXPECT_TRUE(flat->isNullAt(size * 2 - 1));
     }
     // Test that the null is cleared.
+    BufferPtr buffer;
     flat->set(size * 2 - 1, testValue<T>(size, buffer));
     EXPECT_FALSE(flat->isNullAt(size * 2 - 1));
 
@@ -495,6 +497,7 @@ class VectorTest : public testing::Test {
     target->copy(source.get(), sourceSize, 0, sourceSize);
     for (int32_t i = 0; i < sourceSize; ++i) {
       EXPECT_TRUE(target->equalValueAt(source.get(), sourceSize + i, i));
+      EXPECT_TRUE(source->equalValueAt(target.get(), i, sourceSize + i));
     }
     // Check that uninitialized is copyable.
     target->resize(target->size() + 100);
@@ -720,8 +723,7 @@ class VectorTest : public testing::Test {
         auto deserializedRetained = resultRow->retainedSize();
         EXPECT_LE(deserializedRetained, originalRetained)
             << "Deserializing half is larger than original";
-        EXPECT_GT(deserializedRetained, originalRetained / 8)
-            << "Deserialized half is less than 1/8 the of original size";
+        EXPECT_GT(deserializedRetained, 0);
         break;
       }
       default:

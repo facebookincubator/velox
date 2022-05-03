@@ -28,6 +28,8 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/CompareFlags.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -40,18 +42,6 @@
 
 namespace facebook {
 namespace velox {
-
-namespace cdvi {
-const folly::F14FastMap<std::string, std::string> EMPTY_METADATA;
-} // namespace cdvi
-
-// Describes value collation in comparison. If equalsOnly is true, comparison
-// can return non-0 early, for example only after considering string length.
-struct CompareFlags {
-  bool nullsFirst = true;
-  bool ascending = true;
-  bool equalsOnly = false;
-};
 
 template <typename T>
 class SimpleVector;
@@ -132,12 +122,14 @@ class BaseVector {
   template <typename T>
   T* asUnchecked() {
     static_assert(std::is_base_of<BaseVector, T>::value);
+    DCHECK(dynamic_cast<const T*>(this) != nullptr);
     return static_cast<T*>(this);
   }
 
   template <typename T>
   const T* asUnchecked() const {
     static_assert(std::is_base_of<BaseVector, T>::value);
+    DCHECK(dynamic_cast<const T*>(this) != nullptr);
     return static_cast<const T*>(this);
   }
 
@@ -195,16 +187,26 @@ class BaseVector {
   }
 
   virtual BufferPtr mutableNulls(vector_size_t size) {
+    ensureNullsCapacity(size);
+    return nulls_;
+  }
+
+  /*
+   * Allocates or reallocates nulls_ with the given size if nulls_ hasn't
+   * been allocated yet or has been allocated with a smaller capacity.
+   */
+  void ensureNullsCapacity(vector_size_t size, bool setNotNull = false) {
     if (nulls_ && nulls_->capacity() >= bits::nbytes(size)) {
-      return nulls_;
+      return;
     }
     if (nulls_) {
-      AlignedBuffer::reallocate<bool>(&nulls_, size, false);
+      AlignedBuffer::reallocate<bool>(
+          &nulls_, size, setNotNull ? bits::kNotNull : bits::kNull);
     } else {
-      nulls_ = AlignedBuffer::allocate<bool>(size, pool_, false);
+      nulls_ = AlignedBuffer::allocate<bool>(
+          size, pool_, setNotNull ? bits::kNotNull : bits::kNull);
     }
     rawNulls_ = nulls_->as<uint64_t>();
-    return nulls_;
   }
 
   std::optional<vector_size_t> getDistinctValueCount() const {
@@ -257,19 +259,35 @@ class BaseVector {
    * @return true if this vector has the same value at the given index as the
    * other vector at the other vector's index (including if both are null),
    * false otherwise
+   * @throws if the type_ of other doesn't match the type_ of this
    */
   virtual bool equalValueAt(
       const BaseVector* other,
       vector_size_t index,
-      vector_size_t otherIndex) const = 0;
+      vector_size_t otherIndex) const {
+    static constexpr CompareFlags kEqualValueAtFlags = {
+        false, false, true /*equalOnly*/, false /*stopAtNull**/};
+    // Will always have value because stopAtNull is false.
+    return compare(other, index, otherIndex, kEqualValueAtFlags).value() == 0;
+  }
+
+  int32_t compare(
+      const BaseVector* other,
+      vector_size_t index,
+      vector_size_t otherIndex) const {
+    // Default compare flags always generate value.
+    return compare(other, index, otherIndex, CompareFlags()).value();
+  }
 
   // Returns < 0 if 'this' at 'index' is less than 'other' at
   // 'otherIndex', 0 if equal and > 0 otherwise.
-  virtual int32_t compare(
+  // If flags.stopAtNull is set, returns std::nullopt if null encountered
+  // whether it's top-level null or inside the data of complex type.
+  virtual std::optional<int32_t> compare(
       const BaseVector* other,
       vector_size_t index,
       vector_size_t otherIndex,
-      CompareFlags flags = CompareFlags()) const = 0;
+      CompareFlags flags) const = 0;
 
   /**
    * @return the hash of the value at the given index in this vector
@@ -334,7 +352,7 @@ class BaseVector {
     return countNulls(nulls, 0, size);
   }
 
-  virtual bool mayAddNulls() const {
+  virtual bool isNullsWritable() const {
     return true;
   }
 
@@ -371,6 +389,14 @@ class BaseVector {
         copy(source, row, sourceRow, 1);
       }
     });
+  }
+
+  // Utility for making a deep copy of a whole vector.
+  static std::shared_ptr<BaseVector> copy(const BaseVector& vector) {
+    auto result =
+        BaseVector::create(vector.type(), vector.size(), vector.pool());
+    result->copy(&vector, 0, 0, vector.size());
+    return result;
   }
 
   // Move or copy an element at 'source' row into 'target' row.
@@ -505,10 +531,13 @@ class BaseVector {
     throw std::runtime_error("Vector is not a wrapper");
   }
 
-  static std::shared_ptr<BaseVector> create(
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> create(
       const TypePtr& type,
       vector_size_t size,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(createInternal(type, size, pool));
+  }
 
   static std::shared_ptr<BaseVector> getOrCreateEmpty(
       std::shared_ptr<BaseVector> vector,
@@ -585,10 +614,32 @@ class BaseVector {
   // and nulls and values are uniquely referenced.
   static bool isReusableFlatVector(const std::shared_ptr<BaseVector>& vector);
 
+  /// To safely reuse a vector one needs to (1) ensure that the vector as well
+  /// as all its buffers and child vectors are singly-referenced and mutable
+  /// (for buffers); (2) clear append-only string buffers and child vectors
+  /// (elements of arrays, keys and values of maps, fields of structs).
+  ///
+  /// This method takes a non-const reference to a 'vector' and updates it to
+  /// possibly a new flat vector of the specified size that is safe to reuse.
+  /// If input 'vector' is not singly-referenced or not flat, replaces 'vector'
+  /// with a new vector of the same type and specified size. If some of the
+  /// buffers cannot be reused, these buffers are reset. Child vectors are
+  /// updated by calling this method recursively with size zero.
+  static void prepareForReuse(
+      std::shared_ptr<BaseVector>& vector,
+      vector_size_t size);
+
+  /// Resets non-reusable buffers and updates child vectors by calling
+  /// BaseVector::prepareForReuse.
+  /// Base implementation checks and resets nulls buffer if needed. Keeps the
+  /// nulls buffer if singly-referenced, mutable and has at least one null bit
+  /// set.
+  virtual void prepareForReuse();
+
   // True if left and right are the same or if right is
   // TypeKind::UNKNOWN.  ArrayVector copying may come across unknown
   // type data for null-only content. Nulls can be transferred between
-  // two unknows but values cannot be assigned into an unknown 'left'
+  // two unknowns but values cannot be assigned into an unknown 'left'
   // from a not-unknown 'right'.
   static bool compatibleKind(TypeKind left, TypeKind right) {
     return left == right || right == TypeKind::UNKNOWN;
@@ -609,6 +660,28 @@ class BaseVector {
   }
 
  protected:
+  FOLLY_ALWAYS_INLINE static std::optional<int32_t>
+  compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
+    DCHECK(thisNull || otherNull);
+    // Null handling.
+    if (flags.stopAtNull) {
+      return std::nullopt;
+    }
+
+    if (thisNull) {
+      if (otherNull) {
+        return 0;
+      }
+      return flags.nullsFirst ? -1 : 1;
+    }
+    if (otherNull) {
+      return flags.nullsFirst ? 1 : -1;
+    }
+
+    VELOX_UNREACHABLE(
+        "The function should be called only if one of the inputs is null");
+  }
+
   void ensureNulls() {
     if (!nulls_) {
       allocateNulls();
@@ -644,6 +717,11 @@ class BaseVector {
   ByteCount inMemoryBytes_ = 0;
 
  private:
+  static std::shared_ptr<BaseVector> createInternal(
+      const TypePtr& type,
+      vector_size_t size,
+      velox::memory::MemoryPool* pool);
+
   bool isCodegenOutput_ = false;
 
   friend class LazyVector;

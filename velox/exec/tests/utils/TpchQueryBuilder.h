@@ -18,14 +18,6 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-#if __has_include("filesystem")
-#include <filesystem>
-namespace fs = std::filesystem;
-#else
-#include <experimental/filesystem>
-namespace fs = std::experimental::filesystem;
-#endif
-
 namespace facebook::velox::exec::test {
 
 /// Contains the query plan and input data files keyed on source plan node ID.
@@ -36,12 +28,16 @@ struct TpchPlan {
   dwio::common::FileFormat dataFileFormat;
 };
 
-/// Contains type information, data files, and column aliases for a table.
+/// Contains type information, data files, and file column names for a table.
 /// This information is inferred from the input data files.
+/// The type names are mapped to the standard names.
+/// Example: If the file has a 'returnflag' column, the corresponding type name
+/// will be 'l_returnflag'. fileColumnNames store the mapping between standard
+/// names and the corresponding name in the file.
 struct TpchTableMetadata {
   RowTypePtr type;
   std::vector<std::string> dataFiles;
-  std::unordered_map<std::string, std::string> columnAliases;
+  std::unordered_map<std::string, std::string> fileColumnNames;
 };
 
 /// Builds TPC-H queries using TPC-H data files located in the specified
@@ -82,6 +78,7 @@ class TpchQueryBuilder {
  private:
   TpchPlan getQ1Plan() const;
   TpchPlan getQ6Plan() const;
+  TpchPlan getQ13Plan() const;
   TpchPlan getQ18Plan() const;
 
   const std::vector<std::string>& getTableFilePaths(
@@ -89,39 +86,17 @@ class TpchQueryBuilder {
     return tableMetadata_.at(tableName).dataFiles;
   }
 
-  const std::string& getColumnAlias(
-      const std::string& tableName,
-      const std::string& columnName) const {
-    return tableMetadata_.at(tableName).columnAliases.at(columnName);
-  }
-
-  std::vector<std::string> getColumnAliases(
-      const std::string& tableName,
-      const std::vector<std::string>& columnNames) const {
-    std::vector<std::string> aliases;
-    for (const auto& name : columnNames) {
-      aliases.push_back(getColumnAlias(tableName, name));
-    }
-    return aliases;
-  }
-
   std::shared_ptr<const RowType> getRowType(
       const std::string& tableName,
       const std::vector<std::string>& columnNames) const {
-    const auto aliases = getColumnAliases(tableName, columnNames);
     auto columnSelector = std::make_shared<dwio::common::ColumnSelector>(
-        tableMetadata_.at(tableName).type, aliases);
+        tableMetadata_.at(tableName).type, columnNames);
     return columnSelector->buildSelectedReordered();
   }
 
-  std::vector<std::string> getProjectColumnAliases(
-      const std::string& tableName,
-      const std::vector<std::string>& columnNames) const {
-    std::vector<std::string> aliases;
-    for (const auto& name : columnNames) {
-      aliases.push_back(getColumnAlias(tableName, name) + " AS " + name);
-    }
-    return aliases;
+  const std::unordered_map<std::string, std::string>& getFileColumnNames(
+      const std::string& tableName) const {
+    return tableMetadata_.at(tableName).fileColumnNames;
   }
 
   std::unordered_map<std::string, TpchTableMetadata> tableMetadata_;

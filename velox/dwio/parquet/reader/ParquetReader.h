@@ -16,11 +16,14 @@
 
 #pragma once
 
+#include "velox/common/base/Macros.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/parquet/reader/duckdb/Allocator.h"
 #include "velox/dwio/parquet/reader/duckdb/InputStreamFileSystem.h"
+VELOX_SUPPRESS_DEPRECATION_WARNING
 #include "velox/external/duckdb/parquet-amalgamation.hpp"
+VELOX_UNSUPPRESS_DEPRECATION_WARNING
 
 namespace facebook::velox::parquet {
 
@@ -48,6 +51,7 @@ class ParquetRowReader : public dwio::common::RowReader {
   memory::MemoryPool& pool_;
   RowTypePtr rowType_;
   std::vector<::duckdb::LogicalType> duckdbRowType_;
+  velox::common::ScanSpec* scanSpec_;
 };
 
 class ParquetReader : public dwio::common::Reader {

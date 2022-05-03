@@ -26,7 +26,7 @@ struct WriterOptions : public WriterOptionsShared {};
 class Writer : public WriterShared {
  public:
   Writer(
-      WriterOptions& options,
+      const WriterOptions& options,
       std::unique_ptr<dwio::common::DataSink> sink,
       memory::MemoryPool& pool)
       : WriterShared{options, std::move(sink), pool} {
@@ -66,8 +66,8 @@ class Writer : public WriterShared {
     writer_->writeFileStats(statsFactory);
   }
 
-  void abandonLowValueDictionaries() {
-    writer_->tryAbandonDictionaries(false);
+  bool abandonLowValueDictionaries() {
+    return writer_->tryAbandonDictionaries(false);
   }
 
   void abandonDictionariesImpl() override {

@@ -22,11 +22,16 @@ target_link_libraries(
   ${FMT}
   ${GFLAGS_LIBRARIES})
 
-add_library(velox_common_base BitUtil.cpp RawVector.cpp SimdUtil.cpp)
+add_library(
+  velox_common_base BitUtil.cpp RandomUtil.cpp RawVector.cpp RuntimeMetrics.cpp
+                    SimdUtil.cpp SuccinctPrinter.cpp)
 
 target_link_libraries(velox_common_base velox_exception velox_process)
 
-add_subdirectory(test_utils)
 if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
   add_subdirectory(benchmarks)
 endif()

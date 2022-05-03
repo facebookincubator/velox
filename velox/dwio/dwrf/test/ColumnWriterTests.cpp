@@ -1163,8 +1163,10 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   WriterOptions options;
   options.config = config;
   options.schema = type;
-  options.flushPolicy = [](auto /* unused */, auto& /* context */) {
-    return true;
+  options.flushPolicyFactory = [&]() {
+    return std::make_unique<LambdaFlushPolicy>([]() {
+      return true; // Flushes every batch.
+    });
   };
   Writer writer{options, std::move(sink), pool};
   writer.write(batch);
@@ -1488,18 +1490,51 @@ bool someNullsWithStride(size_t /* unused */, size_t i, size_t size) {
   return (size % (i + 1)) % 2;
 }
 
+std::function<void(ColumnWriter&, size_t, size_t)> checkAbandonDict(
+    const std::function<bool(size_t, size_t)>& callTryAbandonDict,
+    bool force,
+    const std::function<bool(size_t, size_t)>& abandonDictSuccess) {
+  return [callTryAbandonDict, force, abandonDictSuccess](
+             ColumnWriter& columnWriter, size_t stripeCount, size_t repCount) {
+    if (callTryAbandonDict(stripeCount, repCount)) {
+      EXPECT_EQ(
+          abandonDictSuccess(stripeCount, repCount),
+          columnWriter.tryAbandonDictionaries(force));
+    }
+  };
+}
+
+void noPostProcessing(
+    ColumnWriter& /* unused */,
+    size_t /* unused */,
+    size_t /* unused */) {}
+
 bool neverAbandonDict(size_t /* unused */, size_t /* unused */) {
   return false;
 }
 
-std::function<bool(size_t, size_t)> abandonNthWrite(size_t n) {
-  return [n](size_t stripeCount, size_t repCount) {
-    return stripeCount == 0 && repCount == n;
+std::function<bool(size_t, size_t)> abandonNthWriteForStripe(
+    size_t stripeIndex,
+    size_t n) {
+  return [stripeIndex, n](size_t stripeCount, size_t repCount) {
+    return stripeCount == stripeIndex && repCount == n;
   };
 }
 
 bool abandonEveryWrite(size_t /* unused */, size_t /* unused */) {
   return true;
+}
+
+std::function<bool(size_t, size_t)> successAtNthWriteForStripe(
+    size_t stripeIndex,
+    size_t n) {
+  return [stripeIndex, n](size_t stripeCount, size_t repCount) {
+    return stripeCount == stripeIndex && repCount == n;
+  };
+}
+
+bool noSuccess(size_t /* unused */, size_t /* unused */) {
+  return false;
 }
 
 // A type erasure runner for the different test types.
@@ -1541,7 +1576,7 @@ struct IntegerColumnWriterTypedTestCase {
   const std::function<Integer(size_t, size_t)> genData;
   const bool hasNulls;
   const std::function<bool(size_t, size_t)> genNulls;
-  const std::function<bool(size_t, size_t)> callAbandonDict;
+  const std::function<void(ColumnWriter&, size_t, size_t)> postProcess;
   const size_t repetitionCount;
   const size_t flushCount;
 
@@ -1553,7 +1588,7 @@ struct IntegerColumnWriterTypedTestCase {
       const std::function<Integer(size_t, size_t)>& genData,
       bool hasNulls,
       const std::function<bool(size_t, size_t)>& genNulls,
-      const std::function<bool(size_t, size_t)>& callAbandonDict,
+      const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
       size_t repetitionCount = 1,
       size_t flushCount = 1)
       : size{size},
@@ -1563,7 +1598,7 @@ struct IntegerColumnWriterTypedTestCase {
         genData{genData},
         hasNulls{hasNulls},
         genNulls{genNulls},
-        callAbandonDict{callAbandonDict},
+        postProcess{postProcess},
         repetitionCount{repetitionCount},
         flushCount{flushCount} {}
 
@@ -1628,9 +1663,7 @@ struct IntegerColumnWriterTypedTestCase {
       proto::StripeFooter stripeFooter;
       for (size_t j = 0; j != repetitionCount; ++j) {
         columnWriter->write(batch, Ranges::of(0, batch->size()));
-        if (callAbandonDict(i, j)) {
-          columnWriter->tryAbandonDictionaries(true);
-        }
+        postProcess(*columnWriter, i, j);
         columnWriter->createIndexEntry();
       }
       // We only flush once per stripe.
@@ -1710,7 +1743,7 @@ struct TypedDictionaryEncodingTestCase
             genData,
             false,
             noNulls,
-            neverAbandonDict,
+            noPostProcessing,
             repetitionCount,
             flushCount} {}
 };
@@ -1734,7 +1767,7 @@ struct TypedDirectEncodingTestCase
             genData,
             false,
             noNulls,
-            neverAbandonDict,
+            noPostProcessing,
             repetitionCount,
             flushCount} {}
 };
@@ -1752,10 +1785,10 @@ struct IntegerColumnWriterUniversalTestCase {
       const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
       bool hasNulls,
       const std::function<bool(size_t, size_t)>& genNulls,
-      const std::function<bool(size_t, size_t)>& callAbandonDict,
+      const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
       size_t repetitionCount = 1,
       size_t flushCount = 1)
-      : int16tTestCase{size, writeDirect, dictionaryWriteThreshold, finalDictionarySize, coerceGenData<int16_t>(genData), hasNulls, genNulls, callAbandonDict, repetitionCount, flushCount},
+      : int16tTestCase{size, writeDirect, dictionaryWriteThreshold, finalDictionarySize, coerceGenData<int16_t>(genData), hasNulls, genNulls, postProcess, repetitionCount, flushCount},
         int32tTestCase{
             size,
             writeDirect,
@@ -1764,7 +1797,7 @@ struct IntegerColumnWriterUniversalTestCase {
             coerceGenData<int32_t>(genData),
             hasNulls,
             genNulls,
-            callAbandonDict,
+            postProcess,
             repetitionCount,
             flushCount},
         int64tTestCase{
@@ -1775,7 +1808,7 @@ struct IntegerColumnWriterUniversalTestCase {
             coerceGenData<int64_t>(genData),
             hasNulls,
             genNulls,
-            callAbandonDict,
+            postProcess,
             repetitionCount,
             flushCount} {}
 
@@ -1820,7 +1853,7 @@ struct IntegerColumnWriterDictionaryEncodingUniversalTestCase
             genData,
             hasNulls,
             genNulls,
-            neverAbandonDict,
+            noPostProcessing,
             repetitionCount,
             flushCount} {}
 };
@@ -1834,7 +1867,7 @@ struct IntegerColumnWriterDirectEncodingUniversalTestCase
       const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
       bool hasNulls,
       const std::function<bool(size_t, size_t)>& genNulls,
-      const std::function<bool(size_t, size_t)>& callAbandonDict,
+      const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
       size_t repetitionCount = 1,
       size_t flushCount = 1)
       : IntegerColumnWriterUniversalTestCase{
@@ -1845,7 +1878,7 @@ struct IntegerColumnWriterDirectEncodingUniversalTestCase
             genData,
             hasNulls,
             genNulls,
-            callAbandonDict,
+            postProcess,
             repetitionCount,
             flushCount} {}
 };
@@ -1927,7 +1960,7 @@ TEST(ColumnWriterTests, IntegerTypeDictionaryEncodingWritesWithNulls) {
               genData,
               true,
               genNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2053,7 +2086,7 @@ TEST(ColumnWriterTests, IntegerTypeDirectEncodingWrites) {
               genData,
               false,
               noNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2088,7 +2121,7 @@ TEST(ColumnWriterTests, IntegerTypeDirectEncodingWritesWithNulls) {
               genData,
               true,
               genNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2123,7 +2156,7 @@ TEST(ColumnWriterTests, IntegerTypeDirectEncodingHugeWrites) {
               genData,
               false,
               noNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2153,7 +2186,7 @@ TEST(ColumnWriterTests, IntegerTypeDirectEncodingHugeRepeatedWrites) {
               genData,
               false,
               noNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2208,7 +2241,7 @@ TEST(ColumnWriterTests, IntegerTypeDictionaryWriteThreshold) {
               genData,
               false,
               noNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2227,7 +2260,7 @@ TEST(ColumnWriterTests, IntegerTypeDictionaryWriteThreshold) {
               genData,
               true,
               allNulls,
-              neverAbandonDict,
+              noPostProcessing,
               repetitionCount,
               flushCount} {}
   };
@@ -2268,34 +2301,127 @@ TEST(ColumnWriterTests, IntegerColumnWriterAbandonDictionaries) {
   struct TestCase : public IntegerColumnWriterUniversalTestCase {
     TestCase(
         size_t size,
+        bool writeDirect,
+        size_t finalDictionarySize,
         const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
-        const std::function<bool(size_t, size_t)>& callAbandonDict,
-        size_t repetitionCount = 1,
-        size_t flushCount = 1)
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount,
+        size_t flushCount)
         : IntegerColumnWriterUniversalTestCase{
               size,
-              true,
+              writeDirect,
               1.0f,
-              0,
+              finalDictionarySize,
               genData,
               false,
               noNulls,
-              callAbandonDict,
+              postProcess,
               repetitionCount,
               flushCount} {}
   };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        size_t finalDictionarySize,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
   std::vector<TestRunner> testCases{
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 10},
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
       // Test abandoning dictionary in multi-write scenarios. For now we could
       // only abandon dictionary starting from the first stripe, because we
       // could not switch up encoding of a writer once determined.
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 2, 5},
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(1), 2, 5},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          2,
+          5},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 1)),
+          2,
+          5},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ true, noSuccess),
+          2,
+          5},
       // Abandoning at every write to make sure subsequent abandon dict calls
       // are safe.
-      TestCase{1000, generateRangeWithCustomLimits, abandonEveryWrite, 10},
-      TestCase{1000, generateRangeWithCustomLimits, abandonEveryWrite, 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
   };
 
   for (const auto& testCase : testCases) {
@@ -2307,34 +2433,308 @@ TEST(ColumnWriterTests, IntegerColumnWriterAbandonDictionariesWithNulls) {
   struct TestCase : public IntegerColumnWriterUniversalTestCase {
     TestCase(
         size_t size,
+        bool writeDirect,
+        size_t finalDictionarySize,
         const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
-        const std::function<bool(size_t, size_t)>& callAbandonDict,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount,
+        size_t flushCount)
+        : IntegerColumnWriterUniversalTestCase{
+              size,
+              writeDirect,
+              1.0f,
+              finalDictionarySize,
+              genData,
+              true,
+              someNulls,
+              postProcess,
+              repetitionCount,
+              flushCount} {}
+  };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        size_t finalDictionarySize,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  std::vector<TestRunner> testCases{
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
+      // Test abandoning dictionary in multi-write scenarios. For now we could
+      // only abandon dictionary starting from the first stripe, because we
+      // could not switch up encoding of a writer once determined.
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          2,
+          5},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 1)),
+          2,
+          5},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* finalDictionarySize */ 341,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ true, noSuccess),
+          2,
+          5},
+      // Abandoning at every write to make sure subsequent abandon dict calls
+      // are safe.
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
+  };
+
+  for (const auto& testCase : testCases) {
+    testCase.runTest();
+  }
+}
+
+TEST(ColumnWriterTests, IntegerColumnWriterAbandonLowValueDictionaries) {
+  struct TestCase : public IntegerColumnWriterUniversalTestCase {
+    TestCase(
+        size_t size,
+        bool writeDirect,
+        float dictionaryWriteThreshold,
+        size_t finalDictionarySize,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
         size_t repetitionCount = 1,
         size_t flushCount = 1)
         : IntegerColumnWriterUniversalTestCase{
               size,
-              true,
-              1.0f,
-              0,
+              writeDirect,
+              dictionaryWriteThreshold,
+              finalDictionarySize,
               genData,
-              true,
-              someNulls,
-              callAbandonDict,
+              false,
+              noNulls,
+              postProcess,
               repetitionCount,
               flushCount} {}
   };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        float dictionaryWriteThreshold,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              dictionaryWriteThreshold,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        float dictionaryWriteThreshold,
+        size_t finalDictionarySize,
+        const std::function<int64_t(size_t, size_t, int64_t, int64_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              dictionaryWriteThreshold,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
   std::vector<TestRunner> testCases{
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 10},
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 1, 10},
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
+      // finalDictionarySize == 0 because in each stripe
+      // each value only appeared once.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 0,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 1,
+          /* stripeCount */ 10},
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 0.4f,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              successAtNthWriteForStripe(0, 1)),
+          /* repCount */ 10},
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 0.4f,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 2),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
       // Test abandoning dictionary in multi-write scenarios. For now we could
       // only abandon dictionary starting from the first stripe, because we
       // could not switch up encoding of a writer once determined.
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(0), 2, 5},
-      TestCase{1000, generateRangeWithCustomLimits, abandonNthWrite(1), 2, 5},
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ false, noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 0.1f,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              successAtNthWriteForStripe(0, 1)),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      // Return false because we were already using direct encoding.
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 0.1f,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ false, noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
       // Abandoning at every write to make sure subsequent abandon dict calls
       // are safe.
-      TestCase{1000, generateRangeWithCustomLimits, abandonEveryWrite, 10},
-      TestCase{1000, generateRangeWithCustomLimits, abandonEveryWrite, 1, 10},
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
+      // finalDictionarySize == 0 because in each stripe
+      // each value only appeared once.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryWriteThreshold */ 1.0f,
+          /* finalDictionarySize */ 0,
+          generateRangeWithCustomLimits,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 1,
+          /* stripeCount*/ 10},
   };
 
   for (const auto& testCase : testCases) {
@@ -2389,7 +2789,7 @@ struct StringColumnWriterTestCase {
   const std::function<std::string(size_t, size_t, size_t)> genData;
   const bool hasNulls;
   const std::function<bool(size_t, size_t, size_t)> genNulls;
-  const std::function<bool(size_t, size_t)> callAbandonDict;
+  const std::function<void(ColumnWriter&, size_t, size_t)> postProcess;
   const size_t repetitionCount;
   const size_t flushCount;
   const std::shared_ptr<const Type> type;
@@ -2403,7 +2803,7 @@ struct StringColumnWriterTestCase {
       const std::function<std::string(size_t, size_t, size_t)>& genData,
       bool hasNulls,
       const std::function<bool(size_t, size_t, size_t)>& genNulls,
-      const std::function<bool(size_t, size_t)>& callAbandonDict,
+      const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
       size_t repetitionCount = 1,
       size_t flushCount = 1)
       : size{size},
@@ -2414,7 +2814,7 @@ struct StringColumnWriterTestCase {
         genData{genData},
         hasNulls{hasNulls},
         genNulls{genNulls},
-        callAbandonDict{callAbandonDict},
+        postProcess{postProcess},
         repetitionCount{repetitionCount},
         flushCount{flushCount},
         type{CppToType<folly::StringPiece>::create()} {}
@@ -2495,9 +2895,7 @@ struct StringColumnWriterTestCase {
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO: break the batch into multiple strides.
         columnWriter->write(batches[j], Ranges::of(0, size));
-        if (callAbandonDict(i, j)) {
-          columnWriter->tryAbandonDictionaries(true);
-        }
+        postProcess(*columnWriter, i, j);
         columnWriter->createIndexEntry();
       }
 
@@ -2585,7 +2983,7 @@ struct StringDictionaryEncodingTestCase : public StringColumnWriterTestCase {
             genData,
             hasNull,
             genNulls,
-            neverAbandonDict,
+            noPostProcessing,
             repetitionCount,
             flushCount} {}
 };
@@ -2607,7 +3005,7 @@ struct StringDirectEncodingTestCase : public StringColumnWriterTestCase {
             genData,
             hasNull,
             genNulls,
-            neverAbandonDict,
+            noPostProcessing,
             repetitionCount,
             flushCount} {}
 };
@@ -2864,35 +3262,128 @@ TEST(ColumnWriterTests, StringColumnWriterAbandonDictionaries) {
   struct TestCase : public StringColumnWriterTestCase {
     TestCase(
         size_t size,
+        bool writeDirect,
+        size_t finalDictionarySize,
         const std::function<std::string(size_t, size_t, size_t)>& genData,
-        const std::function<bool(size_t, size_t)>& callAbandonDict,
-        size_t repetitionCount = 1,
-        size_t flushCount = 1)
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount,
+        size_t flushCount)
         : StringColumnWriterTestCase{
               size,
-              true,
-              0.0f,
+              writeDirect,
               1.0f,
-              0,
+              0.0f,
+              finalDictionarySize,
               genData,
               false,
               noNullsWithStride,
-              callAbandonDict,
+              postProcess,
               repetitionCount,
               flushCount} {}
   };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        size_t finalDictionarySize,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
   std::vector<TestRunner> testCases{
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 10},
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
       // Test abandoning dictionary in multi-write scenarios. For now we could
       // only abandon dictionary starting from the first stripe, because we
       // could not switch up encoding of a writer once determined.
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 2, 5},
-      TestCase{1000, generateStringRange, abandonNthWrite(1), 2, 5},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          2,
+          5},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 1)),
+          2,
+          5},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ true, noSuccess),
+          2,
+          5},
       // Abandoning at every write to make sure subsequent abandon dict calls
       // are safe.
-      TestCase{1000, generateStringRange, abandonEveryWrite, 10},
-      TestCase{1000, generateStringRange, abandonEveryWrite, 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
   };
 
   for (const auto& testCase : testCases) {
@@ -2905,35 +3396,310 @@ TEST(ColumnWriterTests, StringColumnWriterAbandonDictionariesWithNulls) {
   struct TestCase : public StringColumnWriterTestCase {
     TestCase(
         size_t size,
+        bool writeDirect,
+        size_t finalDictionarySize,
         const std::function<std::string(size_t, size_t, size_t)>& genData,
-        const std::function<bool(size_t, size_t)>& callAbandonDict,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
         size_t repetitionCount = 1,
         size_t flushCount = 1)
         : StringColumnWriterTestCase{
               size,
-              true,
-              0.0f,
+              writeDirect,
               1.0f,
-              0,
+              0.0f,
+              finalDictionarySize,
               genData,
               true,
               someNullsWithStride,
-              callAbandonDict,
+              postProcess,
               repetitionCount,
               flushCount} {}
   };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        size_t finalDictionarySize,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
   std::vector<TestRunner> testCases{
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 10},
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
       // Test abandoning dictionary in multi-write scenarios. For now we could
       // only abandon dictionary starting from the first stripe, because we
       // could not switch up encoding of a writer once determined.
-      TestCase{1000, generateStringRange, abandonNthWrite(0), 2, 5},
-      TestCase{1000, generateStringRange, abandonNthWrite(1), 2, 5},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          2,
+          5},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ true,
+              successAtNthWriteForStripe(0, 1)),
+          2,
+          5},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* finalDictionarySize */ 341,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ true, noSuccess),
+          2,
+          5},
       // Abandoning at every write to make sure subsequent abandon dict calls
       // are safe.
-      TestCase{1000, generateStringRange, abandonEveryWrite, 10},
-      TestCase{1000, generateStringRange, abandonEveryWrite, 1, 10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          10},
+      DirectEncodingTestCase{
+          1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ true,
+              successAtNthWriteForStripe(0, 0)),
+          1,
+          10},
+  };
+
+  for (const auto& testCase : testCases) {
+    testCase.runTest();
+  }
+}
+
+TEST(ColumnWriterTests, StringColumnWriterAbandonLowValueDictionaries) {
+  struct TestCase : public StringColumnWriterTestCase {
+    TestCase(
+        size_t size,
+        bool writeDirect,
+        float dictionaryKeyEfficiencyThreshold,
+        size_t finalDictionarySize,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount,
+        size_t flushCount)
+        : StringColumnWriterTestCase{
+              size,
+              writeDirect,
+              dictionaryKeyEfficiencyThreshold,
+              /* entropyKeyEfficiencyThreshold */ 0.0f,
+              finalDictionarySize,
+              genData,
+              false,
+              noNullsWithStride,
+              postProcess,
+              repetitionCount,
+              flushCount} {}
+  };
+
+  struct DirectEncodingTestCase : public TestCase {
+    DirectEncodingTestCase(
+        size_t size,
+        float dictionaryKeyEfficiencyThreshold,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ true,
+              dictionaryKeyEfficiencyThreshold,
+              /* finalDictionarySize */ 0,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  struct DictionaryEncodingTestCase : public TestCase {
+    DictionaryEncodingTestCase(
+        size_t size,
+        float dictionaryKeyEfficiencyThreshold,
+        size_t finalDictionarySize,
+        const std::function<std::string(size_t, size_t, size_t)>& genData,
+        const std::function<void(ColumnWriter&, size_t, size_t)>& postProcess,
+        size_t repetitionCount = 1,
+        size_t flushCount = 1)
+        : TestCase(
+              size,
+              /* writeDirect */ false,
+              dictionaryKeyEfficiencyThreshold,
+              finalDictionarySize,
+              genData,
+              postProcess,
+              repetitionCount,
+              flushCount) {}
+  };
+
+  std::vector<TestRunner> testCases{
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
+      // FinalDictionarySize == 0 because in each stripe
+      // each value only appeared once.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 0,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 0),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 1,
+          /* stripeCount */ 10},
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 0.4f,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              successAtNthWriteForStripe(0, 1)),
+          /* repCount */ 10},
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 0.4f,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 2),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
+      // Test abandoning dictionary in multi-write scenarios. For now we could
+      // only abandon dictionary starting from the first stripe, because we
+      // could not switch up encoding of a writer once determined.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      // We shouldn't be able to switch encodings beyond the first stripe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ false, noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 0.1f,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(0, 1),
+              /* force */ false,
+              successAtNthWriteForStripe(0, 1)),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      // Return false because we were already using direct encoding.
+      DirectEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 0.1f,
+          generateStringRange,
+          checkAbandonDict(
+              abandonNthWriteForStripe(1, 0), /* force */ false, noSuccess),
+          /* repCount */ 5,
+          /* stripeCount*/ 2},
+      // Abandoning at every write to make sure subsequent abandon dict calls
+      // are safe.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 1000,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 10},
+      // FinalDictionarySize == 0 because in each stripe
+      // each value only appeared once.
+      DictionaryEncodingTestCase{
+          1000,
+          /* dictionaryKeyEfficiencyThreshold */ 1.0f,
+          /* finalDictionarySize */ 0,
+          generateStringRange,
+          checkAbandonDict(
+              abandonEveryWrite,
+              /* force */ false,
+              noSuccess),
+          /* repCount */ 1,
+          /* stripeCount*/ 10},
   };
 
   for (const auto& testCase : testCases) {
@@ -3340,4 +4106,5 @@ TEST(ColumnWriterTests, mapDictionary) {
       MAP(INTEGER(), MAP(VARCHAR(), MAP(VARCHAR(), TINYINT()))),
       randomNulls(3));
 }
+
 } // namespace facebook::velox::dwrf

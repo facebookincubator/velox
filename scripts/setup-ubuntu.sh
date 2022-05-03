@@ -18,8 +18,8 @@ set -eufx -o pipefail
 
 # Folly must be built with the same compiler flags so that some low level types
 # are the same size.
-export COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
-FB_OS_VERSION=v2021.05.10.00
+export COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -mlzcnt"
+FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
@@ -113,7 +113,7 @@ function cmake_install {
 }
 
 function install_fmt {
-  github_checkout fmtlib/fmt 7.1.3
+  github_checkout fmtlib/fmt 8.0.0
   cmake_install -DFMT_TEST=OFF
 }
 

@@ -95,10 +95,15 @@ uint64_t SelectiveStructColumnReader::skip(uint64_t numValues) {
   // null. But because struct nulls are injected as nulls in child
   // readers, it is practical to keep the row numbers in terms of the
   // enclosing struct.
+  //
+  // Setting the 'readOffset_' in children is recursive so that nested
+  // nullable structs, where inner structs may advance less because of
+  // nulls above them still end up on the same row in terms of top
+  // level rows.
   for (auto& child : children_) {
     if (child) {
       child->skip(numNonNulls);
-      child->setReadOffset(child->readOffset() + numValues);
+      child->setReadOffsetRecursive(child->readOffset() + numValues);
     }
   }
   return numValues;
@@ -188,13 +193,51 @@ void SelectiveStructColumnReader::read(
   readOffset_ = offset + rows.back() + 1;
 }
 
+namespace {
+//   Recursively makes empty RowVectors for positions in 'children'
+//   where the corresponding child type in 'rowType' is a row. The
+//   reader expects RowVector outputs to be initialized so that the
+//   content corresponds to the query schema regardless of the file
+//   schema. An empty RowVector can have nullptr for all its non-row
+//   children.
+void fillRowVectorChildren(
+    memory::MemoryPool& pool,
+    const RowType& rowType,
+    std::vector<VectorPtr>& children) {
+  for (auto i = 0; i < children.size(); ++i) {
+    const auto& type = rowType.childAt(i);
+    if (type->isRow()) {
+      std::vector<VectorPtr> innerChildren(type->size());
+      fillRowVectorChildren(pool, type->asRow(), innerChildren);
+      children[i] = std::make_shared<RowVector>(
+          &pool, type, nullptr, 0, std::move(innerChildren));
+    }
+  }
+}
+} // namespace
+
 void SelectiveStructColumnReader::getValues(RowSet rows, VectorPtr* result) {
   assert(!children_.empty());
   VELOX_CHECK(
       *result != nullptr,
       "SelectiveStructColumnReader expects a non-null result");
-  RowVector* resultRow = dynamic_cast<RowVector*>(result->get());
-  VELOX_CHECK(resultRow, "Struct reader expects a result of type ROW.");
+  VELOX_CHECK(
+      result->get()->type()->isRow(),
+      "Struct reader expects a result of type ROW.");
+
+  auto resultRow = static_cast<RowVector*>(result->get());
+  if (!result->unique()) {
+    std::vector<VectorPtr> children(resultRow->children().size());
+    fillRowVectorChildren(
+        *resultRow->pool(), resultRow->type()->asRow(), children);
+    *result = std::make_unique<RowVector>(
+        resultRow->pool(),
+        resultRow->type(),
+        BufferPtr(nullptr),
+        0,
+        std::move(children));
+    resultRow = static_cast<RowVector*>(result->get());
+  }
   resultRow->resize(rows.size());
   if (!rows.size()) {
     return;

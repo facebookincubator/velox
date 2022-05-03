@@ -34,6 +34,10 @@ class ArrayAggAggregate : public exec::Aggregate {
     return sizeof(ArrayAccumulator);
   }
 
+  bool isFixedSize() const override {
+    return false;
+  }
+
   void initializeNewGroups(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
@@ -64,12 +68,16 @@ class ArrayAggAggregate : public exec::Aggregate {
 
       auto& values = value<ArrayAccumulator>(groups[i])->elements;
       auto arraySize = values.size();
-      ValueListReader reader(values);
-      for (auto index = 0; index < arraySize; ++index) {
-        reader.next(*elements, offset + index);
+      if (arraySize) {
+        ValueListReader reader(values);
+        for (auto index = 0; index < arraySize; ++index) {
+          reader.next(*elements, offset + index);
+        }
+        vector->setOffsetAndSize(i, offset, arraySize);
+        offset += arraySize;
+      } else {
+        vector->setOffsetAndSize(i, offset, 0);
       }
-      vector->setOffsetAndSize(i, offset, arraySize);
-      offset += arraySize;
     }
   }
 
@@ -86,6 +94,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     decodedElements_.decode(*args[0], rows);
     rows.applyToSelected([&](vector_size_t row) {
       auto group = groups[row];
+      auto tracker = trackRowSize(group);
       value<ArrayAccumulator>(group)->elements.appendValue(
           decodedElements_, row, allocator_);
     });
@@ -96,15 +105,18 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    VELOX_CHECK_EQ(args[0]->encoding(), VectorEncoding::Simple::ARRAY);
-    auto arrayVector = args[0]->as<ArrayVector>();
+    decodedIntermediate_.decode(*args[0], rows);
+
+    auto arrayVector = decodedIntermediate_.base()->as<ArrayVector>();
     auto& elements = arrayVector->elements();
     rows.applyToSelected([&](vector_size_t row) {
       auto group = groups[row];
+      auto decodedRow = decodedIntermediate_.index(row);
+      auto tracker = trackRowSize(group);
       value<ArrayAccumulator>(group)->elements.appendRange(
           elements,
-          arrayVector->offsetAt(row),
-          arrayVector->sizeAt(row),
+          arrayVector->offsetAt(decodedRow),
+          arrayVector->sizeAt(decodedRow),
           allocator_);
     });
   }
@@ -117,6 +129,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     auto& values = value<ArrayAccumulator>(group)->elements;
 
     decodedElements_.decode(*args[0], rows);
+    auto tracker = trackRowSize(group);
     rows.applyToSelected([&](vector_size_t row) {
       values.appendValue(decodedElements_, row, allocator_);
     });
@@ -127,16 +140,17 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    auto& values = value<ArrayAccumulator>(group)->elements;
+    decodedIntermediate_.decode(*args[0], rows);
+    auto arrayVector = decodedIntermediate_.base()->as<ArrayVector>();
 
-    VELOX_CHECK_EQ(args[0]->encoding(), VectorEncoding::Simple::ARRAY);
-    auto arrayVector = args[0]->as<ArrayVector>();
+    auto& values = value<ArrayAccumulator>(group)->elements;
     auto elements = arrayVector->elements();
     rows.applyToSelected([&](vector_size_t row) {
+      auto decodedRow = decodedIntermediate_.index(row);
       values.appendRange(
           elements,
-          arrayVector->offsetAt(row),
-          arrayVector->sizeAt(row),
+          arrayVector->offsetAt(decodedRow),
+          arrayVector->sizeAt(decodedRow),
           allocator_);
     });
   }
@@ -158,6 +172,7 @@ class ArrayAggAggregate : public exec::Aggregate {
 
   // Reusable instance of DecodedVector for decoding input vectors.
   DecodedVector decodedElements_;
+  DecodedVector decodedIntermediate_;
 };
 
 bool registerArrayAggregate(const std::string& name) {

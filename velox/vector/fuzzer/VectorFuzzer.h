@@ -77,6 +77,10 @@ class VectorFuzzer {
       size_t seed = 123456)
       : opts_(options), pool_(pool), rng_(seed) {}
 
+  void setOptions(VectorFuzzer::Options options) {
+    opts_ = options;
+  }
+
   // Returns a "fuzzed" vector, containing randomized data, nulls, and indices
   // vector (dictionary).
   VectorPtr fuzz(const TypePtr& type);
@@ -112,12 +116,12 @@ class VectorFuzzer {
     rng_.seed(seed);
   }
 
- private:
   // Returns true 1/n of times.
   bool oneIn(size_t n) {
     return folly::Random::oneIn(n, rng_);
   }
 
+ private:
   VectorPtr fuzz(const TypePtr& type, vector_size_t size);
 
   VectorPtr fuzzFlat(const TypePtr& type, vector_size_t size);
@@ -128,7 +132,7 @@ class VectorFuzzer {
 
   VectorPtr fuzzRow(const RowTypePtr& rowType, vector_size_t size);
 
-  const VectorFuzzer::Options opts_;
+  VectorFuzzer::Options opts_;
 
   memory::MemoryPool* pool_;
 

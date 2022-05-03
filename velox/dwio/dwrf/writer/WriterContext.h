@@ -18,6 +18,7 @@
 
 #include <gtest/gtest_prod.h>
 
+#include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
@@ -68,7 +69,7 @@ class WriterContext : public CompressionBufferPool {
       handler_ = std::make_unique<encryption::EncryptionHandler>();
     }
     validateConfigs();
-    LOG(INFO) << fmt::format("Compression config: {}", compression);
+    VLOG(1) << fmt::format("Compression config: {}", compression);
     compressionBuffer_ = std::make_unique<dwio::common::DataBuffer<char>>(
         generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
@@ -368,11 +369,6 @@ class WriterContext : public CompressionBufferPool {
     return ceil(flushOverheadRatioTracker_.getEstimatedRatio() * dataRawSize);
   }
 
-  // At this point we won't have data to estimate flush overhead.
-  int64_t getEstimatedEncodingSwitchOverhead() const {
-    return stripeRawSize;
-  }
-
   bool checkLowMemoryMode() const {
     return checkLowMemoryMode_;
   }
@@ -495,6 +491,7 @@ class WriterContext : public CompressionBufferPool {
   const bool isStreamSizeAboveThresholdCheckEnabled;
   const uint64_t rawDataSizePerBatch;
   const dwio::common::MetricsLogPtr metricLogger;
+  CpuWallTiming flushTiming{};
 
   template <typename TestType>
   friend class WriterEncodingIndexTest;

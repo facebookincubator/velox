@@ -16,4 +16,4 @@ add_executable(velox_parse_utils_test VariantToVectorTest.cpp)
 add_test(velox_parse_utils_test velox_parse_utils_test)
 
 target_link_libraries(velox_parse_utils_test velox_parse_utils velox_type
-                      velox_vector ${GTEST_BOTH_LIBRARIES})
+                      velox_vector gtest gtest_main)

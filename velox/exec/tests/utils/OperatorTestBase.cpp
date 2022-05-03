@@ -28,7 +28,7 @@
 namespace facebook::velox::exec::test {
 
 // static
-std::unique_ptr<cache::AsyncDataCache> OperatorTestBase::asyncDataCache_;
+std::shared_ptr<cache::AsyncDataCache> OperatorTestBase::asyncDataCache_;
 
 OperatorTestBase::OperatorTestBase() {
   using memory::MappedMemory;
@@ -51,7 +51,7 @@ void OperatorTestBase::SetUp() {
     // Sets the process default MappedMemory to an async cache of up
     // to 4GB backed by a default MappedMemory
     if (!asyncDataCache_) {
-      asyncDataCache_ = std::make_unique<cache::AsyncDataCache>(
+      asyncDataCache_ = std::make_shared<cache::AsyncDataCache>(
           MappedMemory::createDefaultInstance(), 4UL << 30);
     }
     MappedMemory::setDefaultInstance(asyncDataCache_.get());
@@ -116,19 +116,6 @@ std::shared_ptr<const core::ITypedExpr> OperatorTestBase::parseExpr(
     std::shared_ptr<const RowType> rowType) {
   auto untyped = parse::parseExpr(text);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
-}
-
-void OperatorTestBase::assertEqualVectors(
-    const VectorPtr& expected,
-    const VectorPtr& actual,
-    const std::string& additionalContext) {
-  ASSERT_EQ(expected->size(), actual->size());
-
-  for (auto i = 0; i < expected->size(); i++) {
-    ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
-        << "at " << i << ": " << expected->toString(i) << " vs. "
-        << actual->toString(i) << additionalContext;
-  }
 }
 
 RowVectorPtr OperatorTestBase::getResults(

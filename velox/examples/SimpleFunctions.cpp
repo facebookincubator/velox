@@ -296,7 +296,7 @@ struct MySimpleSplitFunction {
     // This code doesn't copy the string contents.
     do {
       cur = std::find(start, input.end(), splitChar);
-      out.append(out_type<Varchar>(StringView(start, cur - start)));
+      out.add_item().copy_from(StringView(start, cur - start));
       start = cur + 1;
     } while (cur < input.end());
     return true;
@@ -409,7 +409,7 @@ struct MyComplexTimesTwoFunction {
       const arg_type<Array<int64_t>>& inputArray) {
     result.reserve(inputArray.size());
     for (const auto& it : inputArray) {
-      result.append(it.has_value() ? it.value() * 2 : 0);
+      result.push_back(it.has_value() ? it.value() * 2 : 0);
     }
     return true;
   }

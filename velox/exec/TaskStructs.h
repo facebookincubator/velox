@@ -34,7 +34,7 @@ enum TaskState { kRunning, kFinished, kCanceled, kAborted, kFailed };
 struct BarrierState {
   int32_t numRequested;
   std::vector<std::shared_ptr<Driver>> drivers;
-  std::vector<VeloxPromise<bool>> promises;
+  std::vector<ContinuePromise> promises;
 };
 
 /// Structure to accumulate splits for distribution.
@@ -44,7 +44,7 @@ struct SplitsStore {
   /// Signal, that no more splits will arrive.
   bool noMoreSplits{false};
   /// Blocking promises given out when out of splits to distribute.
-  std::vector<VeloxPromise<bool>> splitPromises;
+  std::vector<ContinuePromise> splitPromises;
 };
 
 /// Structure contains the current info on splits for a particular plan node.
@@ -64,16 +64,19 @@ struct SplitsState {
   SplitsState& operator=(SplitsState const&) = delete;
 };
 
-/// Stores local exchange sources with the memory manager.
-struct LocalExchange {
-  std::unique_ptr<LocalExchangeMemoryManager> memoryManager;
-  std::vector<std::shared_ptr<LocalExchangeSource>> sources;
+/// Stores local exchange queues with the memory manager.
+struct LocalExchangeState {
+  std::shared_ptr<LocalExchangeMemoryManager> memoryManager;
+  std::vector<std::shared_ptr<LocalExchangeQueue>> queues;
 };
 
 /// Stores inter-operator state (exchange, bridges) for split groups.
 struct SplitGroupState {
   /// Map from the plan node id of the join to the corresponding JoinBridge.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>> bridges;
+
+  // Holds states for Task::allPeersFinished.
+  std::unordered_map<core::PlanNodeId, BarrierState> barriers;
 
   /// Map of merge sources keyed on LocalMergeNode plan node ID.
   std::
@@ -85,15 +88,23 @@ struct SplitGroupState {
       mergeJoinSources;
 
   /// Map of local exchanges keyed on LocalPartition plan node ID.
-  std::unordered_map<core::PlanNodeId, LocalExchange> localExchanges;
+  std::unordered_map<core::PlanNodeId, LocalExchangeState> localExchanges;
 
   /// Drivers created and still running for this split group.
   /// The split group is finished when this numbers reaches zero.
-  uint32_t activeDrivers{0};
+  uint32_t numRunningDrivers{0};
+
+  /// The number of completed drivers in the output pipeline. When all drivers
+  /// in the output pipeline finish, the remaining running pipelines should stop
+  /// processing and transition to finished state as well. This happens when
+  /// there is a downstream operator that finishes before receiving all input,
+  /// e.g. Limit.
+  uint32_t numFinishedOutputDrivers{0};
 
   /// Clears the state.
   void clear() {
     bridges.clear();
+    barriers.clear();
     localMergeSources.clear();
     mergeJoinSources.clear();
     localExchanges.clear();

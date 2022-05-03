@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/common/base/test_utils/GTestUtils.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 
@@ -64,7 +64,7 @@ TEST_P(BoolAndOrTest, basic) {
   agg = PlanBuilder()
             .values(vectors)
             .project({"c0 % 10", "c1"})
-            .partialAggregation({0}, {partialAgg})
+            .partialAggregation({"p0"}, {partialAgg})
             .planNode();
   assertQuery(
       agg,
@@ -75,7 +75,7 @@ TEST_P(BoolAndOrTest, basic) {
   agg = PlanBuilder()
             .values(vectors)
             .project({"c0 % 10", "c1"})
-            .partialAggregation({0}, {partialAgg})
+            .partialAggregation({"p0"}, {partialAgg})
             .finalAggregation()
             .planNode();
   assertQuery(
@@ -88,7 +88,7 @@ TEST_P(BoolAndOrTest, basic) {
             .values(vectors)
             .filter("c0 % 2 = 0")
             .project({"c0 % 11", "c1"})
-            .partialAggregation({0}, {partialAgg})
+            .partialAggregation({"p0"}, {partialAgg})
             .planNode();
 
   assertQuery(

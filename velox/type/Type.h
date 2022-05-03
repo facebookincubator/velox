@@ -82,7 +82,13 @@ enum class TypeKind : int8_t {
   INVALID = 36
 };
 
+// Returns the typekind represented by the `name`. Throws if no match found.
 TypeKind mapNameToTypeKind(const std::string& name);
+
+// Returns the typekind represented by the `name` and std::nullopt if no
+// match found.
+std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name);
+
 std::string mapTypeKindToName(const TypeKind& typeKind);
 
 std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
@@ -1295,11 +1301,19 @@ struct Generic {
   Generic() = delete;
 };
 
+using Any = Generic<>;
+
 template <typename>
 struct isVariadicType : public std::false_type {};
 
 template <typename T>
 struct isVariadicType<Variadic<T>> : public std::true_type {};
+
+template <typename>
+struct isGenericType : public std::false_type {};
+
+template <typename T>
+struct isGenericType<Generic<T>> : public std::true_type {};
 
 template <typename KEY, typename VALUE>
 struct Map {
@@ -1329,40 +1343,8 @@ struct Array {
   Array() {}
 };
 
-// This is a temporary type to be used when ArrayWriter is requested by the user
-// to represent an Array output type in the simple function interface.
-// Eventually this will be removed and Array will be ArrayWriterT once all proxy
-// types are implemented.
 template <typename ELEMENT>
-struct ArrayWriterT {
-  using element_type = ELEMENT;
-
-  static_assert(
-      !isVariadicType<element_type>::value,
-      "Array elements cannot be Variadic");
-
- private:
-  ArrayWriterT() {}
-};
-
-// This is a temporary type to be used when the fast MapWriter is requested by
-// the user to represent a map output type in the simple function interface.
-// Eventually this will be removed and joined with Map once all writers
-// types are implemented.
-template <typename K, typename V>
-struct MapWriterT {
-  using key_type = K;
-  using value_type = V;
-
-  static_assert(
-      !isVariadicType<key_type>::value,
-      "Map keys cannot be Variadic");
-  static_assert(
-      !isVariadicType<value_type>::value,
-      "Map values cannot be Variadic");
-
-  MapWriterT() = delete;
-};
+using ArrayWriterT = Array<ELEMENT>;
 
 template <typename... T>
 struct Row {
@@ -1375,18 +1357,6 @@ struct Row {
 
  private:
   Row() {}
-};
-
-template <typename... T>
-struct RowWriterT {
-  template <size_t idx>
-  using type_at = typename std::tuple_element<idx, std::tuple<T...>>::type;
-
-  static_assert(
-      std::conjunction<std::bool_constant<!isVariadicType<T>::value>...>::value,
-      "Struct fields cannot be Variadic");
-
-  RowWriterT() = delete;
 };
 
 struct DynamicRow {
@@ -1478,6 +1448,9 @@ struct CppToType<Timestamp> : public CppToTypeBase<TypeKind::TIMESTAMP> {};
 template <>
 struct CppToType<Date> : public CppToTypeBase<TypeKind::DATE> {};
 
+template <typename T>
+struct CppToType<Generic<T>> : public CppToTypeBase<TypeKind::UNKNOWN> {};
+
 // TODO: maybe do something smarter than just matching any shared_ptr, e.g. we
 // can declare "registered" types explicitly
 template <typename T>
@@ -1496,13 +1469,6 @@ struct CppToType<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
   }
 };
 
-template <typename KEY, typename VAL>
-struct CppToType<MapWriterT<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
-  static auto create() {
-    return MAP(CppToType<KEY>::create(), CppToType<VAL>::create());
-  }
-};
-
 template <typename ELEMENT>
 struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
   static auto create() {
@@ -1510,22 +1476,8 @@ struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
   }
 };
 
-template <typename ELEMENT>
-struct CppToType<ArrayWriterT<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
-  static auto create() {
-    return ARRAY(CppToType<ELEMENT>::create());
-  }
-};
-
 template <typename... T>
 struct CppToType<Row<T...>> : public TypeTraits<TypeKind::ROW> {
-  static auto create() {
-    return ROW({CppToType<T>::create()...});
-  }
-};
-
-template <typename... T>
-struct CppToType<RowWriterT<T...>> : public TypeTraits<TypeKind::ROW> {
   static auto create() {
     return ROW({CppToType<T>::create()...});
   }
@@ -1555,40 +1507,39 @@ static inline int32_t sizeOfTypeKind(TypeKind kind) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(sizeOfTypeKindHelper, kind);
 }
 
-// Helper for using folly::to with StringView.
 template <typename T, typename U>
-static inline T to(U value) {
+static inline T to(const U& value) {
   return folly::to<T>(value);
 }
 
 template <>
-inline Timestamp to(std::string value) {
+inline Timestamp to(const std::string& value) {
   return Timestamp(0, 0);
 }
 
 template <>
-inline UnknownValue to(std::string /* value */) {
+inline UnknownValue to(const std::string& /* value */) {
   return UnknownValue();
 }
 
 template <>
-inline std::string to(Timestamp value) {
+inline std::string to(const Timestamp& value) {
   return value.toString();
 }
 
 template <>
-inline std::string to(velox::StringView value) {
+inline std::string to(const velox::StringView& value) {
   return std::string(value.data(), value.size());
 }
 
 template <>
-inline std::string to(ComplexType value) {
+inline std::string to(const ComplexType& value) {
   return std::string("ComplexType");
 }
 
 template <>
-inline ComplexType to(std::string value) {
-  return ComplexType();
+inline velox::StringView to(const std::string& value) {
+  return velox::StringView(value);
 }
 
 namespace exec {
@@ -1641,6 +1592,63 @@ void toAppend(
     TString* result) {
   result->append(type->toString());
 }
+
+template <typename T>
+struct MaterializeType {
+  using null_free_t = T;
+  using nullable_t = T;
+  static constexpr bool requiresMaterialization = false;
+};
+
+template <typename V>
+struct MaterializeType<Array<V>> {
+  using null_free_t = std::vector<typename MaterializeType<V>::null_free_t>;
+  using nullable_t =
+      std::vector<std::optional<typename MaterializeType<V>::nullable_t>>;
+  static constexpr bool requiresMaterialization = true;
+};
+
+template <typename K, typename V>
+struct MaterializeType<Map<K, V>> {
+  using key_t = typename MaterializeType<K>::null_free_t;
+
+  using nullable_t = folly::
+      F14FastMap<key_t, std::optional<typename MaterializeType<V>::nullable_t>>;
+
+  using null_free_t =
+      folly::F14FastMap<key_t, typename MaterializeType<V>::null_free_t>;
+  static constexpr bool requiresMaterialization = true;
+};
+
+template <typename... T>
+struct MaterializeType<Row<T...>> {
+  using nullable_t =
+      std::tuple<std::optional<typename MaterializeType<T>::nullable_t>...>;
+
+  using null_free_t = std::tuple<typename MaterializeType<T>::null_free_t...>;
+  static constexpr bool requiresMaterialization = true;
+};
+
+template <typename T>
+struct MaterializeType<std::shared_ptr<T>> {
+  using nullable_t = T;
+  using null_free_t = T;
+  static constexpr bool requiresMaterialization = false;
+};
+
+template <>
+struct MaterializeType<Varchar> {
+  using nullable_t = std::string;
+  using null_free_t = std::string;
+  static constexpr bool requiresMaterialization = false;
+};
+
+template <>
+struct MaterializeType<Varbinary> {
+  using nullable_t = std::string;
+  using null_free_t = std::string;
+  static constexpr bool requiresMaterialization = false;
+};
 
 } // namespace facebook::velox
 
