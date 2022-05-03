@@ -427,10 +427,7 @@ class PlanBuilder {
       const std::vector<core::SortOrder>& sortOrder,
       const std::vector<std::string>& windowFunctions);
 
-  /// Adds a LocalMergeNode using specified ORDER BY clauses.
-=======
   /// Add a LocalMergeNode using specified ORDER BY clauses.
->>>>>>> 34262be2cc6d70432be7c0348c7aa93928280e03
   ///
   /// For example,
   ///
