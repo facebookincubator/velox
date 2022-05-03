@@ -123,7 +123,7 @@ class PlanNode {
       bool detailed = false,
       bool recursive = false,
       std::function<void(
-          const PlanNodeId& planNodeId,
+          const PlanNode& planNode,
           const std::string& indentation,
           std::stringstream& stream)> addContext = nullptr) const {
     std::stringstream stream;
@@ -150,7 +150,7 @@ class PlanNode {
       bool recursive,
       size_t indentationSize,
       std::function<void(
-          const PlanNodeId& planNodeId,
+          const PlanNode& planNode,
           const std::string& indentation,
           std::stringstream& stream)> addContext) const;
 

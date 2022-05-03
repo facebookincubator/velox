@@ -155,14 +155,15 @@ std::string printPlanWithStats(
   return plan.toString(
       true,
       true,
-      [&](const auto& planNodeId, const auto& indentation, auto& stream) {
-        const auto& stats = planStats[planNodeId];
-
+      [&](const auto& planNode, const auto& indentation, auto& stream) {
+        stream << "OutputType: " << planNode.outputType()->toString();
+        stream << std::endl;
         // Print input rows and sizes only for leaf plan nodes. Including this
         // information for other plan nodes is redundant as it is the same as
         // output of the source nodes.
-        const bool includeInputStats = leafPlanNodes.count(planNodeId) > 0;
-        stream << stats.toString(includeInputStats);
+        const bool includeInputStats = leafPlanNodes.count(planNode.id()) > 0;
+        const auto& stats = planStats[planNode.id()];
+        stream << indentation << stats.toString(includeInputStats);
 
         // Include break down by operator type for plan nodes with multiple
         // operators. Print input rows and sizes for all such nodes.
