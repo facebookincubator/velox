@@ -17,7 +17,8 @@ add_executable(velox_aggregates_hyperloglog_test DenseHllTest.cpp
 
 add_test(NAME velox_aggregates_hyperloglog_test
          COMMAND velox_aggregates_hyperloglog_test)
-
+target_link_directories(velox_aggregates_hyperloglog_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_aggregates_hyperloglog_test velox_functions_hyperloglog velox_encode
   ${gflags_LIBRARIES} gtest gtest_main)

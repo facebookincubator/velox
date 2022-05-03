@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_vector_hash_all_benchmark SimpleVectorHashAllBenchmark.cpp)
-
+target_link_directories(velox_vector_hash_all_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_vector_hash_all_benchmark velox_vector
                       ${FOLLY_WITH_DEPENDENCIES} ${FOLLY_BENCHMARK} ${FMT})
 
 add_executable(velox_vector_selectivity_vector_benchmark
                SelectivityVectorBenchmark.cpp)
-
+target_link_directories(velox_vector_selectivity_vector_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_vector_selectivity_vector_benchmark velox_exception
                       ${FOLLY_WITH_DEPENDENCIES} ${FOLLY_BENCHMARK})

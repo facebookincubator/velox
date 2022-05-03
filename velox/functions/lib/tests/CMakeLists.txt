@@ -22,7 +22,8 @@ add_executable(
   Re2FunctionsTest.cpp)
 
 add_test(velox_functions_lib_test velox_functions_lib_test)
-
+target_link_directories(velox_functions_lib_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_functions_lib_test
   velox_functions_lib

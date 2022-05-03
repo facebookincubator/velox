@@ -17,7 +17,8 @@ add_executable(
   TestColumnSelector.cpp TypeTests.cpp LoggedExceptionTest.cpp)
 
 add_test(velox_dwio_common_test velox_dwio_common_test)
-
+target_link_directories(velox_dwio_common_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_common_test
   velox_memory
@@ -36,6 +37,7 @@ target_link_libraries(
   ${FMT})
 
 add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
-
+target_link_directories(velox_dwio_common_data_buffer_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_dwio_common_data_buffer_benchmark velox_memory
                       velox_dwio_common_exception ${FOLLY} ${FOLLY_BENCHMARK})

@@ -29,7 +29,7 @@ add_executable(
   MayHaveNullsRecursiveTest.cpp)
 
 add_test(velox_vector_test velox_vector_test)
-
+target_link_directories(velox_vector_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_vector_test
   velox_vector_test_lib
@@ -58,7 +58,7 @@ target_link_libraries(
 add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
 
 add_test(simple_vector_test simple_vector_test)
-
+target_link_directories(simple_vector_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   simple_vector_test
   velox_vector
@@ -75,7 +75,7 @@ target_link_libraries(
 add_executable(bias_vector_test BiasVectorTest.cpp)
 
 add_test(bias_vector_test bias_vector_test)
-
+target_link_directories(bias_vector_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   bias_vector_test
   velox_vector

@@ -14,7 +14,8 @@
 add_executable(velox_hive_connector_test HivePartitionFunctionTest.cpp
                                          FileHandleTest.cpp)
 add_test(velox_hive_connector_test velox_hive_connector_test)
-
+target_link_directories(velox_hive_connector_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_hive_connector_test
   velox_hive_connector

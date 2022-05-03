@@ -14,7 +14,8 @@
 add_executable(velox_functions_string_test StringImplTest.cpp)
 
 add_test(velox_functions_string_test velox_functions_string_test)
-
+target_link_directories(velox_functions_string_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_functions_string_test
   velox_functions_string

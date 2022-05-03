@@ -17,6 +17,8 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # set the project name
 project(velox)
 
+include(SetupDependency.cmake)
+
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # Add all options below
@@ -226,6 +228,10 @@ find_library(FMT fmt)
 find_library(EVENT event)
 
 find_library(DOUBLE_CONVERSION double-conversion)
+
+setup_dependency(
+  PROJ GTest GIT_REPOSITORY https://github.com/google/googletest.git GIT_TAG
+  release-1.11.0)
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZ4 lz4)

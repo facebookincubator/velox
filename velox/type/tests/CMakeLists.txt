@@ -22,7 +22,7 @@ add_executable(
   TimestampTest.cpp)
 
 add_test(velox_type_test velox_type_test)
-
+target_link_directories(velox_type_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_type_test
   velox_type
@@ -37,7 +37,8 @@ target_link_libraries(
   glog::glog)
 
 add_executable(velox_filter_benchmark FilterBenchmark.cpp)
-
+target_link_directories(velox_filter_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_filter_benchmark
   velox_type

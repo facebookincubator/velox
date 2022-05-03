@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_exec_vector_hasher_benchmark VectorHasherBenchmark.cpp)
-
+target_link_directories(velox_exec_vector_hasher_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_exec_vector_hasher_benchmark velox_exec
                       velox_vector_test_lib ${FOLLY_BENCHMARK})
 
 add_executable(velox_merge_benchmark MergeBenchmark.cpp)
-
+target_link_directories(velox_merge_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_merge_benchmark velox_exec velox_vector_test_lib
                       ${FOLLY_BENCHMARK} gtest gtest_main)

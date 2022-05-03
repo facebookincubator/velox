@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(velox_read_benchmark_lib ReadBenchmark.cpp)
 
-add_executable(velox_read_benchmark ReadBenchmarkMain.cpp)
-target_link_directories(velox_read_benchmark PRIVATE "${GTest_INSTALL_DIR}/lib")
-target_link_libraries(
-  velox_read_benchmark
-  velox_read_benchmark_lib
-  velox_file
-  velox_exception
-  velox_exec_test_util
-  ${FMT}
-  ${FOLLY_WITH_DEPENDENCIES})
+cmake_minimum_required(VERSION 3.10)
+
+project(${SD_ARGS_PROJ}-download NONE)
+
+include(ExternalProject)
+ExternalProject_Add(${SD_ARGS_PROJ}-download
+                    ${SD_ARGS_UNPARSED_ARGUMENTS}
+                    SOURCE_DIR          "${SD_ARGS_SOURCE_DIR}"
+                    BINARY_DIR          "${SD_ARGS_BINARY_DIR}"
+                    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=install
+                    TEST_COMMAND ""
+                    UPDATE_DISCONNECTED 1
+)

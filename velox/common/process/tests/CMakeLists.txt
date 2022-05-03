@@ -15,7 +15,7 @@
 add_executable(velox_process_test TraceContextTest.cpp)
 
 add_test(velox_process_test velox_process_test)
-
+target_link_directories(velox_process_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_process_test
   velox_process

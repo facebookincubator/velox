@@ -15,7 +15,8 @@ add_executable(velox_presto_serializer_test PrestoOutputStreamListenerTest.cpp
                                             PrestoSerializerTest.cpp)
 
 add_test(velox_presto_serializer_test velox_presto_serializer_test)
-
+target_link_directories(velox_presto_serializer_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_presto_serializer_test
   velox_presto_serializer

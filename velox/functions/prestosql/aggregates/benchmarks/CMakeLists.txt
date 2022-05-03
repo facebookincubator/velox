@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_aggregates_pushdown_benchmarks PushdownBenchmark.cpp)
-
+target_link_directories(velox_aggregates_pushdown_benchmarks PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_aggregates_pushdown_benchmarks
   velox_aggregates

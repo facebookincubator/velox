@@ -15,7 +15,8 @@
 add_executable(velox_duckdb_functions_test DuckFunctionTest.cpp)
 
 add_test(velox_duckdb_functions_test velox_duckdb_functions_test)
-
+target_link_directories(velox_duckdb_functions_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_duckdb_functions_test
   velox_duckdb_functions

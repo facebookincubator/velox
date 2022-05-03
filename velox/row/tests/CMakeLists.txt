@@ -16,7 +16,7 @@ add_executable(velox_row_test UnsafeRowSerializerTest.cpp
                               UnsafeRowDeserializerTest.cpp)
 
 add_test(velox_row_test velox_row_test)
-
+target_link_directories(velox_row_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_row_test
   velox_row

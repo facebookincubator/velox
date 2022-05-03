@@ -16,7 +16,8 @@ add_executable(velox_duckdb_conversion_test
                DuckConversionTest.cpp DuckParserTest.cpp DuckWrapperTest.cpp)
 
 add_test(velox_duckdb_conversion_test velox_duckdb_conversion_test)
-
+target_link_directories(velox_duckdb_conversion_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_duckdb_conversion_test
   velox_duckdb_functions

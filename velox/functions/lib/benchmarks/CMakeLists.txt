@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 add_executable(velox_re2_functions_benchmarks Re2FunctionsBenchmarks.cpp)
-
+target_link_directories(velox_re2_functions_benchmarks PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_re2_functions_benchmarks
   velox_functions_lib

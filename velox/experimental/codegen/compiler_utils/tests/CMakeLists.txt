@@ -23,6 +23,8 @@ endif()
 add_test(velox_codegen_compiler_utils_test velox_codegen_compiler_utils_test)
 add_dependencies(velox_codegen_compiler_utils_test velox_codegen_compiler_utils
                  velox_transform_utils velox_codegen_proto velox_exception)
+target_link_directories(velox_codegen_compiler_utils_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_compiler_utils_test
   velox_codegen_compiler_utils

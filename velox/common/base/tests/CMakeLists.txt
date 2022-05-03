@@ -26,7 +26,7 @@ add_executable(
   SuccinctPrinterTest.cpp)
 
 add_test(velox_base_test velox_base_test)
-
+target_link_directories(velox_base_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_base_test
   velox_common_base
