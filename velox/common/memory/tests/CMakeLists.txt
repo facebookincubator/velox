@@ -23,7 +23,7 @@ add_executable(
   MemoryUsageTest.cpp
   MemoryUsageTrackerTest.cpp
   MappedMemoryTest.cpp)
-
+target_link_directories(velox_memory_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_memory_test
   velox_memory
@@ -37,7 +37,8 @@ target_link_libraries(
 gtest_add_tests(velox_memory_test "" AUTO)
 
 add_executable(velox_fragmentation_benchmark FragmentationBenchmark.cpp)
-
+target_link_directories(velox_fragmentation_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_fragmentation_benchmark
   velox_memory

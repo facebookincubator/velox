@@ -53,7 +53,7 @@ add_test(
   NAME velox_exec_test
   COMMAND velox_exec_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-
+target_link_directories(velox_exec_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_exec_test
   velox_functions_test_lib

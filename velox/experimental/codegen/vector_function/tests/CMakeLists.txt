@@ -16,7 +16,8 @@ add_executable(
   velox_codegen_vector_function_test CodegenVectorFunctionTest.cpp
                                      TempStringTest.cpp VectorReaderTest.cpp)
 add_test(velox_codegen_vector_function_test velox_codegen_vector_function_test)
-
+target_link_directories(velox_codegen_vector_function_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_vector_function_test
   velox_codegen_ast

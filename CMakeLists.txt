@@ -17,7 +17,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # set the project name
 project(velox)
 
-include(DownloadDependency.cmake)
+include(SetupDependency.cmake)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -166,6 +166,10 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
+if("${TREAT_WARNINGS_AS_ERRORS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+endif()
+
 if("${ENABLE_ALL_WARNINGS}")
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(KNOWN_COMPILER_SPECIFIC_WARNINGS
@@ -225,16 +229,9 @@ find_library(EVENT event)
 
 find_library(DOUBLE_CONVERSION double-conversion)
 
-download_dependency(PROJ  googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG  release-1.11.0
-        USE_CMAKE_BUILD)
-
-add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
-
-if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-endif()
+setup_dependency(
+  PROJ GTest GIT_REPOSITORY https://github.com/google/googletest.git GIT_TAG
+  release-1.11.0)
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_library(LZ4 lz4)

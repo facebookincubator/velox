@@ -39,12 +39,13 @@ set(TEST_LINK_LIBS
     gmock
     glog::glog
     ${FILESYSTEM})
-
+link_directories("${GTest_INSTALL_DIR}/lib")
 add_executable(velox_dwio_dwrf_buffered_output_stream_test
                TestBufferedOutputStream.cpp)
 add_test(velox_dwio_dwrf_buffered_output_stream_test
          velox_dwio_dwrf_buffered_output_stream_test)
-
+target_link_directories(velox_dwio_dwrf_buffered_output_stream_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_buffered_output_stream_test ${VELOX_LINK_LIBS}
   ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
@@ -52,13 +53,15 @@ target_link_libraries(
 add_executable(velox_dwio_dwrf_column_statistics_test TestColumnStatistics.cpp)
 add_test(velox_dwio_dwrf_column_statistics_test
          velox_dwio_dwrf_column_statistics_test)
-
+target_link_directories(velox_dwio_dwrf_column_statistics_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_dwio_dwrf_column_statistics_test ${VELOX_LINK_LIBS}
                       ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_compression_test TestCompression.cpp)
 add_test(velox_dwio_dwrf_compression_test velox_dwio_dwrf_compression_test)
-
+target_link_directories(velox_dwio_dwrf_compression_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_compression_test
   ${VELOX_LINK_LIBS}
@@ -75,7 +78,8 @@ add_test(
   NAME velox_dwio_dwrf_decompression_test
   COMMAND velox_dwio_dwrf_decompression_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
-
+target_link_directories(velox_dwio_dwrf_decompression_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_decompression_test
   ${VELOX_LINK_LIBS}
@@ -88,7 +92,8 @@ target_link_libraries(
 
 add_executable(velox_dwio_dwrf_stripe_stream_test TestStripeStream.cpp)
 add_test(velox_dwio_dwrf_stripe_stream_test velox_dwio_dwrf_stripe_stream_test)
-
+target_link_directories(velox_dwio_dwrf_stripe_stream_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_stripe_stream_test
   ${VELOX_LINK_LIBS}
@@ -105,7 +110,8 @@ add_executable(velox_dwio_dwrf_stripe_dictionary_cache_test
                TestStripeDictionaryCache.cpp)
 add_test(velox_dwio_dwrf_stripe_dictionary_cache_test
          velox_dwio_dwrf_stripe_dictionary_cache_test)
-
+target_link_directories(velox_dwio_dwrf_stripe_dictionary_cache_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_stripe_dictionary_cache_test
   ${VELOX_LINK_LIBS}
@@ -121,13 +127,15 @@ target_link_libraries(
 add_executable(velox_dwio_dwrf_buffered_input_test TestBufferedInput.cpp)
 add_test(velox_dwio_dwrf_buffered_input_test
          velox_dwio_dwrf_buffered_input_test)
-
+target_link_directories(velox_dwio_dwrf_buffered_input_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_dwio_dwrf_buffered_input_test ${VELOX_LINK_LIBS}
                       ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
 
 add_executable(velox_dwio_dwrf_cache_input_test CacheInputTest.cpp)
 add_test(velox_dwio_dwrf_cache_input_test velox_dwio_dwrf_cache_input_test)
-
+target_link_directories(velox_dwio_dwrf_cache_input_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_cache_input_test ${VELOX_LINK_LIBS} velox_temp_path
   ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
@@ -136,7 +144,8 @@ add_executable(velox_dwio_dwrf_dictionary_encoder_test
                TestIntegerDictionaryEncoder.cpp TestStringDictionaryEncoder.cpp)
 add_test(velox_dwio_dwrf_dictionary_encoder_test
          velox_dwio_dwrf_dictionary_encoder_test)
-
+target_link_directories(velox_dwio_dwrf_dictionary_encoder_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_dictionary_encoder_test ${VELOX_LINK_LIBS}
   ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})
@@ -144,7 +153,8 @@ target_link_libraries(
 add_executable(velox_dwio_dwrf_encoding_selector_test TestEncodingSelector.cpp)
 add_test(velox_dwio_dwrf_encoding_selector_test
          velox_dwio_dwrf_encoding_selector_test)
-
+target_link_directories(velox_dwio_dwrf_encoding_selector_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_encoding_selector_test ${VELOX_LINK_LIBS}
   ${DOUBLE_CONVERSION} ${FOLLY_WITH_DEPENDENCIES} ${TEST_LINK_LIBS})

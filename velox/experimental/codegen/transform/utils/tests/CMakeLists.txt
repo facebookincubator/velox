@@ -20,7 +20,8 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   target_compile_options(velox_transform_utils_test
                          PUBLIC -fconcepts-diagnostics-depth=6)
 endif()
-
+target_link_directories(velox_transform_utils_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_transform_utils_test
   velox_transform_utils

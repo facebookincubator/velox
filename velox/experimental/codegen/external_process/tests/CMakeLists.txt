@@ -17,6 +17,8 @@ add_test(velox_codegen_external_process_test
          velox_codegen_external_process_test)
 add_dependencies(velox_codegen_external_process_test
                  velox_codegen_external_process)
+target_link_directories(velox_codegen_external_process_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_external_process_test
   gtest

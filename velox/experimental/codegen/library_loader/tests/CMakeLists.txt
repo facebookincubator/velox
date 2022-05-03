@@ -31,6 +31,8 @@ add_dependencies(
   velox_codegen_native_loader_resources_good_library
   velox_codegen_native_loader_resources_bad_library
   velox_codegen_native_loader_resources_typeinfo_library)
+target_link_directories(velox_codegen_native_loader_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_native_loader_test
   gtest

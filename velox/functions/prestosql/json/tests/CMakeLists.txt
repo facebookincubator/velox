@@ -15,7 +15,8 @@ add_executable(velox_functions_json_test JsonExtractorTest.cpp
                                          JsonPathTokenizerTest.cpp)
 
 add_test(velox_functions_json_test velox_functions_json_test)
-
+target_link_directories(velox_functions_json_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_functions_json_test
   velox_functions_json

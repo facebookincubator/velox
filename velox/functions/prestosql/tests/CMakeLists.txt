@@ -63,7 +63,7 @@ add_executable(
   ZipTest.cpp)
 
 add_test(velox_functions_test velox_functions_test)
-
+target_link_directories(velox_functions_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_functions_test
   velox_functions_test_lib

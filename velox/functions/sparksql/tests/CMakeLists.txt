@@ -27,7 +27,8 @@ add_executable(
   SubscriptTest.cpp)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
-
+target_link_directories(velox_functions_spark_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_functions_spark_test
   velox_functions_spark

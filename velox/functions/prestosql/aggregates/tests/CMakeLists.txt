@@ -37,7 +37,8 @@ add_executable(
   MapAggTest.cpp
   ValueListTest.cpp
   VarianceAggregationTest.cpp)
-
+target_link_directories(velox_aggregates_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 add_test(
   NAME velox_aggregates_test
   COMMAND velox_aggregates_test

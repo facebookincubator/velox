@@ -15,13 +15,14 @@
 
 cmake_minimum_required(VERSION 3.10)
 
-project(${DD_ARGS_PROJ}-download NONE)
+project(${SD_ARGS_PROJ}-download NONE)
 
 include(ExternalProject)
-ExternalProject_Add(${DD_ARGS_PROJ}-download
-                    ${DD_ARGS_UNPARSED_ARGUMENTS}
-                    SOURCE_DIR          "${DD_ARGS_SOURCE_DIR}"
-                    BINARY_DIR          "${DD_ARGS_BINARY_DIR}"
-                    INSTALL_COMMAND     ""
+ExternalProject_Add(${SD_ARGS_PROJ}-download
+                    ${SD_ARGS_UNPARSED_ARGUMENTS}
+                    SOURCE_DIR          "${SD_ARGS_SOURCE_DIR}"
+                    BINARY_DIR          "${SD_ARGS_BINARY_DIR}"
+                    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=install
                     TEST_COMMAND ""
+                    UPDATE_DISCONNECTED 1
 )

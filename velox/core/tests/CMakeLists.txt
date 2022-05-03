@@ -16,5 +16,5 @@ add_executable(velox_core_test TestMap.cpp TestMetafunctions.cpp TestString.cpp
                                TestTypeAnalysis.cpp)
 
 add_test(velox_core_test velox_core_test)
-
+target_link_directories(velox_core_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_core_test velox_core gtest gtest_main)

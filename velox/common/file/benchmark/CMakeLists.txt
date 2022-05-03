@@ -15,7 +15,7 @@
 add_library(velox_read_benchmark_lib ReadBenchmark.cpp)
 
 add_executable(velox_read_benchmark ReadBenchmarkMain.cpp)
-
+target_link_directories(velox_read_benchmark PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_read_benchmark
   velox_read_benchmark_lib

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+link_directories("${GTest_INSTALL_DIR}/lib")
 set(BENCHMARK_DEPENDENCIES_NO_FUNC
     velox_functions_test_lib
     velox_exec

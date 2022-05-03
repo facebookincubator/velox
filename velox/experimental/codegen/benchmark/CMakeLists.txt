@@ -16,7 +16,8 @@ add_executable(
   velox_codegen_benchmark_single_output
   SingleOutputDefaultNullsBenchmark.cpp
   SingleOutputNotDefaultNullsBenchmark.cpp BooleanBenchmarks.cpp)
-
+target_link_directories(velox_codegen_benchmark_single_output PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_benchmark_single_output
   velox_exec_test_util
@@ -41,6 +42,8 @@ add_test(velox_codegen_benchmark_single_output
          velox_codegen_benchmark_single_output)
 
 add_executable(velox_codegen_benchmark CodegenBenchmarks.cpp)
+target_link_directories(velox_codegen_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(velox_codegen_benchmark velox_hive_connector)
 
 add_compile_definitions(velox_codegen_test BASEFOLDER="${PROJECT_SOURCE_DIR}")
@@ -82,7 +85,8 @@ add_compile_definitions(velox_codegen_test
                         VELOX_CACHING="$<TARGET_LINKER_FILE:velox_caching>")
 
 add_compile_definitions(velox_codegen_test GFLAGS_LI="${GFLAGS_INCLUDES}")
-
+target_link_directories(velox_codegen_benchmark PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_codegen_benchmark
   velox_exec_test_util

@@ -14,7 +14,7 @@
 add_executable(velox_buffer_test BufferTest.cpp StringViewBufferHolderTest.cpp)
 
 add_test(velox_buffer_test velox_buffer_test)
-
+target_link_directories(velox_buffer_test PRIVATE "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_buffer_test
   velox_memory

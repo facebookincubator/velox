@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 find_library(RE2 re2 REQUIRED)
-
+link_directories("${GTest_INSTALL_DIR}/lib")
 add_executable(velox_example_simple_functions SimpleFunctions.cpp)
 
 target_link_libraries(velox_example_simple_functions velox_functions_lib

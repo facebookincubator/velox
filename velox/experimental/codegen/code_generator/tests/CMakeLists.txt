@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # write all cmake var in a file for post-processing
-
+link_directories("${GTest_INSTALL_DIR}/lib")
 set(CODEGEN_LINK_PATH "$<TARGET_FILE:velox_all_link>")
 get_directory_property(DEFINED_VARIABLE VARIABLES)
 foreach(VR IN LISTS DEFINED_VARIABLE)

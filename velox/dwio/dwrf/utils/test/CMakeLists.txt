@@ -16,7 +16,8 @@ add_executable(velox_dwio_dwrf_utils_test ProtoUtilsTests.cpp
                                           BitIteratorTests.cpp)
 
 add_test(velox_dwio_dwrf_utils_test velox_dwio_dwrf_utils_test)
-
+target_link_directories(velox_dwio_dwrf_utils_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_dwio_dwrf_utils_test
   velox_dwio_common

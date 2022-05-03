@@ -20,6 +20,7 @@ target_link_libraries(velox_file PUBLIC Folly::folly)
 if(${VELOX_BUILD_TESTING})
   add_executable(velox_file_test FileTest.cpp)
   add_test(velox_file_test velox_file_test)
+  target_link_directories(velox_file_test PRIVATE "${GTest_INSTALL_DIR}/lib")
   target_link_libraries(
     velox_file_test
     velox_file

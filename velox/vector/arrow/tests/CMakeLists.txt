@@ -15,7 +15,8 @@ add_executable(velox_arrow_bridge_test ArrowBridgeArrayTest.cpp
                                        ArrowBridgeSchemaTest.cpp)
 
 add_test(velox_arrow_bridge_test velox_arrow_bridge_test)
-
+target_link_directories(velox_arrow_bridge_test PRIVATE
+                        "${GTest_INSTALL_DIR}/lib")
 target_link_libraries(
   velox_arrow_bridge_test
   velox_core
