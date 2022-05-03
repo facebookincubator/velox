@@ -292,7 +292,10 @@ std::string variant::toJson() const {
       // debugging only. Variant::serialize should actually serialize the data.
       return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
     }
-    case TypeKind::SHORT_DECIMAL:
+    case TypeKind::SHORT_DECIMAL: {
+      auto& shortDecimal = value<TypeKind::SHORT_DECIMAL>();
+      return '"' + shortDecimal.toString() + '"';
+    }
     case TypeKind::LONG_DECIMAL:
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
