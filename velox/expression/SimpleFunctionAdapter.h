@@ -135,6 +135,25 @@ class SimpleFunctionAdapter : public VectorFunction {
     }
   }
 
+  VectorPtr* findArgToReuse(
+      std::vector<VectorPtr>& args,
+      const TypePtr& outputType) const {
+    if (args.size() > 0 && outputType->isPrimitiveType() &&
+        outputType->isFixedWidth()) {
+      for (auto& arg : args) {
+        if (arg->type()->kindEquals(outputType)) {
+          if (BaseVector::isReusableFlatVector(arg)) {
+            // Re-use arg for result. We rely on the fact that for each row
+            // we read arguments before computing and writing out the
+            // result.
+            return &arg;
+          }
+        }
+      }
+    }
+    return nullptr;
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -154,19 +173,8 @@ class SimpleFunctionAdapter : public VectorFunction {
     if constexpr (
         !FUNC::can_produce_null_output && !FUNC::udf_has_callNullFree) {
       if (!reusableResult->get()) {
-        if (args.size() > 0 && outputType->isPrimitiveType() &&
-            outputType->isFixedWidth()) {
-          for (auto& arg : args) {
-            if (arg->type()->kindEquals(outputType)) {
-              if (BaseVector::isReusableFlatVector(arg)) {
-                // Re-use arg for result. We rely on the fact that for each row
-                // we read arguments before computing and writing out the
-                // result.
-                reusableResult = &arg;
-                break;
-              }
-            }
-          }
+        if (auto arg = findArgToReuse(args, outputType)) {
+          reusableResult = arg;
         }
       }
     }
