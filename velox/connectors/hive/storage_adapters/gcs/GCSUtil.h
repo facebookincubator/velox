@@ -15,8 +15,8 @@
  */
 
 #pragma once
-//TODO add proper includes
 #include "velox/common/base/Exceptions.h"
+#include <google/cloud/storage/client.h>
 
 namespace facebook::velox {
 
@@ -26,11 +26,21 @@ constexpr std::string_view kGCSScheme{"gcs://"};
 
 } // namespace
 
+std::string getErrorStringFromGCSError(
+    const google::cloud::StatusCode& error);
+
 inline bool isGCSFile(const std::string_view filename) {
   return (filename.substr(0, kGCSScheme.size()) == kGCSScheme);
 }
 
-
+inline void bucketAndKeyFromGCSPath(
+    const std::string& path,
+    std::string& bucket,
+    std::string& key) {
+  auto firstSep = path.find_first_of(kSep);
+  bucket = path.substr(0, firstSep);
+  key = path.substr(firstSep + 1);
+}
 inline std::string gcsURI(const std::string& bucket) {
   return std::string(kGCSScheme) + bucket;
 }
@@ -43,5 +53,21 @@ inline std::string gcsPath(const std::string_view& path) {
   // Remove the prefix gcs:// from the given path
   return std::string(path.substr(kGCSScheme.length()));
 }
+
+
+#define VELOX_CHECK_GCS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                              \
+  {                                                                                                \
+    if (!outcome.ok()) {                                                                           \
+      auto error = outcome.error_info();                                                           \
+      VELOX_FAIL(                                                                                  \
+          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",      \
+          errorMsgPrefix,                                                                          \
+          error.reason(),                                                                          \
+          gcsURI(bucket, key),                                                                     \
+          error.domain(),                                                                          \
+          getErrorStringFromGCSError(outcome.code()),                                              \
+          outcome.message());                                                                      \
+    }                                                                                              \
+  }
 
 } // namespace facebook::velox

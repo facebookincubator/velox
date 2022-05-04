@@ -34,15 +34,12 @@ class GCSFileSystem : public FileSystem {
   std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override;
 
   std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override {
-    VELOX_UNSUPPORTED("remove for GCS not implemented"); //TODO can we implement
+    VELOX_NYI(); //TODO
   }
 
   std::string name() const override;
 
-  void remove(std::string_view path) override {
-    VELOX_UNSUPPORTED("remove for GCS not implemented"); //TODO can we implement
-  }
-
+  void remove(std::string_view path) override;
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;
