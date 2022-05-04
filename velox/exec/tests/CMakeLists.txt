@@ -46,6 +46,7 @@ add_executable(
   HashJoinTest.cpp
   PlanBuilderTest.cpp
   PlanNodeToStringTest.cpp
+  PrintPlanWithStatsTest.cpp
   FunctionSignatureBuilderTest.cpp
   SimpleFunctionResolutionTest.cpp
   SpillTest.cpp
@@ -85,6 +86,7 @@ target_link_libraries(
   ${Boost_SYSTEM_LIBRARIES}
   gtest
   gtest_main
+  gmock
   ${FOLLY_WITH_DEPENDENCIES}
   ${DOUBLE_CONVERSION}
   ${gflags_LIBRARIES}
