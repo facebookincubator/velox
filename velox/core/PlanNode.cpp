@@ -440,7 +440,7 @@ void PlanNode::toString(
     addDetails(stream);
     stream << "]";
     stream << " -> ";
-    outputType()->printChildren(stream);
+    outputType()->printChildren(stream, ", ");
   }
   stream << std::endl;
 

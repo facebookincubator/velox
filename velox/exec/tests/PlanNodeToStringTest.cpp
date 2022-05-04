@@ -156,7 +156,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   ASSERT_EQ("-- Aggregation\n", plan->toString());
   ASSERT_EQ(
-      "-- Aggregation[PARTIAL a := sum(ROW[\"c0\"]), b := avg(ROW[\"c1\"]), c := min(ROW[\"c2\"])] -> a:BIGINT, b:ROW<\"\":DOUBLE, \"\":BIGINT>, c:BIGINT\n",
+      "-- Aggregation[PARTIAL a := sum(ROW[\"c0\"]), b := avg(ROW[\"c1\"]), c := min(ROW[\"c2\"])] -> a:BIGINT, b:ROW<\"\":DOUBLE,\"\":BIGINT>, c:BIGINT\n",
       plan->toString(true, false));
 
   // Group-by aggregation.
