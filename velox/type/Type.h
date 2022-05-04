@@ -698,6 +698,9 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   std::string toString() const override;
 
+  // Print children name and type as comma separated pairs.
+  void printChildren(std::stringstream& ss) const;
+
   std::shared_ptr<RowType> unionWith(std::shared_ptr<RowType>& rowType) const;
 
   folly::dynamic serialize() const override;
