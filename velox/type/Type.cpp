@@ -330,9 +330,8 @@ bool RowType::operator==(const Type& other) const {
   return true;
 }
 
-void RowType::printChildren(
-    std::stringstream& ss,
-    std::string_view delimiter) const {
+void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
+    const {
   bool any = false;
   for (size_t i = 0; i < children_.size(); ++i) {
     if (any) {

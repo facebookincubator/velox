@@ -699,9 +699,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
   std::string toString() const override;
 
   /// Print child names and types separated by 'delimiter'.
-  void printChildren(
-      std::stringstream& ss,
-      std::string_view delimiter = ",") const;
+  void printChildren(std::stringstream& ss, std::string_view delimiter = ",")
+      const;
 
   std::shared_ptr<RowType> unionWith(std::shared_ptr<RowType>& rowType) const;
 
