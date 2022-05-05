@@ -136,6 +136,14 @@ struct OperatorStats {
     runtimeStats.at(name).addValue(value.value);
   }
 
+  void mergeRuntimeStat(const std::string& name, const RuntimeMetric& other) {
+    if (UNLIKELY(runtimeStats.count(name) == 0)) {
+      runtimeStats.insert(std::pair(name, other));
+    } else {
+      runtimeStats.at(name).merge(other);
+    }
+  }
+
   void add(const OperatorStats& other);
   void clear();
 };
@@ -169,7 +177,7 @@ class OperatorCtx {
   // Makes an extract of QueryCtx for use in a connector. 'planNodeId'
   // is the id of the calling TableScan. This and the task id identify
   // the scan for column access tracking.
-  std::unique_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
+  std::shared_ptr<connector::ConnectorQueryCtx> createConnectorQueryCtx(
       const std::string& connectorId,
       const std::string& planNodeId) const;
 

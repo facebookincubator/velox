@@ -22,6 +22,8 @@
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/dwrf/common/InputStream.h"
 
+#include <gflags/gflags.h>
+
 namespace facebook::velox::dwrf {
 
 class CachedBufferedInput;

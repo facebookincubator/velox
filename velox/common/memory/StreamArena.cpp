@@ -37,7 +37,7 @@ void StreamArena::newRange(int32_t bytes, ByteRange* range) {
             std::max(allocationQuantum_, numPages),
             kVectorStreamOwner,
             allocation_)) {
-      throw std::bad_alloc();
+      VELOX_FAIL("Failed allocation for StreamArena");
     }
     currentRun_ = 0;
     currentPage_ = 0;

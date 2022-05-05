@@ -351,6 +351,10 @@ class SubscriptImpl : public exec::VectorFunction {
         processRow(row, searchKey);
       });
     }
+    if (baseMap->mapValues()->size() == 0) {
+      return BaseVector::createNullConstant(
+          baseMap->mapValues()->type(), rows.size(), baseMap->pool());
+    }
     return BaseVector::wrapInDictionary(
         nullsBuilder.build(), indices, rows.size(), baseMap->mapValues());
   }

@@ -307,6 +307,12 @@ class SelectiveColumnReader : public ColumnReader {
     return true;
   }
 
+  const dwio::common::ColumnStatistics* FOLLY_NULLABLE
+  rowGroupStats(int32_t index) const {
+    auto it = rowGroupStats_.find(index);
+    return it == rowGroupStats_.end() ? nullptr : it->second.get();
+  }
+
   // Used by decoders to set encoding-related data to be kept between calls to
   // read().
   ScanState& scanState() {
@@ -456,6 +462,10 @@ class SelectiveColumnReader : public ColumnReader {
   // Number of clocks spent initializing.
   uint64_t initTimeClocks_{0};
 
+  mutable folly::
+      F14FastMap<int32_t, std::unique_ptr<dwio::common::ColumnStatistics>>
+          rowGroupStats_;
+
   // Encoding-related state to keep between reads, e.g. dictionaries.
   ScanState scanState_;
 };
@@ -480,7 +490,8 @@ inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
 
 class SelectiveColumnReaderFactory : public ColumnReaderFactory {
  public:
-  explicit SelectiveColumnReaderFactory(common::ScanSpec* scanSpec)
+  explicit SelectiveColumnReaderFactory(
+      std::shared_ptr<common::ScanSpec> scanSpec)
       : scanSpec_(scanSpec) {}
   std::unique_ptr<ColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
@@ -488,13 +499,17 @@ class SelectiveColumnReaderFactory : public ColumnReaderFactory {
       StripeStreams& stripe,
       FlatMapContext flatMapContext) override {
     auto reader = SelectiveColumnReader::build(
-        requestedType, dataType, stripe, scanSpec_, std::move(flatMapContext));
+        requestedType,
+        dataType,
+        stripe,
+        scanSpec_.get(),
+        std::move(flatMapContext));
     reader->setIsTopLevel();
     return reader;
   }
 
  private:
-  common::ScanSpec* const scanSpec_;
+  std::shared_ptr<common::ScanSpec> const scanSpec_;
 };
 
 // Template parameter to indicate no hook in fast scan path. This is

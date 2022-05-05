@@ -411,6 +411,22 @@ void HashTable<ignoreNullKeys>::arrayGroupProbe(HashLookup& lookup) {
   int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
   auto hashes = lookup.hashes.data();
+  assert(!lookup.hits.empty());
+  for (auto check = 0; check < numProbes; ++check) {
+    if (hashes[rows[check]] >= size_) {
+      std::stringstream out;
+      for (auto& h : lookup.hashers) {
+        out << h->toString();
+      }
+      VELOX_FAIL(
+          "ARRGB: Out of range array group by index at {}:  {}/{} {}",
+          check,
+          hashes[rows[check]],
+          size_,
+          out.str());
+    }
+  }
+
   auto groups = lookup.hits.data();
   int32_t i = 0;
   if (process::hasAvx2() && simd::isDense(rows, numProbes)) {
@@ -544,6 +560,15 @@ void HashTable<ignoreNullKeys>::clear() {
     memset(table_, 0, sizeof(char*) * size_);
   }
   numDistinct_ = 0;
+}
+
+template <bool ignoreNullKeys>
+int64_t HashTable<ignoreNullKeys>::allocatedBytes() const {
+  int64_t size = tableAllocation_.size() + rows_->allocatedBytes();
+  for (auto& other : otherTables_) {
+    size += other->allocatedBytes();
+  }
+  return size;
 }
 
 template <bool ignoreNullKeys>

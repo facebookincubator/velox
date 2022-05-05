@@ -289,6 +289,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
       destination->setFinished();
     }
 
+    bufferManager->updateStats(operatorCtx_->task()->taskId(), stats_);
     bufferManager->noMoreData(operatorCtx_->task()->taskId());
     finished_ = true;
   }
