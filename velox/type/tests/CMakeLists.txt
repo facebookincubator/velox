@@ -13,6 +13,7 @@
 # limitations under the License.
 add_executable(
   velox_type_test
+  DecimalUtilsTest.cpp
   StringViewTest.cpp
   TypeTest.cpp
   FilterTest.cpp

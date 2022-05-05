@@ -117,6 +117,50 @@ TEST(Type, date) {
   EXPECT_EQ(date->begin(), date->end());
 }
 
+TEST(Type, decimal) {
+  auto shortDecimal = SHORT_DECIMAL(10, 5);
+  EXPECT_EQ(shortDecimal->toString(), "SHORT_DECIMAL(10,5)");
+  EXPECT_EQ(shortDecimal->size(), 0);
+  EXPECT_THROW(shortDecimal->childAt(0), std::invalid_argument);
+  EXPECT_EQ(shortDecimal->kind(), TypeKind::SHORT_DECIMAL);
+  EXPECT_STREQ(shortDecimal->kindName(), "SHORT_DECIMAL");
+  EXPECT_EQ(shortDecimal->begin(), shortDecimal->end());
+  EXPECT_EQ(*SHORT_DECIMAL(10, 5), *shortDecimal);
+  EXPECT_NE(*SHORT_DECIMAL(9, 5), *shortDecimal);
+  EXPECT_NE(*SHORT_DECIMAL(10, 4), *shortDecimal);
+  try {
+    shortDecimal = SHORT_DECIMAL(19, 5);
+    FAIL();
+  } catch (const VeloxRuntimeError& e) {
+    EXPECT_EQ("(19 vs. 18)", e.message());
+  }
+  auto decimal = DECIMAL(10, 6);
+  EXPECT_EQ(decimal->kind(), TypeKind::SHORT_DECIMAL);
+  decimal = DECIMAL(18, 6);
+  EXPECT_EQ(decimal->kind(), TypeKind::SHORT_DECIMAL);
+}
+
+TEST(type, longDecimal) {
+  auto longDecimal = LONG_DECIMAL(30, 5);
+  EXPECT_EQ(longDecimal->toString(), "LONG_DECIMAL(30,5)");
+  EXPECT_EQ(longDecimal->size(), 0);
+  EXPECT_THROW(longDecimal->childAt(0), std::invalid_argument);
+  EXPECT_EQ(longDecimal->kind(), TypeKind::LONG_DECIMAL);
+  EXPECT_STREQ(longDecimal->kindName(), "LONG_DECIMAL");
+  EXPECT_EQ(longDecimal->begin(), longDecimal->end());
+  EXPECT_EQ(*LONG_DECIMAL(30, 5), *longDecimal);
+  EXPECT_NE(*LONG_DECIMAL(9, 5), *longDecimal);
+  EXPECT_NE(*LONG_DECIMAL(30, 3), *longDecimal);
+  try {
+    longDecimal = LONG_DECIMAL(39, 5);
+    FAIL();
+  } catch (const VeloxRuntimeError& e) {
+    EXPECT_EQ("(39 vs. 38)", e.message());
+  }
+  auto decimal = DECIMAL(20, 6);
+  EXPECT_EQ(decimal->kind(), TypeKind::LONG_DECIMAL);
+}
+
 TEST(Type, dateToString) {
   Date epoch(0);
   EXPECT_EQ(epoch.toString(), "1970-01-01");
