@@ -65,7 +65,6 @@ class VeloxConverter : public OperatorTestBase {
 
 // SELECT * FROM tmp
 TEST_F(VeloxConverter, valuesNode) {
-
   auto subPlanPath = facebook::velox::test::getDataFilePath(
       "velox/substrait/tests", "data/substrait_virtualTable.json");
   ::substrait::Plan* subPlan = new ::substrait::Plan();
