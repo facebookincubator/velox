@@ -179,6 +179,14 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
       data_ = nullptr;
     }
 
+    ContiguousAllocation(ContiguousAllocation&& other) noexcept {
+      mappedMemory_ = other.mappedMemory_;
+      data_ = other.data_;
+      size_ = other.size_;
+      other.data_ = nullptr;
+      other.size_ = 0;
+    }
+
     MappedMemory* FOLLY_NULLABLE mappedMemory() const {
       return mappedMemory_;
     }
@@ -277,15 +285,15 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
 
   virtual void freeContiguous(ContiguousAllocation& allocation) = 0;
 
-  // Allocates 'size'contiguous bytes and returns the pointer to the
-  // first byte. If 'size' is less than 'maxMallocSize', delegates the
-  // allocation to malloc. If the size is above that and below the
-  // largest size class, allocates one element of the next size
-  // class. If 'size' is greater than the largest size class, calls
-  // allocateContiguous(). Returns nullptr if there is no space. The
-  // amount to allocate is subject to the size limit of 'this'. This
-  // function is not virtual but calls the virtual functions allocate
-  // and allocateContiguous, which can track sizes and enforce caps etc.
+  // Allocates 'bytes' contiguous bytes and returns the pointer to the first
+  // byte. If 'bytes' is less than 'maxMallocSize', delegates the allocation to
+  // malloc. If the size is above that and below the largest size classes' size,
+  // allocates one element of the next size classes' size. If 'size' is greater
+  // than the largest size classes' size, calls allocateContiguous(). Returns
+  // nullptr if there is no space. The amount to allocate is subject to the size
+  // limit of 'this'. This function is not virtual but calls the virtual
+  // functions allocate and allocateContiguous, which can track sizes and
+  // enforce caps etc.
   void* FOLLY_NULLABLE
   allocateBytes(uint64_t bytes, uint64_t maxMallocSize = kMaxMallocBytes);
 
