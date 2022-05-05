@@ -32,7 +32,7 @@ namespace filesystems {
 ////////////////////
 namespace {
 namespace gcs = ::google::cloud::storage;
-
+namespace gc = ::google::cloud;
 // Reference: https://issues.apache.org/jira/browse/ARROW-14346
 // https://github.com/apache/arrow/blob/master/cpp/src/arrow/filesystem/gcsfs.cc#L49
 // Change the default upload buffer size. In general, sending larger buffers is more
@@ -134,6 +134,74 @@ class GCSReadFile final : public ReadFile {
   std::string key_;
   int64_t length_ = -1;
 };
+
+class GCSWriteFile final : public WriteFile {
+ public:
+  explicit GCSWriteFile(std::string path, gcs::Client* client)
+  : client_(client) {
+    bucketAndKeyFromGCSPath(path, bucket_, key_);
+
+  }
+  ~GCSWriteFile()
+  {
+    close();
+  }
+  void initialize() {
+    // Make it a no-op if invoked twice.
+    if (size_ != -1) {
+      return;
+    }
+    //TODO add option for metadata to be used for encryption? Acl? Kms?
+
+    //check that it doesn't exist , if it does throw an error
+    gc::StatusOr<gcs::ObjectMetadata> object_metadata =
+        client_->GetObjectMetadata(bucket_, key_);
+
+    if (object_metadata) {
+
+      VELOX_CHECK(false, "File already exists");
+    }
+
+    auto stream = client_->WriteObject(bucket_, key_);
+    VELOX_CHECK_GCS_OUTCOME(
+        stream.last_status(), "Failed to open GCS object for writing", bucket_, key_);
+    stream_ = std::move(stream);
+    size_ = 0;
+  }
+  void append(std::string_view data)
+  {
+    VELOX_CHECK((!closed_ && stream_.IsOpen()), "File is closed");
+    stream_ << data;
+    size_ += data.size();
+  }
+  void flush()
+  {
+    if (!closed_ && stream_.IsOpen())
+    {
+      stream_.flush();
+    }
+  }
+  void close()
+  {
+    if (!closed_ && stream_.IsOpen())
+    {
+      stream_.Close();
+      closed_ = true;
+    }
+  }
+  uint64_t size() const
+  {
+    return size_;
+  }
+
+ private:
+  gcs::ObjectWriteStream stream_;
+  gcs::Client* client_;
+  std::string bucket_;
+  std::string key_;
+  int64_t size_{-1};
+  bool closed_{false};
+};
 } // namespace
 
 
@@ -145,7 +213,7 @@ class GCSConfig {
     std::string cred = config_->get("credentials", std::string(""));
     if (!cred.empty())
     {
-      credentials_ = google::cloud::MakeServiceAccountCredentials(cred);
+      credentials_ = gc::MakeServiceAccountCredentials(cred);
     }
   }
 
@@ -158,13 +226,13 @@ class GCSConfig {
     return config_->get("scheme", std::string("https"));
   }
 
-  std::shared_ptr<google::cloud::Credentials> credentials() const
+  std::shared_ptr<gc::Credentials> credentials() const
   {
    return credentials_;
   }
  private:
   const Config* FOLLY_NONNULL config_;
-  std::shared_ptr<google::cloud::Credentials> credentials_;
+  std::shared_ptr<gc::Credentials> credentials_;
 };
 
 class GCSFileSystem::Impl {
@@ -180,22 +248,22 @@ class GCSFileSystem::Impl {
   // Use the input Config parameters and initialize the GCSClient.
   void initializeClient() {
 
-    auto options = google::cloud::Options{};
+    auto options = gc::Options{};
     std::string scheme = gcsConfig_.scheme();
     //if (scheme.empty()) scheme = "https";
     if (scheme == "https") {
-      options.set<google::cloud::UnifiedCredentialsOption>(
-          google::cloud::MakeGoogleDefaultCredentials());
+      options.set<gc::UnifiedCredentialsOption>(
+          gc::MakeGoogleDefaultCredentials());
     } else {
-      options.set<google::cloud::UnifiedCredentialsOption>(
-          google::cloud::MakeInsecureCredentials());
+      options.set<gc::UnifiedCredentialsOption>(
+          gc::MakeInsecureCredentials());
     }
     options.set<gcs::UploadBufferSizeOption>(kUploadBufferSize);
     if (!gcsConfig_.endpointOverride().empty()) {
       options.set<gcs::RestEndpointOption>(scheme + "://" + gcsConfig_.endpointOverride());
     }
     if (gcsConfig_.credentials()) {
-      options.set<google::cloud::UnifiedCredentialsOption>(gcsConfig_.credentials());
+      options.set<gc::UnifiedCredentialsOption>(gcsConfig_.credentials());
     }
     client_ = std::make_shared<gcs::Client>(options);
   }
@@ -220,8 +288,15 @@ void GCSFileSystem::initializeClient() {
 }
 
 std::unique_ptr<ReadFile> GCSFileSystem::openFileForRead(std::string_view path) {
-  const std::string file = gcsPath(path);
-  auto gcsfile = std::make_unique<GCSReadFile>(file, impl_->gcsClient());
+  const std::string gcspath = gcsPath(path);
+  auto gcsfile = std::make_unique<GCSReadFile>(gcspath, impl_->gcsClient());
+  gcsfile->initialize();
+  return gcsfile;
+}
+
+std::unique_ptr<WriteFile> GCSFileSystem::openFileForWrite(std::string_view path) {
+  const std::string gcspath = gcsPath(path);
+  auto gcsfile = std::make_unique<GCSWriteFile>(gcspath, impl_->gcsClient());
   gcsfile->initialize();
   return gcsfile;
 }

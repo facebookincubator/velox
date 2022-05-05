@@ -28,14 +28,11 @@ class GCSFileSystem : public FileSystem {
  public:
   explicit GCSFileSystem(std::shared_ptr<const Config> config);
 
-  // Initialize the Aws::S3::S3Client from the input Config parameters.
   void initializeClient();
 
   std::unique_ptr<ReadFile> openFileForRead(std::string_view path) override;
 
-  std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override {
-    VELOX_NYI(); //TODO
-  }
+  std::unique_ptr<WriteFile> openFileForWrite(std::string_view path) override;
 
   std::string name() const override;
 
