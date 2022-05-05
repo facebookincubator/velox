@@ -21,56 +21,58 @@
 
 namespace facebook::velox::substrait {
 
+using PlanNodePtr = std::shared_ptr<const core::PlanNode>;
+
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
   /// Convert Substrait AggregateRel into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::AggregateRel& aggRel,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Convert Substrait ProjectRel into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::ProjectRel& projectRel,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Convert Substrait FilterRel into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::FilterRel& filterRel,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Convert Substrait ReadRel into Velox PlanNode.
   /// Index: the index of the partition this item belongs to.
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
-      facebook::velox::memory::MemoryPool* pool,
+      memory::MemoryPool* pool,
       u_int32_t& index,
       std::vector<std::string>& paths,
       std::vector<u_int64_t>& starts,
       std::vector<u_int64_t>& lengths);
 
   /// Convert Substrait ReadRel into Velox Values Node.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
-      facebook::velox::memory::MemoryPool* pool,
-      std::shared_ptr<const RowType> type);
+      memory::MemoryPool* pool,
+      const RowTypePtr& type);
 
   /// Convert Substrait Rel into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::Rel& rel,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Convert Substrait RelRoot into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::RelRoot& root,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Convert Substrait Plan into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+  PlanNodePtr toVeloxPlan(
       const ::substrait::Plan& substraitPlan,
-      facebook::velox::memory::MemoryPool* pool);
+      memory::MemoryPool* pool);
 
   /// Return the index of Partition to be scanned.
   u_int32_t getPartitionIndex() {

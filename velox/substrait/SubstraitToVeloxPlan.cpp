@@ -24,9 +24,9 @@ namespace facebook::velox::substrait {
 
 namespace {
 template <TypeKind KIND>
-VectorPtr setCellFromVariantByKind(
+VectorPtr setVectorFromVariantsByKind(
     const std::vector<velox::variant>& value,
-    velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   using T = typename TypeTraits<KIND>::NativeType;
 
   auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(
@@ -43,18 +43,18 @@ VectorPtr setCellFromVariantByKind(
 }
 
 template <>
-VectorPtr setCellFromVariantByKind<TypeKind::VARBINARY>(
+VectorPtr setVectorFromVariantsByKind<TypeKind::VARBINARY>(
     const std::vector<velox::variant>& value,
-    velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   throw std::invalid_argument("Return of VARBINARY data is not supported");
 }
 
 template <>
-VectorPtr setCellFromVariantByKind<TypeKind::VARCHAR>(
+VectorPtr setVectorFromVariantsByKind<TypeKind::VARCHAR>(
     const std::vector<velox::variant>& value,
-    velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   auto flatVector = std::dynamic_pointer_cast<FlatVector<StringView>>(
-      BaseVector::create(CppToType<StringView>::create(), value.size(), pool));
+      BaseVector::create(VARCHAR(), value.size(), pool));
 
   for (vector_size_t i = 0; i < value.size(); i++) {
     if (value[i].isNull()) {
@@ -66,19 +66,19 @@ VectorPtr setCellFromVariantByKind<TypeKind::VARCHAR>(
   return flatVector;
 }
 
-VectorPtr setCellFromVariant(
+VectorPtr setVectorFromVariants(
     const TypePtr& type,
     const std::vector<velox::variant>& value,
     velox::memory::MemoryPool* pool) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      setCellFromVariantByKind, type->kind(), value, pool);
+      setVectorFromVariantsByKind, type->kind(), value, pool);
 }
 } // namespace
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel,
-    facebook::velox::memory::MemoryPool* pool) {
-  std::shared_ptr<const core::PlanNode> childNode;
+    memory::MemoryPool* pool) {
+  PlanNodePtr childNode;
   if (aggRel.has_input()) {
     childNode = toVeloxPlan(aggRel.input(), pool);
   } else {
@@ -111,7 +111,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   core::AggregationNode::Step aggStep;
   // Project expressions are used to conduct a pre-projection before
   // Aggregation if needed.
-  std::vector<std::shared_ptr<const core::ITypedExpr>> projectExprs;
+  std::vector<core::TypedExprPtr> projectExprs;
   std::vector<std::string> projectOutNames;
   std::vector<std::shared_ptr<const core::CallTypedExpr>> aggExprs;
   aggExprs.reserve(aggRel.measures().size());
@@ -120,7 +120,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   for (const auto& sMea : aggRel.measures()) {
     auto aggFunction = sMea.measure();
     // Get the params of this Aggregate function.
-    std::vector<std::shared_ptr<const core::ITypedExpr>> aggParams;
+    std::vector<core::TypedExprPtr> aggParams;
     auto args = aggFunction.args();
     aggParams.reserve(args.size());
     for (auto arg : args) {
@@ -228,10 +228,10 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ProjectRel& projectRel,
-    facebook::velox::memory::MemoryPool* pool) {
-  std::shared_ptr<const core::PlanNode> childNode;
+    memory::MemoryPool* pool) {
+  PlanNodePtr childNode;
   if (projectRel.has_input()) {
     childNode = toVeloxPlan(projectRel.input(), pool);
   } else {
@@ -241,7 +241,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   // Construct Velox Expressions.
   auto projectExprs = projectRel.expressions();
   std::vector<std::string> projectNames;
-  std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
+  std::vector<core::TypedExprPtr> expressions;
   projectNames.reserve(projectExprs.size());
   expressions.reserve(projectExprs.size());
 
@@ -261,10 +261,10 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   return projectNode;
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel,
-    facebook::velox::memory::MemoryPool* pool) {
-  std::shared_ptr<const core::PlanNode> childNode;
+    memory::MemoryPool* pool) {
+  PlanNodePtr childNode;
   if (filterRel.has_input()) {
     childNode = toVeloxPlan(filterRel.input(), pool);
   } else {
@@ -280,9 +280,9 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& sRead,
-    facebook::velox::memory::MemoryPool* pool,
+    memory::MemoryPool* pool,
     u_int32_t& index,
     std::vector<std::string>& paths,
     std::vector<u_int64_t>& starts,
@@ -359,28 +359,28 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
-    facebook::velox::memory::MemoryPool* pool,
-    std::shared_ptr<const RowType> type) {
+    memory::MemoryPool* pool,
+    const RowTypePtr& type) {
   ::substrait::ReadRel_VirtualTable readVirtualTable = readRel.virtual_table();
-  int64_t numRows = readVirtualTable.values_size();
+  int64_t numVectors = readVirtualTable.values_size();
   int64_t numColumns = type->size();
-  int64_t valueFieldNums = readVirtualTable.values(numRows - 1).fields_size();
+  int64_t valueFieldNums =
+      readVirtualTable.values(numVectors - 1).fields_size();
   std::vector<RowVectorPtr> vectors;
-  vectors.reserve(numRows);
+  vectors.reserve(numVectors);
 
   int64_t batchSize = valueFieldNums / numColumns;
 
-  for (int64_t row = 0; row < numRows; ++row) {
+  for (int64_t index = 0; index < numVectors; ++index) {
     std::vector<VectorPtr> children;
     ::substrait::Expression_Literal_Struct rowValue =
-        readRel.virtual_table().values(row);
+        readRel.virtual_table().values(index);
     auto fieldSize = rowValue.fields_size();
     VELOX_CHECK_EQ(fieldSize, batchSize * numColumns);
 
-    const auto& childrenSize = type->children().size();
-    for (int64_t col = 0; col < childrenSize; ++col) {
+    for (int64_t col = 0; col < numColumns; ++col) {
       const TypePtr& outputChildType = type->childAt(col);
       std::vector<variant> batchChild;
       batchChild.reserve(batchSize);
@@ -404,21 +404,19 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
         }
       }
       children.emplace_back(
-          setCellFromVariant(outputChildType, batchChild, pool));
+          setVectorFromVariants(outputChildType, batchChild, pool));
     }
 
-    // make rowVectors
-    const size_t vectorSize = children.empty() ? 0 : children.front()->size();
-    vectors.emplace_back(std::make_shared<RowVector>(
-        pool, type, BufferPtr(nullptr), vectorSize, children));
+    vectors.emplace_back(
+        std::make_shared<RowVector>(pool, type, nullptr, batchSize, children));
   }
 
   return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Rel& rel,
-    facebook::velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   if (rel.has_aggregate()) {
     return toVeloxPlan(rel.aggregate(), pool);
   }
@@ -435,9 +433,9 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::RelRoot& root,
-    facebook::velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   // TODO: Use the names as the output names for the whole computing.
   const auto& names = root.names();
   if (root.has_input()) {
@@ -447,9 +445,9 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   VELOX_FAIL("Input is expected in RelRoot.");
 }
 
-std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan,
-    facebook::velox::memory::MemoryPool* pool) {
+    memory::MemoryPool* pool) {
   // Construct the function map based on the Substrait representation.
   for (const auto& extension : substraitPlan.extensions()) {
     if (!extension.has_extension_function()) {

@@ -307,8 +307,8 @@ TEST_P(PlanConversionTest, queryTest) {
            VARCHAR(),
            VARCHAR(),
            VARCHAR()});
-  std::unique_ptr<facebook::velox::memory::MemoryPool> pool{
-      facebook::velox::memory::getDefaultScopedMemoryPool()};
+  std::unique_ptr<memory::MemoryPool> pool{
+      memory::getDefaultScopedMemoryPool()};
   std::vector<VectorPtr> vectors;
   // TPC-H lineitem table has 16 columns.
   int colNum = 16;

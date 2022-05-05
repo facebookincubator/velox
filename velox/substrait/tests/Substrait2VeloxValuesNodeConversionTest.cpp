@@ -31,14 +31,13 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::substrait;
 
-class VeloxConverter : public OperatorTestBase {
+class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  public:
   void assertPlanConversion(
-      const std::shared_ptr<const core::PlanNode>& plan,
+      const PlanNodePtr& plan,
       const std::string& duckDbSql) {
     const auto& valuesNode =
-        std::dynamic_pointer_cast<const facebook::velox::core::ValuesNode>(
-            plan);
+        std::dynamic_pointer_cast<const core::ValuesNode>(plan);
     ASSERT_TRUE(valuesNode != nullptr);
     const auto& vectors = valuesNode->values();
 
@@ -46,7 +45,7 @@ class VeloxConverter : public OperatorTestBase {
     assertQuery(plan, duckDbSql);
   }
 
-  void parseJson(std::string filePath, ::substrait::Plan* subPlan) {
+  void parseJson(const std::string& filePath, ::substrait::Plan* subPlan) {
     // Read json and resume the Substrait plan.
     std::ifstream subJson(filePath);
     std::stringstream buffer;
@@ -59,17 +58,19 @@ class VeloxConverter : public OperatorTestBase {
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
       std::make_shared<SubstraitVeloxPlanConverter>();
 
-  std::unique_ptr<facebook::velox::memory::ScopedMemoryPool> pool_{
+  std::unique_ptr<memory::ScopedMemoryPool> pool_{
       memory::getDefaultScopedMemoryPool()};
 };
 
 // SELECT * FROM tmp
-TEST_F(VeloxConverter, valuesNode) {
-  auto subPlanPath = facebook::velox::test::getDataFilePath(
+TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
+  auto subPlanPath = getDataFilePath(
       "velox/substrait/tests", "data/substrait_virtualTable.json");
-  ::substrait::Plan* subPlan = new ::substrait::Plan();
 
-  parseJson(subPlanPath, subPlan);
+  std::shared_ptr<::substrait::Plan> subPlan =
+      std::make_shared<::substrait::Plan>();
+
+  parseJson(subPlanPath, subPlan.get());
 
   auto veloxPlan = planConverter_->toVeloxPlan(*subPlan, pool_.get());
 
