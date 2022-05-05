@@ -19,6 +19,7 @@
 #include <sstream>
 
 #include "velox/common/base/tests/Fs.h"
+#include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -35,19 +36,28 @@ class VeloxConverter : public OperatorTestBase {
   void assertPlanConversion(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::string& duckDbSql) {
-    if (auto vValuesNode =
-            std::dynamic_pointer_cast<const facebook::velox::core::ValuesNode>(
-                plan)) {
-      vectors = vValuesNode->values();
-    }
+    const auto& valuesNode =
+        std::dynamic_pointer_cast<const facebook::velox::core::ValuesNode>(
+            plan);
+    ASSERT_TRUE(valuesNode != nullptr);
+    const auto& vectors = valuesNode->values();
+
     createDuckDbTable(vectors);
     assertQuery(plan, duckDbSql);
   }
 
-  std::shared_ptr<facebook::velox::substrait::SubstraitVeloxPlanConverter>
-      planConverter = std::make_shared<
-          facebook::velox::substrait::SubstraitVeloxPlanConverter>();
-  std::vector<RowVectorPtr> vectors;
+  void parseJson(std::string filePath, ::substrait::Plan* subPlan) {
+    // Read json and resume the Substrait plan.
+    std::ifstream subJson(filePath);
+    std::stringstream buffer;
+    buffer << subJson.rdbuf();
+    std::string subData = buffer.str();
+
+    google::protobuf::util::JsonStringToMessage(subData, subPlan);
+  };
+
+  std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
+      std::make_shared<SubstraitVeloxPlanConverter>();
 
   std::unique_ptr<facebook::velox::memory::ScopedMemoryPool> pool_{
       memory::getDefaultScopedMemoryPool()};
@@ -55,35 +65,14 @@ class VeloxConverter : public OperatorTestBase {
 
 // SELECT * FROM tmp
 TEST_F(VeloxConverter, valuesNode) {
-  // Find the Velox path according current path.
-  std::string veloxPath;
-  std::string currentPath = fs::current_path().c_str();
-  size_t pos = 0;
 
-  if ((pos = currentPath.find("project")) != std::string::npos) {
-    // In Github test, the Velox home is /root/project.
-    veloxPath = currentPath.substr(0, pos) + "project";
-  } else if ((pos = currentPath.find("velox")) != std::string::npos) {
-    veloxPath = currentPath.substr(0, pos) + "velox";
-  } else if ((pos = currentPath.find("fbcode")) != std::string::npos) {
-    veloxPath = currentPath;
-  } else {
-    throw std::runtime_error("Current path is not a valid Velox path.");
-  }
+  auto subPlanPath = facebook::velox::test::getDataFilePath(
+      "velox/substrait/tests", "data/substrait_virtualTable.json");
+  ::substrait::Plan* subPlan = new ::substrait::Plan();
 
-  // Find and deserialize Substrait plan json file.
-  std::string subPlanPath =
-      veloxPath + "/velox/substrait/tests/substrait_virtualTable.json";
+  parseJson(subPlanPath, subPlan);
 
-  // Read json and resume the Substrait plan.
-  std::ifstream subJson(subPlanPath);
-  std::stringstream buffer;
-  buffer << subJson.rdbuf();
-  std::string subData = buffer.str();
-  ::substrait::Plan subPlan;
-  google::protobuf::util::JsonStringToMessage(subData, &subPlan);
-
-  auto veloxPlan = planConverter->toVeloxPlan(subPlan, pool_.get());
+  auto veloxPlan = planConverter_->toVeloxPlan(*subPlan, pool_.get());
 
   assertPlanConversion(veloxPlan, "SELECT * FROM tmp");
 }

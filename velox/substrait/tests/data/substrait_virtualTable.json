@@ -1,14 +1,5 @@
 {
- "extension_uris": [
-  {
-   "extension_uri_anchor": 1,
-   "uri": "/workspace/veloxPlugin/velox/substrait/extensions/functions_comparison.yaml"
-  },
-  {
-   "extension_uri_anchor": 2,
-   "uri": "/workspace/veloxPlugin/velox/substrait/extensions/functions_arithmetic.yaml"
-  }
- ],
+ "extension_uris": [],
  "extensions": [],
  "relations": [
   {
