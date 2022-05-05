@@ -74,7 +74,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
-          velox::variant(velox::variant(sLit.fp64())));
+          velox::variant(sLit.fp64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kBoolean:
       return std::make_shared<core::ConstantTypedExpr>(variant(sLit.boolean()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
@@ -87,21 +87,17 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
-    const ::substrait::Expression::Cast& sCast,
+    const ::substrait::Expression::Cast& castExpr,
     const RowTypePtr& inputType) {
-  auto subType = subParser_->parseType(sCast.type());
-  auto vCastType = toVeloxType(subType->type);
+  auto substraitType = subParser_->parseType(castExpr.type());
+  auto type = toVeloxType(substraitType->type);
   // TODO add flag in substrait after. now is set false.
   bool nullOnFailure = false;
 
-  std::vector<std::shared_ptr<const core::ITypedExpr>> vCastInputs;
-  vCastInputs.reserve(1);
-  std::shared_ptr<const core::ITypedExpr> vCastInput =
-      toVeloxExpr(sCast.input(), inputType);
-  vCastInputs.emplace_back(vCastInput);
+  std::vector<core::TypedExprPtr> inputs{
+      toVeloxExpr(castExpr.input(), inputType)};
 
-  return std::make_shared<core::CastTypedExpr>(
-      vCastType, vCastInputs, nullOnFailure);
+  return std::make_shared<core::CastTypedExpr>(type, inputs, nullOnFailure);
 }
 
 std::shared_ptr<const core::ITypedExpr>

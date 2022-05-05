@@ -210,7 +210,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   } else {
     VELOX_FAIL("Child Rel is expected in FilterRel.");
   }
-  // This is for the case when the filter is not be pushdowned by TableScan.
+
   const auto& inputType = childNode->outputType();
   const auto& sExpr = sFilter.condition();
 
