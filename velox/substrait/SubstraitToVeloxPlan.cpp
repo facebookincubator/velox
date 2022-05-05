@@ -186,10 +186,10 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   projectNames.reserve(projectExprs.size());
   expressions.reserve(projectExprs.size());
 
-  RowTypePtr vPreNodeOutPut = childNode->outputType();
+  const auto& inputType = childNode->outputType();
   int colIdx = 0;
   for (const auto& expr : projectExprs) {
-    expressions.emplace_back(exprConverter_->toVeloxExpr(expr, vPreNodeOutPut));
+    expressions.emplace_back(exprConverter_->toVeloxExpr(expr, inputType));
     projectNames.emplace_back(subParser_->makeNodeName(planNodeId_, colIdx));
     colIdx += 1;
   }
@@ -211,23 +211,13 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
     VELOX_FAIL("Child Rel is expected in FilterRel.");
   }
   // This is for the case when the filter is not be pushdowned by TableScan.
-  // TODO remove the bool condition after the sub.json remove the filter node
-  bool filterPushdownEnabled = true;
-  if (filterPushdownEnabled) {
-    return childNode;
-  } else {
-    RowTypePtr vPreNodeOutPut = childNode->outputType();
-    if (!sFilter.has_condition()) {
-      return std::make_shared<core::FilterNode>(
-          nextPlanNodeId(), nullptr, childNode);
-    }
+  const auto& inputType = childNode->outputType();
+  const auto& sExpr = sFilter.condition();
 
-    const ::substrait::Expression& sExpr = sFilter.condition();
-    return std::make_shared<core::FilterNode>(
-        nextPlanNodeId(),
-        exprConverter_->toVeloxExpr(sExpr, vPreNodeOutPut),
-        childNode);
-  }
+  return std::make_shared<core::FilterNode>(
+      nextPlanNodeId(),
+      exprConverter_->toVeloxExpr(sExpr, inputType),
+      childNode);
 }
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(

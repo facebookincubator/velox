@@ -22,7 +22,7 @@ namespace facebook::velox::substrait {
 std::shared_ptr<const core::FieldAccessTypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::FieldReference& sField,
-    const RowTypePtr& vPreNodeOutPut) {
+    const RowTypePtr& inputType) {
   auto typeCase = sField.reference_type_case();
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
@@ -30,16 +30,16 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       auto dRef = sField.direct_reference();
       int32_t colIdx = subParser_->parseReferenceSegment(dRef);
 
-      std::vector<TypePtr> vPreNodeColTypes = vPreNodeOutPut->children();
-      std::vector<std::string> vPreNodeColNames = vPreNodeOutPut->names();
-      int64_t vPreNodeColNums = vPreNodeColNames.size();
+      const auto& inputTypes = inputType->children();
+      const auto& inputNames = inputType->names();
+      const int64_t inputSize = inputNames.size();
 
-      if (colIdx <= vPreNodeColNums) {
+      if (colIdx <= inputSize) {
         // convert type to row
         return std::make_shared<core::FieldAccessTypedExpr>(
-            vPreNodeColTypes[colIdx],
-            std::make_shared<core::InputTypedExpr>(vPreNodeColTypes[colIdx]),
-            vPreNodeColNames[colIdx]);
+            inputTypes[colIdx],
+            std::make_shared<core::InputTypedExpr>(inputTypes[colIdx]),
+            inputNames[colIdx]);
       } else {
         VELOX_FAIL("Missing the column with id '{}' .", colIdx);
       }
@@ -53,11 +53,11 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& sFunc,
-    const RowTypePtr& vPreNodeOutPut) {
+    const RowTypePtr& inputType) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
   params.reserve(sFunc.args().size());
   for (const auto& sArg : sFunc.args()) {
-    params.emplace_back(toVeloxExpr(sArg, vPreNodeOutPut));
+    params.emplace_back(toVeloxExpr(sArg, inputType));
   }
   auto functionId = sFunc.function_reference();
   auto veloxFunction = subParser_->findVeloxFunction(functionMap_, functionId);
@@ -88,7 +88,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::Cast& sCast,
-    const RowTypePtr& vPreNodeOutPut) {
+    const RowTypePtr& inputType) {
   auto subType = subParser_->parseType(sCast.type());
   auto vCastType = toVeloxType(subType->type);
   // TODO add flag in substrait after. now is set false.
@@ -97,7 +97,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   std::vector<std::shared_ptr<const core::ITypedExpr>> vCastInputs;
   vCastInputs.reserve(1);
   std::shared_ptr<const core::ITypedExpr> vCastInput =
-      toVeloxExpr(sCast.input(), vPreNodeOutPut);
+      toVeloxExpr(sCast.input(), inputType);
   vCastInputs.emplace_back(vCastInput);
 
   return std::make_shared<core::CastTypedExpr>(
@@ -107,18 +107,18 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression& sExpr,
-    const RowTypePtr& vPreNodeOutPut) {
+    const RowTypePtr& inputType) {
   std::shared_ptr<const core::ITypedExpr> veloxExpr;
   auto typeCase = sExpr.rex_type_case();
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kLiteral:
       return toVeloxExpr(sExpr.literal());
     case ::substrait::Expression::RexTypeCase::kScalarFunction:
-      return toVeloxExpr(sExpr.scalar_function(), vPreNodeOutPut);
+      return toVeloxExpr(sExpr.scalar_function(), inputType);
     case ::substrait::Expression::RexTypeCase::kSelection:
-      return toVeloxExpr(sExpr.selection(), vPreNodeOutPut);
+      return toVeloxExpr(sExpr.selection(), inputType);
     case ::substrait::Expression::RexTypeCase::kCast:
-      return toVeloxExpr(sExpr.cast(), vPreNodeOutPut);
+      return toVeloxExpr(sExpr.cast(), inputType);
     default:
       VELOX_NYI(
           "Substrait conversion not supported for Expression '{}'", typeCase);
