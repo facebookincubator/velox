@@ -34,7 +34,7 @@ using namespace facebook::velox::substrait;
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  public:
   void assertPlanConversion(
-      const PlanNodePtr& plan,
+      const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
     const auto& valuesNode =
         std::dynamic_pointer_cast<const core::ValuesNode>(plan);
@@ -67,8 +67,7 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
   auto subPlanPath = getDataFilePath(
       "velox/substrait/tests", "data/substrait_virtualTable.json");
 
-  std::shared_ptr<::substrait::Plan> subPlan =
-      std::make_shared<::substrait::Plan>();
+  auto subPlan = std::make_shared<::substrait::Plan>();
 
   parseJson(subPlanPath, subPlan.get());
 

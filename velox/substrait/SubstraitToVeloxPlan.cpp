@@ -75,10 +75,10 @@ VectorPtr setVectorFromVariants(
 }
 } // namespace
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::AggregateRel& aggRel,
     memory::MemoryPool* pool) {
-  PlanNodePtr childNode;
+  core::PlanNodePtr childNode;
   if (aggRel.has_input()) {
     childNode = toVeloxPlan(aggRel.input(), pool);
   } else {
@@ -228,10 +228,10 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ProjectRel& projectRel,
     memory::MemoryPool* pool) {
-  PlanNodePtr childNode;
+  core::PlanNodePtr childNode;
   if (projectRel.has_input()) {
     childNode = toVeloxPlan(projectRel.input(), pool);
   } else {
@@ -261,7 +261,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   return projectNode;
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel,
     memory::MemoryPool* pool) {
   PlanNodePtr childNode;
@@ -280,7 +280,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       childNode);
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& sRead,
     memory::MemoryPool* pool,
     u_int32_t& index,
@@ -359,7 +359,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
     memory::MemoryPool* pool,
     const RowTypePtr& type) {
@@ -414,7 +414,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Rel& rel,
     memory::MemoryPool* pool) {
   if (rel.has_aggregate()) {
@@ -433,7 +433,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::RelRoot& root,
     memory::MemoryPool* pool) {
   // TODO: Use the names as the output names for the whole computing.
@@ -445,7 +445,7 @@ PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   VELOX_FAIL("Input is expected in RelRoot.");
 }
 
-PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
+core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan,
     memory::MemoryPool* pool) {
   // Construct the function map based on the Substrait representation.

@@ -17,27 +17,26 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/core/PlanNode.h"
 #include "velox/substrait/SubstraitToVeloxExpr.h"
 
 namespace facebook::velox::substrait {
-
-using PlanNodePtr = std::shared_ptr<const core::PlanNode>;
 
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
   /// Convert Substrait AggregateRel into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::AggregateRel& aggRel,
       memory::MemoryPool* pool);
 
   /// Convert Substrait ProjectRel into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::ProjectRel& projectRel,
       memory::MemoryPool* pool);
 
   /// Convert Substrait FilterRel into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::FilterRel& filterRel,
       memory::MemoryPool* pool);
 
@@ -45,7 +44,7 @@ class SubstraitVeloxPlanConverter {
   /// Index: the index of the partition this item belongs to.
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
       memory::MemoryPool* pool,
       u_int32_t& index,
@@ -54,23 +53,23 @@ class SubstraitVeloxPlanConverter {
       std::vector<u_int64_t>& lengths);
 
   /// Convert Substrait ReadRel into Velox Values Node.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
       memory::MemoryPool* pool,
       const RowTypePtr& type);
 
   /// Convert Substrait Rel into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::Rel& rel,
       memory::MemoryPool* pool);
 
   /// Convert Substrait RelRoot into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::RelRoot& root,
       memory::MemoryPool* pool);
 
   /// Convert Substrait Plan into Velox PlanNode.
-  PlanNodePtr toVeloxPlan(
+  core::PlanNodePtr toVeloxPlan(
       const ::substrait::Plan& substraitPlan,
       memory::MemoryPool* pool);
 
