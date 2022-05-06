@@ -16,7 +16,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 
-#include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/c/abi.h"
 
 namespace facebook::velox::exec {
 

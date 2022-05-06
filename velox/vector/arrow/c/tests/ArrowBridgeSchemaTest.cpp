@@ -19,8 +19,9 @@
 #include <arrow/testing/gtest_util.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/arrow/c/Bridge.h"
 
 namespace {
 

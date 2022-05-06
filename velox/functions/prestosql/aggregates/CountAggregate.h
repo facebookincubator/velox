@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/prestosql/aggregates/CountAggregate.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SumAggregate.h"
 
-namespace facebook::velox::aggregate::prestosql {
-
-namespace {
+namespace facebook::velox::aggregate {
 
 class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
   using BaseAggregate = SimpleNumericAggregate<bool, int64_t, int64_t>;
@@ -91,14 +91,14 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     if (args.empty()) {
-      addToGroup(group, rows.countSelected());
+      addToGroup(group, rows.size());
       return;
     }
 
     DecodedVector decoded(*args[0], rows);
     if (decoded.isConstantMapping()) {
       if (!decoded.isNullAt(0)) {
-        addToGroup(group, rows.countSelected());
+        addToGroup(group, rows.size());
       }
     } else if (decoded.mayHaveNulls()) {
       int64_t nonNullCount = 0;
@@ -109,7 +109,7 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       });
       addToGroup(group, nonNullCount);
     } else {
-      addToGroup(group, rows.countSelected());
+      addToGroup(group, rows.size());
     }
   }
 
@@ -173,10 +173,4 @@ bool registerCountAggregate(const std::string& name) {
   return true;
 }
 
-} // namespace
-
-void registerCountAggregate() {
-  registerCountAggregate(kCount);
-}
-
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::aggregate

@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/vector/arrow/Bridge.h"
-
+#include "velox/vector/arrow/c/Bridge.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"

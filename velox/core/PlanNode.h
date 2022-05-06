@@ -20,7 +20,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
-#include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/arrow/c/Bridge.h"
 
 namespace facebook::velox::core {
 

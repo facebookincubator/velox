@@ -18,17 +18,14 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/arrow/c/abi.h"
 
-/// These 2 definitions should be included by user from either
-///   1. <arrow/c/abi.h> or
-///   2. "velox/vector/arrow/Abi.h"
 struct ArrowArray;
 struct ArrowSchema;
 
 namespace facebook::velox {
-
-/// Export a generic Velox Vector to an ArrowArray, as defined by Arrow's C data
-/// interface:
+/// Export a generic Velox Vector to an ArrowArray, as defined by Arrow's C
+/// data interface:
 ///
 ///   https://arrow.apache.org/docs/format/CDataInterface.html
 ///
@@ -36,13 +33,13 @@ namespace facebook::velox {
 /// heap or stack), and after usage, the standard REQUIRES the client to call
 /// the release() function (or memory will leak).
 ///
-/// After exporting, the ArrowArray will hold ownership to the underlying Vector
-/// being referenced, so the consumer does not need to explicitly hold on to the
-/// input Vector shared_ptr.
+/// After exporting, the ArrowArray will hold ownership to the underlying
+/// Vector being referenced, so the consumer does not need to explicitly hold
+/// on to the input Vector shared_ptr.
 ///
 /// The function takes a memory pool where allocations will be made (in cases
-/// where the conversion is not zero-copy, e.g. for strings) and throws in case
-/// the conversion is not implemented yet.
+/// where the conversion is not zero-copy, e.g. for strings) and throws in
+/// case the conversion is not implemented yet.
 ///
 /// Example usage:
 ///
@@ -83,10 +80,10 @@ void exportToArrow(const VectorPtr&, ArrowSchema&);
 
 /// Import an ArrowSchema into a Velox Type object.
 ///
-/// This function does the exact opposite of the function above. TypePtr carries
-/// all buffers they need to represent types, so after this function returns,
-/// the client is free to release any buffers associated with the input
-/// ArrowSchema object.
+/// This function does the exact opposite of the function above. TypePtr
+/// carries all buffers they need to represent types, so after this function
+/// returns, the client is free to release any buffers associated with the
+/// input ArrowSchema object.
 ///
 /// The function throws in case there was no valid conversion available.
 ///
@@ -107,8 +104,8 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema);
 /// both (buffer and type). A memory pool is also required, since all vectors
 /// carry a pointer to it, but not really used in most cases - unless the
 /// conversion itself requires a new allocation. In most cases no new
-/// allocations are required, unless for arrays of varchars (or varbinaries) and
-/// complex types written out of order.
+/// allocations are required, unless for arrays of varchars (or varbinaries)
+/// and complex types written out of order.
 ///
 /// The new Velox vector returned contains only references to the underlying
 /// buffers, so it's the client's responsibility to ensure the buffer's
@@ -134,14 +131,14 @@ VectorPtr importFromArrowAsViewer(
 /// ownership over the input data.
 ///
 /// Similar to importFromArrowAsViewer but the ownership of arrowSchema and
-/// arrowArray will be taken over. Specifically, the returned Vector will own a
-/// copy of arrowSchema and arrowArray.
+/// arrowArray will be taken over. Specifically, the returned Vector will own
+/// a copy of arrowSchema and arrowArray.
 ///
-/// The inputs arrowSchema and arrowArray will be marked as released by setting
-/// their release callback to nullptr
-/// (https://arrow.apache.org/docs/format/CDataInterface.html). Afterwards, the
-/// returned Vector will be responsible for calling the release callbacks when
-/// destructed.
+/// The inputs arrowSchema and arrowArray will be marked as released by
+/// setting their release callback to nullptr
+/// (https://arrow.apache.org/docs/format/CDataInterface.html). Afterwards,
+/// the returned Vector will be responsible for calling the release callbacks
+/// when destructed.
 VectorPtr importFromArrowAsOwner(
     ArrowSchema& arrowSchema,
     ArrowArray& arrowArray,
