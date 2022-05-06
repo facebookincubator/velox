@@ -22,7 +22,7 @@ namespace facebook::velox {
 
 namespace {
 constexpr std::string_view kSep{"/"};
-constexpr std::string_view kGCSScheme{"gcs://"};
+constexpr std::string_view kGCSScheme{"gs://"};
 
 } // namespace
 

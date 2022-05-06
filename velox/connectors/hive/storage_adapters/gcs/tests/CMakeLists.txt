@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_s3file_test S3UtilTest.cpp S3FileSystemTest.cpp)
-add_test(velox_s3file_test velox_s3file_test)
+add_executable(velox_gcsfile_test GCSUtilTest.cpp GCSFileSystemTest.cpp)
+add_test(velox_gcsfile_test velox_gcsfile_test)
 target_link_libraries(
-  velox_s3file_test
+  velox_gcsfile_test
   velox_file
-  velox_s3fs
+  velox_gcs
   velox_core
   velox_exec_test_util
   velox_hive_connector

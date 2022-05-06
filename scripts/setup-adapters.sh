@@ -200,6 +200,9 @@ if [ $install_gcs -eq 1 ]; then
 fi
 
 if [ $install_aws -eq 1 ]; then
+  # aws-sdk-cpp missing dependencies
+  yum install -y curl-devel
+
   install_aws-sdk-cpp
 fi
 if [ $install_hdfs -eq 1 ]; then

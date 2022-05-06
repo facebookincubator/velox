@@ -14,28 +14,31 @@
  * limitations under the License.
  */
 
-#include "connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "connectors/hive/storage_adapters/gcs/GCSFileSystem.h"
+#include "connectors/hive/storage_adapters/gcs/GCSUtil.h"
+#include "velox/common/file/File.h"
+#include "velox/connectors/hive/FileHandle.h"
+#include "velox/exec/tests/utils/TempFilePath.h"
 
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
 
-TEST(S3UtilTest, isS3File) {
-  EXPECT_FALSE(isS3File("s3:"));
-  EXPECT_FALSE(isS3File("s3::/bucket"));
-  EXPECT_FALSE(isS3File("s3:/bucket"));
-  EXPECT_TRUE(isS3File("s3://bucket/file.txt"));
-}
+constexpr int kOneMB = 1 << 20;
 
-TEST(S3UtilTest, s3Path) {
-  auto path = s3Path("s3://bucket/file.txt");
-  EXPECT_EQ(path, "bucket/file.txt");
-}
+class GCSFileSystemTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
 
-TEST(S3UtilTest, bucketAndKeyFromS3Path) {
-  std::string bucket, key;
-  auto path = "bucket/file.txt";
-  bucketAndKeyFromS3Path(path, bucket, key);
-  EXPECT_EQ(bucket, "bucket");
-  EXPECT_EQ(key, "file.txt");
-}
+    filesystems::registerGCSFileSystem();
+  }
+
+  static void TearDownTestSuite() {
+    //TODO
+  }
+
+
+
+};
+
+//TODO
