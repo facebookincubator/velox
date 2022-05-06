@@ -54,7 +54,8 @@ set(SRCS
     VeloxToSubstraitPlan.cpp
     VeloxToSubstraitType.cpp
     VeloxSubstraitSignature.cpp
-    VariantToVectorConverter.cpp)
+    VariantToVectorConverter.cpp
+    SubstraitToVeloxPlanValidator.cpp)
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter

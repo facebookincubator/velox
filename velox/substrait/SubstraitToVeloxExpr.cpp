@@ -157,8 +157,8 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
-      const auto& directRef = substraitField.direct_reference();
-      int32_t colIdx = substraitParser_.parseReferenceSegment(directRef);
+      const auto& dRef = sField.direct_reference();
+      int32_t colIdx = subParser_->parseReferenceSegment(dRef);
       const auto& inputNames = inputType->names();
       const int64_t inputSize = inputNames.size();
       if (colIdx <= inputSize) {
@@ -187,10 +187,19 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   for (const auto& sArg : substraitFunc.arguments()) {
     params.emplace_back(toVeloxExpr(sArg.value(), inputType));
   }
-  const auto& veloxFunction = substraitParser_.findVeloxFunction(
-      functionMap_, substraitFunc.function_reference());
-  std::string typeName =
-      substraitParser_.parseType(substraitFunc.output_type())->type;
+  const auto& veloxFunction =
+      subParser_->findVeloxFunction(functionMap_, sFunc.function_reference());
+  const auto& veloxType =
+      toVeloxType(subParser_->parseType(sFunc.output_type())->type);
+
+  // Omit alias because because name change is not needed.
+  if (veloxFunction == "alias") {
+    if (params.size() != 1) {
+      VELOX_FAIL("Alias expects one parameter.");
+    }
+    return params[0];
+  }
+
   return std::make_shared<const core::CallTypedExpr>(
       toVeloxType(typeName), std::move(params), veloxFunction);
 }
@@ -218,8 +227,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.fp32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
-      return std::make_shared<core::ConstantTypedExpr>(
-          variant(substraitLit.i64()));
+      return std::make_shared<core::ConstantTypedExpr>(variant(sLit.i64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.fp64()));
