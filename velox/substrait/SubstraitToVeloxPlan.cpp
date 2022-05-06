@@ -264,7 +264,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::FilterRel& filterRel,
     memory::MemoryPool* pool) {
-  PlanNodePtr childNode;
+  core::PlanNodePtr childNode;
   if (filterRel.has_input()) {
     childNode = toVeloxPlan(filterRel.input(), pool);
   } else {
@@ -272,7 +272,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
 
   const auto& inputType = childNode->outputType();
-  const auto& sExpr = sFilter.condition();
+  const auto& sExpr = filterRel.condition();
 
   return std::make_shared<core::FilterNode>(
       nextPlanNodeId(),

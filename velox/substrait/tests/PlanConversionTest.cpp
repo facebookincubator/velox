@@ -479,7 +479,7 @@ TEST_P(PlanConversionTest, queryTest) {
   }
 
   // Find and deserialize Substrait plan json file.
-  std::string subPlanPath = veloxPath + "/velox/substrait/tests/sub.json";
+  std::string subPlanPath = veloxPath + "/velox/substrait/tests/data/sub.json";
   auto veloxConverter = std::make_shared<VeloxConverter>();
 
   // Writes data into an ORC file.

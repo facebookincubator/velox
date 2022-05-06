@@ -14,12 +14,19 @@
         "c0",
         "c1",
         "c2",
-        "c3"
+        "c3",
+        "c4"
        ],
        "struct": {
         "types": [
          {
-          "fp64": {
+          "i64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_REQUIRED"
+          }
+         },
+         {
+          "i32": {
            "type_variation_reference": 0,
            "nullability": "NULLABILITY_REQUIRED"
           }
@@ -31,20 +38,20 @@
           }
          },
          {
-          "fp64": {
+          "bool": {
            "type_variation_reference": 0,
            "nullability": "NULLABILITY_REQUIRED"
           }
          },
          {
-          "fp64": {
+          "i32": {
            "type_variation_reference": 0,
-           "nullability": "NULLABILITY_REQUIRED"
+           "nullability": "NULLABILITY_NULLABLE"
           }
          }
         ],
         "type_variation_reference": 0,
-        "nullability": "NULLABILITY_REQUIRED"
+        "nullability": "NULLABILITY_NULLABLE"
        }
       },
       "virtual_table": {
@@ -53,47 +60,27 @@
          "fields": [
           {
            "nullable": false,
-           "fp64": 0.90579193414549275
+           "i64": "2499109626526694126"
           },
           {
            "nullable": false,
-           "fp64": 0.96886777112423139
+           "i64": "2342493223442167775"
           },
           {
            "nullable": false,
-           "fp64": 0.90579193414549275
+           "i64": "4077358421272316858"
           },
           {
            "nullable": false,
-           "fp64": 0.96886777112423139
+           "i32": 581869302
           },
           {
            "nullable": false,
-           "fp64": 0.90579193414549275
+           "i32": -708632711
           },
           {
            "nullable": false,
-           "fp64": 0.96886777112423139
-          },
-          {
-           "nullable": false,
-           "fp64": 0.90579193414549275
-          },
-          {
-           "nullable": false,
-           "fp64": 0.96886777112423139
-          }
-         ]
-        },
-        {
-         "fields": [
-          {
-           "nullable": false,
-           "fp64": 0.90579193414549275
-          },
-          {
-           "nullable": false,
-           "fp64": 0.96886777112423139
+           "i32": -133711905
           },
           {
            "nullable": false,
@@ -105,55 +92,46 @@
           },
           {
            "nullable": false,
-           "fp64": 0.90579193414549275
+           "fp64": 0.63235925003444637
           },
           {
            "nullable": false,
-           "fp64": 0.96886777112423139
+           "boolean": true
           },
           {
            "nullable": false,
-           "fp64": 0.90579193414549275
+           "boolean": false
           },
           {
            "nullable": false,
-           "fp64": 0.96886777112423139
-          }
-         ]
-        },
-        {
-         "fields": [
-          {
-           "nullable": false,
-           "fp64": 0.90579193414549275
+           "boolean": false
           },
           {
-           "nullable": false,
-           "fp64": 0.96886777112423139
+           "null": {
+            "i32": {
+             "type_variation_reference": 0,
+             "nullability": "NULLABILITY_NULLABLE"
+            }
+           },
+           "nullable": true
           },
           {
-           "nullable": false,
-           "fp64": 0.90579193414549275
+           "null": {
+            "i32": {
+             "type_variation_reference": 0,
+             "nullability": "NULLABILITY_NULLABLE"
+            }
+           },
+           "nullable": true
           },
           {
-           "nullable": false,
-           "fp64": 0.96886777112423139
-          },
-          {
-           "nullable": false,
-           "fp64": 0.90579193414549275
-          },
-          {
-           "nullable": false,
-           "fp64": 0.96886777112423139
-          },
-          {
-           "nullable": false,
-           "fp64": 0.90579193414549275
-          },
-          {
-           "nullable": false,
-           "fp64": 0.96886777112423139
+           "null": {
+            "i32": {
+             "type_variation_reference": 0,
+             "nullability": "NULLABILITY_NULLABLE"
+            }
+           },
+           "nullable": true
           }
          ]
         }
@@ -165,7 +143,8 @@
      "c0",
      "c1",
      "c2",
-     "c3"
+     "c3",
+     "c4"
     ]
    }
   }
