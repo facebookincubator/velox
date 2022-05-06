@@ -15,18 +15,11 @@
 # for generated headers
 
 add_library(velox_gcs GCSFileSystem.cpp GCSUtil.cpp)
-#TODO script should set it
-link_directories("/home/eman_copty_intel_com/data2/vcpkg/packages/google-cloud-cpp_x64-linux//lib")
-include_directories("/home/eman_copty_intel_com/data2/google-cloud-cpp/cmake-out/vcpkg_installed/x64-linux/include/")
-
-set(GCSSDK_INCLUDE_DIRS "/home/eman_copty_intel_com/data2/vcpkg/packages/google-cloud-cpp_x64-linux/include")
 set(GCSSDK_LIBRARIES "google_cloud_cpp_common google_cloud_cpp_rest_internal google_cloud_cpp_storage")
-
 
 target_include_directories(velox_gcs PUBLIC ${GCSSDK_INCLUDE_DIRS})
 target_link_libraries(velox_gcs ${GCSSDK_LIBRARIES})
-#GCSSDK_INCLUDE_DIRS
+
 if(${VELOX_BUILD_TESTING})
   #add_subdirectory(tests) #TODO add tests
-  #add_subdirectory(benchmark)
 endif()
