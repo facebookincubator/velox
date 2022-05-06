@@ -20,6 +20,8 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 
+#include "velox/vector/arrow/Bridge.h"
+
 namespace facebook::velox::core {
 
 typedef std::string PlanNodeId;
@@ -236,6 +238,51 @@ class ValuesNode : public PlanNode {
 
   const std::vector<RowVectorPtr> values_;
   const RowTypePtr outputType_;
+  const bool parallelizable_;
+};
+
+class ArrowStreamNode : public PlanNode {
+ public:
+  ArrowStreamNode(
+      const PlanNodeId& id,
+      const RowTypePtr& outputType,
+      std::shared_ptr<ArrowArrayStream> arrowStream,
+      bool parallelizable = false)
+      : PlanNode(id),
+        outputType_(outputType),
+        arrowStream_(arrowStream),
+        parallelizable_(parallelizable) {
+    VELOX_CHECK(arrowStream != nullptr);
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override;
+
+  bool requiresSplits() const override {
+    return true;
+  }
+
+  // For testing only.
+  bool isParallelizable() const {
+    return parallelizable_;
+  }
+
+  std::shared_ptr<ArrowArrayStream> arrowStream() const {
+    return arrowStream_;
+  }
+
+  std::string_view name() const override {
+    return "ArrowStream";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const RowTypePtr outputType_;
+  std::shared_ptr<ArrowArrayStream> arrowStream_;
   const bool parallelizable_;
 };
 
