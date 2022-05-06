@@ -229,6 +229,82 @@ struct VectorReader {
   const DecodedVector& decoded_;
 };
 
+template <typename T>
+struct FlatVectorReader {
+  using exec_in_t = typename VectorExec::template resolver<T>::in_type;
+  using exec_null_free_in_t =
+      typename VectorExec::template resolver<T>::in_type;
+
+  explicit FlatVectorReader(const BaseVector* vector)
+      : vector_{vector->template asFlatVector<exec_in_t>()},
+        rawValues_{vector_->rawValues()} {
+    VELOX_CHECK_NOT_NULL(vector_);
+  }
+
+  explicit FlatVectorReader(const FlatVectorReader<T>&) = delete;
+  FlatVectorReader<T>& operator=(const FlatVectorReader<T>&) = delete;
+
+  FOLLY_ALWAYS_INLINE exec_in_t operator[](size_t offset) const {
+    return rawValues_[offset];
+  }
+
+  FOLLY_ALWAYS_INLINE exec_null_free_in_t readNullFree(size_t offset) const {
+    return rawValues_[offset];
+  }
+
+  bool isSet(size_t offset) const {
+    return !vector_->isNullAt(offset);
+  }
+
+  bool containsNull(size_t offset) const {
+    return vector_->isNullAt(offset);
+  }
+
+  bool mayHaveNulls() const {
+    return vector_->mayHaveNulls();
+  }
+
+  const FlatVector<exec_in_t>* vector_;
+  const exec_in_t* rawValues_;
+};
+
+template <typename T>
+struct ConstantVectorReader {
+  using exec_in_t = typename VectorExec::template resolver<T>::in_type;
+  using exec_null_free_in_t =
+      typename VectorExec::template resolver<T>::in_type;
+
+  explicit ConstantVectorReader(const BaseVector* vector)
+      : value_{vector->as<SimpleVector<exec_in_t>>()->valueAt(0)},
+        isNull_{vector->isNullAt(0)} {}
+
+  explicit ConstantVectorReader(const ConstantVectorReader<T>&) = delete;
+  ConstantVectorReader<T>& operator=(const ConstantVectorReader<T>&) = delete;
+
+  FOLLY_ALWAYS_INLINE exec_in_t operator[](size_t offset) const {
+    return value_;
+  }
+
+  FOLLY_ALWAYS_INLINE exec_null_free_in_t readNullFree(size_t offset) const {
+    return value_;
+  }
+
+  bool isSet(size_t offset) const {
+    return !isNull_;
+  }
+
+  bool containsNull(size_t offset) const {
+    return isNull_;
+  }
+
+  bool mayHaveNulls() const {
+    return isNull_;
+  }
+
+  const exec_in_t value_;
+  const bool isNull_;
+};
+
 namespace detail {
 
 template <typename TOut>

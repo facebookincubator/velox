@@ -200,8 +200,7 @@ class SimpleFunctionAdapter : public VectorFunction {
       (*reusableResult)->clearNulls(rows);
     }
 
-    DecodedArgs decodedArgs{rows, args, context};
-    unpack<0>(applyContext, true, decodedArgs);
+    unpack<0>(applyContext, true, args);
 
     if constexpr (
         fastPathIteration && !FUNC::can_produce_null_output &&
@@ -216,8 +215,10 @@ class SimpleFunctionAdapter : public VectorFunction {
       VELOX_CHECK_LT(reuseStringsFromArg, args.size());
       VELOX_CHECK_EQ(args[reuseStringsFromArg]->typeKind(), TypeKind::VARCHAR);
 
-      tryAcquireStringBuffer(
-          reusableResult->get(), decodedArgs.at(reuseStringsFromArg)->base());
+      // TODO Avoid decoding twice.
+      LocalDecodedVector decoded(
+          applyContext.context, *args[reuseStringsFromArg], *applyContext.rows);
+      tryAcquireStringBuffer(reusableResult->get(), decoded.get()->base());
     }
 
     *result = std::move(*reusableResult);
@@ -287,7 +288,7 @@ class SimpleFunctionAdapter : public VectorFunction {
           unpack(
               ApplyContext& applyContext,
               bool allNotNull,
-              const DecodedArgs& packed,
+              const std::vector<VectorPtr>& packed,
               TReader&... readers) const {
     if constexpr (isVariadicType<arg_at<POSITION>>::value) {
       // This should already be statically checked by the UDFHolder used to
@@ -295,7 +296,10 @@ class SimpleFunctionAdapter : public VectorFunction {
       static_assert(
           POSITION == FUNC::num_args - 1,
           "Variadic args can only be used as the last argument to a function.");
-      auto oneReader = VectorReader<arg_at<POSITION>>(packed, POSITION);
+      // TODO Limit decoding to just the variaic arguments. Do not decode
+      // arguments that came before.
+      DecodedArgs decodedArgs(*applyContext.rows, packed, applyContext.context);
+      auto oneReader = VectorReader<arg_at<POSITION>>(decodedArgs, POSITION);
 
       if constexpr (FUNC::udf_has_callNullFree) {
         oneReader.setChildrenMayHaveNulls();
@@ -313,21 +317,91 @@ class SimpleFunctionAdapter : public VectorFunction {
       unpack<POSITION + 1>(
           applyContext, nextNonNull, packed, readers..., oneReader);
     } else {
-      auto* oneUnpacked = packed.at(POSITION);
-      auto oneReader = VectorReader<arg_at<POSITION>>(oneUnpacked);
+      if constexpr (
+          std::is_same_v<arg_at<POSITION>, int8_t> ||
+          std::is_same_v<arg_at<POSITION>, int16_t> ||
+          std::is_same_v<arg_at<POSITION>, int32_t> ||
+          std::is_same_v<arg_at<POSITION>, int64_t> ||
+          std::is_same_v<arg_at<POSITION>, float> ||
+          std::is_same_v<arg_at<POSITION>, double>) {
+        if (packed[POSITION]->encoding() == VectorEncoding::Simple::FLAT) {
+          auto& flatUnpacked = packed[POSITION];
+          auto oneReader =
+              FlatVectorReader<arg_at<POSITION>>(flatUnpacked.get());
 
-      if constexpr (FUNC::udf_has_callNullFree) {
-        oneReader.setChildrenMayHaveNulls();
-        applyContext.mayHaveNullsRecursive |= oneReader.mayHaveNullsRecursive();
+          if constexpr (FUNC::udf_has_callNullFree) {
+            oneReader.setChildrenMayHaveNulls();
+            applyContext.mayHaveNullsRecursive |=
+                oneReader.mayHaveNullsRecursive();
+          }
+
+          // context->nullPruned() is true after rows with nulls have been
+          // pruned out of 'rows', so we won't be seeing any more nulls here.
+          bool nextNonNull = applyContext.context->nullsPruned() ||
+              (allNotNull && !flatUnpacked->mayHaveNulls());
+
+          unpack<POSITION + 1>(
+              applyContext, nextNonNull, packed, readers..., oneReader);
+        } else if (
+            packed[POSITION]->encoding() == VectorEncoding::Simple::CONSTANT) {
+          auto& constUnpacked = packed[POSITION];
+          auto oneReader =
+              ConstantVectorReader<arg_at<POSITION>>(constUnpacked.get());
+
+          if constexpr (FUNC::udf_has_callNullFree) {
+            oneReader.setChildrenMayHaveNulls();
+            applyContext.mayHaveNullsRecursive |=
+                oneReader.mayHaveNullsRecursive();
+          }
+
+          // context->nullPruned() is true after rows with nulls have been
+          // pruned out of 'rows', so we won't be seeing any more nulls here.
+          bool nextNonNull = applyContext.context->nullsPruned() ||
+              (allNotNull && !constUnpacked->mayHaveNulls());
+
+          unpack<POSITION + 1>(
+              applyContext, nextNonNull, packed, readers..., oneReader);
+        } else {
+          // TODO Reduce copy-paste.
+          LocalDecodedVector decoded(
+              applyContext.context, *packed.at(POSITION), *applyContext.rows);
+          auto* oneUnpacked = decoded.get();
+          auto oneReader = VectorReader<arg_at<POSITION>>(oneUnpacked);
+
+          if constexpr (FUNC::udf_has_callNullFree) {
+            oneReader.setChildrenMayHaveNulls();
+            applyContext.mayHaveNullsRecursive |=
+                oneReader.mayHaveNullsRecursive();
+          }
+
+          // context->nullPruned() is true after rows with nulls have been
+          // pruned out of 'rows', so we won't be seeing any more nulls here.
+          bool nextNonNull = applyContext.context->nullsPruned() ||
+              (allNotNull && !oneUnpacked->mayHaveNulls());
+
+          unpack<POSITION + 1>(
+              applyContext, nextNonNull, packed, readers..., oneReader);
+        }
+      } else {
+        LocalDecodedVector decoded(
+            applyContext.context, *packed.at(POSITION), *applyContext.rows);
+        auto* oneUnpacked = decoded.get();
+        auto oneReader = VectorReader<arg_at<POSITION>>(oneUnpacked);
+
+        if constexpr (FUNC::udf_has_callNullFree) {
+          oneReader.setChildrenMayHaveNulls();
+          applyContext.mayHaveNullsRecursive |=
+              oneReader.mayHaveNullsRecursive();
+        }
+
+        // context->nullPruned() is true after rows with nulls have been
+        // pruned out of 'rows', so we won't be seeing any more nulls here.
+        bool nextNonNull = applyContext.context->nullsPruned() ||
+            (allNotNull && !oneUnpacked->mayHaveNulls());
+
+        unpack<POSITION + 1>(
+            applyContext, nextNonNull, packed, readers..., oneReader);
       }
-
-      // context->nullPruned() is true after rows with nulls have been
-      // pruned out of 'rows', so we won't be seeing any more nulls here.
-      bool nextNonNull = applyContext.context->nullsPruned() ||
-          (allNotNull && !oneUnpacked->mayHaveNulls());
-
-      unpack<POSITION + 1>(
-          applyContext, nextNonNull, packed, readers..., oneReader);
     }
   }
 
@@ -341,7 +415,7 @@ class SimpleFunctionAdapter : public VectorFunction {
   void unpack(
       ApplyContext& applyContext,
       bool allNotNull,
-      const DecodedArgs& /*packed*/,
+      const std::vector<VectorPtr>& /*packed*/,
       const TReader&... readers) const {
     iterate(applyContext, allNotNull, readers...);
   }
