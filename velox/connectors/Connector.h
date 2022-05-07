@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/caching/DataCache.h"
 #include "velox/common/caching/ScanTracker.h"
@@ -34,14 +35,14 @@ class ExprSet;
 }
 namespace facebook::velox::connector {
 
+class DataSource;
+
 // A split represents a chunk of data that a connector should load and return
 // as a RowVectorPtr, potentially after processing pushdowns.
 struct ConnectorSplit {
   const std::string connectorId;
 
-  // true if the Task processing this has aborted. Allows aborting
-  // async prefetch for the split.
-  bool cancelled{false};
+  std::shared_ptr<AsyncSource<std::shared_ptr<DataSource>>> dataSource;
 
   explicit ConnectorSplit(const std::string& _connectorId)
       : connectorId(_connectorId) {}
@@ -119,6 +120,22 @@ class DataSource {
   virtual uint64_t getCompletedRows() = 0;
 
   virtual std::unordered_map<std::string, RuntimeCounter> runtimeStats() = 0;
+
+  // Returns true if 'this' has initiated all the prefetch this will
+  // initiate. This means that the caller should schedule next splits
+  // to prefetch in the background. false if the source does not
+  // prefetch.
+  virtual bool allPrefetchIssued() const {
+    return false;
+  }
+
+  // Initializes this from 'source'. 'source' is effectively moved
+  // into 'this' Adaptation like dynamic filters stay in effect but
+  // the parts dealing with open files, prefetched data etc. are moved. 'source'
+  // is freed after the move.
+  virtual void setFromDataSource(std::shared_ptr<DataSource> source) {
+    VELOX_UNSUPPORTED("setFromDataSource");
+  }
 
   // Returns a connector dependent row size if available. This can be
   // called after addSplit().  This estimates uncompressed data
@@ -233,6 +250,14 @@ class Connector {
           std::shared_ptr<connector::ColumnHandle>>& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) = 0;
 
+  // Returns true if addSplit of DataSource can use 'dataSource' from
+  // ConnectorSplit in addSplit(). If so, TableScan can preload splits
+  // so that file opening and metadata operations are off the Driver'
+  // thread.
+  virtual bool supportsSplitPreload() {
+    return false;
+  }
+
   virtual std::shared_ptr<DataSink> createDataSink(
       std::shared_ptr<const RowType> inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
@@ -245,6 +270,10 @@ class Connector {
   static std::shared_ptr<cache::ScanTracker> getTracker(
       const std::string& scanId,
       int32_t loadQuantum);
+
+  virtual folly::Executor* FOLLY_NULLABLE executor() const {
+    return nullptr;
+  }
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

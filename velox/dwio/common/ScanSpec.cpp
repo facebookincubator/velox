@@ -62,6 +62,8 @@ void ScanSpec::reorder() {
   if (children_.empty()) {
     return;
   }
+  // Make sure 'stableChildren_' is initialized.
+  stableChildren();
   std::sort(
       children_.begin(),
       children_.end(),
@@ -88,6 +90,17 @@ void ScanSpec::reorder() {
       });
 }
 
+const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (stableChildren_.empty()) {
+    stableChildren_.reserve(children_.size());
+    for (auto& child : children_) {
+      stableChildren_.push_back(child.get());
+    }
+  }
+  return stableChildren_;
+}
+
 bool ScanSpec::hasFilter() const {
   if (hasFilter_.has_value()) {
     return hasFilter_.value();
@@ -104,6 +117,37 @@ bool ScanSpec::hasFilter() const {
   }
   hasFilter_ = false;
   return false;
+}
+
+void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
+  // moves the filters and filter order from 'other'.
+  std::vector<std::unique_ptr<ScanSpec>> newChildren;
+  for (auto& otherChild : other.children_) {
+    bool found = false;
+    for (auto& child : children_) {
+      if (child && child->fieldName_ == otherChild->fieldName_) {
+        if (!child->isConstant() && !otherChild->isConstant()) {
+          // If other child is constant, a possible filter on a
+          // constant will have been evaluated at split start time. If
+          // 'child' is constant there is no adaptation that can be
+          // received.
+          child->filter_ = std::move(otherChild->filter_);
+          child->selectivity_ = otherChild->selectivity_;
+        }
+        newChildren.push_back(std::move(child));
+        found = true;
+        break;
+      }
+    }
+    VELOX_CHECK(found);
+  }
+  children_ = std::move(newChildren);
+  stableChildren_.clear();
+  for (auto& otherChild : other.stableChildren_) {
+    auto child = childByName(otherChild->fieldName_);
+    VELOX_CHECK(child);
+    stableChildren_.push_back(child);
+  }
 }
 
 namespace {

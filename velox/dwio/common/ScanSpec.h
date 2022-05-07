@@ -148,6 +148,10 @@ class ScanSpec {
     return children_;
   }
 
+  // Returns 'children in a stable order. May be used for parallel construction
+  // and read-ahead of reader trees while the main user of 'this' is running.
+  const std::vector<ScanSpec*>& stableChildren();
+
   // Returns a read sequence number. This can b used for tagging
   // lazy vectors with a generation number so that we can check that
   // the reader that made them has not advanced between the making and
@@ -251,10 +255,15 @@ class ScanSpec {
   // Returns the child which produces values for 'channel'. Throws if not found.
   ScanSpec& getChildByChannel(ChannelIndex channel);
 
+  void moveAdaptationFrom(ScanSpec& other);
+
   std::string toString() const;
 
  private:
   void reorder();
+
+  // Serializes stableChildren().
+  std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
   // is used for setup on first use and to produce a read sequence
@@ -300,6 +309,10 @@ class ScanSpec {
   // true differentiates pruning from the case of extracting all children.
 
   std::vector<std::unique_ptr<ScanSpec>> children_;
+  // Read-only copy of children, not subject to reordering. Used when
+  // asynchronously constructing reader trees for read-ahead, while
+  // 'children_' is reorderable by a running scan.
+  std::vector<ScanSpec*> stableChildren_;
   mutable std::optional<bool> hasFilter_;
   ValueHook* valueHook_ = nullptr;
 };

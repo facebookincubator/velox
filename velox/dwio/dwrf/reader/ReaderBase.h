@@ -135,8 +135,7 @@ class ReaderBase {
   }
 
   const BufferedInputFactory& bufferedInputFactory() const {
-    return bufferedInputFactory_ ? *bufferedInputFactory_
-                                 : *BufferedInputFactory::baseFactory();
+    return *bufferedInputFactory_;
   }
 
   const std::unique_ptr<StripeMetadataCache>& getMetadataCache() const {
