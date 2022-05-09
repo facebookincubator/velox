@@ -22,6 +22,7 @@
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/tests/VectorTestBase.h"
 
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
@@ -34,13 +35,9 @@ using namespace facebook::velox::substrait;
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  public:
   void assertPlanConversion(
+      const std::vector<RowVectorPtr>& vectors,
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
-    const auto& valuesNode =
-        std::dynamic_pointer_cast<const core::ValuesNode>(plan);
-    ASSERT_TRUE(valuesNode != nullptr);
-    const auto& vectors = valuesNode->values();
-
     createDuckDbTable(vectors);
     assertQuery(plan, duckDbSql);
   }
@@ -73,5 +70,16 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
 
   auto veloxPlan = planConverter_->toVeloxPlan(*subPlan, pool_.get());
 
-  assertPlanConversion(veloxPlan, "SELECT * FROM tmp");
+  RowVectorPtr expectedData = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {2499109626526694126, 2342493223442167775, 4077358421272316858}),
+       makeFlatVector<int32_t>({581869302, -708632711, -133711905}),
+       makeFlatVector<double>(
+           {0.90579193414549275, 0.96886777112423139, 0.63235925003444637}),
+       makeFlatVector<bool>({true, false, false}),
+       makeFlatVector<int32_t>(3, nullptr, nullEvery(1))
+
+      });
+
+  assertPlanConversion({expectedData}, veloxPlan, "SELECT * FROM tmp");
 }

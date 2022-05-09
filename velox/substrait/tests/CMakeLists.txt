@@ -57,10 +57,3 @@ target_link_libraries(
   glog::glog
   ${FMT}
   ${FILESYSTEM})
-
-set(json_data_directory ${CMAKE_CURRENT_SOURCE_DIR}/data)
-file(GLOB JSON_FILES ${json_data_directory}/*.json)
-
-foreach(JSON ${JSON_FILES})
-  file(COPY ${JSON} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/data)
-endforeach()
