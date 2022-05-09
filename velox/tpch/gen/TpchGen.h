@@ -46,11 +46,17 @@ enum class Table {
   TBL_REGION,
 };
 
+/// Returns table name as a string.
+std::string_view toTableName(Table table);
+
 /// Returns the row count for a particular TPC-H table given a scale factor, as
 /// defined in the spec available at:
 ///
 ///  https://www.tpc.org/tpch/
 constexpr size_t getRowCount(Table table, size_t scaleFactor);
+
+/// Returns the schema (RowType) for a particular TPC-H table.
+RowTypePtr getTableSchema(Table table);
 
 /// Returns a row vector containing at most `maxRows` rows of the "orders"
 /// table, starting at `offset`, and given the scale factor. The row vector
