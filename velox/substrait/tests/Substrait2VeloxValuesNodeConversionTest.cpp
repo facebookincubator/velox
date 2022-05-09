@@ -34,14 +34,6 @@ using namespace facebook::velox::substrait;
 
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  public:
-  void assertPlanConversion(
-      const std::vector<RowVectorPtr>& vectors,
-      const core::PlanNodePtr& plan,
-      const std::string& duckDbSql) {
-    createDuckDbTable(vectors);
-    assertQuery(plan, duckDbSql);
-  }
-
   void parseJson(const std::string& filePath, ::substrait::Plan* subPlan) {
     // Read json and resume the Substrait plan.
     std::ifstream subJson(filePath);
@@ -81,5 +73,6 @@ TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
 
       });
 
-  assertPlanConversion({expectedData}, veloxPlan, "SELECT * FROM tmp");
+  createDuckDbTable({expectedData});
+  assertQuery(veloxPlan, "SELECT * FROM tmp");
 }
