@@ -2805,3 +2805,51 @@ TEST_F(ExprTest, invalidInputs) {
       exec::EvalCtx(execCtx_.get(), exprSet.get(), input.get()),
       VeloxRuntimeError);
 }
+
+TEST_F(ExprTest, addNullsTest) {
+  auto kTestSize = 10'000;
+  // encoding 1
+  auto encoding1 = std::vector{
+      EncodingOptions::flat(100, 2), EncodingOptions::dictionary(kTestSize, 6)};
+  // encoding 2
+  auto encoding2 = std::vector{
+      EncodingOptions::flat(100, 2), EncodingOptions::constant(kTestSize, 3)};
+
+  fillVectorAndReference<int64_t>(
+      encoding1,
+      [](int32_t row) {
+        return row % 7 == 0 ? std::nullopt
+                            : std::optional(static_cast<int64_t>(row));
+      },
+      &testData_.bigint1);
+
+  fillVectorAndReference<int64_t>(
+      encoding2,
+      [](int32_t row) {
+        return (row % 11 == 0) ? std::nullopt
+                               : std::optional(static_cast<int64_t>(row));
+      },
+      &testData_.bigint2);
+
+  run<int64_t>(
+      "if(bigint1 % 2 = 0 and bigint2 < 1000 and bigint1 + bigint2 > 0,"
+      "  bigint1, bigint2) + 11",
+      [&](int32_t row) {
+        if ((IS_BIGINT1 && BIGINT1 % 2 == 0) &&
+            (IS_BIGINT2 && BIGINT2 < 1000) &&
+            (IS_BIGINT1 && IS_BIGINT2 && BIGINT1 + BIGINT2 > 0)) {
+          return IS_BIGINT1 ? INT64V(BIGINT1 + 11) : INT64N;
+        }
+        return IS_BIGINT2 ? INT64V(BIGINT2 + 11) : INT64N;
+      });
+
+  run<int64_t>(
+      "if ((if (bigint1 % 3 = 0, bigint1 % 0 > 1, bigint1 >= 0)"
+      "and if(bigint2 % 13 = 0, bigint2 % 0 > 1, bigint2 > 0)"
+      "and (bigint1 % 3 > 0) and (bigint2 % 13 > 0)), 1, 0)",
+      [&](int32_t row) {
+        if (IS_BIGINT1 && BIGINT1 % 3 > 0 && IS_BIGINT2 && BIGINT2 % 13 > 0)
+          return 1;
+        return 0;
+      });
+}
