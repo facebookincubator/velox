@@ -272,6 +272,10 @@ void Expr::eval(
     return;
   }
 
+  if (context->mode() == EvalMode::kFlatNonNull) {
+    return evalFlatNonNull(rows, context, result);
+  }
+  
   // Check if there are any IFs, ANDs or ORs. These expressions are special
   // because not all of their sub-expressions get evaluated on all the rows
   // all the time. Therefore, we should delay loading lazy vectors until we
@@ -283,11 +287,14 @@ void Expr::eval(
   // peeling and wrapping in the sub-nodes.
   //
   // TODO: Re-work the logic of deciding when to load which field.
-  if (!hasConditionals_ || distinctFields_.size() == 1) {
+  VarSetter mode(&context->mode(), context->mode());
+  if (context->mode() == EvalMode::kGeneric && (!hasConditionals_ || distinctFields_.size() == 1)) {
     // Load lazy vectors if any.
+    EvalMode newMode = EvalMode::kFlatNonNull;
     for (const auto& field : distinctFields_) {
-      context->ensureFieldLoaded(field->index(context), rows);
+      context->ensureFieldLoaded(field->index(context), rows, &newMode);
     }
+    context->mode() = newMode;
   }
 
   if (inputs_.empty()) {
@@ -297,7 +304,7 @@ void Expr::eval(
 
   // Check if this expression has been evaluated already. If so, fetch and
   // return the previously computed result.
-  if (checkGetSharedSubexprValues(rows, context, result)) {
+  if (isMultiplyReferenced_ && checkGetSharedSubexprValues(rows, context, result)) {
     return;
   }
 
@@ -318,7 +325,7 @@ bool Expr::checkGetSharedSubexprValues(
   //
   // For now, disable the optimization if any encodings have been peeled off.
 
-  if (!isMultiplyReferenced_ || !sharedSubexprValues_ ||
+  if (!sharedSubexprValues_ ||
       context->wrapEncoding() != VectorEncoding::Simple::FLAT) {
     return false;
   }
@@ -697,7 +704,10 @@ void Expr::evalWithNulls(
     *result = BaseVector::createNullConstant(type(), 0, context->pool());
     return;
   }
-
+  if (context->nullsPruned()) {
+    evalAll(rows, context, result);
+    return;
+  }
   if (propagatesNulls_) {
     bool mayHaveNulls = false;
     for (const auto& field : distinctFields_) {
@@ -971,9 +981,49 @@ void Expr::evalAll(
   if (remainingRows != &rows) {
     addNulls(rows, remainingRows->asRange().bits(), context, result);
   }
+  context->releaseVectors(inputValues_);
   inputValues_.clear();
 }
 
+void Expr::evalFlatNonNull(
+    const SelectivityVector& rows,
+    EvalCtx* context,
+    VectorPtr* result) {
+  if (isSpecialForm()) {
+    evalSpecialForm(rows, context, result);
+    return;
+  }
+  LocalSelectivityVector nonNulls(context);
+  auto* remainingRows = &rows;
+
+  inputValues_.resize(inputs_.size());
+  for (int32_t i = 0; i < inputs_.size(); ++i) {
+    inputs_[i]->evalFlatNonNull(*remainingRows, context, &inputValues_[i]);
+  // If any errors occurred evaluating the arguments, it's possible (even
+  // likely) that the values for those arguments were not defined which could
+  // lead to undefined behavior if we try to evaluate the current function on
+  // them.  It's safe to skip evaluating them since the value for this branch
+  // of the expression tree will be NULL for those rows anyway.
+  if (context->errors()) {
+    if (remainingRows == &rows) {
+      nonNulls.allocate(rows.end());
+      *nonNulls.get() = rows;
+      remainingRows = nonNulls.get();
+    }
+    deselectErrors(context, *nonNulls.get());
+    if (!remainingRows->hasSelections()) {
+      context->releaseVectors(inputValues_);
+      inputValues_.clear();
+      return;
+    }
+  }
+
+  applyFunction(*remainingRows, context, result);
+  }
+  context->releaseVectors(inputValues_);
+  inputValues_.clear();
+}
+   
 namespace {
 void setPeeledArg(
     VectorPtr arg,

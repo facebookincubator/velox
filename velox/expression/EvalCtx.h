@@ -27,6 +27,15 @@ class Expr;
 class ExprSet;
 struct ContextSaver;
 
+  // Specifies the items to check in the Expr::eval
+  // traversal. kGeneric means that anything can occur. kLazyLoaded
+  // means that LazyVectors are loaded and replaced by the
+  // corresponding loaded vectors. kFlatNonNull implies
+  // kLazyLoaded and that the operands do not contain non-flat
+  // encodings or nulls at any level. Shared subexpressions and
+  // complex types are allowed in all modes.
+  enum class EvalMode : char {kGeneric, kLazyLoaded, kFlatNonNull};
+  
 // Context for holding the base row vector, error state and various
 // flags for Expr interpreter.
 class EvalCtx {
@@ -47,11 +56,11 @@ class EvalCtx {
   // Returns the index-th column of the base row. If we have peeled off
   // wrappers like dictionaries, then this provides access only to the
   // peeled off fields.
-  const VectorPtr& getField(int32_t index) const;
+  VectorPtr& getField(int32_t index);
 
   BaseVector* getRawField(int32_t index) const;
 
-  void ensureFieldLoaded(int32_t index, const SelectivityVector& rows);
+  void ensureFieldLoaded(int32_t index, const SelectivityVector& rows, EvalMode* FOLLY_NULLABLE mode = nullptr);
 
   void setPeeled(int32_t index, const VectorPtr& vector) {
     if (peeledFields_.size() <= index) {
@@ -138,6 +147,11 @@ class EvalCtx {
     return &nullsPruned_;
   }
 
+  EvalMode& mode() {
+    return mode_;
+  }
+
+
   // Returns true if the set of rows the expressions are evaluated on are
   // complete, e.g. we are currently not under an IF where expressions are
   // evaluated only on a subset of rows which either passed the condition
@@ -200,6 +214,18 @@ class EvalCtx {
     }
   }
 
+  VectorPtr getVector(const TypePtr& type, vector_size_t size) {
+    return execCtx_->getVector(type, size);
+  }
+
+  void releaseVector(VectorPtr& vector) {
+    execCtx_->releaseVector(vector);
+  }
+
+  void releaseVectors(std::vector<VectorPtr>& vectors) {
+    execCtx_->releaseVectors(vectors);
+  }
+  
  private:
   core::ExecCtx* const execCtx_;
   ExprSet* const exprSet_;
@@ -219,6 +245,9 @@ class EvalCtx {
   bool nullsPruned_{false};
   bool throwOnError_{true};
 
+  // True if all operands processed with ensureFieldLoaded().
+  EvalMode mode_{EvalMode::kGeneric};
+  
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};
 

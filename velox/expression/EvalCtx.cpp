@@ -231,16 +231,16 @@ void EvalCtx::setErrors(
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 
-const VectorPtr& EvalCtx::getField(int32_t index) const {
-  const VectorPtr* field;
+VectorPtr& EvalCtx::getField(int32_t index) {
+  VectorPtr* field;
   if (!peeledFields_.empty()) {
     field = &peeledFields_[index];
   } else {
-    field = &row_->childAt(index);
+    field = &const_cast<RowVector*>(row_)->childAt(index);
   }
   if ((*field)->isLazy() && (*field)->asUnchecked<LazyVector>()->isLoaded()) {
     auto lazy = (*field)->asUnchecked<LazyVector>();
-    return lazy->loadedVectorShared();
+    return *const_cast<VectorPtr*>(&lazy->loadedVectorShared());
   }
   return *field;
 }
@@ -258,8 +258,25 @@ BaseVector* EvalCtx::getRawField(int32_t index) const {
   return field;
 }
 
-void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
-  auto field = getField(index);
+void EvalCtx::ensureFieldLoaded(
+    int32_t index,
+    const SelectivityVector& rows,
+    EvalMode* FOLLY_NULLABLE mode) {
+  auto& field = getField(index);
+  auto encoding = field->encoding();
+  if (encoding == VectorEncoding::Simple::FLAT) {
+    if (mode && *mode == EvalMode::kFlatNonNull && field->rawNulls()) {
+      *mode = EvalMode::kLazyLoaded;
+    }
+    return;
+  }
+
+  auto updateMode = [&]() {
+    if (mode && *mode == EvalMode::kFlatNonNull && !field->isFlatNonNull()) {
+      *mode = EvalMode::kLazyLoaded;
+    }
+  };
+
   if (isLazyNotLoaded(*field)) {
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
 
@@ -269,13 +286,20 @@ void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
     auto baseRows = baseRowsHolder.get();
     auto rawField = field.get();
     LazyVector::ensureLoadedRows(field, rowsToLoad, *decoded, *baseRows);
+    updateMode();
     if (rawField != field.get()) {
       const_cast<RowVector*>(row_)->childAt(index) = field;
     }
+
   } else {
     // This is needed in any case because wrappers must be initialized also if
     // they contain a loaded lazyVector.
-    field->loadedVector();
+    if (encoding == VectorEncoding::Simple::LAZY) {
+      field = field->asUnchecked<LazyVector>()->loadedVectorShared();
+    } else {
+      field->loadedVector();
+    }
+    updateMode();
   }
 }
 

@@ -221,6 +221,11 @@ class Expr {
   void
   evalAll(const SelectivityVector& rows, EvalCtx* context, VectorPtr* result);
 
+  void evalFlatNonNull(
+      const SelectivityVector& rows,
+      EvalCtx* context,
+      VectorPtr* result);
+
   static void setDictionaryWrapping(
       DecodedVector& decoded,
       const SelectivityVector& rows,

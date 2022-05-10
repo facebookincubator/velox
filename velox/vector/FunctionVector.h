@@ -101,11 +101,7 @@ class FunctionVector : public BaseVector {
   };
 
   FunctionVector(velox::memory::MemoryPool* pool, TypePtr type)
-      : BaseVector(pool, type, BufferPtr(nullptr), 0) {}
-
-  VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::FUNCTION;
-  }
+    : BaseVector(pool, type, VectorEncoding::Simple::FUNCTION, BufferPtr(nullptr), 0) {}
 
   // Implements evaluation of the lambda function literal special
   // form. This assigns a function to a specified set of rows. This

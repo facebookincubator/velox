@@ -72,7 +72,11 @@ class SimpleFunctionAdapter : public VectorFunction {
         EvalCtx* _context,
         VectorPtr* _result)
         : rows{_rows}, context{_context} {
-      BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+      if (!*_result) {
+	*_result = context->getVector(outputType, _rows->size()); 
+      } else {
+	BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+      }
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);
     }
