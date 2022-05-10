@@ -85,52 +85,58 @@ void FieldReference::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
-  ExceptionContextSetter exceptionContext(
-      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
-
   if (*result) {
     BaseVector::ensureWritable(rows, type_, context->pool(), result);
   }
-  const RowVector* row;
+
+  if (inputs_.empty()) {
+    // Reference to a top level column in the context.
+    auto& child = context->getField(index(context));
+    if (result->get()) {
+      (*result)->copy(child.get(), rows, nullptr);
+      return;
+    }
+      
+    if (child->encoding() == VectorEncoding::Simple::CONSTANT) {
+      if (child.unique()) {
+	child->resize(rows.size());
+	*result = child;
+      } else {
+	*result = BaseVector::wrapInConstant(rows.size(), 0, child);
+      }
+      return;
+    }
+      *result = child;
+      return;
+    }
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   DecodedVector decoded;
   VectorPtr input;
   bool useDecode = false;
-  if (inputs_.empty()) {
-    row = context->row();
-  } else {
-    inputs_[0]->eval(rows, context, &input);
+  inputs_[0]->eval(rows, context, &input);
 
-    if (auto rowTry = input->as<RowVector>()) {
-      // Make sure output is not copied
-      if (rowTry->isCodegenOutput()) {
-        auto rowType = dynamic_cast<const RowType*>(rowTry->type().get());
-        index_ = rowType->getChildIdx(field_);
-        *result = std::move(rowTry->childAt(index_));
-        VELOX_CHECK(result->unique());
-        return;
-      }
-    }
-
-    decoded.decode(*input.get(), rows);
-    useDecode = !decoded.isIdentityMapping();
-    const BaseVector* base = decoded.base();
-    VELOX_CHECK(base->encoding() == VectorEncoding::Simple::ROW);
-    row = base->as<const RowVector>();
-  }
-  if (index_ == -1) {
-    auto rowType = dynamic_cast<const RowType*>(row->type().get());
-    VELOX_CHECK(rowType);
+      auto row = input->asUnchecked<RowVector>();
+      // Make sure output is not copied for codegen.
+  if (input->typeKind() == TypeKind::ROW && row->isCodegenOutput()) {
+    auto rowType = reinterpret_cast<const RowType*>(input->type().get());
     index_ = rowType->getChildIdx(field_);
+    *result = std::move(row->childAt(index_));
+    VELOX_CHECK(result->unique());
+    return;
   }
-  // If we refer to a column of the context row, this may have been
-  // peeled due to peeling off encoding, hence access it via
-  // 'context'.  Chekc if the child is unique before taking the second
-  // reference. Unique constant vectors can be resized in place, non-unique
+
+  decoded.decode(*input, rows);
+  useDecode = !decoded.isIdentityMapping();
+  const BaseVector* base = decoded.base();
+  VELOX_CHECK_EQ(base->encoding(),  VectorEncoding::Simple::ROW);
+  row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
+  
+  // Unique constant vectors can be resized in place, non-unique
   // must be copied to set the size.
-  bool isUniqueChild = inputs_.empty() ? context->getField(index_).unique()
-                                       : row->childAt(index_).unique();
-  VectorPtr child =
-      inputs_.empty() ? context->getField(index_) : row->childAt(index_);
+  auto& child =
+ row->childAt(index_);
   if (result->get()) {
     auto indices = useDecode ? decoded.indices() : nullptr;
     (*result)->copy(child.get(), rows, indices);
@@ -142,15 +148,17 @@ void FieldReference::evalSpecialForm(
     // have a constant that is not wrapped in anything we set its size
     // to correspond to rows.size(). This is in place for unique ones
     // and a copy otherwise.
+    VectorPtr toReturn;
     if (!useDecode && child->isConstantEncoding()) {
-      if (isUniqueChild) {
+      if (child.unique()) {
         child->resize(rows.size());
+	toReturn = child;
       } else {
-        child = BaseVector::wrapInConstant(rows.size(), 0, child);
+        toReturn = BaseVector::wrapInConstant(rows.size(), 0, child);
       }
     }
-    *result = useDecode ? std::move(decoded.wrap(child, *input.get(), rows))
-                        : std::move(child);
+    *result = useDecode ? std::move(decoded.wrap(toReturn, *input.get(), rows))
+                        : std::move(toReturn);
   }
 }
 

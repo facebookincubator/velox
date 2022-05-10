@@ -295,6 +295,10 @@ void Expr::eval(
       context->ensureFieldLoaded(field->index(context), rows, &newMode);
     }
     context->mode() = newMode;
+    if (newMode == EvalMode::kFlatNonNull) {
+      evalFlatNonNull(rows, context, result);
+      return;
+    }
   }
 
   if (inputs_.empty()) {
@@ -989,6 +993,9 @@ void Expr::evalFlatNonNull(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  if (isMultiplyReferenced_ && checkGetSharedSubexprValues(rows, context, result)) {
+    return;
+  }
   if (isSpecialForm()) {
     evalSpecialForm(rows, context, result);
     return;
