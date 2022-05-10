@@ -686,6 +686,12 @@ class ArrayView {
   vector_size_t size_;
 };
 
+template <typename T>
+using NullFreeArrayView = ArrayView<false, T>;
+
+template <typename T>
+using NullableArrayView = ArrayView<true, T>;
+
 // This class is used to represent map inputs in simple functions with an
 // interface similar to std::map.
 // When returnsOptionalValues is true, the interface is like std::map<K,
@@ -874,6 +880,12 @@ class MapView {
   vector_size_t offset_;
   vector_size_t size_;
 };
+
+template <typename K, typename V>
+using NullFreeMapView = MapView<false, K, V>;
+
+template <typename K, typename V>
+using NullableMapView = MapView<true, K, V>;
 
 template <bool returnsOptionalValues, typename... T>
 class RowView {

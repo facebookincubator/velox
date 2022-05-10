@@ -402,17 +402,20 @@ Complex types as inputs
 Input complex types are represented in the simple function interface using light-weight lazy
 access abstractions that enable efficient direct access to the underlying data in Velox
 vectors.
-As mentioned earlier, the helper alias arg_type can be used in the function signature to
+As mentioned earlier, the helper aliases arg_type and null_free_arg_type can be used in functions signatures to
 map Velox types to the corresponding input types. The table below shows the actual types that are
 used to represent inputs of different complex types.
 
-==========  ==============================  =============================
-Velox Type  C++ Argument Type               C++ Actual Argument Type
-==========  ==============================  =============================
-ARRAY       arg_type<Array<E>>              ArrayView<OptionalAccessor<E>>>
-MAP         arg_type<Map<K,V>>              MapView<arg_type<K>, OptionalAccessor<V>>
-ROW         arg_type<Row<T1, T2, T3,...>>   RowView<OptionalAccessor<arg_type<T1>>...>>
-==========  ==============================  =============================
+==============================    ==============================================================
+ C++ Argument Type                 C++ Actual Argument Type
+==============================    ==============================================================
+arg_type<Array<E>>                NullableArrayView<OptionalAccessor<E>>>
+arg_type<Map<K,V>>                NullableMapView<arg_type<K>, OptionalAccessor<V>>
+arg_type<Row<T...>>               NullableRowView<OptionalAccessor<arg_type<T>>...>>
+null_free_arg_type<Array<E>>      NullFreeArrayView<null_free_arg_type<E>>>
+null_free_arg_type<Map<K,V>>      NullFreeMapView<null_free_arg_type<K>, null_free_arg_type<V>>
+null_free_arg_type<Row<T...>>>    NullFreeRowView<null_free_arg_type<T>...>
+==============================    ==============================================================
 
 The view types are designed to have interfaces similar to those of std::containers, in fact in most cases
 they can be used as a drop in replacement. The table below shows the mapping between the Velox type and
@@ -421,21 +424,24 @@ the corresponding std type. For example: a *Map<Row<int, int>, Array<float>>* co
 
 All views types are cheap to copy objects, for example the size of ArrayView is 16 bytes at max.
 
-===========      ======================================
-Lazy Input       Corresponding `std` type
-===========      ======================================
-ArrayView        const std::vector<std::optional<V>>
-MapView          const std::map<K, std::optional<V>>
-RowView          const std::tuple<std::optional<T1>...>
-===========      ======================================
+======================    ======================================
+Lazy Input                Corresponding `std` type
+======================    ======================================
+NullableArrayView<V>      const std::vector<std::optional<V>>
+NullableMapView<K, V>     const std::map<K, std::optional<V>>
+NullableRowView<T...>     const std::tuple<std::optional<T>...>
+NullFreeArrayView<V>      const std::vector<V>
+NullFreeMapView<K, V>     const std::map<K, V>
+NullFreeRowView<T...>     const std::tuple<T...>
+======================    ======================================
 
 
 
 **1- OptionalAccessor<E>**:
 
 OptionalAccessor is an *std::optional* like object that provides lazy access to the nullity and
-value of the underlying Velox vector at a specific index. Currently, it is used to represent elements of input arrays
-and values of input maps. Note that keys in the map are assumed to be not nullable in Velox.
+value of the underlying Velox vector at a specific index. Currently, it is used to represent elements of nullable input arrays
+and values of nullable input maps. Note that keys in the map are assumed to be always not nullable in Velox.
 
 The object supports the following methods:
 
@@ -462,10 +468,10 @@ The following expressions are valid, where array[0] is an optional accessor.
     if(std::nullopt == array[0]) ...
     if(array[0]== std::optional<int>{1}) ...
 
-**2- ArrayView<T>**:
+**2- NullableArrayView<T> and NullFreeArrayView<T>**
 
-ArrayView have an interface similar to that of const *std::vector<std::optional<V>>*, the code
-below shows the function arraySum, a range loop is used to iterate over the values.
+NullableArrayView and NullFreeArrayView have interfaces similar to that of *std::vector<std::optional<V>>* and *std::vector<V>*,
+the code below shows the function arraySum, a range loop is used to iterate over the values. Null
 
 .. code-block:: c++
 
@@ -489,7 +495,7 @@ ArrayView supports the following:
 
 - size_t size() : return the number of elements in the array.
 
-- OptionalAccessor<T> operator[](size_t index) : access element at index.
+- operator[](size_t index) : access element at index.
 
 - ArrayView<T>::Iterator begin() : iterator to the first element.
 
@@ -543,10 +549,10 @@ would skip reading the nullity when mayHaveNulls() is false.
 Note: calls to operator[], iterator de-referencing, and iterator pointer de-referencing are r-values (temporaries),
 versus l-values in STD containers. Hence those can be bound to const references or l-values but not normal references.
 
-**3- MapView<K, V>**:
+**3- NullableMapView<K, V> and  NullFreeMapView<K, V>**
 
-MapView has an interface similar to std::map<K, std::optional<V>>,  the code below shows an example function mapSum,
-that sums up the keys and values.
+NullableMapView and NullFreeMapView has an interfaces similar to std::map<K, std::optional<V>> and std::map<K, V>,
+the code below shows an example function mapSum, kibtjihjeeerjgcjnrfjktvhdcthjufbthat sums up the keys and values.
 
 .. code-block:: c++
 
@@ -572,18 +578,17 @@ MapView supports the following:
 
 - size_t size()                 : number of elements in the map.
 
-- MapView<K,V>::Iterator find(const arg_type<K>& key): performs a linear search for the key, and returns iterator to the
-element if found otherwise returns end().
+- MapView<K,V>::Iterator find(const key_t& key): performs a linear search for the key, and returns iterator to the element if found otherwise returns end(). Only supported for primitive key types.
 
-- MapView<K,V>::Iterator operator[](const arg_type<K>& key): same as find, throws an exception if element not found.
+- MapView<K,V>::Iterator operator[](const key_t& key): same as find, throws an exception if element not found.
 
 - MapView<K,V>::Element
 
 MapView<K, V>::Element is the type returned by dereferencing MapView<K, V>::Iterator. It has two members:
 
-- first : arg_type<K>
+- first : arg_type<K> | null_free_arg_type<K>
 
-- second: OptionalAccessor<V>.
+- second: OptionalAccessor<V> | null_free_arg_type<V>
 
 - MapView<K, V>::Element participates in struct binding: auto [v, k] = *map.begin();
 
@@ -653,7 +658,7 @@ syntactic type, and behaves somewhat similarly to Array.
 ==========  ==============================  =============================
 Velox Type  C++ Argument Type               C++ Actual Argument Type
 ==========  ==============================  =============================
-VARIADIC    arg_type<Variadic<E>>           VariadicView<OptionalAccessor<E>>>
+VARIADIC    arg_type<Variadic<E>>           VariadicView<OptionalAccessor<E>>
 ==========  ==============================  =============================
 
 Like the ArrayView, VariadicView has a similar interface to
