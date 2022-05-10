@@ -390,6 +390,17 @@ inline uint64_t SimpleVector<ComplexType>::hashValueAt(
   return wrappedVector()->hashValueAt(wrappedIndex(index));
 }
 
+template <>
+inline uint64_t SimpleVector<int128_t>::hashValueAt(vector_size_t index) const {
+  if (isNullAt(index)) {
+    return BaseVector::kNullHash;
+  }
+  auto value = valueAt(index);
+  auto lowerHash = folly::hasher<uint64_t>{}((uint64_t)value);
+  auto upperHash = folly::hasher<uint64_t>{}((uint64_t)(value >> 64));
+  return bits::commutativeHashMix(upperHash, lowerHash);
+}
+
 template <typename T>
 using SimpleVectorPtr = std::shared_ptr<SimpleVector<T>>;
 

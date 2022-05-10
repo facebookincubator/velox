@@ -752,6 +752,13 @@ class VectorTest : public testing::Test {
 };
 
 template <>
+ShortDecimal VectorTest::testValue<ShortDecimal>(
+    int32_t i,
+    BufferPtr& /*space*/) {
+  return ShortDecimal(i);
+}
+
+template <>
 StringView VectorTest::testValue(int32_t n, BufferPtr& buffer) {
   if (!buffer || buffer->capacity() < 1000) {
     buffer = AlignedBuffer::allocate<char>(1000, pool_.get());
@@ -847,6 +854,11 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::BOOLEAN>(BOOLEAN(), vectorSize_);
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
+}
+
+TEST_F(VectorTest, createDecimal) {
+  testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
+  testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
 }
 
 TEST_F(VectorTest, createOpaque) {

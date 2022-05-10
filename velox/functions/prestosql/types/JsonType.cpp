@@ -53,6 +53,10 @@ void generateJsonTyped(
     } else if constexpr (
         std::is_same_v<T, Date> || std::is_same_v<T, Timestamp>) {
       result.append(std::to_string(value));
+    } else if constexpr (std::is_same_v<T, ShortDecimal>) {
+      // ShortDecimal doesn't include precision and scale information
+      // to serialize into JSON.
+      VELOX_UNSUPPORTED();
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }

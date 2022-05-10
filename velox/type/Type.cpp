@@ -713,3 +713,16 @@ exec::CastOperatorPtr getCastOperator(const std::string& name) {
 }
 
 } // namespace facebook::velox
+
+namespace folly {
+namespace detail {
+
+// Added to overcome an issue while linking executable
+// velox_vector_test.
+template <>
+Expected<facebook::velox::int128_t, ConversionCode>
+str_to_integral<::facebook::velox::int128_t>(StringPiece* src) noexcept {
+  VELOX_NYI();
+}
+} // namespace detail
+} // namespace folly

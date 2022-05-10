@@ -25,7 +25,9 @@ namespace facebook::velox {
 
 struct ShortDecimal {
  public:
-  explicit ShortDecimal(int64_t value) : unscaledValue_(value) {}
+  // Default required for creating vector with NULL values.
+  constexpr explicit ShortDecimal() : unscaledValue_(0) {}
+  constexpr explicit ShortDecimal(int64_t value) : unscaledValue_(value) {}
 
   int64_t unscaledValue() const {
     return unscaledValue_;
@@ -71,8 +73,13 @@ struct ShortDecimal {
   }
 
  private:
-  const int64_t unscaledValue_;
+  int64_t unscaledValue_;
 };
+
+template <typename T>
+void toAppend(const ::facebook::velox::ShortDecimal& value, T* result) {
+  VELOX_UNSUPPORTED();
+}
 } // namespace facebook::velox
 
 namespace std {

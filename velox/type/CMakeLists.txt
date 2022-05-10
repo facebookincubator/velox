@@ -26,6 +26,7 @@ add_library(
   Date.cpp
   Filter.cpp
   Subfield.cpp
+  ShortDecimal.cpp
   Tokenizer.cpp)
 
 target_link_libraries(
