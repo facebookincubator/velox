@@ -18,21 +18,20 @@
 
 namespace facebook::velox {
 
-  std::string getErrorStringFromGCSError(
-    const google::cloud::StatusCode& code) {
-    using ::google::cloud::StatusCode;
+std::string getErrorStringFromGCSError(const google::cloud::StatusCode& code) {
+  using ::google::cloud::StatusCode;
 
-    switch (code) {
-      case StatusCode::kNotFound:
-        return "Resource not found";
-      case StatusCode::kPermissionDenied :
-        return "Access denied";
-      case StatusCode::kUnavailable:
-        return "Service unavailable";
+  switch (code) {
+    case StatusCode::kNotFound:
+      return "Resource not found";
+    case StatusCode::kPermissionDenied:
+      return "Access denied";
+    case StatusCode::kUnavailable:
+      return "Service unavailable";
 
-      default:
-        return "Unknown error";
-    }
+    default:
+      return "Unknown error";
+  }
 }
 
 } // namespace facebook::velox

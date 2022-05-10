@@ -37,6 +37,7 @@ class GCSFileSystem : public FileSystem {
   std::string name() const override;
 
   void remove(std::string_view path) override;
+
  protected:
   class Impl;
   std::shared_ptr<Impl> impl_;

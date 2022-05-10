@@ -27,7 +27,6 @@ TEST(GCSUtilTest, isGCSFile) {
   EXPECT_TRUE(isGCSFile("gs://bucket/file.txt"));
 }
 
-
 TEST(GCSUtilTest, bucketAndKeyFromGCSPath) {
   std::string bucket, key;
   auto path = "bucket/file.txt";

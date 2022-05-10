@@ -15,8 +15,8 @@
  */
 
 #pragma once
-#include "velox/common/base/Exceptions.h"
 #include <google/cloud/storage/client.h>
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox {
 
@@ -26,8 +26,7 @@ constexpr std::string_view kGCSScheme{"gs://"};
 
 } // namespace
 
-std::string getErrorStringFromGCSError(
-    const google::cloud::StatusCode& error);
+std::string getErrorStringFromGCSError(const google::cloud::StatusCode& error);
 
 inline bool isGCSFile(const std::string_view filename) {
   return (filename.substr(0, kGCSScheme.size()) == kGCSScheme);
@@ -54,20 +53,19 @@ inline std::string gcsPath(const std::string_view& path) {
   return std::string(path.substr(kGCSScheme.length()));
 }
 
-
-#define VELOX_CHECK_GCS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                              \
-  {                                                                                                \
-    if (!outcome.ok()) {                                                                           \
-      auto error = outcome.error_info();                                                           \
-      VELOX_FAIL(                                                                                  \
-          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",      \
-          errorMsgPrefix,                                                                          \
-          error.reason(),                                                                          \
-          gcsURI(bucket, key),                                                                     \
-          error.domain(),                                                                          \
-          getErrorStringFromGCSError(outcome.code()),                                              \
-          outcome.message());                                                                      \
-    }                                                                                              \
+#define VELOX_CHECK_GCS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                         \
+  {                                                                                           \
+    if (!outcome.ok()) {                                                                      \
+      auto error = outcome.error_info();                                                      \
+      VELOX_FAIL(                                                                             \
+          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'", \
+          errorMsgPrefix,                                                                     \
+          error.reason(),                                                                     \
+          gcsURI(bucket, key),                                                                \
+          error.domain(),                                                                     \
+          getErrorStringFromGCSError(outcome.code()),                                         \
+          outcome.message());                                                                 \
+    }                                                                                         \
   }
 
 } // namespace facebook::velox

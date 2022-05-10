@@ -29,16 +29,10 @@ constexpr int kOneMB = 1 << 20;
 class GCSFileSystemTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-
     filesystems::registerGCSFileSystem();
   }
 
   static void TearDownTestSuite() {
-    //TODO
+    // TODO
   }
-
-
-
 };
-
-//TODO
