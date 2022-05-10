@@ -70,7 +70,7 @@ class ConstantVector final : public SimpleVector<T> {
       : SimpleVector<T>(
             pool,
             type,
-	    VectorEncoding::Simple::CONSTANT,
+            VectorEncoding::Simple::CONSTANT,
             BufferPtr(nullptr),
             length,
             stats,
@@ -117,7 +117,7 @@ class ConstantVector final : public SimpleVector<T> {
       : SimpleVector<T>(
             pool,
             base->type(),
-	    VectorEncoding::Simple::CONSTANT,
+            VectorEncoding::Simple::CONSTANT,
             BufferPtr(nullptr),
             length,
             stats,
@@ -132,11 +132,11 @@ class ConstantVector final : public SimpleVector<T> {
         valueVector_(base),
         index_(index) {
     VELOX_CHECK_NE(
-		   base->BaseVector::encoding(),
+        base->BaseVector::encoding(),
         VectorEncoding::Simple::CONSTANT,
         "Constant vector cannot wrap Constant vector");
     VELOX_CHECK_NE(
-		   base->BaseVector::encoding(),
+        base->BaseVector::encoding(),
         VectorEncoding::Simple::DICTIONARY,
         "Constant vector cannot wrap Dictionary vector");
     setInternalState();
@@ -325,8 +325,8 @@ class ConstantVector final : public SimpleVector<T> {
 
   std::string toString() const override {
     std::stringstream out;
-    out << "[" << BaseVector::encoding() << " " << this->type()->toString() << ": "
-        << toString(index_) << " value, " << this->size() << " size]";
+    out << "[" << BaseVector::encoding() << " " << this->type()->toString()
+        << ": " << toString(index_) << " value, " << this->size() << " size]";
     return out.str();
   }
 

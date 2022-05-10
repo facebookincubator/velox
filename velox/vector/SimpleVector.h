@@ -71,7 +71,7 @@ class SimpleVector : public BaseVector {
       : BaseVector(
             pool,
             std::move(type),
-	    encoding,
+            encoding,
             std::move(nulls),
             length,
             distinctValueCount,
@@ -97,7 +97,7 @@ class SimpleVector : public BaseVector {
       : SimpleVector(
             pool,
             CppToType<T>::create(),
-	    encoding,
+            encoding,
             std::move(nulls),
             length,
             stats,

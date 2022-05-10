@@ -96,19 +96,19 @@ void FieldReference::evalSpecialForm(
       (*result)->copy(child.get(), rows, nullptr);
       return;
     }
-      
+
     if (child->encoding() == VectorEncoding::Simple::CONSTANT) {
       if (child.unique()) {
-	child->resize(rows.size());
-	*result = child;
+        child->resize(rows.size());
+        *result = child;
       } else {
-	*result = BaseVector::wrapInConstant(rows.size(), 0, child);
+        *result = BaseVector::wrapInConstant(rows.size(), 0, child);
       }
       return;
     }
-      *result = child;
-      return;
-    }
+    *result = child;
+    return;
+  }
   ExceptionContextSetter exceptionContext(
       {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
 
@@ -117,8 +117,8 @@ void FieldReference::evalSpecialForm(
   bool useDecode = false;
   inputs_[0]->eval(rows, context, &input);
 
-      auto row = input->asUnchecked<RowVector>();
-      // Make sure output is not copied for codegen.
+  auto row = input->asUnchecked<RowVector>();
+  // Make sure output is not copied for codegen.
   if (input->typeKind() == TypeKind::ROW && row->isCodegenOutput()) {
     auto rowType = reinterpret_cast<const RowType*>(input->type().get());
     index_ = rowType->getChildIdx(field_);
@@ -130,13 +130,12 @@ void FieldReference::evalSpecialForm(
   decoded.decode(*input, rows);
   useDecode = !decoded.isIdentityMapping();
   const BaseVector* base = decoded.base();
-  VELOX_CHECK_EQ(base->encoding(),  VectorEncoding::Simple::ROW);
+  VELOX_CHECK_EQ(base->encoding(), VectorEncoding::Simple::ROW);
   row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
-  
+
   // Unique constant vectors can be resized in place, non-unique
   // must be copied to set the size.
-  auto& child =
- row->childAt(index_);
+  auto& child = row->childAt(index_);
   if (result->get()) {
     auto indices = useDecode ? decoded.indices() : nullptr;
     (*result)->copy(child.get(), rows, indices);
@@ -152,7 +151,7 @@ void FieldReference::evalSpecialForm(
     if (!useDecode && child->isConstantEncoding()) {
       if (child.unique()) {
         child->resize(rows.size());
-	toReturn = child;
+        toReturn = child;
       } else {
         toReturn = BaseVector::wrapInConstant(rows.size(), 0, child);
       }

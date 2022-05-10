@@ -538,7 +538,7 @@ class BaseVector {
   bool isFlatNonNull() const {
     return encoding_ == VectorEncoding::Simple::FLAT && !rawNulls_;
   }
-  
+
   // If 'this' is a wrapper, returns the wrap info, interpretation depends on
   // encoding.
   virtual BufferPtr wrapInfo() const {
@@ -731,13 +731,13 @@ class BaseVector {
   std::optional<ByteCount> storageByteCount_;
   ByteCount inMemoryBytes_ = 0;
 
-  #if 0
+#if 0
   // Values of a scalar vector, interpretation depends on encoding. Defined here to provide non-virtual getter.
   BufferPtr values_
   // Caches values_.get()
   void* rawValues_;
 #endif
-  
+
  private:
   static std::shared_ptr<BaseVector> createInternal(
       const TypePtr& type,

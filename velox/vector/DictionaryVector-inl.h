@@ -64,7 +64,7 @@ DictionaryVector<T>::DictionaryVector(
     : SimpleVector<T>(
           pool,
           dictionaryValues->type(),
-	  VectorEncoding::Simple::DICTIONARY,
+          VectorEncoding::Simple::DICTIONARY,
           nulls,
           length,
           stats,

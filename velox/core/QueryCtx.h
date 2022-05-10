@@ -158,63 +158,78 @@ class QueryCtx : public Context {
   QueryConfig config_;
 };
 
-  // A thread-level cache of preallocated flat vectors of different types.
-  class VectorPool {
-  public:
+// A thread-level cache of preallocated flat vectors of different types.
+class VectorPool {
+ public:
+  VectorPtr
+  get(const TypePtr& type, vector_size_t size, memory::MemoryPool& pool) {
+    auto kind = static_cast<int32_t>(type->kind());
+    if (kind < kNumCachedVectorTypes) {
+      return vectors_[kind].pop(type, size, pool);
+    }
+    return BaseVector::create(type, size, &pool);
+  }
 
-    VectorPtr get(const TypePtr& type, vector_size_t size, memory::MemoryPool& pool) {
-      auto kind = static_cast<int32_t>(type->kind());
-      if (kind < kNumCachedVectorTypes) {
-	return vectors_[kind].pop(type, size, pool);
+  // Moves vector into 'this' if it is flat, recursively singly referenced and
+  // there is space.
+  void release(VectorPtr& vector) {
+    auto kind = static_cast<int32_t>(vector->typeKind());
+    if (kind < kNumCachedVectorTypes) {
+      vectors_[kind].maybe_push_back(vector);
+    }
+  }
+
+ private:
+  static constexpr int32_t kNumCachedVectorTypes =
+      static_cast<int32_t>(TypeKind::ARRAY);
+  static constexpr int32_t kNumPerType = 10;
+  struct TypePool {
+    int32_t size{0};
+    std::array<VectorPtr, kNumPerType> vectors;
+
+    void maybe_push_back(VectorPtr& vector) {
+      if (!vector->isRecyclable()) {
+        return;
       }
-      return BaseVector::create(type, size, &pool);
+      if (size < kNumPerType) {
+        vectors[size++] = std::move(vector);
+      }
     }
 
-    // Moves vector into 'this' if it is flat, recursively singly referenced and there is space.
-    void release(VectorPtr& vector) {
-      auto kind = static_cast<int32_t>(vector->typeKind());
-      if (kind < kNumCachedVectorTypes) {
-	vectors_[kind].maybe_push_back(vector);
+    VectorPtr pop(
+        const TypePtr& type,
+        vector_size_t vectorSize,
+        memory::MemoryPool& pool) {
+      if (size) {
+        auto result = std::move(vectors[--size]);
+        if (UNLIKELY(result->rawNulls() != nullptr)) {
+          // This is a recyclable vector, no need to check uniqueness.
+          simd::memset(
+              const_cast<uint64_t*>(result->rawNulls()),
+              bits::kNotNull,
+              bits::roundUp(std::min<int32_t>(vectorSize, result->size()), 64) /
+                  8);
+        }
+        if (UNLIKELY(
+                result->typeKind() == TypeKind::VARCHAR ||
+                result->typeKind() == TypeKind::VARBINARY)) {
+          simd::memset(
+              const_cast<void*>(result->valuesAsVoid()),
+              0,
+              std::min<int32_t>(vectorSize, result->size()) *
+                  sizeof(StringView));
+        }
+        result->resize(vectorSize);
+        return result;
       }
+      return BaseVector::create(type, vectorSize, &pool);
     }
-
-  private:
-    static constexpr int32_t kNumCachedVectorTypes = static_cast<int32_t>(TypeKind::ARRAY);
-    static constexpr int32_t kNumPerType = 10;
-    struct TypePool {
-      int32_t size{0};
-      std::array<VectorPtr, kNumPerType> vectors;
-
-      void maybe_push_back(VectorPtr& vector) {
-	if (!vector->isRecyclable()) {
-	  return;
-	}
-	if (size < kNumPerType) {
-	  vectors[size++] = std::move(vector);
-	}
-      }
-    
-      VectorPtr pop( const TypePtr& type, vector_size_t vectorSize, memory::MemoryPool& pool) {
-	if (size) {
-	  auto result = std::move(vectors[--size]);
-	  if (UNLIKELY(result->rawNulls() != nullptr)) {
-	    // This is a recyclable vector, no need to check uniqueness.
-	    simd::memset(const_cast<uint64_t*>(result->rawNulls()), bits::kNotNull, bits::roundUp(std::min<int32_t>(vectorSize, result->size()), 64) / 8);
-	  }
-	  if (UNLIKELY(result->typeKind() == TypeKind::VARCHAR || result->typeKind() == TypeKind::VARBINARY)) {
-	    simd::memset(const_cast<void*>(result->valuesAsVoid()), 0, std::min<int32_t>(vectorSize, result->size()) * sizeof(StringView));
-	  }
-	  result->resize(vectorSize);
-	  return result;
-	}
-	return BaseVector::create(type, vectorSize, &pool);
-      }
-    };
-    
-    // Caches of preallocated vectors indexed by typeKind.
-    std::array<TypePool, kNumCachedVectorTypes> vectors_;
   };
-  
+
+  // Caches of preallocated vectors indexed by typeKind.
+  std::array<TypePool, kNumCachedVectorTypes> vectors_;
+};
+
 // Represents the state of one thread of query execution.
 class ExecCtx : public Context {
  public:
@@ -276,7 +291,6 @@ class ExecCtx : public Context {
     }
   }
 
-  
  private:
   // Pool for all Buffers for this thread
   memory::MemoryPool* pool_;

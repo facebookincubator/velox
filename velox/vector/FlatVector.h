@@ -93,7 +93,7 @@ class FlatVector final : public SimpleVector<T> {
       : SimpleVector<T>(
             pool,
             type,
-	    VectorEncoding::Simple::FLAT,
+            VectorEncoding::Simple::FLAT,
             std::move(nulls),
             length,
             stats,
@@ -191,9 +191,9 @@ class FlatVector final : public SimpleVector<T> {
 
   bool isRecyclable() const final {
     return (!BaseVector::nulls_ || BaseVector::nulls_->unique()) &&
-      (values_ && values_->unique()); 
+        (values_ && values_->unique());
   }
-  
+
   template <typename As>
   const As* rawValues() const {
     return reinterpret_cast<const As*>(rawValues_);

@@ -73,9 +73,9 @@ class SimpleFunctionAdapter : public VectorFunction {
         VectorPtr* _result)
         : rows{_rows}, context{_context} {
       if (!*_result) {
-	*_result = context->getVector(outputType, _rows->size()); 
+        *_result = context->getVector(outputType, _rows->size());
       } else {
-	BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+        BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
       }
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);

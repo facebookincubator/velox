@@ -41,7 +41,15 @@ class RowVector : public BaseVector {
       size_t length,
       std::vector<VectorPtr> children,
       std::optional<vector_size_t> nullCount = std::nullopt)
-    : BaseVector(pool, type, VectorEncoding::Simple::ROW, nulls, length, std::nullopt, nullCount, 1),
+      : BaseVector(
+            pool,
+            type,
+            VectorEncoding::Simple::ROW,
+            nulls,
+            length,
+            std::nullopt,
+            nullCount,
+            1),
         childrenSize_(children.size()),
         children_(std::move(children)) {
     // Some columns may not be projected out
@@ -198,7 +206,7 @@ class ArrayVector : public BaseVector {
       : BaseVector(
             pool,
             type,
-	    VectorEncoding::Simple::ARRAY,
+            VectorEncoding::Simple::ARRAY,
             nulls,
             length,
             std::nullopt /*distinctValueCount*/,
@@ -394,7 +402,7 @@ class MapVector : public BaseVector {
       : BaseVector(
             pool,
             type,
-	    VectorEncoding::Simple::MAP,
+            VectorEncoding::Simple::MAP,
             nulls,
             length,
             std::nullopt /*distinctValueCount*/,
