@@ -1034,13 +1034,12 @@ void Expr::evalFlatNonNull(
   }
   if (!tryPeelArgs ||
       !applyFunctionWithPeeling(rows, *remainingRows, context, result)) {
-
     applyFunction(*remainingRows, context, result);
   }
   if (anyUnique) {
     context->releaseVectors(inputValues_);
   }
-    inputValues_.clear();
+  inputValues_.clear();
 }
 
 namespace {

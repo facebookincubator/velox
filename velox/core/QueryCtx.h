@@ -193,10 +193,12 @@ class VectorPool {
         return;
       }
       if (size < kNumPerType) {
-	if (vector->typeKind() == TypeKind::VARCHAR || vector->typeKind() == TypeKind::VARBINARY) {
-	  vector->asUnchecked<FlatVector<StringView>>()->stringBuffers().clear();
-
-	}
+        if (vector->typeKind() == TypeKind::VARCHAR ||
+            vector->typeKind() == TypeKind::VARBINARY) {
+          vector->asUnchecked<FlatVector<StringView>>()
+              ->stringBuffers()
+              .clear();
+        }
         vectors[size++] = std::move(vector);
       }
     }
@@ -223,12 +225,14 @@ class VectorPool {
               0,
               std::min<int32_t>(vectorSize, result->size()) *
                   sizeof(StringView));
-	  result->asUnchecked<FlatVector<StringView>>()->stringBuffers().clear();
+          result->asUnchecked<FlatVector<StringView>>()
+              ->stringBuffers()
+              .clear();
         }
-	if (result->size() != vectorSize) {
-	  result->resize(vectorSize);
-	}
-	  return result;
+        if (result->size() != vectorSize) {
+          result->resize(vectorSize);
+        }
+        return result;
       }
       return BaseVector::create(type, vectorSize, &pool);
     }
