@@ -22,6 +22,7 @@
 #include "velox/core/Context.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::core {
 
@@ -192,6 +193,10 @@ class VectorPool {
         return;
       }
       if (size < kNumPerType) {
+	if (vector->typeKind() == TypeKind::VARCHAR || vector->typeKind() == TypeKind::VARBINARY) {
+	  vector->asUnchecked<FlatVector<StringView>>()->stringBuffers().clear();
+
+	}
         vectors[size++] = std::move(vector);
       }
     }
@@ -218,9 +223,12 @@ class VectorPool {
               0,
               std::min<int32_t>(vectorSize, result->size()) *
                   sizeof(StringView));
+	  result->asUnchecked<FlatVector<StringView>>()->stringBuffers().clear();
         }
-        result->resize(vectorSize);
-        return result;
+	if (result->size() != vectorSize) {
+	  result->resize(vectorSize);
+	}
+	  return result;
       }
       return BaseVector::create(type, vectorSize, &pool);
     }

@@ -1007,8 +1007,12 @@ void Expr::evalFlatNonNull(
   auto* remainingRows = &rows;
 
   inputValues_.resize(inputs_.size());
+  bool tryPeelArgs = true;
+  bool anyUnique = false;
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     inputs_[i]->evalFlatNonNull(*remainingRows, context, &inputValues_[i]);
+    anyUnique = anyUnique || inputValues_[i].unique();
+    tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
     // If any errors occurred evaluating the arguments, it's possible (even
     // likely) that the values for those arguments were not defined which could
     // lead to undefined behavior if we try to evaluate the current function on
@@ -1027,11 +1031,16 @@ void Expr::evalFlatNonNull(
         return;
       }
     }
+  }
+  if (!tryPeelArgs ||
+      !applyFunctionWithPeeling(rows, *remainingRows, context, result)) {
 
     applyFunction(*remainingRows, context, result);
   }
-  context->releaseVectors(inputValues_);
-  inputValues_.clear();
+  if (anyUnique) {
+    context->releaseVectors(inputValues_);
+  }
+    inputValues_.clear();
 }
 
 namespace {
