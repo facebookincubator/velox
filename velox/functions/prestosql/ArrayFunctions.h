@@ -280,4 +280,43 @@ struct CombinationsFunction {
   }
 };
 
+template <typename T>
+struct udf_array_sum {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+  template <typename OT, typename IT>
+  FOLLY_ALWAYS_INLINE bool call(OT& out, const IT& array) {
+    if (array.mayHaveNulls()) {
+      bool allNulls = true;
+      OT sum = 0;
+      for (const auto& item : array) {
+        if (item.has_value()) {
+          allNulls = false;
+          sum += *item;
+        }
+      }
+      out = sum;
+      return true;
+    }
+
+    // Not nulls path
+    OT sum = 0;
+    for (const auto& item : array) {
+      sum += *item;
+    }
+    out = sum;
+    return true;
+  }
+
+  template <typename OT, typename IT>
+  FOLLY_ALWAYS_INLINE bool callNullFree(OT& out, const IT& array) {
+    // Not nulls path
+    OT sum = 0;
+    for (const auto& item : array) {
+      sum += item;
+    }
+    out = sum;
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
