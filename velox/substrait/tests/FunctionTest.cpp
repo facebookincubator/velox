@@ -19,7 +19,6 @@
 #include "velox/common/base/tests/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
-
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 
 using namespace facebook::velox;
@@ -133,4 +132,13 @@ TEST_F(FunctionTest, constructFunctionMap) {
 
   function = planConverter_->findFunction(8);
   ASSERT_EQ(function, "count:opt_i32");
+}
+
+TEST_F(FunctionTest, streamIsInput) {
+  std::string planPath =
+      getDataFilePath("velox/substrait/tests", "data/read_second_stage.json");
+  ::substrait::Rel substraitRel;
+  JsonToProtoConverter::readFromFile(planPath, substraitRel);
+  int index = planConverter_->streamIsInput(substraitRel.read());
+  ASSERT_EQ(index, 1);
 }

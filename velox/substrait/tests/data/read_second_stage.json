@@ -1,0 +1,119 @@
+{
+"read": {
+   "common": {
+    "direct": {}
+   },
+   "base_schema": {
+    "names": [
+     "l_returnflag",
+     "l_linestatus",
+     "sum",
+     "sum",
+     "sum",
+     "sum",
+     "sum",
+     "count",
+     "sum",
+     "count",
+     "sum",
+     "count",
+     "count"
+    ],
+    "struct": {
+     "types": [
+      {
+       "string": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "string": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "i64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "i64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "fp64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "i64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_NULLABLE"
+       }
+      },
+      {
+       "i64": {
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_REQUIRED"
+       }
+      }
+     ],
+     "type_variation_reference": 0,
+     "nullability": "NULLABILITY_UNSPECIFIED"
+    }
+   },
+   "local_files": {
+    "items": [
+     {
+      "format": "FILE_FORMAT_UNSPECIFIED",
+      "partition_index": "0",
+      "start": "0",
+      "length": "0",
+      "uri_file": "iterator:1"
+     }
+    ]
+   }
+  }
+}
