@@ -14,7 +14,8 @@
 
 add_executable(
   velox_plan_conversion_test
-  PlanConversionTest.cpp Substrait2VeloxValuesNodeConversionTest.cpp TestUtils.cpp)
+  PlanConversionTest.cpp Substrait2VeloxValuesNodeConversionTest.cpp
+  PlanValidationTest.cpp TestUtils.cpp)
 
 add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
 
