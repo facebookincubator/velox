@@ -449,19 +449,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan,
     memory::MemoryPool* pool) {
   // Construct the function map based on the Substrait representation.
-  for (const auto& extension : substraitPlan.extensions()) {
-    if (!extension.has_extension_function()) {
-      continue;
-    }
-    const auto& functionMap = extension.extension_function();
-    auto id = functionMap.function_anchor();
-    auto name = functionMap.name();
-    functionMap_[id] = name;
-  }
+  constructFuncMap(substraitPlan);
 
   // Construct the expression converter.
-  exprConverter_ =
-      std::make_shared<SubstraitVeloxExprConverter>(subParser_, functionMap_);
+  exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
 
   // In fact, only one RelRoot or Rel is expected here.
   for (const auto& rel : substraitPlan.relations()) {
@@ -647,6 +638,24 @@ void SubstraitVeloxPlanConverter::flattenConditions(
     default:
       VELOX_NYI("GetFlatConditions not supported for type '{}'", typeCase);
   }
+}
+
+void SubstraitVeloxPlanConverter::constructFuncMap(
+    const ::substrait::Plan& substraitPlan) {
+  // Construct the function map based on the Substrait representation.
+  for (const auto& sExtension : substraitPlan.extensions()) {
+    if (!sExtension.has_extension_function()) {
+      continue;
+    }
+    const auto& sFmap = sExtension.extension_function();
+    auto id = sFmap.function_anchor();
+    auto name = sFmap.name();
+    functionMap_[id] = name;
+  }
+}
+
+std::string SubstraitVeloxPlanConverter::findFuncSpec(uint64_t id) {
+  return subParser_->findSubstraitFuncSpec(functionMap_, id);
 }
 
 } // namespace facebook::velox::substrait

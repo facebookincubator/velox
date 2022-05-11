@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-#include <google/protobuf/util/json_util.h>
-#include <fstream>
-#include <sstream>
-
+#include "TestUtils.h"
 #include "velox/common/base/tests/Fs.h"
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -34,33 +31,22 @@ using namespace facebook::velox::substrait;
 
 class Substrait2VeloxValuesNodeConversionTest : public OperatorTestBase {
  public:
-  void parseJson(const std::string& filePath, ::substrait::Plan* subPlan) {
-    // Read json and resume the Substrait plan.
-    std::ifstream subJson(filePath);
-    std::stringstream buffer;
-    buffer << subJson.rdbuf();
-    std::string subData = buffer.str();
-
-    google::protobuf::util::JsonStringToMessage(subData, subPlan);
-  };
-
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
       std::make_shared<SubstraitVeloxPlanConverter>();
 
   std::unique_ptr<memory::ScopedMemoryPool> pool_{
       memory::getDefaultScopedMemoryPool()};
+
+  std::shared_ptr<TestUtils> testUtils_ = std::make_shared<TestUtils>();
 };
 
 // SELECT * FROM tmp
 TEST_F(Substrait2VeloxValuesNodeConversionTest, valuesNode) {
   auto subPlanPath = getDataFilePath(
       "velox/substrait/tests", "data/substrait_virtualTable.json");
-
-  auto subPlan = std::make_shared<::substrait::Plan>();
-
-  parseJson(subPlanPath, subPlan.get());
-
-  auto veloxPlan = planConverter_->toVeloxPlan(*subPlan, pool_.get());
+  ::substrait::Plan subPlan;
+  testUtils_->getMsg(subPlanPath, subPlan);
+  auto veloxPlan = planConverter_->toVeloxPlan(subPlan, pool_.get());
 
   RowVectorPtr expectedData = makeRowVector(
       {makeFlatVector<int64_t>(
