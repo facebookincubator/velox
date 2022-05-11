@@ -420,7 +420,6 @@ class PlanBuilder {
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {});
 
-<<<<<<< HEAD
   PlanBuilder& window(
       const std::vector<ChannelIndex>& partitionKeyIndices,
       const std::vector<ChannelIndex>& sortKeyIndices,

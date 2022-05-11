@@ -59,7 +59,7 @@ TEST_F(WindowFunctionsTest, basicRowNumber) {
               {1},
               {core::kAscNullsLast},
               {"row_number() as row_number_partition"})
-          .orderBy({0, 1}, {core::kAscNullsLast, core::kAscNullsLast}, false)
+          .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
           .planNode();
   assertQuery(
       op,

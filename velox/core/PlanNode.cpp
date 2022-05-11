@@ -134,7 +134,6 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   }
 }
 
-<<<<<<< HEAD
 WindowNode::WindowNode(
     const PlanNodeId& id,
     const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&

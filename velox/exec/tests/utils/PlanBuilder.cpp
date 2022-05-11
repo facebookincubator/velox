@@ -854,7 +854,7 @@ PlanBuilder& PlanBuilder::window(
   std::vector<std::string> windowFunctionNames;
   std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
   for (auto i = 0; i < windowFunctions.size(); ++i) {
-    auto untypedExpr = parse::parseExpr(windowFunctions[i]);
+    auto untypedExpr = duckdb::parseExpr(windowFunctions[i]);
     auto callUnTypedExpr =
         std::dynamic_pointer_cast<const core::CallExpr>(untypedExpr);
     VELOX_CHECK(callUnTypedExpr->getFunctionName() == "row_number");
