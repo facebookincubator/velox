@@ -386,6 +386,15 @@ RowVectorPtr HashProbe::getNonMatchingOutputForRightJoin() {
   return output_;
 }
 
+void HashProbe::clearIdentityProjectedOutput() {
+  if (!output_ || !output_.unique()) {
+    return;
+  }
+  for (auto& projection : identityProjections_) {
+    output_->childAt(projection.outputChannel) = nullptr;
+  }
+}
+
 RowVectorPtr HashProbe::getOutput() {
   clearIdentityProjectedOutput();
   if (!input_) {
@@ -553,7 +562,7 @@ void HashProbe::ensureLoadedIfNotAtEnd(ChannelIndex channel) {
       results_.atEnd()) {
     return;
   }
-  EvalCtx evalCtx(operatorCtx_->execCtx(), nullptr, input_.get());
+
   if (!passingInputRowsInitialized_) {
     passingInputRowsInitialized_ = true;
     passingInputRows_.resize(input_->size());
@@ -571,7 +580,8 @@ void HashProbe::ensureLoadedIfNotAtEnd(ChannelIndex channel) {
     }
     passingInputRows_.updateBounds();
   }
-  evalCtx.ensureFieldLoaded(channel, passingInputRows_);
+
+  LazyVector::ensureLoadedRows(input_->childAt(channel), passingInputRows_);
 }
 
 void HashProbe::noMoreInput() {

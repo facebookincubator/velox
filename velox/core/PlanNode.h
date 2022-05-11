@@ -105,6 +105,14 @@ class PlanNode {
   virtual const std::vector<std::shared_ptr<const PlanNode>>& sources()
       const = 0;
 
+  /// Returns true if this is a leaf plan node and corresponding operator
+  /// requires splits to make progress. ValueNode is a leaf node that doesn't
+  /// require splits, but TableScanNode and ExchangeNode are leaf nodes that
+  /// require splits.
+  virtual bool requiresSplits() const {
+    return false;
+  }
+
   /// Returns a set of leaf plan node IDs.
   std::unordered_set<core::PlanNodeId> leafPlanNodeIds() const;
 
@@ -330,6 +338,10 @@ class TableScanNode : public PlanNode {
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool requiresSplits() const override {
+    return true;
   }
 
   const std::shared_ptr<connector::ConnectorTableHandle>& tableHandle() const {
@@ -644,6 +656,10 @@ class ExchangeNode : public PlanNode {
   }
 
   const std::vector<PlanNodePtr>& sources() const override;
+
+  bool requiresSplits() const override {
+    return true;
+  }
 
   std::string_view name() const override {
     return "Exchange";

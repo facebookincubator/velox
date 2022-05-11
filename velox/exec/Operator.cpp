@@ -65,7 +65,7 @@ core::ExecCtx* OperatorCtx::execCtx() const {
   return execCtx_.get();
 }
 
-std::unique_ptr<connector::ConnectorQueryCtx>
+std::shared_ptr<connector::ConnectorQueryCtx>
 OperatorCtx::createConnectorQueryCtx(
     const std::string& connectorId,
     const std::string& planNodeId) const {
@@ -91,11 +91,35 @@ Operator::translators() {
 std::unique_ptr<Operator> Operator::fromPlanNode(
     DriverCtx* ctx,
     int32_t id,
-    const std::shared_ptr<const core::PlanNode>& planNode) {
+    const core::PlanNodePtr& planNode) {
   for (auto& translator : translators()) {
-    auto op = translator->translate(ctx, id, planNode);
+    auto op = translator->toOperator(ctx, id, planNode);
     if (op) {
       return op;
+    }
+  }
+  return nullptr;
+}
+
+// static
+std::unique_ptr<JoinBridge> Operator::joinBridgeFromPlanNode(
+    const core::PlanNodePtr& planNode) {
+  for (auto& translator : translators()) {
+    auto joinBridge = translator->toJoinBridge(planNode);
+    if (joinBridge) {
+      return joinBridge;
+    }
+  }
+  return nullptr;
+}
+
+// static
+OperatorSupplier Operator::operatorSupplierFromPlanNode(
+    const core::PlanNodePtr& planNode) {
+  for (auto& translator : translators()) {
+    auto supplier = translator->toOperatorSupplier(planNode);
+    if (supplier) {
+      return supplier;
     }
   }
   return nullptr;
@@ -108,7 +132,7 @@ void Operator::registerOperator(
 }
 
 std::optional<uint32_t> Operator::maxDrivers(
-    const std::shared_ptr<const core::PlanNode>& planNode) {
+    const core::PlanNodePtr& planNode) {
   for (auto& translator : translators()) {
     auto current = translator->maxDrivers(planNode);
     if (current) {
@@ -128,38 +152,6 @@ memory::MappedMemory* OperatorCtx::mappedMemory() const {
 
 const std::string& OperatorCtx::taskId() const {
   return driverCtx_->task->taskId();
-}
-
-VectorPtr Operator::getResultVector(ChannelIndex index) {
-  // If there is a singly referenced results vector and it has a
-  // singly referenced flat child with singly referenced buffers, the
-  // child can be reused.
-  if (!output_ || !output_.unique()) {
-    return nullptr;
-  }
-
-  VectorPtr& vector = output_->childAt(index);
-  if (!vector) {
-    return nullptr;
-  }
-
-  if (BaseVector::isReusableFlatVector(vector)) {
-    vector->resize(0);
-    return std::move(vector);
-  }
-
-  return nullptr;
-}
-
-void Operator::getResultVectors(std::vector<VectorPtr>* result) {
-  if (resultProjections_.empty()) {
-    return;
-  }
-  result->resize(resultProjections_.back().inputChannel + 1);
-  for (auto& projection : resultProjections_) {
-    (*result)[projection.inputChannel] =
-        getResultVector(projection.outputChannel);
-  }
 }
 
 static bool isSequence(
@@ -184,19 +176,7 @@ RowVectorPtr Operator::fillOutput(vector_size_t size, BufferPtr mapping) {
     wrapResults = false;
   }
 
-  if (output_.unique()) {
-    output_->resize(size);
-  } else {
-    std::vector<VectorPtr> localColumns(outputType_->size());
-    output_ = std::make_shared<RowVector>(
-        operatorCtx_->pool(),
-        outputType_,
-        BufferPtr(nullptr),
-        size,
-        std::move(localColumns),
-        0 /*nullCount*/);
-  }
-  auto& columns = output_->children();
+  std::vector<VectorPtr> columns(outputType_->size());
   if (!identityProjections_.empty()) {
     auto input = input_->children();
     for (auto& projection : identityProjections_) {
@@ -207,31 +187,16 @@ RowVectorPtr Operator::fillOutput(vector_size_t size, BufferPtr mapping) {
   }
   for (auto& projection : resultProjections_) {
     columns[projection.outputChannel] = wrapResults
-        ? wrapChild(size, mapping, std::move(results_[projection.inputChannel]))
-        : std::move(results_[projection.inputChannel]);
+        ? wrapChild(size, mapping, results_[projection.inputChannel])
+        : results_[projection.inputChannel];
   }
-  return output_;
-}
 
-void Operator::inputProcessed() {
-  input_ = nullptr;
-  if (!output_.unique()) {
-    output_ = nullptr;
-    return;
-  }
-  auto& columns = output_->children();
-  for (auto& projection : identityProjections_) {
-    columns[projection.outputChannel] = nullptr;
-  }
-}
-
-void Operator::clearIdentityProjectedOutput() {
-  if (!output_ || !output_.unique()) {
-    return;
-  }
-  for (auto& projection : identityProjections_) {
-    output_->childAt(projection.outputChannel) = nullptr;
-  }
+  return std::make_shared<RowVector>(
+      operatorCtx_->pool(),
+      outputType_,
+      BufferPtr(nullptr),
+      size,
+      std::move(columns));
 }
 
 void Operator::recordBlockingTime(uint64_t start) {
@@ -310,10 +275,12 @@ void OperatorStats::add(const OperatorStats& other) {
   addInputTiming.add(other.addInputTiming);
   inputBytes += other.inputBytes;
   inputPositions += other.inputPositions;
+  inputVectors += other.inputVectors;
 
   getOutputTiming.add(other.getOutputTiming);
   outputBytes += other.outputBytes;
   outputPositions += other.outputPositions;
+  outputVectors += other.outputVectors;
 
   physicalWrittenBytes += other.physicalWrittenBytes;
 

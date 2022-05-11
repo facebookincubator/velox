@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include <immintrin.h>
 
 #include <folly/hash/Hash.h>
 
+#include <velox/vector/BaseVector.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/BuilderTypeUtils.h"
@@ -69,9 +69,13 @@ Range<T> FlatVector<T>::asRange() const {
 }
 
 template <typename T>
-__m256i FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
-  return _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
-      reinterpret_cast<uint8_t*>(rawValues_) + byteOffset));
+xsimd::batch<T> FlatVector<T>::loadSIMDValueBufferAt(size_t byteOffset) const {
+  auto mem = reinterpret_cast<uint8_t*>(rawValues_) + byteOffset;
+  if constexpr (std::is_same_v<T, bool>) {
+    return xsimd::batch<T>(xsimd::load_unaligned(mem));
+  } else {
+    return xsimd::load_unaligned(reinterpret_cast<T*>(mem));
+  }
 }
 
 template <typename T>
@@ -128,7 +132,7 @@ bool FlatVector<T>::useSimdEquality(size_t numCmpVals) const {
     // whether or not to pursue the SIMD path or the fallback path.
     auto fallbackCost = SET_CMP_COST * BaseVector::length_;
     auto simdCost = SIMD_CMP_COST * numCmpVals * BaseVector::length_ /
-        simd::Vectors<T>::VSize;
+        xsimd::batch<T>::size;
     return simdCost <= fallbackCost;
   }
 }
@@ -149,6 +153,13 @@ void FlatVector<T>::copyValuesAndNulls(
   if (source->mayHaveNulls()) {
     rawNulls = BaseVector::mutableRawNulls();
   }
+
+  // Allocate values buffer if not allocated yet. This may happen if vector
+  // contains only null values.
+  if (!values_) {
+    mutableRawValues();
+  }
+
   if (source->encoding() == VectorEncoding::Simple::FLAT) {
     auto flat = source->asUnchecked<FlatVector<T>>();
     auto* sourceValues =
@@ -227,9 +238,20 @@ void FlatVector<T>::copyValuesAndNulls(
   if (source->mayHaveNulls()) {
     rawNulls = BaseVector::mutableRawNulls();
   }
+
+  // Allocate values buffer if not allocated yet. This may happen if vector
+  // contains only null values.
+  if (!values_) {
+    mutableRawValues();
+  }
+
   if (source->encoding() == VectorEncoding::Simple::FLAT) {
     auto flat = source->asUnchecked<FlatVector<T>>();
-    if (source->typeKind() != TypeKind::UNKNOWN) {
+    if (!flat->values() || flat->values()->size() == 0) {
+      // The vector must have all-null values.
+      VELOX_CHECK_EQ(
+          BaseVector::countNulls(flat->nulls(), 0, flat->size()), flat->size());
+    } else if (source->typeKind() != TypeKind::UNKNOWN) {
       if (Buffer::is_pod_like_v<T>) {
         memcpy(
             &rawValues_[targetIndex],
@@ -344,6 +366,7 @@ void FlatVector<T>::prepareForReuse() {
   // Reset otherwise.
   if (values_ && !(values_->unique() && values_->isMutable())) {
     values_ = nullptr;
+    rawValues_ = nullptr;
   }
 
   // Check string buffers. Keep at most one singly-referenced buffer if it is

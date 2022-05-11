@@ -31,6 +31,13 @@ class ExprStatsTest : public testing::Test, public VectorTestBase {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
+
+    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+
+    // Enable CPU usage tracking.
+    queryCtx_->setConfigOverridesUnsafe({
+        {core::QueryConfig::kExprTrackCpuUsage, "true"},
+    });
   }
 
   static RowTypePtr asRowType(const TypePtr& type) {
@@ -229,6 +236,9 @@ TEST_F(ExprStatsTest, listener) {
   ASSERT_EQ(1024 * 2, stats.at("plus").numProcessedRows);
   ASSERT_EQ(1024, stats.at("multiply").numProcessedRows);
   ASSERT_EQ(1024, stats.at("mod").numProcessedRows);
+  for (const auto& name : {"plus", "multiply", "mod"}) {
+    ASSERT_GT(stats.at(name).timing.cpuNanos, 0);
+  }
 
   // Evaluate the same expressions twice and verify that stats received by the
   // listener are "doubled".
@@ -243,6 +253,9 @@ TEST_F(ExprStatsTest, listener) {
   ASSERT_EQ(1024 * 2 * 2, stats.at("plus").numProcessedRows);
   ASSERT_EQ(1024 * 2, stats.at("multiply").numProcessedRows);
   ASSERT_EQ(1024 * 2, stats.at("mod").numProcessedRows);
+  for (const auto& name : {"plus", "multiply", "mod"}) {
+    ASSERT_GT(stats.at(name).timing.cpuNanos, 0);
+  }
 
   ASSERT_NE(events[0].uuid, events[1].uuid);
 
@@ -257,4 +270,27 @@ TEST_F(ExprStatsTest, listener) {
     evaluate(*exprSet, data);
   }
   ASSERT_EQ(2, events.size());
+}
+
+TEST_F(ExprStatsTest, memoryAllocations) {
+  std::mt19937 rng;
+
+  vector_size_t size = 256;
+  auto data = makeRowVector({
+      makeFlatVector<float>(
+          size, [&](auto /*row*/) { return folly::Random::randDouble01(rng); }),
+  });
+
+  auto rowType = asRowType(data->type());
+  auto exprSet =
+      compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
+
+  auto prevAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+
+  evaluate(*exprSet, data);
+  auto currAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+
+  // Expect a single allocation for the result. Intermediate results should
+  // reuse memory.
+  ASSERT_EQ(1, currAllocations - prevAllocations);
 }

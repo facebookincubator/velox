@@ -20,8 +20,6 @@
 
 namespace facebook::velox::dwrf {
 
-using V32 = simd::Vectors<int32_t>;
-
 int32_t nonNullRowsFromDense(
     const uint64_t* nulls,
     int32_t numRows,
@@ -58,7 +56,7 @@ bool nonNullRowsFromSparse(
     raw_vector<int32_t>& outerRows,
     uint64_t* resultNulls,
     int32_t& tailSkip) {
-  constexpr int32_t kStep = 8;
+  constexpr int32_t kStep = xsimd::batch<int32_t>::size;
   bool anyNull = false;
   auto numIn = rows.size();
   innerRows.resize(numIn);
@@ -94,22 +92,31 @@ bool nonNullRowsFromSparse(
     if (isDense(rows.data() + i, width)) {
       uint16_t flags = load8Bits(nulls, rows[i]) & widthMask;
       if (outputNulls) {
-        resultNullBytes[i / 8] = flags;
+        if constexpr (kStep == 8) {
+          resultNullBytes[i / 8] = flags;
+        } else {
+          VELOX_DCHECK_EQ(kStep, 4);
+          if (i % 8 == 0) {
+            resultNullBytes[i / 8] = flags;
+          } else {
+            resultNullBytes[i / 8] |= flags << 4;
+          }
+        }
         anyNull |= flags != widthMask;
       }
       if (!flags) {
         continue;
       }
       auto numNonNull = __builtin_popcount(flags);
-      auto setBits = V32::compareSetBits(flags);
       // contiguous inner rows.
       auto innerStart = innerFor(i);
-      V32::store(inner + numInner, V32::iota() + innerStart);
+      (simd::iota<int32_t>() + innerStart).store_unaligned(inner + numInner);
       if (isFilter) {
-        simd::storePermute(
-            outer + numInner, V32::load(rows.data() + i), setBits);
+        simd::filter(xsimd::load_unaligned(rows.data() + i), flags)
+            .store_unaligned(outer + numInner);
       } else {
-        V32::store(outer + numInner, setBits + i);
+        (detail::bitMaskIndices<int32_t>(flags) + i)
+            .store_unaligned(outer + numInner);
       }
       // We processed 'width' consecutive. The inner count is incremented
       // by number of non-nulls. Nulls are counted for the 'width' rows,
@@ -121,23 +128,32 @@ bool nonNullRowsFromSparse(
       lastNonNull = rows[i + width - 1];
       numNulls += width - numNonNull;
     } else {
-      auto next8Rows = V32::load(rows.data() + i);
+      auto next8Rows = xsimd::load_unaligned(rows.data() + i);
       uint16_t flags = simd::gather8Bits(nulls, next8Rows, width);
       if (outputNulls) {
-        resultNullBytes[i / 8] = flags;
+        if constexpr (kStep == 8) {
+          resultNullBytes[i / 8] = flags;
+        } else {
+          VELOX_DCHECK_EQ(kStep, 4);
+          if (i % 8 == 0) {
+            resultNullBytes[i / 8] = flags;
+          } else {
+            resultNullBytes[i / 8] |= flags << 4;
+          }
+        }
         anyNull |= flags != widthMask;
       }
       if (!flags) {
         continue;
       }
-      auto setBits = V32::compareSetBits(flags);
       if (isFilter) {
         // The non-null indices among 'rows' are possible filter results.
-        simd::storePermute(outer + numInner, next8Rows, setBits);
+        simd::filter(next8Rows, flags).store_unaligned(outer + numInner);
       } else {
         // Make scatter indices so that there are gaps for 'rows' that hit a
         // null.
-        V32::store(outer + numInner, setBits + i);
+        (detail::bitMaskIndices<int32_t>(flags) + i)
+            .store_unaligned(outer + numInner);
       }
       // Calculate the inner row corresponding to each non-null in 'next8Rows'.
       while (flags) {
