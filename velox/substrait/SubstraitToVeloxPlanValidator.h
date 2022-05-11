@@ -36,6 +36,9 @@ class SubstraitToVeloxPlanValidator {
   /// Used to validate whether the computing of this Filter is supported.
   bool validate(const ::substrait::FilterRel& sFilter);
 
+  /// Used to validate Join.
+  bool validate(const ::substrait::JoinRel& sJoin);
+
   /// Used to validate whether the computing of this Read is supported.
   bool validate(const ::substrait::ReadRel& sRead);
 
