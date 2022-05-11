@@ -14,8 +14,6 @@
 * limitations under the License.
 */
 
-#include <folly/container/F14Map.h>
-
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
@@ -64,6 +62,7 @@ void ArraySumFunction<T>::apply(
   TypePtr type = arrayVector->type()->childAt(0);
   auto resultVector = BaseVector::create(type, numRows, pool);
 
+  auto
   // Get access to raw values for the result
   T* resultValues = (T*) resultVector->valuesAsVoid();
 
@@ -156,28 +155,28 @@ std::shared_ptr<exec::VectorFunction> create(
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
  return {
      exec::FunctionSignatureBuilder()
-         .returnType("array(tinyint)")
-         .argumentType("bigint")
+         .returnType("bigint")
+         .argumentType("array(tinyint)")
          .build(),
      exec::FunctionSignatureBuilder()
-         .returnType("array(smallint)")
-         .argumentType("bigint")
+         .returnType("bigint")
+         .argumentType("array(smallint)")
          .build(),
      exec::FunctionSignatureBuilder()
-         .returnType("array(integer)")
-         .argumentType("bigint")
+         .returnType("bigint")
+         .argumentType("array(integer)")
          .build(),
      exec::FunctionSignatureBuilder()
-         .returnType("array(bigint)")
-         .argumentType("bigint")
+         .returnType("bigint")
+         .argumentType("array(bigint)")
          .build(),
      exec::FunctionSignatureBuilder()
-         .returnType("array(real)")
-         .argumentType("double")
+         .returnType("double")
+         .argumentType("array(real)")
          .build(),
      exec::FunctionSignatureBuilder()
-         .returnType("array(double)")
-         .argumentType("double")
+         .returnType("double")
+         .argumentType("array(double)")
          .build()};
 }
 
