@@ -222,12 +222,11 @@ std::string Operator::toString() const {
 
 std::vector<ChannelIndex> toChannels(
     const RowTypePtr& rowType,
-    const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
-        fields) {
+    const std::vector<std::shared_ptr<const core::ITypedExpr>>& exprs) {
   std::vector<ChannelIndex> channels;
-  channels.reserve(fields.size());
-  for (const auto& field : fields) {
-    auto channel = exprToChannel(field.get(), rowType);
+  channels.reserve(exprs.size());
+  for (const auto& expr : exprs) {
+    auto channel = exprToChannel(expr.get(), rowType);
     channels.push_back(channel);
   }
   return channels;
@@ -275,10 +274,12 @@ void OperatorStats::add(const OperatorStats& other) {
   addInputTiming.add(other.addInputTiming);
   inputBytes += other.inputBytes;
   inputPositions += other.inputPositions;
+  inputVectors += other.inputVectors;
 
   getOutputTiming.add(other.getOutputTiming);
   outputBytes += other.outputBytes;
   outputPositions += other.outputPositions;
+  outputVectors += other.outputVectors;
 
   physicalWrittenBytes += other.physicalWrittenBytes;
 
