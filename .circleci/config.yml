@@ -23,6 +23,7 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
+      - arm-linux-build
 
   # Daily documentation update
   nightly:
@@ -51,6 +52,7 @@ workflows:
       - linux-build-options
       - linux-parquet-s3-build
       - macos-build
+      - arm-linux-build
 
 executors:
   build:
@@ -66,6 +68,10 @@ executors:
   doc-gen:
     docker:
       - image : prestocpp/velox-circleci:sagarm-20220131
+  arm-build:
+    machine:
+      image: ubuntu-2004:current
+    resource_class: arm.large
 
 jobs:
   macos-build:
@@ -119,21 +125,16 @@ jobs:
           key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
           paths:
             - .ccache/
-      - run:
-          name: "Run Unit Tests"
-          command: |
-            cd _build/debug && ctest -j 16 -VV --output-on-failure
-          no_output_timeout: 1h
-      - run:
-          name: "Run Fuzzer Tests"
-          command: |
-              _build/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0
-              no_output_timeout: 5m
 
   linux-build:
     executor: build
     steps:
       - checkout
+      - run:
+          name: "Machine Information"
+          command: |
+            lscpu
+            uname -m
       - run:
           name: "Update submodules"
           command: |
@@ -178,6 +179,35 @@ jobs:
          command: |
            _build/debug/velox/examples/velox_example_expression_eval
            _build/debug/velox/examples/velox_example_opaque_type
+
+  arm-linux-build:
+    executor: arm-build
+    steps:
+      - checkout
+      - run:
+          name: "Update submodules"
+          command: |
+            git submodule sync --recursive
+            git submodule update --init --recursive
+      - run:
+          name: "Install dependencies"
+          command: |
+            set -xu
+            if [[ ! -e ~/deps ]]; then
+              mkdir ~/deps ~/deps-src
+              PATH=~/deps/bin:${PATH} DEPENDENCY_DIR=~/deps-src INSTALL_PREFIX=~/deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-ubuntu.sh
+            fi
+      - run:
+          name: "Build on ARM"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            mkdir -p .ccache
+            export CCACHE_DIR=$(pwd)/.ccache
+            ccache -sz -M 5Gi
+            cmake -B _build/debug -GNinja -DTREAT_WARNINGS_AS_ERRORS=1 -DENABLE_ALL_WARNINGS=1 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PREFIX_PATH=~/deps -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            ninja -C _build/debug
+            ccache -s
+          no_output_timeout: 1h
 
   linux-build-release:
     executor: build

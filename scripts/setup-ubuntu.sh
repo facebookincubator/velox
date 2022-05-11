@@ -18,7 +18,17 @@ set -eufx -o pipefail
 
 # Folly must be built with the same compiler flags so that some low level types
 # are the same size.
-export COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -mlzcnt"
+ARCH=`uname -m`
+
+if [ "$ARCH" = "x86_64" ] ; then
+  COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -mlzcnt";
+fi
+
+if [ "$ARCH" = "aarch64"  ] || [ "$ARCH" = "arm" ] ; then
+  COMPILER_FLAGS="-mneon";
+fi
+
+export
 FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
