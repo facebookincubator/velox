@@ -38,53 +38,84 @@ public:
      std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
      const TypePtr& outputType,
      exec::EvalCtx* context,
-     VectorPtr* result) const override {
-   // Acquire the array elements vector.
-   auto arrayVector = args[0]->as<ArrayVector>();
-   VELOX_CHECK(arrayVector);
-   auto elementsVector = arrayVector->elements();
-
-   auto elementsRows =
-       toElementRows(elementsVector->size(), rows, arrayVector);
-   exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
-
-   vector_size_t numElements = elementsRows.size();
-   vector_size_t numRows = arrayVector->size();
-
-   // Allocate new vector for the result
-   memory::MemoryPool* pool = context->pool();
-   TypePtr type = arrayVector->type()->childAt(0);
-   auto resultVector = BaseVector::create(type, numRows, pool);
-
-   // Get access to raw values for the result
-   T* resultValues = (T*) resultVector->valuesAsVoid();
-
-   // Iterate over the input vector and find the sum of each arrays values
-   for (int i = 0; i < numRows; i++) {
-     // If the whole array is null then set the row null in the output
-     if (arrayVector->isNullAt(i)) {
-        resultVector->setNull(i, true);
-     }
-     // If the array is not null then sum the elements and set the result to the sum
-     else {
-       int start = arrayVector->offsetAt(i);
-       int end = start + arrayVector->sizeAt(i);
-
-       T sum = 0;
-       for (start; start < end; start++) {
-         if (!elements->isNullAt(start)) {
-           sum += elements->template valueAt<T>(start);
-         }
-       }
-
-       // Here I want to just set the value of the result at i equal to sum
-
-     }
-   }
-
-   context->moveOrCopyResult(resultVector, rows, result);
- }
+     VectorPtr* result) const override;
 };
+
+template <typename T>
+void ArraySumFunction<T>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {
+  // Acquire the array elements vector.
+  auto arrayVector = args[0]->as<ArrayVector>();
+  VELOX_CHECK(arrayVector);
+  auto elementsVector = arrayVector->elements();
+
+  auto elementsRows =
+      toElementRows(elementsVector->size(), rows, arrayVector);
+  exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
+
+  vector_size_t numRows = arrayVector->size();
+
+  // Allocate new vector for the result
+  memory::MemoryPool* pool = context->pool();
+  TypePtr type = arrayVector->type()->childAt(0);
+  auto resultVector = BaseVector::create(type, numRows, pool);
+
+  // Get access to raw values for the result
+  T* resultValues = (T*) resultVector->valuesAsVoid();
+
+  // Iterate over the input vector and find the sum of each array's values
+  for (int i = 0; i < numRows; i++) {
+    // If the whole array is null then set the row null in the output
+    if (arrayVector->isNullAt(i)) {
+      resultVector->setNull(i, true);
+    }
+    // If the array is not null then sum the elements and set the result to the sum
+    else {
+      int start = arrayVector->offsetAt(i);
+      int end = start + arrayVector->sizeAt(i);
+
+      T sum = 0;
+      for (; start < end; start++) {
+        if (!elements->isNullAt(start)) {
+          sum += elements->template valueAt<T>(start);
+        }
+      }
+
+      // Set the value at i equal to the sum
+      resultValues[i] = sum;
+    }
+  }
+
+  context->moveOrCopyResult(resultVector, rows, result);
+}
+
+template <>
+void ArraySumFunction<Timestamp>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
+
+template <>
+void ArraySumFunction<StringView>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
+
+template <>
+void ArraySumFunction<Date>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
 
 // Validate number of parameters and types.
 void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
