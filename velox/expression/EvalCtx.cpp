@@ -258,7 +258,7 @@ BaseVector* EvalCtx::getRawField(int32_t index) const {
   return field;
 }
 
-void EvalCtx::ensureFieldLoaded(
+const VectorPtr& EvalCtx::ensureFieldLoaded(
     int32_t index,
     const SelectivityVector& rows,
     EvalMode* FOLLY_NULLABLE mode) {
@@ -268,12 +268,20 @@ void EvalCtx::ensureFieldLoaded(
     if (mode && *mode == EvalMode::kFlatNonNull && field->rawNulls()) {
       *mode = EvalMode::kLazyLoaded;
     }
-    return;
+    return field;
   }
 
   auto updateMode = [&]() {
-    if (mode && *mode == EvalMode::kFlatNonNull && !field->isFlatNonNull()) {
-      *mode = EvalMode::kLazyLoaded;
+    if (mode && *mode == EvalMode::kFlatNonNull) {
+      if (field->encoding() == VectorEncoding::Simple::CONSTANT &&
+          !field->isNullAt(0)) {
+        // Once the LazyVector wrapped by a constant is loaded the constant will
+        // not be peeled any further.
+        return;
+      }
+      if (!field->isFlatNonNull()) {
+        *mode = EvalMode::kLazyLoaded;
+      }
     }
   };
 
@@ -290,7 +298,6 @@ void EvalCtx::ensureFieldLoaded(
     if (rawField != field.get()) {
       const_cast<RowVector*>(row_)->childAt(index) = field;
     }
-
   } else {
     // This is needed in any case because wrappers must be initialized also if
     // they contain a loaded lazyVector.
@@ -301,6 +308,7 @@ void EvalCtx::ensureFieldLoaded(
     }
     updateMode();
   }
+  return field;
 }
 
 } // namespace facebook::velox::exec

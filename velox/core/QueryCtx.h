@@ -174,6 +174,9 @@ class VectorPool {
   // Moves vector into 'this' if it is flat, recursively singly referenced and
   // there is space.
   void release(VectorPtr& vector) {
+    if (!vector.unique()) {
+      return;
+    }
     auto kind = static_cast<int32_t>(vector->typeKind());
     if (kind < kNumCachedVectorTypes) {
       vectors_[kind].maybe_push_back(vector);

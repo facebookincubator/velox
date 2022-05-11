@@ -280,15 +280,16 @@ class Expr {
       EvalCtx* context,
       LocalSelectivityVector& nullHolder);
 
-  // If this is a common subexpression, checks if there is a previously
-  // calculated result and populates the 'result'.
-  bool checkGetSharedSubexprValues(
+  //  Checks if there is a
+  // previously calculated result and populates the 'result'. If no
+  // result, calculates and stores the result and 'rows'.
+  void evalSharedSubexpr(
       const SelectivityVector& rows,
       EvalCtx* context,
       VectorPtr* result);
 
-  // If this is a common subexpression, stores the newly calculated result.
-  void checkUpdateSharedSubexprValues(
+  // Stores the newly calculated result of a common subexpression.
+  void updateSharedSubexprValues(
       const SelectivityVector& rows,
       EvalCtx* context,
       const VectorPtr& result);

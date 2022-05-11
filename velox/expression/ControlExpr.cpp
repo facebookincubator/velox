@@ -114,51 +114,56 @@ void FieldReference::evalSpecialForm(
 
   DecodedVector decoded;
   VectorPtr input;
-  bool useDecode = false;
   inputs_[0]->eval(rows, context, &input);
 
-  auto row = input->asUnchecked<RowVector>();
   // Make sure output is not copied for codegen.
-  if (input->typeKind() == TypeKind::ROW && row->isCodegenOutput()) {
+  if (input->encoding() == VectorEncoding::Simple::ROW &&
+      input->asUnchecked<RowVector>()->isCodegenOutput()) {
     auto rowType = reinterpret_cast<const RowType*>(input->type().get());
-    index_ = rowType->getChildIdx(field_);
-    *result = std::move(row->childAt(index_));
+    if (index_ == -1) {
+      index_ = rowType->getChildIdx(field_);
+    }
+    *result = std::move(input->asUnchecked<RowVector>()->childAt(index_));
     VELOX_CHECK(result->unique());
     return;
   }
 
   decoded.decode(*input, rows);
-  useDecode = !decoded.isIdentityMapping();
+  auto useDecode = !decoded.isIdentityMapping();
   const BaseVector* base = decoded.base();
   VELOX_CHECK_EQ(base->encoding(), VectorEncoding::Simple::ROW);
-  row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
+  auto row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
+  if (index_ == -1) {
+    index_ = row->type()->asRow().getChildIdx(field_);
+  }
 
-  // Unique constant vectors can be resized in place, non-unique
-  // must be copied to set the size.
   auto& child = row->childAt(index_);
-  if (result->get()) {
+  if (*result) {
     auto indices = useDecode ? decoded.indices() : nullptr;
     (*result)->copy(child.get(), rows, indices);
-  } else {
-    if (child->encoding() == VectorEncoding::Simple::LAZY) {
-      child = BaseVector::loadedVectorShared(child);
-    }
-    // The caller relies on vectors having a meaningful size. If we
-    // have a constant that is not wrapped in anything we set its size
-    // to correspond to rows.size(). This is in place for unique ones
-    // and a copy otherwise.
-    VectorPtr toReturn;
-    if (!useDecode && child->isConstantEncoding()) {
-      if (child.unique()) {
-        child->resize(rows.size());
-        toReturn = child;
-      } else {
-        toReturn = BaseVector::wrapInConstant(rows.size(), 0, child);
-      }
-    }
-    *result = useDecode ? std::move(decoded.wrap(toReturn, *input.get(), rows))
-                        : std::move(toReturn);
+    return;
   }
+  if (child->encoding() == VectorEncoding::Simple::LAZY) {
+    child = BaseVector::loadedVectorShared(child);
+  }
+  // The caller relies on vectors having a meaningful size. If we
+  // have a constant that is not wrapped in anything we set its size
+  // to correspond to rows.size(). This is in place for unique ones
+  // and a copy otherwise.
+  VectorPtr toReturn;
+  if (!useDecode && child->isConstantEncoding()) {
+    // Unique can be resized in place, otherwise must be copied to set the size.
+    if (child.unique()) {
+      child->resize(rows.size());
+      toReturn = child;
+    } else {
+      toReturn = BaseVector::wrapInConstant(rows.size(), 0, child);
+    }
+  } else {
+    toReturn = child;
+  }
+  *result = useDecode ? std::move(decoded.wrap(toReturn, *input.get(), rows))
+                      : std::move(toReturn);
 }
 
 void FieldReference::evalSpecialFormSimplified(

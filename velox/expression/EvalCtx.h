@@ -60,7 +60,11 @@ class EvalCtx {
 
   BaseVector* getRawField(int32_t index) const;
 
-  void ensureFieldLoaded(
+  // Loads field at 'index' if it is lazy or wraps a
+  // LazyVector. Replaces the LazyVector on top or inside wrappers
+  // with the loaded vector. Only loads the values at 'rows'. Returns
+  // the contents of the field after load.
+  const VectorPtr& ensureFieldLoaded(
       int32_t index,
       const SelectivityVector& rows,
       EvalMode* FOLLY_NULLABLE mode = nullptr);
