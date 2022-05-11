@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/dwio/parquet/tests/ParquetReaderTestBase.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/FilterBuilder.h"
@@ -32,91 +33,8 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
 using namespace facebook::velox::parquet;
 
-class ParquetReaderTest : public testing::Test {
- protected:
-  std::string getExampleFilePath(const std::string& fileName) {
-    return test::getDataFilePath(
-        "velox/dwio/parquet/tests", "examples/" + fileName);
-  }
-
-  RowReaderOptions getReaderOpts(const RowTypePtr& rowType) {
-    RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(rowType, rowType->names()));
-
-    return rowReaderOpts;
-  }
-
-  static RowTypePtr sampleSchema() {
-    return ROW({"a", "b"}, {BIGINT(), DOUBLE()});
-  }
-
-  static RowTypePtr dateSchema() {
-    return ROW({"date"}, {DATE()});
-  }
-
-  static RowTypePtr intSchema() {
-    return ROW({"int", "bigint"}, {INTEGER(), BIGINT()});
-  }
-
-  template <typename T>
-  VectorPtr rangeVector(size_t size, T start) {
-    std::vector<T> vals(size);
-    for (size_t i = 0; i < size; ++i) {
-      vals[i] = start + static_cast<T>(i);
-    }
-    return vectorMaker_->flatVector(vals);
-  }
-
-  // Check that actual vector is equal to a part of expected vector
-  // at a specified offset.
-  void assertEqualVectorPart(
-      const VectorPtr& expected,
-      const VectorPtr& actual,
-      size_t offset) {
-    ASSERT_GE(expected->size(), actual->size() + offset);
-    ASSERT_EQ(expected->typeKind(), actual->typeKind());
-    for (auto i = 0; i < actual->size(); i++) {
-      ASSERT_TRUE(expected->equalValueAt(actual.get(), i + offset, i))
-          << "at " << (i + offset) << ": expected "
-          << expected->toString(i + offset) << ", but got "
-          << actual->toString(i);
-    }
-  }
-
-  void assertReadExpected(RowReader& reader, RowVectorPtr expected) {
-    uint64_t total = 0;
-    VectorPtr result;
-    while (total < expected->size()) {
-      auto part = reader.next(1000, result);
-      EXPECT_GT(part, 0);
-      if (part > 0) {
-        assertEqualVectorPart(expected, result, total);
-        total += part;
-      } else {
-        break;
-      }
-    }
-    EXPECT_EQ(total, expected->size());
-    EXPECT_EQ(reader.next(1000, result), 0);
-  }
-
-  std::shared_ptr<common::ScanSpec> makeScanSpec(const RowTypePtr& rowType) {
-    auto scanSpec = std::make_shared<common::ScanSpec>("");
-
-    for (auto i = 0; i < rowType->size(); ++i) {
-      auto child =
-          scanSpec->getOrCreateChild(common::Subfield(rowType->nameOf(i)));
-      child->setProjectOut(true);
-      child->setChannel(i);
-    }
-
-    return scanSpec;
-  }
-
-  using FilterMap =
-      std::unordered_map<std::string, std::unique_ptr<common::Filter>>;
-
+class DuckDbParquetReaderTest : public ParquetReaderTestBase {
+ public:
   void assertReadWithFilters(
       const std::string& fileName,
       const RowTypePtr& fileSchema,
@@ -125,34 +43,15 @@ class ParquetReaderTest : public testing::Test {
     const auto filePath(getExampleFilePath(fileName));
 
     ReaderOptions readerOptions;
-    ParquetReader reader(
+    auto reader = std::make_unique<parquet::duckdb_reader::ParquetReader>(
         std::make_unique<FileInputStream>(filePath), readerOptions);
 
-    auto scanSpec = makeScanSpec(fileSchema);
-    for (auto&& [column, filter] : filters) {
-      scanSpec->getOrCreateChild(common::Subfield(column))
-          ->setFilter(std::move(filter));
-    }
-
-    auto rowReaderOpts = getReaderOpts(fileSchema);
-    rowReaderOpts.setScanSpec(scanSpec);
-    auto rowReader = reader.createRowReader(rowReaderOpts);
-    assertReadExpected(*rowReader, expected);
+    assertReadWithReaderAndFilters(
+        std::move(reader), fileName, fileSchema, std::move(filters), expected);
   }
-
-  std::unique_ptr<memory::ScopedMemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
-  std::unique_ptr<test::VectorMaker> vectorMaker_{
-      std::make_unique<test::VectorMaker>(pool_.get())};
 };
 
-template <>
-VectorPtr ParquetReaderTest::rangeVector<Date>(size_t size, Date start) {
-  return vectorMaker_->flatVector<Date>(
-      size, [&](auto row) { return Date(start.days() + row); });
-}
-
-TEST_F(ParquetReaderTest, readSampleFull) {
+TEST_F(DuckDbParquetReaderTest, readSampleFull) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
   // 20 rows (10 rows per group). Group offsets are 153 and 614.
   // Data is in plain uncompressed format:
@@ -161,7 +60,7 @@ TEST_F(ParquetReaderTest, readSampleFull) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 20ULL);
@@ -184,11 +83,11 @@ TEST_F(ParquetReaderTest, readSampleFull) {
   assertReadExpected(*rowReader, expected);
 }
 
-TEST_F(ParquetReaderTest, readSampleRange1) {
+TEST_F(DuckDbParquetReaderTest, readSampleRange1) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -201,11 +100,11 @@ TEST_F(ParquetReaderTest, readSampleRange1) {
   assertReadExpected(*rowReader, expected);
 }
 
-TEST_F(ParquetReaderTest, readSampleRange2) {
+TEST_F(DuckDbParquetReaderTest, readSampleRange2) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -218,11 +117,11 @@ TEST_F(ParquetReaderTest, readSampleRange2) {
   assertReadExpected(*rowReader, expected);
 }
 
-TEST_F(ParquetReaderTest, readSampleEmptyRange) {
+TEST_F(DuckDbParquetReaderTest, readSampleEmptyRange) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   auto rowReaderOpts = getReaderOpts(sampleSchema());
@@ -235,7 +134,7 @@ TEST_F(ParquetReaderTest, readSampleEmptyRange) {
   EXPECT_EQ(rowReader->next(1000, result), 0);
 }
 
-TEST_F(ParquetReaderTest, readSampleBigintRangeFilter) {
+TEST_F(DuckDbParquetReaderTest, readSampleBigintRangeFilter) {
   // a BETWEEN 16 AND 20
   FilterMap filters;
   filters.insert({"a", common::test::between(16, 20)});
@@ -247,7 +146,7 @@ TEST_F(ParquetReaderTest, readSampleBigintRangeFilter) {
       "sample.parquet", sampleSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, readSampleBigintValuesUsingBitmaskFilter) {
+TEST_F(DuckDbParquetReaderTest, readSampleBigintValuesUsingBitmaskFilter) {
   // a in 16, 17, 18, 19, 20.
   std::vector<int64_t> values{16, 17, 18, 19, 20};
   auto bigintBitmaskFilter =
@@ -263,7 +162,7 @@ TEST_F(ParquetReaderTest, readSampleBigintValuesUsingBitmaskFilter) {
       "sample.parquet", sampleSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, readSampleEqualFilter) {
+TEST_F(DuckDbParquetReaderTest, readSampleEqualFilter) {
   // a = 16
   FilterMap filters;
   filters.insert({"a", common::test::equal(16)});
@@ -275,7 +174,7 @@ TEST_F(ParquetReaderTest, readSampleEqualFilter) {
       "sample.parquet", sampleSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, dateRead) {
+TEST_F(DuckDbParquetReaderTest, dateRead) {
   // date.parquet holds a single column (date: DATE) and
   // 25 rows.
   // Data is in plain uncompressed format:
@@ -283,7 +182,7 @@ TEST_F(ParquetReaderTest, dateRead) {
   const std::string sample(getExampleFilePath("date.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 25ULL);
@@ -302,7 +201,7 @@ TEST_F(ParquetReaderTest, dateRead) {
   assertReadExpected(*rowReader, expected);
 }
 
-TEST_F(ParquetReaderTest, dateFilter) {
+TEST_F(DuckDbParquetReaderTest, dateFilter) {
   // date BETWEEN 5 AND 14
   FilterMap filters;
   filters.insert({"date", common::test::between(5, 14)});
@@ -313,7 +212,7 @@ TEST_F(ParquetReaderTest, dateFilter) {
       "date.parquet", dateSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, intRead) {
+TEST_F(DuckDbParquetReaderTest, intRead) {
   // int.parquet holds integer columns (int: INTEGER, bigint: BIGINT)
   // and 10 rows.
   // Data is in plain uncompressed format:
@@ -322,7 +221,7 @@ TEST_F(ParquetReaderTest, intRead) {
   const std::string sample(getExampleFilePath("int.parquet"));
 
   ReaderOptions readerOptions;
-  ParquetReader reader(
+  duckdb_reader::ParquetReader reader(
       std::make_unique<FileInputStream>(sample), readerOptions);
 
   EXPECT_EQ(reader.numberOfRows(), 10ULL);
@@ -344,7 +243,7 @@ TEST_F(ParquetReaderTest, intRead) {
   assertReadExpected(*rowReader, expected);
 }
 
-TEST_F(ParquetReaderTest, intMultipleFilters) {
+TEST_F(DuckDbParquetReaderTest, intMultipleFilters) {
   // int BETWEEN 102 AND 120 AND bigint BETWEEN 900 AND 1006
   FilterMap filters;
   filters.insert({"int", common::test::between(102, 120)});
@@ -357,7 +256,7 @@ TEST_F(ParquetReaderTest, intMultipleFilters) {
       "int.parquet", intSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, doubleFilters) {
+TEST_F(DuckDbParquetReaderTest, doubleFilters) {
   // b < 10.0
   FilterMap filters;
   filters.insert({"b", common::test::lessThanDouble(10.0)});
@@ -405,7 +304,7 @@ TEST_F(ParquetReaderTest, doubleFilters) {
       "sample.parquet", sampleSchema(), std::move(filters), expected);
 }
 
-TEST_F(ParquetReaderTest, varcharFilters) {
+TEST_F(DuckDbParquetReaderTest, varcharFilters) {
   // name < 'CANADA'
   FilterMap filters;
   filters.insert({"name", common::test::lessThan("CANADA")});

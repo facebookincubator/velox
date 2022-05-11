@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include <iostream>
 #include "velox/common/base/tests/Fs.h"
 
 namespace facebook::velox::test {

@@ -16,7 +16,8 @@
 
 #include <folly/init/Init.h>
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/common/RegisterParquetReader.h"
+#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/tests/FilterBuilder.h"
@@ -25,6 +26,7 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::parquet;
 
 class ParquetTableScanTest : public HiveConnectorTestBase {
  protected:
@@ -32,11 +34,13 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
-    parquet::registerParquetReaderFactory();
+    //    duckdb_reader::registerDuckDbParquetReaderFactory();
+    registerParquetReaderFactory();
   }
 
   void TearDown() override {
-    parquet::unregisterParquetReaderFactory();
+    //    duckdb_reader::unregisterDuckDbParquetReaderFactory();
+    unregisterParquetReaderFactory();
     HiveConnectorTestBase::TearDown();
   }
 
@@ -107,7 +111,7 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
 
   std::string getExampleFilePath(const std::string& fileName) {
     return facebook::velox::test::getDataFilePath(
-        "velox/dwio/parquet/tests", "examples/" + fileName);
+        "", "../examples/" + fileName);
   }
 
   std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(

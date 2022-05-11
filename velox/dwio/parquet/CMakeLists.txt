@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(reader)
+add_subdirectory(duckdb_reader)
 
+message("VELOX_BUILD_TESTING ${VELOX_BUILD_TESTING}")
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()

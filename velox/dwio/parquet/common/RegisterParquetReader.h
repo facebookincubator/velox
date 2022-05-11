@@ -16,14 +16,30 @@
 
 #pragma once
 
-#include "velox/dwio/common/Statistics.h"
+#include "velox/dwio/parquet/duckdb_reader/ParquetReader.h"
 
 namespace facebook::velox::parquet {
 
-class ColumnStatistics : public dwio::common::ColumnStatistics {
- public:
-  ColumnStatistics() {}
-  ~ColumnStatistics() override = default;
-};
+enum class ParquetReaderType { DUCKDB };
+
+void registerParquetReaderFactory(ParquetReaderType parquetReaderType) {
+  switch (parquetReaderType) {
+    case ParquetReaderType::DUCKDB:
+      dwio::common::registerReaderFactory(
+          std::make_shared<duckdb_reader::ParquetReaderFactory>());
+      break;
+    default:
+      VELOX_UNSUPPORTED(
+          "Velox does not support ParquetReaderType ", parquetReaderType);
+  }
+}
+
+void registerParquetReaderFactory() {
+  registerParquetReaderFactory(ParquetReaderType::DUCKDB);
+}
+
+void unregisterParquetReaderFactory() {
+  dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
+}
 
 } // namespace facebook::velox::parquet

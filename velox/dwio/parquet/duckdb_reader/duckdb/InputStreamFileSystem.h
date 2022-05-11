@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/parquet/reader/duckdb/InputStreamFileHandle.h"
+#include "velox/dwio/parquet/duckdb_reader/duckdb/InputStreamFileHandle.h"
 #include "velox/external/duckdb/duckdb.hpp"
 
 #include <folly/Synchronized.h>
