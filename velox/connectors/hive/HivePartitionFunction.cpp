@@ -29,12 +29,12 @@ void hashTyped(
       TypeTraits<kind>::name);
 }
 
-template <typename T>
+template <typename T, typename Func>
 void abstractHashTyped(
     const DecodedVector& values,
     vector_size_t size,
     bool mix,
-    std::function<uint32_t(const T&)> const& hashOne,
+    Func&& hashOne,
     std::vector<uint32_t>& hashes) {
   for (auto i = 0; i < size; ++i) {
     const uint32_t hash =
