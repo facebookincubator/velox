@@ -390,6 +390,14 @@ inline uint64_t SimpleVector<ComplexType>::hashValueAt(
   return wrappedVector()->hashValueAt(wrappedIndex(index));
 }
 
+template <>
+inline uint64_t SimpleVector<int128_t>::hashValueAt(vector_size_t index) const {
+  if (isNullAt(index)) {
+    return BaseVector::kNullHash;
+  }
+  return folly::hasher<int128_t>{}(valueAt(index));
+}
+
 template <typename T>
 using SimpleVectorPtr = std::shared_ptr<SimpleVector<T>>;
 

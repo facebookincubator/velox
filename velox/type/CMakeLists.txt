@@ -26,7 +26,8 @@ add_library(
   Date.cpp
   Filter.cpp
   Subfield.cpp
-  Tokenizer.cpp)
+  Tokenizer.cpp
+  ShortDecimal.cpp)
 
 target_link_libraries(
   velox_type

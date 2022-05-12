@@ -1152,6 +1152,12 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL) {     \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::SHORT_DECIMAL>(        \
+          __VA_ARGS__);                                                        \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL) {      \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::LONG_DECIMAL>(         \
+          __VA_ARGS__);                                                        \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
@@ -1226,6 +1232,12 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if (((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL)) {   \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::SHORT_DECIMAL>(        \
+          __VA_ARGS__);                                                        \
+    } else if (((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL)) {    \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::LONG_DECIMAL>(         \
+          __VA_ARGS__);                                                        \
     } else {                                                                   \
       return VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(                                 \
           TEMPLATE_FUNC, , typeKind, __VA_ARGS__);                             \
@@ -1623,6 +1635,15 @@ inline Timestamp to(const std::string& value) {
 }
 
 template <>
+inline ShortDecimal to(const std::string& value) {
+  VELOX_UNSUPPORTED();
+}
+
+inline int128_t to(const std::string& value) {
+  VELOX_UNSUPPORTED();
+}
+
+template <>
 inline UnknownValue to(const std::string& /* value */) {
   return UnknownValue();
 }
@@ -1630,6 +1651,16 @@ inline UnknownValue to(const std::string& /* value */) {
 template <>
 inline std::string to(const Timestamp& value) {
   return value.toString();
+}
+
+template <>
+inline std::string to(const ShortDecimal& value) {
+  VELOX_UNSUPPORTED();
+}
+
+template <>
+inline std::string to(const int128_t& value) {
+  VELOX_UNSUPPORTED();
 }
 
 template <>
@@ -1764,6 +1795,8 @@ struct hasher<::facebook::velox::UnknownValue> {
     return 0;
   }
 };
+
+int64_t hashLongDecimal(const ::facebook::velox::int128_t value);
 
 // Helper functions to allow TypeKind and some common variations to be
 // transparently used by folly::sformat.

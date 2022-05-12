@@ -107,6 +107,10 @@ std::string typeToEncodingName(const TypePtr& type) {
       return "LONG_ARRAY";
     case TypeKind::DATE:
       return "INT_ARRAY";
+    case TypeKind::SHORT_DECIMAL:
+      return "LONG_ARRAY";
+    case TypeKind::LONG_DECIMAL:
+      return "INT128_ARRAY";
     case TypeKind::ARRAY:
       return "ARRAY";
     case TypeKind::MAP:
