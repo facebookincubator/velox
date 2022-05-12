@@ -71,6 +71,11 @@ void fillTimestamps(
 
 } // namespace detail
 
+std::vector<uint64_t> toPositions(const proto::RowIndexEntry& entry) {
+  return std::vector<uint64_t>(
+      entry.positions().begin(), entry.positions().end());
+}
+
 inline RleVersion convertRleVersion(proto::ColumnEncoding_Kind kind) {
   switch (static_cast<int64_t>(kind)) {
     case proto::ColumnEncoding_Kind_DIRECT:
@@ -828,8 +833,6 @@ void FloatingPointColumnReader<DataT, ReqT>::next(
 
 class StringDictionaryColumnReader : public ColumnReader {
  private:
-  void loadStrideDictionary();
-
   BufferPtr dictionaryBlob;
   BufferPtr dictionaryOffset;
   BufferPtr inDict;
@@ -844,27 +847,33 @@ class StringDictionaryColumnReader : public ColumnReader {
   FlatVectorPtr<StringView> combinedDictionaryValues_;
   FlatVectorPtr<StringView> dictionaryValues_;
 
+  // Number of values in the stripe dictionary
   uint64_t dictionaryCount;
+  // Number of values in the stride(RowGroup) dictionary
   uint64_t strideDictCount;
   int64_t lastStrideIndex;
-  size_t positionOffset;
-  size_t strideDictSizeOffset;
 
-  std::unique_ptr<SeekableInputStream> indexStream_;
-  std::unique_ptr<proto::RowIndex> rowIndex_;
+  mutable std::unique_ptr<SeekableInputStream> indexStream_;
+  mutable std::unique_ptr<proto::RowIndex> rowIndex_;
   const StrideIndexProvider& provider;
 
-  // lazy load the dictionary
   std::unique_ptr<IntDecoder</*isSigned*/ false>> lengthDecoder;
   std::unique_ptr<SeekableInputStream> blobStream;
   const bool returnFlatVector_;
   bool initialized_{false};
+
+  // lazy load the dictionary
+  void ensureInitialized();
+  bool isRowGroupOpen() const;
+  void openRowGroup();
+  void ensureRowGroupIndex() const;
 
   BufferPtr loadDictionary(
       uint64_t count,
       SeekableInputStream& data,
       IntDecoder</*isSigned*/ false>& lengthDecoder,
       BufferPtr& offsets);
+  void loadStrideDictionary();
 
   bool FOLLY_ALWAYS_INLINE setOutput(
       uint64_t index,
@@ -885,8 +894,6 @@ class StringDictionaryColumnReader : public ColumnReader {
   void
   readFlatVector(uint64_t numValues, VectorPtr& result, const uint64_t* nulls);
 
-  void ensureInitialized();
-
  public:
   StringDictionaryColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> nodeType,
@@ -905,6 +912,7 @@ StringDictionaryColumnReader::StringDictionaryColumnReader(
     StripeStreams& stripe,
     FlatMapContext flatMapContext)
     : ColumnReader(std::move(nodeType), stripe, std::move(flatMapContext)),
+      strideDictCount(0),
       lastStrideIndex(-1),
       provider(stripe.getStrideIndexProvider()),
       returnFlatVector_(stripe.getRowReaderOptions().getReturnFlatVector()) {
@@ -995,22 +1003,7 @@ BufferPtr StringDictionaryColumnReader::loadDictionary(
 }
 
 void StringDictionaryColumnReader::loadStrideDictionary() {
-  auto nextStride = provider.getStrideIndex();
-  if (nextStride == lastStrideIndex) {
-    return;
-  }
-
-  // get stride dictionary size and load it if needed
-  auto& positions = rowIndex_->entry(nextStride).positions();
-  strideDictCount = positions.Get(strideDictSizeOffset);
   if (strideDictCount > 0) {
-    // seek stride dictionary related streams
-    std::vector<uint64_t> pos(
-        positions.begin() + positionOffset, positions.end());
-    PositionProvider pp(pos);
-    strideDictStream->seekToRowGroup(pp);
-    strideDictLengthDecoder->seekToRowGroup(pp);
-
     detail::ensureCapacity<int64_t>(
         strideDictOffset, strideDictCount + 1, &memoryPool_);
     strideDict = loadDictionary(
@@ -1021,8 +1014,6 @@ void StringDictionaryColumnReader::loadStrideDictionary() {
   } else {
     strideDict.reset();
   }
-
-  lastStrideIndex = nextStride;
 
   dictionaryValues_.reset();
   combinedDictionaryValues_.reset();
@@ -1074,20 +1065,24 @@ void StringDictionaryColumnReader::next(
   // lazy loading dictionary data when first hit
   ensureInitialized();
 
-  const char* strideDictBlob = nullptr;
-  if (inDictionaryReader) {
-    loadStrideDictionary();
-    if (strideDict) {
-      DWIO_ENSURE_NOT_NULL(strideDictOffset);
+  if (!isRowGroupOpen()) {
+    openRowGroup();
 
-      // It's possible strideDictBlob is nullptr when stride dictionary only
-      // contains empty string. In that case, we need to make sure
-      // strideDictBlob point to some valid address, and the last entry of
-      // strideDictOffset have value 0.
-      strideDictBlob = strideDict->as<char>();
-      if (!strideDictBlob) {
-        strideDictBlob = EMPTY_DICT.data();
-        DWIO_ENSURE_EQ(strideDictOffset->as<int64_t>()[strideDictCount], 0);
+    const char* strideDictBlob = nullptr;
+    if (inDictionaryReader) {
+      loadStrideDictionary();
+      if (strideDict) {
+        DWIO_ENSURE_NOT_NULL(strideDictOffset);
+
+        // It's possible strideDictBlob is nullptr when stride dictionary only
+        // contains empty string. In that case, we need to make sure
+        // strideDictBlob point to some valid address, and the last entry of
+        // strideDictOffset have value 0.
+        strideDictBlob = strideDict->as<char>();
+        if (!strideDictBlob) {
+          strideDictBlob = EMPTY_DICT.data();
+          DWIO_ENSURE_EQ(strideDictOffset->as<int64_t>()[strideDictCount], 0);
+        }
       }
     }
   }
@@ -1343,22 +1338,60 @@ void StringDictionaryColumnReader::ensureInitialized() {
       dictionaryCount, *blobStream, *lengthDecoder, dictionaryOffset);
   dictionaryValues_.reset();
   combinedDictionaryValues_.reset();
-
-  // handle in dictionary stream
-  if (inDictionaryReader) {
-    // load stride dictionary offsets
-    rowIndex_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
-    auto indexStartOffset = flatMapContext_.inMapDecoder
-        ? flatMapContext_.inMapDecoder->loadIndices(*rowIndex_, 0)
-        : 0;
-    positionOffset = notNullDecoder_
-        ? notNullDecoder_->loadIndices(*rowIndex_, indexStartOffset)
-        : indexStartOffset;
-    auto offset = strideDictStream->loadIndices(*rowIndex_, positionOffset);
-    strideDictSizeOffset =
-        strideDictLengthDecoder->loadIndices(*rowIndex_, offset);
-  }
   initialized_ = true;
+}
+
+bool StringDictionaryColumnReader::isRowGroupOpen() const {
+  return provider.getStrideIndex() == lastStrideIndex;
+}
+
+void StringDictionaryColumnReader::openRowGroup() {
+  lastStrideIndex = provider.getStrideIndex();
+
+  // Open strideDictStream and set strideDictLengthDecoder to the correct read
+  // addresses if this is a new RowGroup. This has to be done before
+  // flatMapContext_.inMapDecoder and notNullDecoder_ are used. Note that we can
+  // only do so when the row index exists.
+  // Ideally, this should set all streams and decoders to the RowGroup starting
+  // addresses. However since some tests do not provide positions for all
+  // streams, we will not set the dictIndex and inDictionaryReader which are
+  // after strideDictStream. This works since openRowGroup() only changes the
+  // state when the row index exists and a stride dictionary needs to be loaded.
+  if (rowIndex_ || indexStream_) {
+    ensureRowGroupIndex();
+
+    // load stride dictionary addresses.
+    auto positions = toPositions(rowIndex_->entry(lastStrideIndex));
+    PositionProvider positionsProvider(positions);
+
+    // To find the stride dictionary position, we need to skip the positions
+    // for flatMapContext_.inMapDecoder and notNullDecoder_. This does not
+    // change the states of these decoders, as long as they were not used before
+    // for the same RowGroup(stride).
+    if (flatMapContext_.inMapDecoder) {
+      flatMapContext_.inMapDecoder->seekToRowGroup(positionsProvider);
+    }
+
+    if (notNullDecoder_) {
+      notNullDecoder_->seekToRowGroup(positionsProvider);
+    }
+
+    // Seek to the stride dictionary address but do not load it yet.
+    if (strideDictStream) {
+      strideDictStream->seekToRowGroup(positionsProvider);
+      strideDictLengthDecoder->seekToRowGroup(positionsProvider);
+      // skip row group dictionary size
+      strideDictCount = positionsProvider.next();
+    }
+  }
+}
+
+void StringDictionaryColumnReader::ensureRowGroupIndex() const {
+  VELOX_CHECK(
+      rowIndex_ || indexStream_, "Reader needs to have an index stream");
+  if (indexStream_) {
+    rowIndex_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
+  }
 }
 
 class StringDirectColumnReader : public ColumnReader {

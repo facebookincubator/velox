@@ -32,12 +32,14 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
           nodeType->type,
           std::move(flatMapContext)),
       lastStrideIndex_(-1),
+      strideDictLoaded_(false),
+      strideDictSize_(0),
+      dictSize_(0),
       provider_(stripe.getStrideIndexProvider()) {
   EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
   RleVersion rleVersion =
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
-  scanState_.dictionary.numValues =
-      stripe.getEncoding(encodingKey).dictionarysize();
+  dictSize_ = stripe.getEncoding(encodingKey).dictionarysize();
 
   const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dictVInts = stripe.getUseVInts(dataId);
@@ -97,19 +99,20 @@ uint64_t SelectiveStringDictionaryColumnReader::skip(uint64_t numValues) {
 }
 
 void SelectiveStringDictionaryColumnReader::loadDictionary(
+    uint64_t count,
     SeekableInputStream& data,
     IntDecoder</*isSigned*/ false>& lengthDecoder,
     DictionaryValues& values) {
   // read lengths from length reader
-  detail::ensureCapacity<StringView>(
-      values.values, values.numValues, &memoryPool_);
+  detail::ensureCapacity<StringView>(values.values, count, &memoryPool_);
   // The lengths are read in the low addresses of the string views array.
   int64_t* int64Values = values.values->asMutable<int64_t>();
-  lengthDecoder.next(int64Values, values.numValues, nullptr);
+  lengthDecoder.next(int64Values, count, nullptr);
   int64_t stringsBytes = 0;
-  for (auto i = 0; i < values.numValues; ++i) {
+  for (auto i = 0; i < count; ++i) {
     stringsBytes += int64Values[i];
   }
+
   // read bytes from underlying string
   values.strings = AlignedBuffer::allocate<char>(stringsBytes, &memoryPool_);
   data.readFully(values.strings->asMutable<char>(), stringsBytes);
@@ -121,33 +124,43 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
   // Write the StringViews from end to begin so as not to overwrite
   // the lengths at the start of values.
   auto offset = stringsBytes;
-  for (int32_t i = values.numValues - 1; i >= 0; --i) {
+  for (int32_t i = count - 1; i >= 0; --i) {
     offset -= int64Values[i];
     views[i] = StringView(strings + offset, int64Values[i]);
+  }
+  values.numValues = count;
+}
+
+bool SelectiveStringDictionaryColumnReader::isRowGroupOpen() {
+  return provider_.getStrideIndex() == lastStrideIndex_;
+}
+
+void SelectiveStringDictionaryColumnReader::openRowGroup() {
+  uint64_t nextStride = provider_.getStrideIndex();
+  lastStrideIndex_ = nextStride;
+  strideDictLoaded_ = false;
+  strideDictSize_ = 0;
+
+  // seekToRowGroup() only works when the RowIndex stream is present or loaded
+  if (index_ || indexStream_) {
+    seekToRowGroup(nextStride);
   }
 }
 
 void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
-  auto nextStride = provider_.getStrideIndex();
-  if (nextStride == lastStrideIndex_) {
-    return;
-  }
+  // If the RowGroup was not open yet, the stride dictionary cannot be loaded
+  // because the strideDictStream_ was not set to the correct position.
+  VELOX_CHECK(isRowGroupOpen(), "The RowGroup is not open.");
+  DWIO_ENSURE_NOT_NULL(strideDictStream_, "strideDictStream_ is null");
 
-  // get stride dictionary size and load it if needed
-  auto& positions = index_->entry(nextStride).positions();
-  scanState_.dictionary2.numValues = positions.Get(strideDictSizeOffset_);
-  if (scanState_.dictionary2.numValues > 0) {
-    // seek stride dictionary related streams
-    std::vector<uint64_t> pos(
-        positions.begin() + positionOffset_, positions.end());
-    PositionProvider pp(pos);
-    strideDictStream_->seekToRowGroup(pp);
-    strideDictLengthDecoder_->seekToRowGroup(pp);
+  loadDictionary(
+      strideDictSize_,
+      *strideDictStream_,
+      *strideDictLengthDecoder_,
+      scanState_.dictionary2);
+  strideDictLoaded_ = true;
+  scanState_.updateRawState();
 
-    loadDictionary(
-        *strideDictStream_, *strideDictLengthDecoder_, scanState_.dictionary2);
-  }
-  lastStrideIndex_ = nextStride;
   dictionaryValues_ = nullptr;
 
   scanState_.filterCache.resize(
@@ -198,10 +211,18 @@ void SelectiveStringDictionaryColumnReader::read(
     vector_size_t offset,
     RowSet rows,
     const uint64_t* incomingNulls) {
+  // Open the to-be-read RowGroup if it's not open yet. This will make the input
+  // streams for stride dictionary and other decoders seek to the correct
+  // starting positions, but does not load the stride dictionary yet.
+  if (!isRowGroupOpen()) {
+    openRowGroup();
+  }
+
   prepareRead<int32_t>(offset, rows, incomingNulls);
   bool isDense = rows.back() == rows.size() - 1;
   const auto* nullsPtr =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+
   // lazy loading dictionary data when first hit
   ensureInitialized();
 
@@ -221,7 +242,10 @@ void SelectiveStringDictionaryColumnReader::read(
         scanState_.inDictionary->asMutable<char>(),
         numFlags,
         isBulk ? nullptr : nullsPtr);
-    loadStrideDictionary();
+
+    if (!strideDictLoaded_ && strideDictSize_ > 0) {
+      loadStrideDictionary();
+    }
   }
 
   if (scanSpec_->keepValues()) {
@@ -286,28 +310,13 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   Timer timer;
 
-  loadDictionary(*blobStream_, *lengthDecoder_, scanState_.dictionary);
+  loadDictionary(
+      dictSize_, *blobStream_, *lengthDecoder_, scanState_.dictionary);
 
   scanState_.filterCache.resize(scanState_.dictionary.numValues);
   simd::memset(
-      scanState_.filterCache.data(),
-      FilterResult::kUnknown,
-      scanState_.dictionary.numValues);
+      scanState_.filterCache.data(), FilterResult::kUnknown, dictSize_);
 
-  // handle in dictionary stream
-  if (inDictionaryReader_) {
-    ensureRowGroupIndex();
-    // load stride dictionary offsets
-    auto indexStartOffset = flatMapContext_.inMapDecoder
-        ? flatMapContext_.inMapDecoder->loadIndices(*index_, 0)
-        : 0;
-    positionOffset_ = notNullDecoder_
-        ? notNullDecoder_->loadIndices(*index_, indexStartOffset)
-        : indexStartOffset;
-    size_t offset = strideDictStream_->loadIndices(*index_, positionOffset_);
-    strideDictSizeOffset_ =
-        strideDictLengthDecoder_->loadIndices(*index_, offset);
-  }
   scanState_.updateRawState();
   initialized_ = true;
   initTimeClocks_ = timer.elapsedClocks();

@@ -27,7 +27,6 @@
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::dwrf {
-
 /**
  * The interface for reading ORC data types.
  */
@@ -181,4 +180,7 @@ void fillTimestamps(
     vector_size_t numValues);
 
 } // namespace detail
+
+std::vector<uint64_t> toPositions(const proto::RowIndexEntry& entry);
+
 } // namespace facebook::velox::dwrf
