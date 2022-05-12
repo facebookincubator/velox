@@ -229,80 +229,69 @@ struct VectorReader {
   const DecodedVector& decoded_;
 };
 
+// This VectorReader is optimized for primitive types in constant or flat
+// encoded vectors.  It operates directly on the vector's content avoiding
+// the need to go through the expensive decoding process.
 template <typename T>
-struct FlatVectorReader {
+struct ConstantFlatVectorReader {
   using exec_in_t = typename VectorExec::template resolver<T>::in_type;
-  using exec_null_free_in_t =
-      typename VectorExec::template resolver<T>::in_type;
 
-  explicit FlatVectorReader(const BaseVector* vector)
-      : vector_{vector->template asFlatVector<exec_in_t>()},
-        rawValues_{vector_->rawValues()} {
-    VELOX_CHECK_NOT_NULL(vector_);
+  explicit ConstantFlatVectorReader(const FlatVector<exec_in_t>* vector)
+      : rawValues_(vector->rawValues()),
+        rawNulls_(vector->rawNulls()),
+        indexMultiple_(1) {}
+
+  explicit ConstantFlatVectorReader(const ConstantVector<exec_in_t>* vector)
+      : rawValues_(vector->rawValues()),
+        rawNulls_(vector->isNullAt(0) ? &bits::kNull64 : nullptr),
+        indexMultiple_(0) {}
+
+  explicit ConstantFlatVectorReader(const VectorReader<T>&) = delete;
+  VectorReader<T>& operator=(const VectorReader<T>&) = delete;
+
+  exec_in_t operator[](vector_size_t offset) const {
+    return rawValues_[offset * indexMultiple_];
   }
 
-  explicit FlatVectorReader(const FlatVectorReader<T>&) = delete;
-  FlatVectorReader<T>& operator=(const FlatVectorReader<T>&) = delete;
-
-  FOLLY_ALWAYS_INLINE exec_in_t operator[](size_t offset) const {
-    return rawValues_[offset];
+  exec_in_t readNullFree(vector_size_t offset) const {
+    return operator[](offset);
   }
 
-  FOLLY_ALWAYS_INLINE exec_null_free_in_t readNullFree(size_t offset) const {
-    return rawValues_[offset];
-  }
-
-  bool isSet(size_t offset) const {
-    return !vector_->isNullAt(offset);
-  }
-
-  bool containsNull(size_t offset) const {
-    return vector_->isNullAt(offset);
+  bool isSet(vector_size_t offset) const {
+    return !rawNulls_ || !bits::isBitNull(rawNulls_, offset * indexMultiple_);
   }
 
   bool mayHaveNulls() const {
-    return vector_->mayHaveNulls();
+    return rawNulls_;
   }
 
-  const FlatVector<exec_in_t>* vector_;
+  inline bool containsNull(vector_size_t index) const {
+    return !isSet(index);
+  }
+
+  bool containsNull(vector_size_t startIndex, vector_size_t endIndex) const {
+    for (auto index = startIndex; index < endIndex; ++index) {
+      if (containsNull(index)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  inline bool mayHaveNullsRecursive() const {
+    return mayHaveNulls();
+  }
+
+  // Scalars don't have children, so this is a no-op.
+  void setChildrenMayHaveNulls() {}
+
   const exec_in_t* rawValues_;
-};
-
-template <typename T>
-struct ConstantVectorReader {
-  using exec_in_t = typename VectorExec::template resolver<T>::in_type;
-  using exec_null_free_in_t =
-      typename VectorExec::template resolver<T>::in_type;
-
-  explicit ConstantVectorReader(const BaseVector* vector)
-      : value_{vector->as<SimpleVector<exec_in_t>>()->valueAt(0)},
-        isNull_{vector->isNullAt(0)} {}
-
-  explicit ConstantVectorReader(const ConstantVectorReader<T>&) = delete;
-  ConstantVectorReader<T>& operator=(const ConstantVectorReader<T>&) = delete;
-
-  FOLLY_ALWAYS_INLINE exec_in_t operator[](size_t offset) const {
-    return value_;
-  }
-
-  FOLLY_ALWAYS_INLINE exec_null_free_in_t readNullFree(size_t offset) const {
-    return value_;
-  }
-
-  bool isSet(size_t offset) const {
-    return !isNull_;
-  }
-
-  bool containsNull(size_t offset) const {
-    return isNull_;
-  }
-
-  bool mayHaveNulls() const {
-    return isNull_;
-  }
-
-  const exec_in_t value_;
-  const bool isNull_;
+  const uint64_t* rawNulls_;
+  // Flat Vectors use an identity mapping for indices, Constant Vectors map all
+  // indices to 0.  This is the same as multiplying by 1 or 0 respectively.
+  // We multiply the index by this value to get that mapping.
+  const vector_size_t indexMultiple_;
 };
 
 namespace detail {
@@ -814,7 +803,9 @@ struct VectorReader<Variadic<T>> {
   using exec_null_free_in_t =
       typename VectorExec::template resolver<Variadic<T>>::null_free_in_type;
 
-  explicit VectorReader(const DecodedArgs& decodedArgs, int32_t startPosition)
+  explicit VectorReader(
+      std::vector<LocalDecodedVector>& decodedArgs,
+      int32_t startPosition)
       : childReaders_{prepareChildReaders(decodedArgs, startPosition)} {}
 
   exec_in_t operator[](vector_size_t offset) const {
@@ -869,14 +860,14 @@ struct VectorReader<Variadic<T>> {
 
  private:
   std::vector<std::unique_ptr<VectorReader<T>>> prepareChildReaders(
-      const DecodedArgs& decodedArgs,
+      std::vector<LocalDecodedVector>& decodedArgs,
       int32_t startPosition) {
     std::vector<std::unique_ptr<VectorReader<T>>> childReaders;
     childReaders.reserve(decodedArgs.size() - startPosition);
 
     for (int i = startPosition; i < decodedArgs.size(); ++i) {
       childReaders.emplace_back(
-          std::make_unique<VectorReader<T>>(decodedArgs.at(i)));
+          std::make_unique<VectorReader<T>>(decodedArgs.at(i).get()));
     }
 
     return childReaders;

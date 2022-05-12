@@ -11,31 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_tpch_connector_test TpchConnectorTest.cpp)
 
-add_library(velox_temp_path TempFilePath.cpp TempDirectoryPath.cpp)
-
-target_link_libraries(velox_temp_path velox_exception)
-
-add_library(
-  velox_exec_test_util
-  Cursor.cpp HiveConnectorTestBase.cpp OperatorTestBase.cpp PlanBuilder.cpp
-  QueryAssertions.cpp TpchQueryBuilder.cpp)
+add_test(velox_tpch_connector_test velox_tpch_connector_test)
 
 target_link_libraries(
-  velox_exec_test_util
-  velox_temp_path
-  duckdb
-  velox_core
-  velox_exception
-  velox_expression
-  velox_parse_parser
-  velox_duckdb_conversion
-  velox_dwio_common
-  velox_dwio_type_fbhive
-  velox_dwio_dwrf_reader
-  velox_dwio_dwrf_writer
-  velox_dwrf_test_utils
-  velox_hive_connector
+  velox_tpch_connector_test
   velox_tpch_connector
-  velox_presto_serializer
-  velox_functions_prestosql)
+  velox_vector_test_lib
+  velox_exec_test_util
+  velox_aggregates
+  gtest
+  gtest_main)
