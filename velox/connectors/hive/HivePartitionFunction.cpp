@@ -38,7 +38,8 @@ void abstractHashTyped(
     std::function<uint32_t(const T&)> const& hashOne,
     std::vector<uint32_t>& hashes) {
   for (auto i = 0; i < size; ++i) {
-    const uint32_t hash = (values.isNullAt(i)) ? 0 : hashOne(values.valueAt<T>(i));
+    const uint32_t hash =
+        (values.isNullAt(i)) ? 0 : hashOne(values.valueAt<T>(i));
     hashes[i] = mix ? hashes[i] * 31 + hash : hash;
   }
 }
@@ -69,7 +70,9 @@ void hashTyped<TypeKind::SMALLINT>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  auto hashSmallint = [](int16_t value) { return static_cast<uint32_t>(value); };
+  auto hashSmallint = [](int16_t value) {
+    return static_cast<uint32_t>(value);
+  };
   abstractHashTyped<int16_t>(values, size, mix, hashSmallint, hashes);
 }
 
@@ -134,7 +137,9 @@ void hashTypedStringView(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  auto hashStringView = [](const StringView& value) { return hashBytes(value, 0); };
+  auto hashStringView = [](const StringView& value) {
+    return hashBytes(value, 0);
+  };
   abstractHashTyped<StringView>(values, size, mix, hashStringView, hashes);
 }
 
