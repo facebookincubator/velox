@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/substrait/SubstraitUtils.h"
+#include "velox/substrait/SubstraitParser.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::substrait {
