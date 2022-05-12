@@ -1,0 +1,163 @@
+{
+ "extension_uris": [],
+ "extensions": [
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 1,
+    "name": "lte:fp64_fp64"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 0,
+    "name": "is_not_null:fp64"
+   }
+  },
+  {
+   "extension_function": {
+    "extension_uri_reference": 0,
+    "function_anchor": 2,
+    "name": "and:bool_bool"
+   }
+  }
+ ],
+ "relations": [
+  {
+   "root": {
+    "input": {
+     "read": {
+      "common": {
+       "direct": {}
+      },
+      "base_schema": {
+       "names": [
+        "l_quantity",
+        "l_extendedprice",
+        "l_discount",
+        "l_tax",
+        "l_returnflag",
+        "l_linestatus",
+        "l_shipdate_new"
+       ],
+       "struct": {
+        "types": [
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "string": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "string": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         },
+         {
+          "fp64": {
+           "type_variation_reference": 0,
+           "nullability": "NULLABILITY_NULLABLE"
+          }
+         }
+        ],
+        "type_variation_reference": 0,
+        "nullability": "NULLABILITY_UNSPECIFIED"
+       }
+      },
+      "filter": {
+       "scalar_function": {
+        "function_reference": 2,
+        "args": [
+         {
+          "scalar_function": {
+           "function_reference": 0,
+           "args": [
+            {
+             "selection": {
+              "direct_reference": {
+               "struct_field": {
+                "field": 6
+               }
+              }
+             }
+            }
+           ],
+           "output_type": {
+            "bool": {
+             "type_variation_reference": 0,
+             "nullability": "NULLABILITY_NULLABLE"
+            }
+           }
+          }
+         },
+         {
+          "scalar_function": {
+           "function_reference": 1,
+           "args": [
+            {
+             "selection": {
+              "direct_reference": {
+               "struct_field": {
+                "field": 6
+               }
+              }
+             }
+            },
+            {
+             "literal": {
+              "nullable": false,
+              "fp64": 10471
+             }
+            }
+           ],
+           "output_type": {
+            "bool": {
+             "type_variation_reference": 0,
+             "nullability": "NULLABILITY_NULLABLE"
+            }
+           }
+          }
+         }
+        ],
+        "output_type": {
+         "bool": {
+          "type_variation_reference": 0,
+          "nullability": "NULLABILITY_NULLABLE"
+         }
+        }
+       }
+      }
+     }
+    },
+    "names": []
+   }
+  }
+ ],
+ "expected_type_urls": []
+}

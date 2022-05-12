@@ -42,17 +42,21 @@ class SubstraitParser {
       const ::substrait::NamedStruct& namedStruct);
 
   /// Used to parse Substrait Type.
-  std::shared_ptr<SubstraitType> parseType(const ::substrait::Type& sType);
+  std::shared_ptr<SubstraitType> parseType(const ::substrait::Type& substraitType);
 
   /// Used to parse Substrait ReferenceSegment.
   int32_t parseReferenceSegment(
-      const ::substrait::Expression::ReferenceSegment& sRef);
+      const ::substrait::Expression::ReferenceSegment& refSegment);
 
   /// Used to make names in the format of {prefix}_{index}.
   std::vector<std::string> makeNames(const std::string& prefix, int size);
 
   /// Used to make node name in the format of n{nodeId}_{colIdx}.
   std::string makeNodeName(int nodeId, int colIdx);
+
+  /// Used to get the column index from a node name in the format of
+  /// n{nodeId}_{colIdx}.
+  int getIdxFromNodeName(const std::string& nodeName);
 
   /// Used to find the Substrait function name according to the function id
   /// from a pre-constructed function map. The function specification can be
@@ -69,6 +73,11 @@ class SubstraitParser {
   /// When the input is a simple name, it will be returned.
   std::string getSubFunctionName(const std::string& subFuncSpec) const;
 
+  /// This function is used get the types from the compound name.
+  void getSubFunctionTypes(
+      const std::string& subFuncSpec,
+      std::vector<std::string>& types) const;
+
   /// Used to find the Velox function name according to the function id
   /// from a pre-constructed function map.
   std::string findVeloxFunction(
@@ -83,7 +92,9 @@ class SubstraitParser {
   /// words. Key: the Substrait function key word, Value: the Velox function key
   /// word. For those functions with different names in Substrait and Velox,
   /// a mapping relation should be added here.
-  std::unordered_map<std::string, std::string> substraitVeloxFunctionMap;
+  std::unordered_map<std::string, std::string> substraitVeloxFunctionMap_ = {
+      {"add", "plus"},
+      {"subtract", "minus"}};
 };
 
 } // namespace facebook::velox::substrait

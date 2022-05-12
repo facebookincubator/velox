@@ -1,0 +1,128 @@
+{
+ "extension_uris": [],
+ "extensions": [],
+ "relations": [
+  {
+   "root": {
+    "input": {
+     "project": {
+      "common": {
+       "direct": {}
+      },
+      "expressions": [
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 0
+          }
+         }
+        }
+       },
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 1
+          }
+         }
+        }
+       },
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 2
+          }
+         }
+        }
+       },
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 3
+          }
+         }
+        }
+       },
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 4
+          }
+         }
+        }
+       },
+       {
+        "selection": {
+         "direct_reference": {
+          "struct_field": {
+           "field": 5
+          }
+         }
+        }
+       }
+      ],
+      "advanced_extension": {
+       "enhancement": {
+        "@type": "type.googleapis.com/substrait.Type",
+        "struct": {
+         "types": [
+          {
+           "fp64": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "fp64": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "fp64": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "fp64": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "string": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "string": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_NULLABLE"
+           }
+          },
+          {
+           "fp64": {
+            "type_variation_reference": 0,
+            "nullability": "NULLABILITY_REQUIRED"
+           }
+          }
+         ],
+         "type_variation_reference": 0,
+         "nullability": "NULLABILITY_UNSPECIFIED"
+        }
+       }
+      }
+     }
+    },
+    "names": []
+   }
+  }
+ ],
+ "expected_type_urls": []
+}
