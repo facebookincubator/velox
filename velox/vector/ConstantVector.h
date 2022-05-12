@@ -415,6 +415,9 @@ void ConstantVector<std::shared_ptr<void>>::setValue(const std::string& string);
 template <>
 void ConstantVector<ComplexType>::setValue(const std::string& string);
 
+    template <>
+    void ConstantVector<int128_t>::setValue(const std::string& string);
+
 template <typename T>
 using ConstantVectorPtr = std::shared_ptr<ConstantVector<T>>;
 

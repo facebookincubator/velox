@@ -36,6 +36,12 @@ void ConstantVector<std::shared_ptr<void>>::setValue(
   VELOX_NYI();
 }
 
+    template <>
+    void ConstantVector<int128_t>::setValue(
+            const std::string& /*string*/) {
+      VELOX_NYI();
+    }
+
 template <>
 void ConstantVector<ComplexType>::setValue(const std::string& /*string*/) {
   VELOX_UNSUPPORTED(
