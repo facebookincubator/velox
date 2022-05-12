@@ -372,16 +372,6 @@ struct VectorWriter<
     return proxy_;
   }
 
-  void copyCommit(const exec_out_t& data) {
-    // If not initialized for zero-copy writes, copy the value into the vector.
-    if (!proxy_.initialized()) {
-      vector_->set(offset_, StringView(data.value()));
-    } else {
-      // Not really copying.
-      proxy_.finalize();
-    }
-  }
-
   void commitNull() {
     vector_->setNull(offset_, true);
   }
@@ -389,7 +379,8 @@ struct VectorWriter<
   void commit(bool isSet) {
     // this code path is called when the slice is top-level
     if (isSet) {
-      copyCommit(proxy_);
+      proxy_.finalize();
+
     } else {
       commitNull();
     }
