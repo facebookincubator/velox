@@ -1,3 +1,4 @@
+#include <iostream>
 /*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
@@ -88,32 +89,11 @@ void hashTyped<TypeKind::REAL>(
     vector_size_t size,
     bool mix,
     std::vector<uint32_t>& hashes) {
-  static_assert(sizeof(float) == sizeof(uint32_t));
-  auto f = [](float value) {
-    uint32_t ret;
-    memcpy(&ret, &value, sizeof ret);
-    return ret;
-  };
-  abstractHashTyped<float>(values, size, mix, hashes, f);
+  hashTyped<TypeKind::INTEGER>(values, size, mix, hashes);
 }
 
 int32_t hashInt64(int64_t value) {
   return ((*reinterpret_cast<uint64_t*>(&value)) >> 32) ^ value;
-}
-
-template <>
-void hashTyped<TypeKind::DOUBLE>(
-    const DecodedVector& values,
-    vector_size_t size,
-    bool mix,
-    std::vector<uint32_t>& hashes) {
-  static_assert(sizeof(float) == sizeof(uint32_t));
-  auto f = [](double value) {
-    int64_t buff;
-    memcpy(&buff, &value, sizeof buff);
-    return hashInt64(buff);
-  };
-  abstractHashTyped<double>(values, size, mix, hashes, f);
 }
 
 template <>
@@ -124,6 +104,15 @@ void hashTyped<TypeKind::BIGINT>(
     std::vector<uint32_t>& hashes) {
   auto f = [](int64_t value) { return hashInt64(value); };
   abstractHashTyped<int64_t>(values, size, mix, hashes, f);
+}
+
+template <>
+void hashTyped<TypeKind::DOUBLE>(
+    const DecodedVector& values,
+    vector_size_t size,
+    bool mix,
+    std::vector<uint32_t>& hashes) {
+  hashTyped<TypeKind::BIGINT>(values, size, mix, hashes);
 }
 
 #if defined(__has_feature)
