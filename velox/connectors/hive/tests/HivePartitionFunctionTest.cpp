@@ -127,20 +127,20 @@ TEST_F(HivePartitionFunctionTest, real) {
   auto values = vm_.flatVectorNullable<float>(
       {std::nullopt,
        2'000'000'000.0,
-       std::numeric_limits<float>::min(),
+       std::numeric_limits<float>::lowest(),
        std::numeric_limits<float>::max()});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
-  assertPartitions(values, 2, {0, 0, 0, 1});
-  assertPartitions(values, 500, {0, 348, 108, 39});
-  assertPartitions(values, 997, {0, 544, 847, 632});
+  assertPartitions(values, 2, {0, 0, 1, 1});
+  assertPartitions(values, 500, {0, 348, 39, 39});
+  assertPartitions(values, 997, {0, 544, 632, 632});
 }
 
 TEST_F(HivePartitionFunctionTest, double) {
   auto values = vm_.flatVectorNullable<double>(
       {std::nullopt,
        300'000'000'000.5,
-       std::numeric_limits<double>::min(),
+       std::numeric_limits<double>::lowest(),
        std::numeric_limits<double>::max()});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
