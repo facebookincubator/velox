@@ -27,7 +27,7 @@ namespace {
 ///
 /// Implements the array_sum function.
 ///
-template <typename T>
+template <typename IT, typename OT>
 class ArraySumFunction : public exec::VectorFunction {
 public:
  // Execute function.
@@ -39,8 +39,8 @@ public:
      VectorPtr* result) const override;
 };
 
-template <typename T>
-void ArraySumFunction<T>::apply(
+template <typename IT, typename OT>
+void ArraySumFunction<IT, OT>::apply(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     const TypePtr& outputType,
@@ -59,12 +59,11 @@ void ArraySumFunction<T>::apply(
 
   // Allocate new vector for the result
   memory::MemoryPool* pool = context->pool();
-  TypePtr type = arrayVector->type()->childAt(0);
-  auto resultVector = BaseVector::create(type, numRows, pool);
+  auto resultVector = BaseVector::create(outputType, numRows, pool);
 
-  auto
+
   // Get access to raw values for the result
-  T* resultValues = (T*) resultVector->valuesAsVoid();
+  OT* resultValues = (OT*) resultVector->valuesAsVoid();
 
   // Iterate over the input vector and find the sum of each array's values
   for (int i = 0; i < numRows; i++) {
@@ -77,10 +76,10 @@ void ArraySumFunction<T>::apply(
       int start = arrayVector->offsetAt(i);
       int end = start + arrayVector->sizeAt(i);
 
-      T sum = 0;
+      OT sum = 0;
       for (; start < end; start++) {
         if (!elements->isNullAt(start)) {
-          sum += elements->template valueAt<T>(start);
+          sum += elements->template valueAt<IT>(start);
         }
       }
 
@@ -93,7 +92,7 @@ void ArraySumFunction<T>::apply(
 }
 
 template <>
-void ArraySumFunction<Timestamp>::apply(
+void ArraySumFunction<Timestamp, int64_t>::apply(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     const TypePtr& outputType,
@@ -101,7 +100,7 @@ void ArraySumFunction<Timestamp>::apply(
     VectorPtr* result) const {}
 
 template <>
-void ArraySumFunction<StringView>::apply(
+void ArraySumFunction<Timestamp, double>::apply(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     const TypePtr& outputType,
@@ -109,7 +108,31 @@ void ArraySumFunction<StringView>::apply(
     VectorPtr* result) const {}
 
 template <>
-void ArraySumFunction<Date>::apply(
+void ArraySumFunction<StringView, int64_t>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
+
+template <>
+void ArraySumFunction<StringView, double>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
+
+template <>
+void ArraySumFunction<Date, int64_t>::apply(
+    const SelectivityVector& rows,
+    std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
+    const TypePtr& outputType,
+    exec::EvalCtx* context,
+    VectorPtr* result) const {}
+
+template <>
+void ArraySumFunction<Date, double>::apply(
     const SelectivityVector& rows,
     std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
     const TypePtr& outputType,
@@ -134,8 +157,15 @@ std::shared_ptr<exec::VectorFunction> createTyped(
    const std::vector<exec::VectorFunctionArg>& inputArgs) {
  VELOX_CHECK_EQ(inputArgs.size(), 1);
 
- using T = typename TypeTraits<kind>::NativeType;
- return std::make_shared<ArraySumFunction<T>>();
+ using IT = typename TypeTraits<kind>::NativeType;
+ if (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT
+     || kind == TypeKind::INTEGER || kind == TypeKind::BIGINT) {
+   return std::make_shared<ArraySumFunction<IT, int64_t>>();
+ }
+ if (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
+   return std::make_shared<ArraySumFunction<IT, double>>();
+ }
+ VELOX_FAIL()
 }
 
 // Create function.

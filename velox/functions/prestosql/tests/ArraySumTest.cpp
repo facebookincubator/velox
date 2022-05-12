@@ -27,11 +27,12 @@ namespace {
 class ArraySumTest : public FunctionBaseTest {
 protected:
  // Evaluate an expression.
+ template <typename T>
  void testExpr(
      const VectorPtr& expected,
      const std::string& expression,
      const std::vector<VectorPtr>& input) {
-   auto result = evaluate<ArrayVector>(expression, makeRowVector(input));
+   auto result = evaluate<FlatVector<T>>(expression, makeRowVector(input));
    assertEqualVectors(expected, result);
  }
 };
@@ -39,11 +40,51 @@ protected:
 } // namespace
 
 // Test integer arrays.
-TEST_F(ArraySumTest, integerArrays) {
+TEST_F(ArraySumTest, integer64Input) {
   auto input = makeNullableArrayVector<int64_t>({{0, 1, 2},
     {std::nullopt, 1, 2},
     {std::nullopt}});
   auto expected = makeNullableFlatVector<int64_t>({3, 3, 0});
-  testExpr(expected, "array_sum(C0)", {input});
+  testExpr<int64_t>(expected, "array_sum(C0)", {input});
 }
 
+TEST_F(ArraySumTest, integer32Input) {
+  auto input = makeNullableArrayVector<int32_t>({{0, 1, 2},
+                                                 {std::nullopt, 1, 2},
+                                                 {std::nullopt}});
+  auto expected = makeNullableFlatVector<int64_t>({3, 3, 0});
+  testExpr<int64_t>(expected, "array_sum(C0)", {input});
+}
+
+TEST_F(ArraySumTest, integer16Input) {
+  auto input = makeNullableArrayVector<int16_t>({{0, 1, 2},
+                                                 {std::nullopt, 1, 2},
+                                                 {std::nullopt}});
+  auto expected = makeNullableFlatVector<int64_t>({3, 3, 0});
+  testExpr<int64_t>(expected, "array_sum(C0)", {input});
+}
+
+TEST_F(ArraySumTest, integer8Input) {
+  auto input = makeNullableArrayVector<int8_t>({{0, 1, 2},
+                                                 {std::nullopt, 1, 2},
+                                                 {std::nullopt}});
+  auto expected = makeNullableFlatVector<int64_t>({3, 3, 0});
+  testExpr<int64_t>(expected, "array_sum(C0)", {input});
+}
+
+// Test floating point arrays
+TEST_F(ArraySumTest, floatInput) {
+  auto input = makeNullableArrayVector<float>({{0, 1, 2},
+                                                 {std::nullopt, 1, 2},
+                                                 {std::nullopt}});
+  auto expected = makeNullableFlatVector<double>({3, 3, 0});
+  testExpr<double>(expected, "array_sum(C0)", {input});
+}
+
+TEST_F(ArraySumTest, doubleInput) {
+  auto input = makeNullableArrayVector<double>({{0, 1, 2},
+                                               {std::nullopt, 1, 2},
+                                               {std::nullopt}});
+  auto expected = makeNullableFlatVector<double>({3, 3, 0});
+  testExpr<double>(expected, "array_sum(C0)", {input});
+}
