@@ -46,12 +46,10 @@ class StringWriter<false /*reuseInput*/> : public UDFOutputString {
     }
 
     auto* newDataBuffer = vector_->getBufferWithSpace(newCapacity);
-    // If the new allocated space is on the same buffer no need to copy content
-    // or reassign start address
-    if (dataBuffer_ == newDataBuffer) {
-      setCapacity(newCapacity);
-      return;
-    }
+    auto actualCapacity = newDataBuffer->capacity() - newDataBuffer->size();
+
+    // Impossible to be the same due to the way the capacity is computed.
+    DCHECK(dataBuffer_ != newDataBuffer);
 
     auto newStartAddress =
         newDataBuffer->asMutable<char>() + newDataBuffer->size();
@@ -60,7 +58,7 @@ class StringWriter<false /*reuseInput*/> : public UDFOutputString {
       std::memcpy(newStartAddress, data(), size());
     }
 
-    setCapacity(newCapacity);
+    setCapacity(actualCapacity);
     setData(newStartAddress);
     dataBuffer_ = newDataBuffer;
   }
@@ -69,8 +67,9 @@ class StringWriter<false /*reuseInput*/> : public UDFOutputString {
   /// finalize the allocation and the string writing
   void finalize() {
     if (!finalized_) {
-      VELOX_CHECK(size() == 0 || data());
-      if (dataBuffer_) {
+      VELOX_DCHECK(size() == 0 || data());
+      if LIKELY (size()) {
+        DCHECK(dataBuffer_);
         dataBuffer_->setSize(dataBuffer_->size() + size());
       }
       vector_->setNoCopy(offset_, StringView(data(), size()));
@@ -172,7 +171,7 @@ class StringWriter<true /*reuseInput*/> : public UDFOutputString {
   /// Not called by the UDF Implementation. Should be called at the end to
   /// finalize the allocation and the string writing
   void finalize() {
-    VELOX_CHECK(size() == 0 || data());
+    VELOX_DCHECK(size() == 0 || data());
     vector_->setNoCopy(offset_, StringView(data(), size()));
   }
 
