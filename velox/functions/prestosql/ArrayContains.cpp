@@ -176,7 +176,7 @@ class ArrayContainsFunction : public exec::VectorFunction {
     exec::LocalDecodedVector arrayHolder(context, *arrayVector, rows);
     auto elements = arrayHolder.get()->base()->as<ArrayVector>()->elements();
 
-    exec::LocalSelectivityVector nestedRows(context, elements->size());
+    exec::LocalSelectivityVector nestedRows(*context, elements->size());
     nestedRows.get()->setAll();
 
     exec::LocalDecodedVector elementsHolder(

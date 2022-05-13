@@ -100,7 +100,7 @@ class Expr {
   // path; fallback to the regular implementation by default.
   virtual void evalSpecialFormSimplified(
       const SelectivityVector& rows,
-      EvalCtx* context,
+      EvalCtx& context,
       VectorPtr& result) {
     evalSpecialForm(rows, context, result);
   }
@@ -292,7 +292,7 @@ class Expr {
   // If this is a common subexpression, stores the newly calculated result.
   void checkUpdateSharedSubexprValues(
       const SelectivityVector& rows,
-      EvalCtx* context,
+      EvalCtx& context,
       const VectorPtr& result);
 
   void evalSimplifiedImpl(

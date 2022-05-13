@@ -45,30 +45,30 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
 }
 
 void EvalCtx::setWrapped(
-    Expr* expr,
+    Expr* FOLLY_NONNULL expr,
     VectorPtr source,
     const SelectivityVector& rows,
-    VectorPtr* result) {
-  if (*result) {
-    BaseVector::ensureWritable(rows, expr->type(), pool(), result);
+    VectorPtr& result) {
+  if (result) {
+    BaseVector::ensureWritable(rows, expr->type(), pool(), &result);
     if (wrapEncoding_ == VectorEncoding::Simple::DICTIONARY) {
       if (!wrapNulls_) {
-        (*result)->copy(source.get(), rows, wrap_->as<vector_size_t>());
+        result->copy(source.get(), rows, wrap_->as<vector_size_t>());
       } else {
         auto nonNullRows = rows;
         nonNullRows.deselectNulls(
             wrapNulls_->as<uint64_t>(), rows.begin(), rows.end());
         if (nonNullRows.hasSelections()) {
-          (*result)->copy(
+          result->copy(
               source.get(), nonNullRows, wrap_->as<vector_size_t>());
         }
-        (*result)->addNulls(wrapNulls_->as<uint64_t>(), rows);
+        result->addNulls(wrapNulls_->as<uint64_t>(), rows);
       }
       return;
     }
     if (wrapEncoding_ == VectorEncoding::Simple::CONSTANT) {
       rows.applyToSelected([&](auto row) {
-        (*result)->copy(source.get(), row, rows.begin(), 1);
+        result->copy(source.get(), row, rows.begin(), 1);
       });
 
       return;
@@ -105,11 +105,11 @@ void EvalCtx::setWrapped(
       // If all rows are null, make a flat vector of the right type with
       // the nulls.
       VELOX_CHECK(nulls);
-      *result = BaseVector::create(expr->type(), rows.size(), pool());
-      (*result)->addNulls(nulls->as<uint64_t>(), rows);
+      result = BaseVector::create(expr->type(), rows.size(), pool());
+      result->addNulls(nulls->as<uint64_t>(), rows);
       return;
     }
-    *result = BaseVector::wrapInDictionary(
+    result = BaseVector::wrapInDictionary(
         std::move(nulls), wrap_, rows.end(), std::move(source));
     return;
   }
@@ -120,10 +120,10 @@ void EvalCtx::setWrapped(
       // upstream source may be not initialized, or otherwise in a bad state.
       // Just return NULL, the value won't be used and TRY is just going to
       // NULL out the result anyway.
-      *result =
+      result =
           BaseVector::createNullConstant(expr->type(), rows.size(), pool());
     } else {
-      *result = BaseVector::wrapInConstant(
+      result = BaseVector::wrapInConstant(
           rows.size(), constantWrapIndex_, std::move(source));
     }
     return;
@@ -263,9 +263,9 @@ void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
   if (isLazyNotLoaded(*field)) {
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
 
-    LocalDecodedVector holder(this);
+    LocalDecodedVector holder(*this);
     auto decoded = holder.get();
-    LocalSelectivityVector baseRowsHolder(this, 0);
+    LocalSelectivityVector baseRowsHolder(*this, 0);
     auto baseRows = baseRowsHolder.get();
     auto rawField = field.get();
     LazyVector::ensureLoadedRows(field, rowsToLoad, *decoded, *baseRows);

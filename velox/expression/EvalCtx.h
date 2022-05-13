@@ -31,10 +31,13 @@ struct ContextSaver;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
-  EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
+  EvalCtx(
+      core::ExecCtx* FOLLY_NONNULL execCtx,
+      ExprSet* exprSet,
+      const RowVector* row);
 
   /// For testing only.
-  explicit EvalCtx(core::ExecCtx* execCtx);
+  explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
 
   const RowVector* row() const {
     return row_;
@@ -71,10 +74,10 @@ class EvalCtx {
   // EvalEncoding. If '*result' existed, positions not in 'rows' are
   // not changed.
   void setWrapped(
-      Expr* expr,
+      Expr* FOLLY_NONNULL expr,
       VectorPtr source,
       const SelectivityVector& rows,
-      VectorPtr* result);
+      VectorPtr& result);
 
   void setError(vector_size_t index, const std::exception_ptr& exceptionPtr);
 
@@ -190,20 +193,26 @@ class EvalCtx {
   void moveOrCopyResult(
       const VectorPtr& localResult,
       const SelectivityVector& rows,
-      VectorPtr* result) const {
-    if (*result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(
-          rows, (*result)->type(), (*result)->pool(), result);
-      (*result)->copy(localResult.get(), rows, nullptr);
+      VectorPtr& result) const {
+    if (result && !isFinalSelection() && *finalSelection() != rows) {
+      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result);
+      result->copy(localResult.get(), rows, nullptr);
     } else {
-      *result = localResult;
+      result = localResult;
     }
   }
 
+  void moveOrCopyResult(
+      const VectorPtr& localResult,
+      const SelectivityVector& rows,
+      VectorPtr* result) const {
+    moveOrCopyResult(localResult, rows, *result);
+  }
+
  private:
-  core::ExecCtx* const execCtx_;
-  ExprSet* const exprSet_;
-  const RowVector* row_;
+  core::ExecCtx* const FOLLY_NONNULL execCtx_;
+  ExprSet* FOLLY_NONNULL const exprSet_;
+  const RowVector* FOLLY_NONNULL row_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
@@ -235,15 +244,15 @@ class EvalCtx {
 struct ContextSaver {
   ~ContextSaver();
   // The context to restore. nullptr if nothing to restore.
-  EvalCtx* context = nullptr;
+  EvalCtx* FOLLY_NULLABLE context = nullptr;
   std::vector<VectorPtr> peeled;
   BufferPtr wrap;
   BufferPtr wrapNulls;
   VectorEncoding::Simple wrapEncoding;
   bool nullsPruned = false;
   // The selection of the context being saved.
-  const SelectivityVector* rows;
-  const SelectivityVector* finalSelection;
+  const SelectivityVector* FOLLY_NONNULL rows;
+  const SelectivityVector* FOLLY_NULLABLE finalSelection;
   EvalCtx::ErrorVectorPtr errors;
 };
 
@@ -251,38 +260,40 @@ class LocalSelectivityVector {
  public:
   // Grab an instance of a SelectivityVector from the pool and resize it to
   // specified size.
-  LocalSelectivityVector(EvalCtx* context, vector_size_t size)
-      : context_(context->execCtx()),
-        vector_(context_->getSelectivityVector(size)) {}
+  LocalSelectivityVector(EvalCtx& context, vector_size_t size)
+      : context_(*context.execCtx()),
+        vector_(context_.getSelectivityVector(size)) {}
 
-  explicit LocalSelectivityVector(core::ExecCtx* context)
+  explicit LocalSelectivityVector(core::ExecCtx& context)
       : context_(context), vector_(nullptr) {}
+  explicit LocalSelectivityVector(core::ExecCtx* context)
+      : context_(*context), vector_(nullptr) {}
 
-  explicit LocalSelectivityVector(EvalCtx* context)
-      : context_(context->execCtx()), vector_(nullptr) {}
+  explicit LocalSelectivityVector(EvalCtx& context)
+      : context_(*context.execCtx()), vector_(nullptr) {}
 
-  LocalSelectivityVector(core::ExecCtx* context, vector_size_t size)
-      : context_(context), vector_(context_->getSelectivityVector(size)) {}
+  LocalSelectivityVector(core::ExecCtx& context, vector_size_t size)
+      : context_(context), vector_(context_.getSelectivityVector(size)) {}
 
   // Grab an instance of a SelectivityVector from the pool and initialize it to
   // the specified value.
-  LocalSelectivityVector(EvalCtx* context, const SelectivityVector& value)
-      : context_(context->execCtx()),
-        vector_(context_->getSelectivityVector(value.size())) {
+  LocalSelectivityVector(EvalCtx& context, const SelectivityVector& value)
+      : context_(*context.execCtx()),
+        vector_(context_.getSelectivityVector(value.size())) {
     *vector_ = value;
   }
 
   ~LocalSelectivityVector() {
     if (vector_) {
-      context_->releaseSelectivityVector(std::move(vector_));
+      context_.releaseSelectivityVector(std::move(vector_));
     }
   }
 
   void allocate(vector_size_t size) {
     if (vector_) {
-      context_->releaseSelectivityVector(std::move(vector_));
+      context_.releaseSelectivityVector(std::move(vector_));
     }
-    vector_ = context_->getSelectivityVector(size);
+    vector_ = context_.getSelectivityVector(size);
   }
 
   explicit operator SelectivityVector&() {
@@ -295,7 +306,7 @@ class LocalSelectivityVector {
 
   SelectivityVector* get(vector_size_t size) {
     if (!vector_) {
-      vector_ = context_->getSelectivityVector(size);
+      vector_ = context_.getSelectivityVector(size);
     }
     return vector_.get();
   }
@@ -310,54 +321,65 @@ class LocalSelectivityVector {
     return *vector_;
   }
 
-  SelectivityVector* operator->() {
+  SelectivityVector* FOLLY_NULLABLE operator->() {
     VELOX_DCHECK_NOT_NULL(vector_, "get(size) must be called.");
     return vector_.get();
   }
 
-  const SelectivityVector* operator->() const {
+  const SelectivityVector* FOLLY_NONNULL operator->() const {
     VELOX_DCHECK_NOT_NULL(vector_, "get(size) must be called.");
     return vector_.get();
   }
 
  private:
-  core::ExecCtx* const context_;
+  core::ExecCtx& context_;
   std::unique_ptr<SelectivityVector> vector_ = nullptr;
 };
 
 class LocalDecodedVector {
  public:
-  explicit LocalDecodedVector(core::ExecCtx* context) : context_(context) {}
+  explicit LocalDecodedVector(core::ExecCtx& context) : context_(context) {}
 
-  explicit LocalDecodedVector(EvalCtx* context)
-      : context_(context->execCtx()) {}
+  explicit LocalDecodedVector(core::ExecCtx* context)
+      : LocalDecodedVector(*context) {}
+
+  explicit LocalDecodedVector(EvalCtx& context)
+      : context_(*context.execCtx()) {}
 
   LocalDecodedVector(
-      EvalCtx* context,
+      const EvalCtx& context,
       const BaseVector& vector,
       const SelectivityVector& rows,
       bool loadLazy = true)
-      : context_(context->execCtx()) {
+      : context_(*context.execCtx()) {
     get()->decode(vector, rows, loadLazy);
   }
+
+  LocalDecodedVector(
+      const EvalCtx* context,
+      const BaseVector& vector,
+      const SelectivityVector& rows,
+      bool loadLazy = true)
+      : LocalDecodedVector(*context, vector, rows, loadLazy) {}
 
   LocalDecodedVector(LocalDecodedVector&& other) noexcept
       : context_{other.context_}, vector_{std::move(other.vector_)} {}
 
+#if 0
   void operator=(LocalDecodedVector&& other) {
     context_ = other.context_;
     vector_ = std::move(other.vector_);
   }
-
+#endif
   ~LocalDecodedVector() {
     if (vector_) {
-      context_->releaseDecodedVector(std::move(vector_));
+      context_.releaseDecodedVector(std::move(vector_));
     }
   }
 
-  DecodedVector* get() {
+  DecodedVector* FOLLY_NONNULL get() {
     if (!vector_) {
-      vector_ = context_->getDecodedVector();
+      vector_ = context_.getDecodedVector();
     }
     return vector_.get();
   }
@@ -373,18 +395,18 @@ class LocalDecodedVector {
     return *vector_;
   }
 
-  DecodedVector* operator->() {
+  DecodedVector* FOLLY_NONNULL operator->() {
     VELOX_DCHECK_NOT_NULL(vector_, "get() must be called.");
     return vector_.get();
   }
 
-  const DecodedVector* operator->() const {
+  const DecodedVector* FOLLY_NONNULL operator->() const {
     VELOX_DCHECK_NOT_NULL(vector_, "get() must be called.");
     return vector_.get();
   }
 
  private:
-  core::ExecCtx* context_;
+  core::ExecCtx& context_;
   std::unique_ptr<DecodedVector> vector_;
 };
 
