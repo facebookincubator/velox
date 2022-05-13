@@ -322,7 +322,7 @@ class Expr {
   // The distinct references to input columns in 'inputs_'
   // subtrees. Empty if this is the same as 'distinctFields_' of
   // parent Expr.
-  std::vector<FieldReference* FOLLY_NONNULL> distinctFields_;
+  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
 
   // True if a null in any of 'distinctFields_' causes 'this' to be
   // null for the row.

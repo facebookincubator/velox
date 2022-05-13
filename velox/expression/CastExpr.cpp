@@ -453,7 +453,7 @@ void applyCustomTypeCast(
   LocalDecodedVector inputDecoded(context, *input, allRows);
 
   exec::LocalSelectivityVector baseRows(
-					*context.execCtx(), inputDecoded->base()->size());
+      *context.execCtx(), inputDecoded->base()->size());
   baseRows->clearAll();
   context.applyToSelectedNoThrow(nonNullRows, [&](auto row) {
     baseRows->setValid(inputDecoded->index(row), true);
@@ -541,7 +541,7 @@ void CastExpr::apply(
 
     if (toType->isArray() || toType->isMap() || toType->isRow()) {
       LocalSelectivityVector translatedRows(
-					    *context.execCtx(), decoded->base()->size());
+          *context.execCtx(), decoded->base()->size());
       translatedRows->clearAll();
       nonNullRows->applyToSelected([&](auto row) {
         translatedRows->setValid(decoded->index(row), true);

@@ -150,7 +150,7 @@ void FieldReference::evalSpecialForm(
       }
     }
     result = useDecode ? std::move(decoded.wrap(child, *input.get(), rows))
-                        : std::move(child);
+                       : std::move(child);
   }
 }
 
@@ -787,8 +787,7 @@ void TryExpr::evalSpecialForm(
   // This also prevents this TRY expression from leaking exceptions to the
   // parent TRY expression, so the parent won't incorrectly null out rows that
   // threw exceptions which this expression already handled.
-  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
-      context.errorsPtr(), nullptr);
+  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(context.errorsPtr(), nullptr);
   inputs_[0]->eval(rows, context, result);
 
   nullOutErrors(rows, context, result);
@@ -807,8 +806,7 @@ void TryExpr::evalSpecialFormSimplified(
   // This also prevents this TRY expression from leaking exceptions to the
   // parent TRY expression, so the parent won't incorrectly null out rows that
   // threw exceptions which this expression already handled.
-  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(
-      context.errorsPtr(), nullptr);
+  VarSetter<EvalCtx::ErrorVectorPtr> errorsSetter(context.errorsPtr(), nullptr);
   inputs_[0]->evalSimplified(rows, context, result);
 
   nullOutErrors(rows, context, result);
@@ -837,7 +835,7 @@ void TryExpr::nullOutErrors(
           rows.testSelected([&](auto row) { return !errors->isNullAt(row); }));
       // Set the result to be a NULL constant.
       result = BaseVector::createNullConstant(
-					      result->type(), result->size(), context.pool());
+          result->type(), result->size(), context.pool());
     } else {
       rows.applyToSelected([&](auto row) {
         if (row < errors->size() && !errors->isNullAt(row)) {

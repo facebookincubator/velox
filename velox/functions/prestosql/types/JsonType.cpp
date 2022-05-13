@@ -173,7 +173,7 @@ struct AsJson {
     // Translates the selected rows of input into the corresponding rows of the
     // base of the decoded input.
     exec::LocalSelectivityVector baseRows(
-					  *context->execCtx(), decoded_->base()->size());
+        *context->execCtx(), decoded_->base()->size());
     baseRows->clearAll();
     context->applyToSelectedNoThrow(rows, [&](auto row) {
       baseRows->setValid(decoded_->index(row), true);

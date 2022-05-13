@@ -250,7 +250,8 @@ void Expr::evalSimplifiedImpl(
   }
 
   // Apply the actual function.
-  vectorFunction_->apply(remainingRows, inputValues_, type(), &context, &result);
+  vectorFunction_->apply(
+      remainingRows, inputValues_, type(), &context, &result);
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.asRange().bits(), context, result);
@@ -694,7 +695,7 @@ void Expr::evalWithNulls(
     VectorPtr& result) {
   if (!rows.hasSelections()) {
     // empty input, return an empty vector of the right type
-   result = BaseVector::createNullConstant(type(), 0, context.pool());
+    result = BaseVector::createNullConstant(type(), 0, context.pool());
     return;
   }
 
@@ -822,8 +823,7 @@ void Expr::setAllNulls(
     result->addNulls(notNulls.get()->asRange().bits(), rows);
     return;
   }
-  result =
-      BaseVector::createNullConstant(type(), rows.size(), context.pool());
+  result = BaseVector::createNullConstant(type(), rows.size(), context.pool());
 }
 
 namespace {

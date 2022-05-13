@@ -59,17 +59,15 @@ void EvalCtx::setWrapped(
         nonNullRows.deselectNulls(
             wrapNulls_->as<uint64_t>(), rows.begin(), rows.end());
         if (nonNullRows.hasSelections()) {
-          result->copy(
-              source.get(), nonNullRows, wrap_->as<vector_size_t>());
+          result->copy(source.get(), nonNullRows, wrap_->as<vector_size_t>());
         }
         result->addNulls(wrapNulls_->as<uint64_t>(), rows);
       }
       return;
     }
     if (wrapEncoding_ == VectorEncoding::Simple::CONSTANT) {
-      rows.applyToSelected([&](auto row) {
-        result->copy(source.get(), row, rows.begin(), 1);
-      });
+      rows.applyToSelected(
+          [&](auto row) { result->copy(source.get(), row, rows.begin(), 1); });
 
       return;
     }
