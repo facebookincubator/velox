@@ -1116,6 +1116,7 @@ void Expr::applyFunction(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
   auto timer = cpuWallTimer();
 
@@ -1222,14 +1223,23 @@ ExprSet::ExprSet(
 namespace {
 void addStats(
     const exec::Expr& expr,
-    std::unordered_map<std::string, exec::ExprStats>& stats) {
+    std::unordered_map<std::string, exec::ExprStats>& stats,
+    std::unordered_set<const exec::Expr*>& uniqueExprs) {
+  auto it = uniqueExprs.find(&expr);
+  if (it != uniqueExprs.end()) {
+    // Common sub-expression. Skip to avoid double counting.
+    return;
+  }
+
+  uniqueExprs.insert(&expr);
+
   // Do not aggregate empty stats.
   if (expr.stats().numProcessedRows) {
     stats[expr.name()].add(expr.stats());
   }
 
   for (const auto& input : expr.inputs()) {
-    addStats(*input, stats);
+    addStats(*input, stats, uniqueExprs);
   }
 }
 
@@ -1242,8 +1252,9 @@ ExprSet::~ExprSet() {
   listeners().withRLock([&](auto& listeners) {
     if (!listeners.empty()) {
       std::unordered_map<std::string, exec::ExprStats> stats;
+      std::unordered_set<const exec::Expr*> uniqueExprs;
       for (const auto& expr : exprs()) {
-        addStats(*expr, stats);
+        addStats(*expr, stats, uniqueExprs);
       }
 
       auto uuid = makeUuid();
@@ -1330,7 +1341,8 @@ void printExprWithStats(
   const auto& stats = expr.stats();
   out << indent << expr.toString(false)
       << " [cpu time: " << succinctNanos(stats.timing.cpuNanos)
-      << ", rows: " << stats.numProcessedRows << "] -> "
+      << ", rows: " << stats.numProcessedRows
+      << ", batches: " << stats.numProcessedVectors << "] -> "
       << expr.type()->toString() << " [#" << id << "]" << std::endl;
 
   auto newIndent = indent + "   ";
