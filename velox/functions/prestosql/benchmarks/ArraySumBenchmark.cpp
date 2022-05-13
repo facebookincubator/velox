@@ -23,5 +23,90 @@
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
+namespace {
 
+template <typename IT, typename OT>
+VELOX_UDF_BEGIN(array_sum)
+FOLLY_ALWAYS_INLINE bool call(
+    OT& out,
+    const arg_type<Array<IT>>& array) {
+  if (array.mayHaveNulls()) {
+    bool allNulls = true;
+    OT sum = 0;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        allNulls = false;
+        sum += *item;
+      }
+    }
+    if (allNulls) {
+      return false;
+    }
+    out = sum;
+    return true;
+  }
 
+  // Not nulls path
+  OT sum = 0;
+  for (const auto& item : array) {
+    sum += *item;
+  }
+  out = sum;
+  return true;
+}
+VELOX_UDF_END();
+
+class ArrayContainsBenchmark : public functions::test::FunctionBenchmarkBase {
+ public:
+  ArrayContainsBenchmark() : FunctionBenchmarkBase() {
+    functions::prestosql::registerArrayFunctions();
+    functions::prestosql::registerGeneralFunctions();
+
+    registerFunction<
+        udf_array_sum<int32_t, int64_t>,
+        int64_t,
+        facebook::velox::Array<int32_t>
+        >({"array_sum_alt"});
+  }
+
+  void runInteger(const std::string& functionName) {
+    folly::BenchmarkSuspender suspender;
+    vector_size_t size = 1'000;
+    auto arrayVector = vectorMaker_.arrayVector<int32_t>(
+        size,
+        [](auto row) { return row % 5; },
+        [](auto row) { return row % 23; });
+
+    auto rowVector = vectorMaker_.rowVector({arrayVector});
+    auto exprSet = compileExpression(
+        fmt::format("{}(c0)", functionName), rowVector->type());
+    suspender.dismiss();
+
+    doRun(exprSet, rowVector);
+  }
+
+  void doRun(ExprSet& exprSet, const RowVectorPtr& rowVector) {
+    int cnt = 0;
+    for (auto i = 0; i < 100; i++) {
+      cnt += evaluate(exprSet, rowVector)->size();
+    }
+    folly::doNotOptimizeAway(cnt);
+  }
+};
+
+BENCHMARK(vectorSimpleFunction) {
+  ArrayContainsBenchmark benchmark;
+  benchmark.runInteger("array_sum_alt");
+}
+
+BENCHMARK_RELATIVE(vectorFunctionInteger) {
+  ArrayContainsBenchmark benchmark;
+  benchmark.runInteger("array_sum");
+}
+
+} // namespace
+
+int main(int /*argc*/, char** /*argv*/) {
+  folly::runBenchmarks();
+  return 0;
+}
