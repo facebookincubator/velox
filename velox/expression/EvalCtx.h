@@ -272,13 +272,13 @@ class LocalSelectivityVector {
 
   explicit LocalSelectivityVector(core::ExecCtx& context)
       : context_(context), vector_(nullptr) {}
-  explicit LocalSelectivityVector(core::ExecCtx* context)
+  explicit LocalSelectivityVector(core::ExecCtx* FOLLY_NONNULL context)
       : context_(*context), vector_(nullptr) {}
 
   explicit LocalSelectivityVector(EvalCtx& context)
       : context_(*context.execCtx()), vector_(nullptr) {}
 
-  explicit LocalSelectivityVector(EvalCtx* context)
+  explicit LocalSelectivityVector(EvalCtx* FOLLY_NONNULL context)
       : LocalSelectivityVector(*context) {}
 
   LocalSelectivityVector(core::ExecCtx& context, vector_size_t size)
@@ -309,11 +309,11 @@ class LocalSelectivityVector {
     return *vector_;
   }
 
-  SelectivityVector* get() {
+  SelectivityVector* FOLLY_NONNULL get() {
     return vector_.get();
   }
 
-  SelectivityVector* get(vector_size_t size) {
+  SelectivityVector* FOLLY_NONNULL get(vector_size_t size) {
     if (!vector_) {
       vector_ = context_.getSelectivityVector(size);
     }
@@ -368,7 +368,7 @@ class LocalDecodedVector {
   }
 
   LocalDecodedVector(
-      const EvalCtx* context,
+      const EvalCtx* FOLLY_NONNULL context,
       const BaseVector& vector,
       const SelectivityVector& rows,
       bool loadLazy = true)
@@ -377,12 +377,6 @@ class LocalDecodedVector {
   LocalDecodedVector(LocalDecodedVector&& other) noexcept
       : context_{other.context_}, vector_{std::move(other.vector_)} {}
 
-#if 0
-  void operator=(LocalDecodedVector&& other) {
-    context_ = other.context_;
-    vector_ = std::move(other.vector_);
-  }
-#endif
   ~LocalDecodedVector() {
     if (vector_) {
       context_.releaseDecodedVector(std::move(vector_));

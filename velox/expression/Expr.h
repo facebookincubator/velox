@@ -240,7 +240,7 @@ class Expr {
   // appropriate.
   void addNulls(
       const SelectivityVector& rows,
-      const uint64_t* rawNulls,
+      const uint64_t* FOLLY_NULLABLE rawNulls,
       EvalCtx& context,
       VectorPtr& result);
 
@@ -398,7 +398,7 @@ class ExprSet {
 
   void clear();
 
-  core::ExecCtx* execCtx() const {
+  core::ExecCtx* FOLLY_NULLABLE execCtx() const {
     return execCtx_;
   }
 
@@ -417,7 +417,7 @@ class ExprSet {
   }
 
   // Flags an expression that remembers the results for a dictionary.
-  void addToMemo(Expr* expr) {
+  void addToMemo(Expr* FOLLY_NONNULL expr) {
     memoizingExprs_.insert(expr);
   }
 

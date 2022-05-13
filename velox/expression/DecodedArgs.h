@@ -41,7 +41,7 @@ class DecodedArgs {
     }
   }
 
-  DecodedVector* at(int i) const {
+  DecodedVector* FOLLY_NONNULL at(int i) const {
     return const_cast<exec::LocalDecodedVector*>(&holders_[i])->get();
   }
 
