@@ -33,8 +33,8 @@ class EvalCtx {
  public:
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
-      ExprSet* FOLLY_NONNULL exprSet,
-      const RowVector* FOLLY_NONNULL row);
+      ExprSet* FOLLY_NULLABLE exprSet,
+      const RowVector* FOLLY_NULLABLE row);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
@@ -129,7 +129,7 @@ class EvalCtx {
     std::swap(errors_, other);
   }
 
-  bool* mutableThrowOnError() {
+  bool* FOLLY_NONNULL mutableThrowOnError() {
     return &throwOnError_;
   }
 
@@ -137,7 +137,7 @@ class EvalCtx {
     return nullsPruned_;
   }
 
-  bool* mutableNullsPruned() {
+  bool* FOLLY_NONNULL mutableNullsPruned() {
     return &nullsPruned_;
   }
 
@@ -153,23 +153,24 @@ class EvalCtx {
   // current SelectivityVector. For example, true for top level
   // projections or conjuncts of a top level AND. False for then and
   // else of an IF.
-  bool* mutableIsFinalSelection() {
+  bool* FOLLY_NONNULL mutableIsFinalSelection() {
     return &isFinalSelection_;
   }
 
-  const SelectivityVector** mutableFinalSelection() {
+  const SelectivityVector* FOLLY_NULLABLE* FOLLY_NONNULL
+  mutableFinalSelection() {
     return &finalSelection_;
   }
 
-  const SelectivityVector* finalSelection() const {
+  const SelectivityVector* FOLLY_NULLABLE finalSelection() const {
     return finalSelection_;
   }
 
-  core::ExecCtx* execCtx() const {
+  core::ExecCtx* FOLLY_NONNULL execCtx() const {
     return execCtx_;
   }
 
-  ExprSet* exprSet() const {
+  ExprSet* FOLLY_NULLABLE exprSet() const {
     return exprSet_;
   }
 
@@ -205,14 +206,14 @@ class EvalCtx {
   void moveOrCopyResult(
       const VectorPtr& localResult,
       const SelectivityVector& rows,
-      VectorPtr* result) const {
+      VectorPtr* FOLLY_NONNULL result) const {
     moveOrCopyResult(localResult, rows, *result);
   }
 
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
-  ExprSet* FOLLY_NONNULL const exprSet_;
-  const RowVector* FOLLY_NONNULL row_;
+  ExprSet* FOLLY_NULLABLE const exprSet_;
+  const RowVector* FOLLY_NULLABLE row_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
@@ -233,7 +234,7 @@ class EvalCtx {
 
   // If isFinalSelection_ is false, the set of rows for the upper-most IF or
   // OR. Used to determine the set of rows for loading lazy vectors.
-  const SelectivityVector* finalSelection_;
+  const SelectivityVector* FOLLY_NULLABLE finalSelection_;
 
   // Stores exception found during expression evaluation. Exceptions are stored
   // in a opaque flat vector, which will translate to a
