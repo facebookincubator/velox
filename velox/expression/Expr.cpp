@@ -439,7 +439,7 @@ void Expr::setDictionaryWrapping(
 
 Expr::PeelEncodingsResult Expr::peelEncodings(
     EvalCtx& context,
-    ContextSaver* saver,
+    ContextSaver& saver,
     const SelectivityVector& rows,
     LocalDecodedVector& localDecoded,
     LocalSelectivityVector& newRowsHolder,
@@ -603,7 +603,7 @@ void Expr::evalEncodings(
       LocalDecodedVector decodedHolder(context);
       auto peelEncodingsResult = peelEncodings(
           context,
-          &saveContext,
+          saveContext,
           rows,
           decodedHolder,
           newRowsHolder,
@@ -1096,13 +1096,13 @@ bool Expr::applyFunctionWithPeeling(
     // All the fields are constant across the rows of interest.
     newRows = singleRow(newRowsHolder, rows.begin());
 
-    context.saveAndReset(&saver, rows);
+    context.saveAndReset(saver, rows);
     context.setConstantWrap(rows.begin());
   } else {
     auto decoded = localDecoded.get();
     decoded->makeIndices(*firstWrapper, applyRows, numLevels);
     newRows = translateToInnerRows(applyRows, *decoded, newRowsHolder);
-    context.saveAndReset(&saver, rows);
+    context.saveAndReset(saver, rows);
     setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
   }
 

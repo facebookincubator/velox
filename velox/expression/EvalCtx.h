@@ -33,17 +33,17 @@ class EvalCtx {
  public:
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
-      ExprSet* exprSet,
-      const RowVector* row);
+      ExprSet* FOLLY_NONNULL exprSet,
+      const RowVector* FOLLY_NONNULL row);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
 
-  const RowVector* row() const {
+  const RowVector* FOLLY_NONNULL row() const {
     return row_;
   }
 
-  memory::MemoryPool* pool() const {
+  memory::MemoryPool* FOLLY_NONNULL pool() const {
     return execCtx_->pool();
   }
 
@@ -52,7 +52,7 @@ class EvalCtx {
   // peeled off fields.
   const VectorPtr& getField(int32_t index) const;
 
-  BaseVector* getRawField(int32_t index) const;
+  BaseVector* FOLLY_NONNULL getRawField(int32_t index) const;
 
   void ensureFieldLoaded(int32_t index, const SelectivityVector& rows);
 
@@ -64,9 +64,9 @@ class EvalCtx {
   }
 
   /// Used by peelEncodings.
-  void saveAndReset(ContextSaver* saver, const SelectivityVector& rows);
+  void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
 
-  void restore(ContextSaver* saver);
+  void restore(ContextSaver& saver);
 
   // Creates or updates *result according to 'source'. The
   // 'source' position corresponding to each position in 'rows' is
@@ -112,21 +112,21 @@ class EvalCtx {
   void addError(
       vector_size_t index,
       const std::exception_ptr& exceptionPtr,
-      ErrorVectorPtr* errorsPtr) const;
+      ErrorVectorPtr& errorsPtr) const;
 
   // Returns the vector of errors or nullptr if no errors. This is
   // intentionally a raw pointer to signify that the caller may not
   // retain references to this.
-  ErrorVector* errors() const {
+  ErrorVector* FOLLY_NULLABLE errors() const {
     return errors_.get();
   }
 
-  ErrorVectorPtr* errorsPtr() {
+  ErrorVectorPtr* FOLLY_NONNULL errorsPtr() {
     return &errors_;
   }
 
-  void swapErrors(ErrorVectorPtr* other) {
-    std::swap(errors_, *other);
+  void swapErrors(ErrorVectorPtr& other) {
+    std::swap(errors_, other);
   }
 
   bool* mutableThrowOnError() {
@@ -277,6 +277,10 @@ class LocalSelectivityVector {
   explicit LocalSelectivityVector(EvalCtx& context)
       : context_(*context.execCtx()), vector_(nullptr) {}
 
+  explicit LocalSelectivityVector(EvalCtx* context)
+    : LocalSelectivityVector(*context) {}
+
+  
   LocalSelectivityVector(core::ExecCtx& context, vector_size_t size)
       : context_(context), vector_(context_.getSelectivityVector(size)) {}
 

@@ -297,7 +297,7 @@ uint64_t* rowsWithError(
     const SelectivityVector& rows,
     const SelectivityVector& activeRows,
     EvalCtx& context,
-    EvalCtx::ErrorVectorPtr* previousErrors,
+    EvalCtx::ErrorVectorPtr& previousErrors,
     LocalSelectivityVector& errorRowsHolder) {
   auto errors = context.errors();
   if (!errors) {
@@ -320,7 +320,7 @@ uint64_t* rowsWithError(
       errors->rawNulls(),
       rows.begin(),
       std::min(errors->size(), rows.end()));
-  if (*previousErrors) {
+  if (previousErrors) {
     // Add the new errors to the previous ones and free the new errors.
     bits::forEachSetBit(
         errors->rawNulls(), rows.begin(), errors->size(), [&](int32_t row) {
@@ -331,7 +331,7 @@ uint64_t* rowsWithError(
               previousErrors);
         });
     context.swapErrors(previousErrors);
-    *previousErrors = nullptr;
+    previousErrors = nullptr;
   }
   return errorMask;
 }
@@ -407,7 +407,7 @@ void ConjunctExpr::evalSpecialForm(
     VectorPtr inputResult;
     EvalCtx::ErrorVectorPtr errors;
     if (handleErrors) {
-      context.swapErrors(&errors);
+      context.swapErrors(errors);
     }
 
     // AND: reduce finalSelection to activeRows unless it has been fixed by IF
@@ -427,7 +427,7 @@ void ConjunctExpr::evalSpecialForm(
       // Add rows with new errors to activeRows and merge these with
       // previous errors.
       extraActive =
-          rowsWithError(rows, *activeRows, context, &errors, errorRows);
+          rowsWithError(rows, *activeRows, context, errors, errorRows);
     }
     updateResult(inputResult.get(), context, flatResult, activeRows);
     if (extraActive) {
