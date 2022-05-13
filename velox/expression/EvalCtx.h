@@ -278,9 +278,8 @@ class LocalSelectivityVector {
       : context_(*context.execCtx()), vector_(nullptr) {}
 
   explicit LocalSelectivityVector(EvalCtx* context)
-    : LocalSelectivityVector(*context) {}
+      : LocalSelectivityVector(*context) {}
 
-  
   LocalSelectivityVector(core::ExecCtx& context, vector_size_t size)
       : context_(context), vector_(context_.getSelectivityVector(size)) {}
 
