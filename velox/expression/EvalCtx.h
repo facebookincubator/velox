@@ -264,9 +264,11 @@ class LocalSelectivityVector {
       : context_(*context.execCtx()),
         vector_(context_.getSelectivityVector(size)) {}
 
-  explicit LocalSelectivityVector(EvalCtx* FOLLY_NONNULL context, vector_size_t size)
-    : LocalSelectivityVector(*context, size) {}
-  
+  explicit LocalSelectivityVector(
+      EvalCtx* FOLLY_NONNULL context,
+      vector_size_t size)
+      : LocalSelectivityVector(*context, size) {}
+
   explicit LocalSelectivityVector(core::ExecCtx& context)
       : context_(context), vector_(nullptr) {}
   explicit LocalSelectivityVector(core::ExecCtx* context)
@@ -350,7 +352,7 @@ class LocalDecodedVector {
       : context_(*context.execCtx()) {}
 
   explicit LocalDecodedVector(EvalCtx* FOLLY_NONNULL context)
-    : LocalDecodedVector(*context) {}
+      : LocalDecodedVector(*context) {}
 
   LocalDecodedVector(
       const EvalCtx& context,
