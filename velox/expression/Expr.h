@@ -432,7 +432,7 @@ class ExprSet {
 
   // Exprs which retain memoized state, e.g. from running over dictionaries.
   std::unordered_set<Expr*> memoizingExprs_;
-  core::ExecCtx* const execCtx_;
+  core::ExecCtx* FOLLY_NONNULL const execCtx_;
 };
 
 class ExprSetSimplified : public ExprSet {
@@ -465,7 +465,7 @@ class ExprSetSimplified : public ExprSet {
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
     std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
-    core::ExecCtx* execCtx);
+    core::ExecCtx* FOLLY_NONNULL execCtx);
 
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or
