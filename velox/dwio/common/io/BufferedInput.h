@@ -21,7 +21,7 @@
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/InputStream.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class BufferedInput {
  public:
@@ -160,4 +160,4 @@ class BufferedInputFactory {
   static BufferedInputFactory* FOLLY_NONNULL baseFactory();
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

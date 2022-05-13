@@ -18,7 +18,7 @@
 
 #include "velox/dwio/dwrf/common/Compression.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class PagedOutputStream : public BufferedOutputStream {
  public:
@@ -84,4 +84,4 @@ class PagedOutputStream : public BufferedOutputStream {
   uint32_t threshold_;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

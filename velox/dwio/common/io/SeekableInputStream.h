@@ -16,14 +16,16 @@
 
 #pragma once
 
+#include "InputStream.h"
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/common/wrap/zero-copy-stream-wrapper.h"
 
 #include <vector>
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
+
+using namespace dwio::common::io;
 
 void printBuffer(std::ostream& out, const char* buffer, uint64_t length);
 
@@ -62,7 +64,7 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
 };
 
 /**
- * Create a seekable input stream based on a memory range.
+ * Create a seekable io stream based on a memory range.
  */
 class SeekableArrayInputStream : public SeekableInputStream {
  private:
@@ -106,7 +108,7 @@ class SeekableArrayInputStream : public SeekableInputStream {
 };
 
 /**
- * Create a seekable input stream based on an input stream.
+ * Create a seekable io stream based on an io stream.
  */
 class SeekableFileInputStream : public SeekableInputStream {
  private:
@@ -140,4 +142,4 @@ class SeekableFileInputStream : public SeekableInputStream {
       override;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

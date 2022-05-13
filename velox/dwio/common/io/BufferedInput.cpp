@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "BufferedInput.h"
 
 #include <fmt/format.h>
 
 DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using dwio::common::LogType;
 using dwio::common::Region;
@@ -216,4 +216,4 @@ BufferedInputFactory* BufferedInputFactory::baseFactory() {
   return instance.get();
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

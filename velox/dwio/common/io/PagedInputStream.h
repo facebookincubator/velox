@@ -18,7 +18,7 @@
 
 #include "velox/dwio/dwrf/common/Compression.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class PagedInputStream : public SeekableInputStream {
  public:
@@ -50,7 +50,7 @@ class PagedInputStream : public SeekableInputStream {
     return folly::to<std::string>(
         "PagedInputStream StreamInfo (",
         streamDebugInfo_,
-        ") input stream (",
+        ") io stream (",
         input_->getName(),
         ") State (",
         state_,
@@ -90,10 +90,10 @@ class PagedInputStream : public SeekableInputStream {
 
   enum class State { HEADER, START, ORIGINAL, END };
 
-  // make sure input is contiguous for decompression/decryption
+  // make sure io is contiguous for decompression/decryption
   const char* ensureInput(size_t availableInputBytes);
 
-  // input stream where to read compressed/encrypted data
+  // io stream where to read compressed/encrypted data
   std::unique_ptr<SeekableInputStream> input_;
   memory::MemoryPool& pool_;
 
@@ -124,7 +124,7 @@ class PagedInputStream : public SeekableInputStream {
   // the size of the current chunk (in its compressed/encrypted form)
   size_t remainingLength_{0};
 
-  // the last buffer returned from the input
+  // the last buffer returned from the io
   const char* inputBufferPtr_{nullptr};
   const char* inputBufferPtrEnd_{nullptr};
 
@@ -142,4 +142,4 @@ class PagedInputStream : public SeekableInputStream {
   const std::string streamDebugInfo_;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io {

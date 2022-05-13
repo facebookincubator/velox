@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/CacheInputStream.h"
+#include "CacheInputStream.h"
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CachedBufferedInput.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using velox::cache::ScanTracker;
 using velox::cache::TrackingId;
@@ -292,4 +292,4 @@ void CacheInputStream::loadPosition() {
     loadPosition();
   }
 }
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

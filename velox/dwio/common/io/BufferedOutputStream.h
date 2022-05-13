@@ -20,7 +20,7 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/common/wrap/zero-copy-stream-wrapper.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 /**
  * Record write position for creating index stream
@@ -163,4 +163,4 @@ class AppendOnlyBufferedStream {
   }
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

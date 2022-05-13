@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
-#include "velox/common/process/TraceContext.h"
-#include "velox/dwio/dwrf/common/CacheInputStream.h"
+#include "velox/common/process/TraceContext.h
+#include "velox/dwio/common/io/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CacheInputStream.h"
 
 DEFINE_int32(
     cache_prefetch_min_pct,
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using cache::CachePin;
 using cache::LoadState;
@@ -475,4 +475,4 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       loadQuantum_);
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

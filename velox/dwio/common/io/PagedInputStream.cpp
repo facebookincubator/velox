@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/PagedInputStream.h"
+#include "PagedInputStream.h"
 #include "velox/dwio/common/exception/Exception.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 void PagedInputStream::prepareOutputBuffer(uint64_t uncompressedLength) {
   if (!outputBuffer_ || uncompressedLength > outputBuffer_->capacity()) {
@@ -76,7 +76,7 @@ const char* PagedInputStream::ensureInput(size_t availableInputBytes) {
     inputBufferPtr_ += availableInputBytes;
     return input;
   }
-  // make sure input buffer has capacity
+  // make sure io buffer has capacity
   if (inputBuffer_.capacity() < remainingLength_) {
     inputBuffer_.reserve(remainingLength_);
   }
@@ -130,7 +130,7 @@ bool PagedInputStream::Next(const void** data, int32_t* size) {
       static_cast<size_t>(inputBufferPtrEnd_ - inputBufferPtr_),
       remainingLength_);
   // in the case when decompression or decryption is needed, need to copy data
-  // to input buffer if the input doesn't contain the entire block
+  // to io buffer if the io doesn't contain the entire block
   bool original = !decrypter_ && (state_ == State::ORIGINAL);
   const char* input = nullptr;
   // if no decompression or decryption is needed, simply adjust the output
@@ -242,4 +242,4 @@ void PagedInputStream::seekToRowGroup(PositionProvider& positionProvider) {
   }
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

@@ -164,7 +164,7 @@ class StringReaderTests
       MockStripeStreams& stripe,
       std::vector<uint64_t> nodes = {},
       const std::shared_ptr<const Type>& dataType = nullptr) {
-    if (useSelectiveReader()) {
+    if (true) {
       return builder_.build(requestedType, stripe, nodes, dataType);
     } else {
       return buildColumnReader(

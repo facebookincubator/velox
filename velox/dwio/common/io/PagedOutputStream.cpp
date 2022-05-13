@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/PagedOutputStream.h"
+#include "PagedOutputStream.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwrf {
@@ -94,7 +94,7 @@ uint64_t PagedOutputStream::flush() {
   if (size > PAGE_HEADER_SIZE) {
     bufferHolder_.take(createPage());
     resetBuffers();
-    // reset input buffer
+    // reset io buffer
     buffer_.resize(PAGE_HEADER_SIZE);
   }
   return bufferHolder_.size() - originalSize;
@@ -129,4 +129,4 @@ void PagedOutputStream::recordPosition(
   recorder.add(size, strideOffset);
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

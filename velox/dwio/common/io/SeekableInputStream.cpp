@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "SeekableInputStream.h"
 
 #include <algorithm>
 #include <iomanip>
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using dwio::common::InputStream;
 using dwio::common::LogType;
@@ -267,4 +267,4 @@ size_t SeekableFileInputStream::loadIndices(
   return startIndex + 1;
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io {

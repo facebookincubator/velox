@@ -16,13 +16,13 @@
 
 #pragma once
 
+#include "InputStream.h"
+#include "dwio/common/io/SeekableInputStream.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/SsdCache.h"
-#include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class CachedBufferedInput;
 
@@ -65,14 +65,14 @@ class CacheInputStream : public SeekableInputStream {
   cache::AsyncDataCache* const cache_;
   dwio::common::IoStatistics* ioStats_;
   dwio::common::InputStream& input_;
-  // The region of 'input' 'this' ranges over.
+  // The region of 'io' 'this' ranges over.
   const dwio::common::Region region_;
   const uint64_t fileNum_;
   std::shared_ptr<cache::ScanTracker> tracker_;
   const cache::TrackingId trackingId_;
   const uint64_t groupId_;
 
-  // Maximum number of bytes read from 'input' at a time. This gives the maximum
+  // Maximum number of bytes read from 'io' at a time. This gives the maximum
   // pin_.entry()->size().
   const int32_t loadQuantum_;
 
@@ -95,4 +95,4 @@ class CacheInputStream : public SeekableInputStream {
   uint64_t position_ = 0;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

@@ -34,10 +34,7 @@
 #include "velox/dwio/common/IoStatistics.h"
 #include "velox/dwio/common/MetricsLog.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common::io {
 
 constexpr uint64_t DEFAULT_AUTO_PRELOAD_SIZE =
     (static_cast<const uint64_t>((1ul << 20) * 72));
@@ -185,7 +182,7 @@ class FileInputStream : public InputStream {
   static void registerFactory();
 };
 
-// An input stream that reads from an already opened ReadFile.
+// An io stream that reads from an already opened ReadFile.
 class ReadFileInputStream final : public InputStream {
  public:
   // Does not take ownership of |readFile|.
@@ -250,10 +247,7 @@ class ReferenceableInputStream : public InputStream {
   virtual const void* FOLLY_NULLABLE
   readReferenceOnly(uint64_t length, uint64_t offset, LogType) = 0;
 };
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::io
 
 #define VELOX_STATIC_REGISTER_INPUT_STREAM(function)                           \
   namespace {                                                                  \
