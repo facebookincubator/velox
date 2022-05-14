@@ -53,6 +53,17 @@ the same.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="distinct_from">
+<span class="sig-name descname"><span class="pre">distinct_from</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#distinct_from" title="Permalink to this definition">¶</a></dt>
+<dd><p>In SQL a <code class="docutils literal notranslate"><span class="pre">NULL</span></code> value signifies an unknown value, so any comparison
+involving a <code class="docutils literal notranslate"><span class="pre">NULL</span></code> will produce NULL. The <code class="docutils literal notranslate"><span class="pre">distinct_from</span></code> treats
+NULL as a known value and guarantees either a <code class="docutils literal notranslate"><span class="pre">true</span></code> or <code class="docutils literal notranslate"><span class="pre">false</span></code>
+outcome even in the presence of <code class="docutils literal notranslate"><span class="pre">NULL</span></code> input.
+So <code class="docutils literal notranslate"><span class="pre">distinct_from(NULL,</span> <span class="pre">NULL)</span></code> returns <code class="docutils literal notranslate"><span class="pre">false</span></code>, since a <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+value is not considered distinct from <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="eq">
 <span class="sig-name descname"><span class="pre">eq</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#eq" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns true if x is equal to y. Supports all scalar types. The
@@ -84,7 +95,7 @@ types. The types of x and y must be the same.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="is_null">
 <span class="sig-name descname"><span class="pre">is_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#is_null" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns true is x is a null. Supports all types.</p>
+<dd><p>Returns true if x is a null. Supports all types.</p>
 </dd></dl>
 
 <dl class="py function">
