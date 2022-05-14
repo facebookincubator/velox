@@ -98,8 +98,6 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   FlatVectorPtr<StringView> dictionaryValues_;
 
   int64_t lastStrideIndex_;
-  size_t positionOffset_;
-  size_t strideDictSizeOffset_;
 
   const StrideIndexProvider& provider_;
 

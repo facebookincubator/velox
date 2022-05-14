@@ -96,15 +96,13 @@ void CacheInputStream::seekToPosition(PositionProvider& seekPosition) {
   position_ = seekPosition.next();
 }
 
-std::string CacheInputStream::getName() const {
-  return fmt::format("CacheInputStream {} of {}", position_, region_.length);
+void CacheInputStream::skipPositions(PositionProvider& position) {
+  // not compressed, so only need to skip 1 value (uncompressed position)
+  position.next();
 }
 
-size_t CacheInputStream::loadIndices(
-    const proto::RowIndex& /*rowIndex*/,
-    size_t startIndex) {
-  // not compressed, so only need to skip 1 value (uncompressed position)
-  return startIndex + 1;
+std::string CacheInputStream::getName() const {
+  return fmt::format("CacheInputStream {} of {}", position_, region_.length);
 }
 
 namespace {

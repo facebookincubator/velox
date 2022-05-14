@@ -113,6 +113,8 @@ class ByteRleDecoder {
    */
   virtual void skip(uint64_t numValues);
 
+  virtual void skipPositions(PositionProvider& pp);
+
   /**
    * Read a number of values into the batch.
    * @param data the array to read into
@@ -121,15 +123,6 @@ class ByteRleDecoder {
    *    pointer is not null, positions that are true are skipped.
    */
   virtual void next(char* data, uint64_t numValues, const uint64_t* nulls);
-
-  /**
-   * Load the RowIndex values for the stream this is reading.
-   */
-  virtual size_t loadIndices(
-      const proto::RowIndex& rowIndex,
-      size_t startIndex) {
-    return inputStream->loadIndices(rowIndex, startIndex) + 1;
-  }
 
   void skipBytes(size_t bytes);
 
@@ -262,12 +255,9 @@ class BooleanRleDecoder : public ByteRleDecoder {
 
   void skip(uint64_t numValues) override;
 
-  void next(char* data, uint64_t numValues, const uint64_t* nulls) override;
+  void skipPositions(PositionProvider& pp) override;
 
-  size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override {
-    return ByteRleDecoder::loadIndices(rowIndex, startIndex) + 1;
-  }
+  void next(char* data, uint64_t numValues, const uint64_t* nulls) override;
 
   // Advances 'dataPosition' by 'numValue' non-nulls, where 'current'
   // is the position in 'nulls'.

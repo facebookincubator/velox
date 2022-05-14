@@ -1000,17 +1000,26 @@ void StringDictionaryColumnReader::loadStrideDictionary() {
     return;
   }
 
-  // get stride dictionary size and load it if needed
+  // seek stride dictionary related streams
   auto& positions = rowIndex_->entry(nextStride).positions();
-  strideDictCount = positions.Get(strideDictSizeOffset);
-  if (strideDictCount > 0) {
-    // seek stride dictionary related streams
-    std::vector<uint64_t> pos(
-        positions.begin() + positionOffset, positions.end());
-    PositionProvider pp(pos);
-    strideDictStream->seekToPosition(pp);
-    strideDictLengthDecoder->seekToRowGroup(pp);
+  std::vector<uint64_t> pos(positions.begin(), positions.end());
+  PositionProvider pp(pos);
 
+  // The positions for inMapDecoder and notNullDecoder_ need to be skipped.
+  if (flatMapContext_.inMapDecoder) {
+    flatMapContext_.inMapDecoder->skipPositions(pp);
+  }
+
+  if (notNullDecoder_) {
+    notNullDecoder_->skipPositions(pp);
+  }
+
+  strideDictStream->seekToPosition(pp);
+  strideDictLengthDecoder->seekToRowGroup(pp);
+
+  // get stride dictionary size and load it if needed
+  strideDictCount = pp.next();
+  if (strideDictCount > 0) {
     detail::ensureCapacity<int64_t>(
         strideDictOffset, strideDictCount + 1, &memoryPool_);
     strideDict = loadDictionary(
@@ -1348,15 +1357,6 @@ void StringDictionaryColumnReader::ensureInitialized() {
   if (inDictionaryReader) {
     // load stride dictionary offsets
     rowIndex_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
-    auto indexStartOffset = flatMapContext_.inMapDecoder
-        ? flatMapContext_.inMapDecoder->loadIndices(*rowIndex_, 0)
-        : 0;
-    positionOffset = notNullDecoder_
-        ? notNullDecoder_->loadIndices(*rowIndex_, indexStartOffset)
-        : indexStartOffset;
-    auto offset = strideDictStream->loadIndices(*rowIndex_, positionOffset);
-    strideDictSizeOffset =
-        strideDictLengthDecoder->loadIndices(*rowIndex_, offset);
   }
   initialized_ = true;
 }

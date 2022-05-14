@@ -52,11 +52,12 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
 
   virtual void seekToPosition(PositionProvider& position) = 0;
 
-  virtual std::string getName() const = 0;
+  // The number of positions in the PositionProvider that are used to identify
+  // an ORC/DWRF input stream address could be 1 or 2. This function just skips
+  // that number of positions in the PositionProvider parameter.
+  virtual void skipPositions(PositionProvider& position) = 0;
 
-  virtual size_t loadIndices(
-      const proto::RowIndex& rowIndex,
-      size_t startIndex) = 0;
+  virtual std::string getName() const = 0;
 
   void readFully(char* buffer, size_t bufferSize);
 };
@@ -100,9 +101,8 @@ class SeekableArrayInputStream : public SeekableInputStream {
   virtual bool Skip(int32_t count) override;
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
+  virtual void skipPositions(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
 };
 
 /**
@@ -135,9 +135,8 @@ class SeekableFileInputStream : public SeekableInputStream {
   virtual bool Skip(int32_t count) override;
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
+  virtual void skipPositions(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
 };
 
 } // namespace facebook::velox::dwrf

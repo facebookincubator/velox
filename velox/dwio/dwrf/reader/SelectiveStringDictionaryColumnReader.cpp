@@ -135,18 +135,31 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
 
   // get stride dictionary size and load it if needed
   auto& positions = index_->entry(nextStride).positions();
-  scanState_.dictionary2.numValues = positions.Get(strideDictSizeOffset_);
-  if (scanState_.dictionary2.numValues > 0) {
-    // seek stride dictionary related streams
-    std::vector<uint64_t> pos(
-        positions.begin() + positionOffset_, positions.end());
-    PositionProvider pp(pos);
+  std::vector<uint64_t> pos(positions.begin(), positions.end());
+  PositionProvider pp(pos);
+
+  // The inMapDecoder and notNullDecoder_ positions in the PositionProvider have
+  // to be skipped.
+  if (flatMapContext_.inMapDecoder) {
+    flatMapContext_.inMapDecoder->skipPositions(pp);
+  }
+
+  if (notNullDecoder_) {
+    notNullDecoder_->skipPositions(pp);
+  }
+
+  if (strideDictStream_) {
     strideDictStream_->seekToPosition(pp);
     strideDictLengthDecoder_->seekToRowGroup(pp);
-
-    loadDictionary(
-        *strideDictStream_, *strideDictLengthDecoder_, scanState_.dictionary2);
+    scanState_.dictionary2.numValues = pp.next();
+    if (scanState_.dictionary2.numValues > 0) {
+      loadDictionary(
+          *strideDictStream_,
+          *strideDictLengthDecoder_,
+          scanState_.dictionary2);
+    }
   }
+
   lastStrideIndex_ = nextStride;
   dictionaryValues_ = nullptr;
 
@@ -297,16 +310,6 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
   // handle in dictionary stream
   if (inDictionaryReader_) {
     ensureRowGroupIndex();
-    // load stride dictionary offsets
-    auto indexStartOffset = flatMapContext_.inMapDecoder
-        ? flatMapContext_.inMapDecoder->loadIndices(*index_, 0)
-        : 0;
-    positionOffset_ = notNullDecoder_
-        ? notNullDecoder_->loadIndices(*index_, indexStartOffset)
-        : indexStartOffset;
-    size_t offset = strideDictStream_->loadIndices(*index_, positionOffset_);
-    strideDictSizeOffset_ =
-        strideDictLengthDecoder_->loadIndices(*index_, offset);
   }
   scanState_.updateRawState();
   initialized_ = true;

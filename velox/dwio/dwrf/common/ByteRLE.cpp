@@ -388,6 +388,11 @@ void ByteRleDecoder::skip(uint64_t numValues) {
   }
 }
 
+void ByteRleDecoder::skipPositions(PositionProvider& pp) {
+  inputStream->skipPositions(pp);
+  pp.next();
+}
+
 void ByteRleDecoder::next(
     char* data,
     uint64_t numValues,
@@ -493,6 +498,11 @@ void BooleanRleDecoder::skip(uint64_t numValues) {
       remainingBits = 8 - bitsToSkip;
     }
   }
+}
+
+void BooleanRleDecoder::skipPositions(PositionProvider& pp) {
+  ByteRleDecoder::skipPositions(pp);
+  pp.next();
 }
 
 void BooleanRleDecoder::next(
