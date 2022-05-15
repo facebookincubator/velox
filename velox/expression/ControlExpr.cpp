@@ -86,7 +86,7 @@ void FieldReference::evalSpecialForm(
     EvalCtx& context,
     VectorPtr& result) {
   if (result) {
-    BaseVector::ensureWritable(rows, type_, context->pool(), result);
+    BaseVector::ensureWritable(rows, type_, context.pool(), &result);
   }
 
   if (inputs_.empty()) {
@@ -135,6 +135,7 @@ void FieldReference::evalSpecialForm(
   auto row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
   if (index_ == -1) {
     index_ = row->type()->asRow().getChildIdx(field_);
+
   }
 
   auto& child = row->childAt(index_);
@@ -359,8 +360,7 @@ void finalizeErrors(
   }
   // null flag of error |= initial active & ~final active.
   int32_t numWords = bits::nwords(errors->size());
-  auto errorNulls =
-      context.errors()->mutableNulls(errors->size())->asMutable<uint64_t>();
+  auto errorNulls = errors->mutableNulls(errors->size())->asMutable<uint64_t>();
   for (int32_t i = 0; i < numWords; ++i) {
     errorNulls[i] &= rows.asRange().bits()[i] & activeRows.asRange().bits()[i];
     if (throwOnError && errorNulls[i]) {
@@ -413,6 +413,7 @@ void ConjunctExpr::evalSpecialForm(
   LocalSelectivityVector errorRows(context);
   LocalSelectivityVector activeRowsHolder(context, rows.end());
   auto activeRows = activeRowsHolder.get();
+  assert(activeRows); // lint
   *activeRows = rows;
   int32_t numActive = activeRows->countSelected();
   for (int32_t i = 0; i < inputs_.size(); ++i) {

@@ -69,8 +69,7 @@ class EvalCtx {
   // the contents of the field after load.
   const VectorPtr& ensureFieldLoaded(
       int32_t index,
-      const SelectivityVector& rows,
-      EvalMode* FOLLY_NULLABLE mode = nullptr);
+      const SelectivityVector& rows);
 
   void setPeeled(int32_t index, const VectorPtr& vector) {
     if (peeledFields_.size() <= index) {
@@ -319,6 +318,11 @@ class LocalSelectivityVector {
   LocalSelectivityVector(core::ExecCtx& context, vector_size_t size)
       : context_(context), vector_(context_.getSelectivityVector(size)) {}
 
+  LocalSelectivityVector(
+      core::ExecCtx* FOLLY_NONNULL context,
+      vector_size_t size)
+      : LocalSelectivityVector(*context, size) {}
+
   // Grab an instance of a SelectivityVector from the pool and initialize it to
   // the specified value.
   LocalSelectivityVector(EvalCtx& context, const SelectivityVector& value)
@@ -344,7 +348,7 @@ class LocalSelectivityVector {
     return *vector_;
   }
 
-  SelectivityVector* FOLLY_NONNULL get() {
+  SelectivityVector* FOLLY_NULLABLE get() {
     return vector_.get();
   }
 

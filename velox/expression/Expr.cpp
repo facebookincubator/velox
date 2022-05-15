@@ -268,7 +268,7 @@ void Expr::eval(
     return;
   }
 
-  if (context->mode() == EvalMode::kFlatNonNull) {
+  if (context.mode() == EvalMode::kFlatNonNull) {
     return evalFlatNonNull(rows, context, result);
   }
 
@@ -283,14 +283,14 @@ void Expr::eval(
   // peeling and wrapping in the sub-nodes.
   //
   // TODO: Re-work the logic of deciding when to load which field.
-  VarSetter mode(&context->mode(), context->mode());
-  if (context->mode() == EvalMode::kGeneric &&
+  VarSetter mode(&context.mode(), context.mode());
+  if (context.mode() == EvalMode::kGeneric &&
       (!hasConditionals_ || distinctFields_.size() == 1)) {
     // Load lazy vectors if any.
     EvalMode newMode = EvalMode::kFlatNonNull;
     bool allConstant = true;
     for (const auto& field : distinctFields_) {
-      auto& vector = context->ensureFieldLoaded(field->index(context), rows);
+      auto& vector = context.ensureFieldLoaded(field->index(context), rows);
       auto encoding = vector->encoding();
       if (encoding == VectorEncoding::Simple::CONSTANT) {
         if (newMode == EvalMode::kFlatNonNull && vector->isNullAt(0)) {
@@ -303,9 +303,9 @@ void Expr::eval(
         }
       }
     }
-    context->mode() = allConstant ? EvalMode::kLazyLoaded : newMode;
+    context.mode() = allConstant ? EvalMode::kLazyLoaded : newMode;
 
-    if (context->mode() == EvalMode::kFlatNonNull) {
+    if (context.mode() == EvalMode::kFlatNonNull) {
       evalFlatNonNull(rows, context, result);
       return;
     }
@@ -341,18 +341,19 @@ void Expr::evalSharedSubexpr(
   //
   // For now, disable the optimization if any encodings have been peeled off.
 
-  if (context->wrapEncoding() != VectorEncoding::Simple::FLAT) {
+  if (context.wrapEncoding() != VectorEncoding::Simple::FLAT) {
     evalEncodings(rows, context, result);
     return;
   }
   if (!sharedSubexprValues_) {
     evalEncodings(rows, context, result);
-    updateSharedSubexprValues(rows, context, *result);
+    updateSharedSubexprValues(rows, context, result);
     return;
   }
   if (!rows.isSubset(*sharedSubexprRows_)) {
     LocalSelectivityVector missingRowsHolder(context, rows);
     auto missingRows = missingRowsHolder.get();
+    assert(missingRows); // lint
     missingRows->deselect(*sharedSubexprRows_);
 
     // Fix finalSelection at "rows" if missingRows is a strict subset to avoid
@@ -367,7 +368,6 @@ void Expr::evalSharedSubexpr(
     evalEncodings(*missingRows, context, sharedSubexprValues_);
   }
   context.moveOrCopyResult(sharedSubexprValues_, rows, result);
-  return true;
 }
 
 void Expr::updateSharedSubexprValues(
@@ -726,7 +726,7 @@ void Expr::evalWithNulls(
     result = BaseVector::createNullConstant(type(), 0, context.pool());
     return;
   }
-  if (context->nullsPruned()) {
+  if (context.nullsPruned()) {
     evalAll(rows, context, result);
     return;
   }
@@ -779,6 +779,7 @@ void Expr::evalWithMemo(
     if (cachedDictionaryIndices_) {
       LocalSelectivityVector cachedHolder(context, rows);
       auto cached = cachedHolder.get();
+      assert(cached); // lint
       cached->intersect(*cachedDictionaryIndices_);
       if (cached->hasSelections()) {
         BaseVector::ensureWritable(rows, type(), context.pool(), &result);
@@ -787,6 +788,7 @@ void Expr::evalWithMemo(
     }
     LocalSelectivityVector uncachedHolder(context, rows);
     auto uncached = uncachedHolder.get();
+    assert(uncached); // lint
     if (cachedDictionaryIndices_) {
       uncached->deselect(*cachedDictionaryIndices_);
     }
@@ -963,6 +965,7 @@ void Expr::evalAll(
         nonNulls.allocate(rows.end());
         *nonNulls.get() = rows;
         remainingRows = nonNulls.get();
+        assert(remainingRows); // lint
       }
       nonNulls.get()->deselectNulls(
           inputValues_[i]->flatRawNulls(rows),
@@ -1002,14 +1005,14 @@ void Expr::evalAll(
   if (remainingRows != &rows) {
     addNulls(rows, remainingRows->asRange().bits(), context, result);
   }
-  context->releaseVectors(inputValues_);
+  context.releaseVectors(inputValues_);
   inputValues_.clear();
 }
 
 void Expr::evalFlatNonNull(
     const SelectivityVector& rows,
-    EvalCtx* context,
-    VectorPtr* result) {
+    EvalCtx& context,
+    VectorPtr& result) {
   if (isMultiplyReferenced_ && !inputs_.empty()) {
     evalSharedSubexpr(rows, context, result);
     return;
@@ -1028,7 +1031,7 @@ void Expr::evalFlatNonNull(
   bool tryPeelArgs = deterministic_;
   bool anyUnique = false;
   for (int32_t i = 0; i < inputs_.size(); ++i) {
-    inputs_[i]->evalFlatNonNull(*remainingRows, context, &inputValues_[i]);
+    inputs_[i]->evalFlatNonNull(*remainingRows, context, inputValues_[i]);
     anyUnique = anyUnique || inputValues_[i].unique();
     tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
     // If any errors occurred evaluating the arguments, it's possible (even
@@ -1037,7 +1040,7 @@ void Expr::evalFlatNonNull(
     // function on them.  It's safe to skip evaluating them since the value
     // for this branch of the expression tree will be NULL for those rows
     // anyway.
-    if (context->errors()) {
+    if (context.errors()) {
       if (remainingRows == &rows) {
         nonNulls.allocate(rows.end());
         *nonNulls.get() = rows;
@@ -1049,7 +1052,7 @@ void Expr::evalFlatNonNull(
         // the error value must be set to null to have an interpretable result
         // vector.
         setAllNulls(rows, context, result);
-        context->releaseVectors(inputValues_);
+        context.releaseVectors(inputValues_);
         inputValues_.clear();
         return;
       }
@@ -1066,7 +1069,7 @@ void Expr::evalFlatNonNull(
   }
 
   if (anyUnique) {
-    context->releaseVectors(inputValues_);
+    context.releaseVectors(inputValues_);
   }
   inputValues_.clear();
 }

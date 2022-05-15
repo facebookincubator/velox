@@ -258,30 +258,12 @@ BaseVector* EvalCtx::getRawField(int32_t index) const {
 
 const VectorPtr& EvalCtx::ensureFieldLoaded(
     int32_t index,
-    const SelectivityVector& rows,
-    EvalMode* FOLLY_NULLABLE mode) {
+    const SelectivityVector& rows) {
   auto& field = getField(index);
   auto encoding = field->encoding();
   if (encoding == VectorEncoding::Simple::FLAT) {
-    if (mode && *mode == EvalMode::kFlatNonNull && field->rawNulls()) {
-      *mode = EvalMode::kLazyLoaded;
-    }
     return field;
   }
-
-  auto updateMode = [&]() {
-    if (mode && *mode == EvalMode::kFlatNonNull) {
-      if (field->encoding() == VectorEncoding::Simple::CONSTANT &&
-          !field->isNullAt(0)) {
-        // Once the LazyVector wrapped by a constant is loaded the constant will
-        // not be peeled any further.
-        return;
-      }
-      if (!field->isFlatNonNull()) {
-        *mode = EvalMode::kLazyLoaded;
-      }
-    }
-  };
 
   if (isLazyNotLoaded(*field)) {
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
@@ -292,7 +274,6 @@ const VectorPtr& EvalCtx::ensureFieldLoaded(
     auto baseRows = baseRowsHolder.get();
     auto rawField = field.get();
     LazyVector::ensureLoadedRows(field, rowsToLoad, *decoded, *baseRows);
-    updateMode();
     if (rawField != field.get()) {
       const_cast<RowVector*>(row_)->childAt(index) = field;
     }
@@ -304,7 +285,6 @@ const VectorPtr& EvalCtx::ensureFieldLoaded(
     } else {
       field->loadedVector();
     }
-    updateMode();
   }
   return field;
 }

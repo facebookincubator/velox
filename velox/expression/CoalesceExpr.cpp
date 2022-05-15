@@ -44,6 +44,7 @@ void CoalesceExpr::evalSpecialForm(
   // Null positions to populate.
   exec::LocalSelectivityVector activeRowsHolder(context, rows.end());
   auto activeRows = activeRowsHolder.get();
+  assert(activeRows); // for lint
   *activeRows = rows;
 
   // Fix finalSelection at "rows" unless already fixed.
