@@ -84,10 +84,10 @@ class HivePartitionFunctionTest : public ::testing::Test {
   test::VectorMaker vm_{pool_.get()};
 };
 
-template<typename T>
+template <typename T>
 void test()
 
-TEST_F(HivePartitionFunctionTest, bigint) {
+    TEST_F(HivePartitionFunctionTest, bigint) {
   auto values = vm_.flatVectorNullable<int64_t>(
       {std::nullopt,
        300'000'000'000,
@@ -106,8 +106,11 @@ TEST_F(HivePartitionFunctionTest, bigint) {
 }
 
 TEST_F(HivePartitionFunctionTest, varchar) {
-  auto values = vm_.flatVectorNullable<std::string>({
-      std::nullopt, "", "test string", "\u5f3a\u5927\u7684Presto\u5f15\u64ce"});
+  auto values = vm_.flatVectorNullable<std::string>(
+      {std::nullopt,
+       "",
+       "test string",
+       "\u5f3a\u5927\u7684Presto\u5f15\u64ce"});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 1, 0});
@@ -226,15 +229,15 @@ TEST_F(HivePartitionFunctionTest, double) {
 }
 
 TEST_F(HivePartitionFunctionTest, timestamp) {
-  auto values = vm_.flatVectorNullable<Timestamp>({
-    std::nullopt,
-    Timestamp(100'000, 900'000),
-    Timestamp(
-        std::numeric_limits<int64_t>::min(),
-        std::numeric_limits<uint64_t>::min()),
-    Timestamp(
-        std::numeric_limits<int64_t>::max(),
-        std::numeric_limits<uint64_t>::max())});
+  auto values = vm_.flatVectorNullable<Timestamp>(
+      {std::nullopt,
+       Timestamp(100'000, 900'000),
+       Timestamp(
+           std::numeric_limits<int64_t>::min(),
+           std::numeric_limits<uint64_t>::min()),
+       Timestamp(
+           std::numeric_limits<int64_t>::max(),
+           std::numeric_limits<uint64_t>::max())});
 
   assertPartitions(values, 1, {0, 0, 0, 0});
   assertPartitions(values, 2, {0, 0, 0, 0});
