@@ -21,7 +21,7 @@
 #include <tuple>
 
 #include "velox/core/CoreTypeSystem.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 #include "velox/type/StringView.h"
@@ -494,6 +494,43 @@ TEST_F(RowWriterTest, copyFromArrayOfRow) {
   auto row1 = arrayView[1].value();
   ASSERT_EQ(exec::get<0>(row1).value(), 1);
   ASSERT_EQ(exec::get<1>(row1).value(), 2);
+}
+
+// Make sure nested vectors are resized to actual size after writing.
+TEST_F(RowWriterTest, finishPostSize) {
+  using out_t = Row<Array<int32_t>, Map<int64_t, int64_t>>;
+
+  auto result = prepareResult(CppToType<out_t>::create());
+
+  exec::VectorWriter<out_t> vectorWriter;
+  vectorWriter.init(*result.get()->as<RowVector>());
+  vectorWriter.setOffset(0);
+
+  auto& rowWriter = vectorWriter.current();
+  auto& arrayWriter = rowWriter.get_writer_at<0>();
+  auto& mapWriter = rowWriter.get_writer_at<1>();
+
+  arrayWriter.resize(10);
+  mapWriter.resize(11);
+
+  vectorWriter.commit();
+  vectorWriter.finish();
+
+  ASSERT_EQ(
+      result->as<RowVector>()
+          ->childAt(0)
+          ->as<ArrayVector>()
+          ->elements()
+          ->size(),
+      10);
+
+  ASSERT_EQ(
+      result->as<RowVector>()->childAt(1)->as<MapVector>()->mapKeys()->size(),
+      11);
+
+  ASSERT_EQ(
+      result->as<RowVector>()->childAt(1)->as<MapVector>()->mapValues()->size(),
+      11);
 }
 
 } // namespace

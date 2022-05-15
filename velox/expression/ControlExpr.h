@@ -50,7 +50,7 @@ enum class BooleanMix { kAllTrue, kAllFalse, kAllNull, kMixNonNull, kMix };
 BooleanMix getFlatBool(
     BaseVector* vector,
     const SelectivityVector& activeRows,
-    EvalCtx* context,
+    EvalCtx& context,
     BufferPtr* tempValues,
     BufferPtr* tempNulls,
     bool mergeNullsToValues,
@@ -84,13 +84,13 @@ class ConstantExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   void evalSpecialFormSimplified(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   const VectorPtr& value() const {
     return sharedSubexprValues_;
@@ -120,7 +120,7 @@ class FieldReference : public SpecialForm {
     return field_;
   }
 
-  int32_t index(EvalCtx* context) {
+  int32_t index(EvalCtx& context) {
     if (index_ != -1) {
       return index_;
     }
@@ -133,13 +133,13 @@ class FieldReference : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   void evalSpecialFormSimplified(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
  protected:
   void computeMetadata() override {
@@ -193,8 +193,8 @@ class SwitchExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   bool propagatesNulls() const override;
 
@@ -224,8 +224,8 @@ class ConjunctExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   bool propagatesNulls() const override {
     return false;
@@ -243,7 +243,7 @@ class ConjunctExpr : public SpecialForm {
   void maybeReorderInputs();
   void updateResult(
       BaseVector* inputResult,
-      EvalCtx* context,
+      EvalCtx& context,
       FlatVector<bool>* result,
       SelectivityVector* activeRows);
 
@@ -289,11 +289,11 @@ class LambdaExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
  private:
-  void makeTypeWithCapture(EvalCtx* context);
+  void makeTypeWithCapture(EvalCtx& context);
 
   std::shared_ptr<const RowType> signature_;
   std::vector<std::shared_ptr<FieldReference>> capture_;
@@ -314,13 +314,13 @@ class TryExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   void evalSpecialFormSimplified(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   bool propagatesNulls() const override {
     return inputs_[0]->propagatesNulls();
@@ -329,7 +329,7 @@ class TryExpr : public SpecialForm {
  private:
   void nullOutErrors(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result);
+      EvalCtx& context,
+      VectorPtr& result);
 };
 } // namespace facebook::velox::exec
