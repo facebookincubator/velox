@@ -84,10 +84,7 @@ class HivePartitionFunctionTest : public ::testing::Test {
   test::VectorMaker vm_{pool_.get()};
 };
 
-template <typename T>
-void test()
-
-    TEST_F(HivePartitionFunctionTest, bigint) {
+TEST_F(HivePartitionFunctionTest, bigint) {
   auto values = vm_.flatVectorNullable<int64_t>(
       {std::nullopt,
        300'000'000'000,
