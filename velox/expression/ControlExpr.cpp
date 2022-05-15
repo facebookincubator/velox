@@ -135,7 +135,6 @@ void FieldReference::evalSpecialForm(
   auto row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
   if (index_ == -1) {
     index_ = row->type()->asRow().getChildIdx(field_);
-
   }
 
   auto& child = row->childAt(index_);
@@ -164,7 +163,7 @@ void FieldReference::evalSpecialForm(
     toReturn = child;
   }
   result = useDecode ? std::move(decoded.wrap(toReturn, *input.get(), rows))
-                      : std::move(toReturn);
+                     : std::move(toReturn);
 }
 
 void FieldReference::evalSpecialFormSimplified(

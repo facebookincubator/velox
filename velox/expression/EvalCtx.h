@@ -233,7 +233,7 @@ class EvalCtx {
   void releaseVectors(std::vector<VectorPtr>& vectors) {
     execCtx_->releaseVectors(vectors);
   }
-  
+
   void moveOrCopyResult(
       const VectorPtr& localResult,
       const SelectivityVector& rows,
