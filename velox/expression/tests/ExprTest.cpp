@@ -2689,7 +2689,7 @@ class TestingIsEven : public exec::VectorFunction {
       VectorPtr* result) const override {
     BaseVector::ensureWritable(
         rows, BIGINT(), context->pool(), result, &context->vectorPool());
-    VELOX_CHECK_EQ((*result)->typeKind(), TypeKind::BOOLEAN);
+    VELOX_CHECK_EQ((*result)->typeKind(), TypeKind::BIGINT);
     VELOX_CHECK_EQ(args[0]->typeKind(), TypeKind::BIGINT);
     exec::LocalDecodedVector holder(*context, *args[0], rows);
     auto decoded = holder.get();
