@@ -1034,6 +1034,23 @@ void Expr::evalFlatNonNull(
     inputs_[i]->evalFlatNonNull(*remainingRows, context, inputValues_[i]);
     anyUnique = anyUnique || inputValues_[i].unique();
     tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
+    if (inputValues_[i]->mayHaveNulls()) {
+      if (remainingRows == &rows) {
+        nonNulls.allocate(rows.end());
+        *nonNulls.get() = rows;
+        remainingRows = nonNulls.get();
+        assert(remainingRows); // lint
+      }
+      nonNulls.get()->deselectNulls(
+          inputValues_[i]->flatRawNulls(rows),
+          remainingRows->begin(),
+          remainingRows->end());
+      if (!remainingRows->hasSelections()) {
+        inputValues_.clear();
+        setAllNulls(rows, context, result);
+        return;
+      }
+    }
     // If any errors occurred evaluating the arguments, it's possible (even
     // likely) that the values for those arguments were not defined which
     // could lead to undefined behavior if we try to evaluate the current
@@ -1063,8 +1080,6 @@ void Expr::evalFlatNonNull(
     applyFunction(*remainingRows, context, result);
   }
   if (remainingRows != &rows) {
-    // Even though this is not supposed to produce nulls or check for them, the
-    // error value must be set to null to have an interpretable result vector.
     addNulls(rows, remainingRows->asRange().bits(), context, result);
   }
 

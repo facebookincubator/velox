@@ -234,6 +234,10 @@ class EvalCtx {
     moveOrCopyResult(localResult, rows, *result);
   }
 
+  VectorPool& vectorPool() const {
+    return execCtx_->vectorPool();
+  }
+  
   VectorPtr getVector(const TypePtr& type, vector_size_t size) {
     return execCtx_->getVector(type, size);
   }
