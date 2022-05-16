@@ -235,8 +235,7 @@ void SwitchExpr::evalSpecialForm(
 
         if (thenRows.get()->hasSelections()) {
           if (result) {
-            context.ensureWritable(
-                *thenRows.get(), result->type(), result);
+            context.ensureWritable(*thenRows.get(), result->type(), result);
           }
 
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
@@ -249,8 +248,7 @@ void SwitchExpr::evalSpecialForm(
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
     if (result) {
-      context.ensureWritable(
-          *remainingRows.get(), result->type(), result);
+      context.ensureWritable(*remainingRows.get(), result->type(), result);
     }
 
     if (hasElseClause_) {
@@ -597,7 +595,8 @@ BooleanMix getFlatBool(
   const auto size = activeRows.end();
   switch (vector->encoding()) {
     case VectorEncoding::Simple::FLAT: {
-      auto values = vector->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
+      auto values =
+          vector->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
       if (!values) {
         return BooleanMix::kAllNull;
       }

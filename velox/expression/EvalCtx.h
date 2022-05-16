@@ -215,7 +215,12 @@ class EvalCtx {
       const SelectivityVector& rows,
       VectorPtr& result) const {
     if (result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result, &execCtx_->vectorPool());
+      BaseVector::ensureWritable(
+          rows,
+          result->type(),
+          result->pool(),
+          &result,
+          &execCtx_->vectorPool());
       result->copy(localResult.get(), rows, nullptr);
     } else {
       result = localResult;
@@ -241,7 +246,8 @@ class EvalCtx {
     execCtx_->releaseVectors(vectors);
   }
 
-  // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the pool of 'execCtx_' if needed.
+  // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the
+  // pool of 'execCtx_' if needed.
   void ensureWritable(
       const SelectivityVector& rows,
       const TypePtr& type,

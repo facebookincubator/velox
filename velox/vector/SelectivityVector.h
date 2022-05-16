@@ -86,7 +86,7 @@ class SelectivityVector {
     end_ = 0;
     size_ = size;
   }
-  
+
   /**
    * Set whether given index is selected. updateBounds() need to be called
    * explicitly after setValid() call, it can be called only once after multiple

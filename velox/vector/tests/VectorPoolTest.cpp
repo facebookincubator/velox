@@ -24,7 +24,9 @@ using namespace facebook::velox::test;
 
 class VectorPoolTest : public testing::Test, public VectorTestBase {
  protected:
-  // Makes 'size' strings of ''stringSize' characters.  If 'hasNulls' is true, sets 1/5 of the strings to null. If 'overwriteNulls' is true, there are null flags but no null values.
+  // Makes 'size' strings of ''stringSize' characters.  If 'hasNulls' is true,
+  // sets 1/5 of the strings to null. If 'overwriteNulls' is true, there are
+  // null flags but no null values.
   FlatVectorPtr<StringView> makeStrings(
       vector_size_t size,
       int32_t stringSize,

@@ -49,8 +49,8 @@ class SimpleVector;
 template <typename T>
 class FlatVector;
 
-  class VectorPool;
-  
+class VectorPool;
+
 /**
  * Base class for all columnar-based vectors of any type.
  */
