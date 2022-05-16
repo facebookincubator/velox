@@ -37,14 +37,13 @@
 #include "velox/common/base/ClassName.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/Date.h"
+#include "velox/type/LongDecimal.h"
 #include "velox/type/ShortDecimal.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
 
 namespace facebook::velox {
-
-using int128_t = __int128_t;
 
 // Velox type system supports a small set of SQL-compatible composeable types:
 // BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
@@ -294,7 +293,7 @@ struct TypeTraits<TypeKind::SHORT_DECIMAL> {
 template <>
 struct TypeTraits<TypeKind::LONG_DECIMAL> {
   using ImplType = DecimalType<TypeKind::LONG_DECIMAL>;
-  using NativeType = int128_t;
+  using NativeType = LongDecimal;
   using DeepCopiedType = NativeType;
   static constexpr uint32_t minSubTypes = 0;
   static constexpr uint32_t maxSubTypes = 0;
@@ -1639,7 +1638,8 @@ inline ShortDecimal to(const std::string& value) {
   VELOX_UNSUPPORTED();
 }
 
-inline int128_t to(const std::string& value) {
+template <>
+inline LongDecimal to(const std::string& value) {
   VELOX_UNSUPPORTED();
 }
 
@@ -1659,7 +1659,7 @@ inline std::string to(const ShortDecimal& value) {
 }
 
 template <>
-inline std::string to(const int128_t& value) {
+inline std::string to(const LongDecimal& value) {
   VELOX_UNSUPPORTED();
 }
 

@@ -384,12 +384,10 @@ inline Timestamp ByteStream::read<Timestamp>() {
 }
 
 template <>
-inline int128_t ByteStream::read<int128_t>() {
-  int128_t value = 0;
-  for (int32_t i = 0; i < sizeof(int128_t) / sizeof(uint64_t); ++i) {
-    value |= static_cast<int128_t>(read<uint64_t>() << (i * 64));
-  }
-  return *reinterpret_cast<const int128_t*>(&value);
+inline LongDecimal ByteStream::read<LongDecimal>() {
+  LongDecimal value;
+  readBytes(reinterpret_cast<uint8_t*>(&value), sizeof(value));
+  return value;
 }
 
 template <>

@@ -391,13 +391,14 @@ inline uint64_t SimpleVector<ComplexType>::hashValueAt(
 }
 
 template <>
-inline uint64_t SimpleVector<int128_t>::hashValueAt(vector_size_t index) const {
+inline uint64_t SimpleVector<LongDecimal>::hashValueAt(
+    vector_size_t index) const {
   if (isNullAt(index)) {
     return BaseVector::kNullHash;
   }
   auto value = valueAt(index);
-  auto lowerHash = folly::hasher<uint64_t>{}((uint64_t)value);
-  auto upperHash = folly::hasher<uint64_t>{}((uint64_t)(value >> 64));
+  auto upperHash = folly::hasher<uint64_t>{}(value.unscaledValue[0]);
+  auto lowerHash = folly::hasher<uint64_t>{}(value.unscaledValue[1]);
   return bits::commutativeHashMix(upperHash, lowerHash);
 }
 

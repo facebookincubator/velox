@@ -57,6 +57,10 @@ void generateJsonTyped(
       // ShortDecimal doesn't include precision and scale information
       // to serialize into JSON.
       VELOX_UNSUPPORTED();
+    } else if constexpr (std::is_same_v<T, LongDecimal>) {
+      // LongDecimal doesn't include precision and scale information
+      // to serialize into JSON.
+      VELOX_UNSUPPORTED();
     } else {
       folly::toAppend<std::string, T>(value, &result);
     }

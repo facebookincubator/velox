@@ -759,6 +759,16 @@ ShortDecimal VectorTest::testValue<ShortDecimal>(
 }
 
 template <>
+LongDecimal VectorTest::testValue<LongDecimal>(
+    int32_t i,
+    BufferPtr& /*space*/) {
+  if (i % 2 == 0) {
+    return LongDecimal(i, 0xAAAAAAAAAAAAAAAA);
+  }
+  return LongDecimal(i * -1, 0xAAAAAAAAAAAAAAAA);
+}
+
+template <>
 StringView VectorTest::testValue(int32_t n, BufferPtr& buffer) {
   if (!buffer || buffer->capacity() < 1000) {
     buffer = AlignedBuffer::allocate<char>(1000, pool_.get());

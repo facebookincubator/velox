@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_compile_definitions(FOLLY_HAVE_INT128_T=1)
-
 add_library(
   velox_vector
   BaseVector.cpp

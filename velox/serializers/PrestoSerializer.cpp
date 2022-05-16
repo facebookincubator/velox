@@ -611,7 +611,7 @@ void readColumns(
           {TypeKind::TIMESTAMP, &read<Timestamp>},
           {TypeKind::DATE, &read<Date>},
           {TypeKind::SHORT_DECIMAL, &read<ShortDecimal>},
-          {TypeKind::LONG_DECIMAL, &read<int128_t>},
+          {TypeKind::LONG_DECIMAL, &read<LongDecimal>},
           {TypeKind::VARCHAR, &read<StringView>},
           {TypeKind::VARBINARY, &read<StringView>},
           {TypeKind::ARRAY, &readArrayVector},

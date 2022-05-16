@@ -18,6 +18,8 @@ add_subdirectory(tz)
 
 add_library(
   velox_type
+  LongDecimal.cpp
+  LongDecimal.h
   StringView.h
   Type.cpp
   Variant.cpp
