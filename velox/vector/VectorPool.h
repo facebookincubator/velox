@@ -44,11 +44,11 @@ class VectorPool {
   }
 
   void release(std::vector<VectorPtr>& vectors) {
-  for (auto& vector : vectors) {
-    release(vector);
+    for (auto& vector : vectors) {
+      release(vector);
     }
-
   }
+
  private:
   static constexpr int32_t kNumCachedVectorTypes =
       static_cast<int32_t>(TypeKind::ARRAY);
