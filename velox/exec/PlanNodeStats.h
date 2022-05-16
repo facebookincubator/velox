@@ -47,6 +47,9 @@ struct PlanNodeStats {
   /// leaf plan nodes or plan nodes that correspond to a single operator type.
   vector_size_t inputRows{0};
 
+  /// Sum of input batches for all corresponding operators.
+  vector_size_t inputVectors{0};
+
   /// Sum of input bytes for all corresponding operators.
   uint64_t inputBytes{0};
 
@@ -63,6 +66,9 @@ struct PlanNodeStats {
   /// these types report non-zero output rows.
   vector_size_t outputRows{0};
 
+  /// Sum of output batches for all corresponding operators.
+  vector_size_t outputVectors{0};
+
   /// Sum of output bytes for all corresponding operators.
   uint64_t outputBytes{0};
 
@@ -77,6 +83,8 @@ struct PlanNodeStats {
   /// Max of peak memory usage for all corresponding operators. Assumes that all
   /// operator instances were running concurrently.
   uint64_t peakMemoryBytes{0};
+
+  uint64_t numMemoryAllocations{0};
 
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;

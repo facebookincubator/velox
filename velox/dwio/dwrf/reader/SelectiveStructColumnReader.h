@@ -114,6 +114,20 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
     }
   }
 
+  // Sets 'rows' as the set of rows for which 'this' or its children
+  // may be loaded as LazyVectors. When a struct is loaded as lazy,
+  // its children will be lazy if the struct does not add nulls. The
+  // children will reference the struct reader, whih must have a live
+  // and up-to-date set of rows for which children can be loaded.
+  void setLoadableRows(RowSet rows) {
+    setOutputRows(rows);
+    inputRows_ = outputRows_;
+  }
+
+  const std::string& debugString() const {
+    return debugString_;
+  }
+
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
   std::vector<std::unique_ptr<SelectiveColumnReader>> children_;
@@ -124,6 +138,13 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
 
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
+
+  // Context information obtained from ExceptionContext. Stored here
+  // so that LazyVector readers under this can add this to their
+  // ExceptionContext. Allows contextualizing reader errors to split
+  // and query. Set at construction, which takes place on first
+  // use. If no ExceptionContext is in effect, this is "".
+  const std::string debugString_;
 };
 
 } // namespace facebook::velox::dwrf

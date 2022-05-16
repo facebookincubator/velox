@@ -19,6 +19,8 @@
 
 #include <thread>
 
+#include <folly/Random.h>
+#include <folly/Range.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -39,7 +41,7 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
     useMmap_ = GetParam();
     if (useMmap_) {
       MmapAllocatorOptions options = {kMaxMappedMemory};
-      mmapAllocator_ = std::make_unique<MmapAllocator>(options);
+      mmapAllocator_ = std::make_shared<MmapAllocator>(options);
       MappedMemory::setDefaultInstance(mmapAllocator_.get());
     } else {
       MappedMemory::setDefaultInstance(nullptr);
@@ -184,8 +186,9 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
           EXPECT_EQ(kCapacity, instance_->numAllocated());
           if (useMmap_) {
             // The allocator has everything allocated and half mapped, with the
-            // other half mapped by the contiguous allocation.
-            EXPECT_EQ(kCapacity / 2, instance_->numMapped());
+            // other half mapped by the contiguous allocation. numMapped()
+            // includes the contiguous allocation.
+            EXPECT_EQ(kCapacity, instance_->numMapped());
           }
           if (!allocateContiguous(available / 2, nullptr, large)) {
             FAIL()
@@ -267,7 +270,7 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
   }
 
   bool useMmap_;
-  std::unique_ptr<MmapAllocator> mmapAllocator_;
+  std::shared_ptr<MmapAllocator> mmapAllocator_;
   std::shared_ptr<MappedMemory> instancePtr_;
   MappedMemory* instance_;
   std::atomic<int32_t> sequence_ = {};
@@ -440,6 +443,205 @@ TEST_P(MappedMemoryTest, minSizeClass) {
       tracker->getCurrentUserBytes());
   mappedMemory->free(result);
   EXPECT_EQ(0, tracker->getCurrentUserBytes());
+}
+
+TEST_P(MappedMemoryTest, externalAdvise) {
+  if (!useMmap_) {
+    return;
+  }
+  constexpr int32_t kSmallSize = 16;
+  constexpr int32_t kLargeSize = 32 * kSmallSize + 1;
+  auto instance = dynamic_cast<MmapAllocator*>(MappedMemory::getInstance());
+  std::vector<std::unique_ptr<MappedMemory::Allocation>> allocations;
+  auto numAllocs = kCapacity / kSmallSize;
+  allocations.reserve(numAllocs);
+  for (int32_t i = 0; i < numAllocs; ++i) {
+    allocations.push_back(std::make_unique<MappedMemory::Allocation>(instance));
+    EXPECT_TRUE(allocate(kSmallSize, *allocations.back().get()));
+  }
+  // We allocated and mapped the capacity. Now free half, leaving the memory
+  // still mapped.
+  allocations.resize(numAllocs / 2);
+  EXPECT_TRUE(instance->checkConsistency());
+  EXPECT_EQ(instance->numMapped(), numAllocs * kSmallSize);
+  EXPECT_EQ(instance->numAllocated(), numAllocs / 2 * kSmallSize);
+  std::vector<MappedMemory::ContiguousAllocation> large(2);
+  EXPECT_TRUE(instance->allocateContiguous(kLargeSize, nullptr, large[0]));
+  // The same number are mapped but some got advised away to back the large
+  // allocation. One kSmallSize got advised away but not fully used because
+  // kLargeSize is not a multiple of kSmallSize.
+  EXPECT_EQ(instance->numMapped(), numAllocs * kSmallSize - kSmallSize + 1);
+  EXPECT_EQ(instance->numAllocated(), numAllocs / 2 * kSmallSize + kLargeSize);
+  EXPECT_TRUE(instance->allocateContiguous(kLargeSize, nullptr, large[1]));
+  large.clear();
+  EXPECT_EQ(instance->numAllocated(), allocations.size() * kSmallSize);
+  // After freeing 2xkLargeSize, We have unmapped 2*LargeSize at the free and
+  // another (kSmallSize - 1 when allocating the first kLargeSize. Of the 15
+  // that this unmapped, 1 was taken by the second large alloc. So, the mapped
+  // pages is total - (2 * kLargeSize) - 14. The unused unmapped are 15 pages
+  // after the first and 14 after the second allocContiguous().
+  EXPECT_EQ(
+      instance->numMapped(),
+      kSmallSize * numAllocs - (2 * kLargeSize) -
+          (kSmallSize - (2 * (kLargeSize % kSmallSize))));
+  EXPECT_TRUE(instance->checkConsistency());
+}
+
+TEST_P(MappedMemoryTest, allocContiguousFail) {
+  if (!useMmap_) {
+    return;
+  }
+  // Covers edge cases of
+  constexpr int32_t kSmallSize = 16;
+  constexpr int32_t kLargeSize = kCapacity / 2;
+  auto instance = dynamic_cast<MmapAllocator*>(MappedMemory::getInstance());
+  std::vector<std::unique_ptr<MappedMemory::Allocation>> allocations;
+  auto numAllocs = kCapacity / kSmallSize;
+  int64_t trackedBytes = 0;
+  auto trackCallback = [&](int64_t delta) { trackedBytes += delta; };
+  allocations.reserve(numAllocs);
+  for (int32_t i = 0; i < numAllocs; ++i) {
+    allocations.push_back(std::make_unique<MappedMemory::Allocation>(instance));
+    EXPECT_TRUE(allocate(kSmallSize, *allocations.back().get()));
+  }
+  // We allocated and mapped the capacity. Now free half, leaving the memory
+  // still mapped.
+  allocations.resize(numAllocs / 2);
+  EXPECT_TRUE(instance->checkConsistency());
+  EXPECT_EQ(instance->numMapped(), numAllocs * kSmallSize);
+  EXPECT_EQ(instance->numAllocated(), numAllocs / 2 * kSmallSize);
+  MappedMemory::ContiguousAllocation large;
+  EXPECT_TRUE(instance->allocateContiguous(
+      kLargeSize / 2, nullptr, large, trackCallback));
+  EXPECT_TRUE(instance->checkConsistency());
+
+  // The allocation should go through because there is 1/2 of
+  // kLargeSize already in large[0], 1/2 of kLargeSize free and
+  // kSmallSize given as collateral. This does not go through because
+  // we inject a failure in advising away the collateral.
+  instance->injectFailure(MmapAllocator::Failure::kMadvise);
+  EXPECT_FALSE(instance->allocateContiguous(
+      kLargeSize + kSmallSize, allocations.back().get(), large, trackCallback));
+  EXPECT_TRUE(instance->checkConsistency());
+  // large and allocations.back() were both freed and nothing was allocated.
+  EXPECT_EQ(kSmallSize * (allocations.size() - 1), instance->numAllocated());
+  // An extra kSmallSize were freed.
+  EXPECT_EQ(-kSmallSize * MappedMemory::kPageSize, trackedBytes);
+  // Remove the cleared item from the end.
+  allocations.pop_back();
+
+  trackedBytes = 0;
+  EXPECT_TRUE(instance->allocateContiguous(
+      kLargeSize / 2, nullptr, large, trackCallback));
+  instance->injectFailure(MmapAllocator::Failure::kMmap);
+  // Should go through because 1/2 of kLargeSize + kSmallSize free and 1/2 of
+  // kLargeSize already in large. Fails because mmap after advise away fails.
+  EXPECT_FALSE(instance->allocateContiguous(
+      kLargeSize + 2 * kSmallSize,
+      allocations.back().get(),
+      large,
+      trackCallback));
+  // large and allocations.back() were both freed and nothing was allocated.
+  EXPECT_EQ(kSmallSize * (allocations.size() - 1), instance->numAllocated());
+  EXPECT_EQ(-kSmallSize * MappedMemory::kPageSize, trackedBytes);
+  allocations.pop_back();
+  EXPECT_TRUE(instance->checkConsistency());
+
+  trackedBytes = 0;
+  EXPECT_TRUE(instance->allocateContiguous(
+      kLargeSize / 2, nullptr, large, trackCallback));
+  // We succeed without injected failure.
+  EXPECT_TRUE(instance->allocateContiguous(
+      kLargeSize + 3 * kSmallSize,
+      allocations.back().get(),
+      large,
+      trackCallback));
+  EXPECT_EQ(kCapacity, instance->numMapped());
+  EXPECT_EQ(kCapacity, instance->numAllocated());
+  // Size grew by kLargeSize + 2 * kSmallSize (one kSmallSize item was freed, so
+  // no not 3 x kSmallSize).
+  EXPECT_EQ(
+      (kLargeSize + 2 * kSmallSize) * MappedMemory::kPageSize, trackedBytes);
+  EXPECT_TRUE(instance->checkConsistency());
+}
+
+TEST_P(MappedMemoryTest, allocateBytes) {
+  constexpr int32_t kNumAllocs = 50;
+  // Different sizes, including below minimum and above largest size class.
+  std::vector<MachinePageCount> sizes = {
+      MappedMemory::kMaxMallocBytes / 2,
+      100000,
+      1000000,
+      instance_->sizeClasses().back() * MappedMemory::kPageSize + 100000};
+  folly::Random::DefaultGenerator rng;
+  rng.seed(1);
+
+  // We fill 'data' with random size allocations. Each is filled with its index
+  // in 'data' cast to char.
+  std::vector<folly::Range<char*>> data(kNumAllocs);
+  for (auto counter = 0; counter < data.size() * 4; ++counter) {
+    int32_t index = folly::Random::rand32(rng) % kNumAllocs;
+    int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
+    char expected = static_cast<char>(index);
+    if (data[index].data()) {
+      // If there is pre-existing data, we check that it has not been
+      // overwritten.
+      for (auto byte : data[index]) {
+        EXPECT_EQ(expected, byte);
+      }
+      instance_->freeBytes(data[index].data(), data[index].size());
+    }
+    data[index] = folly::Range<char*>(
+        reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
+    for (auto& byte : data[index]) {
+      byte = expected;
+    }
+  }
+  EXPECT_TRUE(instance_->checkConsistency());
+  for (auto& range : data) {
+    if (range.data()) {
+      instance_->freeBytes(range.data(), range.size());
+    }
+  }
+  auto stats = MappedMemory::allocateBytesStats();
+  EXPECT_EQ(0, stats.totalSmall);
+  EXPECT_EQ(0, stats.totalInSizeClasses);
+  EXPECT_EQ(0, stats.totalLarge);
+
+  EXPECT_EQ(0, instance_->numAllocated());
+  EXPECT_TRUE(instance_->checkConsistency());
+}
+
+TEST_P(MappedMemoryTest, stlMappedMemoryAllocator) {
+  {
+    std::vector<double, StlMappedMemoryAllocator<double>> data(
+        0, StlMappedMemoryAllocator<double>(instance_));
+    // The contiguous size goes to 2MB, covering malloc, size
+    // Allocation from classes and ContiguousAllocation outside size
+    // classes.
+    constexpr int32_t kNumDoubles = 256 * 1024;
+    size_t capacity = 0;
+    for (auto i = 0; i < kNumDoubles; i++) {
+      data.push_back(i);
+      if (data.capacity() != capacity) {
+        capacity = data.capacity();
+        auto stats = MappedMemory::allocateBytesStats();
+        EXPECT_EQ(
+            capacity * sizeof(double),
+            stats.totalSmall + stats.totalInSizeClasses + stats.totalLarge);
+      }
+    }
+    for (auto i = 0; i < kNumDoubles; i++) {
+      ASSERT_EQ(i, data[i]);
+    }
+    EXPECT_EQ(512, instance_->numAllocated());
+    auto stats = MappedMemory::allocateBytesStats();
+    EXPECT_EQ(0, stats.totalSmall);
+    EXPECT_EQ(0, stats.totalInSizeClasses);
+    EXPECT_EQ(2 << 20, stats.totalLarge);
+  }
+  EXPECT_EQ(0, instance_->numAllocated());
+  EXPECT_TRUE(instance_->checkConsistency());
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

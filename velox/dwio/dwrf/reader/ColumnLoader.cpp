@@ -50,6 +50,13 @@ void ColumnLoader::loadInternal(
   auto outputRows = structReader_->outputRows();
   raw_vector<vector_size_t> selectedRows;
   RowSet effectiveRows;
+  ExceptionContextSetter exceptionContext(
+      {[](auto* reader) {
+         return static_cast<SelectiveStructColumnReader*>(reader)
+             ->debugString();
+       },
+       this});
+
   if (rows.size() == outputRows.size()) {
     // All the rows planned at creation are accessed.
     effectiveRows = outputRows;
@@ -67,6 +74,12 @@ void ColumnLoader::loadInternal(
   structReader_->advanceFieldReader(fieldReader_, offset);
   fieldReader_->scanSpec()->setValueHook(hook);
   fieldReader_->read(offset, effectiveRows, incomingNulls);
+  if (fieldReader_->type()->kind() == TypeKind::ROW) {
+    // 'fieldReader_' may itself produce LazyVectors. For this it must have its
+    // result row numbers set.
+    reinterpret_cast<SelectiveStructColumnReader*>(fieldReader_)
+        ->setLoadableRows(effectiveRows);
+  }
   if (!hook) {
     fieldReader_->getValues(effectiveRows, result);
     if (rows.size() != outputRows.size()) {

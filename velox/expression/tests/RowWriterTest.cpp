@@ -21,7 +21,7 @@
 #include <tuple>
 
 #include "velox/core/CoreTypeSystem.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/VectorWriters.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 #include "velox/type/StringView.h"
@@ -60,8 +60,7 @@ class RowWriterTest : public functions::test::FunctionBaseTest {
   template <typename... T>
   void testE2EPrimitive(const std::string& testFunctionName) {
     auto functionName = "row_writer_test_" + testFunctionName;
-    registerFunction<FuncPrimitivesTest, RowWriterT<T...>, int64_t>(
-        {functionName});
+    registerFunction<FuncPrimitivesTest, Row<T...>, int64_t>({functionName});
 
     auto result = evaluate(
         fmt::format("{}(c0)", functionName),
@@ -93,9 +92,8 @@ class RowWriterTest : public functions::test::FunctionBaseTest {
 
   struct TestWriter {
     VectorPtr result;
-    std::unique_ptr<VectorWriter<RowWriterT<int64_t, int64_t, int64_t>>>
-        writer = std::make_unique<
-            VectorWriter<RowWriterT<int64_t, int64_t, int64_t>>>();
+    std::unique_ptr<VectorWriter<Row<int64_t, int64_t, int64_t>>> writer =
+        std::make_unique<VectorWriter<Row<int64_t, int64_t, int64_t>>>();
   };
 
   TestWriter makeTestWriter() {
@@ -163,7 +161,7 @@ TEST_F(RowWriterTest, e2ePrimitives) {
 TEST_F(RowWriterTest, timeStamp) {
   auto result = prepareResult(makeRowType({TIMESTAMP()}), 2);
 
-  VectorWriter<RowWriterT<Timestamp>> vectorWriter;
+  VectorWriter<Row<Timestamp>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   {
@@ -188,7 +186,7 @@ TEST_F(RowWriterTest, timeStamp) {
 TEST_F(RowWriterTest, varChar) {
   auto result = prepareResult(makeRowType({VARCHAR()}), 2);
 
-  VectorWriter<RowWriterT<Varchar>> vectorWriter;
+  VectorWriter<Row<Varchar>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   {
@@ -213,7 +211,7 @@ TEST_F(RowWriterTest, varChar) {
 TEST_F(RowWriterTest, varBinary) {
   auto result = prepareResult(makeRowType({VARBINARY()}), 2);
 
-  VectorWriter<RowWriterT<Varchar>> vectorWriter;
+  VectorWriter<Row<Varchar>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   {
@@ -276,7 +274,7 @@ TEST_F(RowWriterTest, nested) {
   auto result = prepareResult(
       makeRowType({makeRowType({BIGINT(), VARCHAR()}), DOUBLE()}));
 
-  VectorWriter<RowWriterT<RowWriterT<int64_t, Varchar>, double>> vectorWriter;
+  VectorWriter<Row<Row<int64_t, Varchar>, double>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   vectorWriter.setOffset(0);
@@ -300,7 +298,7 @@ TEST_F(RowWriterTest, nested) {
 TEST_F(RowWriterTest, rowOfArray) {
   auto result = prepareResult(makeRowType({ARRAY(BIGINT())}));
 
-  VectorWriter<RowWriterT<ArrayWriterT<int64_t>>> vectorWriter;
+  VectorWriter<Row<Array<int64_t>>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   vectorWriter.setOffset(0);
@@ -320,7 +318,7 @@ TEST_F(RowWriterTest, rowOfArray) {
 TEST_F(RowWriterTest, arrayOfRows) {
   auto result = prepareResult(ARRAY(makeRowType({BIGINT(), BIGINT()})));
 
-  VectorWriter<ArrayWriterT<RowWriterT<int64_t, int64_t>>> vectorWriter;
+  VectorWriter<Array<Row<int64_t, int64_t>>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
 
   vectorWriter.setOffset(0);
@@ -365,7 +363,7 @@ TEST_F(RowWriterTest, arrayOfRows) {
 TEST_F(RowWriterTest, commitNull) {
   auto result = prepareResult(ARRAY(makeRowType({BIGINT(), BIGINT()})), 2);
 
-  VectorWriter<ArrayWriterT<RowWriterT<int64_t, int64_t>>> vectorWriter;
+  VectorWriter<Array<Row<int64_t, int64_t>>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
 
   {
@@ -440,11 +438,7 @@ TEST_F(RowWriterTest, copyFromRowOfArrays) {
   auto result = prepareResult(
       makeRowType({ARRAY(BIGINT()), ARRAY(DOUBLE()), ARRAY(BOOLEAN())}));
 
-  VectorWriter<RowWriterT<
-      ArrayWriterT<int64_t>,
-      ArrayWriterT<double>,
-      ArrayWriterT<bool>>>
-      vectorWriter;
+  VectorWriter<Row<Array<int64_t>, Array<double>, Array<bool>>> vectorWriter;
   vectorWriter.init(*result->as<RowVector>());
 
   vectorWriter.setOffset(0);
@@ -471,7 +465,7 @@ TEST_F(RowWriterTest, copyFromRowOfArrays) {
 TEST_F(RowWriterTest, copyFromArrayOfRow) {
   auto result = prepareResult(ARRAY(makeRowType({BIGINT(), BIGINT()})));
 
-  VectorWriter<ArrayWriterT<RowWriterT<int64_t, int64_t>>> vectorWriter;
+  VectorWriter<Array<Row<int64_t, int64_t>>> vectorWriter;
   vectorWriter.init(*result->as<ArrayVector>());
   vectorWriter.setOffset(0);
 
@@ -500,6 +494,43 @@ TEST_F(RowWriterTest, copyFromArrayOfRow) {
   auto row1 = arrayView[1].value();
   ASSERT_EQ(exec::get<0>(row1).value(), 1);
   ASSERT_EQ(exec::get<1>(row1).value(), 2);
+}
+
+// Make sure nested vectors are resized to actual size after writing.
+TEST_F(RowWriterTest, finishPostSize) {
+  using out_t = Row<Array<int32_t>, Map<int64_t, int64_t>>;
+
+  auto result = prepareResult(CppToType<out_t>::create());
+
+  exec::VectorWriter<out_t> vectorWriter;
+  vectorWriter.init(*result.get()->as<RowVector>());
+  vectorWriter.setOffset(0);
+
+  auto& rowWriter = vectorWriter.current();
+  auto& arrayWriter = rowWriter.get_writer_at<0>();
+  auto& mapWriter = rowWriter.get_writer_at<1>();
+
+  arrayWriter.resize(10);
+  mapWriter.resize(11);
+
+  vectorWriter.commit();
+  vectorWriter.finish();
+
+  ASSERT_EQ(
+      result->as<RowVector>()
+          ->childAt(0)
+          ->as<ArrayVector>()
+          ->elements()
+          ->size(),
+      10);
+
+  ASSERT_EQ(
+      result->as<RowVector>()->childAt(1)->as<MapVector>()->mapKeys()->size(),
+      11);
+
+  ASSERT_EQ(
+      result->as<RowVector>()->childAt(1)->as<MapVector>()->mapValues()->size(),
+      11);
 }
 
 } // namespace

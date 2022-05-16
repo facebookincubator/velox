@@ -318,7 +318,7 @@ TEST_F(HashJoinTest, memory) {
   auto tracker = memory::MemoryUsageTracker::create();
   params.queryCtx->pool()->setMemoryUsageTracker(tracker);
   auto [taskCursor, rows] = readCursor(params, [](Task*) {});
-  EXPECT_GT(2500, tracker->getNumAllocs());
+  EXPECT_GT(3'500, tracker->getNumAllocs());
   EXPECT_GT(7'500'000, tracker->getCumulativeBytes());
 }
 
@@ -765,7 +765,27 @@ TEST_F(HashJoinTest, dynamicFilters) {
         "SELECT t.c0, t.c1 + 1 FROM t, u WHERE t.c0 = u.c0");
     EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
     EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
-    EXPECT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+    EXPECT_EQ(getReplacedWithFilterRows(task, 1).sum, numRowsBuild * numSplits);
+    EXPECT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+  }
+
+  // Push-down that turns join into a no-op with output having a different
+  // number of columns than the input.
+  {
+    core::PlanNodeId probeScanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
+                  .planNode();
+
+    auto task = assertQuery(
+        op,
+        {{probeScanId, leftFiles}},
+        "SELECT t.c0 FROM t JOIN u ON (t.c0 = u.c0)");
+    EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
+    EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
+    EXPECT_EQ(getReplacedWithFilterRows(task, 1).sum, numRowsBuild * numSplits);
     EXPECT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
   }
 

@@ -14,13 +14,16 @@
  * limitations under the License.
  */
 
-#include "AggregationTestBase.h"
+#include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
+
+using facebook::velox::exec::test::CursorParameters;
+using facebook::velox::exec::test::PlanBuilder;
 
 namespace facebook::velox::aggregate::test {
 
 std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
-    const std::shared_ptr<const RowType>& rowType,
+    const RowTypePtr& rowType,
     vector_size_t size,
     int numVectors) {
   std::vector<RowVectorPtr> vectors;
@@ -30,6 +33,185 @@ std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
     vectors.push_back(vector);
   }
   return vectors;
+}
+
+void AggregationTestBase::testAggregations(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::string& duckDbSql) {
+  testAggregations(data, groupingKeys, aggregates, {}, duckDbSql);
+}
+
+void AggregationTestBase::testAggregations(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<RowVectorPtr>& expectedResult) {
+  testAggregations(data, groupingKeys, aggregates, {}, expectedResult);
+}
+
+void AggregationTestBase::testAggregations(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::string& duckDbSql) {
+  testAggregations(
+      [&](PlanBuilder& builder) { builder.values(data); },
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      duckDbSql);
+}
+
+void AggregationTestBase::testAggregations(
+    const std::vector<RowVectorPtr>& data,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::vector<RowVectorPtr>& expectedResult) {
+  testAggregations<false>(
+      [&](PlanBuilder& builder) { builder.values(data); },
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      "",
+      expectedResult);
+}
+
+void AggregationTestBase::testAggregations(
+    std::function<void(PlanBuilder&)> makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::string& duckDbSql) {
+  testAggregations(makeSource, groupingKeys, aggregates, {}, duckDbSql);
+}
+
+template <bool UseDuckDB>
+void AggregationTestBase::testAggregations(
+    std::function<void(PlanBuilder&)> makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::string& duckDbSql,
+    const std::vector<RowVectorPtr>& expectedResult) {
+  // Run partial + final.
+  {
+    PlanBuilder builder;
+    makeSource(builder);
+    builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    if constexpr (UseDuckDB) {
+      assertQuery(builder.planNode(), duckDbSql);
+    } else {
+      exec::test::assertQuery(builder.planNode(), expectedResult);
+    }
+  }
+
+  // Run single.
+  {
+    PlanBuilder builder;
+    makeSource(builder);
+    builder.singleAggregation(groupingKeys, aggregates);
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    if constexpr (UseDuckDB) {
+      assertQuery(builder.planNode(), duckDbSql);
+    } else {
+      exec::test::assertQuery(builder.planNode(), expectedResult);
+    }
+  }
+
+  // Run partial + intermediate + final.
+  {
+    PlanBuilder builder;
+    makeSource(builder);
+    builder.partialAggregation(groupingKeys, aggregates)
+        .intermediateAggregation()
+        .finalAggregation();
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    if constexpr (UseDuckDB) {
+      assertQuery(builder.planNode(), duckDbSql);
+    } else {
+      exec::test::assertQuery(builder.planNode(), expectedResult);
+    }
+  }
+
+  // Run partial + local exchange + final.
+  if (!groupingKeys.empty()) {
+    auto planNodeIdGenerator =
+        std::make_shared<exec::test::PlanNodeIdGenerator>();
+    PlanBuilder sourceBuilder{planNodeIdGenerator};
+    makeSource(sourceBuilder);
+
+    auto builder =
+        PlanBuilder(planNodeIdGenerator)
+            .localPartition(
+                groupingKeys,
+                {sourceBuilder.partialAggregation(groupingKeys, aggregates)
+                     .planNode()})
+            .finalAggregation();
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    CursorParameters params;
+    params.planNode = builder.planNode();
+    params.maxDrivers = 2;
+    if constexpr (UseDuckDB) {
+      assertQuery(params, duckDbSql);
+    } else {
+      exec::test::assertQuery(params, expectedResult);
+    }
+  }
+
+  // Run partial + local exchange + intermediate + local exchange + final.
+  {
+    auto planNodeIdGenerator =
+        std::make_shared<exec::test::PlanNodeIdGenerator>();
+    PlanBuilder sourceBuilder{planNodeIdGenerator};
+    makeSource(sourceBuilder);
+
+    PlanBuilder partialBuilder{planNodeIdGenerator};
+    if (groupingKeys.empty()) {
+      partialBuilder.localPartitionRoundRobin(
+          {sourceBuilder.partialAggregation(groupingKeys, aggregates)
+               .planNode()});
+    } else {
+      partialBuilder.localPartition(
+          groupingKeys,
+          {sourceBuilder.partialAggregation(groupingKeys, aggregates)
+               .planNode()});
+    }
+
+    auto builder =
+        PlanBuilder(planNodeIdGenerator)
+            .localPartition(
+                groupingKeys,
+                {partialBuilder.intermediateAggregation().planNode()})
+            .finalAggregation();
+    if (!postAggregationProjections.empty()) {
+      builder.project(postAggregationProjections);
+    }
+
+    CursorParameters params;
+    params.planNode = builder.planNode();
+    params.maxDrivers = 2;
+    if constexpr (UseDuckDB) {
+      assertQuery(params, duckDbSql);
+    } else {
+      exec::test::assertQuery(params, expectedResult);
+    }
+  }
 }
 
 } // namespace facebook::velox::aggregate::test

@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/FunctionSignature.h"
@@ -188,10 +189,8 @@ static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
 
 class AggregationTest : public OperatorTestBase {
  protected:
-  std::vector<RowVectorPtr> makeVectors(
-      const std::shared_ptr<const RowType>& rowType,
-      vector_size_t size,
-      int numVectors) {
+  std::vector<RowVectorPtr>
+  makeVectors(const RowTypePtr& rowType, vector_size_t size, int numVectors) {
     std::vector<RowVectorPtr> vectors;
     for (int32_t i = 0; i < numVectors; ++i) {
       auto vector = std::dynamic_pointer_cast<RowVector>(
@@ -220,7 +219,7 @@ class AggregationTest : public OperatorTestBase {
     auto op = PlanBuilder()
                   .values(vectors)
                   .aggregation(
-                      {rowType_->getChildIdx(keyName)},
+                      {keyName},
                       aggregates,
                       {},
                       core::AggregationNode::Step::kPartial,
@@ -269,7 +268,7 @@ class AggregationTest : public OperatorTestBase {
     auto op = PlanBuilder()
                   .values(vectors)
                   .aggregation(
-                      {0, 1, 6},
+                      {"c0", "c1", "c6"},
                       aggregates,
                       {},
                       core::AggregationNode::Step::kPartial,
@@ -342,7 +341,7 @@ class AggregationTest : public OperatorTestBase {
     }
   }
 
-  std::shared_ptr<const RowType> rowType_{
+  RowTypePtr rowType_{
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6"},
           {BIGINT(),
            SMALLINT(),
@@ -469,7 +468,7 @@ TEST_F(AggregationTest, aggregateOfNulls) {
   auto op = PlanBuilder()
                 .values(vectors)
                 .aggregation(
-                    {0},
+                    {"c0"},
                     {"sum(c1)", "min(c1)", "max(c1)"},
                     {},
                     core::AggregationNode::Step::kPartial,
@@ -494,85 +493,85 @@ TEST_F(AggregationTest, aggregateOfNulls) {
 
 TEST_F(AggregationTest, hashmodes) {
   rng_.seed(1);
-  std::vector<std::string> keyNames = {"C0", "C1", "C2", "C3", "C4", "C5"};
-  std::vector<std::shared_ptr<const Type>> types = {
-      BIGINT(), SMALLINT(), TINYINT(), VARCHAR(), VARCHAR(), VARCHAR()};
-  rowType_ = std::make_shared<RowType>(std::move(keyNames), std::move(types));
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {BIGINT(), SMALLINT(), TINYINT(), VARCHAR(), VARCHAR(), VARCHAR()});
 
   std::vector<RowVectorPtr> batches;
 
   // 20K rows with all at low cardinality.
-  makeModeTestKeys(rowType_, 20000, 2, 2, 2, 4, 4, 4, batches);
+  makeModeTestKeys(rowType, 20000, 2, 2, 2, 4, 4, 4, batches);
   // 20K rows with all at slightly higher cardinality, still in array range.
-  makeModeTestKeys(rowType_, 20000, 2, 2, 2, 4, 16, 4, batches);
+  makeModeTestKeys(rowType, 20000, 2, 2, 2, 4, 16, 4, batches);
   // 100K rows with cardinality outside of array range. We transit to
   // generic hash table from normalized keys when running out of quota
   // for distinct string storage for the sixth key.
-  makeModeTestKeys(rowType_, 100000, 1000000, 2, 2, 4, 4, 1000000, batches);
+  makeModeTestKeys(rowType, 100000, 1000000, 2, 2, 4, 4, 1000000, batches);
   createDuckDbTable(batches);
-  auto op = PlanBuilder()
-                .values(batches)
-                .singleAggregation({0, 1, 2, 3, 4, 5}, {"sum(1)"})
-                .planNode();
+  auto op =
+      PlanBuilder()
+          .values(batches)
+          .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(1)"})
+          .planNode();
 
   assertQuery(
       op,
       "SELECT c0, c1, C2, C3, C4, C5, sum(1) FROM tmp "
-      " GROUP BY c0, C1, C2, c3, C4, C5");
+      " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
 TEST_F(AggregationTest, rangeToDistinct) {
   rng_.seed(1);
-  std::vector<std::string> keyNames = {"C0", "C1", "C2", "C3", "C4", "C5"};
-  std::vector<std::shared_ptr<const Type>> types = {
-      BIGINT(), SMALLINT(), TINYINT(), VARCHAR(), VARCHAR(), VARCHAR()};
-  rowType_ = std::make_shared<RowType>(std::move(keyNames), std::move(types));
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {BIGINT(), SMALLINT(), TINYINT(), VARCHAR(), VARCHAR(), VARCHAR()});
 
   std::vector<RowVectorPtr> batches;
   // 20K rows with all at low cardinality. c0 is a range.
-  makeModeTestKeys(rowType_, 20000, 2000, 2, 2, 4, 4, 4, batches);
+  makeModeTestKeys(rowType, 20000, 2000, 2, 2, 4, 4, 4, batches);
   // 20 rows that make c0 represented as distincts.
-  makeModeTestKeys(rowType_, 20, 200000000, 2, 2, 4, 4, 4, batches);
+  makeModeTestKeys(rowType, 20, 200000000, 2, 2, 4, 4, 4, batches);
   // More keys in the low cardinality range. We see if these still hit
   // after the re-encoding of c0.
-  makeModeTestKeys(rowType_, 10000, 2000, 2, 2, 4, 4, 4, batches);
+  makeModeTestKeys(rowType, 10000, 2000, 2, 2, 4, 4, 4, batches);
 
   createDuckDbTable(batches);
-  auto op = PlanBuilder()
-                .values(batches)
-                .singleAggregation({0, 1, 2, 3, 4, 5}, {"sum(1)"})
-                .planNode();
+  auto op =
+      PlanBuilder()
+          .values(batches)
+          .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(1)"})
+          .planNode();
 
   assertQuery(
       op,
-      "SELECT c0, c1, C2, C3, C4, C5, sum(1) FROM tmp "
-      " GROUP BY c0, C1, C2, c3, C4, C5");
+      "SELECT c0, c1, c2, c3, c4, c5, sum(1) FROM tmp "
+      " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
 TEST_F(AggregationTest, allKeyTypes) {
   // Covers different key types. Unlike the integer/string tests, the
   // hash table begins life in the generic mode, not array or
   // normalized key. Add types here as they become supported.
-  std::vector<std::string> keyNames = {"C0", "C1", "C2", "C3", "C4", "C5"};
-  std::vector<std::shared_ptr<const Type>> types = {
-      DOUBLE(), REAL(), BIGINT(), INTEGER(), BOOLEAN(), VARCHAR()};
-  rowType_ = std::make_shared<RowType>(std::move(keyNames), std::move(types));
+  auto rowType =
+      ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
+          {DOUBLE(), REAL(), BIGINT(), INTEGER(), BOOLEAN(), VARCHAR()});
 
   std::vector<RowVectorPtr> batches;
   for (auto i = 0; i < 10; ++i) {
     batches.push_back(std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType_, 100, *pool_)));
+        BatchMaker::createBatch(rowType, 100, *pool_)));
   }
   createDuckDbTable(batches);
-  auto op = PlanBuilder()
-                .values(batches)
-                .singleAggregation({0, 1, 2, 3, 4, 5}, {"sum(1)"})
-                .planNode();
+  auto op =
+      PlanBuilder()
+          .values(batches)
+          .singleAggregation({"c0", "c1", "c2", "c3", "c4", "c5"}, {"sum(1)"})
+          .planNode();
 
   assertQuery(
       op,
-      "SELECT c0, c1, C2, C3, C4, C5, sum(1) FROM tmp "
-      " GROUP BY c0, C1, C2, c3, C4, C5");
+      "SELECT c0, c1, c2, c3, c4, c5, sum(1) FROM tmp "
+      " GROUP BY c0, c1, c2, c3, c4, c5");
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
@@ -599,7 +598,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Distinct aggregation.
   params.planNode = PlanBuilder()
                         .values(vectors)
-                        .partialAggregation({0}, {})
+                        .partialAggregation({"c0"}, {})
                         .finalAggregation()
                         .planNode();
 
@@ -608,11 +607,62 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   // Count aggregation.
   params.planNode = PlanBuilder()
                         .values(vectors)
-                        .partialAggregation({0}, {"count(1)"})
+                        .partialAggregation({"c0"}, {"count(1)"})
                         .finalAggregation()
                         .planNode();
 
   assertQuery(params, "SELECT c0, count(1) FROM tmp GROUP BY 1");
+}
+
+/// Verify number of memory allocations in the HashAggregation operator.
+TEST_F(AggregationTest, memoryAllocations) {
+  vector_size_t size = 1'024;
+  std::vector<RowVectorPtr> data;
+  for (auto i = 0; i < 10; ++i) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+        makeFlatVector<int64_t>(size, [](auto row) { return row + 3; }),
+    }));
+  }
+
+  createDuckDbTable(data);
+
+  core::PlanNodeId projectNodeId;
+  core::PlanNodeId aggNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0 + c1"})
+                  .capturePlanNodeId(projectNodeId)
+                  .singleAggregation({}, {"sum(p0)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto task = assertQuery(plan, "SELECT sum(c0 + c1) FROM tmp");
+
+  // Verify memory allocations. Project operator should allocate a single vector
+  // and re-use it. Aggregation should make 2 allocations: 1 for the
+  // RowContainer holding single accumulator and 1 for the result.
+  auto planStats = toPlanStats(task->taskStats());
+  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
+  ASSERT_EQ(2, planStats.at(aggNodeId).numMemoryAllocations);
+
+  plan = PlanBuilder()
+             .values(data)
+             .project({"c0", "c0 + c1"})
+             .capturePlanNodeId(projectNodeId)
+             .singleAggregation({"c0"}, {"sum(p1)"})
+             .capturePlanNodeId(aggNodeId)
+             .planNode();
+
+  task = assertQuery(plan, "SELECT c0, sum(c0 + c1) FROM tmp GROUP BY 1");
+
+  // Verify memory allocations. Project operator should allocate a single vector
+  // and re-use it. Aggregation should make 5 allocations: 1 for the hash table,
+  // 1 for the RowContainer holding accumulators, 3 for results (2 for values
+  // and nulls buffers of the grouping key column, 1 for sum column).
+  planStats = toPlanStats(task->taskStats());
+  ASSERT_EQ(1, planStats.at(projectNodeId).numMemoryAllocations);
+  ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
 }
 
 } // namespace

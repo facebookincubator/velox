@@ -62,7 +62,7 @@ void E2EFilterTestBase::makeDataset(
   auto spec = filterGenerator->makeScanSpec(SubfieldFilters{});
 
   uint64_t timeWithNoFilter = 0;
-  readWithoutFilter(spec.get(), batches_, timeWithNoFilter);
+  readWithoutFilter(spec, batches_, timeWithNoFilter);
 }
 
 void E2EFilterTestBase::addRowGroupSpecificData() {
@@ -143,7 +143,7 @@ void E2EFilterTestBase::makeStringUnique(const Subfield& field) {
 }
 
 void E2EFilterTestBase::makeNotNull(int32_t firstRow) {
-  for (RowVectorPtr batch : batches_) {
+  for (const auto& batch : batches_) {
     for (auto& data : batch->children()) {
       std::vector<vector_size_t> nonNulls;
       vector_size_t probe = 0;
@@ -170,7 +170,7 @@ void E2EFilterTestBase::makeNotNull(int32_t firstRow) {
 }
 
 void E2EFilterTestBase::readWithoutFilter(
-    ScanSpec* spec,
+    std::shared_ptr<ScanSpec> spec,
     const std::vector<RowVectorPtr>& batches,
     uint64_t& time) {
   auto input = std::make_unique<MemoryInputStream>(
@@ -182,6 +182,7 @@ void E2EFilterTestBase::readWithoutFilter(
   ;
   // The spec must stay live over the lifetime of the reader.
   rowReaderOpts.setScanSpec(spec);
+  OwnershipChecker ownershipChecker;
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   auto batchIndex = 0;
@@ -197,6 +198,7 @@ void E2EFilterTestBase::readWithoutFilter(
       break;
     }
 
+    ownershipChecker.check(batch);
     for (int32_t i = 0; i < batch->size(); ++i) {
       ASSERT_TRUE(batch->equalValueAt(batches[batchIndex].get(), i, rowIndex))
           << "Content mismatch at batch " << batchIndex << " at index "
@@ -215,7 +217,7 @@ void E2EFilterTestBase::readWithoutFilter(
 }
 
 void E2EFilterTestBase::readWithFilter(
-    ScanSpec* spec,
+    std::shared_ptr<ScanSpec> spec,
     const std::vector<RowVectorPtr>& batches,
     const std::vector<uint32_t>& hitRows,
     uint64_t& time,
@@ -230,6 +232,7 @@ void E2EFilterTestBase::readWithFilter(
   auto factory = std::make_unique<SelectiveColumnReaderFactory>(spec);
   // The  spec must stay live over the lifetime of the reader.
   rowReaderOpts.setScanSpec(spec);
+  OwnershipChecker ownershipChecker;
   auto rowReader = reader->createRowReader(rowReaderOpts);
   runtimeStats_ = dwio::common::RuntimeStatistics();
   auto rowIndex = 0;
@@ -281,6 +284,8 @@ void E2EFilterTestBase::readWithFilter(
           << batches[batchNumber(hit)]->toString(batchRow(hit))
           << " actual: " << batch->toString(i);
     }
+    // Check no overwrites after all LazyVectors are loaded.
+    ownershipChecker.check(batch);
   }
   if (!skipCheck) {
     ASSERT_EQ(rowIndex, hitRows.size());
@@ -310,12 +315,11 @@ void E2EFilterTestBase::testFilterSpecs(
       filterGenerator->makeSubfieldFilters(filterSpecs, batches_, hitRows);
   auto spec = filterGenerator->makeScanSpec(std::move(filters));
   uint64_t timeWithFilter = 0;
-  readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, false);
+  readWithFilter(spec, batches_, hitRows, timeWithFilter, false);
 
   if (FLAGS_timing_repeats) {
     for (auto i = 0; i < FLAGS_timing_repeats; ++i) {
-      readWithFilter(
-          spec.get(), batches_, hitRows, timeWithFilter, false, true);
+      readWithFilter(spec, batches_, hitRows, timeWithFilter, false, true);
     }
   }
   // Redo the test with LazyVectors for non-filtered columns.
@@ -323,9 +327,9 @@ void E2EFilterTestBase::testFilterSpecs(
   for (auto& childSpec : spec->children()) {
     childSpec->setExtractValues(false);
   }
-  readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, false);
+  readWithFilter(spec, batches_, hitRows, timeWithFilter, false);
   timeWithFilter = 0;
-  readWithFilter(spec.get(), batches_, hitRows, timeWithFilter, true);
+  readWithFilter(spec, batches_, hitRows, timeWithFilter, true);
 }
 
 void E2EFilterTestBase::testRowGroupSkip(
@@ -387,6 +391,33 @@ void E2EFilterTestBase::testWithTypes(
       testRowGroupSkip(filterable);
     }
   }
+}
+
+void OwnershipChecker::check(const VectorPtr& batch) {
+  // Check the 6 first pairs of previous, next batch to see that
+  // fetching the next does not overwrite parts reachable from a
+  // retained reference to the previous one.
+  if (batchCounter_ > 11) {
+    return;
+  }
+  if (batchCounter_ % 2 == 0) {
+    previousBatch_ = std::make_shared<RowVector>(
+        batch->pool(),
+        batch->type(),
+        BufferPtr(nullptr),
+        batch->size(),
+        batch->as<RowVector>()->children());
+    previousBatchCopy_ = BaseVector::copy(*batch);
+  }
+  if (batchCounter_ % 2 == 1) {
+    for (auto i = 0; i < previousBatch_->size(); ++i) {
+      ASSERT_TRUE(previousBatch_->equalValueAt(previousBatchCopy_.get(), i, i))
+          << "Retained reference of a batch has been overwritten by the next "
+          << "index " << i << " batch " << previousBatch_->toString(i)
+          << " original " << previousBatchCopy_->toString(i);
+    }
+  }
+  ++batchCounter_;
 }
 
 } // namespace facebook::velox::dwio::dwrf

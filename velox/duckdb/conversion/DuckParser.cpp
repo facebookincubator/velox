@@ -66,14 +66,17 @@ std::string normalizeFuncName(std::string input) {
       {"or", "or"},
       {"is", "is"},
       {"~~", "like"},
+      {"!~~", "notlike"},
       {"like_escape", "like"},
+      {"not_like_escape", "notlike"},
   };
   auto it = kLookup.find(input);
   return (it == kLookup.end()) ? input : it->second;
 }
 
-// Convert duckDB operator name to Velox function. Coalesce and subscript needs
-// special treatment because `ExpressionTypeToOperator` returns an empty string.
+// Convert duckDB operator name to Velox function. Some expression types such as
+// coalesce and subscript need special treatment because
+// `ExpressionTypeToOperator` returns an empty string.
 std::string duckOperatorToVelox(ExpressionType type) {
   switch (type) {
     case ExpressionType::OPERATOR_IS_NULL:
@@ -84,6 +87,8 @@ std::string duckOperatorToVelox(ExpressionType type) {
       return "subscript";
     case ExpressionType::COMPARE_IN:
       return "in";
+    case ExpressionType::OPERATOR_NOT:
+      return "not";
     default:
       return normalizeFuncName(ExpressionTypeToOperator(type));
   }
@@ -151,10 +156,16 @@ std::shared_ptr<const core::IExpr> parseFunctionExpr(ParsedExpression& expr) {
   for (const auto& c : functionExpr.children) {
     params.emplace_back(parseExpr(*c));
   }
-  return callExpr(
-      normalizeFuncName(functionExpr.function_name),
-      std::move(params),
-      getAlias(expr));
+  auto func = normalizeFuncName(functionExpr.function_name);
+  // NOT LIKE function needs special handling as it maps to two functions
+  // "not" and "like".
+  if (func == "notlike") {
+    auto likeParams = params;
+    params.clear();
+    params.emplace_back(callExpr("like", std::move(likeParams), {}));
+    func = "not";
+  }
+  return callExpr(func, std::move(params), getAlias(expr));
 }
 
 // Parse a comparison (a > b, a = b, etc).

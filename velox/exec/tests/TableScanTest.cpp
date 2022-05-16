@@ -124,15 +124,7 @@ class TableScanTest : public virtual HiveConnectorTestBase,
       const std::string& filePath,
       const TypePtr& partitionType,
       const std::optional<std::string>& partitionValue) {
-    std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
-        {{"pkey", partitionValue}};
-    auto split = std::make_shared<HiveConnectorSplit>(
-        kHiveConnectorId,
-        filePath,
-        facebook::velox::dwio::common::FileFormat::ORC,
-        0,
-        fs::file_size(filePath),
-        partitionKeys);
+    auto split = makeHiveConnectorSplit(filePath, {{"pkey", partitionValue}});
     auto outputType =
         ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()});
     auto tableHandle = makeTableHandle(SubfieldFilters{});
@@ -1462,6 +1454,28 @@ TEST_P(TableScanTest, bucket) {
   }
 }
 
+TEST_P(TableScanTest, floatingPointNotEqualFilter) {
+  auto vectors = makeVectors(1, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, vectors);
+  createDuckDbTable(vectors);
+
+  const std::string tableName = "t";
+
+  auto outputType = ROW({"c4"}, {DOUBLE()});
+  auto op = PlanBuilder()
+                .tableScan(tableName, outputType, {}, {"c4 != 0.0"})
+                .planNode();
+  assertQuery(op, {filePath}, "SELECT c4 FROM tmp WHERE c4 != 0.0");
+
+  outputType = ROW({"c3"}, {REAL()});
+  op = PlanBuilder()
+           .tableScan(tableName, outputType, {}, {"c3 != cast(0.0 as REAL)"})
+           .planNode();
+  assertQuery(
+      op, {filePath}, "SELECT c3 FROM tmp WHERE c3 != cast(0.0 as REAL)");
+}
+
 TEST_P(TableScanTest, remainingFilter) {
   auto rowType = ROW(
       {"c0", "c1", "c2", "c3"}, {INTEGER(), INTEGER(), DOUBLE(), BOOLEAN()});
@@ -1541,7 +1555,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
       PlanBuilder()
           .tableScan(rowType_)
           .partialAggregation(
-              {5}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
+              {"c5"}, {"max(c0)", "sum(c1)", "sum(c2)", "sum(c3)", "sum(c4)"})
           .planNode();
 
   auto task = assertQuery(
@@ -1554,7 +1568,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .singleAggregation(
-               {5}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+               {"c5"}, {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
            .planNode();
 
   task = assertQuery(
@@ -1567,7 +1581,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .singleAggregation(
-               {5}, {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
+               {"c5"}, {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
            .planNode();
 
   task = assertQuery(
@@ -1582,7 +1596,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .project({"c0 % 5", "c1"})
-           .singleAggregation({0}, {"sum(c1)"})
+           .singleAggregation({"p0"}, {"sum(c1)"})
            .planNode();
 
   task =
@@ -1595,7 +1609,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   // aggregation.
   op = PlanBuilder()
            .tableScan(rowType_, {}, "length(c5) % 2 = 0")
-           .singleAggregation({5}, {"max(c0)"})
+           .singleAggregation({"c5"}, {"max(c0)"})
            .planNode();
   task = assertQuery(
       op,
@@ -1609,7 +1623,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   // LazyVector
   op = PlanBuilder()
            .tableScan(rowType_)
-           .singleAggregation({5}, {"min(c0)", "max(c0)"})
+           .singleAggregation({"c5"}, {"min(c0)", "max(c0)"})
            .planNode();
   task = assertQuery(
       op, {filePath}, "SELECT c5, min(c0), max(c0) FROM tmp GROUP BY 1");
@@ -1618,7 +1632,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .project({"c5", "c0", "c0 + c1 AS c0_plus_c1"})
-           .singleAggregation({0}, {"min(c0)", "max(c0_plus_c1)"})
+           .singleAggregation({"c5"}, {"min(c0)", "max(c0_plus_c1)"})
            .planNode();
   task = assertQuery(
       op, {filePath}, "SELECT c5, min(c0), max(c0 + c1) FROM tmp GROUP BY 1");
@@ -1627,7 +1641,7 @@ TEST_P(TableScanTest, aggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .project({"c5", "c0 + 1 as a", "c1 + 2 as b", "c2 + 3 as c"})
-           .singleAggregation({0}, {"min(a)", "max(b)", "sum(c)"})
+           .singleAggregation({"c5"}, {"min(a)", "max(b)", "sum(c)"})
            .planNode();
   task = assertQuery(
       op,
@@ -1645,7 +1659,7 @@ TEST_P(TableScanTest, bitwiseAggregationPushdown) {
   auto op = PlanBuilder()
                 .tableScan(rowType_)
                 .singleAggregation(
-                    {5},
+                    {"c5"},
                     {"bitwise_and_agg(c0)",
                      "bitwise_and_agg(c1)",
                      "bitwise_and_agg(c2)",
@@ -1660,7 +1674,7 @@ TEST_P(TableScanTest, bitwiseAggregationPushdown) {
   op = PlanBuilder()
            .tableScan(rowType_)
            .singleAggregation(
-               {5},
+               {"c5"},
                {"bitwise_or_agg(c0)",
                 "bitwise_or_agg(c1)",
                 "bitwise_or_agg(c2)",

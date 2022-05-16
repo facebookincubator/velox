@@ -18,6 +18,7 @@
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/DataSink.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/functions/Udf.h"
@@ -171,7 +172,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   std::shared_ptr<const core::ITypedExpr> parseExpression(
       const std::string& text,
-      const std::shared_ptr<const RowType>& rowType = nullptr) {
+      const RowTypePtr& rowType = nullptr) {
     auto untyped = parse::parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType ? rowType : testDataType_, execCtx_->pool());
@@ -404,13 +405,24 @@ class ExprTest : public testing::Test, public VectorTestBase {
     addField(testData_.bool1, fields, size);
     addField(testData_.opaquestate1, fields, size);
 
+    // Keep only non-null fields.
+    std::vector<std::string> names;
+    std::vector<TypePtr> types;
+    std::vector<VectorPtr> nonNullFields;
+    for (auto i = 0; i < fields.size(); ++i) {
+      if (fields[i]) {
+        names.push_back(testDataType_->nameOf(i));
+        types.push_back(testDataType_->childAt(i));
+        nonNullFields.push_back(fields[i]);
+      }
+    }
+
     return std::make_shared<RowVector>(
         execCtx_->pool(),
-        testDataType_,
-        BufferPtr(nullptr),
+        ROW(std::move(names), std::move(types)),
+        nullptr,
         size,
-        std::move(fields),
-        0 /*nullCount*/);
+        std::move(nonNullFields));
   }
 
   static std::string describeEncoding(const BaseVector* const vector) {
@@ -685,6 +697,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return indicesBuffer;
   }
 
+  void assertErrorContext(
+      const std::string& expression,
+      const VectorPtr& input,
+      const std::string& context,
+      const std::string& topLevelContext) {
+    try {
+      evaluate(expression, makeRowVector({input}));
+      ASSERT_TRUE(false) << "Expected an error";
+    } catch (VeloxException& e) {
+      ASSERT_EQ(context, e.context());
+      ASSERT_EQ(topLevelContext, e.topLevelContext());
+    }
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
   std::unique_ptr<memory::MemoryPool> pool_{
       memory::getDefaultScopedMemoryPool()};
@@ -693,7 +719,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
   std::unique_ptr<test::VectorMaker> vectorMaker_{
       std::make_unique<test::VectorMaker>(pool_.get())};
   TestData testData_;
-  std::shared_ptr<const RowType> testDataType_;
+  RowTypePtr testDataType_;
   std::unique_ptr<exec::ExprSet> exprs_;
   std::vector<std::vector<EncodingOptions>> testEncodings_;
 };
@@ -2538,10 +2564,13 @@ TEST_F(ExprTest, exceptionContext) {
   });
 
   try {
-    evaluate("(c0 + c1) % 0", data);
+    evaluate("c0 + (c0 + c1) % 0", data);
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "plus(cast((c0) as BIGINT), mod(cast((plus(c0, c1)) as BIGINT), 0:BIGINT))",
+        e.topLevelContext());
   }
 
   try {
@@ -2549,6 +2578,9 @@ TEST_F(ExprTest, exceptionContext) {
     FAIL() << "Expected an exception";
   } catch (const VeloxException& e) {
     ASSERT_EQ("mod(cast((c1) as BIGINT), 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "plus(cast((c0) as BIGINT), mod(cast((c1) as BIGINT), 0:BIGINT))",
+        e.topLevelContext());
   }
 }
 
@@ -2569,4 +2601,180 @@ TEST_F(ExprTest, constantToString) {
   ASSERT_EQ(
       "4 elements starting at 0 {1.2000000476837158, 3.4000000953674316, null, 5.599999904632568}:ARRAY<REAL>",
       exprSet.exprs()[2]->toString());
+}
+
+namespace {
+// A naive function that wraps the input in a dictionary vector resized to
+// rows.end() - 1.  It assumes all selected values are non-null.
+class TestingShrinkingDictionary : public exec::VectorFunction {
+ public:
+  bool isDefaultNullBehavior() const override {
+    return true;
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    BufferPtr indices =
+        AlignedBuffer::allocate<vector_size_t>(rows.end(), context->pool());
+    auto rawIndices = indices->asMutable<vector_size_t>();
+    rows.applyToSelected([&](int row) { rawIndices[row] = row; });
+
+    *result =
+        BaseVector::wrapInDictionary(nullptr, indices, rows.end() - 1, args[0]);
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("bigint")
+                .argumentType("bigint")
+                .build()};
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, specialFormPropagateNulls) {
+  exec::registerVectorFunction(
+      "test_shrinking_dictionary",
+      TestingShrinkingDictionary::signatures(),
+      std::make_unique<TestingShrinkingDictionary>());
+
+  // This test verifies an edge case where applyFunctionWithPeeling may produce
+  // a result vector which is dictionary encoded and has fewer values than
+  // are rows.
+  // This can happen when the last value in a column used in an expression is
+  // null which causes removeSureNulls to move the end of the SelectivityVector
+  // forward.  When we incorrectly use rows.end() as the size of the
+  // dictionary when rewrapping the results.
+  // Normally this is masked when this vector is used in a function call which
+  // produces a new output vector.  However, in SpecialForm expressions, we may
+  // return the output untouched, and when we try to add back in the nulls, we
+  // get an exception trying to resize the DictionaryVector.
+  // This is difficult to reproduce, so this test artificially triggers the
+  // issue by using a UDF that returns a dictionary one smaller than rows.end().
+
+  // Making the last row NULL, so we call addNulls in eval.
+  auto c0 = makeFlatVector<int64_t>(
+      5,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 4; });
+
+  auto rowVector = makeRowVector({c0});
+  auto evalResult = evaluate("test_shrinking_dictionary(\"c0\")", rowVector);
+
+  auto expectedResult = makeFlatVector<int64_t>(
+      5,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 4; });
+  assertEqualVectors(expectedResult, evalResult);
+}
+
+namespace {
+template <typename T>
+struct AlwaysThrowsFunction {
+  template <typename TResult, typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TResult&, const TInput&) {
+    VELOX_CHECK(false);
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, tryWithConstantFailure) {
+  // This test verifies the behavior of constant peeling on a function wrapped
+  // in a TRY.  Specifically the case when the UDF executed on the peeled
+  // vector throws an exception on the constant value.
+
+  // When wrapping a peeled ConstantVector, the result is wrapped in a
+  // ConstantVector.  ConstantVector has special handling logic to copy the
+  // underlying string when the type is Varchar.  When an exception is thrown
+  // and the StringView isn't initialized, without special handling logic in
+  // EvalCtx this results in reading uninitialized memory triggering ASAN
+  // errors.
+  registerFunction<AlwaysThrowsFunction, Varchar, Varchar>({"always_throws"});
+  auto c0 = makeConstantVector("test", 5);
+  auto c1 = makeFlatVector<int64_t>(5, [](vector_size_t row) { return row; });
+  auto rowVector = makeRowVector({c0, c1});
+
+  // We use strpos and c1 to ensure that the constant is peeled before calling
+  // always_throws, not before the try.
+  auto evalResult =
+      evaluate("try(strpos(always_throws(\"c0\"), 't', c1))", rowVector);
+
+  auto expectedResult = makeFlatVector<int64_t>(
+      5, [](vector_size_t) { return 0; }, [](vector_size_t) { return true; });
+  assertEqualVectors(expectedResult, evalResult);
+}
+
+TEST_F(ExprTest, castExceptionContext) {
+  assertErrorContext(
+      "cast(c0 as bigint)",
+      makeFlatVector({"a"}),
+      "cast((c0) as BIGINT)",
+      "Same as context.");
+}
+
+TEST_F(ExprTest, switchExceptionContext) {
+  assertErrorContext(
+      "case c0 when 7 then c0 / 0 else 0 end",
+      makeFlatVector<int64_t>({7}),
+      "divide(c0, 0:BIGINT)",
+      "switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)");
+}
+
+TEST_F(ExprTest, conjunctExceptionContext) {
+  fillVectorAndReference<int64_t>(
+      {EncodingOptions::flat(20, 2)},
+      [](int32_t row) { return std::optional(static_cast<int64_t>(row)); },
+      &testData_.bigint1);
+
+  try {
+    run<int64_t>(
+        "if (bigint1 % 409 < 300 and bigint1 / 0 < 30, 1, 2)",
+        [&](int32_t /*row*/) { return 0; });
+    ASSERT_TRUE(false) << "Expected an error";
+  } catch (VeloxException& e) {
+    ASSERT_EQ("divide(bigint1, 0:BIGINT)", e.context());
+    ASSERT_EQ(
+        "switch(and(lt(mod(bigint1, 409:BIGINT), 300:BIGINT), lt(divide(bigint1, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
+        e.topLevelContext());
+  }
+}
+
+TEST_F(ExprTest, lambdaExceptionContext) {
+  auto array = makeArrayVector<int64_t>(
+      10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
+  core::Expressions::registerLambda(
+      "lambda",
+      ROW({"x"}, {BIGINT()}),
+      ROW({ARRAY(BIGINT())}),
+      parse::parseExpr("x / 0 > 1"),
+      execCtx_->pool());
+
+  assertErrorContext(
+      "filter(c0, function('lambda'))",
+      array,
+      "divide(x, 0:BIGINT)",
+      "filter(c0, lambda)");
+}
+
+/// Verify that null inputs result in exceptions, not crashes.
+TEST_F(ExprTest, invalidInputs) {
+  auto rowType = ROW({"a"}, {BIGINT()});
+  auto exprSet = compileExpression("a + 5", rowType);
+
+  // Try null top-level vector.
+  RowVectorPtr input;
+  ASSERT_THROW(
+      exec::EvalCtx(execCtx_.get(), exprSet.get(), input.get()),
+      VeloxRuntimeError);
+
+  // Try non-null vector with null children.
+  input = std::make_shared<RowVector>(
+      pool_.get(), rowType, nullptr, 1024, std::vector<VectorPtr>{nullptr});
+  ASSERT_THROW(
+      exec::EvalCtx(execCtx_.get(), exprSet.get(), input.get()),
+      VeloxRuntimeError);
 }

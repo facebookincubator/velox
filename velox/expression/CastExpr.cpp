@@ -22,7 +22,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -112,37 +112,23 @@ void CastExpr::applyCastWithTry(
 
   if (!nullOnFailure_) {
     if (!isCastIntByTruncate) {
-      rows.applyToSelected([&](int row) {
+      context->applyToSelectedNoThrow(rows, [&](int row) {
         // Passing a false truncate flag
-        try {
-          bool nullOutput = false;
-          applyCastKernel<To, From, false>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            context->setError(
-                row,
-                std::make_exception_ptr(std::invalid_argument(makeErrorMessage(
-                    input, row, resultFlatVector->type(), toString()))));
-          }
-        } catch (const std::exception& e) {
-          context->setError(
-              row,
-              std::make_exception_ptr(std::invalid_argument(makeErrorMessage(
-                  input, row, resultFlatVector->type(), toString()))));
+        bool nullOutput = false;
+        applyCastKernel<To, From, false>(
+            row, input, resultFlatVector, nullOutput);
+        if (nullOutput) {
+          VELOX_USER_FAIL("Cast failure.");
         }
       });
     } else {
-      rows.applyToSelected([&](int row) {
+      context->applyToSelectedNoThrow(rows, [&](int row) {
         // Passing a true truncate flag
-        try {
-          bool nullOutput = false;
-          applyCastKernel<To, From, true>(
-              row, input, resultFlatVector, nullOutput);
-          if (nullOutput) {
-            context->setError(row, std::current_exception());
-          }
-        } catch (const std::exception& e) {
-          context->setError(row, std::current_exception());
+        bool nullOutput = false;
+        applyCastKernel<To, From, true>(
+            row, input, resultFlatVector, nullOutput);
+        if (nullOutput) {
+          VELOX_USER_FAIL("Cast failure.");
         }
       });
     }
@@ -628,13 +614,17 @@ void CastExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx* context,
     VectorPtr* result) {
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
   VectorPtr input;
   inputs_[0]->eval(rows, context, &input);
   auto fromType = inputs_[0]->type();
   auto toType = std::const_pointer_cast<const Type>(type_);
 
+  stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
-  CpuWallTimer timer(stats_.timing);
+  auto timer = cpuWallTimer();
   apply(rows, input, context, fromType, toType, result);
 }
 

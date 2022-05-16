@@ -60,6 +60,12 @@ General Aggregate Functions
 
     This is an alias for :func:`bool_and`.
 
+.. function:: histogram(x)
+
+    Returns a map containing the count of the number of times
+    each input value occurs. Supports integral, floating-point,
+    boolean, timestamp, and date input types.
+
 .. function:: max_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
@@ -130,6 +136,16 @@ Approximate Aggregate Functions
     given ``percentage``. The value of ``percentage`` must be between zero and
     one and must be constant for all input rows.
 
+.. function:: approx_percentile(x, percentage, accuracy) -> [same as x]
+
+    As ``approx_percentile(x, percentage)``, but with a maximum rank
+    error of ``accuracy``. The value of ``accuracy`` must be between
+    zero and one (exclusive) and must be constant for all input rows.
+    Note that a lower "accuracy" is really a lower error threshold,
+    and thus more accurate.  The default accuracy is 0.0133.  The
+    underlying implementation is KLL sketch thus has a stronger
+    guarantee for accuracy than T-Digest.
+
 .. function:: approx_percentile(x, w, percentage) -> [same as x]
 
     Returns the approximate weighed percentile for all input values of ``x``
@@ -137,6 +153,11 @@ Approximate Aggregate Functions
     an integer value of at least one. It is effectively a replication count for
     the value ``x`` in the percentile set. The value of ``p`` must be between
     zero and one and must be constant for all input rows.
+
+.. function:: approx_percentile(x, w, percentage, accuracy) -> [same as x]
+
+    As ``approx_percentile(x, w, percentage)``, but with a maximum
+    rank error of ``accuracy``.
 
 Statistical Aggregate Functions
 -------------------------------

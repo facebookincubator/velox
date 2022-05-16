@@ -106,8 +106,7 @@ TEST_F(LocalPartitionTest, gather) {
                 .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
                 .planNode();
 
-  auto task = assertQuery(
-      op, std::vector<std::shared_ptr<TempFilePath>>{}, "SELECT 300, -71, 152");
+  auto task = assertQuery(op, "SELECT 300, -71, 152");
   verifyExchangeSourceOperatorStats(task, 300);
 
   auto filePaths = writeToFiles(vectors);
@@ -168,7 +167,7 @@ TEST_F(LocalPartitionTest, partition) {
     auto builder = PlanBuilder(planNodeIdGenerator);
     auto scanNode = builder.tableScan(rowType).planNode();
     scanNodeIds.push_back(scanNode->id());
-    return builder.partialAggregation({0}, {"count(1)"}).planNode();
+    return builder.partialAggregation({"c0"}, {"count(1)"}).planNode();
   };
 
   auto op = PlanBuilder(planNodeIdGenerator)
@@ -179,7 +178,7 @@ TEST_F(LocalPartitionTest, partition) {
                         scanAggNode(),
                         scanAggNode(),
                     })
-                .partialAggregation({0}, {"count(1)"})
+                .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
   createDuckDbTable(vectors);
@@ -279,7 +278,7 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
                         scanNode(),
                         scanNode(),
                     })
-                .partialAggregation({0}, {"count(1)"})
+                .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
   CursorParameters params;
@@ -518,9 +517,9 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
                                  tableScanNode(),
                                  tableScanNode(),
                              })
-                         .partialAggregation({0, 1}, {"count(1)"})
+                         .partialAggregation({"c0", "c1"}, {"count(1)"})
                          .planNode()})
-                .partialAggregation({0}, {"count(1)", "sum(a0)"})
+                .partialAggregation({"c0"}, {"count(1)", "sum(a0)"})
                 .planNode();
 
   createDuckDbTable(vectors);

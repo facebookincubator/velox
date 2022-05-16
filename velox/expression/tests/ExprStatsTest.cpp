@@ -31,6 +31,13 @@ class ExprStatsTest : public testing::Test, public VectorTestBase {
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
+
+    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+
+    // Enable CPU usage tracking.
+    queryCtx_->setConfigOverridesUnsafe({
+        {core::QueryConfig::kExprTrackCpuUsage, "true"},
+    });
   }
 
   static RowTypePtr asRowType(const TypePtr& type) {
@@ -88,22 +95,22 @@ TEST_F(ExprStatsTest, printWithStats) {
     // Check stats before evaluation.
     ASSERT_EQ(
         exec::printExprWithStats(*exprSet),
-        "multiply [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "   plus [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "      cast(c0 as BIGINT) [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "         c0 [cpu time: 0ns, rows: 0] -> INTEGER\n"
-        "      3:BIGINT [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "   cast(c1 as BIGINT) [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "      c1 [cpu time: 0ns, rows: 0] -> INTEGER\n"
+        "multiply [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#1]\n"
+        "   plus [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#2]\n"
+        "      cast(c0 as BIGINT) [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#3]\n"
+        "         c0 [cpu time: 0ns, rows: 0, batches: 0] -> INTEGER [#4]\n"
+        "      3:BIGINT [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#5]\n"
+        "   cast(c1 as BIGINT) [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#6]\n"
+        "      c1 [cpu time: 0ns, rows: 0, batches: 0] -> INTEGER [#7]\n"
         "\n"
-        "eq [cpu time: 0ns, rows: 0] -> BOOLEAN\n"
-        "   mod [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "      cast(plus as BIGINT) [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "         plus [cpu time: 0ns, rows: 0] -> INTEGER\n"
-        "            c0 [cpu time: 0ns, rows: 0] -> INTEGER\n"
-        "            c1 [cpu time: 0ns, rows: 0] -> INTEGER\n"
-        "      2:BIGINT [cpu time: 0ns, rows: 0] -> BIGINT\n"
-        "   0:BIGINT [cpu time: 0ns, rows: 0] -> BIGINT\n");
+        "eq [cpu time: 0ns, rows: 0, batches: 0] -> BOOLEAN [#8]\n"
+        "   mod [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#9]\n"
+        "      cast(plus as BIGINT) [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#10]\n"
+        "         plus [cpu time: 0ns, rows: 0, batches: 0] -> INTEGER [#11]\n"
+        "            c0 -> INTEGER [CSE #4]\n"
+        "            c1 -> INTEGER [CSE #7]\n"
+        "      2:BIGINT [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#12]\n"
+        "   0:BIGINT [cpu time: 0ns, rows: 0, batches: 0] -> BIGINT [#13]\n");
 
     evaluate(*exprSet, data);
 
@@ -111,22 +118,42 @@ TEST_F(ExprStatsTest, printWithStats) {
     ASSERT_THAT(
         exec::printExprWithStats(*exprSet),
         ::testing::MatchesRegex(
-            "multiply .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "   plus .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "      cast.c0 as BIGINT. .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "         c0 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "      3:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"
-            "   cast.c1 as BIGINT. .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "      c1 .cpu time: 0ns, rows: 0. -> INTEGER\n"
+            "multiply .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#1.\n"
+            "   plus .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#2.\n"
+            "      cast.c0 as BIGINT. .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#3.\n"
+            "         c0 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#4.\n"
+            "      3:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#5.\n"
+            "   cast.c1 as BIGINT. .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#6.\n"
+            "      c1 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#7.\n"
             "\n"
-            "eq .cpu time: .+, rows: 1024. -> BOOLEAN\n"
-            "   mod .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "      cast.plus as BIGINT. .cpu time: .+, rows: 1024. -> BIGINT\n"
-            "         plus .cpu time: .+, rows: 1024. -> INTEGER\n"
-            "            c0 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "            c1 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "      2:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"
-            "   0:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"));
+            "eq .cpu time: .+, rows: 1024, batches: 1. -> BOOLEAN .#8.\n"
+            "   mod .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#9.\n"
+            "      cast.plus as BIGINT. .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#10.\n"
+            "         plus .cpu time: .+, rows: 1024, batches: 1. -> INTEGER .#11.\n"
+            "            c0 -> INTEGER .CSE #4.\n"
+            "            c1 -> INTEGER .CSE #7.\n"
+            "      2:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#12.\n"
+            "   0:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#13.\n"));
+  }
+
+  // Verify that common sub-expressions are identified properly.
+  {
+    auto exprSet =
+        compileExpressions({"(c0 + c1) % 5", "(c0 + c1) % 3"}, rowType);
+    evaluate(*exprSet, data);
+    ASSERT_THAT(
+        exec::printExprWithStats(*exprSet),
+        ::testing::MatchesRegex(
+            "mod .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#1.\n"
+            "   cast.plus as BIGINT. .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#2.\n"
+            "      plus .cpu time: .+, rows: 1024, batches: 1. -> INTEGER .#3.\n"
+            "         c0 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#4.\n"
+            "         c1 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#5.\n"
+            "   5:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#6.\n"
+            "\n"
+            "mod .cpu time: .+, rows: 1024, batches: 1. -> BIGINT .#7.\n"
+            "   cast..plus.c0, c1.. as BIGINT. -> BIGINT .CSE #2.\n"
+            "   3:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#8.\n"));
   }
 
   // Use dictionary encoding to repeat each row 5 times.
@@ -144,22 +171,22 @@ TEST_F(ExprStatsTest, printWithStats) {
     ASSERT_THAT(
         exec::printExprWithStats(*exprSet),
         ::testing::MatchesRegex(
-            "multiply .cpu time: .+, rows: 205. -> BIGINT\n"
-            "   plus .cpu time: .+, rows: 205. -> BIGINT\n"
-            "      cast.c0 as BIGINT. .cpu time: .+, rows: 205. -> BIGINT\n"
-            "         c0 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "      3:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"
-            "   cast.c1 as BIGINT. .cpu time: .+, rows: 205. -> BIGINT\n"
-            "      c1 .cpu time: 0ns, rows: 0. -> INTEGER\n"
+            "multiply .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#1.\n"
+            "   plus .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#2.\n"
+            "      cast.c0 as BIGINT. .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#3.\n"
+            "         c0 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#4.\n"
+            "      3:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#5.\n"
+            "   cast.c1 as BIGINT. .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#6.\n"
+            "      c1 .cpu time: 0ns, rows: 0, batches: 0. -> INTEGER .#7.\n"
             "\n"
-            "eq .cpu time: .+, rows: 205. -> BOOLEAN\n"
-            "   mod .cpu time: .+, rows: 205. -> BIGINT\n"
-            "      cast.plus as BIGINT. .cpu time: .+, rows: 205. -> BIGINT\n"
-            "         plus .cpu time: .+, rows: 205. -> INTEGER\n"
-            "            c0 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "            c1 .cpu time: 0ns, rows: 0. -> INTEGER\n"
-            "      2:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"
-            "   0:BIGINT .cpu time: 0ns, rows: 0. -> BIGINT\n"));
+            "eq .cpu time: .+, rows: 205, batches: 1. -> BOOLEAN .#8.\n"
+            "   mod .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#9.\n"
+            "      cast.plus as BIGINT. .cpu time: .+, rows: 205, batches: 1. -> BIGINT .#10.\n"
+            "         plus .cpu time: .+, rows: 205, batches: 1. -> INTEGER .#11.\n"
+            "            c0 -> INTEGER .CSE #4.\n"
+            "            c1 -> INTEGER .CSE #7.\n"
+            "      2:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#12.\n"
+            "   0:BIGINT .cpu time: 0ns, rows: 0, batches: 0. -> BIGINT .#13.\n"));
   }
 }
 
@@ -206,9 +233,19 @@ TEST_F(ExprStatsTest, listener) {
   }
   ASSERT_EQ(1, events.size());
   auto stats = events.back().stats;
+
+  ASSERT_EQ(2, stats.at("plus").numProcessedVectors);
   ASSERT_EQ(1024 * 2, stats.at("plus").numProcessedRows);
+
+  ASSERT_EQ(1, stats.at("multiply").numProcessedVectors);
   ASSERT_EQ(1024, stats.at("multiply").numProcessedRows);
+
+  ASSERT_EQ(1, stats.at("mod").numProcessedVectors);
   ASSERT_EQ(1024, stats.at("mod").numProcessedRows);
+
+  for (const auto& name : {"plus", "multiply", "mod"}) {
+    ASSERT_GT(stats.at(name).timing.cpuNanos, 0);
+  }
 
   // Evaluate the same expressions twice and verify that stats received by the
   // listener are "doubled".
@@ -220,11 +257,35 @@ TEST_F(ExprStatsTest, listener) {
   }
   ASSERT_EQ(2, events.size());
   stats = events.back().stats;
+
+  ASSERT_EQ(4, stats.at("plus").numProcessedVectors);
   ASSERT_EQ(1024 * 2 * 2, stats.at("plus").numProcessedRows);
+
+  ASSERT_EQ(2, stats.at("multiply").numProcessedVectors);
   ASSERT_EQ(1024 * 2, stats.at("multiply").numProcessedRows);
+
+  ASSERT_EQ(2, stats.at("mod").numProcessedVectors);
   ASSERT_EQ(1024 * 2, stats.at("mod").numProcessedRows);
+  for (const auto& name : {"plus", "multiply", "mod"}) {
+    ASSERT_GT(stats.at(name).timing.cpuNanos, 0);
+  }
 
   ASSERT_NE(events[0].uuid, events[1].uuid);
+
+  // Evaluate an expression with CTE and verify no double accounting.
+  {
+    auto exprSet =
+        compileExpressions({"(c0 + c1) % 5", "pow(c0 + c1, 2)"}, rowType);
+    evaluate(*exprSet, data);
+  }
+  ASSERT_EQ(3, events.size());
+  stats = events.back().stats;
+  ASSERT_EQ(1024, stats.at("plus").numProcessedRows);
+  ASSERT_EQ(1024, stats.at("mod").numProcessedRows);
+  ASSERT_EQ(1024, stats.at("pow").numProcessedRows);
+  for (const auto& name : {"plus", "mod", "pow"}) {
+    ASSERT_EQ(1, stats.at(name).numProcessedVectors);
+  }
 
   // Unregister the listener, evaluate expressions again and verify the listener
   // wasn't invoked.
@@ -236,5 +297,28 @@ TEST_F(ExprStatsTest, listener) {
         compileExpressions({"(c0 + 3) * c1", "(c0 + c1) % 2 = 0"}, rowType);
     evaluate(*exprSet, data);
   }
-  ASSERT_EQ(2, events.size());
+  ASSERT_EQ(3, events.size());
+}
+
+TEST_F(ExprStatsTest, memoryAllocations) {
+  std::mt19937 rng;
+
+  vector_size_t size = 256;
+  auto data = makeRowVector({
+      makeFlatVector<float>(
+          size, [&](auto /*row*/) { return folly::Random::randDouble01(rng); }),
+  });
+
+  auto rowType = asRowType(data->type());
+  auto exprSet =
+      compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
+
+  auto prevAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+
+  evaluate(*exprSet, data);
+  auto currAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+
+  // Expect a single allocation for the result. Intermediate results should
+  // reuse memory.
+  ASSERT_EQ(1, currAllocations - prevAllocations);
 }

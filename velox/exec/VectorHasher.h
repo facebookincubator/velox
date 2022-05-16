@@ -82,7 +82,7 @@ struct UniqueValueHasher {
   size_t operator()(const UniqueValue& value) const {
     auto size = value.size();
     if (size <= sizeof(int64_t)) {
-      return _mm_crc32_u64(value.data(), 1);
+      return simd::crc32U64(value.data(), 1);
     }
 
     uint64_t hash = 1;
@@ -91,7 +91,7 @@ struct UniqueValueHasher {
     size_t wordIndex = 0;
     auto numFullWords = size / 8;
     for (; wordIndex < numFullWords; ++wordIndex) {
-      hash = _mm_crc32_u64(*(data + wordIndex), hash);
+      hash = simd::crc32U64(*(data + wordIndex), hash);
     }
 
     auto numBytesRemaining = size - wordIndex * 8;
@@ -99,7 +99,7 @@ struct UniqueValueHasher {
       auto lastWord = bits::loadPartialWord(
           reinterpret_cast<const uint8_t*>(data + wordIndex),
           numBytesRemaining);
-      hash = _mm_crc32_u64(lastWord, hash);
+      hash = simd::crc32U64(lastWord, hash);
     }
 
     return hash;
@@ -169,6 +169,18 @@ class VectorHasher {
       const SelectivityVector& rows,
       bool mix,
       raw_vector<uint64_t>& result);
+
+  // Computes a hash for 'rows' using precomputedHash_ (just like from a const
+  // vector) and stores it in 'result'.
+  // If 'mix' is true, mixes the hash with existing value in 'result'.
+  void hashPrecomputed(
+      const SelectivityVector& rows,
+      bool mix,
+      raw_vector<uint64_t>& result) const;
+
+  // Precompute hash of a given single value (vector has just one row) into
+  // precomputedHash_. Used for constant partition keys.
+  void precompute(const BaseVector& value);
 
   // Computes a normalized key for 'rows' in 'values' and stores this
   // in 'result'. If this is not the first hasher with normalized
@@ -494,6 +506,9 @@ class VectorHasher {
 
   DecodedVector decoded_;
   raw_vector<uint64_t> cachedHashes_;
+
+  // Single precomputed hash for constant partition keys.
+  uint64_t precomputedHash_{0};
 
   // Members for fast map to int domain for array/normalized key.
   // Maximum integer mapping. If distinct count exceeds this,

@@ -47,6 +47,10 @@ if(${VELOX_ENABLE_HIVE_CONNECTOR})
   add_subdirectory(dwio)
 endif()
 
+if(${VELOX_ENABLE_TPCH_CONNECTOR})
+  add_subdirectory(tpch/gen)
+endif()
+
 add_subdirectory(functions) # depends on md5 (postgresql)
 add_subdirectory(connectors)
 

@@ -57,6 +57,25 @@ inline void TestingHook<StringView>::addValue(
       row, StringView(*reinterpret_cast<const folly::StringPiece*>(value)));
 }
 
+// Utility for checking that a subsequent batch of output does not
+// overwrite internals of a possibly retained previous batch.
+class OwnershipChecker {
+ public:
+  // Receives consecutive batches during a test and checks that
+  // subsequent ones do not overwrite retained content from previous
+  // ones.
+  void check(const VectorPtr& batch);
+
+ private:
+  // Sequence number of batch for check().
+  int32_t batchCounter_{0};
+  // References the previous batch of results for check().
+  VectorPtr previousBatch_;
+  // Copy of 'previousBatch_' used for validating no overwrite from fetching the
+  // next batch.
+  VectorPtr previousBatchCopy_;
+};
+
 class E2EFilterTestBase : public testing::Test {
  protected:
   static constexpr int32_t kRowsInGroup = 10'000;
@@ -170,6 +189,8 @@ class E2EFilterTestBase : public testing::Test {
   // found in sampling is not changed.
   void makeNotNull(int32_t firstRow = 0);
 
+  void makeNotNullRecursive(int32_t firstRow, RowVectorPtr batch);
+
   virtual void writeToMemory(
       const TypePtr& type,
       const std::vector<RowVectorPtr>& batches,
@@ -180,12 +201,12 @@ class E2EFilterTestBase : public testing::Test {
       std::unique_ptr<dwio::common::InputStream> input) = 0;
 
   void readWithoutFilter(
-      ScanSpec* spec,
+      std::shared_ptr<ScanSpec> spec,
       const std::vector<RowVectorPtr>& batches,
       uint64_t& time);
 
   void readWithFilter(
-      ScanSpec* spec,
+      std::shared_ptr<ScanSpec> spec,
       const std::vector<RowVectorPtr>& batches,
       const std::vector<uint32_t>& hitRows,
       uint64_t& time,

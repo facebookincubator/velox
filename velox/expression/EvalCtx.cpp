@@ -28,7 +28,21 @@ ContextSaver::~ContextSaver() {
 }
 
 EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
-    : execCtx_(execCtx), exprSet_(exprSet), row_(row) {}
+    : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
+  // TODO Change the API to replace raw pointers with non-const references.
+  // Sanity check inputs to prevent crashes.
+  VELOX_CHECK_NOT_NULL(execCtx);
+  VELOX_CHECK_NOT_NULL(exprSet);
+  VELOX_CHECK_NOT_NULL(row);
+  for (const auto& child : row->children()) {
+    VELOX_CHECK_NOT_NULL(child);
+  }
+}
+
+EvalCtx::EvalCtx(core::ExecCtx* execCtx)
+    : execCtx_(execCtx), exprSet_(nullptr), row_(nullptr) {
+  VELOX_CHECK_NOT_NULL(execCtx);
+}
 
 void EvalCtx::setWrapped(
     Expr* expr,
@@ -100,8 +114,18 @@ void EvalCtx::setWrapped(
     return;
   }
   if (wrapEncoding_ == VectorEncoding::Simple::CONSTANT) {
-    *result = BaseVector::wrapInConstant(
-        rows.size(), constantWrapIndex_, std::move(source));
+    if (errors_ && constantWrapIndex_ < errors_->size() &&
+        !errors_->isNullAt(constantWrapIndex_)) {
+      // If the single row caused an error that will be caught by a TRY
+      // upstream source may be not initialized, or otherwise in a bad state.
+      // Just return NULL, the value won't be used and TRY is just going to
+      // NULL out the result anyway.
+      *result =
+          BaseVector::createNullConstant(expr->type(), rows.size(), pool());
+    } else {
+      *result = BaseVector::wrapInConstant(
+          rows.size(), constantWrapIndex_, std::move(source));
+    }
     return;
   }
   VELOX_CHECK(false, "Bad expression wrap encoding {}", wrapEncoding_);

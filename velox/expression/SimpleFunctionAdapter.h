@@ -18,12 +18,14 @@
 
 #include <memory>
 
+#include <velox/expression/DecodedArgs.h>
+#include <velox/expression/EvalCtx.h>
 #include "velox/common/base/Portability.h"
 #include "velox/expression/ComplexWriterTypes.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
-#include "velox/vector/VectorTypeUtils.h"
+#include "velox/expression/VectorReaders.h"
+#include "velox/expression/VectorWriters.h"
 
 namespace facebook::velox::exec {
 
@@ -65,14 +67,26 @@ class SimpleFunctionAdapter : public VectorFunction {
   static constexpr bool fastPathIteration =
       return_type_traits::isPrimitiveType && return_type_traits::isFixedWidth;
 
+  template <int32_t POSITION>
+  static constexpr bool isArgFlatConstantFastPathEligible =
+      CppToType<arg_at<POSITION>>::typeKind !=
+      TypeKind::UNKNOWN&& CppToType<arg_at<POSITION>>::typeKind !=
+      TypeKind::BOOLEAN&& CppToType<arg_at<POSITION>>::isPrimitiveType;
+
   struct ApplyContext {
     ApplyContext(
         const SelectivityVector* _rows,
         const TypePtr& outputType,
         EvalCtx* _context,
-        VectorPtr* _result)
+        VectorPtr* _result,
+        bool isResultReused)
         : rows{_rows}, context{_context} {
-      BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+      // If we're reusing the input, we've already checked that the vector
+      // is unique, as is nulls.  We also know the size of the vector is
+      // at least as large as the size of rows.
+      if (!isResultReused) {
+        BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+      }
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);
     }
@@ -135,13 +149,142 @@ class SimpleFunctionAdapter : public VectorFunction {
     }
   }
 
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION<FUNC::num_args, int32_t> = 0> bool
+          allPrimitiveArgsFlatConstant(const std::vector<VectorPtr>& args)
+              const {
+    // Variadic args are always last, and we don't support the optimization
+    // for them for now.
+    if constexpr (isVariadicType<arg_at<POSITION>>::value) {
+      return true;
+    } else if constexpr (isArgFlatConstantFastPathEligible<POSITION>) {
+      if (args[POSITION]->encoding() != VectorEncoding::Simple::FLAT &&
+          args[POSITION]->encoding() != VectorEncoding::Simple::CONSTANT) {
+        return false;
+      }
+    }
+
+    return allPrimitiveArgsFlatConstant<POSITION + 1>(args);
+  }
+
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
+  bool allPrimitiveArgsFlatConstant(
+      const std::vector<VectorPtr>& /*args*/) const {
+    // Base case.
+    return true;
+  }
+
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION<FUNC::num_args, int32_t> = 0> void
+          decodeArgs(
+              std::vector<LocalDecodedVector>& decodedArgs,
+              const std::vector<VectorPtr>& args,
+              const SelectivityVector& rows,
+              EvalCtx* context,
+              bool decodePrimitives) const {
+    if constexpr (isVariadicType<arg_at<POSITION>>::value) {
+      // Decode the underlying arguments of the Variadic type.
+      for (int i = POSITION; i < args.size(); ++i) {
+        decodedArgs.emplace_back(context, *args[i], rows);
+      }
+    } else if constexpr (isArgFlatConstantFastPathEligible<POSITION>) {
+      if (decodePrimitives) {
+        decodedArgs.emplace_back(context, *args[POSITION], rows);
+      } else {
+        // If we're skipping decoding this argument, add a dummy value.
+        decodedArgs.emplace_back(context);
+      }
+    } else {
+      decodedArgs.emplace_back(context, *args[POSITION], rows);
+    }
+
+    decodeArgs<POSITION + 1>(
+        decodedArgs, args, rows, context, decodePrimitives);
+  }
+
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
+  void decodeArgs(
+      std::vector<LocalDecodedVector>& /*decodedArgs*/,
+      const std::vector<VectorPtr>& /*args*/,
+      const SelectivityVector& /*rows*/,
+      EvalCtx* /*context*/,
+      bool /*decodePrimitives*/) const {
+    // No-op base case.
+  }
+
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION<FUNC::num_args, int32_t> = 0>
+          VectorPtr* findReusableArg(std::vector<VectorPtr>& args) const {
+    if constexpr (isVariadicType<arg_at<POSITION>>::value) {
+      if constexpr (
+          CppToType<typename arg_at<POSITION>::underlying_type>::typeKind ==
+          return_type_traits::typeKind) {
+        if (args.size() > POSITION) {
+          return &args[POSITION];
+        }
+      }
+      // A Variadic arg is always the last, so if we haven't found a match yet,
+      // we know for sure that we won't.
+      return nullptr;
+    } else if constexpr (
+        CppToType<arg_at<POSITION>>::typeKind == return_type_traits::typeKind) {
+      if (BaseVector::isReusableFlatVector(args[POSITION])) {
+        // Re-use arg for result. We rely on the fact that for each row
+        // we read arguments before computing and writing out the
+        // result.
+        return &args[POSITION];
+      }
+    }
+
+    return findReusableArg<POSITION + 1>(args);
+  }
+
+  template <
+      int32_t POSITION,
+      typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
+  VectorPtr* findReusableArg(std::vector<VectorPtr>& args) const {
+    // Base case: we didn't find an input vector to reuse.
+    return nullptr;
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
       EvalCtx* context,
       VectorPtr* result) const override {
-    ApplyContext applyContext{&rows, outputType, context, result};
+    auto* reusableResult = result;
+    // If result is null, check if one of the arguments can be re-used for
+    // storing the result. This is possible if all the following conditions are
+    // met:
+    // - result type is a fixed-width type,
+    // - function doesn't produce nulls,
+    // - an argument has the same type as result,
+    // - the argument has flat encoding,
+    // - the argument is singly-referenced and has singly-referenced values
+    // and nulls buffers.
+    bool isResultReused = false;
+    if constexpr (
+        !FUNC::can_produce_null_output && !FUNC::udf_has_callNullFree &&
+        return_type_traits::isPrimitiveType &&
+        return_type_traits::isFixedWidth) {
+      if (!reusableResult->get()) {
+        if (auto arg = findReusableArg<0>(args)) {
+          reusableResult = arg;
+          isResultReused = true;
+        }
+      }
+    }
+
+    ApplyContext applyContext{
+        &rows, outputType, context, reusableResult, isResultReused};
 
     // Enable fast all-ASCII path if all string inputs are ASCII and the
     // function provides ASCII-only path.
@@ -151,14 +294,34 @@ class SimpleFunctionAdapter : public VectorFunction {
 
     // If this UDF can take the fast path iteration, we set all active rows as
     // non-nulls in the result vector. The assumption is that the majority of
-    // rows will return non-null values (and hence won't have to touch the null
-    // buffer during iteration).
-    if constexpr (fastPathIteration) {
-      (*result)->clearNulls(rows);
+    // rows will return non-null values (and hence won't have to touch the
+    // null buffer during iteration).
+    // If this function doesn't produce nulls, then one of its arguments may be
+    // used for storing results. In this case, do not clear the nulls before
+    // processing these.
+    if constexpr (
+        fastPathIteration &&
+        (FUNC::can_produce_null_output || FUNC::udf_has_callNullFree)) {
+      (*reusableResult)->clearNulls(rows);
     }
 
-    DecodedArgs decodedArgs{rows, args, context};
-    unpack<0>(applyContext, true, decodedArgs);
+    bool primitiveFlatConstantFastPath = allPrimitiveArgsFlatConstant<0>(args);
+
+    std::vector<LocalDecodedVector> decoded;
+    decoded.reserve(args.size());
+    decodeArgs<0>(decoded, args, rows, context, !primitiveFlatConstantFastPath);
+
+    if (primitiveFlatConstantFastPath) {
+      unpack<0, true>(applyContext, true, decoded, args);
+    } else {
+      unpack<0, false>(applyContext, true, decoded, args);
+    }
+
+    if constexpr (
+        fastPathIteration && !FUNC::can_produce_null_output &&
+        !FUNC::udf_has_callNullFree) {
+      (*reusableResult)->clearNulls(rows);
+    }
 
     // Check if the function reuses input strings for the result, and add
     // references to input string buffers to all result vectors.
@@ -166,10 +329,21 @@ class SimpleFunctionAdapter : public VectorFunction {
     if (reuseStringsFromArg >= 0) {
       VELOX_CHECK_LT(reuseStringsFromArg, args.size());
       VELOX_CHECK_EQ(args[reuseStringsFromArg]->typeKind(), TypeKind::VARCHAR);
-
-      tryAcquireStringBuffer(
-          result->get(), decodedArgs.at(reuseStringsFromArg)->base());
+      if (primitiveFlatConstantFastPath) {
+        // primitiveFlatConstantFastPath is only true if all primitives are
+        // encoded in Flat or Constant Vectors.  Since varchar is a primitive
+        // type, if we're here, we're guaranteed the argument is either a Flat
+        // or Constant vector so no decoding is necessary.
+        tryAcquireStringBuffer(
+            reusableResult->get(), args.at(reuseStringsFromArg).get());
+      } else {
+        tryAcquireStringBuffer(
+            reusableResult->get(),
+            decoded.at(reuseStringsFromArg).get()->base());
+      }
     }
+
+    *result = std::move(*reusableResult);
   }
 
   // Acquire string buffer from source if vector is a string flat vector.
@@ -231,20 +405,22 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   template <
       int32_t POSITION,
+      bool primitiveFlatConstantFastPath,
       typename... TReader,
       typename std::enable_if_t<POSITION<FUNC::num_args, int32_t> = 0> void
           unpack(
               ApplyContext& applyContext,
               bool allNotNull,
-              const DecodedArgs& packed,
+              std::vector<LocalDecodedVector>& decodedArgs,
+              const std::vector<VectorPtr>& rawArgs,
               TReader&... readers) const {
     if constexpr (isVariadicType<arg_at<POSITION>>::value) {
-      // This should already be statically checked by the UDFHolder used to wrap
-      // the simple function, but checking again here just in case.
+      // This should already be statically checked by the UDFHolder used to
+      // wrap the simple function, but checking again here just in case.
       static_assert(
           POSITION == FUNC::num_args - 1,
           "Variadic args can only be used as the last argument to a function.");
-      auto oneReader = VectorReader<arg_at<POSITION>>(packed, POSITION);
+      auto oneReader = VectorReader<arg_at<POSITION>>(decodedArgs, POSITION);
 
       if constexpr (FUNC::udf_has_callNullFree) {
         oneReader.setChildrenMayHaveNulls();
@@ -254,29 +430,75 @@ class SimpleFunctionAdapter : public VectorFunction {
       bool nextNonNull = applyContext.context->nullsPruned();
       if (!nextNonNull && allNotNull) {
         nextNonNull = true;
-        for (auto i = POSITION; i < packed.size(); i++) {
-          nextNonNull &= !packed.at(i)->mayHaveNulls();
+        for (auto i = POSITION; i < decodedArgs.size(); i++) {
+          nextNonNull &= !decodedArgs.at(i).get()->mayHaveNulls();
         }
       }
 
-      unpack<POSITION + 1>(
-          applyContext, nextNonNull, packed, readers..., oneReader);
+      unpack<POSITION + 1, primitiveFlatConstantFastPath>(
+          applyContext,
+          nextNonNull,
+          decodedArgs,
+          rawArgs,
+          readers...,
+          oneReader);
     } else {
-      auto* oneUnpacked = packed.at(POSITION);
-      auto oneReader = VectorReader<arg_at<POSITION>>(oneUnpacked);
+      if constexpr (
+          CppToType<arg_at<POSITION>>::isPrimitiveType &&
+          CppToType<arg_at<POSITION>>::typeKind != TypeKind::UNKNOWN &&
+          CppToType<arg_at<POSITION>>::typeKind != TypeKind::BOOLEAN &&
+          primitiveFlatConstantFastPath) {
+        using value_t =
+            typename ConstantFlatVectorReader<arg_at<POSITION>>::exec_in_t;
+        auto& arg = rawArgs[POSITION];
+        auto oneReader = arg->encoding() == VectorEncoding::Simple::FLAT
+            ? ConstantFlatVectorReader<arg_at<POSITION>>(
+                  static_cast<FlatVector<value_t>*>(arg.get()))
+            : ConstantFlatVectorReader<arg_at<POSITION>>(
+                  static_cast<ConstantVector<value_t>*>(arg.get()));
 
-      if constexpr (FUNC::udf_has_callNullFree) {
-        oneReader.setChildrenMayHaveNulls();
-        applyContext.mayHaveNullsRecursive |= oneReader.mayHaveNullsRecursive();
+        if constexpr (FUNC::udf_has_callNullFree) {
+          oneReader.setChildrenMayHaveNulls();
+          applyContext.mayHaveNullsRecursive |=
+              oneReader.mayHaveNullsRecursive();
+        }
+
+        // context->nullPruned() is true after rows with nulls have been
+        // pruned out of 'rows', so we won't be seeing any more nulls
+        // here.
+        bool nextNonNull = applyContext.context->nullsPruned() ||
+            (allNotNull && !arg->mayHaveNulls());
+
+        unpack<POSITION + 1, primitiveFlatConstantFastPath>(
+            applyContext,
+            nextNonNull,
+            decodedArgs,
+            rawArgs,
+            readers...,
+            oneReader);
+      } else {
+        auto* oneUnpacked = decodedArgs.at(POSITION).get();
+        auto oneReader = VectorReader<arg_at<POSITION>>(oneUnpacked);
+
+        if constexpr (FUNC::udf_has_callNullFree) {
+          oneReader.setChildrenMayHaveNulls();
+          applyContext.mayHaveNullsRecursive |=
+              oneReader.mayHaveNullsRecursive();
+        }
+
+        // context->nullPruned() is true after rows with nulls have been
+        // pruned out of 'rows', so we won't be seeing any more nulls here.
+        bool nextNonNull = applyContext.context->nullsPruned() ||
+            (allNotNull && !oneUnpacked->mayHaveNulls());
+
+        unpack<POSITION + 1, primitiveFlatConstantFastPath>(
+            applyContext,
+            nextNonNull,
+            decodedArgs,
+            rawArgs,
+            readers...,
+            oneReader);
       }
-
-      // context->nullPruned() is true after rows with nulls have been
-      // pruned out of 'rows', so we won't be seeing any more nulls here.
-      bool nextNonNull = applyContext.context->nullsPruned() ||
-          (allNotNull && !oneUnpacked->mayHaveNulls());
-
-      unpack<POSITION + 1>(
-          applyContext, nextNonNull, packed, readers..., oneReader);
     }
   }
 
@@ -285,12 +507,14 @@ class SimpleFunctionAdapter : public VectorFunction {
   // unpack: base case
   template <
       int32_t POSITION,
+      bool primitiveFlatConstantFastPath,
       typename... TReader,
       typename std::enable_if_t<POSITION == FUNC::num_args, int32_t> = 0>
   void unpack(
       ApplyContext& applyContext,
       bool allNotNull,
-      const DecodedArgs& /*packed*/,
+      std::vector<LocalDecodedVector>& /*decodedArgs*/,
+      const std::vector<VectorPtr>& /*rawArgs*/,
       const TReader&... readers) const {
     iterate(applyContext, allNotNull, readers...);
   }
@@ -303,8 +527,8 @@ class SimpleFunctionAdapter : public VectorFunction {
     // If is_default_contains_nulls_behavior we return null if the inputs
     // contain any nulls.
     // If !is_default_contains_nulls_behavior we don't invoke callNullFree
-    // if the inputs contain any nulls, but rather invoke call or callNullable
-    // as usual.
+    // if the inputs contain any nulls, but rather invoke call or
+    // callNullable as usual.
     bool callNullFree = FUNC::is_default_contains_nulls_behavior ||
         (FUNC::udf_has_callNullFree && !applyContext.mayHaveNullsRecursive);
 
@@ -314,9 +538,9 @@ class SimpleFunctionAdapter : public VectorFunction {
       auto* data = applyContext.result->mutableRawValues();
       auto writeResult = [&applyContext, &nullBuffer, &data](
                              auto row, bool notNull, auto out) INLINE_LAMBDA {
-        // For fast path iteration, all active rows were already set as non-null
-        // beforehand, so we only need to update the null buffer if the function
-        // returned null (which is not the common case).
+        // For fast path iteration, all active rows were already set as
+        // non-null beforehand, so we only need to update the null buffer if
+        // the function returned null (which is not the common case).
         if (notNull) {
           if constexpr (return_type_traits::typeKind == TypeKind::BOOLEAN) {
             bits::setBit(data, row, out);
@@ -331,9 +555,9 @@ class SimpleFunctionAdapter : public VectorFunction {
         }
       };
       if (callNullFree) {
-        // This results in some code duplication, but applying this check once
-        // per batch instead of once per row shows a significant performance
-        // improvement when there are no nulls.
+        // This results in some code duplication, but applying this check
+        // once per batch instead of once per row shows a significant
+        // performance improvement when there are no nulls.
         if (applyContext.mayHaveNullsRecursive) {
           applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
             typename return_type_traits::NativeType out{};
@@ -358,10 +582,10 @@ class SimpleFunctionAdapter : public VectorFunction {
         }
       } else if (allNotNull) {
         applyContext.applyToSelectedNoThrow([&](auto row) INLINE_LAMBDA {
-          // Passing a stack variable have shown to be boost the performance of
-          // functions that repeatedly update the output.
-          // The opposite optimization (eliminating the temp) is easier to do
-          // by the compiler (assuming the function call is inlined).
+          // Passing a stack variable have shown to be boost the performance
+          // of functions that repeatedly update the output. The opposite
+          // optimization (eliminating the temp) is easier to do by the
+          // compiler (assuming the function call is inlined).
           typename return_type_traits::NativeType out{};
           bool notNull = doApplyNotNull<0>(row, out, readers...);
           writeResult(row, notNull, out);
@@ -375,9 +599,9 @@ class SimpleFunctionAdapter : public VectorFunction {
       }
     } else {
       if (callNullFree) {
-        // This results in some code duplication, but applying this check once
-        // per batch instead of once per row shows a significant performance
-        // improvement when there are no nulls.
+        // This results in some code duplication, but applying this check
+        // once per batch instead of once per row shows a significant
+        // performance improvement when there are no nulls.
         if (applyContext.mayHaveNullsRecursive) {
           applyUdf(applyContext, [&](auto& out, auto row) INLINE_LAMBDA {
             auto containsNull = (readers.containsNull(row) || ...);
@@ -477,7 +701,8 @@ class SimpleFunctionAdapter : public VectorFunction {
               T& target,
               R0& currentReader,
               const Values&... extra) const {
-    // Recurse through all the arguments to build the arg list at compile time.
+    // Recurse through all the arguments to build the arg list at compile
+    // time.
     if constexpr (std::is_reference<decltype(currentReader[idx])>::value) {
       return doApply<POSITION + 1>(
           idx,
@@ -525,10 +750,10 @@ class SimpleFunctionAdapter : public VectorFunction {
   // If we're guaranteed not to have any nulls, pass all parameters as
   // references.
   //
-  // Note that (*fn_).call() will internally dispatch the call to either call()
-  // or callNullable() (whichever is implemented by the user function). Default
-  // null behavior or not does not matter in this path since we don't have any
-  // nulls.
+  // Note that (*fn_).call() will internally dispatch the call to either
+  // call() or callNullable() (whichever is implemented by the user
+  // function). Default null behavior or not does not matter in this path
+  // since we don't have any nulls.
   template <
       size_t POSITION,
       typename R0,

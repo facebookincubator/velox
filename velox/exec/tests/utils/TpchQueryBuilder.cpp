@@ -80,6 +80,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ1Plan();
     case 6:
       return getQ6Plan();
+    case 13:
+      return getQ13Plan();
     case 18:
       return getQ18Plan();
     default:
@@ -127,7 +129,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
                "l_extendedprice * (1.0 - l_discount) * (1.0 + l_tax) AS l_sum_charge",
                "l_discount"})
           .partialAggregation(
-              {0, 1},
+              {"l_returnflag", "l_linestatus"},
               {"sum(l_quantity)",
                "sum(l_extendedprice)",
                "sum(l_sum_disc_price)",
@@ -140,24 +142,7 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
 
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .localPartition({}, {partialAggStage})
-                  .finalAggregation(
-                      {0, 1},
-                      {"sum(a0)",
-                       "sum(a1)",
-                       "sum(a2)",
-                       "sum(a3)",
-                       "avg(a4)",
-                       "avg(a5)",
-                       "avg(a6)",
-                       "count(a7)"},
-                      {DOUBLE(),
-                       DOUBLE(),
-                       DOUBLE(),
-                       DOUBLE(),
-                       DOUBLE(),
-                       DOUBLE(),
-                       DOUBLE(),
-                       BIGINT()})
+                  .finalAggregation()
                   .orderBy({"l_returnflag", "l_linestatus"}, false)
                   .planNode();
 
@@ -203,11 +188,69 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
                            .project({"l_extendedprice * l_discount"})
                            .partialAggregation({}, {"sum(p0)"})
                            .planNode()})
-                  .finalAggregation({}, {"sum(a0)"}, {DOUBLE()})
+                  .finalAggregation()
                   .planNode();
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ13Plan() const {
+  static const std::string kOrders = "orders";
+  static const std::string kCustomer = "customer";
+  std::vector<std::string> ordersColumns = {
+      "o_custkey", "o_comment", "o_orderkey"};
+  std::vector<std::string> customerColumns = {"c_custkey"};
+
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId customerScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+
+  auto customers =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .capturePlanNodeId(customerScanNodeId)
+          .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {},
+                      {PlanBuilder(planNodeIdGenerator)
+                           .tableScan(
+                               kOrders,
+                               ordersSelectedRowType,
+                               ordersFileColumns,
+                               {},
+                               "o_comment not like '%special%requests%'")
+                           .capturePlanNodeId(ordersScanNodeId)
+                           .hashJoin(
+                               {"o_custkey"},
+                               {"c_custkey"},
+                               customers,
+                               "",
+                               {"c_custkey", "o_orderkey"},
+                               core::JoinType::kRight)
+                           .partialAggregation(
+                               {"c_custkey"}, {"count(o_orderkey) as pc_count"})
+                           .planNode()})
+                  .finalAggregation(
+                      {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
+                  .singleAggregation({"c_count"}, {"count(0) as custdist"})
+                  .orderBy({"custdist DESC", "c_count DESC"}, false)
+                  .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
   context.dataFileFormat = format_;
   return context;
 }
@@ -243,9 +286,11 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                    .tableScan(
                        kLineitem, lineitemSelectedRowType, lineitemFileColumns)
                    .capturePlanNodeId(lineitemScanNodeId)
-                   .partialAggregation({0}, {"sum(l_quantity) AS partial_sum"})
+                   .partialAggregation(
+                       {"l_orderkey"}, {"sum(l_quantity) AS partial_sum"})
                    .planNode()})
-          .finalAggregation({0}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
+          .finalAggregation(
+              {"l_orderkey"}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
           .filter("quantity > 300.0")
           .planNode();
 
@@ -341,7 +386,7 @@ const std::unordered_map<std::string, std::vector<std::string>>
             std::vector<std::string>{
                 "c_custkey",
                 "c_name",
-                "c_addres",
+                "c_address",
                 "c_nationkey",
                 "c_phone",
                 "c_acctbal",

@@ -37,11 +37,14 @@
 #include "velox/common/base/ClassName.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/Date.h"
+#include "velox/type/ShortDecimal.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/Tree.h"
 
 namespace facebook::velox {
+
+using int128_t = __int128_t;
 
 // Velox type system supports a small set of SQL-compatible composeable types:
 // BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
@@ -69,7 +72,8 @@ enum class TypeKind : int8_t {
   VARBINARY = 8,
   TIMESTAMP = 9,
   DATE = 10,
-
+  SHORT_DECIMAL = 11,
+  LONG_DECIMAL = 12,
   // Enum values for ComplexTypes start after 30 to leave
   // some values space to accommodate adding new scalar/native
   // types above.
@@ -95,7 +99,8 @@ std::ostream& operator<<(std::ostream& os, const TypeKind& kind);
 
 template <TypeKind KIND>
 class ScalarType;
-
+template <TypeKind KIND>
+class DecimalType;
 class ArrayType;
 class MapType;
 class RowType;
@@ -271,6 +276,32 @@ struct TypeTraits<TypeKind::DATE> {
   static constexpr bool isPrimitiveType = true;
   static constexpr bool isFixedWidth = true;
   static constexpr const char* name = "DATE";
+};
+
+template <>
+struct TypeTraits<TypeKind::SHORT_DECIMAL> {
+  using ImplType = DecimalType<TypeKind::SHORT_DECIMAL>;
+  using NativeType = ShortDecimal;
+  using DeepCopiedType = NativeType;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::SHORT_DECIMAL;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = true;
+  static constexpr const char* name = "SHORT_DECIMAL";
+};
+
+template <>
+struct TypeTraits<TypeKind::LONG_DECIMAL> {
+  using ImplType = DecimalType<TypeKind::LONG_DECIMAL>;
+  using NativeType = int128_t;
+  using DeepCopiedType = NativeType;
+  static constexpr uint32_t minSubTypes = 0;
+  static constexpr uint32_t maxSubTypes = 0;
+  static constexpr TypeKind typeKind = TypeKind::LONG_DECIMAL;
+  static constexpr bool isPrimitiveType = true;
+  static constexpr bool isFixedWidth = true;
+  static constexpr const char* name = "LONG_DECIMAL";
 };
 
 template <>
@@ -469,6 +500,8 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
   VELOX_FLUENT_CAST(Varbinary, VARBINARY)
   VELOX_FLUENT_CAST(Timestamp, TIMESTAMP)
   VELOX_FLUENT_CAST(Date, DATE)
+  VELOX_FLUENT_CAST(ShortDecimal, SHORT_DECIMAL)
+  VELOX_FLUENT_CAST(LongDecimal, LONG_DECIMAL)
   VELOX_FLUENT_CAST(Array, ARRAY)
   VELOX_FLUENT_CAST(Map, MAP)
   VELOX_FLUENT_CAST(Row, ROW)
@@ -505,6 +538,61 @@ class TypeBase : public Type {
   const char* kindName() const override {
     return TypeTraits<KIND>::name;
   }
+};
+
+using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
+using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
+
+/// This class represents the fixed-point numbers.
+/// The parameter "precision" represents the number of digits the
+/// Decimal Type can support and "scale" represents the number of digits to the
+/// right of the decimal point.
+template <TypeKind KIND>
+class DecimalType : public ScalarType<KIND> {
+ public:
+  static_assert(
+      KIND == TypeKind::SHORT_DECIMAL || KIND == TypeKind::LONG_DECIMAL);
+  static constexpr uint8_t kMaxPrecision =
+      KIND == TypeKind::SHORT_DECIMAL ? 18 : 38;
+
+  DecimalType(const uint8_t precision = 18, const uint8_t scale = 0)
+      : precision_(precision), scale_(scale) {
+    VELOX_CHECK_LE(scale, precision);
+    VELOX_CHECK_LE(precision, kMaxPrecision);
+  }
+
+  inline bool operator==(const Type& otherDecimal) const override {
+    if (this->kind() != otherDecimal.kind()) {
+      return false;
+    }
+    auto decimalType = static_cast<const DecimalType<KIND>&>(otherDecimal);
+    return (
+        decimalType.precision() == this->precision_ &&
+        decimalType.scale() == this->scale_);
+  }
+
+  inline uint8_t precision() const {
+    return precision_;
+  }
+
+  inline uint8_t scale() const {
+    return scale_;
+  }
+
+  std::string toString() const override {
+    return fmt::format("{}({},{})", TypeTraits<KIND>::name, precision_, scale_);
+  }
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = toString();
+    return obj;
+  }
+
+ private:
+  const uint8_t precision_;
+  const uint8_t scale_;
 };
 
 template <TypeKind KIND>
@@ -698,6 +786,10 @@ class RowType : public TypeBase<TypeKind::ROW> {
 
   std::string toString() const override;
 
+  /// Print child names and types separated by 'delimiter'.
+  void printChildren(std::stringstream& ss, std::string_view delimiter = ",")
+      const;
+
   std::shared_ptr<RowType> unionWith(std::shared_ptr<RowType>& rowType) const;
 
   folly::dynamic serialize() const override;
@@ -872,7 +964,6 @@ struct ComplexType {
 
 template <TypeKind KIND>
 struct TypeFactory {
-  // default factory
   static std::shared_ptr<const typename TypeTraits<KIND>::ImplType> create() {
     return TypeTraits<KIND>::ImplType::create();
   }
@@ -934,6 +1025,16 @@ std::shared_ptr<const MapType> MAP(
 std::shared_ptr<const TimestampType> TIMESTAMP();
 
 std::shared_ptr<const DateType> DATE();
+
+std::shared_ptr<const ShortDecimalType> SHORT_DECIMAL(
+    const uint8_t precision,
+    const uint8_t scale);
+
+std::shared_ptr<const LongDecimalType> LONG_DECIMAL(
+    const uint8_t precision,
+    const uint8_t scale);
+
+TypePtr DECIMAL(const uint8_t precision, const uint8_t scale);
 
 template <typename Class>
 std::shared_ptr<const OpaqueType> OPAQUE() {
@@ -1204,15 +1305,19 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
     }                                                                         \
   }()
 
-#define VELOX_STATIC_FIELD_DYNAMIC_DISPATCH_ALL(CLASS, FIELD, typeKind)   \
-  [&]() {                                                                 \
-    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {             \
-      return CLASS<::facebook::velox::TypeKind::UNKNOWN>::FIELD;          \
-    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {       \
-      return CLASS<::facebook::velox::TypeKind::OPAQUE>::FIELD;           \
-    } else {                                                              \
-      return VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(CLASS, FIELD, typeKind); \
-    }                                                                     \
+#define VELOX_STATIC_FIELD_DYNAMIC_DISPATCH_ALL(CLASS, FIELD, typeKind)    \
+  [&]() {                                                                  \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {              \
+      return CLASS<::facebook::velox::TypeKind::UNKNOWN>::FIELD;           \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {        \
+      return CLASS<::facebook::velox::TypeKind::OPAQUE>::FIELD;            \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL) { \
+      return CLASS<::facebook::velox::TypeKind::SHORT_DECIMAL>::FIELD;     \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL) {  \
+      return CLASS<::facebook::velox::TypeKind::LONG_DECIMAL>::FIELD;      \
+    } else {                                                               \
+      return VELOX_STATIC_FIELD_DYNAMIC_DISPATCH(CLASS, FIELD, typeKind);  \
+    }                                                                      \
   }()
 
 // todo: union convenience creators
@@ -1343,40 +1448,8 @@ struct Array {
   Array() {}
 };
 
-// This is a temporary type to be used when ArrayWriter is requested by the user
-// to represent an Array output type in the simple function interface.
-// Eventually this will be removed and Array will be ArrayWriterT once all proxy
-// types are implemented.
 template <typename ELEMENT>
-struct ArrayWriterT {
-  using element_type = ELEMENT;
-
-  static_assert(
-      !isVariadicType<element_type>::value,
-      "Array elements cannot be Variadic");
-
- private:
-  ArrayWriterT() {}
-};
-
-// This is a temporary type to be used when the fast MapWriter is requested by
-// the user to represent a map output type in the simple function interface.
-// Eventually this will be removed and joined with Map once all writers
-// types are implemented.
-template <typename K, typename V>
-struct MapWriterT {
-  using key_type = K;
-  using value_type = V;
-
-  static_assert(
-      !isVariadicType<key_type>::value,
-      "Map keys cannot be Variadic");
-  static_assert(
-      !isVariadicType<value_type>::value,
-      "Map values cannot be Variadic");
-
-  MapWriterT() = delete;
-};
+using ArrayWriterT = Array<ELEMENT>;
 
 template <typename... T>
 struct Row {
@@ -1389,18 +1462,6 @@ struct Row {
 
  private:
   Row() {}
-};
-
-template <typename... T>
-struct RowWriterT {
-  template <size_t idx>
-  using type_at = typename std::tuple_element<idx, std::tuple<T...>>::type;
-
-  static_assert(
-      std::conjunction<std::bool_constant<!isVariadicType<T>::value>...>::value,
-      "Struct fields cannot be Variadic");
-
-  RowWriterT() = delete;
 };
 
 struct DynamicRow {
@@ -1513,13 +1574,6 @@ struct CppToType<Map<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
   }
 };
 
-template <typename KEY, typename VAL>
-struct CppToType<MapWriterT<KEY, VAL>> : public TypeTraits<TypeKind::MAP> {
-  static auto create() {
-    return MAP(CppToType<KEY>::create(), CppToType<VAL>::create());
-  }
-};
-
 template <typename ELEMENT>
 struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
   static auto create() {
@@ -1527,22 +1581,8 @@ struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
   }
 };
 
-template <typename ELEMENT>
-struct CppToType<ArrayWriterT<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
-  static auto create() {
-    return ARRAY(CppToType<ELEMENT>::create());
-  }
-};
-
 template <typename... T>
 struct CppToType<Row<T...>> : public TypeTraits<TypeKind::ROW> {
-  static auto create() {
-    return ROW({CppToType<T>::create()...});
-  }
-};
-
-template <typename... T>
-struct CppToType<RowWriterT<T...>> : public TypeTraits<TypeKind::ROW> {
   static auto create() {
     return ROW({CppToType<T>::create()...});
   }

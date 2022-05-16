@@ -36,8 +36,7 @@ HashAggregation::HashAggregation(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()),
       isPartialOutput_(isPartialOutput(aggregationNode->step())),
       isDistinct_(aggregationNode->aggregates().empty()),
-      isGlobal_(aggregationNode->groupingKeys().empty()),
-      hasPreGroupedKeys_(!aggregationNode->preGroupedKeys().empty()) {
+      isGlobal_(aggregationNode->groupingKeys().empty()) {
   auto inputType = aggregationNode->sources()[0]->outputType();
 
   auto numHashers = aggregationNode->groupingKeys().size();
@@ -114,7 +113,7 @@ HashAggregation::HashAggregation(
   }
 
   if (isDistinct_) {
-    for (ChannelIndex i = 0; i < hashers.size(); ++i) {
+    for (auto i = 0; i < hashers.size(); ++i) {
       identityProjections_.emplace_back(hashers[i]->channel(), i);
     }
   }
@@ -132,17 +131,36 @@ HashAggregation::HashAggregation(
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
-  input_ = input;
   if (!pushdownChecked_) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
   }
-  groupingSet_->addInput(input_, mayPushdown_);
+
+  groupingSet_->addInput(input, mayPushdown_);
   if (isPartialOutput_ &&
       groupingSet_->allocatedBytes() > maxPartialAggregationMemoryUsage_) {
     partialFull_ = true;
   }
-  newDistincts_ = isDistinct_ && !groupingSet_->hashLookup().newGroups.empty();
+
+  if (isDistinct_) {
+    newDistincts_ = !groupingSet_->hashLookup().newGroups.empty();
+
+    if (newDistincts_) {
+      // Save input to use for output in getOutput().
+      input_ = input;
+    }
+  }
+}
+
+void HashAggregation::prepareOutput(vector_size_t size) {
+  if (output_) {
+    VectorPtr output = std::move(output_);
+    BaseVector::prepareForReuse(output, size);
+    output_ = std::static_pointer_cast<RowVector>(output);
+  } else {
+    output_ = std::static_pointer_cast<RowVector>(
+        BaseVector::create(outputType_, size, pool()));
+  }
 }
 
 RowVectorPtr HashAggregation::getOutput() {
@@ -191,12 +209,11 @@ RowVectorPtr HashAggregation::getOutput() {
 
   auto batchSize = isGlobal_ ? 1 : outputBatchSize_;
 
-  // TODO Figure out how to re-use 'result' safely.
-  auto result = std::static_pointer_cast<RowVector>(
-      BaseVector::create(outputType_, batchSize, operatorCtx_->pool()));
+  // Reuse output vectors if possible.
+  prepareOutput(batchSize);
 
   bool hasData = groupingSet_->getOutput(
-      batchSize, isPartialOutput_, &resultIterator_, result);
+      batchSize, isPartialOutput_, &resultIterator_, output_);
   if (!hasData) {
     resultIterator_.reset();
 
@@ -210,7 +227,7 @@ RowVectorPtr HashAggregation::getOutput() {
     }
     return nullptr;
   }
-  return result;
+  return output_;
 }
 
 bool HashAggregation::isFinished() {

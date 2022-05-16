@@ -34,12 +34,14 @@ void PlanNodeStats::add(const OperatorStats& stats) {
 void PlanNodeStats::addTotals(const OperatorStats& stats) {
   inputRows += stats.inputPositions;
   inputBytes += stats.inputBytes;
+  inputVectors += stats.inputVectors;
 
   rawInputRows += stats.rawInputPositions;
   rawInputBytes += stats.rawInputBytes;
 
   outputRows += stats.outputPositions;
   outputBytes += stats.outputBytes;
+  outputVectors += stats.outputVectors;
 
   cpuWallTiming.add(stats.addInputTiming);
   cpuWallTiming.add(stats.getOutputTiming);
@@ -48,6 +50,7 @@ void PlanNodeStats::addTotals(const OperatorStats& stats) {
   blockedWallNanos += stats.blockedWallNanos;
 
   peakMemoryBytes += stats.memoryStats.peakTotalMemoryReservation;
+  numMemoryAllocations += stats.memoryStats.numMemoryAllocations;
 
   for (const auto& [name, runtimeStats] : stats.runtimeStats) {
     if (UNLIKELY(customStats.count(name) == 0)) {
@@ -73,17 +76,18 @@ std::string PlanNodeStats::toString(bool includeInputStats) const {
   std::stringstream out;
   if (includeInputStats) {
     out << "Input: " << inputRows << " rows (" << succinctBytes(inputBytes)
-        << "), ";
+        << ", " << inputVectors << " batches), ";
     if ((rawInputRows > 0) && (rawInputRows != inputRows)) {
       out << "Raw Input: " << rawInputRows << " rows ("
           << succinctBytes(rawInputBytes) << "), ";
     }
   }
   out << "Output: " << outputRows << " rows (" << succinctBytes(outputBytes)
-      << ")"
+      << ", " << outputVectors << " batches)"
       << ", Cpu time: " << succinctNanos(cpuWallTiming.cpuNanos)
       << ", Blocked wall time: " << succinctNanos(blockedWallNanos)
-      << ", Peak memory: " << succinctBytes(peakMemoryBytes);
+      << ", Peak memory: " << succinctBytes(peakMemoryBytes)
+      << ", Memory allocations: " << numMemoryAllocations;
 
   if (numDrivers > 0) {
     out << ", Threads: " << numDrivers;

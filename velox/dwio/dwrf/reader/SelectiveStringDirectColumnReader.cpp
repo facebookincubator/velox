@@ -140,6 +140,10 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     int32_t start,
     const int32_t* rows,
     int32_t row) {
+  // If we haven't read in a buffer yet.
+  if (!bufferStart_) {
+    return false;
+  }
   const char* data = bufferStart_ + start + bytesToSkip_;
   if (!data || bufferEnd_ - data < start + 8 * 12) {
     return false;
@@ -168,8 +172,8 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
       return false;
     }
     result[resultIndex] = length;
-    auto first16 = *reinterpret_cast<const __m128_u*>(data);
-    *reinterpret_cast<__m128_u*>(result + resultIndex + 1) = first16;
+    auto first16 = xsimd::make_sized_batch_t<char, 16>::load_unaligned(data);
+    first16.store_unaligned(reinterpret_cast<char*>(result + resultIndex + 1));
     if (length <= 12) {
       data += length;
       *reinterpret_cast<int64_t*>(
@@ -182,7 +186,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
     }
     *reinterpret_cast<char**>(result + resultIndex + 2) =
         rawStringBuffer_ + rawUsed;
-    *reinterpret_cast<__m128_u*>(rawStringBuffer_ + rawUsed) = first16;
+    first16.store_unaligned<char>(rawStringBuffer_ + rawUsed);
     if (length > 16) {
       size_t copySize = bits::roundUp(length - 16, 16);
       VELOX_CHECK_LE(data + copySize, bufferEnd_);
@@ -251,7 +255,9 @@ folly::StringPiece SelectiveStringDirectColumnReader::readValue(
     int32_t length) {
   skipBytes(bytesToSkip_, blobStream_.get(), bufferStart_, bufferEnd_);
   bytesToSkip_ = 0;
-  if (bufferStart_ + length <= bufferEnd_) {
+  // bufferStart_ may be null if length is 0 and this is the first string
+  // we're reading.
+  if (bufferEnd_ - bufferStart_ >= length) {
     bytesToSkip_ = length;
     return folly::StringPiece(bufferStart_, length);
   }

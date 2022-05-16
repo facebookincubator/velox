@@ -63,12 +63,15 @@ class TableScan : public SourceOperator {
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   bool needNewSplit_ = true;
   std::shared_ptr<connector::Connector> connector_;
-  std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
+  std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::shared_ptr<connector::DataSource> dataSource_;
   bool noMoreSplits_ = false;
   // Dynamic filters to add to the data source when it gets created.
   std::unordered_map<ChannelIndex, std::shared_ptr<common::Filter>>
       pendingDynamicFilters_;
   int32_t readBatchSize_{kDefaultBatchSize};
+
+  // String shown in ExceptionContext inside DataSource and LazyVector loading.
+  std::string debugString_;
 };
 } // namespace facebook::velox::exec

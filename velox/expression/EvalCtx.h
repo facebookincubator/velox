@@ -33,6 +33,9 @@ class EvalCtx {
  public:
   EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row);
 
+  /// For testing only.
+  explicit EvalCtx(core::ExecCtx* execCtx);
+
   const RowVector* row() const {
     return row_;
   }
@@ -188,7 +191,7 @@ class EvalCtx {
       const VectorPtr& localResult,
       const SelectivityVector& rows,
       VectorPtr* result) const {
-    if (*result && !isFinalSelection()) {
+    if (*result && !isFinalSelection() && *finalSelection() != rows) {
       BaseVector::ensureWritable(
           rows, (*result)->type(), (*result)->pool(), result);
       (*result)->copy(localResult.get(), rows, nullptr);

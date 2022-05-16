@@ -54,14 +54,14 @@ HiveTableHandle::~HiveTableHandle() {}
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
-  out << "Table: " << tableName_;
+  out << "table: " << tableName_;
   if (!subfieldFilters_.empty()) {
     // Sort filters by subfield for deterministic output.
     std::map<std::string, common::Filter*> orderedFilters;
     for (const auto& [field, filter] : subfieldFilters_) {
       orderedFilters[field.toString()] = filter.get();
     }
-    out << ", Filters: [";
+    out << ", range filters: [";
     bool notFirstFilter = false;
     for (const auto& [field, filter] : orderedFilters) {
       if (notFirstFilter) {
@@ -71,6 +71,9 @@ std::string HiveTableHandle::toString() const {
       notFirstFilter = true;
     }
     out << "]";
+  }
+  if (remainingFilter_) {
+    out << ", remaining filter: (" << remainingFilter_->toString() << ")";
   }
   return out.str();
 }
@@ -157,10 +160,10 @@ static void makeFieldSpecs(
   }
 }
 
-std::unique_ptr<common::ScanSpec> makeScanSpec(
+std::shared_ptr<common::ScanSpec> makeScanSpec(
     const SubfieldFilters& filters,
     const std::shared_ptr<const RowType>& rowType) {
-  auto spec = std::make_unique<common::ScanSpec>("root");
+  auto spec = std::make_shared<common::ScanSpec>("root");
   makeFieldSpecs("", 0, rowType, spec.get());
 
   for (auto& pair : filters) {
@@ -270,7 +273,7 @@ HiveDataSource::HiveDataSource(
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
 
-  rowReaderOpts_.setScanSpec(scanSpec_.get());
+  rowReaderOpts_.setScanSpec(scanSpec_);
 
   ioStats_ = std::make_shared<dwio::common::IoStatistics>();
 }
@@ -404,7 +407,7 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         ioStats_,
         executor_,
         readerOpts_);
-    readerOpts_.setBufferedInputFactory(bufferedInputFactory_.get());
+    readerOpts_.setBufferedInputFactory(bufferedInputFactory_);
   } else if (dataCache_) {
     auto dataCacheConfig = std::make_shared<dwio::common::DataCacheConfig>();
     dataCacheConfig->cache = dataCache_;

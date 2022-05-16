@@ -18,57 +18,20 @@
 #include <algorithm>
 #include <array>
 #include <random>
+#include "velox/common/file/FileSystems.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
-#include "velox/dwio/type/fbhive/HiveTypeParser.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/exec/VectorHasher.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/exec/tests/utils/RowContainerTestBase.h"
+#include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::test;
-using namespace facebook::velox::dwio;
 
-class RowContainerTest : public testing::Test {
+class RowContainerTest : public exec::test::RowContainerTestBase {
  protected:
-  void SetUp() override {
-    pool_ = memory::getDefaultScopedMemoryPool();
-    mappedMemory_ = memory::MappedMemory::getInstance();
-  }
-
-  RowVectorPtr makeDataset(
-      const std::string& columns,
-      const size_t size,
-      std::function<void(RowVectorPtr)> customizeData) {
-    std::string schema = fmt::format("struct<{}>", columns);
-    facebook::velox::dwio::type::fbhive::HiveTypeParser parser;
-    auto rowType =
-        std::dynamic_pointer_cast<const RowType>(parser.parse(schema));
-    auto batch = std::static_pointer_cast<RowVector>(
-        BatchMaker::createBatch(rowType, size, *pool_));
-    if (customizeData) {
-      customizeData(batch);
-    }
-    return batch;
-  }
-
-  std::unique_ptr<RowContainer> makeRowContainer(
-      const std::vector<TypePtr>& keyTypes,
-      const std::vector<TypePtr>& dependentTypes) {
-    static const std::vector<std::unique_ptr<Aggregate>> kEmptyAggregates;
-    return std::make_unique<RowContainer>(
-        keyTypes,
-        false,
-        kEmptyAggregates,
-        dependentTypes,
-        true,
-        true,
-        true,
-        true,
-        mappedMemory_,
-        ContainerRowSerde::instance());
-  }
-
   void testExtractColumnForOddRows(
       RowContainer& container,
       const std::vector<char*>& rows,
@@ -201,9 +164,6 @@ class RowContainerTest : public testing::Test {
     result = vectorMaker.flatVector<T>(sorted);
     assertEqualVectors(expected, result);
   }
-
-  std::unique_ptr<memory::MemoryPool> pool_;
-  memory::MappedMemory* mappedMemory_;
 };
 
 namespace {
@@ -264,28 +224,39 @@ TEST_F(RowContainerTest, storeExtractArrayOfVarchar) {
 TEST_F(RowContainerTest, types) {
   constexpr int32_t kNumRows = 100;
   auto batch = makeDataset(
-      "bool_val:boolean,"
-      "tiny_val:tinyint,"
-      "small_val:bigint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "float_val:float,"
-      "double_val:double,"
-      "string_val:string,"
-      "array_val:array<array<string>>,"
-      "struct_val:struct<s_int:int, s_array:array<float>>,"
-      "map_val:map<string, map<bigint, struct<s2_int:int, s2_string:string>>>"
-      "bool_val:boolean,"
-      "tiny_val:tinyint,"
-      "small_val:bigint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "float_val:float,"
-      "double_val:double,"
-      "string_val:string,"
-      "array_val:array<array<string>>,"
-      "struct_val:struct<s_int:int, s_array:array<float>>,"
-      "map_val:map<string, map<bigint, struct<s2_int:int, s2_string:string>>>",
+      ROW(
+          {{"bool_val", BOOLEAN()},
+           {"tiny_val", TINYINT()},
+           {"small_val", SMALLINT()},
+           {"int_val", INTEGER()},
+           {"long_val", BIGINT()},
+           {"float_val", REAL()},
+           {"double_val", DOUBLE()},
+           {"string_val", VARCHAR()},
+           {"array_val", ARRAY(VARCHAR())},
+           {"struct_val",
+            ROW({{"s_int", INTEGER()}, {"s_array", ARRAY(REAL())}})},
+           {"map_val",
+            MAP(VARCHAR(),
+                MAP(BIGINT(),
+                    ROW({{"s2_int", INTEGER()}, {"s2_string", VARCHAR()}})))},
+
+           {"bool_val2", BOOLEAN()},
+           {"tiny_val2", TINYINT()},
+           {"small_val2", SMALLINT()},
+           {"int_val2", INTEGER()},
+           {"long_val2", BIGINT()},
+           {"float_val2", REAL()},
+           {"double_val2", DOUBLE()},
+           {"string_val2", VARCHAR()},
+           {"array_val2", ARRAY(VARCHAR())},
+           {"struct_val2",
+            ROW({{"s_int", INTEGER()}, {"s_array", ARRAY(REAL())}})},
+           {"map_val2",
+            MAP(VARCHAR(),
+                MAP(BIGINT(),
+                    ROW({{"s2_int", INTEGER()}, {"s2_string", VARCHAR()}})))}}),
+
       kNumRows,
       [](RowVectorPtr rows) {
         auto strings =
@@ -321,7 +292,8 @@ TEST_F(RowContainerTest, types) {
   EXPECT_EQ(kNumRows, data->numRows());
   std::vector<char*> rows(kNumRows);
   RowContainerIterator iter;
-  EXPECT_EQ(kNumRows, data->listRows(&iter, kNumRows, rows.data()));
+
+  EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), kNumRows);
   EXPECT_EQ(data->listRows(&iter, kNumRows, rows.data()), 0);
 
   checkSizes(rows, *data);
@@ -387,6 +359,11 @@ TEST_F(RowContainerTest, types) {
       }
     }
   }
+  // We check that there is unused space in rows and variable length
+  // data.
+  auto free = data->freeSpace();
+  EXPECT_LT(0, free.first);
+  EXPECT_LT(0, free.second);
 }
 
 TEST_F(RowContainerTest, erase) {
@@ -434,6 +411,32 @@ TEST_F(RowContainerTest, erase) {
   auto newRow = data->newRow();
   EXPECT_EQ(rowSet.end(), rowSet.find(newRow));
   data->checkConsistency();
+  data->clear();
+  EXPECT_EQ(0, data->numRows());
+  auto free = data->freeSpace();
+  EXPECT_EQ(0, free.first);
+  EXPECT_EQ(0, free.second);
+  data->checkConsistency();
+}
+
+TEST_F(RowContainerTest, initialNulls) {
+  std::vector<TypePtr> keys{INTEGER()};
+  std::vector<TypePtr> dependent{INTEGER()};
+  // Join build.
+  auto data = makeRowContainer(keys, dependent, true);
+  auto row = data->newRow();
+  auto isNullAt = [](const RowContainer& data, const char* row, int32_t i) {
+    auto column = data.columnAt(i);
+    return RowContainer::isNullAt(row, column.nullByte(), column.nullMask());
+  };
+
+  EXPECT_FALSE(isNullAt(*data, row, 0));
+  EXPECT_FALSE(isNullAt(*data, row, 1));
+  // Non-join build.
+  data = makeRowContainer(keys, dependent, false);
+  row = data->newRow();
+  EXPECT_FALSE(isNullAt(*data, row, 0));
+  EXPECT_FALSE(isNullAt(*data, row, 1));
 }
 
 TEST_F(RowContainerTest, rowSize) {

@@ -17,7 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 
 namespace facebook::velox {
@@ -458,9 +458,11 @@ TEST_F(VectorReaderTest, variadicContainsNull) {
       [](vector_size_t row) { return row; },
       [](vector_size_t row) { return row % 5 == 2; });
   SelectivityVector rows(10);
-  exec::EvalCtx ctx(&execCtx_, nullptr, nullptr);
-  exec::DecodedArgs args(
-      rows, {field1Vector, field2Vector, field3Vector}, &ctx);
+  exec::EvalCtx ctx(&execCtx_);
+  std::vector<facebook::velox::exec::LocalDecodedVector> args;
+  for (const auto& vector : {field1Vector, field2Vector, field3Vector}) {
+    args.emplace_back(&ctx, *vector, rows);
+  }
   exec::VectorReader<Variadic<int32_t>> reader(args, 0);
 
   // Row without NULLs.
@@ -530,9 +532,11 @@ TEST_F(VectorReaderTest, dictionaryEncodedVariadicContainsNull) {
   auto field3Vector = wrapInDictionary(field3indices, size, field3BaseVector);
 
   SelectivityVector rows(10);
-  exec::EvalCtx ctx(&execCtx_, nullptr, nullptr);
-  exec::DecodedArgs args(
-      rows, {field1Vector, field2Vector, field3Vector}, &ctx);
+  exec::EvalCtx ctx(&execCtx_);
+  std::vector<facebook::velox::exec::LocalDecodedVector> args;
+  for (const auto& vector : {field1Vector, field2Vector, field3Vector}) {
+    args.emplace_back(&ctx, *vector, rows);
+  }
   exec::VectorReader<Variadic<int32_t>> reader(args, 0);
 
   // Row without NULLs.

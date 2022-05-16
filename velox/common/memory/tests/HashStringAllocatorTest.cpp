@@ -17,6 +17,7 @@
 
 #include <folly/Random.h>
 
+#include <folly/container/F14Map.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
@@ -157,6 +158,44 @@ TEST_F(HashStringAllocatorTest, multipart) {
   instance_->checkConsistency();
 }
 
+TEST_F(HashStringAllocatorTest, rewrite) {
+  ByteStream stream(instance_.get());
+  auto header = instance_->allocate(5);
+  EXPECT_EQ(16, header->size()); // Rounds up to kMinAlloc.
+  HashStringAllocator::Position current{header, header->begin()};
+  for (auto i = 0; i < 10; ++i) {
+    instance_->extendWrite(current, stream);
+    stream.appendOne(123456789012345LL);
+    current = instance_->finishWrite(stream, 0);
+    auto offset = HashStringAllocator::offset(header, current);
+    EXPECT_EQ((i + 1) * sizeof(int64_t), offset);
+    // The allocated writable space from 'header' is at least the amount
+    // written.
+    auto avail = HashStringAllocator::available({header, header->begin()});
+    EXPECT_LE((i + 1) * sizeof(int64_t), avail);
+  }
+  EXPECT_EQ(-1, HashStringAllocator::offset(header, {nullptr, nullptr}));
+  for (auto repeat = 0; repeat < 2; ++repeat) {
+    auto position = HashStringAllocator::seek(header, sizeof(int64_t));
+    // We write the words at index 1 and 2.
+    instance_->extendWrite(position, stream);
+    stream.appendOne(12345LL);
+    stream.appendOne(67890LL);
+    position = instance_->finishWrite(stream, 0);
+    EXPECT_EQ(
+        3 * sizeof(int64_t), HashStringAllocator::offset(header, position));
+    HashStringAllocator::prepareRead(header, stream);
+    EXPECT_EQ(123456789012345LL, stream.read<int64_t>());
+    EXPECT_EQ(12345LL, stream.read<int64_t>());
+    EXPECT_EQ(67890LL, stream.read<int64_t>());
+  }
+  // The stream contains 3 int64_t's.
+  auto end = HashStringAllocator::seek(header, 3 * sizeof(int64_t));
+  EXPECT_EQ(0, HashStringAllocator::available(end));
+  instance_->ensureAvailable(32, end);
+  EXPECT_EQ(32, HashStringAllocator::available(end));
+}
+
 TEST_F(HashStringAllocatorTest, stlAllocator) {
   {
     std::vector<double, StlAllocator<double>> data(
@@ -237,4 +276,42 @@ TEST_F(HashStringAllocatorTest, stlAllocatorWithSet) {
 
   // We allow for some overhead for free lists after all is freed.
   EXPECT_LE(instance_->retainedSize() - instance_->freeSpace(), 100);
+}
+
+TEST_F(HashStringAllocatorTest, alignedStlAllocatorWithF14Map) {
+  {
+    folly::F14FastMap<
+        int32_t,
+        double,
+        std::hash<int32_t>,
+        std::equal_to<int32_t>,
+        AlignedStlAllocator<std::pair<const int32_t, double>, 16>>
+        map(AlignedStlAllocator<std::pair<const int32_t, double>, 16>(
+            instance_.get()));
+
+    for (auto i = 0; i < 10'000; i++) {
+      map.try_emplace(i, i + 0.05);
+    }
+    for (auto i = 0; i < 10'000; i++) {
+      ASSERT_EQ(1, map.count(i));
+    }
+
+    map.clear();
+    for (auto i = 0; i < 10'000; i++) {
+      ASSERT_EQ(0, map.count(i));
+    }
+
+    for (auto i = 10'000; i < 20'000; i++) {
+      map.try_emplace(i, i + 0.15);
+    }
+    for (auto i = 10'000; i < 20'000; i++) {
+      ASSERT_EQ(1, map.count(i));
+    }
+  }
+
+  instance_->checkConsistency();
+
+  // We allow for some overhead for free lists after all is freed. Map tends to
+  // generate more free blocks at the end, so we loosen the upper bound a bit.
+  EXPECT_LE(instance_->retainedSize() - instance_->freeSpace(), 130);
 }

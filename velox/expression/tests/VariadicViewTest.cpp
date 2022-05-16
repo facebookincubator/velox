@@ -16,7 +16,7 @@
 
 #include "glog/logging.h"
 #include "gtest/gtest.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 
@@ -60,8 +60,11 @@ class VariadicViewTest : public functions::test::FunctionBaseTest {
       vectors.emplace_back(makeNullableFlatVector(vector));
     }
     SelectivityVector rows(vectors[0]->size());
-    EvalCtx ctx(&execCtx_, nullptr, nullptr);
-    DecodedArgs args(rows, vectors, &ctx);
+    EvalCtx ctx(&execCtx_);
+    std::vector<facebook::velox::exec::LocalDecodedVector> args;
+    for (const auto& vector : vectors) {
+      args.emplace_back(&ctx, *vector, rows);
+    }
 
     size_t startIndex = additionalVectors.size();
     VectorReader<Variadic<int64_t>> reader(args, startIndex);
@@ -133,8 +136,11 @@ class VariadicViewTest : public functions::test::FunctionBaseTest {
       vectors.emplace_back(makeNullableFlatVector(vector));
     }
     SelectivityVector rows(vectors[0]->size());
-    EvalCtx ctx(&execCtx_, nullptr, nullptr);
-    DecodedArgs args(rows, vectors, &ctx);
+    EvalCtx ctx(&execCtx_);
+    std::vector<facebook::velox::exec::LocalDecodedVector> args;
+    for (const auto& vector : vectors) {
+      args.emplace_back(&ctx, *vector, rows);
+    }
 
     VectorReader<Variadic<int64_t>> reader(args, 0);
 
@@ -160,8 +166,11 @@ class VariadicViewTest : public functions::test::FunctionBaseTest {
       vectors.emplace_back(makeNullableFlatVector(vector));
     }
     SelectivityVector rows(vectors[0]->size());
-    EvalCtx ctx(&execCtx_, nullptr, nullptr);
-    DecodedArgs args(rows, vectors, &ctx);
+    EvalCtx ctx(&execCtx_);
+    std::vector<facebook::velox::exec::LocalDecodedVector> args;
+    for (const auto& vector : vectors) {
+      args.emplace_back(&ctx, *vector, rows);
+    }
 
     VectorReader<Variadic<int64_t>> reader(args, 0);
 
@@ -190,8 +199,11 @@ class VariadicViewTest : public functions::test::FunctionBaseTest {
       vectors.emplace_back(makeNullableFlatVector(vector));
     }
     SelectivityVector rows(vectors[0]->size());
-    EvalCtx ctx(&execCtx_, nullptr, nullptr);
-    DecodedArgs args(rows, vectors, &ctx);
+    EvalCtx ctx(&execCtx_);
+    std::vector<facebook::velox::exec::LocalDecodedVector> args;
+    for (const auto& vector : vectors) {
+      args.emplace_back(&ctx, *vector, rows);
+    }
 
     VectorReader<Variadic<int64_t>> reader(args, 0);
 
@@ -219,8 +231,11 @@ class VariadicViewTest : public functions::test::FunctionBaseTest {
       vectors.emplace_back(makeNullableFlatVector(vector));
     }
     SelectivityVector rows(vectors[0]->size());
-    EvalCtx ctx(&execCtx_, nullptr, nullptr);
-    DecodedArgs args(rows, vectors, &ctx);
+    EvalCtx ctx(&execCtx_);
+    std::vector<facebook::velox::exec::LocalDecodedVector> args;
+    for (const auto& vector : vectors) {
+      args.emplace_back(&ctx, *vector, rows);
+    }
 
     VectorReader<Variadic<int64_t>> reader(args, 0);
 
@@ -287,8 +302,11 @@ TEST_F(NullableVariadicViewTest, notNullContainer) {
     vectors.emplace_back(makeNullableFlatVector(vector));
   }
   SelectivityVector rows(vectors[0]->size());
-  EvalCtx ctx(&execCtx_, nullptr, nullptr);
-  DecodedArgs args(rows, vectors, &ctx);
+  EvalCtx ctx(&execCtx_);
+  std::vector<facebook::velox::exec::LocalDecodedVector> args;
+  for (const auto& vector : vectors) {
+    args.emplace_back(&ctx, *vector, rows);
+  }
 
   VectorReader<Variadic<int64_t>> reader(args, 0);
 
