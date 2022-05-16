@@ -113,10 +113,10 @@ if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
 endif()
 
-# If CODEGEN support isn't explicitly set, we guestimate the value based on the
-# compiler
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES
-                                            "Clang"))
+# Turn on Codegen only for Clang and non Mac systems.
+if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
+   AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
   message(STATUS "Enabling Codegen")
   set(VELOX_CODEGEN_SUPPORT True)
 else()
@@ -141,7 +141,8 @@ if(UNIX AND NOT APPLE)
   add_link_options("-Wl,-export-dynamic")
 endif()
 
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64"  AND ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64" AND ${CMAKE_SYSTEM_NAME} MATCHES
+                                                 "Darwin")
   set(ON_APPLE_M1 True)
 endif()
 
@@ -249,7 +250,7 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  if (ON_APPLE_M1)
+  if(ON_APPLE_M1)
     set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
   else()
     set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
