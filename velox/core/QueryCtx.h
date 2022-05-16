@@ -169,7 +169,7 @@ class VectorPool {
   VectorPtr
   get(const TypePtr& type, vector_size_t size, memory::MemoryPool& pool) {
     auto kind = static_cast<int32_t>(type->kind());
-    if (kind < kNumCachedVectorTypes) {
+    if (kind < kNumCachedVectorTypes && size <= kMaxRecycleSize) {
       return vectors_[kind].pop(type, size, pool);
     }
     return BaseVector::create(type, size, &pool);
@@ -178,7 +178,7 @@ class VectorPool {
   // Moves vector into 'this' if it is flat, recursively singly referenced and
   // there is space.
   void release(VectorPtr& vector) {
-    if (!vector.unique()) {
+    if (!vector.unique() || vector->size() > kMaxRecycleSize) {
       return;
     }
     auto kind = static_cast<int32_t>(vector->typeKind());
@@ -190,6 +190,9 @@ class VectorPool {
  private:
   static constexpr int32_t kNumCachedVectorTypes =
       static_cast<int32_t>(TypeKind::ARRAY);
+  // Max number of elements for a vector to be recyclable. The larger
+  // the batch the less the win from recycling.
+  static constexpr vector_size_t kMaxRecycleSize = 64 * 1024;
   static constexpr int32_t kNumPerType = 10;
   struct TypePool {
     int32_t size{0};
@@ -200,12 +203,7 @@ class VectorPool {
         return;
       }
       if (size < kNumPerType) {
-        if (vector->typeKind() == TypeKind::VARCHAR ||
-            vector->typeKind() == TypeKind::VARBINARY) {
-          vector->asUnchecked<FlatVector<StringView>>()
-              ->stringBuffers()
-              .clear();
-        }
+	vector->prepareForReuse();
         vectors[size++] = std::move(vector);
       }
     }
@@ -220,7 +218,7 @@ class VectorPool {
           // This is a recyclable vector, no need to check uniqueness.
           simd::memset(
               const_cast<uint64_t*>(result->rawNulls()),
-              bits::kNotNull,
+              bits::kNotNullByte,
               bits::roundUp(std::min<int32_t>(vectorSize, result->size()), 64) /
                   8);
         }
@@ -232,9 +230,6 @@ class VectorPool {
               0,
               std::min<int32_t>(vectorSize, result->size()) *
                   sizeof(StringView));
-          result->asUnchecked<FlatVector<StringView>>()
-              ->stringBuffers()
-              .clear();
         }
         if (result->size() != vectorSize) {
           result->resize(vectorSize);
