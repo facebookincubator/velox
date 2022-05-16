@@ -24,6 +24,7 @@
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SequenceVector.h"
 #include "velox/vector/TypeAliases.h"
+#include "velox/vector/VectorPool.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook {
@@ -504,13 +505,19 @@ void BaseVector::ensureWritable(
     const SelectivityVector& rows,
     const TypePtr& type,
     velox::memory::MemoryPool* pool,
-    VectorPtr* result) {
+    VectorPtr* result,
+    VectorPool* vectorPool) {
   if (!*result) {
-    *result = BaseVector::create(type, rows.size(), pool);
+    if (vectorPool) {
+      *result = vectorPool->get(type, rows.size(), *pool);
+    } else {
+      *result = BaseVector::create(type, rows.size(), pool);
+    }
     return;
   }
   auto resultType = (*result)->type();
   bool isUnknownType = resultType->containsUnknown();
+  const auto& createType = isUnknownType ? type : resultType;
   if ((*result)->encoding() == VectorEncoding::Simple::LAZY) {
     // TODO Figure out how to allow memory reuse for a newly loaded vector.
     // LazyVector holds a reference to loaded vector, hence, unique() check
@@ -531,8 +538,9 @@ void BaseVector::ensureWritable(
         if (!(*result)->isNullAt(0) && isFillType((*result)->typeKind())) {
           auto targetSize =
               std::max<vector_size_t>(rows.size(), (*result)->size());
-          auto copy = BaseVector::create(
-              isUnknownType ? type : resultType, targetSize, pool);
+          auto copy = vectorPool
+              ? vectorPool->get(createType, targetSize, *pool)
+              : BaseVector::create(createType, targetSize, pool);
           fill(**result, *copy);
           *result = copy;
           return;
@@ -547,8 +555,8 @@ void BaseVector::ensureWritable(
   // vector.
   auto targetSize = std::max<vector_size_t>(rows.size(), (*result)->size());
 
-  auto copy =
-      BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
+  auto copy = vectorPool ? vectorPool->get(createType, targetSize, *pool)
+                         : BaseVector::create(createType, targetSize, pool);
   SelectivityVector copyRows(
       std::min<vector_size_t>(targetSize, (*result)->size()));
   copyRows.deselect(rows);

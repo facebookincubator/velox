@@ -235,8 +235,8 @@ void SwitchExpr::evalSpecialForm(
 
         if (thenRows.get()->hasSelections()) {
           if (result) {
-            BaseVector::ensureWritable(
-                *thenRows.get(), result->type(), context.pool(), &result);
+            context.ensureWritable(
+                *thenRows.get(), result->type(), result);
           }
 
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
@@ -249,8 +249,8 @@ void SwitchExpr::evalSpecialForm(
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
     if (result) {
-      BaseVector::ensureWritable(
-          *remainingRows.get(), result->type(), context.pool(), &result);
+      context.ensureWritable(
+          *remainingRows.get(), result->type(), result);
     }
 
     if (hasElseClause_) {

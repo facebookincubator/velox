@@ -215,11 +215,18 @@ class EvalCtx {
       const SelectivityVector& rows,
       VectorPtr& result) const {
     if (result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result);
+      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result, &execCtx_->vectorPool());
       result->copy(localResult.get(), rows, nullptr);
     } else {
       result = localResult;
     }
+  }
+
+  void moveOrCopyResult(
+      const VectorPtr& localResult,
+      const SelectivityVector& rows,
+      VectorPtr* FOLLY_NONNULL result) const {
+    moveOrCopyResult(localResult, rows, *result);
   }
 
   VectorPtr getVector(const TypePtr& type, vector_size_t size) {
@@ -234,11 +241,13 @@ class EvalCtx {
     execCtx_->releaseVectors(vectors);
   }
 
-  void moveOrCopyResult(
-      const VectorPtr& localResult,
+  // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the pool of 'execCtx_' if needed.
+  void ensureWritable(
       const SelectivityVector& rows,
-      VectorPtr* FOLLY_NONNULL result) const {
-    moveOrCopyResult(localResult, rows, *result);
+      const TypePtr& type,
+      VectorPtr& result) {
+    BaseVector::ensureWritable(
+        rows, type, execCtx_->pool(), &result, &execCtx_->vectorPool());
   }
 
  private:
