@@ -203,7 +203,7 @@ class VectorPool {
         return;
       }
       if (size < kNumPerType) {
-	vector->prepareForReuse();
+        vector->prepareForReuse();
         vectors[size++] = std::move(vector);
       }
     }
