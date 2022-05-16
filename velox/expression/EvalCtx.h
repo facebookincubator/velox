@@ -237,7 +237,7 @@ class EvalCtx {
   VectorPool& vectorPool() const {
     return execCtx_->vectorPool();
   }
-  
+
   VectorPtr getVector(const TypePtr& type, vector_size_t size) {
     return execCtx_->getVector(type, size);
   }

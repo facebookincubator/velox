@@ -196,9 +196,7 @@ void FlatVector<T>::copyValuesAndNulls(
     }
     auto constant = source->asUnchecked<ConstantVector<T>>();
     T value = constant->valueAt(0);
-    rows.applyToSelected([&](int32_t row) {
-      rawValues_[row] = value;
-    });
+    rows.applyToSelected([&](int32_t row) { rawValues_[row] = value; });
     if (rawNulls) {
       bits::orBits(rawNulls, rows.asRange().bits(), rows.begin(), rows.end());
     }
