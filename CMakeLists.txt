@@ -138,6 +138,10 @@ if(UNIX AND NOT APPLE)
   add_link_options("-Wl,-export-dynamic")
 endif()
 
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64"  AND ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(ON_APPLE_M1 True)
+endif()
+
 # Required so velox code can be used in a dynamic library
 set(POSITION_INDEPENDENT_CODE True)
 
@@ -242,7 +246,11 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  if (ON_APPLE_M1)
+    set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  else()
+    set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  endif()
   find_package(ICU REQUIRED)
   include_directories(${ICU_INCLUDE_DIRS})
   link_directories("${ICU_INCLUDE_DIRS}/../lib")

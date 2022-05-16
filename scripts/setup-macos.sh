@@ -31,6 +31,11 @@ set -x # Print commands that are executed.
 FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt"
+
+if [ `uname -m` = "amr64" ]; then
+  COMPILER_FLAGS="-mcpu=apple-m1+crc"
+fi
+
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
