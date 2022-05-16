@@ -497,8 +497,8 @@ void fill(BaseVector& constant, BaseVector& target) {
     case TypeKind::DOUBLE:
       fillValues<int64_t>(constant, target);
       break;
-  default:
-    VELOX_FAIL("Unexpected typeKind {}", constant.typeKind());
+    default:
+      VELOX_FAIL("Unexpected typeKind {}", constant.typeKind());
   }
 }
 } // namespace
