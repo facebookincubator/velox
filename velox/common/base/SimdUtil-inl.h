@@ -31,6 +31,7 @@ namespace detail {
 
 template <typename T, typename A>
 int genericToBitMask(xsimd::batch_bool<T, A> mask) {
+  static_assert(mask.size <= 32);
   alignas(A::alignment()) bool tmp[mask.size];
   mask.store_aligned(tmp);
   int ans = 0;

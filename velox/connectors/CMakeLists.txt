@@ -18,3 +18,7 @@ target_link_libraries(velox_connector velox_config velox_vector)
 if(${VELOX_ENABLE_HIVE_CONNECTOR})
   add_subdirectory(hive)
 endif()
+
+if(${VELOX_ENABLE_TPCH_CONNECTOR})
+  add_subdirectory(tpch)
+endif()

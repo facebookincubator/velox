@@ -22,7 +22,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/CoreTypeSystem.h"
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/external/date/tz.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FunctionVector.h"
@@ -622,6 +622,7 @@ void CastExpr::evalSpecialForm(
   auto fromType = inputs_[0]->type();
   auto toType = std::const_pointer_cast<const Type>(type_);
 
+  stats_.numProcessedVectors += 1;
   stats_.numProcessedRows += rows.countSelected();
   auto timer = cpuWallTimer();
   apply(rows, input, context, fromType, toType, result);

@@ -101,7 +101,7 @@ std::string_view toTableName(Table table) {
   return ""; // make gcc happy.
 }
 
-constexpr size_t getRowCount(Table table, size_t scaleFactor) {
+size_t getRowCount(Table table, size_t scaleFactor) {
   switch (table) {
     case Table::TBL_PART:
       return 200'000 * scaleFactor;
@@ -319,6 +319,10 @@ RowTypePtr getTableSchema(Table table) {
     }
   }
   return nullptr; // make gcc happy.
+}
+
+TypePtr resolveTpchColumn(Table table, const std::string& columnName) {
+  return getTableSchema(table)->findChild(columnName);
 }
 
 RowVectorPtr genTpchOrders(
