@@ -140,7 +140,7 @@ pattern format.
 Convenience Extraction Functions
 --------------------------------
 
-These functions are supported for TIMESTAMP and DATE values.
+These functions are supported for TIMESTAMP, DATE, and Presto's TIMESTAMPWITHTIMEZONE values.
 
 .. function:: day(x) -> bigint
 
@@ -172,14 +172,6 @@ These functions are supported for TIMESTAMP and DATE values.
 
     Returns the hour of the day from ``x``. The value ranges from 0 to 23.
 
-.. function:: millisecond(x) -> int64
-
-    Returns the millisecond of the second from ``x``.
-
-.. function:: minute(x) -> bigint
-
-    Returns the minute of the hour from ``x``.
-
 .. function:: month(x) -> bigint
 
     Returns the month of the year from ``x``.
@@ -187,10 +179,6 @@ These functions are supported for TIMESTAMP and DATE values.
 .. function:: quarter(x) -> bigint
 
     Returns the quarter of the year from ``x``. The value ranges from ``1`` to ``4``.
-
-.. function:: second(x) -> bigint
-
-    Returns the second of the minute from ``x``.
 
 .. function:: year(x) -> bigint
 
@@ -203,3 +191,17 @@ These functions are supported for TIMESTAMP and DATE values.
 .. function:: yow(x) -> bigint
 
     This is an alias for :func:`year_of_week`.
+
+These functions are supported for TIMESTAMP and DATE values.
+
+.. function:: millisecond(x) -> int64
+
+    Returns the millisecond of the second from ``x``.
+
+.. function:: minute(x) -> bigint
+
+    Returns the minute of the hour from ``x``.
+
+.. function:: second(x) -> bigint
+
+    Returns the second of the minute from ``x``.
