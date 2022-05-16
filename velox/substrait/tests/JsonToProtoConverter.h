@@ -13,25 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include "velox/expression/ControlExpr.h"
+#include <google/protobuf/util/json_util.h>
 
-namespace facebook::velox::exec {
-
-const char* const kCoalesce = "coalesce";
-
-class CoalesceExpr : public SpecialForm {
+class JsonToProtoConverter {
  public:
-  CoalesceExpr(TypePtr type, std::vector<ExprPtr>&& inputs);
-
-  void evalSpecialForm(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      VectorPtr& result) override;
-
-  bool propagatesNulls() const override {
-    return false;
-  }
+  /// Reconstruct Protobuf message from Json file.
+  static void readFromFile(
+      const std::string& msgPath,
+      google::protobuf::Message& msg);
 };
-} // namespace facebook::velox::exec

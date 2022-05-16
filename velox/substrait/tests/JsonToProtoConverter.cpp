@@ -13,25 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include "velox/expression/ControlExpr.h"
+#include "velox/substrait/tests/JsonToProtoConverter.h"
+#include <fstream>
+#include <sstream>
 
-namespace facebook::velox::exec {
-
-const char* const kCoalesce = "coalesce";
-
-class CoalesceExpr : public SpecialForm {
- public:
-  CoalesceExpr(TypePtr type, std::vector<ExprPtr>&& inputs);
-
-  void evalSpecialForm(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      VectorPtr& result) override;
-
-  bool propagatesNulls() const override {
-    return false;
-  }
-};
-} // namespace facebook::velox::exec
+void JsonToProtoConverter::readFromFile(
+    const std::string& msgPath,
+    google::protobuf::Message& msg) {
+  // Read json file and resume the Substrait plan.
+  std::ifstream msgJson(msgPath);
+  std::stringstream buffer;
+  buffer << msgJson.rdbuf();
+  std::string msgData = buffer.str();
+  google::protobuf::util::JsonStringToMessage(msgData, &msg);
+}
