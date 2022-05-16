@@ -473,6 +473,33 @@ void BaseVector::ensureWritable(const SelectivityVector& rows) {
   this->resize(newSize);
 }
 
+namespace {
+bool isFillType(TypeKind kind) {
+  return kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::REAL || kind == TypeKind::DOUBLE;
+}
+
+template <typename T>
+void fillValues(const BaseVector& constant, BaseVector& target) {
+  auto value = constant.asUnchecked<ConstantVector<T>>()->valueAt(0);
+  auto values = target.asUnchecked<FlatVector<T>>()->mutableRawValues();
+  std::fill(values, values + target.size(), value);
+}
+
+void fill(BaseVector& constant, BaseVector& target) {
+  switch (constant.typeKind()) {
+    case TypeKind::INTEGER:
+    case TypeKind::REAL:
+      fillValues<int32_t>(constant, target);
+      break;
+    case TypeKind::BIGINT:
+    case TypeKind::DOUBLE:
+      fillValues<int64_t>(constant, target);
+      break;
+  }
+}
+} // namespace
+
 void BaseVector::ensureWritable(
     const SelectivityVector& rows,
     const TypePtr& type,
@@ -500,6 +527,17 @@ void BaseVector::ensureWritable(
         (*result)->ensureWritable(rows);
         return;
       }
+      case VectorEncoding::Simple::CONSTANT:
+        if (!(*result)->isNullAt(0) && isFillType((*result)->typeKind())) {
+          auto targetSize =
+              std::max<vector_size_t>(rows.size(), (*result)->size());
+          auto copy = BaseVector::create(
+              isUnknownType ? type : resultType, targetSize, pool);
+          fill(**result, *copy);
+          *result = copy;
+          return;
+        }
+        break;
       default:
         break; /** NOOP **/
     }
@@ -621,8 +659,8 @@ bool isLazyNotLoaded(const BaseVector& vector) {
 
 // static
 bool BaseVector::isReusableFlatVector(const VectorPtr& vector) {
-  // If the main shared_ptr has more than one references, or if it's not a flat
-  // vector, can't reuse.
+  // If the main shared_ptr has more than one references, or if it's not a
+  // flat vector, can't reuse.
   if (!vector.unique() || !isFlat(vector->encoding())) {
     return false;
   }

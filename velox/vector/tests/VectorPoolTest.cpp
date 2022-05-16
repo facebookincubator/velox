@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/core/QueryCtx.h"
+#include "velox/vector/VectorPool.h"
 #include "velox/vector/tests/VectorTestBase.h"
 
 using namespace facebook::velox;
@@ -24,9 +24,7 @@ using namespace facebook::velox::test;
 
 class VectorPoolTest : public testing::Test, public VectorTestBase {
  protected:
-  void SetUp() {
-    execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), nullptr);
-  }
+  // Makes 'size' strings of ''stringSize' characters.  If 'hasNulls' is true, sets 1/5 of the strings to null. If 'overwriteNulls' is true, there are null flags but no null values.
   FlatVectorPtr<StringView> makeStrings(
       vector_size_t size,
       int32_t stringSize,
@@ -49,7 +47,7 @@ class VectorPoolTest : public testing::Test, public VectorTestBase {
     return vector;
   }
 
-  std::unique_ptr<core::ExecCtx> execCtx_;
+  VectorPool vectorPool_;
 };
 
 TEST_F(VectorPoolTest, strings) {
@@ -75,7 +73,7 @@ TEST_F(VectorPoolTest, strings) {
   for (auto& vector : vectors) {
     rawPointers.push_back(vector.get());
   }
-  execCtx_->releaseVectors(vectors);
+  vectorPool_.release(vectors);
   EXPECT_TRUE(!vectors[0]);
   EXPECT_FALSE(!vectors[1]);
   EXPECT_TRUE(!vectors[2]);
@@ -83,7 +81,7 @@ TEST_F(VectorPoolTest, strings) {
   EXPECT_FALSE(!vectors[4]);
   EXPECT_TRUE(!vectors[5]);
 
-  vectors[5] = execCtx_->getVector(VARCHAR(), 100);
+  vectors[5] = vectorPool_.get(VARCHAR(), 100, *pool_);
   EXPECT_EQ(vectors[5].get(), rawPointers[5]);
   // Strings zeroed out.
   EXPECT_EQ(0, vectors[5]->as<FlatVector<StringView>>()->valueAt(1).size());
@@ -91,17 +89,17 @@ TEST_F(VectorPoolTest, strings) {
   EXPECT_TRUE(
       vectors[5]->as<FlatVector<StringView>>()->stringBuffers().empty());
 
-  vectors[3] = execCtx_->getVector(VARCHAR(), 100);
+  vectors[3] = vectorPool_.get(VARCHAR(), 100, *pool_);
   EXPECT_EQ(vectors[3].get(), rawPointers[3]);
   // No nulls array.
   EXPECT_TRUE(!vectors[3]->rawNulls());
 
-  vectors[2] = execCtx_->getVector(VARCHAR(), 100);
+  vectors[2] = vectorPool_.get(VARCHAR(), 100, *pool_);
   EXPECT_FALSE(!vectors[2]->rawNulls());
   EXPECT_EQ(
       0, BaseVector::countNulls(vectors[2]->nulls(), 0, vectors[2]->size()));
 
-  vectors[0] = execCtx_->getVector(VARCHAR(), 100);
+  vectors[0] = vectorPool_.get(VARCHAR(), 100, *pool_);
   EXPECT_EQ(vectors[0].get(), rawPointers[0]);
   // No nulls buffer.
   EXPECT_TRUE(!vectors[0]->rawNulls());

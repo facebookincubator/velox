@@ -597,7 +597,7 @@ BooleanMix getFlatBool(
   const auto size = activeRows.end();
   switch (vector->encoding()) {
     case VectorEncoding::Simple::FLAT: {
-      auto values = vector->asFlatVector<bool>()->rawValues<uint64_t>();
+      auto values = vector->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
       if (!values) {
         return BooleanMix::kAllNull;
       }

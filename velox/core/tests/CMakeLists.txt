@@ -13,8 +13,8 @@
 # limitations under the License.
 
 add_executable(velox_core_test TestMetafunctions.cpp TestString.cpp
-                               VectorPoolTest.cpp TestTypeAnalysis.cpp)
+                               TestTypeAnalysis.cpp)
 
 add_test(velox_core_test velox_core_test)
 
-target_link_libraries(velox_core_test velox_core velox_vector gtest gtest_main)
+target_link_libraries(velox_core_test velox_core gtest gtest_main)
