@@ -19,8 +19,10 @@
 #include "folly/Random.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/common/Common.h"
 
 using namespace facebook::velox::dwrf;
+using namespace facebook::velox::dwio::common;
 
 TEST(ConfigTests, Set) {
   Config config;
