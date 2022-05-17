@@ -93,6 +93,10 @@ class HivePartitionFunctionBenchmark
 
   template <TypeKind KIND>
   void run(HivePartitionFunction* function) {
+    if (rowVectors_.find(KIND) == rowVectors_.end()) {
+      throw std::runtime_error(
+          fmt::format("Unsupported type {}.", mapTypeKindToName(KIND)));
+    }
     function->partition(*rowVectors_[KIND], partitions_);
   }
 
