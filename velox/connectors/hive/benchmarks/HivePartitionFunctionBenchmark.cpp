@@ -13,12 +13,14 @@ void BM_HivePartFunc(
     size_t,
     size_t vectorSize,
     size_t bucketCount,
-    const TypePtr& type) {
+    const TypePtr& type,
+    size_t stringLength = 0) {
   functions::test::FunctionBenchmarkBase benchmarkBase;
   folly::BenchmarkSuspender suspender;
 
   VectorFuzzer::Options opts;
   opts.vectorSize = vectorSize;
+  opts.stringLength = stringLength;
   VectorFuzzer fuzzer(opts, benchmarkBase.pool());
   auto vector = fuzzer.fuzzRow(ROW({type}));
 
@@ -38,13 +40,6 @@ void BM_HivePartFunc(
 }
 
 } // namespace
-
-BENCHMARK_NAMED_PARAM(
-    BM_HivePartFunc,
-    BIGINT_10M_ROWS_1K_BUCKETS,
-    10'000'000,
-    1'000,
-    BIGINT());
 
 BENCHMARK_NAMED_PARAM(
     BM_HivePartFunc,
@@ -76,6 +71,13 @@ BENCHMARK_NAMED_PARAM(
 
 BENCHMARK_NAMED_PARAM(
     BM_HivePartFunc,
+    BIGINT_10M_ROWS_1K_BUCKETS,
+    10'000'000,
+    1'000,
+    BIGINT());
+
+BENCHMARK_NAMED_PARAM(
+    BM_HivePartFunc,
     REAL_10M_ROWS_1K_BUCKETS,
     10'000'000,
     1'000,
@@ -101,6 +103,22 @@ BENCHMARK_NAMED_PARAM(
     10'000'000,
     1'000,
     DATE());
+
+BENCHMARK_NAMED_PARAM(
+    BM_HivePartFunc,
+    VARCHAR_10M_ROWS_1K_BUCKETS_20,
+    10'000'000,
+    1'000,
+    VARCHAR(),
+    20);
+
+BENCHMARK_RELATIVE_NAMED_PARAM(
+    BM_HivePartFunc,
+    VARCHAR_10M_ROWS_1K_BUCKETS_40,
+    10'000'000,
+    1'000,
+    VARCHAR(),
+    40);
 
 } // namespace facebook::velox::test
 
