@@ -229,8 +229,8 @@ void EvalCtx::setErrors(
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 
-  const VectorPtr& EvalCtx::getField(int32_t index) {
-    VectorPtr* field;
+const VectorPtr& EvalCtx::getField(int32_t index) {
+  VectorPtr* field;
   if (!peeledFields_.empty()) {
     field = &peeledFields_[index];
   } else {
@@ -284,7 +284,8 @@ const VectorPtr& EvalCtx::ensureFieldLoaded(
     // they contain a loaded lazyVector.
     if (encoding == VectorEncoding::Simple::LAZY) {
       // The top level vector was lazy. Replace with loaded.
-      return setFieldAfterLoad(index, field->asUnchecked<LazyVector>()->loadedVectorShared());
+      return setFieldAfterLoad(
+          index, field->asUnchecked<LazyVector>()->loadedVectorShared());
     } else {
       // Replaces nested LazyVectors with loaded vectors.
       field->loadedVector();
@@ -293,7 +294,9 @@ const VectorPtr& EvalCtx::ensureFieldLoaded(
   return field;
 }
 
-const VectorPtr& EvalCtx::setFieldAfterLoad(int32_t index, const VectorPtr& field) {
+const VectorPtr& EvalCtx::setFieldAfterLoad(
+    int32_t index,
+    const VectorPtr& field) {
   if (peeledFields_.size() > index && peeledFields_[index]) {
     peeledFields_[index] = field;
     // Make the top ;level vector reference the loaded instead of the lazy.
