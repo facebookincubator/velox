@@ -54,15 +54,11 @@ class FlatVector;
  */
 class BaseVector {
  public:
-  static constexpr SelectivityVector* kPreserveAll = nullptr;
-
   static constexpr uint64_t kNullHash = 1;
-
-  enum SerializeOp { kWrite, kRead, kCompare };
 
   BaseVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      TypePtr type,
       VectorEncoding::Simple encoding,
       BufferPtr nulls,
       size_t length,
@@ -163,7 +159,7 @@ class BaseVector {
     nullCount_ = newNullCount;
   }
 
-  const std::shared_ptr<const Type>& type() const {
+  const TypePtr& type() const {
     return type_;
   }
 
@@ -710,7 +706,7 @@ class BaseVector {
     nullCount_ = std::nullopt;
   }
 
-  std::shared_ptr<const Type> type_;
+  TypePtr type_;
   TypeKind typeKind_;
   const VectorEncoding::Simple encoding_;
   BufferPtr nulls_;
