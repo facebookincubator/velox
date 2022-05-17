@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/common/AbstractSeekableInputStream.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -46,9 +47,9 @@ class PositionProvider {
  * By extending Google's class, we get the ability to pass it directly
  * to the protobuf readers.
  */
-class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
+class SeekableInputStream : public dwio::common::AbstractSeekableInputStream {
  public:
-  ~SeekableInputStream() override = default;
+  ~SeekableInputStream() = default;
 
   virtual void seekToPosition(PositionProvider& position) = 0;
 

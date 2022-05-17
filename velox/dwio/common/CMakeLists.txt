@@ -23,6 +23,7 @@ add_library(
   Common.cpp
   DataBuffer.cpp
   DataSink.cpp
+  DecoderUtil.cpp
   DwioMetricsLog.cpp
   InputStream.cpp
   IoStatistics.cpp

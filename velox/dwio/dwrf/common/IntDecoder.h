@@ -23,7 +23,7 @@
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/InputStream.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/StreamUtil.h"
+#include "velox/dwio/common/StreamUtil.h"
 
 namespace facebook::velox::dwrf {
 
