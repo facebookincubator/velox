@@ -186,17 +186,18 @@ class DirectDecoder : public IntDecoder<isSigned> {
               folly::Range<const int32_t*>(rows, numRows),
               visitor.rawValues(numRows));
         }
-        dwio::common::processFixedWidthRun<T, filterOnly, false, Visitor::dense>(
-            rowsAsRange,
-            0,
-            rowsAsRange.size(),
-            hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
-                    : nullptr,
-            visitor.rawValues(numRows),
-            hasFilter ? visitor.outputRows(numRows) : nullptr,
-            numValues,
-            visitor.filter(),
-            visitor.hook());
+        dwio::common::
+            processFixedWidthRun<T, filterOnly, false, Visitor::dense>(
+                rowsAsRange,
+                0,
+                rowsAsRange.size(),
+                hasHook ? velox::iota(numRows, visitor.innerNonNullRows())
+                        : nullptr,
+                visitor.rawValues(numRows),
+                hasFilter ? visitor.outputRows(numRows) : nullptr,
+                numValues,
+                visitor.filter(),
+                visitor.hook());
       } else {
         dwio::common::fixedWidthScan<T, filterOnly, false>(
             rowsAsRange,

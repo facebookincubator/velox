@@ -16,6 +16,7 @@
 
 #include "velox/dwio/dwrf/common/Compression.h"
 
+#include "velox/dwio/common/Common.h"
 #include "velox/dwio/common/compression/LzoDecompressor.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/PagedInputStream.h"
@@ -27,7 +28,6 @@
 #include <zlib.h>
 #include <zstd.h>
 #include <zstd_errors.h>
-#include <dwio/common/Common.h>
 
 namespace facebook::velox::dwrf {
 

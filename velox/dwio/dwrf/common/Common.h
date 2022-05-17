@@ -19,7 +19,6 @@
 #include <string>
 
 #include <fmt/format.h>
-#include <dwio/common/Common.h>
 
 #include "folly/Range.h"
 #include "velox/dwio/common/Common.h"

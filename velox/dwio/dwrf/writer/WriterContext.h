@@ -172,7 +172,8 @@ class WriterContext : public CompressionBufferPool {
   }
 
   bool isStreamPaged(uint32_t nodeId) const {
-    return (compression != dwio::common::CompressionKind::CompressionKind_NONE) ||
+    return (compression !=
+            dwio::common::CompressionKind::CompressionKind_NONE) ||
         handler_->isEncrypted(nodeId);
   }
 

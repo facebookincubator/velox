@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/AbstractSeekableInputStream.h"
 
 namespace facebook::velox {

@@ -61,7 +61,8 @@ void WriterBase::writeFooter(const Type& type) {
   ps.set_footerlength(footerLength);
   ps.set_compression(
       static_cast<proto::CompressionKind>(context_->compression));
-  if (context_->compression != dwio::common::CompressionKind::CompressionKind_NONE) {
+  if (context_->compression !=
+      dwio::common::CompressionKind::CompressionKind_NONE) {
     ps.set_compressionblocksize(context_->compressionBlockSize);
   }
   ps.set_cachemode(writerSink_->getCacheMode());

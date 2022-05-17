@@ -18,8 +18,8 @@
 
 #include <gtest/gtest_prod.h>
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/dwrf/common/Adaptor.h"
 #include "velox/dwio/common/DecoderUtil.h"
+#include "velox/dwio/dwrf/common/Adaptor.h"
 #include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 
