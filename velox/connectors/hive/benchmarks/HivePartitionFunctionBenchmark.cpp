@@ -43,11 +43,6 @@ constexpr std::array<TypeKind, 10> supportedTypes {
   TypeKind::DATE
 };
 
-constexpr size_t smallVectorSize = 1'000;
-constexpr size_t largeVectorSize = 10'000;
-constexpr size_t smallBucketCount = 20;
-constexpr size_t largeBucketCount = 100;
-
 class HivePartitionFunctionBenchmark
   : public functions::test::FunctionBenchmarkBase {
 public:
@@ -109,6 +104,11 @@ private:
   std::unique_ptr<HivePartitionFunction> largeBucketFunction_;
   std::vector<uint32_t> partitions_;
 };
+
+constexpr size_t smallVectorSize = 1'000;
+constexpr size_t largeVectorSize = 10'000;
+constexpr size_t smallBucketCount = 20;
+constexpr size_t largeBucketCount = 100;
 
 std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkSmall;
 std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkLarge;
