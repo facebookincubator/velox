@@ -30,28 +30,27 @@ using connector::hive::HivePartitionFunction;
 
 namespace {
 
-constexpr std::array<TypeKind, 10> supportedTypes {
-  TypeKind::BOOLEAN,
-  TypeKind::TINYINT,
-  TypeKind::SMALLINT,
-  TypeKind::INTEGER,
-  TypeKind::BIGINT,
-  TypeKind::REAL,
-  TypeKind::DOUBLE,
-  TypeKind::VARCHAR,
-  TypeKind::TIMESTAMP,
-  TypeKind::DATE
-};
+constexpr std::array<TypeKind, 10> supportedTypes{
+    TypeKind::BOOLEAN,
+    TypeKind::TINYINT,
+    TypeKind::SMALLINT,
+    TypeKind::INTEGER,
+    TypeKind::BIGINT,
+    TypeKind::REAL,
+    TypeKind::DOUBLE,
+    TypeKind::VARCHAR,
+    TypeKind::TIMESTAMP,
+    TypeKind::DATE};
 
 class HivePartitionFunctionBenchmark
-  : public functions::test::FunctionBenchmarkBase {
-public:
+    : public functions::test::FunctionBenchmarkBase {
+ public:
   explicit HivePartitionFunctionBenchmark(
       size_t vectorSize,
       size_t smallBucketCount,
       size_t largeBucketCount,
       size_t stringLength = 20)
-    : FunctionBenchmarkBase() {
+      : FunctionBenchmarkBase() {
     // Prepare input data
     VectorFuzzer::Options opts;
     opts.vectorSize = vectorSize;
@@ -71,22 +70,22 @@ public:
     partitions_.resize(vectorSize);
   }
 
-  template<TypeKind KIND>
+  template <TypeKind KIND>
   void run(HivePartitionFunction* function) {
     function->partition(*rowVectors_[KIND], partitions_);
   }
 
-  template<TypeKind KIND>
+  template <TypeKind KIND>
   void runSmall() {
     run<KIND>(smallBucketFunction_.get());
   }
 
-  template<TypeKind KIND>
+  template <TypeKind KIND>
   void runLarge() {
     run<KIND>(largeBucketFunction_.get());
   }
 
-private:
+ private:
   std::unique_ptr<HivePartitionFunction> createHivePartitionFunction(
       size_t bucketCount) {
     std::vector<int> bucketToPartition(bucketCount);
@@ -94,9 +93,7 @@ private:
     std::vector<ChannelIndex> keyChannels;
     keyChannels.emplace_back(0);
     return std::make_unique<HivePartitionFunction>(
-        bucketCount,
-        bucketToPartition,
-        keyChannels);
+        bucketCount, bucketToPartition, keyChannels);
   }
 
   std::unordered_map<TypeKind, RowVectorPtr> rowVectors_;
