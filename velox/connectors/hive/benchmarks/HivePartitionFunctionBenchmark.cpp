@@ -71,11 +71,6 @@ class HivePartitionFunctionBenchmark
   }
 
   template <TypeKind KIND>
-  void run(HivePartitionFunction* function) {
-    function->partition(*rowVectors_[KIND], partitions_);
-  }
-
-  template <TypeKind KIND>
   void runSmall() {
     run<KIND>(smallBucketFunction_.get());
   }
@@ -94,6 +89,11 @@ class HivePartitionFunctionBenchmark
     keyChannels.emplace_back(0);
     return std::make_unique<HivePartitionFunction>(
         bucketCount, bucketToPartition, keyChannels);
+  }
+
+  template <TypeKind KIND>
+  void run(HivePartitionFunction* function) {
+    function->partition(*rowVectors_[KIND], partitions_);
   }
 
   std::unordered_map<TypeKind, RowVectorPtr> rowVectors_;
