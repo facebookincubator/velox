@@ -27,7 +27,7 @@ ContextSaver::~ContextSaver() {
   }
 }
 
-EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
+EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, RowVector* row)
     : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
@@ -229,16 +229,16 @@ void EvalCtx::setErrors(
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 
-VectorPtr& EvalCtx::getField(int32_t index) {
-  VectorPtr* field;
+  const VectorPtr& EvalCtx::getField(int32_t index) {
+    VectorPtr* field;
   if (!peeledFields_.empty()) {
     field = &peeledFields_[index];
   } else {
-    field = &const_cast<RowVector*>(row_)->childAt(index);
+    field = &row_->childAt(index);
   }
   if ((*field)->isLazy() && (*field)->asUnchecked<LazyVector>()->isLoaded()) {
     auto lazy = (*field)->asUnchecked<LazyVector>();
-    return *const_cast<VectorPtr*>(&lazy->loadedVectorShared());
+    *field = lazy->loadedVectorShared();
   }
   return *field;
 }
@@ -273,20 +273,36 @@ const VectorPtr& EvalCtx::ensureFieldLoaded(
     LocalSelectivityVector baseRowsHolder(*this, 0);
     auto baseRows = baseRowsHolder.get();
     auto rawField = field.get();
-    LazyVector::ensureLoadedRows(field, rowsToLoad, *decoded, *baseRows);
-    if (rawField != field.get()) {
-      const_cast<RowVector*>(row_)->childAt(index) = field;
+    VectorPtr loadedField = field;
+    LazyVector::ensureLoadedRows(loadedField, rowsToLoad, *decoded, *baseRows);
+    if (rawField != loadedField.get()) {
+      return setFieldAfterLoad(index, loadedField);
     }
+    return field;
   } else {
     // This is needed in any case because wrappers must be initialized also if
     // they contain a loaded lazyVector.
     if (encoding == VectorEncoding::Simple::LAZY) {
-      field = field->asUnchecked<LazyVector>()->loadedVectorShared();
+      // The top level vector was lazy. Replace with loaded.
+      return setFieldAfterLoad(index, field->asUnchecked<LazyVector>()->loadedVectorShared());
     } else {
+      // Replaces nested LazyVectors with loaded vectors.
       field->loadedVector();
     }
   }
   return field;
+}
+
+const VectorPtr& EvalCtx::setFieldAfterLoad(int32_t index, const VectorPtr& field) {
+  if (peeledFields_.size() > index && peeledFields_[index]) {
+    peeledFields_[index] = field;
+    // Make the top ;level vector reference the loaded instead of the lazy.
+    row_->childAt(index)->loadedVector();
+    return peeledFields_[index];
+  } else {
+    row_->childAt(index) = field;
+    return row_->childAt(index);
+  }
 }
 
 } // namespace facebook::velox::exec

@@ -37,18 +37,19 @@ struct ContextSaver;
 enum class EvalMode : char { kGeneric, kLazyLoaded, kFlatNonNull };
 
 // Context for holding the base row vector, error state and various
-// flags for Expr interpreter.
+// flags for Expr interpreter. The base row is logically unchanged but
+// has lazy vectors replaced with loaded vectors on first use.
 class EvalCtx {
  public:
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
       ExprSet* FOLLY_NULLABLE exprSet,
-      const RowVector* FOLLY_NULLABLE row);
+      RowVector* FOLLY_NULLABLE row);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
 
-  const RowVector* FOLLY_NONNULL row() const {
+  RowVector* FOLLY_NONNULL row() const {
     return row_;
   }
 
@@ -59,7 +60,7 @@ class EvalCtx {
   // Returns the index-th column of the base row. If we have peeled off
   // wrappers like dictionaries, then this provides access only to the
   // peeled off fields.
-  VectorPtr& getField(int32_t index);
+  const VectorPtr& getField(int32_t index);
 
   BaseVector* FOLLY_NONNULL getRawField(int32_t index) const;
 
@@ -261,9 +262,14 @@ class EvalCtx {
   }
 
  private:
+  // Replaces the field at 'index' with 'field'. If the field is
+  // peeled, replaces the peeled value and refreshes the field in the
+  // top level row so as to cut out loaded LazyVectors.
+  const VectorPtr& setFieldAfterLoad(int32_t index, const VectorPtr& field);
+
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
-  const RowVector* FOLLY_NULLABLE row_;
+  RowVector* FOLLY_NULLABLE const row_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
