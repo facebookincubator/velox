@@ -30,7 +30,7 @@ using connector::hive::HivePartitionFunction;
 
 namespace {
 
-constexpr std::array<TypeKind, 10> supportedTypes{
+constexpr std::array<TypeKind, 10> kSupportedTypes{
     TypeKind::BOOLEAN,
     TypeKind::TINYINT,
     TypeKind::SMALLINT,
@@ -45,39 +45,34 @@ constexpr std::array<TypeKind, 10> supportedTypes{
 class HivePartitionFunctionBenchmark
     : public functions::test::FunctionBenchmarkBase {
  public:
-  explicit HivePartitionFunctionBenchmark(
-      size_t vectorSize,
-      size_t smallBucketCount,
-      size_t largeBucketCount,
-      size_t stringLength = 20)
+  explicit HivePartitionFunctionBenchmark(size_t vectorSize)
       : FunctionBenchmarkBase() {
     // Prepare input data
     VectorFuzzer::Options opts;
     opts.vectorSize = vectorSize;
-    opts.stringLength = stringLength;
+    opts.stringLength = 20;
     VectorFuzzer fuzzer(opts, pool(), FLAGS_fuzzer_seed);
     VectorMaker vm{pool_.get()};
-    for (auto typeKind : supportedTypes) {
+    for (auto typeKind : kSupportedTypes) {
       auto flatVector = fuzzer.fuzzFlat(createScalarType(typeKind));
-      auto rowVecotr = vm.rowVector({flatVector});
-      rowVectors_[typeKind] = std::move(rowVecotr);
+      rowVectors_[typeKind] = vm.rowVector({flatVector});
     }
 
     // Prepare HivePartitionFunction
-    smallBucketFunction_ = createHivePartitionFunction(smallBucketCount);
-    largeBucketFunction_ = createHivePartitionFunction(largeBucketCount);
+    fewBucketsFunction_ = createHivePartitionFunction(20);
+    manyBucketsFunction_ = createHivePartitionFunction(100);
 
     partitions_.resize(vectorSize);
   }
 
   template <TypeKind KIND>
-  void runSmall() {
-    run<KIND>(smallBucketFunction_.get());
+  void runFew() {
+    run<KIND>(fewBucketsFunction_.get());
   }
 
   template <TypeKind KIND>
-  void runLarge() {
-    run<KIND>(largeBucketFunction_.get());
+  void runMany() {
+    run<KIND>(manyBucketsFunction_.get());
   }
 
  private:
@@ -101,195 +96,190 @@ class HivePartitionFunctionBenchmark
   }
 
   std::unordered_map<TypeKind, RowVectorPtr> rowVectors_;
-  std::unique_ptr<HivePartitionFunction> smallBucketFunction_;
-  std::unique_ptr<HivePartitionFunction> largeBucketFunction_;
+  std::unique_ptr<HivePartitionFunction> fewBucketsFunction_;
+  std::unique_ptr<HivePartitionFunction> manyBucketsFunction_;
   std::vector<uint32_t> partitions_;
 };
 
-constexpr size_t smallVectorSize = 1'000;
-constexpr size_t largeVectorSize = 10'000;
-constexpr size_t smallBucketCount = 20;
-constexpr size_t largeBucketCount = 100;
+std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkFew;
+std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkMany;
 
-std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkSmall;
-std::unique_ptr<HivePartitionFunctionBenchmark> benchmarkLarge;
-
-BENCHMARK(booleanSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::BOOLEAN>();
+BENCHMARK(booleanFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::BOOLEAN>();
 }
 
-BENCHMARK_RELATIVE(booleanSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::BOOLEAN>();
+BENCHMARK_RELATIVE(booleanFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::BOOLEAN>();
 }
 
-BENCHMARK(booleanLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::BOOLEAN>();
+BENCHMARK(booleanManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::BOOLEAN>();
 }
 
-BENCHMARK_RELATIVE(booleanLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::BOOLEAN>();
+BENCHMARK_RELATIVE(booleanManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::BOOLEAN>();
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK(tinyintSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::TINYINT>();
+BENCHMARK(tinyintFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::TINYINT>();
 }
 
-BENCHMARK_RELATIVE(tinyintSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::TINYINT>();
+BENCHMARK_RELATIVE(tinyintFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::TINYINT>();
 }
 
-BENCHMARK(tinyintLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::TINYINT>();
+BENCHMARK(tinyintManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::TINYINT>();
 }
 
-BENCHMARK_RELATIVE(tinyintLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::TINYINT>();
-}
-
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK(smallintSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::SMALLINT>();
-}
-
-BENCHMARK_RELATIVE(smallintSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::SMALLINT>();
-}
-
-BENCHMARK(smallintLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::SMALLINT>();
-}
-
-BENCHMARK_RELATIVE(smallintLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::SMALLINT>();
+BENCHMARK_RELATIVE(tinyintManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::TINYINT>();
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK(integerSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::INTEGER>();
+BENCHMARK(smallintFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::SMALLINT>();
 }
 
-BENCHMARK_RELATIVE(integerSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::INTEGER>();
+BENCHMARK_RELATIVE(smallintFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::SMALLINT>();
 }
 
-BENCHMARK(integerLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::INTEGER>();
+BENCHMARK(smallintManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::SMALLINT>();
 }
 
-BENCHMARK_RELATIVE(integerLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::INTEGER>();
-}
-
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK(bigintSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::BIGINT>();
-}
-
-BENCHMARK_RELATIVE(bigintSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::BIGINT>();
-}
-
-BENCHMARK(bigintLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::BIGINT>();
-}
-
-BENCHMARK_RELATIVE(bigintLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::BIGINT>();
+BENCHMARK_RELATIVE(smallintManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::SMALLINT>();
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK(realSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::REAL>();
+BENCHMARK(integerFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::INTEGER>();
 }
 
-BENCHMARK_RELATIVE(realSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::REAL>();
+BENCHMARK_RELATIVE(integerFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::INTEGER>();
 }
 
-BENCHMARK(realLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::REAL>();
+BENCHMARK(integerManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::INTEGER>();
 }
 
-BENCHMARK_RELATIVE(realLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::REAL>();
-}
-
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK(doubleSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::DOUBLE>();
-}
-
-BENCHMARK_RELATIVE(doubleSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::DOUBLE>();
-}
-
-BENCHMARK(doubleLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::DOUBLE>();
-}
-
-BENCHMARK_RELATIVE(doubleLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::DOUBLE>();
+BENCHMARK_RELATIVE(integerManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::INTEGER>();
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK(varcharSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::VARCHAR>();
+BENCHMARK(bigintFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::BIGINT>();
 }
 
-BENCHMARK_RELATIVE(varcharSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::VARCHAR>();
+BENCHMARK_RELATIVE(bigintFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::BIGINT>();
 }
 
-BENCHMARK(varcharLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::VARCHAR>();
+BENCHMARK(bigintManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::BIGINT>();
 }
 
-BENCHMARK_RELATIVE(varcharLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::VARCHAR>();
-}
-
-BENCHMARK_DRAW_LINE();
-
-BENCHMARK(timestampSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::TIMESTAMP>();
-}
-
-BENCHMARK_RELATIVE(timestampSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::TIMESTAMP>();
-}
-
-BENCHMARK(timestampLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::TIMESTAMP>();
-}
-
-BENCHMARK_RELATIVE(timestampLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::TIMESTAMP>();
+BENCHMARK_RELATIVE(bigintManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::BIGINT>();
 }
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK(dateSmallRowsSmallBuckets) {
-  benchmarkSmall->runSmall<TypeKind::DATE>();
+BENCHMARK(realFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::REAL>();
 }
 
-BENCHMARK_RELATIVE(dateSmallRowsLargeBuckets) {
-  benchmarkSmall->runLarge<TypeKind::DATE>();
+BENCHMARK_RELATIVE(realFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::REAL>();
 }
 
-BENCHMARK(dateLargeRowsSmallBuckets) {
-  benchmarkLarge->runSmall<TypeKind::DATE>();
+BENCHMARK(realManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::REAL>();
 }
 
-BENCHMARK_RELATIVE(dateLargeRowsLargeBuckets) {
-  benchmarkLarge->runLarge<TypeKind::DATE>();
+BENCHMARK_RELATIVE(realManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::REAL>();
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(doubleFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::DOUBLE>();
+}
+
+BENCHMARK_RELATIVE(doubleFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::DOUBLE>();
+}
+
+BENCHMARK(doubleManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::DOUBLE>();
+}
+
+BENCHMARK_RELATIVE(doubleManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::DOUBLE>();
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(varcharFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::VARCHAR>();
+}
+
+BENCHMARK_RELATIVE(varcharFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::VARCHAR>();
+}
+
+BENCHMARK(varcharManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::VARCHAR>();
+}
+
+BENCHMARK_RELATIVE(varcharManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::VARCHAR>();
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(timestampFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::TIMESTAMP>();
+}
+
+BENCHMARK_RELATIVE(timestampFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::TIMESTAMP>();
+}
+
+BENCHMARK(timestampManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::TIMESTAMP>();
+}
+
+BENCHMARK_RELATIVE(timestampManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::TIMESTAMP>();
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(dateFewRowsFewBuckets) {
+  benchmarkFew->runFew<TypeKind::DATE>();
+}
+
+BENCHMARK_RELATIVE(dateFewRowsManyBuckets) {
+  benchmarkFew->runMany<TypeKind::DATE>();
+}
+
+BENCHMARK(dateManyRowsFewBuckets) {
+  benchmarkMany->runFew<TypeKind::DATE>();
+}
+
+BENCHMARK_RELATIVE(dateManyRowsManyBuckets) {
+  benchmarkMany->runMany<TypeKind::DATE>();
 }
 
 } // namespace
@@ -297,15 +287,13 @@ BENCHMARK_RELATIVE(dateLargeRowsLargeBuckets) {
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  benchmarkSmall = std::make_unique<HivePartitionFunctionBenchmark>(
-      smallVectorSize, smallBucketCount, largeBucketCount);
-  benchmarkLarge = std::make_unique<HivePartitionFunctionBenchmark>(
-      largeVectorSize, smallBucketCount, largeBucketCount);
+  benchmarkFew = std::make_unique<HivePartitionFunctionBenchmark>(1'000);
+  benchmarkMany = std::make_unique<HivePartitionFunctionBenchmark>(10'000);
 
   folly::runBenchmarks();
 
-  benchmarkSmall.reset();
-  benchmarkLarge.reset();
+  benchmarkFew.reset();
+  benchmarkMany.reset();
 
   return 0;
 }
