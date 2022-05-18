@@ -337,7 +337,8 @@ struct HourFunction : public InitSessionTimezone<T> {
 };
 
 template <typename T>
-struct MinuteFunction : public InitSessionTimezone<T> {
+struct MinuteFunction : public InitSessionTimezone<T>,
+                        public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -351,10 +352,18 @@ struct MinuteFunction : public InitSessionTimezone<T> {
     result = getDateTime(date).tm_min;
     return true;
   }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getDateTime(timestamp, nullptr).tm_min;
+    return true;
+  }
 };
 
 template <typename T>
-struct SecondFunction {
+struct SecondFunction : public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -366,6 +375,14 @@ struct SecondFunction {
 
   FOLLY_ALWAYS_INLINE bool call(int64_t& result, const arg_type<Date>& date) {
     result = getDateTime(date).tm_sec;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getDateTime(timestamp, nullptr).tm_sec;
     return true;
   }
 };
@@ -385,6 +402,14 @@ struct MillisecondFunction {
       int64_t& result,
       const arg_type<Date>& /*date*/) {
     // Dates do not have millisecond granularity.
+    result = 0;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>&) {
+    // TimestampWithTimezone currently does not have millisecond granularity
     result = 0;
     return true;
   }
