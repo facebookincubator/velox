@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/DecoderUtil.h"
+#include "velox/dwio/common/DecoderUtil.h"
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
 #include "velox/type/Filter.h"
@@ -22,7 +22,7 @@
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
-using namespace facebook::velox::dwrf;
+using namespace facebook::velox::dwio::common;
 
 class DecoderUtilTest : public testing::Test {
  protected:
@@ -111,8 +111,9 @@ class DecoderUtilTest : public testing::Test {
     raw_vector<int32_t> testOuter;
     std::vector<uint64_t> testNulls(bits::nwords(rows.size()), ~0ULL);
     int32_t testSkip;
-    auto testAnyNull = nonNullRowsFromSparse<isFilter, outputNulls>(
-        nulls, rows, testInner, testOuter, testNulls.data(), testSkip);
+    auto testAnyNull =
+        dwio::common::nonNullRowsFromSparse<isFilter, outputNulls>(
+            nulls, rows, testInner, testOuter, testNulls.data(), testSkip);
 
     EXPECT_EQ(testAnyNull, referenceAnyNull);
     EXPECT_EQ(testSkip, referenceSkip);
@@ -210,8 +211,8 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
         data.data() + rowIndex,
         numInput * sizeof(results[0]));
 
-    NoHook noHook;
-    processFixedWidthRun<int32_t, false, true, false>(
+    dwrf::NoHook noHook;
+    dwio::common::processFixedWidthRun<int32_t, false, true, false>(
         rows,
         rowIndex,
         numInput,

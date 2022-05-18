@@ -1087,7 +1087,8 @@ class StringDictionaryColumnVisitor
       }
       DCHECK_EQ(input, values + numValues);
       if (scatter) {
-        scatterDense(input, scatterRows + super::rowIndex_, numInput, values);
+        dwio::common::scatterDense(
+                    input, scatterRows + super::rowIndex_, numInput, values);
       }
       numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
                           : numValues + numInput;
@@ -1312,7 +1313,7 @@ class DirectRleColumnVisitor
     constexpr bool filterOnly =
         std::is_same<typename super::Extract, DropValues>::value;
 
-    processFixedWidthRun<T, filterOnly, scatter, isDense>(
+    dwio::common::processFixedWidthRun<T, filterOnly, scatter, isDense>(
         folly::Range<const vector_size_t*>(super::rows_, super::numRows_),
         super::rowIndex_,
         numInput,
