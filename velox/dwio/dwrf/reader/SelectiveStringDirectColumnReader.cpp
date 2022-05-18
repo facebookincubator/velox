@@ -328,7 +328,8 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
     if (nullsInReadRange_) {
       if (TVisitor::dense) {
         returnReaderNulls_ = true;
-        dwio::common::nonNullRowsFromDense(nulls, rows.size(), outerNonNullRows_);
+        dwio::common::nonNullRowsFromDense(
+            nulls, rows.size(), outerNonNullRows_);
         extractSparse(rows.data(), outerNonNullRows_.size());
       } else {
         int32_t tailSkip = -1;

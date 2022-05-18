@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <fmt/format.h>
 #include <string>
 
