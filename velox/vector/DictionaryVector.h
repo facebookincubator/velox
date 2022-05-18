@@ -64,10 +64,6 @@ class DictionaryVector : public SimpleVector<T> {
 
   virtual ~DictionaryVector() override = default;
 
-  inline VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::DICTIONARY;
-  }
-
   bool mayHaveNulls() const override {
     VELOX_DCHECK(initialized_);
     return BaseVector::nulls() || dictionaryValues_->mayHaveNulls();
@@ -110,15 +106,6 @@ class DictionaryVector : public SimpleVector<T> {
 
   inline TypeKind getIndexType() const {
     return indexType_;
-  }
-
-  /**
-   * @return stats for the internal dictionary value vector. They
-   * hold the min and max value in the dictionary.
-   */
-  // TODO (T61713241): Remove this later.
-  inline const SimpleVectorStats<T>& getDictionaryStats() const {
-    return dictionaryStats_;
   }
 
   inline const BufferPtr& indices() const {
@@ -165,11 +152,7 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BaseVector* loadedVector() override {
-    auto loaded = BaseVector::loadedVectorShared(dictionaryValues_);
-    if (loaded == dictionaryValues_) {
-      return this;
-    }
-    dictionaryValues_ = loaded;
+    dictionaryValues_ = BaseVector::loadedVectorShared(dictionaryValues_);
     setInternalState();
     return this;
   }
@@ -235,9 +218,6 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setInternalState();
-
-  // stats over the contained vector data
-  SimpleVectorStats<T> dictionaryStats_;
 
   // the dictionary indices of the vector can be variable types depending on the
   // size of the dictionary - kept as original and typed

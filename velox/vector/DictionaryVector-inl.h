@@ -43,6 +43,8 @@ void DictionaryVector<T>::setInternalState() {
   }
   initialized_ = true;
 
+  BaseVector::inMemoryBytes_ =
+      BaseVector::nulls_ ? BaseVector::nulls_->capacity() : 0;
   BaseVector::inMemoryBytes_ += indices_->capacity();
   BaseVector::inMemoryBytes_ += dictionaryValues_->inMemoryBytes();
 }
@@ -64,6 +66,7 @@ DictionaryVector<T>::DictionaryVector(
     : SimpleVector<T>(
           pool,
           dictionaryValues->type(),
+          VectorEncoding::Simple::DICTIONARY,
           nulls,
           length,
           stats,
@@ -71,8 +74,7 @@ DictionaryVector<T>::DictionaryVector(
           nullCount,
           isSorted,
           representedBytes,
-          storageByteCount),
-      dictionaryStats_(stats) {
+          storageByteCount) {
   VELOX_CHECK(dictionaryValues != nullptr, "dictionaryValues must not be null");
   VELOX_CHECK(
       dictionaryIndices != nullptr, "dictionaryIndices must not be null");

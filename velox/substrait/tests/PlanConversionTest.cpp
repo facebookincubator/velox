@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-#include <google/protobuf/util/json_util.h>
-#include <fstream>
-#include <sstream>
+#include "velox/substrait/tests/JsonToProtoConverter.h"
 
 #include "velox/common/base/tests/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -35,6 +33,7 @@
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 using namespace facebook::velox;
+using namespace facebook::velox::test;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::common::test;
@@ -155,21 +154,18 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
     // and convert it into Velox PlanNode. A result iterator for
     // Velox computing will be returned.
     std::shared_ptr<WholeComputeResultIterator> getResIter(
-        const std::string& subPlanPath) {
+        const std::string& planPath) {
       std::unique_ptr<facebook::velox::memory::ScopedMemoryPool> pool_{
           memory::getDefaultScopedMemoryPool()};
+
       // Read sub.json and resume the Substrait plan.
-      std::ifstream subJson(subPlanPath);
-      std::stringstream buffer;
-      buffer << subJson.rdbuf();
-      std::string subData = buffer.str();
-      ::substrait::Plan subPlan;
-      google::protobuf::util::JsonStringToMessage(subData, &subPlan);
+      ::substrait::Plan substraitPlan;
+      JsonToProtoConverter::readFromFile(planPath, substraitPlan);
 
       auto planConverter = std::make_shared<
           facebook::velox::substrait::SubstraitVeloxPlanConverter>();
       // Convert to Velox PlanNode.
-      auto planNode = planConverter->toVeloxPlan(subPlan, pool_.get());
+      auto planNode = planConverter->toVeloxPlan(substraitPlan, pool_.get());
 
       // Get the information for TableScan.
       u_int32_t partitionIndex = planConverter->getPartitionIndex();
@@ -462,24 +458,9 @@ TEST_P(PlanConversionTest, queryTest) {
   std::vector<RowVectorPtr> batches{std::make_shared<RowVector>(
       pool.get(), type, nullptr, 10, vectors, nullCount)};
 
-  // Find the Velox path according current path.
-  std::string veloxPath;
-  std::string currentPath = fs::current_path().c_str();
-  size_t pos = 0;
-
-  if ((pos = currentPath.find("project")) != std::string::npos) {
-    // In Github test, the Velox home is /root/project.
-    veloxPath = currentPath.substr(0, pos) + "project";
-  } else if ((pos = currentPath.find("velox")) != std::string::npos) {
-    veloxPath = currentPath.substr(0, pos) + "velox";
-  } else if ((pos = currentPath.find("fbcode")) != std::string::npos) {
-    veloxPath = currentPath;
-  } else {
-    throw std::runtime_error("Current path is not a valid Velox path.");
-  }
-
   // Find and deserialize Substrait plan json file.
-  std::string subPlanPath = veloxPath + "/velox/substrait/tests/data/sub.json";
+  std::string planPath =
+      getDataFilePath("velox/substrait/tests", "data/sub.json");
   auto veloxConverter = std::make_shared<VeloxConverter>();
 
   // Writes data into an ORC file.
@@ -502,7 +483,7 @@ TEST_P(PlanConversionTest, queryTest) {
   }
   writer->close();
 
-  auto resIter = veloxConverter->getResIter(subPlanPath);
+  auto resIter = veloxConverter->getResIter(planPath);
   while (resIter->HasNext()) {
     auto rv = resIter->Next();
     auto size = rv->size();

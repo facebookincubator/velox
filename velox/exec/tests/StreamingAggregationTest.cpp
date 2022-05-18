@@ -24,10 +24,6 @@ class StreamingAggregationTest : public OperatorTestBase {
   static CursorParameters makeCursorParameters(
       const std::shared_ptr<const core::PlanNode>& planNode,
       uint32_t preferredOutputBatchSize) {
-    auto queryCtx = core::QueryCtx::createForTest();
-    queryCtx->setConfigOverridesUnsafe(
-        {{core::QueryConfig::kCreateEmptyFiles, "true"}});
-
     CursorParameters params;
     params.planNode = planNode;
     params.queryCtx = core::QueryCtx::createForTest();
@@ -55,13 +51,20 @@ class StreamingAggregationTest : public OperatorTestBase {
     auto plan = PlanBuilder()
                     .values(data)
                     .partialStreamingAggregation(
-                        {"c0"}, {"count(1)", "min(c1)", "max(c1)", "sum(c1)"})
+                        {"c0"},
+                        {"count(1)",
+                         "min(c1)",
+                         "max(c1)",
+                         "sum(c1)",
+                         "approx_percentile(c1, 0.95)"})
                     .finalAggregation()
                     .planNode();
 
     assertQuery(
         makeCursorParameters(plan, outputBatchSize),
-        "SELECT c0, count(1), min(c1), max(c1), sum(c1) FROM tmp GROUP BY 1");
+        "SELECT c0, count(1), min(c1), max(c1), sum(c1)"
+        "     , approx_quantile(c1, 0.95) "
+        "FROM tmp GROUP BY 1");
 
     plan = PlanBuilder()
                .values(data)

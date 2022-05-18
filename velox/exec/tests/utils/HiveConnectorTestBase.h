@@ -44,26 +44,20 @@ class HiveConnectorTestBase : public OperatorTestBase {
           std::make_shared<facebook::velox::dwrf::Config>());
 
   std::vector<RowVectorPtr> makeVectors(
-      const std::shared_ptr<const RowType>& rowType,
+      const RowTypePtr& rowType,
       int32_t numVectors,
       int32_t rowsPerVector);
 
   std::shared_ptr<exec::Task> assertQuery(
-      const std::shared_ptr<const core::PlanNode>& plan,
+      const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
     return OperatorTestBase::assertQuery(plan, duckDbSql);
   }
 
+  /// Assumes plan has a single TableScan node.
   std::shared_ptr<exec::Task> assertQuery(
-      const std::shared_ptr<const core::PlanNode>& plan,
+      const core::PlanNodePtr& plan,
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths,
-      const std::string& duckDbSql);
-
-  std::shared_ptr<exec::Task> assertQuery(
-      const std::shared_ptr<const core::PlanNode>& plan,
-      const std::unordered_map<
-          core::PlanNodeId,
-          std::vector<std::shared_ptr<TempFilePath>>>& filePaths,
       const std::string& duckDbSql);
 
   static std::vector<std::shared_ptr<TempFilePath>> makeFilePaths(int count);
@@ -71,8 +65,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
   static std::vector<std::shared_ptr<connector::ConnectorSplit>> makeHiveSplits(
       const std::vector<std::shared_ptr<TempFilePath>>& filePaths);
 
-  static std::shared_ptr<connector::hive::HiveConnectorSplit>
-  makeHiveConnectorSplit(
+  static std::shared_ptr<connector::ConnectorSplit> makeHiveConnectorSplit(
       const std::string& filePath,
       uint64_t start = 0,
       uint64_t length = std::numeric_limits<uint64_t>::max()) {
@@ -86,8 +79,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       uint32_t splitCount,
       dwio::common::FileFormat format);
 
-  static std::shared_ptr<connector::hive::HiveConnectorSplit>
-  makeHiveConnectorSplit(
+  static std::shared_ptr<connector::ConnectorSplit> makeHiveConnectorSplit(
       const std::string& filePath,
       const std::unordered_map<std::string, std::optional<std::string>>&
           partitionKeys,
@@ -104,7 +96,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       int32_t groupId);
 
   static std::shared_ptr<connector::hive::HiveTableHandle> makeTableHandle(
-      common::test::SubfieldFilters subfieldFilters,
+      common::test::SubfieldFilters subfieldFilters = {},
       const std::shared_ptr<const core::ITypedExpr>& remainingFilter = nullptr,
       const std::string& tableName = "hive_table") {
     return std::make_shared<connector::hive::HiveTableHandle>(
@@ -123,8 +115,7 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const std::string& name,
       const TypePtr& type);
 
-  static ColumnHandleMap allRegularColumns(
-      const std::shared_ptr<const RowType>& rowType) {
+  static ColumnHandleMap allRegularColumns(const RowTypePtr& rowType) {
     ColumnHandleMap assignments;
     assignments.reserve(rowType->size());
     for (uint32_t i = 0; i < rowType->size(); ++i) {
@@ -133,14 +124,6 @@ class HiveConnectorTestBase : public OperatorTestBase {
     }
     return assignments;
   }
-
-  static void addConnectorSplit(
-      Task* task,
-      const core::PlanNodeId& planNodeId,
-      const std::shared_ptr<connector::ConnectorSplit>& connectorSplit);
-
-  static void
-  addSplit(Task* task, const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   memory::MappedMemory* mappedMemory() {
     return memory::MappedMemory::getInstance();

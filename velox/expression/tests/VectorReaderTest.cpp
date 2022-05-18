@@ -17,7 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "velox/expression/VectorUdfTypeSystem.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 
 namespace facebook::velox {
@@ -459,8 +459,10 @@ TEST_F(VectorReaderTest, variadicContainsNull) {
       [](vector_size_t row) { return row % 5 == 2; });
   SelectivityVector rows(10);
   exec::EvalCtx ctx(&execCtx_);
-  exec::DecodedArgs args(
-      rows, {field1Vector, field2Vector, field3Vector}, &ctx);
+  std::vector<facebook::velox::exec::LocalDecodedVector> args;
+  for (const auto& vector : {field1Vector, field2Vector, field3Vector}) {
+    args.emplace_back(&ctx, *vector, rows);
+  }
   exec::VectorReader<Variadic<int32_t>> reader(args, 0);
 
   // Row without NULLs.
@@ -531,8 +533,10 @@ TEST_F(VectorReaderTest, dictionaryEncodedVariadicContainsNull) {
 
   SelectivityVector rows(10);
   exec::EvalCtx ctx(&execCtx_);
-  exec::DecodedArgs args(
-      rows, {field1Vector, field2Vector, field3Vector}, &ctx);
+  std::vector<facebook::velox::exec::LocalDecodedVector> args;
+  for (const auto& vector : {field1Vector, field2Vector, field3Vector}) {
+    args.emplace_back(&ctx, *vector, rows);
+  }
   exec::VectorReader<Variadic<int32_t>> reader(args, 0);
 
   // Row without NULLs.
