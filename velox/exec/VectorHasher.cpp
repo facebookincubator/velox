@@ -20,6 +20,8 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
 
+DEFINE_bool(enable_str_simd, true, "Enable StringView SIMD hash");
+
 namespace facebook::velox::exec {
 
 #define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)             \
@@ -573,6 +575,159 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
   }
 }
 
+#if 0
+namespace {
+
+V32::TV stringViewOffsets = {0, 4, 8, 12, 16, 20, 24, 28};
+
+inline void updateResult(
+    bool multiply,
+    __m256i multiplier,
+    __m256i values,
+    uint64_t* result) {
+  if (!multiply) {
+    V64::store(result, values);
+  } else {
+    V64::store(result, V64::load(result) + values * multiplier);
+  }
+}
+
+inline bool processPrefix64(
+    __m256i prefixes,
+    __m256i lengths,
+    __m256i min,
+    __m256i max,
+    bool multiply,
+    __m256i multiplier,
+    uint64_t* result) {
+  static int64_t lengthMasks64[8] = {
+      0,
+      1UL << 8,
+      1UL << 16,
+      1UL << 24,
+      1UL << 32,
+      1UL << 40,
+      1UL << 48,
+      1UL << 56};
+  auto masks = V64::gather64<8>(lengthMasks64, lengths);
+  prefixes |= masks;
+  if (V64::compareBitMask(
+          V64::compareGt(min, prefixes) | V64::compareGt(prefixes, max))) {
+    return false;
+  }
+  auto numbers = prefixes - min + 1;
+  updateResult(multiply, multiplier, numbers, result);
+  return true;
+}
+
+inline __m256i
+loadPrefixes64(const void* base, int64_t min, int32_t i, int32_t end) {
+  auto start = reinterpret_cast<const char*>(base) + sizeof(StringView) * i + 4;
+  auto indices = *reinterpret_cast<const __m128si_u*>(&stringViewOffsets);
+  if (i + 4 <= end) {
+    return V64::gather32<4>(start, indices);
+  } else if (i >= end) {
+    return V64::setAll(min);
+  } else {
+    return V64::maskGather32<4>(
+        V64::setAll(min), V64::leadingMask(end - i), start, indices);
+  }
+}
+} // namespace
+#endif
+template <>
+bool VectorHasher::tryMapToRange(
+    const StringView* values,
+    const SelectivityVector& rows,
+    uint64_t* result) {
+  return false;
+#if 0
+  if (!FLAGS_enable_str_simd || !process::hasAvx2() || !rows.isAllSelected()) {
+    return false;
+  }
+  auto end = rows.end();
+  int32_t i = 0;
+  auto min = V64::setAll(min_);
+  auto max = V64::setAll(max_);
+  __m256si lengthMasks32 = {0, 1 << 8, 1 << 16, 1 << 24, 0, 0, 0, 0};
+  V64::TV multiplier = {0, 0, 0, 0};
+  bool multiply = false;
+  if (multiplier_ != 1) {
+    multiply = true;
+    multiplier = V64::setAll(multiplier_);
+  }
+  auto allZero = V32::setAll(0);
+  // Points to the first of each batch of 8 consecutive StringViews.
+  auto first = reinterpret_cast<const int32_t*>(values);
+  for (; i < end; i += 8) {
+    V32::TV lengths;
+    V32::TV prefixes;
+    if (UNLIKELY(i + 8 > end)) {
+      auto minLength =
+          V32::setAll(!min_ ? 0 : (63 - __builtin_clzll(min_)) / 8);
+      auto mask = V32::leadingMask(end - i);
+      lengths = V32::maskGather32(minLength, mask, first, stringViewOffsets);
+    } else {
+      lengths = V32::gather32(first, stringViewOffsets);
+    }
+    if (V32::compareBitMask(
+            V32::compareGt(lengths, V32::setAll(rangeMaxChars_)))) {
+      // At least one is longer than maximum allowed.
+      return false;
+    }
+    if (rangeMaxChars_ <= 3 ||
+        V32::kAllTrue ==
+            V32::compareBitMask(V32::compareGt(V32::setAll(4), lengths))) {
+      // All fit in 32 bits.
+      if (i + 8 <= end) {
+        prefixes = V32::gather32(first + 1, stringViewOffsets);
+      } else {
+        prefixes = V32::maskGather32(
+            V32::setAll(min_),
+            V32::leadingMask(end - i),
+            first + 1,
+            stringViewOffsets);
+      }
+      auto masks = reinterpret_cast<__m256si>(_mm256_permutevar8x32_epi32(
+          simd::to256i(lengthMasks32), simd::to256i(lengths)));
+      prefixes |= masks;
+      if (V32::compareBitMask(
+              V32::compareGt(V32::setAll(min_), prefixes) |
+              V32::compareGt(prefixes, V32::setAll(max_)))) {
+        return false;
+      }
+      prefixes -= static_cast<int32_t>(min_ - 1);
+      updateResult(multiply, multiplier, V32::as4x64u<0>(prefixes), result + i);
+      updateResult(
+          multiply, multiplier, V32::as4x64u<1>(prefixes), result + i + 4);
+    } else {
+      if (!processPrefix64(
+              loadPrefixes64(values, min_, i, end),
+              V32::as4x64u<0>(lengths),
+              min,
+              max,
+              multiply,
+              multiplier,
+              result + i)) {
+        return false;
+      }
+      if (!processPrefix64(
+              loadPrefixes64(values, min_, i + 4, end),
+              V32::as4x64u<1>(lengths),
+              min,
+              max,
+              multiply,
+              multiplier,
+              result + i + 4)) {
+        return false;
+      }
+    }
+    first += (8 * sizeof(StringView)) / sizeof(int32_t);
+  }
+  return true;
+#endif
+}
+
 void VectorHasher::cardinality(uint64_t& asRange, uint64_t& asDistincts) {
   if (typeKind_ == TypeKind::BOOLEAN) {
     hasRange_ = true;
@@ -634,6 +789,7 @@ uint64_t VectorHasher::enableValueRange(uint64_t multiplier, int64_t reserve) {
   } else {
     max_ += reserve;
   }
+  rangeMaxChars_ = max_ ? (64 - __builtin_clzll(max_)) / 8 : 0;
   isRange_ = true;
   // No overflow because max range is under 63 bits.
   if (typeKind_ == TypeKind::BOOLEAN) {

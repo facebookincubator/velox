@@ -405,9 +405,6 @@ class VectorHasher {
       const T* values,
       const SelectivityVector& rows,
       uint64_t* result) {
-    if (!isRange_) {
-      return false;
-    }
 
     if constexpr (
         std::is_same_v<T, std::int64_t> || std::is_same_v<T, std::int32_t> ||
@@ -432,6 +429,7 @@ class VectorHasher {
     return inRange;
   }
 
+ public: // For testing.
   template <typename T>
   uint64_t valueId(T value) {
     auto int64Value = toInt64(value);
@@ -455,6 +453,7 @@ class VectorHasher {
     return unique.id();
   }
 
+ private:
   template <typename T>
   uint64_t lookupValueId(T value) const {
     auto int64Value = toInt64(value);
@@ -539,6 +538,7 @@ class VectorHasher {
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
   uint64_t distinctStringsBytes_ = 0;
+  int32_t rangeMaxChars_{0};
 };
 
 template <>
@@ -559,12 +559,10 @@ template <>
 void VectorHasher::analyzeValue(StringView value);
 
 template <>
-inline bool VectorHasher::tryMapToRange(
+bool VectorHasher::tryMapToRange(
     const StringView* /*values*/,
     const SelectivityVector& /*rows*/,
-    uint64_t* /*result*/) {
-  return false;
-}
+    uint64_t* /*result*/);
 
 template <>
 inline uint64_t VectorHasher::valueId(StringView value) {

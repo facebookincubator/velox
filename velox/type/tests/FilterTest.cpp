@@ -174,6 +174,17 @@ TEST(FilterTest, bigIntRange) {
   EXPECT_TRUE(filter->testInt64Range(-100, 10, true));
 }
 
+namespace {
+// True if 'filter' is an equality test for 'value'.
+bool isBigintEq(std::unique_ptr<Filter> filter, int64_t value) {
+  if (!filter) {
+    return false;
+  }
+  auto range = dynamic_cast<const BigintRange*>(filter.get());
+  return range && range->lower() == range->upper() && range->lower() == value;
+}
+} // namespace
+
 TEST(FilterTest, bigintValuesUsingHashTable) {
   auto filter = createBigintValues({1, 10, 100, 10'000}, false);
   ASSERT_TRUE(dynamic_cast<BigintValuesUsingHashTable*>(filter.get()));
@@ -203,6 +214,16 @@ TEST(FilterTest, bigintValuesUsingHashTable) {
   EXPECT_FALSE(filter->testInt64Range(9'000, 9'999, false));
   EXPECT_TRUE(filter->testInt64Range(9'000, 10'000, false));
   EXPECT_TRUE(filter->testInt64Range(0, 1, false));
+
+  auto rangeFilter = filter->filterForRange(1, 1);
+  EXPECT_EQ(FilterKind::kIsNotNull, rangeFilter->kind());
+
+  // The range has two values.
+  EXPECT_EQ(nullptr, filter->filterForRange(1, 10));
+  EXPECT_EQ(nullptr, filter->filterForRange(11, 11100));
+  EXPECT_TRUE(isBigintEq(filter->filterForRange(9999, 10000), 10000));
+  EXPECT_TRUE(isBigintEq(filter->filterForRange(10000, 10002), 10000));
+  EXPECT_TRUE(isBigintEq(filter->filterForRange(99, 110), 100));
 }
 
 constexpr unsigned bitsNeeded(unsigned n) {

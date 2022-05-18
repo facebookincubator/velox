@@ -15,6 +15,11 @@
  */
 #include "velox/type/Filter.h"
 
+DEFINE_bool(
+    enable_filter_for_range,
+    true,
+    "Enable using a narrower filter in function of row group stats");
+
 namespace facebook::velox::common {
 
 std::string Filter::toString() const {
@@ -274,6 +279,33 @@ bool BigintValuesUsingHashTable::testInt64Range(
     return true;
   }
   return max >= *it;
+}
+
+// Returns an equality filter if the closed nterval of [min, max]
+// contains exactly one value. Returns a is not null filter if min
+// == max and this is a value in the filter.
+std::unique_ptr<Filter> BigintValuesUsingHashTable::filterForRange(
+    int64_t min,
+    int64_t max) const {
+  if (!FLAGS_enable_filter_for_range) {
+    return nullptr;
+  }
+  if (min == max) {
+    if (testInt64(min)) {
+      if (!nullAllowed_) {
+        return std::make_unique<IsNotNull>();
+      }
+      return std::make_unique<AlwaysTrue>();
+    }
+  }
+
+  auto it = std::lower_bound(values_.begin(), values_.end(), min);
+  assert(it != values_.end()); // min is already tested to be <= max because
+                               // testInt64Range is called first..
+  if (it + 1 == values_.end() || it[1] > max) {
+    return std::make_unique<BigintRange>(*it, *it, nullAllowed_);
+  }
+  return nullptr;
 }
 
 namespace {

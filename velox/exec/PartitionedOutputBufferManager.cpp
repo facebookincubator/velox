@@ -14,8 +14,20 @@
  * limitations under the License.
  */
 #include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/common/time/Timer.h"
 
 namespace facebook::velox::exec {
+
+void DestinationBuffer::enqueue(std::shared_ptr<SerializedPage> data) {
+  // drop duplicate end markers
+  if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
+    return;
+  }
+  if (!dataAvailableSince_) {
+    dataAvailableSince_ = getCurrentTimeMicro();
+  }
+  data_.push_back(std::move(data));
+}
 
 void DestinationBuffer::getData(
     uint64_t maxBytes,
@@ -54,6 +66,14 @@ void DestinationBuffer::getData(
     if (resultBytes >= maxBytes) {
       break;
     }
+    auto now = getCurrentTimeMicro();
+    fetchDelay_.addValue((now - dataAvailableSince_) * 1000);
+    if (result.size() == data_.size()) {
+      dataAvailableSince_ = 0;
+      dataFetchedSince_ = now;
+    } else {
+      dataAvailableSince_ = now;
+    }
   }
 }
 
@@ -74,6 +94,10 @@ DataAvailable DestinationBuffer::getAndClearNotify() {
 std::vector<std::shared_ptr<SerializedPage>> DestinationBuffer::acknowledge(
     int64_t sequence,
     bool fromGetData) {
+  if (dataFetchedSince_) {
+    ackDelay_.addValue((getCurrentTimeMicro() - dataFetchedSince_) * 1000);
+    dataFetchedSince_ = 0;
+  }
   int64_t numDeleted = sequence - sequence_;
   if (numDeleted == 0 && fromGetData) {
     // If called from getData, it is expected that there will be
@@ -418,6 +442,11 @@ void PartitionedOutputBuffer::getData(
   }
 }
 
+void DestinationBuffer::updateStats(OperatorStats& stats) {
+  stats.mergeRuntimeStat("fetchDelay", fetchDelay_);
+  stats.mergeRuntimeStat("ackDelay", ackDelay_);
+}
+
 void PartitionedOutputBuffer::terminate() {
   std::vector<ContinuePromise> outstandingPromises;
   {
@@ -427,6 +456,14 @@ void PartitionedOutputBuffer::terminate() {
   }
   for (auto& promise : outstandingPromises) {
     promise.setValue(true);
+  }
+}
+
+void PartitionedOutputBuffer::updateStats(OperatorStats& stats) {
+  std::lock_guard<std::mutex> l(mutex_);
+
+  for (auto& buffer : buffers_) {
+    buffer->updateStats(stats);
   }
 }
 
@@ -573,6 +610,21 @@ void PartitionedOutputBufferManager::removeTask(const std::string& taskId) {
   if (buffer) {
     buffer->terminate();
   }
+}
+
+void PartitionedOutputBufferManager::updateStats(
+    const std::string& taskId,
+    OperatorStats& stats) {
+  auto buffer = buffers_.withLock(
+      [&](auto& buffers) -> std::shared_ptr<PartitionedOutputBuffer> {
+        auto it = buffers.find(taskId);
+        if (it == buffers.end()) {
+          // Already removed.
+          return nullptr;
+        }
+        return it->second;
+      });
+  buffer->updateStats(stats);
 }
 
 std::string PartitionedOutputBufferManager::toString() {

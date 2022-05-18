@@ -52,7 +52,7 @@ void AllocationPool::newRun(int32_t preferredSize) {
             allocation_,
             nullptr,
             numPages)) {
-      throw std::bad_alloc();
+      VELOX_FAIL("Failed allocation for aggregation/hash join payload");
     }
     currentRun_ = 0;
   }

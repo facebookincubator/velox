@@ -18,6 +18,8 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "velox/codegen/Codegen.h"
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/Exchange.h"
@@ -30,7 +32,17 @@
 #include "velox/experimental/codegen/CodegenLogger.h"
 #endif
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 namespace facebook::velox::exec {
+
+static void checkTraceCommand();
+
+// The number of splits groups we run concurrently.
+// TODO(spershin): We need to expose this as some kind of setting/parameter.
+static constexpr uint32_t kNumConcurrentSplitGroups = 1;
 
 namespace {
 folly::Synchronized<std::vector<std::shared_ptr<TaskListener>>>& listeners() {
@@ -591,6 +603,12 @@ std::unique_ptr<ContinuePromise> Task::addSplitLocked(
   ++taskStats_.numTotalSplits;
   ++taskStats_.numQueuedSplits;
 
+  if (split.connectorSplit) {
+    // Tests may use the same splits list many times. Make sure there
+    // is no async load pending on any, if, for example, a test did
+    // not process all its splits.
+    split.connectorSplit->dataSource.reset();
+  }
   if (isUngroupedExecution()) {
     VELOX_DCHECK(
         not split.hasGroup(), "Got split group for ungrouped execution!");
@@ -732,24 +750,36 @@ BlockingReason Task::getSplitOrFuture(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId,
     exec::Split& split,
-    ContinueFuture& future) {
+    ContinueFuture& future,
+    int32_t maxPreloadSplits,
+    std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload) {
   std::lock_guard<std::mutex> l(mutex_);
 
   auto& splitsState = splitsStates_[planNodeId];
 
   if (isUngroupedExecution()) {
     return getSplitOrFutureLocked(
-        splitsState.groupSplitsStores[0], split, future);
+        splitsState.groupSplitsStores[0],
+        split,
+        future,
+        maxPreloadSplits,
+        preload);
   } else {
     return getSplitOrFutureLocked(
-        splitsState.groupSplitsStores[splitGroupId], split, future);
+        splitsState.groupSplitsStores[splitGroupId],
+        split,
+        future,
+        maxPreloadSplits,
+        preload);
   }
 }
 
 BlockingReason Task::getSplitOrFutureLocked(
     SplitsStore& splitsStore,
     exec::Split& split,
-    ContinueFuture& future) {
+    ContinueFuture& future,
+    int32_t maxPreloadSplits,
+    std::function<void(std::shared_ptr<connector::ConnectorSplit>)> preload) {
   if (splitsStore.splits.empty()) {
     if (splitsStore.noMoreSplits) {
       return BlockingReason::kNotBlocked;
@@ -760,9 +790,24 @@ BlockingReason Task::getSplitOrFutureLocked(
     splitsStore.splitPromises.push_back(std::move(splitPromise));
     return BlockingReason::kWaitForSplit;
   }
-
-  split = std::move(splitsStore.splits.front());
-  splitsStore.splits.pop_front();
+  int32_t readySplitIndex = -1;
+  if (maxPreloadSplits) {
+    for (auto i = 0; i < splitsStore.splits.size() && i < maxPreloadSplits;
+         ++i) {
+      auto& split = splitsStore.splits[i].connectorSplit;
+      if (!split->dataSource) {
+        // Initializes split->dataSource
+        preload(split);
+      } else if (readySplitIndex == -1 && split->dataSource->hasValue()) {
+        readySplitIndex = i;
+      }
+    }
+  }
+  if (readySplitIndex == -1) {
+    readySplitIndex = 0;
+  }
+  split = std::move(splitsStore.splits[readySplitIndex]);
+  splitsStore.splits.erase(splitsStore.splits.begin() + readySplitIndex);
 
   --taskStats_.numQueuedSplits;
   ++taskStats_.numRunningSplits;
@@ -1313,6 +1358,86 @@ Task::getLocalExchangeQueues(
       "Incorrect local exchange ID: {}",
       planNodeId);
   return it->second.queues;
+}
+
+void doCommand(std::string command) {
+  auto cache =
+      dynamic_cast<cache::AsyncDataCache*>(memory::MappedMemory::getInstance());
+  if (command == "dropram") {
+    if (!cache) {
+      LOG(ERROR) << "No cache to drop";
+      return;
+    }
+    LOG(INFO) << "VELOXCMD: Dropping RAM cache";
+    cache->clear();
+    return;
+  }
+  if (command == "dropssd") {
+    if (!cache) {
+      LOG(ERROR) << "VELOXCMD: No cache to drop";
+      return;
+    }
+
+    LOG(INFO) << "VELOXCMD: Dropping SSD and RAM cache";
+    if (cache->ssdCache()) {
+      cache->ssdCache()->clear();
+    }
+    cache->clear();
+    return;
+  }
+
+  if (command == "status") {
+    LOG(INFO) << "VELOXCMD: " << process::TraceContext::statusLine();
+    return;
+  }
+  auto equals = strchr(command.c_str(), '=');
+  if (equals) {
+    int32_t equalsOffset = equals - command.c_str();
+    std::string flag(command.data(), equalsOffset);
+    std::string value(
+        command.data() + equalsOffset + 1, command.size() - equalsOffset);
+    LOG(INFO) << "VELOXCMD set " << flag << "=" << value << ": "
+              << gflags::SetCommandLineOption(flag.c_str(), value.c_str());
+    return;
+  }
+  LOG(ERROR) << "VELOXCMD: Did not understand veloxcmd.txt: " << command;
+}
+
+static void checkTraceCommand() {
+  constexpr auto kCmdFile = "/tmp/veloxcmd.txt";
+  static std::mutex mutex;
+  static bool firstTime = true;
+  static std::chrono::steady_clock::time_point lastTime;
+  auto now = std::chrono::steady_clock::now();
+  if (firstTime ||
+      std::chrono::duration_cast<std::chrono::microseconds>(now - lastTime)
+              .count() > 1000000) {
+    std::lock_guard<std::mutex> l(mutex);
+    lastTime = now;
+    firstTime = false;
+    int32_t fd = open(kCmdFile, O_RDWR);
+    if (fd < 0) {
+      return;
+    }
+    static char buffer[10000] = {};
+    int32_t length = read(fd, buffer, sizeof(buffer));
+    close(fd);
+    if (unlink(kCmdFile) < 0) {
+      LOG(ERROR) << "VELOXCMD: Failed to rm " << kCmdFile << " with " << buffer
+                 << " - no action taken";
+      return;
+    }
+    int32_t start = 0;
+    for (auto i = 0; i < length; ++i) {
+      if (buffer[i] == ';') {
+        doCommand(std::string(buffer + start, i - start));
+        start = i + 1;
+      }
+    }
+    if (length - start > 0) {
+      doCommand(std::string(buffer + start, length - start));
+    }
+  }
 }
 
 void Task::setError(const std::exception_ptr& exception) {

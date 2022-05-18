@@ -161,6 +161,12 @@ class HiveDataSource : public DataSource {
 
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() override;
 
+  bool allPrefetchIssued() const override {
+    return rowReader_ && rowReader_->allPrefetchIssued();
+  }
+
+  void setFromDataSource(std::shared_ptr<DataSource> source) override;
+
   int64_t estimatedRowSize() override;
 
  private:
@@ -199,7 +205,7 @@ class HiveDataSource : public DataSource {
   std::shared_ptr<HiveConnectorSplit> split_;
   dwio::common::ReaderOptions readerOpts_;
   dwio::common::RowReaderOptions rowReaderOpts_;
-  std::unique_ptr<dwio::common::Reader> reader_;
+  std::shared_ptr<dwio::common::Reader> reader_;
   std::unique_ptr<dwio::common::RowReader> rowReader_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   std::shared_ptr<const RowType> readerOutputType_;
@@ -255,6 +261,10 @@ class HiveConnector final : public Connector {
         executor_);
   }
 
+  bool supportsSplitPreload() override {
+    return true;
+  }
+
   std::shared_ptr<DataSink> createDataSink(
       std::shared_ptr<const RowType> inputType,
       std::shared_ptr<ConnectorInsertTableHandle> connectorInsertTableHandle,
@@ -270,7 +280,7 @@ class HiveConnector final : public Connector {
         connectorQueryCtx->memoryPool());
   }
 
-  folly::Executor* FOLLY_NULLABLE executor() {
+  folly::Executor* FOLLY_NULLABLE executor() const override {
     return executor_;
   }
 

@@ -114,6 +114,13 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
     }
   }
 
+  void setRowGroupSpecificFilters();
+
+  void moveScanSpec(ColumnReader& other) override {
+    auto otherStruct = dynamic_cast<SelectiveStructColumnReader*>(&other);
+    scanSpec_->moveAdaptationFrom(*otherStruct->scanSpec_);
+  }
+
   // Sets 'rows' as the set of rows for which 'this' or its children
   // may be loaded as LazyVectors. When a struct is loaded as lazy,
   // its children will be lazy if the struct does not add nulls. The
@@ -138,6 +145,7 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
 
   // Dense set of rows to read in next().
   raw_vector<vector_size_t> rows_;
+  int32_t previousRowGroup_{-1};
 
   // Context information obtained from ExceptionContext. Stored here
   // so that LazyVector readers under this can add this to their

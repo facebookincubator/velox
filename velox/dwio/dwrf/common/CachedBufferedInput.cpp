@@ -23,6 +23,11 @@ DEFINE_int32(
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
+DEFINE_int32(
+    ssd_max_coalesce_distance,
+    (50 << 10),
+    "Max gap across wich IOs are coalesced for SSD");
+
 namespace facebook::velox::dwrf {
 
 using cache::CachePin;

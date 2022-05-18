@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/FilterProject.h"
+#include "velox/common/process/TraceContext.h"
+
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 
@@ -75,6 +77,17 @@ FilterProject::FilterProject(
   }
   numExprs_ = allExprs.size();
   exprs_ = makeExprSetFromFlag(std::move(allExprs), operatorCtx_->execCtx());
+  std::stringstream label;
+  label << "FilterProject: ";
+  for (auto i = 0; i < numExprs_; ++i) {
+    label << exprs_->expr(i)->toString() << " ";
+  }
+  traceLabel_ = label.str();
+  auto labelSize = traceLabel_.size();
+  if (labelSize > 70) {
+    traceLabel_.resize(70);
+    traceLabel_ += fmt::format("... ({} chars total)", labelSize);
+  }
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
@@ -112,51 +125,69 @@ RowVectorPtr FilterProject::getOutput() {
   if (allInputProcessed()) {
     return nullptr;
   }
+  process::TraceContext trace(traceLabel_, true);
+  try {
+    vector_size_t size = input_->size();
+    LocalSelectivityVector localRows(*operatorCtx_->execCtx(), size);
+    auto* rows = localRows.get();
+    rows->setAll();
+    EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
+    if (!hasFilter_) {
+      numProcessedInputRows_ = size;
+      VELOX_CHECK(!isIdentityProjection_);
+      project(*rows, &evalCtx);
 
-  vector_size_t size = input_->size();
-  LocalSelectivityVector localRows(*operatorCtx_->execCtx(), size);
-  auto* rows = localRows.get();
-  rows->setAll();
-  EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
-  if (!hasFilter_) {
-    numProcessedInputRows_ = size;
-    VELOX_CHECK(!isIdentityProjection_);
-    project(*rows, &evalCtx);
-
-    if (results_.size() > 0) {
-      auto outCol = results_[0];
-      if (outCol && outCol->isCodegenOutput()) {
-        // codegen can output different size when it merged filter + projection
-        size = outCol->size();
-        if (size == 0) { // all filtered out
-          return nullptr;
+      if (results_.size() > 0) {
+        auto outCol = results_[0];
+        if (outCol && outCol->isCodegenOutput()) {
+          // codegen can output different size when it merged filter +
+          // projection
+          size = outCol->size();
+          if (size == 0) { // all filtered out
+            return nullptr;
+          }
         }
       }
+
+      return fillOutput(size, nullptr);
     }
 
-    return fillOutput(size, nullptr);
-  }
-
-  // evaluate filter
-  auto numOut = filter(&evalCtx, *rows);
-  numProcessedInputRows_ = size;
-  if (numOut == 0) { // no rows passed the filer
-    input_ = nullptr;
-    return nullptr;
-  }
-
-  bool allRowsSelected = (numOut == size);
-
-  // evaluate projections (if present)
-  if (!isIdentityProjection_) {
-    if (!allRowsSelected) {
-      rows->setFromBits(filterEvalCtx_.selectedBits->as<uint64_t>(), size);
+    // evaluate filter
+    auto numOut = filter(&evalCtx, *rows);
+    numProcessedInputRows_ = size;
+    if (numOut == 0) { // no rows passed the filer
+      input_ = nullptr;
+      return nullptr;
     }
-    project(*rows, &evalCtx);
-  }
 
-  return fillOutput(
-      numOut, allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices);
+    bool allRowsSelected = (numOut == size);
+
+    // evaluate projections (if present)
+    if (!isIdentityProjection_) {
+      if (!allRowsSelected) {
+        rows->setFromBits(filterEvalCtx_.selectedBits->as<uint64_t>(), size);
+      }
+      project(*rows, &evalCtx);
+    }
+
+    return fillOutput(
+        numOut, allRowsSelected ? nullptr : filterEvalCtx_.selectedIndices);
+  } catch (const std::exception& e) {
+    LOG(INFO) << "FilterProject: " << e.what() << input_->type()->toString();
+    std::stringstream out;
+    for (auto child : input_->children()) {
+      LOG(INFO) << child->toString();
+      LOG(INFO) << child->toString(0, child->size());
+    }
+
+    std::stringstream label;
+    label << "FilterProject: ";
+    for (auto i = 0; i < numExprs_; ++i) {
+      label << exprs_->expr(i)->toString() << " ";
+    }
+    LOG(INFO) << "Exprs: " << label.str();
+    throw;
+  }
 }
 
 void FilterProject::project(const SelectivityVector& rows, EvalCtx* evalCtx) {

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/HiveConnector.h"
-
-#include <memory>
+#include <velox/dwio/dwrf/reader/SelectiveColumnReader.h>
+#include "velox/common/process/TraceContext.h"
 
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
@@ -288,6 +288,7 @@ bool testFilters(
   const auto& rowType = reader->rowType();
   for (const auto& child : scanSpec->children()) {
     if (child->filter()) {
+      child->clearSpecializedFilter();
       const auto& name = child->fieldName();
       if (!rowType->containsChild(name)) {
         // Column is missing. Most likely due to schema evolution.
@@ -397,9 +398,14 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       readerOpts_.setDataCacheConfig(std::move(dataCacheConfig));
     }
     readerOpts_.getDataCacheConfig()->filenum = fileHandle_->uuid.id();
-    bufferedInputFactory_ = std::make_unique<dwrf::CachedBufferedInputFactory>(
+    cache::FileGroupStats* groupStats = asyncCache->ssdCache()
+        ? &asyncCache->ssdCache()->groupStats()
+        : nullptr;
+    auto tracker =
+        Connector::getTracker(scanId_, readerOpts_.loadQuantum(), groupStats);
+    bufferedInputFactory_ = std::make_shared<dwrf::CachedBufferedInputFactory>(
         (asyncCache),
-        Connector::getTracker(scanId_, readerOpts_.loadQuantum()),
+        tracker,
         fileHandle_->groupId.id(),
         [factory = fileHandleFactory_, path = split_->filePath]() {
           return makeStreamHolder(factory, path);
@@ -511,10 +517,40 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       rowReaderOpts_.select(cs).range(split_->start, split_->length));
 }
 
+void HiveDataSource::setFromDataSource(
+    std::shared_ptr<DataSource> sourceShared) {
+  auto source = dynamic_cast<HiveDataSource*>(sourceShared.get());
+  VELOX_CHECK(source, "Bad DataSource type");
+  emptySplit_ = source->emptySplit_;
+  split_ = std::move(source->split_);
+  if (emptySplit_) {
+    // Leave old readers in place so tat their adaptation can be moved to a new
+    // reader.
+    return;
+  }
+  if (rowReader_) {
+    if (!source->rowReader_->moveAdaptationFrom(*rowReader_)) {
+      // The source had a reader that did not have state that could be
+      // advanced. Keep the old readers so that you can transfer the
+      // adaptation to the next non-empty one.
+      emptySplit_ = true;
+      return;
+    }
+  }
+  reader_ = std::move(source->reader_);
+  rowReader_ = std::move(source->rowReader_);
+  scanSpec_ = std::move(source->scanSpec_);
+  // New io will be accounted on the stats of 'source'. Add the existing
+  // balance to that.
+  source->ioStats_->merge(*ioStats_);
+  ioStats_ = std::move(source->ioStats_);
+}
+
 RowVectorPtr HiveDataSource::next(uint64_t size) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   if (emptySplit_) {
-    resetSplit();
+    split_.reset();
+    // Keep readers around to hold adaptation.
     return nullptr;
   }
 
@@ -526,6 +562,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
   // column, e.g. rand() < 0.1. Evaluate that conjunct first, then scan only
   // rows that passed.
 
+  process::TraceContext trace(fmt::format("Scan: {}", split_->filePath), true);
   auto rowsScanned = rowReader_->next(size, output_);
   completedRows_ += rowsScanned;
 
@@ -577,10 +614,7 @@ RowVectorPtr HiveDataSource::next(uint64_t size) {
 
 void HiveDataSource::resetSplit() {
   split_.reset();
-  // Make sure to destroy Reader and RowReader in the opposite order of
-  // creation, e.g. destroy RowReader first, then destroy Reader.
-  rowReader_.reset();
-  reader_.reset();
+  // Keep readers around to hold adaptation.
 }
 
 vector_size_t HiveDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {

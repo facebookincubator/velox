@@ -235,21 +235,20 @@ class InPredicate : public exec::VectorFunction {
       return;
     }
 
-    VELOX_CHECK_EQ(arg->encoding(), VectorEncoding::Simple::FLAT);
-    auto flatArg = arg->asUnchecked<FlatVector<T>>();
-    auto rawValues = flatArg->rawValues();
+    exec::LocalDecodedVector localDecoded(context, *arg, rows);
+    auto decoded = localDecoded.get();
 
     BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
     auto boolResult = static_cast<FlatVector<bool>*>((*result).get());
 
     auto rawResults = boolResult->mutableRawValues<uint64_t>();
 
-    if (flatArg->mayHaveNulls() || passOrNull) {
+    if (decoded->mayHaveNulls() || passOrNull) {
       rows.applyToSelected([&](auto row) {
-        if (flatArg->isNullAt(row)) {
+        if (decoded->isNullAt(row)) {
           boolResult->setNull(row, true);
         } else {
-          bool pass = testFunction(rawValues[row]);
+          bool pass = testFunction(decoded->valueAt<T>(row));
           if (!pass && passOrNull) {
             boolResult->setNull(row, true);
           } else {
@@ -259,7 +258,7 @@ class InPredicate : public exec::VectorFunction {
       });
     } else {
       rows.applyToSelected([&](auto row) {
-        bool pass = testFunction(rawValues[row]);
+        bool pass = testFunction(decoded->valueAt<T>(row));
         bits::setBit(rawResults, row, pass);
       });
     }

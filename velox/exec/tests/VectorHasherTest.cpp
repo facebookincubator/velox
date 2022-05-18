@@ -148,6 +148,29 @@ class VectorHasherTest : public testing::Test {
         base);
   }
 
+  void testStringSimd(
+      FlatVector<StringView>& vector,
+      SelectivityVector& rows,
+      bool expectRange) {
+    auto hasher = std::make_unique<VectorHasher>(VARCHAR(), 0);
+    raw_vector<uint64_t> hashes(rows.end());
+    EXPECT_FALSE(hasher->computeValueIds(vector, rows, hashes));
+    uint64_t rangeSize;
+    uint64_t distinctSize;
+    hasher->cardinality(rangeSize, distinctSize);
+    if (expectRange) {
+      EXPECT_NE(VectorHasher::kRangeTooLarge, rangeSize);
+      hasher->enableValueRange(1, 0);
+    } else {
+      EXPECT_EQ(VectorHasher::kRangeTooLarge, rangeSize);
+      hasher->enableValueIds(1, 0);
+    }
+    EXPECT_TRUE(hasher->computeValueIds(vector, rows, hashes));
+    rows.applyToSelected([&](vector_size_t row) {
+      EXPECT_EQ(hashes[row], hasher->valueId(vector.valueAt(row)));
+    });
+  }
+
   std::unique_ptr<memory::ScopedMemoryPool> pool_;
   SelectivityVector allRows_;
   SelectivityVector oddRows_;
@@ -367,6 +390,26 @@ TEST_F(VectorHasherTest, stringIds) {
   // range.
   hasher->lookupValueIds(*vector, rows, scratchMemory, hashes);
   EXPECT_EQ(numInRange, rows.countSelected());
+}
+
+TEST_F(VectorHasherTest, stringIdSimd) {
+  auto source = std::static_pointer_cast<FlatVector<StringView>>(
+      BaseVector::create(VARCHAR(), 1000, pool_.get()));
+  for (auto i = 0; i < source->size(); ++i) {
+    auto str = fmt::format(
+        "{}",
+        (i % 100) *
+            (i < 200       ? 1
+                 : i < 700 ? 100
+                           : 1000000));
+    source->set(i, StringView(str));
+  }
+  SelectivityVector rows(165);
+  testStringSimd(*source, rows, true);
+  rows.resize(511);
+  testStringSimd(*source, rows, true);
+  rows.resize(1000);
+  testStringSimd(*source, rows, false);
 }
 
 TEST_F(VectorHasherTest, integerIds) {
