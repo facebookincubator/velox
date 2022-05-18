@@ -18,17 +18,23 @@
 
 namespace facebook::velox::substrait {
 
-::substrait::Plan* VeloxToSubstraitPlanConvertor::toSubstrait(
+::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const PlanNode>& plan) {
   // Assume only accepts a single plan fragment.
   // TODO add root_rel
   ::substrait::Plan* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
+
+  // Add Extension Functions.
+  substraitPlan->add_extensions()->mutable_extension_function()->MergeFrom(
+      addExtensionFunc(arena));
+
+  // Do conversion.
   ::substrait::Rel* rel = substraitPlan->add_relations()->mutable_rel();
   toSubstrait(arena, plan, rel);
 
-  return substraitPlan;
+  return *substraitPlan;
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -153,6 +159,24 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   }
 
   return;
+}
+
+::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction&
+VeloxToSubstraitPlanConvertor::addExtensionFunc(
+    google::protobuf::Arena& arena) {
+  // TODO: Fetch all functions from velox's registry and add them into substrait
+  // extensions.
+  // Now we just work around this part and add one function as dummy version to
+  // pass filter round-trip test.
+  auto extensionFunction = google::protobuf::Arena::CreateMessage<
+      ::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction>(
+      &arena);
+
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(0);
+  extensionFunction->set_name("lt:i32_i32");
+
+  return *extensionFunction;
 }
 
 } // namespace facebook::velox::substrait

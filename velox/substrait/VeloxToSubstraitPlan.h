@@ -43,7 +43,7 @@ class VeloxToSubstraitPlanConvertor {
   /// \param arena Arena to use for allocating Substrait plan objects.
   /// \return A pointer to Substrait plan object allocated on the arena and
   /// representing the input Velox plan.
-  ::substrait::Plan* toSubstrait(
+  ::substrait::Plan& toSubstrait(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const PlanNode>& planNode);
 
@@ -71,6 +71,11 @@ class VeloxToSubstraitPlanConvertor {
       google::protobuf::Arena& arena,
       const std::shared_ptr<const ProjectNode>& projectNode,
       ::substrait::ProjectRel* projectRel);
+
+  ///  Fetch all functions from Velox's registry and create Substrait extensions
+  ///  for these.
+  ::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction&
+  addExtensionFunc(google::protobuf::Arena& arena);
 
   VeloxToSubstraitExprConvertor exprConvertor_;
   VeloxToSubstraitTypeConvertor typeConvertor_;

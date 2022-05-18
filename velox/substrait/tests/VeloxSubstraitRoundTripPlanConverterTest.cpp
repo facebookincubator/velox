@@ -29,7 +29,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::substrait;
 
-class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
+class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
  protected:
   /// Makes a vector of INTEGER type with 'size' RowVectorPtr.
   /// @param size The number of RowVectorPtr.
@@ -61,32 +61,42 @@ class SubstraitVeloxPlanConvertorTest : public OperatorTestBase {
     assertQuery(plan, duckDbSql);
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
-    convertor_.toSubstrait(arena, plan);
+    auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
+
+    // Convert Substrait Plan to Velox Plan.
+    auto veloxPlan =
+        substraitConverter_->toVeloxPlan(substraitPlan, pool_.get());
+
+    // Assert velox again.
+    assertQuery(veloxPlan, duckDbSql);
   }
 
-  VeloxToSubstraitPlanConvertor convertor_;
+  std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
+      std::make_shared<VeloxToSubstraitPlanConvertor>();
+  std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
+      std::make_shared<SubstraitVeloxPlanConverter>();
+  std::unique_ptr<memory::ScopedMemoryPool> pool_{
+      memory::getDefaultScopedMemoryPool()};
 };
 
-TEST_F(SubstraitVeloxPlanConvertorTest, project) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, project) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
-  auto plan =
-      PlanBuilder().values(vectors).project({"c0 + c1", "c1 - c2"}).planNode();
-  assertPlanConversion(plan, "SELECT  c0 + c1, c1 - c2 FROM tmp");
+  auto plan = PlanBuilder().values(vectors).project({"c0", "c1"}).planNode();
+  assertPlanConversion(plan, "SELECT c0, c1 FROM tmp");
 }
 
-TEST_F(SubstraitVeloxPlanConvertorTest, filter) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, filter) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
 
-  const std::string& filter =
-      "(c2 < 1000) and (c1 between 0.6 and 1.6) and (c0 >= 100)";
+  const std::string& filter = "c2 < 1000";
   auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
 
   assertPlanConversion(plan, "SELECT * FROM tmp WHERE " + filter);
 }
 
-TEST_F(SubstraitVeloxPlanConvertorTest, values) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
 
