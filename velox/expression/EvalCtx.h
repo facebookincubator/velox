@@ -210,17 +210,17 @@ class EvalCtx {
     moveOrCopyResult(localResult, rows, *result);
   }
 
-      BaseVector::ensureWritable(
-          rows,
-          result->type(),
-          result->pool(),
-          &result,
-          &execCtx_->vectorPool());
+  BaseVector::ensureWritable(
+      rows,
+      result->type(),
+      result->pool(),
+      &result,
+      &execCtx_->vectorPool());
 
   result->copy(localResult.get(), rows, nullptr);
-     } else {
-       result = localResult;
- 
+} else {
+  result = localResult;
+
   VectorPool& vectorPool() const {
     return execCtx_->vectorPool();
   }
@@ -229,24 +229,22 @@ class EvalCtx {
     return execCtx_->getVector(type, size);
   }
 
-  void releaseVector(VectorPtr& vector) {
+  void releaseVector(VectorPtr & vector) {
     execCtx_->releaseVector(vector);
   }
 
-  void releaseVectors(std::vector<VectorPtr>& vectors) {
+  void releaseVectors(std::vector<VectorPtr> & vectors) {
     execCtx_->releaseVectors(vectors);
   }
 
   // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the
   // pool of 'execCtx_' if needed.
   void ensureWritable(
-      const SelectivityVector& rows,
-      const TypePtr& type,
-      VectorPtr& result) {
+      const SelectivityVector& rows, const TypePtr& type, VectorPtr& result) {
     BaseVector::ensureWritable(
         rows, type, execCtx_->pool(), &result, &execCtx_->vectorPool());
   }
-  
+
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
