@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include "velox/dwio/common/SeekableInputStream.h"
-#include <dwio/common/Common.h>
 #include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/CompressionBufferPool.h"
