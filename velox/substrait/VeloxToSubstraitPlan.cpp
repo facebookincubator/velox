@@ -20,15 +20,22 @@ namespace facebook::velox::substrait {
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const PlanNode>& plan) {
+    const PlanNodePtr& plan) {
   // Assume only accepts a single plan fragment.
+
+  // Construct the function map based on the Velox plan.
+  constructFunctionMap(plan);
+
+  // Construct the expression converter.
+  exprConvertor_ =
+      std::make_shared<VeloxToSubstraitExprConvertor>(functionMap_);
+
   // TODO add root_rel
   ::substrait::Plan* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
 
   // Add Extension Functions.
-  substraitPlan->add_extensions()->mutable_extension_function()->MergeFrom(
-      addExtensionFunc(arena));
+  substraitPlan->MergeFrom(addExtensionFunc(arena));
 
   // Do conversion.
   ::substrait::Rel* rel = substraitPlan->add_relations()->mutable_rel();
@@ -39,7 +46,7 @@ namespace facebook::velox::substrait {
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
-    const std::shared_ptr<const PlanNode>& planNode,
+    const PlanNodePtr& planNode,
     ::substrait::Rel* rel) {
   if (auto filterNode = std::dynamic_pointer_cast<const FilterNode>(planNode)) {
     auto filterRel = rel->mutable_filter();
@@ -63,7 +70,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const FilterNode>& filterNode,
     ::substrait::FilterRel* filterRel) {
-  std::vector<std::shared_ptr<const PlanNode>> sources = filterNode->sources();
+  std::vector<PlanNodePtr> sources = filterNode->sources();
 
   // Check there only have one input.
   VELOX_USER_CHECK_EQ(
@@ -78,7 +85,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   auto filterCondition = filterNode->filter();
   auto inputType = source->outputType();
   filterRel->mutable_condition()->MergeFrom(
-      exprConvertor_.toSubstraitExpr(arena, filterCondition, inputType));
+      exprConvertor_->toSubstraitExpr(arena, filterCondition, inputType));
 
   filterRel->mutable_common()->mutable_direct();
 }
@@ -93,7 +100,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       readRel->mutable_virtual_table();
 
   readRel->mutable_base_schema()->MergeFrom(
-      typeConvertor_.toSubstraitNamedStruct(arena, outputType));
+      typeConvertor_->toSubstraitNamedStruct(arena, outputType));
 
   // The row number of the input data.
   int64_t numVectors = valuesNode->values().size();
@@ -114,7 +121,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
       const VectorPtr& child = rowVector->childAt(column);
 
-      substraitField->MergeFrom(exprConvertor_.toSubstraitExpr(
+      substraitField->MergeFrom(exprConvertor_->toSubstraitExpr(
           arena, std::make_shared<ConstantTypedExpr>(child), litValue));
     }
   }
@@ -128,7 +135,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   std::vector<std::shared_ptr<const ITypedExpr>> projections =
       projectNode->projections();
 
-  std::vector<std::shared_ptr<const PlanNode>> sources = projectNode->sources();
+  std::vector<PlanNodePtr> sources = projectNode->sources();
   // Check there only have one input.
   VELOX_USER_CHECK_EQ(
       1, sources.size(), "Project plan node must have exactly one source.");
@@ -152,7 +159,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     const auto& veloxExpr = projections.at(i);
 
     projectRel->add_expressions()->MergeFrom(
-        exprConvertor_.toSubstraitExpr(arena, veloxExpr, inputType));
+        exprConvertor_->toSubstraitExpr(arena, veloxExpr, inputType));
 
     // Add outputMapping for each expression.
     projRelEmit->add_output_mapping(inputTypeSize + i);
@@ -161,22 +168,51 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   return;
 }
 
-::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction&
-VeloxToSubstraitPlanConvertor::addExtensionFunc(
+void VeloxToSubstraitPlanConvertor::constructFunctionMap(
+    const PlanNodePtr& planNode) {
+  // TODO: Fetch all functions from velox's registry.
+
+  functionMap_["plus"] = 0;
+  functionMap_["multiply"] = 1;
+  functionMap_["lt"] = 2;
+  functionMap_["divide"] = 3;
+}
+
+::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
     google::protobuf::Arena& arena) {
   // TODO: Fetch all functions from velox's registry and add them into substrait
   // extensions.
   // Now we just work around this part and add one function as dummy version to
-  // pass filter round-trip test.
-  auto extensionFunction = google::protobuf::Arena::CreateMessage<
-      ::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction>(
-      &arena);
+  // pass filter and project round-trip test.
+  auto substraitPlan =
+      google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
+
+  auto extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
 
   extensionFunction->set_extension_uri_reference(0);
   extensionFunction->set_function_anchor(0);
+  extensionFunction->set_name("add:i32_i32");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(1);
+  extensionFunction->set_name("multiply:i32_i32");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(1);
+  extensionFunction->set_function_anchor(2);
   extensionFunction->set_name("lt:i32_i32");
 
-  return *extensionFunction;
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(3);
+  extensionFunction->set_name("divide:i32_i32");
+
+  return *substraitPlan;
 }
 
 } // namespace facebook::velox::substrait

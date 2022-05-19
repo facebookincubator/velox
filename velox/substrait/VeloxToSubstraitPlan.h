@@ -39,19 +39,19 @@ namespace facebook::velox::substrait {
 class VeloxToSubstraitPlanConvertor {
  public:
   /// Convert Velox PlanNode into Substrait Plan.
-  /// \param vPlan Velox query plan to convert.
-  /// \param arena Arena to use for allocating Substrait plan objects.
-  /// \return A pointer to Substrait plan object allocated on the arena and
+  /// @param vPlan Velox query plan to convert.
+  /// @param arena Arena to use for allocating Substrait plan objects.
+  /// @return A pointer to Substrait plan object allocated on the arena and
   /// representing the input Velox plan.
   ::substrait::Plan& toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const PlanNode>& planNode);
+      const PlanNodePtr& planNode);
 
  private:
   /// Convert Velox PlanNode into Substrait Rel.
   void toSubstrait(
       google::protobuf::Arena& arena,
-      const std::shared_ptr<const PlanNode>& planNode,
+      const PlanNodePtr& planNode,
       ::substrait::Rel* rel);
 
   /// Convert Velox FilterNode into Substrait FilterRel.
@@ -72,12 +72,21 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const ProjectNode>& projectNode,
       ::substrait::ProjectRel* projectRel);
 
+  /// Construct the function map between the Velox function name and index.
+  void constructFunctionMap(const PlanNodePtr& planNode);
+
   ///  Fetch all functions from Velox's registry and create Substrait extensions
   ///  for these.
-  ::substrait::extensions::SimpleExtensionDeclaration_ExtensionFunction&
-  addExtensionFunc(google::protobuf::Arena& arena);
+  ::substrait::Plan& addExtensionFunc(google::protobuf::Arena& arena);
 
-  VeloxToSubstraitExprConvertor exprConvertor_;
-  VeloxToSubstraitTypeConvertor typeConvertor_;
+  /// The Expression converter used to convert Velox representations into
+  /// Substrait expressions.
+  std::shared_ptr<VeloxToSubstraitExprConvertor> exprConvertor_;
+
+  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
+
+  /// The map storing the relations between the function name and the function
+  /// id. Will be constructed based on the Velox representation.
+  std::unordered_map<std::string, uint64_t> functionMap_;
 };
 } // namespace facebook::velox::substrait
