@@ -63,12 +63,12 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
     google::protobuf::Arena arena;
     auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
 
-    // Convert Substrait Plan to Velox Plan.
-    auto veloxPlan =
+    // Convert Substrait Plan to the same Velox Plan.
+    auto samePlan =
         substraitConverter_->toVeloxPlan(substraitPlan, pool_.get());
 
     // Assert velox again.
-    assertQuery(veloxPlan, duckDbSql);
+    assertQuery(samePlan, duckDbSql);
   }
 
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
@@ -82,25 +82,34 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, project) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
-  auto plan = PlanBuilder().values(vectors).project({"c0", "c1"}).planNode();
-  assertPlanConversion(plan, "SELECT c0, c1 FROM tmp");
+  auto plan =
+      PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
+  assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, filter) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
 
-  const std::string& filter = "c2 < 1000";
-  auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
+  auto plan = PlanBuilder().values(vectors).filter("c2 < 1000").planNode();
 
-  assertPlanConversion(plan, "SELECT * FROM tmp WHERE " + filter);
+  assertPlanConversion(plan, "SELECT * FROM tmp WHERE c2 < 1000");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {
-  auto vectors = makeVectors(3, 4, 2);
-  createDuckDbTable(vectors);
+  RowVectorPtr vectors = makeRowVector(
+      {makeFlatVector<int64_t>(
+           {2499109626526694126, 2342493223442167775, 4077358421272316858}),
+       makeFlatVector<int32_t>({581869302, -708632711, -133711905}),
+       makeFlatVector<double>(
+           {0.90579193414549275, 0.96886777112423139, 0.63235925003444637}),
+       makeFlatVector<bool>({true, false, false}),
+       makeFlatVector<int32_t>(3, nullptr, nullEvery(1))
 
-  auto plan = PlanBuilder().values(vectors).planNode();
+      });
+  createDuckDbTable({vectors});
+
+  auto plan = PlanBuilder().values({vectors}).planNode();
 
   assertPlanConversion(plan, "SELECT * FROM tmp");
 }
