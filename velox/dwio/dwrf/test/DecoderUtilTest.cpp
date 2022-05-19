@@ -162,7 +162,7 @@ TEST_F(DecoderUtilTest, nonNullsFromSparse) {
   }
 }
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 // Excerpt from LazyVector.h.
 struct NoHook {
   void addValues(
@@ -172,7 +172,7 @@ struct NoHook {
       uint8_t /*valueWidth*/) {}
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common
 
 TEST_F(DecoderUtilTest, processFixedWithRun) {
   // Tests processing consecutive batches of integers with processFixedWidthRun.
@@ -211,7 +211,7 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
         data.data() + rowIndex,
         numInput * sizeof(results[0]));
 
-    dwrf::NoHook noHook;
+    NoHook noHook;
     dwio::common::processFixedWidthRun<int32_t, false, true, false>(
         rows,
         rowIndex,

@@ -47,7 +47,7 @@ class PositionProvider {
  */
 class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
  public:
-  ~SeekableInputStream() = default;
+  ~SeekableInputStream() override = default;
 
   virtual void seekToPosition(PositionProvider& position) = 0;
 

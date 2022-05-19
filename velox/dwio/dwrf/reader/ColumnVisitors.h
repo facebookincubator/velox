@@ -17,19 +17,20 @@
 #pragma once
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
 // structs for extractValues in ColumnVisitor.
 
-NoHook& noHook();
+dwio::common::NoHook& noHook();
 
 // Represents values not being retained after filter evaluation.
 
 struct DropValues {
   static constexpr bool kSkipNulls = false;
-  using HookType = NoHook;
+  using HookType = dwio::common::NoHook;
 
   bool acceptsNulls() const {
     return true;
@@ -47,7 +48,7 @@ struct DropValues {
 
 template <typename TReader>
 struct ExtractToReader {
-  using HookType = NoHook;
+  using HookType = dwio::common::NoHook;
   static constexpr bool kSkipNulls = false;
   explicit ExtractToReader(TReader* readerIn) : reader(readerIn) {}
 
@@ -64,7 +65,7 @@ struct ExtractToReader {
 
   TReader* reader;
 
-  NoHook& hook() {
+  dwio::common::NoHook& hook() {
     return noHook();
   }
 };
