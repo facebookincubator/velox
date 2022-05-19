@@ -1088,7 +1088,7 @@ class StringDictionaryColumnVisitor
       DCHECK_EQ(input, values + numValues);
       if (scatter) {
         dwio::common::scatterDense(
-                    input, scatterRows + super::rowIndex_, numInput, values);
+            input, scatterRows + super::rowIndex_, numInput, values);
       }
       numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
                           : numValues + numInput;

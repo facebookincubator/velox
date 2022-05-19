@@ -162,6 +162,9 @@ TEST_F(DecoderUtilTest, nonNullsFromSparse) {
   }
 }
 
+// TODO: This NoHook has been moved to facebook::velox::dwio::common. It should
+//  be moved after SelectiveColumnReader has been refactored.
+
 namespace facebook::velox::dwio::common {
 // Excerpt from LazyVector.h.
 struct NoHook {
@@ -172,7 +175,7 @@ struct NoHook {
       uint8_t /*valueWidth*/) {}
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common
 
 TEST_F(DecoderUtilTest, processFixedWithRun) {
   // Tests processing consecutive batches of integers with processFixedWidthRun.

@@ -32,8 +32,8 @@ std::string compressionKindToString(CompressionKind kind) {
       return "lzo";
     case CompressionKind_ZSTD:
       return "zstd";
-   case CompressionKind_LZ4:
-     return "lz4";
+    case CompressionKind_LZ4:
+      return "lz4";
   }
   return folly::to<std::string>("unknown - ", kind);
 }

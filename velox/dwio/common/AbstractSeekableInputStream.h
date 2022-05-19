@@ -24,7 +24,7 @@
 namespace facebook::velox::dwio::common {
 
 class AbstractSeekableInputStream
-    : public google::protobuf::io::ZeroCopyInputStream{
+    : public google::protobuf::io::ZeroCopyInputStream {
  public:
   virtual bool Next(const void** data, int* size) = 0;
   virtual bool Skip(int count) = 0;
