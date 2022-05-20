@@ -42,6 +42,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
   fileHandle->file = filesystems::getFileSystem(filename, properties_)
                          ->openFileForRead(filename);
   fileHandle->uuid = StringIdLease(fileIds(), filename);
+  FileSizes::setSize(fileHandle->uuid.id(), fileHandle->file->size());
   fileHandle->groupId = StringIdLease(fileIds(), groupName(filename));
   VLOG(1) << "Generating file handle for: " << filename
           << " uuid: " << fileHandle->uuid.id();

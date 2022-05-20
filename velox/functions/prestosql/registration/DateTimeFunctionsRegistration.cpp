@@ -79,6 +79,7 @@ void registerSimpleFunctions() {
   registerFunction<DateParseFunction, Timestamp, Varchar, Varchar>(
       {"date_parse"});
 }
+
 } // namespace
 
 void registerDateTimeFunctions() {

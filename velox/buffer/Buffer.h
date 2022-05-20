@@ -488,6 +488,7 @@ class AlignedBuffer : public Buffer {
   }
 
   void freeToPool() override {
+    pool_->checkMagic();
     pool_->free(this, kPaddedSize + capacity_);
   }
 };
@@ -603,6 +604,7 @@ class NonPODAlignedBuffer : public Buffer {
   }
 
   void freeToPool() override {
+    pool_->checkMagic();
     pool_->free(this, AlignedBuffer::kPaddedSize + capacity_);
   }
 

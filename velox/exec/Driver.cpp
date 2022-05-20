@@ -19,6 +19,7 @@
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <gflags/gflags.h>
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
@@ -260,6 +261,8 @@ StopReason Driver::runInternal(
     }
     return stop;
   }
+  process::TraceContext trace(
+      fmt::format("driver {}", self->ctx_->task->taskId()), true);
 
   // Update the queued time after entering the Task to ensure the stats have not
   // been deleted.

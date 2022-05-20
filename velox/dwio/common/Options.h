@@ -285,6 +285,8 @@ enum class PrefetchMode {
                // current buffer, if any.
   PREFETCH = 2, // read a second buffer of autoPreloadLength bytes ahead of
                 // actual reads.
+  PREFETCH_STRIPES = 3 // Load metadata and densely accessed columns of the
+                       // next stripe on the executor of CachedBufferedInput.
 };
 
 /**

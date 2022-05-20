@@ -45,7 +45,11 @@ uint64_t IoStatistics::outputBatchSize() const {
 }
 
 uint64_t IoStatistics::incRawBytesRead(int64_t v) {
-  return rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
+  auto r = v + rawBytesRead_.fetch_add(v, std::memory_order_relaxed);
+  if ((int64_t)r < 0) {
+    LOG(INFO) << "bing";
+  }
+  return r;
 }
 
 uint64_t IoStatistics::incRawBytesWritten(int64_t v) {

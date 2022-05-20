@@ -43,14 +43,7 @@ struct DataAvailable {
 
 class DestinationBuffer {
  public:
-  void enqueue(std::shared_ptr<SerializedPage> data) {
-    // drop duplicate end markers
-    if (data == nullptr && !data_.empty() && data_.back() == nullptr) {
-      return;
-    }
-
-    data_.push_back(std::move(data));
-  }
+  void enqueue(std::shared_ptr<SerializedPage> data);
 
   // Copies data starting at 'sequence' into 'result', stopping after
   // exceeding 'maxBytes'. If there is no data, 'notify' is installed
@@ -79,6 +72,8 @@ class DestinationBuffer {
 
   std::string toString();
 
+  void updateStats(OperatorStats& stats);
+
  private:
   std::vector<std::shared_ptr<SerializedPage>> data_;
   // The sequence number of the first in 'data_'.
@@ -87,6 +82,16 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_;
   uint64_t notifyMaxBytes_;
+
+  // Microsecond time when 'this' became non-empty.
+  uint64_t dataAvailableSince_{0};
+  // Time spent in a non-empty state.
+  RuntimeMetric fetchDelay_{RuntimeCounter::Unit::kNanos};
+
+  int64_t dataFetchedSince_{0};
+  // Times between send and ack. Ack is either an ack message or a
+  // getData with a higher sequence number.
+  RuntimeMetric ackDelay_{RuntimeCounter::Unit::kNanos};
 };
 
 class PartitionedOutputBuffer {
@@ -136,6 +141,8 @@ class PartitionedOutputBuffer {
   // Continues any possibly waiting producers. Called when the
   // producer task has an error or cancellation.
   void terminate();
+
+  void updateStats(OperatorStats& stats);
 
   std::string toString();
 
@@ -264,6 +271,8 @@ class PartitionedOutputBufferManager {
       std::function<std::unique_ptr<OutputStreamListener>()> factory) {
     listenerFactory_ = factory;
   }
+
+  void updateStats(const std::string& taskId, OperatorStats& stats);
 
   std::string toString();
 

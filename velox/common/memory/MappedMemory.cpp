@@ -57,7 +57,11 @@ void MappedMemory::Allocation::findRun(
     }
     skipped += size;
   }
-  VELOX_CHECK(false, "Seeking to an out of range offset in Allocation");
+  VELOX_CHECK(
+      false,
+      "Seeking to an out of range offset in Allocation. offset {}, size{}",
+      offset,
+      skipped);
 }
 
 MachinePageCount MappedMemory::ContiguousAllocation::numPages() const {

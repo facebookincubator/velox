@@ -19,9 +19,11 @@ add_library(
   StringIdMap.cpp
   AsyncDataCache.cpp
   ScanTracker.cpp
+  FileGroupStats.cpp
   SsdCache.cpp
   SsdFile.cpp
   SsdFileTracker.cpp)
+
 target_link_libraries(
   velox_caching
   velox_memory

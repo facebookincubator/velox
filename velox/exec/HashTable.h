@@ -290,11 +290,7 @@ class HashTable : public BaseHashTable {
 
   void clear() override;
 
-  int64_t allocatedBytes() const override {
-    // for each row: 1 byte per tag + sizeof(Entry) per table entry + memory
-    // allocated with MappedMemory for fixed-width rows and strings.
-    return (1 + sizeof(char*)) * size_ + rows_->allocatedBytes();
-  }
+  int64_t allocatedBytes() const override;
 
   HashStringAllocator* stringAllocator() override {
     return &rows_->stringAllocator();

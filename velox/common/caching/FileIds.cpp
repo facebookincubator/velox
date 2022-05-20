@@ -23,4 +23,8 @@ StringIdMap& fileIds() {
   static StringIdMap* ids = new StringIdMap();
   return *ids;
 }
+
+std::mutex FileSizes::mutex_;
+std::unordered_map<uint64_t, uint64_t> FileSizes::idToSize_;
+
 } // namespace facebook::velox
