@@ -542,7 +542,8 @@ class PlanBuilder {
   /// @param outputLayout Optional output layout in case it is different then
   /// the input. Output columns may appear in different order from the input,
   /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output.
+  /// duplicated in the output. Supports "col AS alias" syntax to change the
+  /// names for the input columns.
   PlanBuilder& localPartition(
       const std::vector<std::string>& keys,
       const std::vector<std::shared_ptr<const core::PlanNode>>& sources,
@@ -556,7 +557,8 @@ class PlanBuilder {
   /// @param outputLayout Optional output layout in case it is different then
   /// the input. Output columns may appear in different order from the input,
   /// some input columns may be missing in the output, some columns may be
-  /// duplicated in the output.
+  /// duplicated in the output. Supports "col AS alias" syntax to change the
+  /// names for the input columns.
   PlanBuilder& localPartitionRoundRobin(
       const std::vector<std::shared_ptr<const core::PlanNode>>& sources,
       const std::vector<std::string>& outputLayout = {});

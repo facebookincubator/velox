@@ -19,7 +19,7 @@ set -efx -o pipefail
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 
-export CFLAGS=$(get_cxx_flags)  # Used by LZO.
+export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 

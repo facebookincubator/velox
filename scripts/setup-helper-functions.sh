@@ -45,68 +45,74 @@ function github_checkout {
 # The goal of this function is to consolidate all architecture specific flags to one
 # location.
 # The values that CPU_ARCH can take are as follows:
-#   ARM64  : Target Apple silicon.
-#   AARCH64: Target general 64 bit arm cpus.
-#   AVX:     Target Intel CPUs with AVX.
-#   SSE:     Target Intel CPUs with SSE.
+#   arm64  : Target Apple silicon.
+#   aarch64: Target general 64 bit arm cpus.
+#   avx:     Target Intel CPUs with AVX.
+#   sse:     Target Intel CPUs with sse.
 # Echo's the appropriate compiler flags which can be captured as so
 # CXX_FLAGS=$(get_cxx_flags) or
-# CXX_FLAGS=$(get_cxx_flags "AVX")
+# CXX_FLAGS=$(get_cxx_flags "avx")
 
 function get_cxx_flags {
   local CPU_ARCH=$1
 
-  local OS=`uname`
-  local MACHINE=`uname -m`
+  local OS
+  OS=$(uname)
+  local MACHINE
+  MACHINE=$(uname -m)
 
   if [ -z "$CPU_ARCH" ]; then
 
-    if [ $OS = "Darwin" ]; then
+    if [ "$OS" = "Darwin" ]; then
 
-      if [ $MACHINE = "x86_64" ]; then
-        local CPU_CAPABILITIES=`sysctl -a | grep machdep.cpu.features | awk '{print tolower($0)}'`
+      if [ "$MACHINE" = "x86_64" ]; then
+        local CPU_CAPABILITIES
+        CPU_CAPABILITIES=$(sysctl -a | grep machdep.cpu.features | awk '{print tolower($0)}')
 
         if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
-          CPU_ARCH="AVX"
+          CPU_ARCH="avx"
         else
-          CPU_ARCH="SSE"
+          CPU_ARCH="sse"
         fi
 
-      elif [ `sysctl -a | grep machdep.cpu.brand_string` =~ "Apple" ]; then
+      elif [[ $(sysctl -a | grep machdep.cpu.brand_string) =~ "Apple" ]]; then
         # Apple silicon.
-        CPU_ARCH="ARM64"
+        CPU_ARCH="arm64"
       fi
-    else [ $OS = "Linux" ];
+    else [ "$OS" = "Linux" ];
 
-      local CPU_CAPABILITIES=`cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}'`
+      local CPU_CAPABILITIES
+      CPU_CAPABILITIES=$(cat /proc/cpuinfo | grep flags | head -n 1| awk '{print tolower($0)}')
 
-      if [[ $CPU_CAPABILITIES =~ "avx" ]]; then
-            CPU_ARCH="AVX"
-      elif [[ $CPU_CAPABILITIES =~ "sse" ]]; then
-            CPU_ARCH="SSE"
-      elif [ $MACHINE = "aarch64" ]; then
-            CPU_ARCH="AARCH64"
+      if [[ "$CPU_CAPABILITIES" =~ "avx" ]]; then
+            CPU_ARCH="avx"
+      elif [[ "$CPU_CAPABILITIES" =~ "sse" ]]; then
+            CPU_ARCH="sse"
+      elif [ "$MACHINE" = "aarch64" ]; then
+            CPU_ARCH="aarch64"
       fi
     fi
   fi
 
   case $CPU_ARCH in
 
-    "ARM64")
+    "arm64")
       echo -n "-mcpu=apple-m1+crc -std=c++17"
     ;;
 
-    "AVX")
+    "avx")
       echo -n "-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt -std=c++17"
     ;;
 
-    "SSE")
-      echo -n "-mf16c -masm=intel -mlzcnt -msse -std=c++17"
+    "sse")
+      echo -n "-mf16c -masm=intel -mlzcnt -msse"
     ;;
 
-    "AARCH64")
+    "aarch64")
       echo -n "-march=armv8-a+crc+crypto -std=c++17"
     ;;
+  *)
+    echo -n "Architecture not supported!"
   esac
 
 }

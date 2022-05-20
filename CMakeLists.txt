@@ -157,6 +157,7 @@ execute_process(
     bash -c
     "( source ./scripts/setup-helper-functions.sh; echo -n $(get_cxx_flags))"
   OUTPUT_VARIABLE SCRIPT_CXX_FLAGS)
+message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
