@@ -20,11 +20,7 @@
 #include <string>
 #include <typeinfo>
 
-#include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/HashPartitionFunction.h"
-#include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/type/Type.h"
 
 #include "velox/substrait/VeloxToSubstraitExpr.h"

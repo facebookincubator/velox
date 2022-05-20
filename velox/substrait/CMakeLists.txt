@@ -47,11 +47,9 @@ set(SRCS
     SubstraitToVeloxExpr.cpp
     SubstraitToVeloxPlan.cpp
     TypeUtils.cpp
-    GlobalCommonVariable.cpp
     VeloxToSubstraitExpr.cpp
     VeloxToSubstraitPlan.cpp
-    VeloxToSubstraitType.cpp
-    VeloxToSubstraitFunc.cpp)
+    VeloxToSubstraitType.cpp)
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
