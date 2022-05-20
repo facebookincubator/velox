@@ -14,9 +14,14 @@
 # limitations under the License.
 
 set -efx -o pipefail
+
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-export CFLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt -std=c++17"
+
+SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPTDIR/setup-helper-functions.sh
+
+export CFLAGS=$(get_cxx_flags)
 export CXXFLAGS=$CFLAGS  # Used by boost.
 
 yum -y install ccache
