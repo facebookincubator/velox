@@ -17,8 +17,8 @@
 #pragma once
 
 #include <folly/Varint.h>
-#include <gtest/gtest_prod.h>
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"

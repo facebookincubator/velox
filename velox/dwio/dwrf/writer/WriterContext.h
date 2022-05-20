@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
-
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"

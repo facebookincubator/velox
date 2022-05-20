@@ -19,8 +19,7 @@
 #include <iterator>
 #include <limits>
 
-#include <gtest/gtest_prod.h>
-
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"

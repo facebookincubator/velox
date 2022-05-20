@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "gtest/gtest_prod.h"
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 #include "velox/dwio/dwrf/writer/WriterSink.h"
 

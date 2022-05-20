@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwrf {

@@ -16,10 +16,9 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
-
 #include <folly/Function.h>
 
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/vector/BaseVector.h"

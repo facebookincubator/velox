@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
 #include <bitset>
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 
 namespace facebook {

@@ -24,15 +24,14 @@
 #include <string>
 
 #include <fmt/format.h>
-#include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <gtest/gtest_prod.h>
 
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
 #include "folly/Random.h"
 #include "folly/SharedMutex.h"
 #include "folly/experimental/FunctionScheduler.h"
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 

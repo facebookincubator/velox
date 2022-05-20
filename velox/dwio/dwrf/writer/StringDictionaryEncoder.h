@@ -18,7 +18,8 @@
 
 #include <folly/container/F14Set.h>
 #include <folly/hash/Checksum.h>
-#include <gtest/gtest_prod.h>
+
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 
 namespace facebook::velox::dwrf {

@@ -29,3 +29,7 @@ add_library(
 
 target_link_libraries(velox_memory velox_flag_definitions velox_exception gtest
                       ${FOLLY_WITH_DEPENDENCIES})
+
+if(VELOX_ENABLE_GOOGLETEST)
+  target_link_libraries(velox_memory gtest)
+endif()

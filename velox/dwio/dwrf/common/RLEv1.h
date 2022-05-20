@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/dwrf/common/Adaptor.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
