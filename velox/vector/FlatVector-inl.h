@@ -177,7 +177,7 @@ void FlatVector<T>::copyValuesAndNulls(
       }
     } else {
       VELOX_CHECK_GE(source->size(), rows.end());
-      while (iter.next(row)) {
+      rows.applyToSelected([&](vector_size_t row) {
         if (sourceValues) {
           rawValues_[row] = sourceValues[row];
         }
@@ -185,7 +185,7 @@ void FlatVector<T>::copyValuesAndNulls(
           bits::setNull(
               rawNulls, row, sourceNulls && bits::isBitNull(sourceNulls, row));
         }
-      }
+      });
     }
   } else if (source->isConstantEncoding()) {
     if (source->isNullAt(0)) {
