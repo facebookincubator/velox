@@ -86,7 +86,7 @@ void FieldReference::evalSpecialForm(
     EvalCtx& context,
     VectorPtr& result) {
   if (result) {
-    BaseVector::ensureWritable(rows, type_, context.pool(), &result);
+    context.ensureWritable(rows, type_, result);
   }
 
   if (inputs_.empty()) {
@@ -382,7 +382,7 @@ void ConjunctExpr::evalSpecialForm(
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
   VarSetter saveError(context.mutableThrowOnError(), false);
-  BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+  context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {

@@ -85,12 +85,7 @@ class SimpleFunctionAdapter : public VectorFunction {
       // is unique, as is nulls.  We also know the size of the vector is
       // at least as large as the size of rows.
       if (!isResultReused) {
-        if (!*_result) {
-          *_result = context->getVector(outputType, _rows->size());
-        } else {
-          BaseVector::ensureWritable(
-              *rows, outputType, context->pool(), _result);
-        }
+        context->ensureWritable(*rows, outputType, *_result);
       }
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);
