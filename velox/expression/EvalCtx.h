@@ -208,17 +208,6 @@ class EvalCtx {
     moveOrCopyResult(localResult, rows, *result);
   }
 
-  BaseVector::ensureWritable(
-      rows,
-      result->type(),
-      result->pool(),
-      &result,
-      &execCtx_->vectorPool());
-
-  result->copy(localResult.get(), rows, nullptr);
-} else {
-  result = localResult;
-
   VectorPool& vectorPool() const {
     return execCtx_->vectorPool();
   }
