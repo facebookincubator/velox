@@ -208,6 +208,7 @@ std::unique_ptr<SerializedPage> ExchangeClient::next(
       }
     }
   }
+
   // Outside of lock
   for (auto& source : toRequest) {
     source->request();
