@@ -89,7 +89,7 @@ inline void negate(char* bits, int32_t size) {
 }
 
 template <typename T, typename U>
-inline T roundUp(T value, U factor) {
+constexpr inline T roundUp(T value, U factor) {
   return (value + (factor - 1)) / factor * factor;
 }
 
@@ -101,11 +101,11 @@ constexpr inline uint64_t highMask(int32_t bits) {
   return lowMask(bits) << (64 - bits);
 }
 
-inline uint64_t nbytes(int32_t bits) {
+constexpr inline uint64_t nbytes(int32_t bits) {
   return roundUp(bits, 8) / 8;
 }
 
-inline uint64_t nwords(int32_t bits) {
+constexpr inline uint64_t nwords(int32_t bits) {
   return roundUp(bits, 64) / 64;
 }
 
@@ -852,6 +852,17 @@ T extractBits(T a, T mask) {
   return dst;
 }
 #endif
+
+// Shift the bits of unsigned 32-bit integer a left by the number of
+// bits specified in shift, rotating the most-significant bit to the
+// least-significant bit location, and return the unsigned result.
+inline uint32_t rotateLeft(uint32_t a, int shift) {
+#ifdef __BMI2__
+  return _rotl(a, shift);
+#else
+  return (a << shift) | (a >> (32 - shift));
+#endif
+}
 
 } // namespace bits
 } // namespace velox

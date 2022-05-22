@@ -88,7 +88,8 @@ TEST_F(LimitTest, limitOverLocalExchange) {
           .planNode();
 
   TaskCursor cursor(params);
-  addSplit(cursor.task().get(), scanNodeId, makeHiveSplit(file->path));
+  cursor.task()->addSplit(
+      scanNodeId, exec::Split(makeHiveConnectorSplit(file->path)));
 
   int32_t numRead = 0;
   while (cursor.moveNext()) {
