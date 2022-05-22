@@ -190,7 +190,7 @@ class ExecCtx : public Context {
     }
     auto vector = std::move(selectivityVectorPool_.back());
     selectivityVectorPool_.pop_back();
-    vector->resize(size);
+    vector->resizeUninitialized(size);
     return vector;
   }
 

@@ -40,10 +40,11 @@ class SelectivityVector {
   SelectivityVector() {}
 
   explicit SelectivityVector(vector_size_t length, bool allSelected = true) {
-    resize(length);
-    if (!allSelected) {
-      clearAll();
-    }
+    bits_.resize(bits::nwords(length), allSelected ? ~0UL : 0);
+    size_ = length;
+    begin_ = 0;
+    end_ = allSelected ? size_ : 0;
+    allSelected_ = allSelected;
   }
 
   // Returns a statically allocated reference to an empty selectivity vector
@@ -75,6 +76,15 @@ class SelectivityVector {
     size_ = size;
 
     updateBounds();
+  }
+
+  // Sets the size and leaves content uninitialized and begin and end set to 0.
+  void resizeUnselected(int32_t size) {
+    auto numWords = bits::nwords(size);
+    bits_.resize(numWords);
+    begin_ = 0;
+    end_ = 0;
+    size_ = size;
   }
 
   /**
