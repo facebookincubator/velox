@@ -15,6 +15,7 @@
  */
 #include "velox/expression/SignatureBinder.h"
 #include <boost/algorithm/string.hpp>
+#include "velox/expression/type_calculation/TypeCalculation.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
@@ -74,6 +75,15 @@ bool SignatureBinder::tryBind(
       return false;
     }
 
+    if (actualType->kind() == TypeKind::SHORT_DECIMAL) {
+      const auto& variables = typeSignature.variables();
+      const ShortDecimalType* type =
+          static_cast<const ShortDecimalType*>(actualType.get());
+      variables_.emplace(variables[0], type->precision());
+      variables_.emplace(variables[1], type->scale());
+      return true;
+    }
+
     const auto& params = typeSignature.parameters();
     if (params.size() != actualType->size()) {
       return false;
@@ -102,20 +112,31 @@ bool SignatureBinder::tryBind(
 }
 
 TypePtr SignatureBinder::tryResolveType(
-    const exec::TypeSignature& typeSignature) const {
-  return tryResolveType(typeSignature, bindings_);
+    const exec::TypeSignature& typeSignature) {
+  return tryResolveType(typeSignature, bindings_, variables_, constraints_);
+}
+
+std::string buildCalculation(
+    const std::string& variable,
+    const std::string& calculation) {
+  std::stringstream calculate;
+  calculate << variable << " = " << calculation << "\n";
+  return calculate.str();
 }
 
 // static
 TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
-    const std::unordered_map<std::string, TypePtr>& bindings) {
+    const std::unordered_map<std::string, TypePtr>& bindings,
+    std::unordered_map<std::string, int>& variables,
+    const std::unordered_map<std::string, std::string>& constraints) {
   const auto& params = typeSignature.parameters();
 
   std::vector<TypePtr> children;
   children.reserve(params.size());
   for (auto& param : params) {
-    auto type = tryResolveType(param, bindings);
+    std::unordered_map<std::string, int> variables;
+    auto type = tryResolveType(param, bindings, variables);
     if (!type) {
       return nullptr;
     }
@@ -146,6 +167,27 @@ TypePtr SignatureBinder::tryResolveType(
     }
     if (*typeKind == TypeKind::OPAQUE) {
       return OpaqueType::create<void>();
+    }
+    if (*typeKind == TypeKind::SHORT_DECIMAL) {
+      const auto& precisionVar = typeSignature.variables()[0];
+      const auto& scaleVar = typeSignature.variables()[1];
+      // check for constraints, else set defaults.
+      const auto& precisionConstraint = constraints.find(precisionVar);
+      const auto& scaleConstraint = constraints.find(scaleVar);
+      int precision = 18;
+      int scale = 0;
+      if (precisionConstraint != constraints.end()) {
+        auto calculation =
+            buildCalculation(precisionVar, precisionConstraint->second);
+        expression::calculation::evaluate(calculation, variables);
+        precision = variables[precisionVar];
+      }
+      if (scaleConstraint != constraints.end()) {
+        auto calculation = buildCalculation(scaleVar, scaleConstraint->second);
+        expression::calculation::evaluate(calculation, variables);
+        scale = variables[scaleVar];
+      }
+      return SHORT_DECIMAL(precision, scale);
     }
     return createType(*typeKind, std::move(children));
   }

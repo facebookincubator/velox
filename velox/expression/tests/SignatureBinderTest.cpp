@@ -35,6 +35,25 @@ void assertCannotResolve(
     const std::vector<TypePtr>& actualTypes) {
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_FALSE(binder.tryBind());
+
+TEST(SignatureBinderTest, decimals) {
+  // decimal(10, 3), decimal(10, 5) -> decimal()
+
+  auto signature =
+      exec::FunctionSignatureBuilder()
+          .returnType("SHORT_DECIMAL(r_precision, r_scale)")
+          .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
+          .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
+          .variableConstraint(
+              "r_precision",
+              "min(b_precision - b_scale, a_precision - a_scale) + max(a_scale, b_scale)")
+          .variableConstraint("r_scale", "max(a_scale, b_scale)")
+          .build();
+
+  testSignatureBinder(
+      signature,
+      {SHORT_DECIMAL(11, 5), SHORT_DECIMAL(10, 6)},
+      SHORT_DECIMAL(10, 6));
 }
 
 TEST(SignatureBinderTest, generics) {

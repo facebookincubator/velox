@@ -102,6 +102,12 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   boost::algorithm::trim(token);
   nestedTypes.emplace_back(parseTypeSignature(token));
 
+  if (baseType == "SHORT_DECIMAL") {
+    std::vector<std::string> vars(2);
+    vars[0] = nestedTypes[0].baseType();
+    vars[1] = nestedTypes[1].baseType();
+    return TypeSignature(baseType, {}, vars);
+  }
   return TypeSignature(baseType, std::move(nestedTypes));
 }
 
@@ -185,10 +191,25 @@ FunctionSignature::FunctionSignature(
   validate(typeVariableConstants_, returnType_, argumentTypes_);
 }
 
+FunctionSignature::FunctionSignature(
+    std::vector<TypeVariableConstraint> typeVariableConstants,
+    std::vector<TypeVariableConstraint> variables,
+    TypeSignature returnType,
+    std::vector<TypeSignature> argumentTypes,
+    bool variableArity)
+    : typeVariableConstants_{std::move(typeVariableConstants)},
+      variables_{std::move(variables)},
+      returnType_{std::move(returnType)},
+      argumentTypes_{std::move(argumentTypes)},
+      variableArity_{variableArity} {
+  validate(typeVariableConstants_, returnType_, argumentTypes_);
+}
+
 FunctionSignaturePtr FunctionSignatureBuilder::build() {
   VELOX_CHECK(returnType_.has_value());
   return std::make_shared<FunctionSignature>(
       std::move(typeVariableConstants_),
+      std::move(variables_),
       returnType_.value(),
       std::move(argumentTypes_),
       variableArity_);
