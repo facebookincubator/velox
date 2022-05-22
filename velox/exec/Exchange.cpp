@@ -176,7 +176,7 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   }
   // Outside of lock
   if (toRequest) {
-	toRequest->request();
+		toRequest->request();
   }
   
 }
