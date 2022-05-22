@@ -89,7 +89,7 @@ void FieldReference::evalSpecialForm(
       {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
 
   if (result) {
-    BaseVector::ensureWritable(rows, type_, context.pool(), &result);
+    context.ensureWritable(rows, type_, result);
   }
   const RowVector* row;
   DecodedVector decoded;
@@ -223,8 +223,7 @@ void SwitchExpr::evalSpecialForm(
 
         if (thenRows.get()->hasSelections()) {
           if (result) {
-            BaseVector::ensureWritable(
-                *thenRows.get(), result->type(), context.pool(), &result);
+            context.ensureWritable(*thenRows.get(), result->type(), result);
           }
 
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
@@ -237,8 +236,7 @@ void SwitchExpr::evalSpecialForm(
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
     if (result) {
-      BaseVector::ensureWritable(
-          *remainingRows.get(), result->type(), context.pool(), &result);
+      context.ensureWritable(*remainingRows.get(), result->type(), result);
     }
 
     if (hasElseClause_) {
@@ -372,7 +370,7 @@ void ConjunctExpr::evalSpecialForm(
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
   VarSetter saveError(context.mutableThrowOnError(), false);
-  BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+  context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {

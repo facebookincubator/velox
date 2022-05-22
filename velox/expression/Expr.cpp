@@ -942,6 +942,7 @@ void Expr::evalAll(
           remainingRows->begin(),
           remainingRows->end());
       if (!remainingRows->hasSelections()) {
+        context.releaseVectors(inputValues_);
         inputValues_.clear();
         setAllNulls(rows, context, result);
         return;
@@ -962,6 +963,7 @@ void Expr::evalAll(
     }
     deselectErrors(context, *nonNulls.get());
     if (!remainingRows->hasSelections()) {
+      context.releaseVectors(inputValues_);
       inputValues_.clear();
       setAllNulls(rows, context, result);
       return;
@@ -975,6 +977,7 @@ void Expr::evalAll(
   if (remainingRows != &rows) {
     addNulls(rows, remainingRows->asRange().bits(), context, result);
   }
+  context.releaseVectors(inputValues_);
   inputValues_.clear();
 }
 
