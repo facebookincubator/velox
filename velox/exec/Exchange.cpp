@@ -178,7 +178,6 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   if (toRequest) {
     toRequest->request();
   }
-  
 }
 
 void ExchangeClient::noMoreRemoteTasks() {
