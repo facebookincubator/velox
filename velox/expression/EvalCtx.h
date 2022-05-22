@@ -243,18 +243,20 @@ class EvalCtx {
     return execCtx_->getVector(type, size);
   }
 
-  void releaseVector(VectorPtr & vector) {
+  void releaseVector(VectorPtr& vector) {
     execCtx_->releaseVector(vector);
   }
 
-  void releaseVectors(std::vector<VectorPtr> & vectors) {
+  void releaseVectors(std::vector<VectorPtr>& vectors) {
     execCtx_->releaseVectors(vectors);
   }
 
   // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the
   // pool of 'execCtx_' if needed.
   void ensureWritable(
-      const SelectivityVector& rows, const TypePtr& type, VectorPtr& result) {
+      const SelectivityVector& rows,
+      const TypePtr& type,
+      VectorPtr& result) {
     BaseVector::ensureWritable(
         rows, type, execCtx_->pool(), &result, &execCtx_->vectorPool());
   }
