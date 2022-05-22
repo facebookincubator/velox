@@ -78,7 +78,8 @@ class SelectivityVector {
     updateBounds();
   }
 
-  // Sets the size and leaves content uninitialized and begin and end set to 0.
+  // Sets the size and leaves content uninitialized and begin and end
+  // set to 0. The contents must be overwritten after calling this.
   void resizeUnselected(int32_t size) {
     auto numWords = bits::nwords(size);
     bits_.resize(numWords);
