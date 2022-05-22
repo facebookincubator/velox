@@ -942,7 +942,7 @@ void Expr::evalAll(
           remainingRows->begin(),
           remainingRows->end());
       if (!remainingRows->hasSelections()) {
-	context.releaseVectors(inputValues_);
+        context.releaseVectors(inputValues_);
         inputValues_.clear();
         setAllNulls(rows, context, result);
         return;
