@@ -284,7 +284,16 @@ class SelectivityVector {
   }
 
   bool operator==(const SelectivityVector& other) const {
-    return bits_ == other.bits_ && begin_ == other.begin_ && end_ == other.end_;
+    return begin_ == other.begin_ && end_ == other.end_ &&
+        bits::testWords(
+               begin_,
+               end_,
+               [&](int32_t index, uint64_t mask) {
+                 return (bits_[index] & mask) == (other.bits_[index] & mask);
+               },
+               [&](int32_t index) {
+                 return bits_[index] == other.bits_[index];
+               });
   }
   bool operator!=(const SelectivityVector& other) const {
     return !(*this == other);
