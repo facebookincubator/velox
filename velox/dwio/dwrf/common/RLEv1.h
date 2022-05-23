@@ -27,6 +27,8 @@
 
 namespace facebook::velox::dwrf {
 
+
+
 template <bool isSigned>
 class RleEncoderV1 : public IntEncoder<isSigned> {
  public:
