@@ -62,8 +62,7 @@ void ArraySumFunction<IT, OT>::apply(
   for (int i = 0; i < numRows; i++) {
     if (arrayVector->isNullAt(i)) {
       resultVector->setNull(i, true);
-    }
-    else {
+    } else {
       int start = arrayVector->offsetAt(i);
       int end = start + arrayVector->sizeAt(i);
 
@@ -143,10 +142,10 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
       "array_sum requires argument of type ARRAY");
 
   auto valueTypeKind = inputArgs.front().type->childAt(0)->kind();
-  bool isCoercibleToDouble = valueTypeKind == TypeKind::TINYINT
-      || valueTypeKind == TypeKind::SMALLINT || valueTypeKind == TypeKind::INTEGER
-      || valueTypeKind == TypeKind::BIGINT || valueTypeKind == TypeKind::REAL
-      || valueTypeKind == TypeKind::DOUBLE;
+  bool isCoercibleToDouble = valueTypeKind == TypeKind::TINYINT ||
+      valueTypeKind == TypeKind::SMALLINT ||
+      valueTypeKind == TypeKind::INTEGER || valueTypeKind == TypeKind::BIGINT ||
+      valueTypeKind == TypeKind::REAL || valueTypeKind == TypeKind::DOUBLE;
   VELOX_USER_CHECK_EQ(isCoercibleToDouble, true, "Invalid value type");
 }
 

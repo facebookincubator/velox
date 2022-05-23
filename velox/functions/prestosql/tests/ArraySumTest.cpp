@@ -114,11 +114,10 @@ TEST_F(ArraySumTest, invalidInputStringView) {
       {},
       {S("red"), S("purple"), S("green")},
   });
-  auto expected = makeNullableFlatVector<double>({3,3,0,1.0});
+  auto expected = makeNullableFlatVector<double>({3, 3, 0, 1.0});
   EXPECT_THROW(
       testExpr<double>(expected, "array_sum(c0)", {arrayVector}),
-      std::invalid_argument
-  );
+      std::invalid_argument);
 }
 
 TEST_F(ArraySumTest, invalidInputBool) {
@@ -129,9 +128,8 @@ TEST_F(ArraySumTest, invalidInputBool) {
       {},
       {true, true, true},
   });
-  auto expected = makeNullableFlatVector<int64_t>({3,3,0,1});
+  auto expected = makeNullableFlatVector<int64_t>({3, 3, 0, 1});
   EXPECT_THROW(
       testExpr<double>(expected, "array_sum(c0)", {arrayVector}),
-      std::invalid_argument
-  );
+      std::invalid_argument);
 }
