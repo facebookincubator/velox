@@ -49,6 +49,8 @@ class SimpleVector;
 template <typename T>
 class FlatVector;
 
+class VectorPool;
+
 /**
  * Base class for all columnar-based vectors of any type.
  */
@@ -472,7 +474,8 @@ class BaseVector {
       const SelectivityVector& rows,
       const TypePtr& type,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<BaseVector>* result);
+      std::shared_ptr<BaseVector>* result,
+      VectorPool* vectorPool = nullptr);
 
   virtual void ensureWritable(const SelectivityVector& rows);
 
@@ -730,6 +733,13 @@ class BaseVector {
   std::optional<ByteCount> representedByteCount_;
   std::optional<ByteCount> storageByteCount_;
   ByteCount inMemoryBytes_ = 0;
+
+#if 0
+  // Values of a scalar vector, interpretation depends on encoding. Defined here to provide non-virtual getter.
+  BufferPtr values_
+  // Caches values_.get()
+  void* rawValues_;
+#endif
 
  private:
   static std::shared_ptr<BaseVector> createInternal(

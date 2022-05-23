@@ -40,10 +40,11 @@ class SelectivityVector {
   SelectivityVector() {}
 
   explicit SelectivityVector(vector_size_t length, bool allSelected = true) {
-    resize(length);
-    if (!allSelected) {
-      clearAll();
-    }
+    bits_.resize(bits::nwords(length), allSelected ? ~0UL : 0);
+    size_ = length;
+    begin_ = 0;
+    end_ = allSelected ? size_ : 0;
+    allSelected_ = allSelected;
   }
 
   // Returns a statically allocated reference to an empty selectivity vector
@@ -75,6 +76,16 @@ class SelectivityVector {
     size_ = size;
 
     updateBounds();
+  }
+
+  // Sets the size and leaves content uninitialized and begin and end
+  // set to 0. The contents must be overwritten after calling this.
+  void resizeUnselected(int32_t size) {
+    auto numWords = bits::nwords(size);
+    bits_.resize(numWords);
+    begin_ = 0;
+    end_ = 0;
+    size_ = size;
   }
 
   /**
@@ -273,7 +284,16 @@ class SelectivityVector {
   }
 
   bool operator==(const SelectivityVector& other) const {
-    return bits_ == other.bits_ && begin_ == other.begin_ && end_ == other.end_;
+    return begin_ == other.begin_ && end_ == other.end_ &&
+        bits::testWords(
+               begin_,
+               end_,
+               [&](int32_t index, uint64_t mask) {
+                 return (bits_[index] & mask) == (other.bits_[index] & mask);
+               },
+               [&](int32_t index) {
+                 return bits_[index] == other.bits_[index];
+               });
   }
   bool operator!=(const SelectivityVector& other) const {
     return !(*this == other);

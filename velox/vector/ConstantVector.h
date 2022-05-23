@@ -349,7 +349,8 @@ class ConstantVector final : public SimpleVector<T> {
     BaseVector::distinctValueCount_ = isNull_ ? 0 : 1;
     BaseVector::nullCount_ = isNull_ ? BaseVector::length_ : 0;
     if (valueVector_->isScalar()) {
-      auto simple = valueVector_->loadedVector()->as<SimpleVector<T>>();
+      auto simple =
+          valueVector_->loadedVector()->asUnchecked<SimpleVector<T>>();
       isNull_ = simple->isNullAt(index_);
       if (!isNull_) {
         value_ = simple->valueAt(index_);
