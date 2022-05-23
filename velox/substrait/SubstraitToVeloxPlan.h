@@ -40,7 +40,11 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::FilterRel& filterRel,
       memory::MemoryPool* pool);
 
-  /// Convert Substrait ReadRel into Velox PlanNode.
+  /// Used to convert Substrait JoinRel into Velox PlanNode.
+  std::shared_ptr<const core::PlanNode> toVeloxPlan(
+      const ::substrait::JoinRel& joinRel,
+      memory::MemoryPool* pool);
+
   /// Index: the index of the partition this item belongs to.
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
@@ -163,6 +167,16 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::AggregateRel& sAgg,
       const std::shared_ptr<const core::PlanNode>& childNode,
       const core::AggregationNode::Step& aggStep);
+
+  /// Extract join keys from joinExpression.
+  /// joinExpression is a boolean condition that describes whether each record
+  /// from the left set “match” the record from the right set. The condition
+  /// must only include the following operations: AND, ==, field references.
+  /// Field references correspond to the direct output order of the data.
+  void extractJoinKeys(
+      const ::substrait::Expression& joinExpression,
+      std::vector<const ::substrait::Expression::FieldReference*>& leftExprs,
+      std::vector<const ::substrait::Expression::FieldReference*>& rightExprs);
 
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.

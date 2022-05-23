@@ -228,6 +228,95 @@ SubstraitVeloxPlanConverter::toVeloxAggWithRowConstruct(
   return aggNode;
 }
 
+std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
+    const ::substrait::JoinRel& sJoin,
+    memory::MemoryPool* pool) {
+  if (!sJoin.has_left()) {
+    VELOX_FAIL("Left Rel is expected in JoinRel.");
+  }
+  if (!sJoin.has_right()) {
+    VELOX_FAIL("Right Rel is expected in JoinRel.");
+  }
+
+  auto leftNode = toVeloxPlan(sJoin.left(), pool);
+  auto rightNode = toVeloxPlan(sJoin.right(), pool);
+
+  auto outputSize =
+      leftNode->outputType()->size() + rightNode->outputType()->size();
+  std::vector<std::string> outputNames;
+  std::vector<std::shared_ptr<const Type>> outputTypes;
+  outputNames.reserve(outputSize);
+  outputTypes.reserve(outputSize);
+  for (const auto& node : {leftNode, rightNode}) {
+    const auto& names = node->outputType()->names();
+    outputNames.insert(outputNames.end(), names.begin(), names.end());
+    const auto& types = node->outputType()->children();
+    outputTypes.insert(outputTypes.end(), types.begin(), types.end());
+  }
+  auto outputRowType = std::make_shared<const RowType>(
+      std::move(outputNames), std::move(outputTypes));
+
+  // extract join keys from join expression
+  std::vector<const ::substrait::Expression::FieldReference*> leftExprs,
+      rightExprs;
+  extractJoinKeys(sJoin.expression(), leftExprs, rightExprs);
+  VELOX_CHECK_EQ(leftExprs.size(), rightExprs.size());
+  size_t numKeys = leftExprs.size();
+
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> leftKeys,
+      rightKeys;
+  leftKeys.reserve(numKeys);
+  rightKeys.reserve(numKeys);
+  for (size_t i = 0; i < numKeys; ++i) {
+    leftKeys.emplace_back(
+        exprConverter_->toVeloxExpr(*leftExprs[i], outputRowType));
+    rightKeys.emplace_back(
+        exprConverter_->toVeloxExpr(*rightExprs[i], outputRowType));
+  }
+
+  std::shared_ptr<const core::ITypedExpr> filter;
+  if (sJoin.has_post_join_filter()) {
+    filter =
+        exprConverter_->toVeloxExpr(sJoin.post_join_filter(), outputRowType);
+  }
+
+  // Map join type
+  core::JoinType joinType;
+  switch (sJoin.type()) {
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_INNER:
+      joinType = core::JoinType::kInner;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_OUTER:
+      joinType = core::JoinType::kFull;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT:
+      joinType = core::JoinType::kLeft;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT:
+      joinType = core::JoinType::kRight;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_SEMI:
+      joinType = core::JoinType::kSemi;
+      break;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI:
+      joinType = core::JoinType::kAnti;
+      break;
+    default:
+      VELOX_NYI("Unsupported Join type: {}", sJoin.type());
+  }
+
+  // Create join node
+  return std::make_shared<core::HashJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      leftKeys,
+      rightKeys,
+      filter,
+      leftNode,
+      rightNode,
+      outputRowType);
+}
+
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
     const ::substrait::AggregateRel& aggRel,
     const std::shared_ptr<const core::PlanNode>& childNode,
@@ -521,6 +610,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     return toVeloxPlan(
         rel.read(), pool, partitionIndex_, paths_, starts_, lengths_);
   }
+  if (rel.has_join()) {
+    return toVeloxPlan(rel.join(), pool);
+  }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }
 
@@ -810,6 +902,40 @@ int32_t SubstraitVeloxPlanConverter::streamIsInput(
     }
   }
   return -1;
+}
+
+void SubstraitVeloxPlanConverter::extractJoinKeys(
+    const ::substrait::Expression& joinExpression,
+    std::vector<const ::substrait::Expression::FieldReference*>& leftExprs,
+    std::vector<const ::substrait::Expression::FieldReference*>& rightExprs) {
+  std::vector<const ::substrait::Expression*> expressions;
+  expressions.push_back(&joinExpression);
+  while (!expressions.empty()) {
+    auto visited = expressions.back();
+    expressions.pop_back();
+    if (visited->rex_type_case() ==
+        ::substrait::Expression::RexTypeCase::kScalarFunction) {
+      auto functionSpec = substraitParser_->findFunctionSpec(
+          functionMap_, visited->scalar_function().function_reference());
+      auto functionName = substraitParser_->getFunctionName(functionSpec);
+      const auto& args = visited->scalar_function().args();
+      if (functionName == "and") {
+        expressions.push_back(&args[0]);
+        expressions.push_back(&args[1]);
+      } else if (functionName == "equal") {
+        VELOX_CHECK(std::all_of(
+            args.cbegin(), args.cend(), [](const ::substrait::Expression& arg) {
+              return arg.has_selection();
+            }));
+        leftExprs.push_back(&args[0].selection());
+        rightExprs.push_back(&args[1].selection());
+      }
+    } else {
+      VELOX_FAIL(
+          "Unable to parse from join expression: {}",
+          joinExpression.DebugString());
+    }
+  }
 }
 
 } // namespace facebook::velox::substrait
