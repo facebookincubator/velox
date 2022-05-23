@@ -1,18 +1,18 @@
 /*
-* Copyright (c) Facebook, Inc. and its affiliates.
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-*     http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include "velox/functions/Macros.h"
@@ -27,9 +27,7 @@ namespace {
 
 template <typename IT, typename OT>
 VELOX_UDF_BEGIN(array_sum)
-FOLLY_ALWAYS_INLINE bool call(
-    OT& out,
-    const arg_type<Array<IT>>& array) {
+FOLLY_ALWAYS_INLINE bool call(OT& out, const arg_type<Array<IT>>& array) {
   if (array.mayHaveNulls()) {
     bool allNulls = true;
     OT sum = 0;
@@ -65,8 +63,7 @@ class ArrayContainsBenchmark : public functions::test::FunctionBenchmarkBase {
     registerFunction<
         udf_array_sum<int32_t, int64_t>,
         int64_t,
-        facebook::velox::Array<int32_t>
-        >({"array_sum_alt"});
+        facebook::velox::Array<int32_t>>({"array_sum_alt"});
   }
 
   void runInteger(const std::string& functionName) {
