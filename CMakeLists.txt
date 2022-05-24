@@ -155,7 +155,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 execute_process(
   COMMAND
     bash -c
-    "( source ./scripts/setup-helper-functions.sh; echo -n $(get_cxx_flags))"
+     "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh; echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
   OUTPUT_VARIABLE SCRIPT_CXX_FLAGS)
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
