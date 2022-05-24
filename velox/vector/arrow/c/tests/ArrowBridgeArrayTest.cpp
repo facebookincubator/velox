@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/arrow/c/Bridge.h"
 #include "velox/vector/tests/VectorMaker.h"
 
 namespace {

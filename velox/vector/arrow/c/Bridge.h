@@ -18,7 +18,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/vector/BaseVector.h"
-#include "velox/vector/arrow/Abi.h"
+#include "velox/vector/arrow/c/abi.h"
 
 namespace facebook::velox {
 
