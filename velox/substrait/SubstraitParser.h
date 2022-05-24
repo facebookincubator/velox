@@ -16,14 +16,7 @@
 
 #pragma once
 
-#include "velox/substrait/proto/substrait/algebra.pb.h"
-#include "velox/substrait/proto/substrait/capabilities.pb.h"
-#include "velox/substrait/proto/substrait/extensions/extensions.pb.h"
-#include "velox/substrait/proto/substrait/function.pb.h"
-#include "velox/substrait/proto/substrait/parameterized_types.pb.h"
-#include "velox/substrait/proto/substrait/plan.pb.h"
-#include "velox/substrait/proto/substrait/type.pb.h"
-#include "velox/substrait/proto/substrait/type_expressions.pb.h"
+#include "velox/substrait/proto/plan.pb.h"
 
 namespace facebook::velox::substrait {
 

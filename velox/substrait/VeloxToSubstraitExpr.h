@@ -19,7 +19,6 @@
 #include "velox/core/PlanNode.h"
 
 #include "velox/substrait/VeloxToSubstraitType.h"
-#include "velox/substrait/proto/substrait/algebra.pb.h"
 
 namespace facebook::velox::substrait {
 

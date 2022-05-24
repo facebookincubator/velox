@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package substrait;
 
-import "velox/substrait/proto/substrait/algebra.proto";
-import "velox/substrait/proto/substrait/extensions/extensions.proto";
+import "algebra.proto";
+import "extensions.proto";
 
 option  cc_enable_arenas= true;
 option java_multiple_files = true;
