@@ -12,21 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(proto)
+file(GLOB PROTO_FILES substrait/*.proto)
 
-set(SRCS
-    SubstraitParser.cpp
-    SubstraitToVeloxExpr.cpp
-    SubstraitToVeloxPlan.cpp
-    TypeUtils.cpp
-    VeloxToSubstraitExpr.cpp
-    VeloxToSubstraitPlan.cpp
-    VeloxToSubstraitType.cpp)
+protobuf_generate_cpp(VELOX_SUBSTRAIT_PROTO_SRCS VELOX_SUBSTRAIT_PROTO_HDRS
+                      ${PROTO_FILES})
 
-add_library(velox_substrait_plan_converter ${SRCS})
-target_link_libraries(velox_substrait_plan_converter velox_connector
-                      velox_dwio_dwrf_common velox_substrait_proto)
+message(${VELOX_SUBSTRAIT_PROTO_SRCS})
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_library(velox_substrait_proto ${VELOX_SUBSTRAIT_PROTO_SRCS}
+                                  ${VELOX_SUBSTRAIT_PROTO_HDRS})
+
+target_link_libraries(velox_substrait_proto protobuf::libprotobuf)
+target_include_directories(velox_substrait_proto
+                           PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/../../../../)

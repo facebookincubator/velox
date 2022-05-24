@@ -24,8 +24,7 @@
 #include "velox/type/Type.h"
 
 #include "velox/substrait/VeloxToSubstraitExpr.h"
-#include "velox/substrait/proto/substrait/algebra.pb.h"
-#include "velox/substrait/proto/substrait/plan.pb.h"
+#include "velox/substrait/proto/plan.pb.h"
 
 namespace facebook::velox::substrait {
 
