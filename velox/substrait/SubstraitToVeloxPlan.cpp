@@ -315,7 +315,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     u_int32_t& index,
     std::vector<std::string>& paths,
     std::vector<u_int64_t>& starts,
-    std::vector<u_int64_t>& lengths) {
+    std::vector<u_int64_t>& lengths,
+    int& fileFormat) {
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
@@ -344,6 +345,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       paths.emplace_back(file.uri_file());
       starts.emplace_back(file.start());
       lengths.emplace_back(file.length());
+      fileFormat = file.format();
     }
   }
 
@@ -465,7 +467,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   }
   if (rel.has_read()) {
     return toVeloxPlan(
-        rel.read(), pool, partitionIndex_, paths_, starts_, lengths_);
+        rel.read(), pool, partitionIndex_, paths_, starts_, lengths_, fileFormat_);
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

@@ -50,7 +50,8 @@ class SubstraitVeloxPlanConverter {
       u_int32_t& index,
       std::vector<std::string>& paths,
       std::vector<u_int64_t>& starts,
-      std::vector<u_int64_t>& lengths);
+      std::vector<u_int64_t>& lengths,
+      int& fileFormat);
 
   /// Convert Substrait ReadRel into Velox Values Node.
   core::PlanNodePtr toVeloxPlan(
@@ -102,6 +103,11 @@ class SubstraitVeloxPlanConverter {
     return lengths_;
   }
 
+  /// Will return the file format of the files to be scanned.
+  int getFileFormat() {
+    return fileFormat_;
+  }
+
   /// Looks up a function by ID and returns function name if found. Throws if
   /// function with specified ID doesn't exist. Returns a compound
   /// function specification consisting of the function name and the input
@@ -149,6 +155,9 @@ class SubstraitVeloxPlanConverter {
 
   /// The lengths to be scanned.
   std::vector<u_int64_t> lengths_;
+
+  // The file format of the files to be scanned.
+  int fileFormat_;
 
   /// The unique identification for each PlanNode.
   int planNodeId_ = 0;
