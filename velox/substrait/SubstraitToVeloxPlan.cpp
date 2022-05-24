@@ -229,22 +229,24 @@ SubstraitVeloxPlanConverter::toVeloxAggWithRowConstruct(
 }
 
 std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::JoinRel& sJoin,
+    const ::substrait::JoinRel& joinRel,
     memory::MemoryPool* pool) {
-  if (!sJoin.has_left()) {
+  if (!joinRel.has_left()) {
     VELOX_FAIL("Left Rel is expected in JoinRel.");
   }
-  if (!sJoin.has_right()) {
+  if (!joinRel.has_right()) {
     VELOX_FAIL("Right Rel is expected in JoinRel.");
   }
 
-  auto leftNode = toVeloxPlan(sJoin.left(), pool);
-  auto rightNode = toVeloxPlan(sJoin.right(), pool);
+  auto joinType = toVeloxJoinType(joinRel.type());
+
+  auto leftNode = toVeloxPlan(joinRel.left(), pool);
+  auto rightNode = toVeloxPlan(joinRel.right(), pool);
 
   auto outputSize =
       leftNode->outputType()->size() + rightNode->outputType()->size();
   std::vector<std::string> outputNames;
-  std::vector<std::shared_ptr<const Type>> outputTypes;
+  std::vector<TypePtr> outputTypes;
   outputNames.reserve(outputSize);
   outputTypes.reserve(outputSize);
   for (const auto& node : {leftNode, rightNode}) {
@@ -256,15 +258,15 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
   auto outputRowType = std::make_shared<const RowType>(
       std::move(outputNames), std::move(outputTypes));
 
-  // extract join keys from join expression
-  std::vector<const ::substrait::Expression::FieldReference*> leftExprs,
-      rightExprs;
-  extractJoinKeys(sJoin.expression(), leftExprs, rightExprs);
+  // Extract join keys from join expression.
+  std::vector<const ::substrait::Expression::FieldReference*> leftExprs;
+  std::vector<const ::substrait::Expression::FieldReference*> rightExprs;
+  extractJoinKeys(joinRel.expression(), leftExprs, rightExprs);
   VELOX_CHECK_EQ(leftExprs.size(), rightExprs.size());
   size_t numKeys = leftExprs.size();
 
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> leftKeys,
-      rightKeys;
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> leftKeys;
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> rightKeys;
   leftKeys.reserve(numKeys);
   rightKeys.reserve(numKeys);
   for (size_t i = 0; i < numKeys; ++i) {
@@ -274,38 +276,13 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxPlan(
         exprConverter_->toVeloxExpr(*rightExprs[i], outputRowType));
   }
 
-  std::shared_ptr<const core::ITypedExpr> filter;
-  if (sJoin.has_post_join_filter()) {
+  core::TypedExprPtr filter;
+  if (joinRel.has_post_join_filter()) {
     filter =
-        exprConverter_->toVeloxExpr(sJoin.post_join_filter(), outputRowType);
+        exprConverter_->toVeloxExpr(joinRel.post_join_filter(), outputRowType);
   }
 
-  // Map join type
-  core::JoinType joinType;
-  switch (sJoin.type()) {
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_INNER:
-      joinType = core::JoinType::kInner;
-      break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_OUTER:
-      joinType = core::JoinType::kFull;
-      break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT:
-      joinType = core::JoinType::kLeft;
-      break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT:
-      joinType = core::JoinType::kRight;
-      break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_SEMI:
-      joinType = core::JoinType::kSemi;
-      break;
-    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI:
-      joinType = core::JoinType::kAnti;
-      break;
-    default:
-      VELOX_NYI("Unsupported Join type: {}", sJoin.type());
-  }
-
-  // Create join node
+  // Create join node.
   return std::make_shared<core::HashJoinNode>(
       nextPlanNodeId(),
       joinType,
@@ -809,7 +786,7 @@ void SubstraitVeloxPlanConverter::flattenConditions(
       auto filterNameSpec = substraitParser_->findFunctionSpec(
           functionMap_, scalarFunction.function_reference());
       // TODO: Only and relation is supported here.
-      if (substraitParser_->getFunctionName(filterNameSpec) == "and") {
+      if (substraitParser_->getFunctionName(filterNameSpec) == kAnd) {
         for (const auto& sCondition : scalarFunction.args()) {
           flattenConditions(sCondition, scalarFunctions);
         }
@@ -919,10 +896,10 @@ void SubstraitVeloxPlanConverter::extractJoinKeys(
           functionMap_, visited->scalar_function().function_reference());
       auto functionName = substraitParser_->getFunctionName(functionSpec);
       const auto& args = visited->scalar_function().args();
-      if (functionName == "and") {
+      if (functionName == kAnd) {
         expressions.push_back(&args[0]);
         expressions.push_back(&args[1]);
-      } else if (functionName == "equal") {
+      } else if (functionName == kEqual) {
         VELOX_CHECK(std::all_of(
             args.cbegin(), args.cend(), [](const ::substrait::Expression& arg) {
               return arg.has_selection();
@@ -936,6 +913,27 @@ void SubstraitVeloxPlanConverter::extractJoinKeys(
           joinExpression.DebugString());
     }
   }
+}
+
+core::JoinType SubstraitVeloxPlanConverter::toVeloxJoinType(
+    ::substrait::JoinRel_JoinType joinType) {
+  switch (joinType) {
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_INNER:
+      return core::JoinType::kInner;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_OUTER:
+      return core::JoinType::kFull;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_LEFT:
+      return core::JoinType::kLeft;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT:
+      return core::JoinType::kRight;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_SEMI:
+      return core::JoinType::kSemi;
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_ANTI:
+      return core::JoinType::kAnti;
+    default:
+      VELOX_NYI("Unsupported Join type: {}", joinType);
+  }
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::substrait

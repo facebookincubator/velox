@@ -22,6 +22,9 @@
 
 namespace facebook::velox::substrait {
 
+static const std::string kAnd = "and";
+static const std::string kEqual = "equal";
+
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
@@ -40,7 +43,7 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::FilterRel& filterRel,
       memory::MemoryPool* pool);
 
-  /// Used to convert Substrait JoinRel into Velox PlanNode.
+  /// Convert Substrait JoinRel into Velox HashJoinNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
       const ::substrait::JoinRel& joinRel,
       memory::MemoryPool* pool);
@@ -177,6 +180,9 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::Expression& joinExpression,
       std::vector<const ::substrait::Expression::FieldReference*>& leftExprs,
       std::vector<const ::substrait::Expression::FieldReference*>& rightExprs);
+
+  /// Convert Substrait join type into Velox join type.
+  core::JoinType toVeloxJoinType(::substrait::JoinRel_JoinType joinType);
 
   /// The Substrait parser used to convert Substrait representations into
   /// recognizable representations.
