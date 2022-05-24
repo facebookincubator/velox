@@ -51,7 +51,7 @@ add_executable(
   SpillTest.cpp
   SpillerTest.cpp
   UnnestTest.cpp
-  AssignUniqueIdTest.cpp)
+  AssignUniqueIdTest.cpp WindowFunctionsTest.cpp)
 
 add_test(
   NAME velox_exec_test
