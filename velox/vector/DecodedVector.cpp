@@ -50,6 +50,7 @@ void DecodedVector::decode(
     const BaseVector& vector,
     const SelectivityVector& rows,
     bool loadLazy) {
+  VELOX_CHECK(rows.hasSelections(), "Decoding requires at least one row");
   reset(rows.end());
   loadLazy_ = loadLazy;
   if (loadLazy_ && (isLazyNotLoaded(vector) || vector.isLazy())) {
@@ -95,6 +96,7 @@ void DecodedVector::makeIndices(
     const BaseVector& vector,
     const SelectivityVector& rows,
     int32_t numLevels) {
+  VELOX_CHECK(rows.hasSelections(), "Decoding requires at least one row");
   VELOX_CHECK_LE(rows.end(), vector.size());
   reset(rows.end());
   combineWrappers(&vector, rows, numLevels);
