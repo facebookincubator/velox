@@ -1,0 +1,480 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>Velox in 10 minutes &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="_static/nature.css" />
+    <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Presto Functions" href="functions.html" />
+    <link rel="prev" title="Velox Documentation" href="index.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="functions.html" title="Presto Functions"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="Velox Documentation"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Velox in 10 minutes</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="velox-in-10-minutes">
+<h1>Velox in 10 minutes<a class="headerlink" href="#velox-in-10-minutes" title="Permalink to this headline">¶</a></h1>
+<p>This is a quick introduction into Velox, the new C++ vectorized database
+acceleration library aimed at optimizing query engines and data processing
+systems. This tutorial was inspired by <a class="reference external" href="https://github.com/facebookresearch/torcharrow/blob/main/tutorial/tutorial.ipynb">TorchArrow in 10 minutes</a>
+which itself was based on a <a class="reference external" href="https://pandas.pydata.org/docs/user_guide/10min.html">10 minutes to pandas tutorial</a>.</p>
+<dl class="simple">
+<dt>We are going to touch the following major components:</dt><dd><ul class="simple">
+<li><p>data representation,</p></li>
+<li><p>expression evaluation,</p></li>
+<li><p>aggregations,</p></li>
+<li><p>sorting,</p></li>
+<li><p>joins,</p></li>
+<li><p>accessing data via connectors.</p></li>
+</ul>
+</dd>
+</dl>
+<p>Note: Velox doesn’t provide a SQL interface, but in this tutorial to keep
+things simple we are going to use SQL and utilities that were designed
+to simplify test development. These utilities use <a class="reference external" href="https://duckdb.org/">DuckDB</a>
+to parse SQL.</p>
+<p>The code used in this tutorial is available in <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/exec/tests/VeloxIn10MinDemo.cpp">velox/exec/tests/VeloxIn10MinDemo.cpp</a>.</p>
+<p>Let’s get started.</p>
+<section id="vectors">
+<h2>Vectors<a class="headerlink" href="#vectors" title="Permalink to this headline">¶</a></h2>
+<p>Velox uses columnar representation of the data similar to Arrow called vectors.
+Let’s create two vectors to store 64-bit integers and one vector to store strings.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeFlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">6</span><span class="p">});</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeFlatVector</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">({</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">,</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="mi">25</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">});</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">dow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeFlatVector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="p">({</span><span class="s">&quot;monday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tuesday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wednesday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;thursday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;friday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;saturday&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;sunday&quot;</span><span class="p">});</span><span class="w"></span>
+</pre></div>
+</div>
+<p>And let’s print out the contents of these vectors:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeRowVector</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;dow&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">dow</span><span class="p">});</span><span class="w"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">dow</span><span class="p">:</span><span class="n">VARCHAR</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">7</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">monday</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="n">tuesday</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="n">wednesday</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="n">thursday</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">friday</span><span class="p">}</span>
+<span class="mi">5</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="n">saturday</span><span class="p">}</span>
+<span class="mi">6</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="n">sunday</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Check out <a class="reference internal" href="develop/vectors.html"><span class="doc">Vectors</span></a> guide to learn more about
+Velox vectors.</p>
+</section>
+<section id="expressions">
+<h2>Expressions<a class="headerlink" href="#expressions" title="Permalink to this headline">¶</a></h2>
+<p>Now, let’s compute a sum of ‘a’ and ‘b’ by evaluating ‘a + b’ expression.</p>
+<p>First we use DuckDB SQL parser to parse the expression into a fully typed
+expression tree. Then, we use Velox APIs to compile the expression tree into
+an executable ExprSet. Check out the implementation of the compileExpression
+helper method in VeloxIn10MinDemo.cpp for details.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">exprSet</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compileExpression</span><span class="p">(</span><span class="s">&quot;a + b&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">asRowType</span><span class="p">(</span><span class="n">data</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()));</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Let’s print out the compiled expression tree:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">exprSet</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="nb">false</span><span class="w"> </span><span class="cm">/*compact*/</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plus</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">a</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#2]</span>
+   <span class="n">b</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#3]</span>
+</pre></div>
+</div>
+<p>The expression tree consists of a root node “plus”, which represents
+a function call, and two child nodes “a” and “b”, which represent field
+access.</p>
+<p>Now we are ready to evaluate the expression on a batch of data.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="o">*</span><span class="n">exprSet</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>And here are the results:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">abc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeRowVector</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;c&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">c</span><span class="p">});</span><span class="w"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">abc</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">abc</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">c</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">c</span><span class="p">:</span><span class="n">BIGINT</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">7</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">12</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">18</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">24</span><span class="p">}</span>
+<span class="mi">5</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="mi">30</span><span class="p">}</span>
+<span class="mi">6</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">36</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Let’s try a slightly more complex expression: <cite>2 * a + b % 3</cite>.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exprSet</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compileExpression</span><span class="p">(</span><span class="s">&quot;2 * a + b % 3&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">asRowType</span><span class="p">(</span><span class="n">data</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()));</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">exprSet</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="nb">false</span><span class="w"> </span><span class="cm">/*compact*/</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">plus</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">multiply</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="mi">2</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#3]</span>
+      <span class="n">a</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#4]</span>
+   <span class="n">mod</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#5]</span>
+      <span class="n">b</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#6]</span>
+      <span class="mi">3</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#7]</span>
+</pre></div>
+</div>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">d</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="o">*</span><span class="n">exprSet</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">abd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeRowVector</span><span class="p">({</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;b&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;d&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">d</span><span class="p">});</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">abd</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">abd</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">d</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">d</span><span class="p">:</span><span class="n">BIGINT</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">7</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">4</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="mi">6</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">10</span><span class="p">}</span>
+<span class="mi">5</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="mi">25</span><span class="p">,</span> <span class="mi">11</span><span class="p">}</span>
+<span class="mi">6</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">12</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Let’s transform ‘dow’ column into a 3-letter prefix with first letter
+capitalized, e.g. Mon, Tue, etc.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">exprSet</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compileExpression</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="s">&quot;concat(upper(substr(dow, 1, 1)), substr(dow, 2, 2))&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">asRowType</span><span class="p">(</span><span class="n">data</span><span class="o">-&gt;</span><span class="n">type</span><span class="p">()));</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">exprSet</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="nb">false</span><span class="w"> </span><span class="cm">/*compact*/</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">concat</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="c1">#1]</span>
+   <span class="n">upper</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="c1">#2]</span>
+      <span class="n">substr</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="c1">#3]</span>
+         <span class="n">dow</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="c1">#4]</span>
+         <span class="mi">1</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#5]</span>
+         <span class="mi">1</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="n">CSE</span> <span class="c1">#5]</span>
+   <span class="n">substr</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="c1">#6]</span>
+      <span class="n">dow</span> <span class="o">-&gt;</span> <span class="n">VARCHAR</span> <span class="p">[</span><span class="n">CSE</span> <span class="c1">#4]</span>
+      <span class="mi">2</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="c1">#7]</span>
+      <span class="mi">2</span><span class="p">:</span><span class="n">BIGINT</span> <span class="o">-&gt;</span> <span class="n">BIGINT</span> <span class="p">[</span><span class="n">CSE</span> <span class="c1">#7]</span>
+</pre></div>
+</div>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">shortDow</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="o">*</span><span class="n">exprSet</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">);</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">shortDow</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">shortDow</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">shortDow</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">FLAT</span> <span class="n">VARCHAR</span><span class="p">:</span> <span class="mi">7</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="n">Mon</span>
+<span class="mi">1</span><span class="p">:</span> <span class="n">Tue</span>
+<span class="mi">2</span><span class="p">:</span> <span class="n">Wed</span>
+<span class="mi">3</span><span class="p">:</span> <span class="n">Thu</span>
+<span class="mi">4</span><span class="p">:</span> <span class="n">Fri</span>
+<span class="mi">5</span><span class="p">:</span> <span class="n">Sat</span>
+<span class="mi">6</span><span class="p">:</span> <span class="n">Sun</span>
+</pre></div>
+</div>
+<p>You can construct and evaluate arbitrary SQL expressions using <a class="reference internal" href="functions.html"><span class="doc">Presto
+functions</span></a> and special forms like IF, AND, OR, COALESCE, TRY and more.
+If a function you need is not available, feel free to add a new one by following
+the <a class="reference internal" href="develop/scalar-functions.html"><span class="doc">How to add a scalar function?</span></a> guide.</p>
+<p>Check out <a class="reference internal" href="develop/expression-evaluation.html"><span class="doc">Expression Evaluation</span></a> article
+to learn what happens under the hood or play with <a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/examples/ExpressionEval.cpp">velox/examples/ExpressionEval.cpp</a>
+which contains a detailed step-by-step example of constructing and evaluating
+expression trees using non-test library APIs.</p>
+</section>
+<section id="queries">
+<h2>Queries<a class="headerlink" href="#queries" title="Permalink to this headline">¶</a></h2>
+<section id="aggregations">
+<h3>Aggregations<a class="headerlink" href="#aggregations" title="Permalink to this headline">¶</a></h3>
+<p>We can calculate sum and average of ‘a’ and ‘b’ by creating and
+executing a query plan with an aggregation node:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">              </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">})</span><span class="w"></span>
+<span class="w">              </span><span class="p">.</span><span class="n">singleAggregation</span><span class="p">(</span><span class="w"></span>
+<span class="w">                  </span><span class="p">{},</span><span class="w"></span>
+<span class="w">                  </span><span class="p">{</span><span class="s">&quot;sum(a) AS sum_a&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">                   </span><span class="s">&quot;avg(a) AS avg_a&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">                   </span><span class="s">&quot;sum(b) AS sum_b&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">                   </span><span class="s">&quot;avg(b) AS avg_b&quot;</span><span class="p">})</span><span class="w"></span>
+<span class="w">              </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">sumAvg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getResults</span><span class="p">(</span><span class="n">plan</span><span class="p">);</span><span class="w"></span>
+</pre></div>
+</div>
+<p>And here are the results:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">sumAvg</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">sumAvg</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sumAvg</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">sum_a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">avg_a</span><span class="p">:</span><span class="n">DOUBLE</span><span class="p">,</span><span class="n">sum_b</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">avg_b</span><span class="p">:</span><span class="n">DOUBLE</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">1</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">15</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">,</span> <span class="mi">75</span><span class="p">,</span> <span class="mf">12.5</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>You can use any of the available <a class="reference internal" href="functions/aggregate.html"><span class="doc">Presto aggregate functions</span></a>
+or add a new one by following <a class="reference internal" href="develop/aggregate-functions.html"><span class="doc">How to add an aggregate function?</span></a>
+guide. Check out <a class="reference internal" href="develop/aggregations.html"><span class="doc">Aggregations</span></a> article for a deep dive
+into aggregation-specific optimizations available in Velox.</p>
+</section>
+<section id="sorting">
+<h3>Sorting<a class="headerlink" href="#sorting" title="Permalink to this headline">¶</a></h3>
+<p>We can sort data using the OrderBy plan node.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">})</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">orderBy</span><span class="p">({</span><span class="s">&quot;a DESC&quot;</span><span class="p">},</span><span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="cm">/*isPartial*/</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">sorted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getResults</span><span class="p">(</span><span class="n">plan</span><span class="p">);</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">sorted</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">sorted</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">sorted</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">6</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="mi">25</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">5</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>And we can get top 3 rows using TopN node:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">})</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">topN</span><span class="p">({</span><span class="s">&quot;a DESC&quot;</span><span class="p">},</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="cm">/*isPartial*/</span><span class="p">)</span><span class="w"></span>
+<span class="w">    </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">top3</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getResults</span><span class="p">(</span><span class="n">plan</span><span class="p">);</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">top5</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">top5</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">top3</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">3</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="mi">25</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="mi">15</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="filtering">
+<h3>Filtering<a class="headerlink" href="#filtering" title="Permalink to this headline">¶</a></h3>
+<p>We can filter data using Filter node.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">().</span><span class="n">values</span><span class="p">({</span><span class="n">data</span><span class="p">}).</span><span class="n">filter</span><span class="p">(</span><span class="s">&quot;a % 2 == 0&quot;</span><span class="p">).</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">evenA</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AssertQueryBuilder</span><span class="p">(</span><span class="n">plan</span><span class="p">).</span><span class="n">copyResults</span><span class="p">(</span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;&gt; rows with even values of &#39;a&#39;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">evenA</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">evenA</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">evenA</span><span class="o">-&gt;</span><span class="n">size</span><span class="p">())</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span> <span class="p">[</span><span class="n">ROW</span> <span class="n">ROW</span><span class="o">&lt;</span><span class="n">a</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">b</span><span class="p">:</span><span class="n">BIGINT</span><span class="p">,</span><span class="n">dow</span><span class="p">:</span><span class="n">VARCHAR</span><span class="o">&gt;</span><span class="p">:</span> <span class="mi">4</span> <span class="n">elements</span><span class="p">,</span> <span class="n">no</span> <span class="n">nulls</span><span class="p">]</span>
+<span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">monday</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="n">wednesday</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="n">friday</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="n">sunday</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="connectors">
+<h3>Connectors<a class="headerlink" href="#connectors" title="Permalink to this headline">¶</a></h3>
+<p>We have seen how to use Velox to perform computation on in-memory vectors
+provided by the caller. Velox can also pull data from connectors. There are
+two connectors to choose from. Hive connector reads DWRF and Parquet
+files. TPC-H connector generates TPC-H tables on the fly.</p>
+<p>Let’s read from TPC-H nation table. We need to use a TableScan plan node and
+provide a split.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">               </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_NATION</span><span class="p">,</span><span class="w"></span>
+<span class="w">               </span><span class="p">{</span><span class="s">&quot;n_nationkey&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;n_name&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">               </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">nations</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AssertQueryBuilder</span><span class="p">(</span><span class="n">plan</span><span class="p">).</span><span class="n">split</span><span class="p">(</span><span class="n">makeTpchSplit</span><span class="p">()).</span><span class="n">copyResults</span><span class="p">(</span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="w"></span>
+<span class="w">          </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;&gt; first 10 rows from TPC-H nation table: &quot;</span><span class="w"></span>
+<span class="w">          </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nations</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nations</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">,</span> <span class="n">ALGERIA</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="n">ARGENTINA</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="n">BRAZIL</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="mi">3</span><span class="p">,</span> <span class="n">CANADA</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="mi">4</span><span class="p">,</span> <span class="n">EGYPT</span><span class="p">}</span>
+<span class="mi">5</span><span class="p">:</span> <span class="p">{</span><span class="mi">5</span><span class="p">,</span> <span class="n">ETHIOPIA</span><span class="p">}</span>
+<span class="mi">6</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">,</span> <span class="n">FRANCE</span><span class="p">}</span>
+<span class="mi">7</span><span class="p">:</span> <span class="p">{</span><span class="mi">7</span><span class="p">,</span> <span class="n">GERMANY</span><span class="p">}</span>
+<span class="mi">8</span><span class="p">:</span> <span class="p">{</span><span class="mi">8</span><span class="p">,</span> <span class="n">INDIA</span><span class="p">}</span>
+<span class="mi">9</span><span class="p">:</span> <span class="p">{</span><span class="mi">9</span><span class="p">,</span> <span class="n">INDONESIA</span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="joins">
+<h3>Joins<a class="headerlink" href="#joins" title="Permalink to this headline">¶</a></h3>
+<p>We can now join TPC-H nation and region tables to count number of nations in
+each region and sort results by region name. We need to use one TableScan node
+for nations table and another for region table. We also need to provide splits
+for each TableScan node. We will use two PlanBuilders: one for the probe
+side of the join and another one for the build side. We will also use
+PlanNodeIdGenerator to ensure that all plan nodes in the final plan have unique
+IDs.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">planNodeIdGenerator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_shared</span><span class="o">&lt;</span><span class="n">PlanNodeIdGenerator</span><span class="o">&gt;</span><span class="p">();</span><span class="w"></span>
+<span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="w"> </span><span class="n">nationScanId</span><span class="p">;</span><span class="w"></span>
+<span class="n">core</span><span class="o">::</span><span class="n">PlanNodeId</span><span class="w"> </span><span class="n">regionScanId</span><span class="p">;</span><span class="w"></span>
+<span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="p">)</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">               </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_NATION</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;n_regionkey&quot;</span><span class="p">},</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">capturePlanNodeId</span><span class="p">(</span><span class="n">nationScanId</span><span class="p">)</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">hashJoin</span><span class="p">(</span><span class="w"></span>
+<span class="w">               </span><span class="p">{</span><span class="s">&quot;n_regionkey&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">               </span><span class="p">{</span><span class="s">&quot;r_regionkey&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">               </span><span class="n">PlanBuilder</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="p">)</span><span class="w"></span>
+<span class="w">                   </span><span class="p">.</span><span class="n">tableScan</span><span class="p">(</span><span class="w"></span>
+<span class="w">                       </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_REGION</span><span class="p">,</span><span class="w"></span>
+<span class="w">                       </span><span class="p">{</span><span class="s">&quot;r_regionkey&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;r_name&quot;</span><span class="p">},</span><span class="w"></span>
+<span class="w">                       </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span><span class="w"></span>
+<span class="w">                   </span><span class="p">.</span><span class="n">capturePlanNodeId</span><span class="p">(</span><span class="n">regionScanId</span><span class="p">)</span><span class="w"></span>
+<span class="w">                   </span><span class="p">.</span><span class="n">planNode</span><span class="p">(),</span><span class="w"></span>
+<span class="w">               </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="c1">// extra filter</span>
+<span class="w">               </span><span class="p">{</span><span class="s">&quot;r_name&quot;</span><span class="p">})</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">singleAggregation</span><span class="p">({</span><span class="s">&quot;r_name&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;count(1) as nation_cnt&quot;</span><span class="p">})</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">orderBy</span><span class="p">({</span><span class="s">&quot;r_name&quot;</span><span class="p">},</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"></span>
+<span class="w">           </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
+
+<span class="k">auto</span><span class="w"> </span><span class="n">nationCnt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AssertQueryBuilder</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span><span class="w"></span>
+<span class="w">                     </span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="n">nationScanId</span><span class="p">,</span><span class="w"> </span><span class="n">makeTpchSplit</span><span class="p">())</span><span class="w"></span>
+<span class="w">                     </span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="n">regionScanId</span><span class="p">,</span><span class="w"> </span><span class="n">makeTpchSplit</span><span class="p">())</span><span class="w"></span>
+<span class="w">                     </span><span class="p">.</span><span class="n">copyResults</span><span class="p">(</span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="w"></span>
+<span class="w">          </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;&gt; number of nations per region in TPC-H: &quot;</span><span class="w"></span>
+<span class="w">          </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nationCnt</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">nationCnt</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="mi">0</span><span class="p">:</span> <span class="p">{</span><span class="n">AFRICA</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">1</span><span class="p">:</span> <span class="p">{</span><span class="n">AMERICA</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">2</span><span class="p">:</span> <span class="p">{</span><span class="n">ASIA</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">3</span><span class="p">:</span> <span class="p">{</span><span class="n">EUROPE</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+<span class="mi">4</span><span class="p">:</span> <span class="p">{</span><span class="n">MIDDLE</span> <span class="n">EAST</span><span class="p">,</span> <span class="mi">5</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>Check out <a class="reference internal" href="develop/joins.html"><span class="doc">Joins</span></a> to learn more about joins and
+join-specific optimizations in Velox.</p>
+<p>You can mix and match as many plan nodes as you need in a query plan. The
+list of available plan nodes can be found in  <a class="reference internal" href="develop/operators.html"><span class="doc">Plan Nodes and Operators</span></a>
+or in PlanNodeId.h and PlanBuilder.h files in the code.</p>
+<p>Curious about reading data from a Hive connector? Check out
+<a class="reference external" href="https://github.com/facebookincubator/velox/blob/main/velox/examples/ScanAndSort.cpp">velox/examples/ScanAndSort.cpp</a>
+example in the code.</p>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">Velox in 10 minutes</a><ul>
+<li><a class="reference internal" href="#vectors">Vectors</a></li>
+<li><a class="reference internal" href="#expressions">Expressions</a></li>
+<li><a class="reference internal" href="#queries">Queries</a><ul>
+<li><a class="reference internal" href="#aggregations">Aggregations</a></li>
+<li><a class="reference internal" href="#sorting">Sorting</a></li>
+<li><a class="reference internal" href="#filtering">Filtering</a></li>
+<li><a class="reference internal" href="#connectors">Connectors</a></li>
+<li><a class="reference internal" href="#joins">Joins</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="index.html"
+                          title="previous chapter">Velox Documentation</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="functions.html"
+                          title="next chapter">Presto Functions</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="_sources/velox-in-10-min.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="functions.html" title="Presto Functions"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="index.html" title="Velox Documentation"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="index.html">Velox  documentation</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Velox in 10 minutes</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>

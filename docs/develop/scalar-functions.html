@@ -444,67 +444,57 @@ as much as possible to allow for faster compilation in codegen.</p>
 <p>Input complex types are represented in the simple function interface using light-weight lazy
 access abstractions that enable efficient direct access to the underlying data in Velox
 vectors.
-As mentioned earlier, the helper alias arg_type can be used in the function signature to
+As mentioned earlier, the helper aliases arg_type and null_free_arg_type can be used in function’s signatures to
 map Velox types to the corresponding input types. The table below shows the actual types that are
 used to represent inputs of different complex types.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 12%" />
-<col style="width: 36%" />
-<col style="width: 52%" />
+<col style="width: 35%" />
+<col style="width: 29%" />
+<col style="width: 35%" />
 </colgroup>
 <thead>
-<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
-<th class="head"><p>C++ Argument Type</p></th>
+<tr class="row-odd"><th class="head"><p>C++ Argument Type</p></th>
 <th class="head"><p>C++ Actual Argument Type</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>ARRAY</p></td>
-<td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
-<td><p>ArrayView&lt;OptionalAccessor&lt;E&gt;&gt;&gt;</p></td>
-</tr>
-<tr class="row-odd"><td><p>MAP</p></td>
-<td><p>arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
-<td><p>MapView&lt;arg_type&lt;K&gt;, OptionalAccessor&lt;V&gt;&gt;</p></td>
-</tr>
-<tr class="row-even"><td><p>ROW</p></td>
-<td><p>arg_type&lt;Row&lt;T1, T2, T3,…&gt;&gt;</p></td>
-<td><p>RowView&lt;OptionalAccessor&lt;arg_type&lt;T1&gt;&gt;…&gt;&gt;</p></td>
-</tr>
-</tbody>
-</table>
-<p>The view types are designed to have interfaces similar to those of std::containers, in fact in most cases
-they can be used as a drop in replacement. The table below shows the mapping between the Velox type and
-the corresponding std type. For example: a <em>Map&lt;Row&lt;int, int&gt;, Array&lt;float&gt;&gt;</em> corresponds to const
-<em>std::map&lt;std:::tuple&lt;int, int&gt;, std::vector&lt;float&gt;&gt;</em>.</p>
-<p>All views types are cheap to copy objects, for example the size of ArrayView is 16 bytes at max.</p>
-<table class="docutils align-default">
-<colgroup>
-<col style="width: 22%" />
-<col style="width: 78%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Lazy Input</p></th>
 <th class="head"><p>Corresponding <cite>std</cite> type</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>ArrayView</p></td>
-<td><p>const std::vector&lt;std::optional&lt;V&gt;&gt;</p></td>
+<tr class="row-even"><td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
+<td><p>NullableArrayView&lt;E&gt;&gt;</p></td>
+<td><p>std::vector&lt;std::optional&lt;V&gt;&gt;</p></td>
 </tr>
-<tr class="row-odd"><td><p>MapView</p></td>
-<td><p>const std::map&lt;K, std::optional&lt;V&gt;&gt;</p></td>
+<tr class="row-odd"><td><p>arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
+<td><p>NullableMapView&lt;K, V&gt;</p></td>
+<td><p>std::map&lt;K, std::optional&lt;V&gt;&gt;</p></td>
 </tr>
-<tr class="row-even"><td><p>RowView</p></td>
-<td><p>const std::tuple&lt;std::optional&lt;T1&gt;…&gt;</p></td>
+<tr class="row-even"><td><p>arg_type&lt;Row&lt;T…&gt;&gt;</p></td>
+<td><p>NullableRowView&lt;T…&gt;</p></td>
+<td><p>std::tuple&lt;std::optional&lt;T&gt;…</p></td>
+</tr>
+<tr class="row-odd"><td><p>null_free_arg_type&lt;Array&lt;E&gt;&gt;</p></td>
+<td><p>NullFreeArrayView&lt;E&gt;</p></td>
+<td><p>std::vector&lt;V&gt;</p></td>
+</tr>
+<tr class="row-even"><td><p>null_free_arg_type&lt;Map&lt;K,V&gt;&gt;</p></td>
+<td><p>NullFreeMapView&lt;K, V&gt;</p></td>
+<td><p>std::map&lt;K, V&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>null_free_arg_type&lt;Row&lt;T…&gt;&gt;&gt;</p></td>
+<td><p>NullFreeRowView&lt;T…&gt;</p></td>
+<td><p>std::tuple&lt;T…&gt;</p></td>
 </tr>
 </tbody>
 </table>
+<p>The view types are designed to have interfaces similar to those of std::containers, in fact in most cases
+they can be used as a drop in replacement. The table above shows the mapping between the Velox type and
+the corresponding std type. For example: a <em>Map&lt;Row&lt;int, int&gt;, Array&lt;float&gt;&gt;</em> corresponds to const
+<em>std::map&lt;std:::tuple&lt;int, int&gt;, std::vector&lt;float&gt;&gt;</em>.</p>
+<p>All views types are cheap to copy objects, for example the size of ArrayView is 16 bytes at max.</p>
 <p><strong>1- OptionalAccessor&lt;E&gt;</strong>:</p>
 <p>OptionalAccessor is an <em>std::optional</em> like object that provides lazy access to the nullity and
-value of the underlying Velox vector at a specific index. Currently, it is used to represent elements of input arrays
-and values of input maps. Note that keys in the map are assumed to be not nullable in Velox.</p>
+value of the underlying Velox vector at a specific index. Currently, it is used to represent elements of nullable input arrays
+and values of nullable input maps. Note that keys in the map are assumed to be always not nullable in Velox.</p>
 <p>The object supports the following methods:</p>
 <ul class="simple">
 <li><p>arg_type&lt;E&gt; value()      : unchecked access to the underlying value.</p></li>
@@ -524,9 +514,9 @@ The following expressions are valid, where array[0] is an optional accessor.</p>
 <span class="k">if</span><span class="p">(</span><span class="n">array</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">==</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">{</span><span class="mi">1</span><span class="p">})</span><span class="w"> </span><span class="p">...</span><span class="w"></span>
 </pre></div>
 </div>
-<p><strong>2- ArrayView&lt;T&gt;</strong>:</p>
-<p>ArrayView have an interface similar to that of const <em>std::vector&lt;std::optional&lt;V&gt;&gt;</em>, the code
-below shows the function arraySum, a range loop is used to iterate over the values.</p>
+<p><strong>2- NullableArrayView&lt;T&gt; and NullFreeArrayView&lt;T&gt;</strong></p>
+<p>NullableArrayView and NullFreeArrayView have interfaces similar to that of <em>std::vector&lt;std::optional&lt;V&gt;&gt;</em> and <em>std::vector&lt;V&gt;</em>,
+the code below shows the function arraySum, a range loop is used to iterate over the values.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">ArraySum</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="n">VELOX_DEFINE_FUNCTION_TYPES</span><span class="p">(</span><span class="n">T</span><span class="p">);</span><span class="w"></span>
@@ -546,7 +536,7 @@ below shows the function arraySum, a range loop is used to iterate over the valu
 <p>ArrayView supports the following:</p>
 <ul class="simple">
 <li><p>size_t size() : return the number of elements in the array.</p></li>
-<li><p>OptionalAccessor&lt;T&gt; operator[](size_t index) : access element at index.</p></li>
+<li><p>operator[](size_t index) : access element at index. It returns either null_free_arg_type&lt;T&gt; or OptionalAccessor&lt;T&gt;.</p></li>
 <li><p>ArrayView&lt;T&gt;::Iterator begin() : iterator to the first element.</p></li>
 <li><p>ArrayView&lt;T&gt;::Iterator end() : iterator indicating end of iteration.</p></li>
 <li><p>bool mayHaveNulls() : constant time check on the underlying vector nullity. When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
@@ -592,9 +582,9 @@ would skip reading the nullity when mayHaveNulls() is false.</p>
 </div>
 <p>Note: calls to operator[], iterator de-referencing, and iterator pointer de-referencing are r-values (temporaries),
 versus l-values in STD containers. Hence those can be bound to const references or l-values but not normal references.</p>
-<p><strong>3- MapView&lt;K, V&gt;</strong>:</p>
-<p>MapView has an interface similar to std::map&lt;K, std::optional&lt;V&gt;&gt;,  the code below shows an example function mapSum,
-that sums up the keys and values.</p>
+<p><strong>3- NullableMapView&lt;K, V&gt; and  NullFreeMapView&lt;K, V&gt;</strong></p>
+<p>NullableMapView and NullFreeMapView has an interfaces similar to std::map&lt;K, std::optional&lt;V&gt;&gt; and std::map&lt;K, V&gt;,
+the code below shows an example function mapSum, sums up the keys and values.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"></span>
 <span class="k">struct</span><span class="w"> </span><span class="nc">MapSum</span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">map</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
@@ -615,17 +605,14 @@ that sums up the keys and values.</p>
 <li><p>MapView&lt;K,V&gt;::Element begin() : iterator to the first map element.</p></li>
 <li><p>MapView&lt;K,V&gt;::Element end()   : iterator that indicates end of iteration.</p></li>
 <li><p>size_t size()                 : number of elements in the map.</p></li>
-<li><p>MapView&lt;K,V&gt;::Iterator find(const arg_type&lt;K&gt;&amp; key): performs a linear search for the key, and returns iterator to the</p></li>
-</ul>
-<p>element if found otherwise returns end().</p>
-<ul class="simple">
-<li><p>MapView&lt;K,V&gt;::Iterator operator[](const arg_type&lt;K&gt;&amp; key): same as find, throws an exception if element not found.</p></li>
+<li><p>MapView&lt;K,V&gt;::Iterator find(const key_t&amp; key): performs a linear search for the key, and returns iterator to the element if found otherwise returns end(). Only supported for primitive key types.</p></li>
+<li><p>MapView&lt;K,V&gt;::Iterator operator[](const key_t&amp; key): same as find, throws an exception if element not found.</p></li>
 <li><p>MapView&lt;K,V&gt;::Element</p></li>
 </ul>
 <p>MapView&lt;K, V&gt;::Element is the type returned by dereferencing MapView&lt;K, V&gt;::Iterator. It has two members:</p>
 <ul class="simple">
-<li><p>first : arg_type&lt;K&gt;</p></li>
-<li><p>second: OptionalAccessor&lt;V&gt;.</p></li>
+<li><p>first : arg_type&lt;K&gt; | null_free_arg_type&lt;K&gt;</p></li>
+<li><p>second: OptionalAccessor&lt;V&gt; | null_free_arg_type&lt;V&gt;</p></li>
 <li><p>MapView&lt;K, V&gt;::Element participates in struct binding: auto [v, k] = <a href="#id3"><span class="problematic" id="id4">*</span></a>map.begin();</p></li>
 </ul>
 <p>Note: iterator de-referencing and iterator pointer de-referencing result in temporaries. Hence those can be bound to
@@ -682,29 +669,29 @@ of the call.  While not a true type in Velox, “Variadic” can be thought of a
 syntactic type, and behaves somewhat similarly to Array.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 14%" />
-<col style="width: 41%" />
-<col style="width: 46%" />
+<col style="width: 56%" />
+<col style="width: 44%" />
 </colgroup>
 <thead>
-<tr class="row-odd"><th class="head"><p>Velox Type</p></th>
-<th class="head"><p>C++ Argument Type</p></th>
+<tr class="row-odd"><th class="head"><p>C++ Argument Type</p></th>
 <th class="head"><p>C++ Actual Argument Type</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>VARIADIC</p></td>
-<td><p>arg_type&lt;Variadic&lt;E&gt;&gt;</p></td>
-<td><p>VariadicView&lt;OptionalAccessor&lt;E&gt;&gt;&gt;</p></td>
+<tr class="row-even"><td><p>arg_type&lt;Variadic&lt;E&gt;&gt;</p></td>
+<td><p>NullableVariadicView&lt;E&gt;</p></td>
+</tr>
+<tr class="row-odd"><td><p>null_free_arg_type&lt;Variadic&lt;E&gt;&gt;</p></td>
+<td><p>NullFreeVariadicView&lt;E&gt;</p></td>
 </tr>
 </tbody>
 </table>
-<p>Like the ArrayView, VariadicView has a similar interface to
+<p>Like the NullableArrayView and NullFreeArrayView, VariadicViews has a similar interface to
 <em>const std::vector&lt;std::optional&lt;V&gt;&gt;</em>.</p>
-<p>VariadicView supports the following:</p>
+<p>NullableVariadicView, and NullFreeVariadicView, supports the following:</p>
 <ul class="simple">
 <li><p>size_t size() : return the number of arguments that were passed as part of the “Variadic” type in the function invocation.</p></li>
-<li><p>OptionalAccessor&lt;T&gt; operator[](size_t index) : access the value of the argument at index.</p></li>
+<li><p>operator[](size_t index) : access the value of the argument at index. It returns either null_free_arg_type&lt;E&gt; or OptionalAccessor&lt;E&gt;.</p></li>
 <li><p>VariadicView&lt;T&gt;::Iterator begin() : iterator to the first argument.</p></li>
 <li><p>VariadicView&lt;T&gt;::Iterator end() : iterator indicating end of iteration.</p></li>
 <li><p>bool mayHaveNulls() : a check on the nullity of the arugments (note this takes time proportional to the number of arguments). When it returns false, there are definitely no nulls, a true does not guarantee null existence.</p></li>
