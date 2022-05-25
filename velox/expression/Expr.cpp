@@ -164,7 +164,7 @@ void Expr::computeMetadata() {
 
 namespace {
 // Returns true if vector is a LazyVector that hasn't been loaded yet or
-// is not dictionary, sequence or constant encoded.
+// is not dictionary or constant encoded.
 bool isFlat(const BaseVector& vector) {
   auto encoding = vector.encoding();
   if (encoding == VectorEncoding::Simple::LAZY) {
@@ -175,7 +175,6 @@ bool isFlat(const BaseVector& vector) {
     encoding = vector.loadedVector()->encoding();
   }
   return !(
-      encoding == VectorEncoding::Simple::SEQUENCE ||
       encoding == VectorEncoding::Simple::DICTIONARY ||
       encoding == VectorEncoding::Simple::CONSTANT);
 }
@@ -459,7 +458,6 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
   do {
     peeled = true;
     BufferPtr firstIndices;
-    BufferPtr firstLengths;
     for (const auto& field : distinctFields_) {
       auto fieldIndex = field->index(context);
       assert(fieldIndex >= 0 && fieldIndex < numFields);
@@ -479,11 +477,6 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
       nonConstant = true;
       auto encoding = leaf->encoding();
       if (encoding == VectorEncoding::Simple::DICTIONARY) {
-        if (firstLengths) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
         if (!propagatesNulls_ && leaf->rawNulls()) {
           // A dictionary that adds nulls over an Expr that is not null for a
           // null argument cannot be peeled.
@@ -495,24 +488,6 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
           firstIndices = std::move(indices);
         } else if (indices != firstIndices) {
           // different fields use different dictionaries
-          peeled = false;
-          break;
-        }
-        if (firstPeeled == -1) {
-          firstPeeled = fieldIndex;
-        }
-        setPeeled(leaf->valueVector(), fieldIndex, context, maybePeeled);
-      } else if (encoding == VectorEncoding::Simple::SEQUENCE) {
-        if (firstIndices) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
-        BufferPtr lengths = leaf->wrapInfo();
-        if (!firstLengths) {
-          firstLengths = std::move(lengths);
-        } else if (lengths != firstLengths) {
-          // different fields use different sequences
           peeled = false;
           break;
         }
@@ -902,7 +877,6 @@ inline bool isPeelable(VectorEncoding::Simple encoding) {
   switch (encoding) {
     case VectorEncoding::Simple::CONSTANT:
     case VectorEncoding::Simple::DICTIONARY:
-    case VectorEncoding::Simple::SEQUENCE:
       return true;
     default:
       return false;
@@ -1011,7 +985,6 @@ bool Expr::applyFunctionWithPeeling(
   do {
     peeled = true;
     BufferPtr firstIndices;
-    BufferPtr firstLengths;
     std::vector<VectorPtr> maybePeeled;
     for (auto i = 0; i < inputValues_.size(); ++i) {
       auto leaf = inputValues_[i];
@@ -1037,11 +1010,6 @@ bool Expr::applyFunctionWithPeeling(
       }
       auto encoding = leaf->encoding();
       if (encoding == VectorEncoding::Simple::DICTIONARY) {
-        if (firstLengths) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
         if (!vectorFunction_->isDefaultNullBehavior() && leaf->rawNulls()) {
           // A dictionary that adds nulls over an Expr that is not null for a
           // null argument cannot be peeled.
@@ -1053,24 +1021,6 @@ bool Expr::applyFunctionWithPeeling(
           firstIndices = std::move(indices);
         } else if (indices != firstIndices) {
           // different fields use different dictionaries
-          peeled = false;
-          break;
-        }
-        if (!firstWrapper) {
-          firstWrapper = leaf;
-        }
-        setPeeledArg(leaf->valueVector(), i, numArgs, maybePeeled);
-      } else if (encoding == VectorEncoding::Simple::SEQUENCE) {
-        if (firstIndices) {
-          // having a mix of dictionary and sequence encoded fields
-          peeled = false;
-          break;
-        }
-        BufferPtr lengths = leaf->wrapInfo();
-        if (!firstLengths) {
-          firstLengths = std::move(lengths);
-        } else if (lengths != firstLengths) {
-          // different fields use different sequences
           peeled = false;
           break;
         }

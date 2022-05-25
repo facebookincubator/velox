@@ -180,9 +180,6 @@ class DecodedVector {
  private:
   void setFlatNulls(const BaseVector& vector, const SelectivityVector& rows);
 
-  template <TypeKind kind>
-  void decodeBiased(const BaseVector& vector, const SelectivityVector& rows);
-
   void makeIndicesMutable();
 
   void combineWrappers(
@@ -194,10 +191,6 @@ class DecodedVector {
       const BaseVector& dictionaryVector,
       const SelectivityVector& rows);
 
-  void applySequenceWrapper(
-      const BaseVector& sequenceVector,
-      const SelectivityVector& rows);
-
   void copyNulls(vector_size_t size);
 
   void fillInIndices();
@@ -205,10 +198,6 @@ class DecodedVector {
   void setBaseData(const BaseVector& vector, const SelectivityVector& rows);
 
   void setBaseDataForConstant(
-      const BaseVector& vector,
-      const SelectivityVector& rows);
-
-  void setBaseDataForBias(
       const BaseVector& vector,
       const SelectivityVector& rows);
 
@@ -231,7 +220,7 @@ class DecodedVector {
   const uint64_t* nulls_ = nullptr;
 
   // The base vector of 'vector' given to decode(). This is the data
-  // after sequence, constant and dictionary vectors have been peeled
+  // after constant and dictionary vectors have been peeled
   // off.
   const BaseVector* baseVector_ = nullptr;
 
@@ -252,10 +241,6 @@ class DecodedVector {
   // complex type. Applies only when isConstantMapping_ is true and baseVector_
   // is of complex type (array, map, row).
   vector_size_t constantIndex_{0};
-
-  // Holds data that needs to be copied out from the base vector,
-  // e.g. exploded BiasVector values.
-  std::vector<uint64_t> tempSpace_;
 
   // Holds indices if an array of indices needs to be materialized,
   // e.g. when combining nested dictionaries.
