@@ -756,7 +756,7 @@ template <>
 LongDecimal VectorTest::testValue<LongDecimal>(
     int32_t i,
     BufferPtr& /*space*/) {
-  int128_t value = BUILD_INT128(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
+  int128_t value = buildInt128(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
   return LongDecimal(value);
 }
 

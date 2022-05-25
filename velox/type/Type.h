@@ -1369,7 +1369,7 @@ std::shared_ptr<const Type> createType(
         std::string(TypeTraits<KIND>::name) +
         " primitive type takes no childern"};
   }
-  VELOX_USER_CHECK(TypeTraits<KIND>::isPrimitiveType);
+  static_assert(TypeTraits<KIND>::isPrimitiveType);
   return ScalarType<KIND>::create();
 }
 
@@ -1607,6 +1607,20 @@ template <>
 struct CppToType<DynamicRow> : public TypeTraits<TypeKind::ROW> {
   static std::shared_ptr<const Type> create() {
     throw std::logic_error{"can't determine exact type for DynamicRow"};
+  }
+};
+
+template <>
+struct CppToType<ShortDecimal> : public TypeTraits<TypeKind::SHORT_DECIMAL> {
+  static std::shared_ptr<const Type> create() {
+    throw std::logic_error{"can't determine exact type for ShortDecimal"};
+  }
+};
+
+template <>
+struct CppToType<LongDecimal> : public TypeTraits<TypeKind::LONG_DECIMAL> {
+  static std::shared_ptr<const Type> create() {
+    throw std::logic_error{"can't determine exact type for LongDecimal"};
   }
 };
 

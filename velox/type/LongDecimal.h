@@ -22,11 +22,14 @@
 
 #pragma once
 
-#define BUILD_INT128(X, Y) ((int128_t)(X) << 64 | Y)
-
 namespace facebook::velox {
 
 using int128_t = __int128_t;
+
+constexpr int128_t buildInt128(uint64_t hi, uint64_t lo) {
+  // GCC does not allow left shift negative value.
+  return (static_cast<__uint128_t>(hi) << 64) | lo;
+}
 
 struct LongDecimal {
  public:
@@ -71,3 +74,7 @@ struct hasher<::facebook::velox::LongDecimal> {
   }
 };
 } // namespace folly
+
+namespace std {
+string to_string(facebook::velox::int128_t x);
+} // namespace std
