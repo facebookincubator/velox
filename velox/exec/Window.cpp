@@ -36,16 +36,27 @@ Window::Window(
       decodedInputVectors_(inputColumnsSize_),
       allKeysComparator_(
           windowNode->sources()[0]->outputType(),
-          windowNode->partitionAndSortKeys(),
-          windowNode->partitionAndSortOrders(),
+          /* TODO : Change the next 2 parameters for a full order of partition and sort keys */
+          windowNode->partitionKeys(),
+          windowNode->sortingOrders(),
           data_.get()),
       partitionKeysComparator_(
           windowNode->sources()[0]->outputType(),
           windowNode->partitionKeys(),
           {},
           data_.get()),
-      windowPartitionsQueue_(allKeysComparator_),
-      windowFunctions_(windowNode->windowFunctions()) {}
+      windowPartitionsQueue_(allKeysComparator_) {
+    for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
+        const auto& windowNodeFunction = windowNode->windowFunctions()[i];
+        std::vector<TypePtr> argTypes;
+        for (auto& arg : windowNodeFunction.functionCall->inputs()) {
+            argTypes.push_back(arg->type());
+        }
+        const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
+        windowFunctions_.push_back(std::move(WindowFunction::create(
+                windowNodeFunction.functionCall->name(), argTypes, resultType)));
+    }
+}
 
 Window::Comparator::Comparator(
     const std::shared_ptr<const RowType>& type,
@@ -132,11 +143,13 @@ RowVectorPtr Window::getOutput() {
     if (i == 0 || partitionKeysComparator_(rows_[i - 1], rows_[i])) {
       // This is a new partition, so reset WindowFunction.
       for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
-        windowFunctions_[j]->resetPartition();
+        // TODO : Figure the rows parameter here.
+        windowFunctions_[j]->resetPartition({});
       }
     }
     for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
-      windowFunctions_[j]->evaluate(windowFunctionOutputs[j], i);
+      // TODO : Figure window frame end points.
+      windowFunctions_[j]->apply(nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[j]);
     }
   }
 

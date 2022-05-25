@@ -461,7 +461,7 @@ PlanBuilder& PlanBuilder::window(
     const std::vector<core::SortOrder>& sortOrder,
     const std::vector<std::string>& windowFunctions) {
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> partitionKeys;
-  for (int i = 0; i < sortKeyIndices.size(); i++) {
+  for (int i = 0; i < partitionKeyIndices.size(); i++) {
     partitionKeys.emplace_back(field(partitionKeyIndices[i]));
   }
 
@@ -473,7 +473,8 @@ PlanBuilder& PlanBuilder::window(
   }
 
   std::vector<std::shared_ptr<const core::CallTypedExpr>> windowFunctionExprs;
-  std::vector<std::string> windowFunctionNames;
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<std::string> windowColumnNames;
   std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
   for (auto i = 0; i < windowFunctions.size(); ++i) {
     auto untypedExpr = duckdb::parseExpr(windowFunctions[i]);
@@ -482,11 +483,11 @@ PlanBuilder& PlanBuilder::window(
     VELOX_CHECK(callUnTypedExpr->getFunctionName() == "row_number");
     auto expr =
         std::make_shared<core::CallTypedExpr>(BIGINT(), args, "row_number");
-    windowFunctionExprs.push_back(expr);
+    windowNodeFunctions.push_back({std::move(expr), true});
     if (untypedExpr->alias().has_value()) {
-      windowFunctionNames.push_back(untypedExpr->alias().value());
+      windowColumnNames.push_back(untypedExpr->alias().value());
     } else {
-      windowFunctionNames.push_back(fmt::format("p{}", i));
+      windowColumnNames.push_back(fmt::format("p{}", i));
     }
   }
 
@@ -495,8 +496,8 @@ PlanBuilder& PlanBuilder::window(
       partitionKeys,
       sortingKeys,
       sortingOrders,
-      windowFunctionNames,
-      windowFunctionExprs,
+      windowColumnNames,
+      windowNodeFunctions,
       planNode_);
   return *this;
 }

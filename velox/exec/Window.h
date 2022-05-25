@@ -15,9 +15,9 @@
  */
 #pragma once
 
-#include "velox/core/WindowFunction.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/WindowFunction.h"
 
 namespace facebook::velox::exec {
 
@@ -118,7 +118,7 @@ class Window : public Operator {
       windowPartitionsQueue_;
   std::vector<char*> rows_;
 
-  const std::vector<std::shared_ptr<core::WindowFunction>>& windowFunctions_;
+  std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
 };
 
 } // namespace facebook::velox::exec

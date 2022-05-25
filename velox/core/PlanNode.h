@@ -17,7 +17,6 @@
 
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
-#include "velox/core/WindowFunction.h"
 
 namespace facebook::velox::core {
 
@@ -560,22 +559,41 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
 
 class WindowNode : public PlanNode {
  public:
-  /**
-   * @param partitionKeys: The partition keys over which the window function is
-   * computed.
-   */
-  WindowNode(
-      const PlanNodeId& id,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          partitionKeys,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          sortingKeys,
-      const std::vector<SortOrder>& sortingOrders,
-      const std::vector<std::string>& windowFunctionNames,
-      const std::vector<std::shared_ptr<const CallTypedExpr>>& windowFunctions,
-      std::shared_ptr<const PlanNode> source);
+  /* TODO : add support for Window frame
+  enum class WindowType { kRange, kRows };
 
-  const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+  enum class BoundType {
+    kUnboundedPreceding,
+    kPreceding,
+    kCurrentRow,
+    kFollowing,
+    kUnboundedFollowing
+  };
+
+  struct Frame {
+    WindowType type;
+    BoundType startType;
+    FieldAccessTypedExprPtr startValue;
+    BoundType endType;
+    FieldAccessTypedExprPtr endValue;
+  }; */
+
+  struct Function {
+    std::shared_ptr<const CallTypedExpr> functionCall;
+    //Frame frame;
+    bool ignoreNulls;
+  };
+
+  WindowNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> windowColumnNames,
+      std::vector<Function> windowFunctions,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
 
@@ -583,12 +601,12 @@ class WindowNode : public PlanNode {
     return outputType_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+  const std::vector<FieldAccessTypedExprPtr>&
   partitionKeys() const {
     return partitionKeys_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys()
       const {
     return sortingKeys_;
   }
@@ -597,25 +615,8 @@ class WindowNode : public PlanNode {
     return sortingOrders_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-  partitionAndSortKeys() const {
-    return partitionAndSortKeys_;
-  }
-
-  const std::vector<SortOrder>& partitionAndSortOrders() const {
-    return partitionAndSortOrders_;
-  }
-
-  const std::vector<std::string>& windowFunctionNames() const {
-    return windowFunctionNames_;
-  }
-
-  const std::vector<std::shared_ptr<const CallTypedExpr>>& windowFunctionExprs()
+  const std::vector<Function>& windowFunctions()
       const {
-    return windowFunctionExprs_;
-  }
-
-  const std::vector<std::shared_ptr<WindowFunction>>& windowFunctions() const {
     return windowFunctions_;
   }
 
@@ -626,22 +627,15 @@ class WindowNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> partitionKeys_;
+  const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
 
-  const std::vector<std::string> windowFunctionNames_;
-  const std::vector<std::shared_ptr<const CallTypedExpr>> windowFunctionExprs_;
-
-  const std::vector<std::shared_ptr<const PlanNode>> sources_;
-
-  std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-      partitionAndSortKeys_;
-  std::vector<SortOrder> partitionAndSortOrders_;
+  const std::vector<Function> windowFunctions_;
+  const std::vector<PlanNodePtr> sources_;
 
   RowTypePtr outputType_;
-  std::vector<std::shared_ptr<WindowFunction>> windowFunctions_;
 };
 
 class ExchangeNode : public PlanNode {

@@ -54,6 +54,7 @@ add_library(
   Values.cpp
   VectorHasher.cpp
   Window.cpp
+  WindowFunction.cpp
   AssignUniqueId.cpp)
 
 target_link_libraries(
