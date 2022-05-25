@@ -66,6 +66,12 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     toSubstrait(arena, projectNode, projectRel);
     return;
   }
+  if (auto aggregationNode =
+          std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
+    ::substrait::AggregateRel* aggregateRel = rel->mutable_aggregate();
+    toSubstrait(arena, aggregationNode, aggregateRel);
+    return;
+  }
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -170,6 +176,135 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   return;
 }
 
+void VeloxToSubstraitPlanConvertor::toSubstrait(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const core::AggregationNode>& aggregateNode,
+    ::substrait::AggregateRel* aggregateRel) {
+  // Process the source Node.
+  std::vector<core::PlanNodePtr> sources = aggregateNode->sources();
+  // Check there only have one input.
+  VELOX_USER_CHECK_EQ(
+      1, sources.size(), "Aggregation plan node must have exactly one source.");
+  const auto& source = sources[0];
+
+  // Build source.
+  toSubstrait(arena, source, aggregateRel->mutable_input());
+
+  // Convert aggregate grouping keys, such as: group by key1, key2.
+  auto inputType = source->outputType();
+  auto groupingKeys = aggregateNode->groupingKeys();
+  int64_t groupingKeySize = groupingKeys.size();
+  ::substrait::AggregateRel_Grouping* aggGroupings =
+      aggregateRel->add_groupings();
+
+  for (int64_t i = 0; i < groupingKeySize; i++) {
+    aggGroupings->add_grouping_expressions()->MergeFrom(
+        exprConvertor_->toSubstraitExpr(
+            arena,
+            std::dynamic_pointer_cast<const ITypedExpr>(groupingKeys.at(i)),
+            inputType));
+  }
+
+  // AggregatesSize should be equal to or greater than the aggregateMasks Size.
+  // Two cases: 1. aggregateMasksSize = 0, aggregatesSize > aggregateMasksSize.
+  // 2. aggregateMasksSize != 0, aggregatesSize = aggregateMasksSize.
+  auto aggregates = aggregateNode->aggregates();
+  auto aggregateMasks = aggregateNode->aggregateMasks();
+  int64_t aggregatesSize = aggregates.size();
+  int64_t aggregateMasksSize = aggregateMasks.size();
+  VELOX_CHECK_GE(aggregatesSize, aggregateMasksSize);
+
+  for (int64_t i = 0; i < aggregatesSize; i++) {
+    ::substrait::AggregateRel_Measure* aggMeasures =
+        aggregateRel->add_measures();
+
+    std::shared_ptr<const core::FieldAccessTypedExpr> aggMaskExpr =
+        aggregateMasks.at(i);
+    // Set substrait filter.
+    ::substrait::Expression* aggFilter = aggMeasures->mutable_filter();
+    if (aggMaskExpr.get()) {
+      aggFilter->MergeFrom(exprConvertor_->toSubstraitExpr(
+          arena,
+          std::dynamic_pointer_cast<const ITypedExpr>(aggMaskExpr),
+          inputType));
+    } else {
+      // Set null.
+      aggFilter = NULL;
+    }
+
+    // Process measure, eg:sum(a).
+    std::shared_ptr<const core::CallTypedExpr> aggregatesExpr =
+        aggregates.at(i);
+    ::substrait::AggregateFunction* aggFunction =
+        aggMeasures->mutable_measure();
+
+    // Aggregation function name.
+    std::string funName = aggregatesExpr->name();
+    // set aggFunction args.
+    std::vector<core::TypedExprPtr> aggregatesExprInputs =
+        aggregatesExpr->inputs();
+
+    int64_t aggregatesExprInputsSize = aggregatesExprInputs.size();
+    for (int64_t j = 0; j < aggregatesExprInputsSize; j++) {
+      ::substrait::Expression* aggFunctionExpr = aggFunction->add_args();
+      core::TypedExprPtr expr = aggregatesExprInputs[j];
+      // In velox plan, expr can only be the FieldAccessTypedExpr.
+      // If the expr is not FieldAccess, people need do project firstly.
+      if (auto vAggregatesExprInput =
+              std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
+        VELOX_NYI("In Velox Plan, the aggregates type cannot be CallTypedExpr");
+      } else if (
+          auto vAggregatesExprInput =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr) &&
+              funName == "count") {
+        // For case count(1).
+        aggFunction->clear_args();
+      } else {
+        // FieldAccessTypedExpr and Cast.
+        aggFunctionExpr->MergeFrom(
+            exprConvertor_->toSubstraitExpr(arena, expr, inputType));
+      }
+    }
+
+    // Set substrait aggregate Function reference and output type.
+    aggFunction->set_function_reference(functionMap_[funName]);
+
+    aggFunction->mutable_output_type()->MergeFrom(
+        typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
+
+    // Set substrait aggregate Function phase.
+    switch (aggregateNode->step()) {
+      case core::AggregationNode::Step::kPartial: {
+        aggFunction->set_phase(
+            ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE);
+        break;
+      }
+      case core::AggregationNode::Step::kIntermediate: {
+        aggFunction->set_phase(
+            ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE);
+        break;
+      }
+      case core::AggregationNode::Step::kSingle: {
+        aggFunction->set_phase(
+            ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT);
+        break;
+      }
+      case core::AggregationNode::Step::kFinal: {
+        aggFunction->set_phase(
+            ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT);
+        break;
+      }
+      default:
+        VELOX_NYI(
+            "Unsupport Aggregate Step '{}' in Substrait ",
+            mapAggregationStepToName(aggregateNode->step()));
+    }
+  }
+
+  // Direct output.
+  aggregateRel->mutable_common()->mutable_direct();
+}
+
 void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   // TODO: Fetch all functions from velox's registry.
 
@@ -177,6 +312,8 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   functionMap_["multiply"] = 1;
   functionMap_["lt"] = 2;
   functionMap_["divide"] = 3;
+  functionMap_["count"] = 4;
+  functionMap_["sum"] = 5;
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
@@ -193,13 +330,13 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
 
   extensionFunction->set_extension_uri_reference(0);
   extensionFunction->set_function_anchor(0);
-  extensionFunction->set_name("add:i32_i32");
+  extensionFunction->set_name("add:opt_i32_i32");
 
   extensionFunction =
       substraitPlan->add_extensions()->mutable_extension_function();
   extensionFunction->set_extension_uri_reference(0);
   extensionFunction->set_function_anchor(1);
-  extensionFunction->set_name("multiply:i32_i32");
+  extensionFunction->set_name("multiply:opt_i32_i32");
 
   extensionFunction =
       substraitPlan->add_extensions()->mutable_extension_function();
@@ -212,6 +349,18 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   extensionFunction->set_extension_uri_reference(0);
   extensionFunction->set_function_anchor(3);
   extensionFunction->set_name("divide:i32_i32");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(4);
+  extensionFunction->set_name("count:opt_i32");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(5);
+  extensionFunction->set_name("sum:opt_i32");
 
   return *substraitPlan;
 }

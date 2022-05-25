@@ -172,6 +172,9 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         case ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT:
           aggStep = core::AggregationNode::Step::kFinal;
           break;
+        case ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT:
+          aggStep = core::AggregationNode::Step::kSingle;
+          break;
         default:
           VELOX_NYI("Substrait conversion not supported for phase '{}'", phase);
       }
@@ -189,8 +192,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   if (projectOutNames.size() == 0) {
     // Conduct Aggregation directly.
     std::vector<std::string> aggOutNames;
-    aggOutNames.reserve(outIdx);
-    for (int idx = 0; idx < outIdx; idx++) {
+    aggOutNames.reserve(aggExprs.size());
+    for (int idx = 0; idx < aggExprs.size(); idx++) {
       aggOutNames.emplace_back(
           substraitParser_->makeNodeName(planNodeId_, idx));
     }

@@ -112,3 +112,41 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {
 
   assertPlanConversion(plan, "SELECT * FROM tmp");
 }
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, aggragateCount) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c6 < 24")
+                  .aggregation(
+                      {"c0", "c1"},
+                      {"count(c4) as num_price"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .project({"num_price"})
+                  .planNode();
+
+  assertPlanConversion(
+      plan,
+      "SELECT count(c4) as num_price FROM tmp WHERE c6 < 24 GROUP BY c0, c1");
+}
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sum) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {},
+                      {"sum(c1)", "count(c4)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      false)
+                  .planNode();
+
+  assertPlanConversion(plan, "SELECT sum(c1), count(c4) FROM tmp");
+}
