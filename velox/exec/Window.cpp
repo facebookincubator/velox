@@ -36,7 +36,8 @@ Window::Window(
       decodedInputVectors_(inputColumnsSize_),
       allKeysComparator_(
           windowNode->sources()[0]->outputType(),
-          /* TODO : Change the next 2 parameters for a full order of partition and sort keys */
+          /* TODO : Change the next 2 parameters for a full order of partition
+             and sort keys */
           windowNode->partitionKeys(),
           windowNode->sortingOrders(),
           data_.get()),
@@ -46,16 +47,16 @@ Window::Window(
           {},
           data_.get()),
       windowPartitionsQueue_(allKeysComparator_) {
-    for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
-        const auto& windowNodeFunction = windowNode->windowFunctions()[i];
-        std::vector<TypePtr> argTypes;
-        for (auto& arg : windowNodeFunction.functionCall->inputs()) {
-            argTypes.push_back(arg->type());
-        }
-        const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
-        windowFunctions_.push_back(std::move(WindowFunction::create(
-                windowNodeFunction.functionCall->name(), argTypes, resultType)));
+  for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
+    const auto& windowNodeFunction = windowNode->windowFunctions()[i];
+    std::vector<TypePtr> argTypes;
+    for (auto& arg : windowNodeFunction.functionCall->inputs()) {
+      argTypes.push_back(arg->type());
     }
+    const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
+    windowFunctions_.push_back(std::move(WindowFunction::create(
+        windowNodeFunction.functionCall->name(), argTypes, resultType)));
+  }
 }
 
 Window::Comparator::Comparator(
@@ -149,7 +150,8 @@ RowVectorPtr Window::getOutput() {
     }
     for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
       // TODO : Figure window frame end points.
-      windowFunctions_[j]->apply(nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[j]);
+      windowFunctions_[j]->apply(
+          nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[j]);
     }
   }
 

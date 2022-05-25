@@ -580,7 +580,7 @@ class WindowNode : public PlanNode {
 
   struct Function {
     std::shared_ptr<const CallTypedExpr> functionCall;
-    //Frame frame;
+    // Frame frame;
     bool ignoreNulls;
   };
 
@@ -601,13 +601,11 @@ class WindowNode : public PlanNode {
     return outputType_;
   }
 
-  const std::vector<FieldAccessTypedExprPtr>&
-  partitionKeys() const {
+  const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
     return partitionKeys_;
   }
 
-  const std::vector<FieldAccessTypedExprPtr>& sortingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
   }
 
@@ -615,8 +613,7 @@ class WindowNode : public PlanNode {
     return sortingOrders_;
   }
 
-  const std::vector<Function>& windowFunctions()
-      const {
+  const std::vector<Function>& windowFunctions() const {
     return windowFunctions_;
   }
 

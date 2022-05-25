@@ -157,9 +157,9 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
 
 namespace {
 std::shared_ptr<RowType> getWindowOutputType(
-        const RowTypePtr& inputType,
-        const std::vector<std::string>& windowColumnNames,
-        const std::vector<WindowNode::Function>& windowFunctions) {
+    const RowTypePtr& inputType,
+    const std::vector<std::string>& windowColumnNames,
+    const std::vector<WindowNode::Function>& windowFunctions) {
   VELOX_CHECK_EQ(
       windowColumnNames.size(),
       windowFunctions.size(),

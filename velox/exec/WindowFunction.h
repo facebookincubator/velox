@@ -23,23 +23,22 @@
 namespace facebook::velox::exec {
 
 class WindowFunction {
-public:
+ public:
+  virtual ~WindowFunction(){};
 
-  virtual ~WindowFunction() {};
-  
   virtual void resetPartition(const std::vector<char*>& rows) = 0;
 
   virtual void apply(
-    const BufferPtr& peerGroupStarts,
-    const BufferPtr& peerGroupEnds,
-    const BufferPtr& frameStarts,
-    const BufferPtr& frameEnds,
-    const VectorPtr& result) = 0;
+      const BufferPtr& peerGroupStarts,
+      const BufferPtr& peerGroupEnds,
+      const BufferPtr& frameStarts,
+      const BufferPtr& frameEnds,
+      const VectorPtr& result) = 0;
 
   static std::unique_ptr<WindowFunction> create(
-    const std::string& name,
-    const std::vector<TypePtr>& argTypes,
-    const TypePtr& resultType);
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes,
+      const TypePtr& resultType);
 };
 
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
@@ -55,11 +54,11 @@ bool registerWindowFunction(
 /// Returns signatures of the window function with the specified name.
 /// Returns empty std::optional if function with that name is not found.
 std::optional<std::vector<std::shared_ptr<FunctionSignature>>>
-    getWindowFunctionSignatures(const std::string& name);
+getWindowFunctionSignatures(const std::string& name);
 
 struct WindowFunctionEntry {
-    std::vector<std::shared_ptr<FunctionSignature>> signatures;
-    WindowFunctionFactory factory;
+  std::vector<std::shared_ptr<FunctionSignature>> signatures;
+  WindowFunctionFactory factory;
 };
 
 using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
