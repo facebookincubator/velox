@@ -54,8 +54,8 @@ Window::Window(
       argTypes.push_back(arg->type());
     }
     const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
-    windowFunctions_.push_back(std::move(WindowFunction::create(
-        windowNodeFunction.functionCall->name(), argTypes, resultType)));
+    windowFunctions_.push_back(WindowFunction::create(
+        windowNodeFunction.functionCall->name(), argTypes, resultType));
   }
 }
 
