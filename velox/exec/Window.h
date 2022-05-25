@@ -67,8 +67,8 @@ class Window : public Operator {
   // Once all inputs are available, we can separate the input rows into Window
   // partitions by sorting all rows with a combination of Window partitionKeys
   // followed by sortKeys.
-  // This WindowFunction is invoked with these partition rows to compute its output
-  // values.
+  // This WindowFunction is invoked with these partition rows to compute its
+  // output values.
   const int inputColumnsSize_;
   std::unique_ptr<RowContainer> data_;
   std::vector<DecodedVector> decodedInputVectors_;
