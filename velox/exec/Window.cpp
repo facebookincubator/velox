@@ -34,12 +34,36 @@ Window::Window(
           windowNode->sources()[0]->outputType()->children(),
           operatorCtx_->mappedMemory())),
       decodedInputVectors_(inputColumnsSize_) {
+
+    std::vector<core::FieldAccessTypedExprPtr> partitionAndSortKeys;
+    std::vector<core::SortOrder> partitionAndSortOrders;
+    partitionAndSortKeys.reserve(
+            windowNode->partitionKeys().size() + windowNode->sortingKeys().size());
+    partitionAndSortOrders.reserve(
+            windowNode->partitionKeys().size() + windowNode->sortingOrders().size());
+
+    partitionAndSortKeys.insert(
+            partitionAndSortKeys.cend(),
+            windowNode->partitionKeys().begin(),
+            windowNode->partitionKeys().end());
+    partitionAndSortKeys.insert(
+            partitionAndSortKeys.cend(),
+            windowNode->sortingKeys().begin(),
+            windowNode->sortingKeys().end());
+    core::SortOrder defaultPartitionSortOrder(true, true);
+    partitionAndSortOrders.insert(
+            partitionAndSortOrders.cend(),
+            windowNode->partitionKeys().size(),
+            defaultPartitionSortOrder);
+    partitionAndSortOrders.insert(
+            partitionAndSortOrders.cend(),
+            windowNode->sortingOrders().begin(),
+            windowNode->sortingOrders().end());
+
   initKeyInfo(
       windowNode->sources()[0]->outputType(),
-      /* TODO : Change the next 2 parameters for a full order of partition
-         and sort keys */
-      windowNode->partitionKeys(),
-      windowNode->sortingOrders(),
+      partitionAndSortKeys,
+      partitionAndSortOrders,
       allKeyInfo_);
   initKeyInfo(
       windowNode->sources()[0]->outputType(),
