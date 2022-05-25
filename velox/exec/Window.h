@@ -77,7 +77,7 @@ class Window : public Operator {
   std::vector<std::pair<ChannelIndex, core::SortOrder>> partitionKeyInfo_;
 
   size_t numRows_ = 0;
-  size_t q = 0;
+  size_t numRowsReturned_ = 0;
   std::vector<char*> rows_;
   std::vector<char*> returningRows_;
 

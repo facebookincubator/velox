@@ -178,10 +178,8 @@ RowVectorPtr Window::getOutput() {
     }
     return false;
   };
-  BufferPtr rowIndices = allocateIndices(numRowsToReturn, pool());
-  auto* rawRowIndices = rowIndices->asMutable<vector_size_t>();
+
   for (int i = 0; i < numRowsToReturn; i++) {
-    rawRowIndices[i] = i;
     if (i == 0 || partitionCompare(returningRows_[i - 1], returningRows_[i])) {
       // This is a new partition, so reset WindowFunction.
       for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
@@ -197,10 +195,7 @@ RowVectorPtr Window::getOutput() {
   }
 
   for (int j = inputColumnsSize_; j < outputType_->size(); j++) {
-    result->childAt(j) = wrapChild(
-        numRowsToReturn,
-        rowIndices,
-        windowFunctionOutputs[j - inputColumnsSize_]);
+    result->childAt(j) = windowFunctionOutputs[j - inputColumnsSize_];
   }
 
   numRowsReturned_ += numRowsToReturn;
