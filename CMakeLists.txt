@@ -113,10 +113,10 @@ if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
 endif()
 
-# If CODEGEN support isn't explicitly set, we guestimate the value based on the
-# compiler
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES
-                                            "Clang"))
+# Turn on Codegen only for Clang and non Mac systems.
+if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
+   AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
   message(STATUS "Enabling Codegen")
   set(VELOX_CODEGEN_SUPPORT True)
 else()
@@ -141,17 +141,25 @@ if(UNIX AND NOT APPLE)
   add_link_options("-Wl,-export-dynamic")
 endif()
 
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64" AND ${CMAKE_SYSTEM_NAME} MATCHES
+                                                 "Darwin")
+  set(ON_APPLE_M1 True)
+endif()
+
 # Required so velox code can be used in a dynamic library
 set(POSITION_INDEPENDENT_CODE True)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=apple-m1+crc")
-else()
-  set(CMAKE_CXX_FLAGS
-      "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -mbmi2 -mbmi")
-endif()
+
+execute_process(
+  COMMAND
+    bash -c
+    "( source ./scripts/setup-helper-functions.sh; echo -n $(get_cxx_flags))"
+  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS)
+message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
@@ -245,7 +253,11 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  if(ON_APPLE_M1)
+    set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  else()
+    set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  endif()
   find_package(ICU REQUIRED)
   include_directories(${ICU_INCLUDE_DIRS})
   link_directories("${ICU_INCLUDE_DIRS}/../lib")
