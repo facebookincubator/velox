@@ -17,9 +17,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/vector/BaseVector.h"
-#include "velox/vector/BiasVector.h"
 #include "velox/vector/LazyVector.h"
-#include "velox/vector/SequenceVector.h"
 
 namespace facebook::velox {
 
@@ -60,7 +58,6 @@ void DecodedVector::decode(
   auto encoding = vector.encoding();
   switch (encoding) {
     case VectorEncoding::Simple::FLAT:
-    case VectorEncoding::Simple::BIASED:
     case VectorEncoding::Simple::ROW:
     case VectorEncoding::Simple::ARRAY:
     case VectorEncoding::Simple::MAP:
@@ -79,8 +76,7 @@ void DecodedVector::decode(
       }
       break;
     }
-    case VectorEncoding::Simple::DICTIONARY:
-    case VectorEncoding::Simple::SEQUENCE: {
+    case VectorEncoding::Simple::DICTIONARY: {
       combineWrappers(&vector, rows);
       break;
     }
@@ -138,18 +134,6 @@ void DecodedVector::combineWrappers(
       hasExtraNulls_ = true;
       mayHaveNulls_ = true;
     }
-  } else if (topEncoding == VectorEncoding::Simple::SEQUENCE) {
-    copiedIndices_.resize(rows.end());
-    indices_ = &copiedIndices_[0];
-    auto sizes = vector->wrapInfo()->as<vector_size_t>();
-    vector_size_t lastBegin = 0;
-    vector_size_t lastEnd = sizes[0];
-    vector_size_t lastIndex = 0;
-    values = vector->valueVector().get();
-    rows.applyToSelected([&](vector_size_t row) {
-      copiedIndices_[row] =
-          offsetOfIndex(sizes, row, &lastBegin, &lastEnd, &lastIndex);
-    });
   } else {
     VELOX_FAIL(
         "Unsupported wrapper encoding: {}",
@@ -172,7 +156,6 @@ void DecodedVector::combineWrappers(
       case VectorEncoding::Simple::LAZY:
       case VectorEncoding::Simple::CONSTANT:
       case VectorEncoding::Simple::FLAT:
-      case VectorEncoding::Simple::BIASED:
       case VectorEncoding::Simple::ROW:
       case VectorEncoding::Simple::ARRAY:
       case VectorEncoding::Simple::MAP:
@@ -180,11 +163,6 @@ void DecodedVector::combineWrappers(
         return;
       case VectorEncoding::Simple::DICTIONARY: {
         applyDictionaryWrapper(*values, rows);
-        values = values->valueVector().get();
-        break;
-      }
-      case VectorEncoding::Simple::SEQUENCE: {
-        applySequenceWrapper(*values, rows);
         values = values->valueVector().get();
         break;
       }
@@ -228,41 +206,6 @@ void DecodedVector::applyDictionaryWrapper(
   });
 }
 
-void DecodedVector::applySequenceWrapper(
-    const BaseVector& sequenceVector,
-    const SelectivityVector& rows) {
-  const auto* lengths = sequenceVector.wrapInfo()->as<vector_size_t>();
-  auto newNulls = sequenceVector.rawNulls();
-  if (newNulls) {
-    hasExtraNulls_ = true;
-    mayHaveNulls_ = true;
-    if (!nulls_ || nullsNotCopied()) {
-      copyNulls(rows.end());
-    }
-  }
-  auto copiedNulls = copiedNulls_.data();
-  auto currentIndices = indices_;
-  if (indicesNotCopied()) {
-    copiedIndices_.resize(size_);
-    indices_ = copiedIndices_.data();
-  }
-
-  vector_size_t lastBegin = 0;
-  vector_size_t lastEnd = lengths[0];
-  vector_size_t lastIndex = 0;
-  rows.applyToSelected([&, this](vector_size_t row) {
-    if (!nulls_ || !bits::isBitNull(nulls_, row)) {
-      auto wrappedIndex = currentIndices[row];
-      if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
-        bits::setNull(copiedNulls, row);
-      } else {
-        copiedIndices_[row] = offsetOfIndex(
-            lengths, wrappedIndex, &lastBegin, &lastEnd, &lastIndex);
-      }
-    }
-  });
-}
-
 void DecodedVector::fillInIndices() {
   if (isConstantMapping_) {
     if (size_ > zeroIndices().size() || constantIndex_ != 0) {
@@ -297,25 +240,6 @@ void DecodedVector::makeIndicesMutable() {
         copiedIndices_.size() * sizeof(copiedIndices_[0]));
     indices_ = &copiedIndices_[0];
   }
-}
-
-template <TypeKind kind>
-void DecodedVector::decodeBiased(
-    const BaseVector& vector,
-    const SelectivityVector& rows) {
-  using T = typename TypeTraits<kind>::NativeType;
-  auto biased = vector.as<const BiasVector<T>>();
-  // The API contract is that 'data_' is interpretable as a flat array
-  // of T. The container is a vector of int64_t. So the number of
-  // elements needed is the rounded up size over the number of T's
-  // that fit in int64_t.
-  auto numInt64 =
-      bits::roundUp(size_, sizeof(int64_t)) / (sizeof(int64_t) / sizeof(T));
-  tempSpace_.resize(numInt64);
-  T* data = reinterpret_cast<T*>(&tempSpace_[0]); // NOLINT
-  rows.applyToSelected(
-      [data, biased](vector_size_t row) { data[row] = biased->valueAt(row); });
-  data_ = data;
 }
 
 void DecodedVector::setFlatNulls(
@@ -364,10 +288,6 @@ void DecodedVector::setBaseData(
       setBaseDataForConstant(vector, rows);
       break;
     }
-    case VectorEncoding::Simple::BIASED: {
-      setBaseDataForBias(vector, rows);
-      break;
-    }
     default:
       VELOX_UNREACHABLE();
   }
@@ -400,29 +320,8 @@ void DecodedVector::setBaseDataForConstant(
   mayHaveNulls_ = hasExtraNulls_ || nulls_;
 }
 
-void DecodedVector::setBaseDataForBias(
-    const BaseVector& vector,
-    const SelectivityVector& rows) {
-  setFlatNulls(vector, rows);
-  switch (vector.typeKind()) {
-    case TypeKind::SMALLINT:
-      decodeBiased<TypeKind::SMALLINT>(vector, rows);
-      break;
-    case TypeKind::INTEGER:
-      decodeBiased<TypeKind::INTEGER>(vector, rows);
-      break;
-    case TypeKind::BIGINT:
-      decodeBiased<TypeKind::BIGINT>(vector, rows);
-      break;
-    default:
-      VELOX_FAIL(
-          "Unsupported type for BiasVector: {}", vector.type()->toString());
-  }
-}
-
 static inline bool isWrapper(VectorEncoding::Simple encoding) {
-  return encoding == VectorEncoding::Simple::SEQUENCE ||
-      encoding == VectorEncoding::Simple::DICTIONARY;
+  return encoding == VectorEncoding::Simple::DICTIONARY;
 }
 
 VectorPtr DecodedVector::wrap(

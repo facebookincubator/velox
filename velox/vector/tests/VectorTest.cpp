@@ -19,7 +19,6 @@
 #include "velox/common/memory/ByteStream.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
-#include "velox/vector/BiasVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -133,47 +132,6 @@ class VectorTest : public testing::Test {
       }
     }
     return base;
-  }
-
-  template <TypeKind Kind, TypeKind BiasKind>
-  VectorPtr createBias(vector_size_t size, bool withNulls) {
-    using T = typename TypeTraits<Kind>::NativeType;
-    using TBias = typename TypeTraits<BiasKind>::NativeType;
-    BufferPtr buffer;
-    BufferPtr values = AlignedBuffer::allocate<TBias>(size, pool_.get());
-    values->setSize(size * sizeof(TBias));
-    BufferPtr nulls;
-    uint64_t* rawNulls = nullptr;
-    if (withNulls) {
-      int32_t bytes = BaseVector::byteSize<bool>(size);
-      nulls = AlignedBuffer::allocate<char>(bytes, pool_.get());
-      rawNulls = nulls->asMutable<uint64_t>();
-      memset(rawNulls, bits::kNotNullByte, bytes);
-      nulls->setSize(bytes);
-    }
-    auto rawValues = values->asMutable<TBias>();
-    int32_t numNulls = 0;
-    constexpr int32_t kBias = 100;
-    for (int32_t i = 0; i < size; ++i) {
-      if (withNulls && i % 3 == 0) {
-        ++numNulls;
-        bits::setNull(rawNulls, i);
-      } else {
-        rawValues[i] = testValue<TBias>(i, buffer) - kBias;
-      }
-    }
-    return std::make_shared<BiasVector<T>>(
-        pool_.get(),
-        nulls,
-        size,
-        BiasKind,
-        std::move(values),
-        kBias,
-        SimpleVectorStats<T>{},
-        std::nullopt,
-        numNulls,
-        false,
-        size * sizeof(T));
   }
 
   VectorPtr createRow(int32_t numRows, bool withNulls) {
@@ -386,18 +344,15 @@ class VectorTest : public testing::Test {
     auto kind = source->typeKind();
     auto isSmall = kind == TypeKind::BOOLEAN || kind == TypeKind::TINYINT;
     bool maybeConstant = false;
-    bool isSequence = false;
     auto sourcePtr = source.get();
     for (;;) {
       auto encoding = sourcePtr->encoding();
       maybeConstant = encoding == VectorEncoding::Simple::CONSTANT ||
           encoding == VectorEncoding::Simple::LAZY;
-      isSequence = encoding == VectorEncoding::Simple::SEQUENCE;
-      if (maybeConstant || isSequence) {
+      if (maybeConstant) {
         break;
       }
-      if (encoding != VectorEncoding::Simple::DICTIONARY &&
-          encoding != VectorEncoding::Simple::SEQUENCE) {
+      if (encoding != VectorEncoding::Simple::DICTIONARY) {
         break;
       }
       sourcePtr = sourcePtr->valueVector().get();
@@ -467,7 +422,7 @@ class VectorTest : public testing::Test {
         }
       }
       if (i > 1 && i < sourceSize - 1 && !target->isNullAt(i) && !isSmall &&
-          !maybeConstant && !isSequence && source->isScalar()) {
+          !maybeConstant && source->isScalar()) {
         EXPECT_FALSE(target->equalValueAt(source.get(), i, i));
       }
     }
@@ -536,6 +491,7 @@ class VectorTest : public testing::Test {
         bits::setNull(rawNulls, i);
       }
     }
+
     auto inDictionary = BaseVector::wrapInDictionary(
         dictionaryNulls, indices, sourceSize, source);
     testCopy(inDictionary, level - 1);
@@ -545,8 +501,6 @@ class VectorTest : public testing::Test {
     for (int32_t i = 0; i < sourceSize; ++i) {
       lengths->asMutable<vector_size_t>()[i] = 1;
     }
-    auto inSequence = BaseVector::wrapInSequence(lengths, sourceSize, source);
-    testCopy(inSequence, level - 1);
 
     auto constant = BaseVector::wrapInConstant(20, 10 + level, source);
     testCopy(constant, level - 1);
@@ -843,14 +797,6 @@ TEST_F(VectorTest, getOrCreateEmpty) {
   EXPECT_NE(empty, nullptr);
   EXPECT_EQ(empty->size(), 0);
   EXPECT_EQ(empty->type(), VARCHAR());
-}
-
-TEST_F(VectorTest, bias) {
-  auto base =
-      createBias<TypeKind::BIGINT, TypeKind::INTEGER>(vectorSize_, false);
-  testCopy(base, 4);
-  base = createBias<TypeKind::INTEGER, TypeKind::SMALLINT>(vectorSize_, true);
-  testCopy(base, 4);
 }
 
 TEST_F(VectorTest, row) {

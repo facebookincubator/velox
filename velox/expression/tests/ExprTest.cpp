@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-#include <folly/Benchmark.h>
 #include "glog/logging.h"
 #include "gtest/gtest.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/dwio/common/DataSink.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -38,11 +36,11 @@ namespace {
 // Specifies an encoding for generating test data. Multiple encodings can be
 // nested. The first element of a list of  EncodingOptions gives the base
 // encoding, either FLAT or CONSTANT. Subsequent elements add a wrapper, e.g.
-// DICTIONARY, SEQUENCE or CONSTANT.
+// DICTIONARY or CONSTANT.
 struct EncodingOptions {
   VectorEncoding::Simple encoding;
 
-  // Specifies the count of values for a FLAT, DICTIONARY or SEQUENCE.
+  // Specifies the count of values for a FLAT or DICTIONARY.
   int32_t cardinality;
 
   // Specifies the frequency of nulls added by a DICTIONARY wrapper. 0 means
@@ -72,10 +70,6 @@ struct EncodingOptions {
         cardinality,
         -1,
         std::move(indices)};
-  }
-
-  static EncodingOptions sequence(int32_t runLength) {
-    return {VectorEncoding::Simple::SEQUENCE, runLength, -1};
   }
 
   static EncodingOptions constant(int32_t cardinality, int32_t index) {
@@ -155,19 +149,11 @@ class ExprTest : public testing::Test, public VectorTestBase {
          EncodingOptions::constant(kTestSize, 7)});
     testEncodings_.push_back(
         {EncodingOptions::flat(100, 2),
-         EncodingOptions::sequence(10),
-         EncodingOptions::dictionary(kTestSize, 6)});
-    testEncodings_.push_back(
-        {EncodingOptions::flat(100, 2),
          EncodingOptions::dictionary(kTestSize, 6)});
     // A dictionary that masks everything as null.
     testEncodings_.push_back(
         {EncodingOptions::flat(100, 2),
          EncodingOptions::dictionary(kTestSize, 1)});
-    testEncodings_.push_back(
-        {EncodingOptions::flat(100, 2),
-         EncodingOptions::dictionary(1000, 0),
-         EncodingOptions::sequence(10)});
   }
 
   std::shared_ptr<const core::ITypedExpr> parseExpression(
@@ -307,26 +293,6 @@ class ExprTest : public testing::Test, public VectorTestBase {
           reference = newReference;
           break;
         }
-        case VectorEncoding::Simple::SEQUENCE: {
-          VELOX_CHECK(current, "Sequence must be non-leaf");
-          BufferPtr sizes;
-          int runLength = cardinality;
-          int currentSize = current->size();
-          std::vector<std::optional<T>> newReference(runLength * currentSize);
-          sizes = AlignedBuffer::allocate<vector_size_t>(
-              currentSize, execCtx_->pool());
-          auto rawSizes = sizes->asMutable<vector_size_t>();
-          for (auto index = 0; index < currentSize; index++) {
-            rawSizes[index] = runLength;
-            for (int i = 0; i < runLength; ++i) {
-              newReference[index * runLength + i] = reference[index];
-            }
-          }
-          reference = newReference;
-          current = BaseVector::wrapInSequence(
-              sizes, runLength * currentSize, std::move(current));
-          break;
-        }
         default:; // nothing to do
       }
     }
@@ -428,7 +394,6 @@ class ExprTest : public testing::Test, public VectorTestBase {
       auto encoding = currentVector->encoding();
       out << encoding;
       if (encoding != VectorEncoding::Simple::DICTIONARY &&
-          encoding != VectorEncoding::Simple::SEQUENCE &&
           encoding != VectorEncoding::Simple::CONSTANT) {
         break;
       }
@@ -2005,7 +1970,7 @@ TEST_F(ExprTest, ifWithConstant) {
 namespace {
 // Testing functions for generating intermediate results in different
 // encodings. The test case passes vectors to these and these
-// functions make constant/dictionary/sequence vectors from their arguments
+// functions make constant/dictionary vectors from their arguments
 
 // Returns the first value of the argument vector wrapped as a constant.
 class TestingConstantFunction : public exec::VectorFunction {
@@ -2065,37 +2030,6 @@ class TestingDictionaryFunction : public exec::VectorFunction {
   }
 };
 
-// Takes a vector  of values and a vector of integer run lengths.
-// Wraps the values in a SequenceVector with the run lengths.
-
-class TestingSequenceFunction : public exec::VectorFunction {
- public:
-  bool isDefaultNullBehavior() const override {
-    return false;
-  }
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
-    VELOX_CHECK(rows.isAllSelected());
-    auto lengths = args[1]->as<FlatVector<int32_t>>()->values();
-    *result = BaseVector::wrapInSequence(lengths, rows.size(), args[0]);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // T, integer -> T
-    return {exec::FunctionSignatureBuilder()
-                .typeVariable("T")
-                .returnType("T")
-                .argumentType("T")
-                .argumentType("integer")
-                .build()};
-  }
-};
-
 // Single-argument deterministic functions always receive their argument
 // vector as flat.
 class TestingSingleArgDeterministicFunction : public exec::VectorFunction {
@@ -2133,11 +2067,6 @@ VELOX_DECLARE_VECTOR_FUNCTION(
     std::make_unique<TestingDictionaryFunction>());
 
 VELOX_DECLARE_VECTOR_FUNCTION(
-    udf_testing_sequence,
-    TestingSequenceFunction::signatures(),
-    std::make_unique<TestingSequenceFunction>());
-
-VELOX_DECLARE_VECTOR_FUNCTION(
     udf_testing_single_arg_deterministic,
     TestingSingleArgDeterministicFunction::signatures(),
     std::make_unique<TestingSingleArgDeterministicFunction>());
@@ -2147,7 +2076,6 @@ TEST_F(ExprTest, peelArgs) {
   constexpr int32_t kDistinct = 10;
   VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_constant, "testing_constant");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_dictionary, "testing_dictionary");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_testing_sequence, "testing_sequence");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_testing_single_arg_deterministic, "testing_single_arg_deterministic");
 
@@ -2182,16 +2110,6 @@ TEST_F(ExprTest, peelArgs) {
   expected32 = makeFlatVector<int32_t>(kSize, [&](int32_t row) {
     return 1 + distinctSource[indicesSource[row]];
   });
-  assertEqualVectors(expected32, result);
-
-  auto lengths = makeFlatVector<int32_t>(lengthSource);
-  result = evaluate(
-      "testing_constant(c0) + testing_sequence(c1, c2)",
-      makeRowVector({allOnes, distincts, lengths}));
-  expected32 = makeFlatVector<int32_t>(kSize, [&](int32_t row) {
-    return 1 + distinctSource[row / (kSize / kDistinct)];
-  });
-
   assertEqualVectors(expected32, result);
 
   // dictionary and single-argument deterministic
@@ -2557,7 +2475,7 @@ TEST_F(ExprTest, peeledConstant) {
     }
     EXPECT_LE(1, result->valueAt(i).size());
     // Check that the data is readable.
-    folly::doNotOptimizeAway(result->toString(i));
+    EXPECT_NO_THROW(result->toString(i));
   }
 }
 
