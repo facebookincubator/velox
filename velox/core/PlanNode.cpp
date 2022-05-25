@@ -155,6 +155,74 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+WindowNode::WindowNode(
+    const PlanNodeId& id,
+    const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+        partitionKeys,
+    const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys,
+    const std::vector<SortOrder>& sortingOrders,
+    const std::vector<std::string>& windowFunctionNames,
+    const std::vector<std::shared_ptr<const CallTypedExpr>>&
+        windowFunctionExprs,
+    std::shared_ptr<const PlanNode> source)
+    : PlanNode(id),
+      partitionKeys_(partitionKeys),
+      sortingKeys_(sortingKeys),
+      sortingOrders_(sortingOrders),
+      windowFunctionNames_(windowFunctionNames),
+      windowFunctionExprs_(windowFunctionExprs),
+      sources_{source} {
+  VELOX_CHECK(!partitionKeys_.empty(), "Windows must specify a partition key");
+
+  VELOX_CHECK(
+      !windowFunctionExprs_.empty(),
+      "Windows must specify a function computation");
+
+  VELOX_CHECK_EQ(
+      windowFunctionNames.size(),
+      windowFunctionExprs.size(),
+      "Number of window function names must be equal to number of window functions");
+
+  partitionAndSortKeys_.reserve(partitionKeys_.size() + sortingKeys.size());
+  partitionAndSortOrders_.reserve(partitionKeys_.size() + sortingOrders.size());
+
+  partitionAndSortKeys_.insert(
+      partitionAndSortKeys_.cend(),
+      partitionKeys_.begin(),
+      partitionKeys_.end());
+  partitionAndSortKeys_.insert(
+      partitionAndSortKeys_.cend(), sortingKeys_.begin(), sortingKeys_.end());
+  core::SortOrder defaultPartitionSortOrder(true, true);
+  partitionAndSortOrders_.insert(
+      partitionAndSortOrders_.cend(),
+      partitionKeys_.size(),
+      defaultPartitionSortOrder);
+  partitionAndSortOrders_.insert(
+      partitionAndSortOrders_.cend(),
+      sortingOrders_.begin(),
+      sortingOrders_.end());
+
+  std::vector<std::string> names(sources_[0]->outputType()->names());
+  std::vector<TypePtr> types(sources_[0]->outputType()->children());
+
+  windowFunctions_.reserve(windowFunctionExprs.size());
+  for (int i = 0; i < windowFunctionExprs.size(); i++) {
+    names.emplace_back(windowFunctionNames[i]);
+
+    VELOX_CHECK_EQ(windowFunctionExprs[i]->name(), "row_number");
+    auto windowFunction =
+        std::make_shared<WindowFunction>(WindowFunction::ROW_NUMBER);
+    types.emplace_back(windowFunction->getOutputType());
+    windowFunctions_.emplace_back(windowFunction);
+  }
+
+  outputType_ = ROW(std::move(names), std::move(types));
+}
+
+void WindowNode::addDetails(std::stringstream& /* stream */) const {
+  // Nothing to add.
+}
+
 const std::vector<PlanNodePtr>& ValuesNode::sources() const {
   return kEmptySources;
 }
