@@ -19,7 +19,9 @@
 #ifdef VELOX_ENABLE_GOOGLETEST
 #include <gtest/gtest_prod.h>
 #else
+#ifndef FRIEND_TEST
 // FRIEND_TEST macro is only used when testing is enabled.
 // Replacing it with "nothing" is okay when testing is disabled.
 #define FRIEND_TEST(X, Y)
+#endif
 #endif
