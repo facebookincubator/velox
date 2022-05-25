@@ -33,6 +33,7 @@ Window::Window(
       data_(std::make_unique<RowContainer>(
           windowNode->sources()[0]->outputType()->children(),
           operatorCtx_->mappedMemory())),
+      decodedInputVectors_(inputColumnsSize_),
       allKeysComparator_(
           windowNode->sources()[0]->outputType(),
           windowNode->partitionAndSortKeys(),
@@ -43,7 +44,6 @@ Window::Window(
           windowNode->partitionKeys(),
           {},
           data_.get()),
-      decodedInputVectors_(inputColumnsSize_),
       windowPartitionsQueue_(allKeysComparator_),
       windowFunctions_(windowNode->windowFunctions()) {}
 
