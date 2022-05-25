@@ -1024,6 +1024,28 @@ TEST_F(StringFunctionsTest, sha256) {
   EXPECT_EQ(std::nullopt, sha256(std::nullopt));
 }
 
+TEST_F(StringFunctionsTest, sha512) {
+  const auto sha512 = [&](std::optional<std::string> arg) {
+    return evaluateOnce<std::string, std::string>(
+        "sha512(c0)", {arg}, {VARBINARY()});
+  };
+
+  EXPECT_EQ(
+      hexToDec(
+          "05b41d06db66a1c9f3b86a4033f920c25a59624dcad4118544f32147f7d04bcdd2627710e487958da69176b6a3884d13fa85f99ccfd44f97f81877bb8c103453"),
+      sha512("prestodb"));
+  EXPECT_EQ(
+      hexToDec(
+          "7de872ed1c41ce3901bb7f12f20b0c0106331fe5b5ecc5fbbcf3ce6c79df4da595ebb7e221ab8b7fc5d918583eac6890ade1c26436335d3835828011204b7679"),
+      sha512("Infinity"));
+  EXPECT_EQ(
+      hexToDec(
+          "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"),
+      sha512(""));
+
+  EXPECT_EQ(std::nullopt, sha512(std::nullopt));
+}
+
 void StringFunctionsTest::testReplaceInPlace(
     const std::vector<std::pair<std::string, std::string>>& tests,
     const std::string& search,
