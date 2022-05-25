@@ -57,11 +57,6 @@ class SortOrder {
   SortOrder(bool ascending, bool nullsFirst)
       : ascending_(ascending), nullsFirst_(nullsFirst) {}
 
-  SortOrder(const SortOrder& a) {
-    ascending_ = a.ascending_;
-    nullsFirst_ = a.nullsFirst_;
-  }
-
   bool isAscending() const {
     return ascending_;
   }
@@ -78,8 +73,8 @@ class SortOrder {
   }
 
  private:
-  bool ascending_;
-  bool nullsFirst_;
+  const bool ascending_;
+  const bool nullsFirst_;
 };
 
 extern const SortOrder kAscNullsFirst;
