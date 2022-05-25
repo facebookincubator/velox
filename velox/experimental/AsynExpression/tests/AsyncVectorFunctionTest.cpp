@@ -30,11 +30,14 @@
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 #include "velox/type/Type.h"
 
-namespace facebook::velox::exec {
+namespace facebook::velox::exec::test {
 
-// For every row, it will sleep input[i] ms, and the result will be the order
-// at which execution of the row is completed. Hence we expect that to match
-// the sleep durations order.
+namespace {
+// For every row, the execution will async sleep input[row]ms, and then result
+// will be the number of rows that were completed before the execution of the
+// row starts.
+// This is used to make sure all rows from multiple functions start
+// before any complete. Hence guarantee no blocking.
 class RecordWakeUpOrder : public AsyncVectorFunction {
  public:
   // Such expansion of the work shall be done through the
@@ -80,6 +83,7 @@ class RecordWakeUpOrder : public AsyncVectorFunction {
     co_return true;
   }
 };
+} // namespace
 
 class AsyncVectorFunctionTest : public functions::test::FunctionBaseTest {};
 
@@ -112,6 +116,7 @@ TEST_F(AsyncVectorFunctionTest, testRowsRunAsync) {
   }
 }
 
+namespace {
 // For every row, it will sleep input[i] ms, and the result will be the rows
 // completed before the execution of the row starts. We use this to make sure
 // all rows from multiple functions start before any complete. Hence
@@ -153,6 +158,7 @@ class RecordPreStartCompletedWork : public AsyncVectorFunction {
     co_return true;
   }
 };
+} // namespace
 
 TEST_F(AsyncVectorFunctionTest, testVectorsRunAsync) {
   std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
@@ -183,4 +189,4 @@ TEST_F(AsyncVectorFunctionTest, testVectorsRunAsync) {
   assertAllZeros(result1);
   assertAllZeros(result2);
 }
-} // namespace facebook::velox::exec
+} // namespace facebook::velox::exec::test

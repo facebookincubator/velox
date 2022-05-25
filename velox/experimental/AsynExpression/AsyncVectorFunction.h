@@ -18,6 +18,7 @@
 
 #include <folly/experimental/coro/BlockingWait.h>
 #include <folly/experimental/coro/Task.h>
+#include <iostream>
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/Type.h"
