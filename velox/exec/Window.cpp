@@ -43,8 +43,8 @@ Window::Window(
           windowNode->partitionKeys(),
           {},
           data_.get()),
-      windowPartitionsQueue_(allKeysComparator_),
       decodedInputVectors_(inputColumnsSize_),
+      windowPartitionsQueue_(allKeysComparator_),
       windowFunctions_(windowNode->windowFunctions()) {}
 
 Window::Comparator::Comparator(
