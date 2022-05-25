@@ -33,20 +33,19 @@ Window::Window(
       data_(std::make_unique<RowContainer>(
           windowNode->sources()[0]->outputType()->children(),
           operatorCtx_->mappedMemory())),
-      decodedInputVectors_(inputColumnsSize_),
-      allKeysComparator_(
-          windowNode->sources()[0]->outputType(),
-          /* TODO : Change the next 2 parameters for a full order of partition
-             and sort keys */
-          windowNode->partitionKeys(),
-          windowNode->sortingOrders(),
-          data_.get()),
-      partitionKeysComparator_(
-          windowNode->sources()[0]->outputType(),
-          windowNode->partitionKeys(),
-          {},
-          data_.get()),
-      windowPartitionsQueue_(allKeysComparator_) {
+      decodedInputVectors_(inputColumnsSize_) {
+  initKeyInfo(
+      windowNode->sources()[0]->outputType(),
+      /* TODO : Change the next 2 parameters for a full order of partition
+         and sort keys */
+      windowNode->partitionKeys(),
+      windowNode->sortingOrders(),
+      allKeyInfo_);
+  initKeyInfo(
+      windowNode->sources()[0]->outputType(),
+      windowNode->partitionKeys(),
+      {},
+      partitionKeyInfo_);
   for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
     const auto& windowNodeFunction = windowNode->windowFunctions()[i];
     std::vector<TypePtr> argTypes;
@@ -59,13 +58,12 @@ Window::Window(
   }
 }
 
-Window::Comparator::Comparator(
+void Window::initKeyInfo(
     const std::shared_ptr<const RowType>& type,
     const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
         sortingKeys,
     const std::vector<core::SortOrder>& sortingOrders,
-    RowContainer* rowContainer)
-    : rowContainer_(rowContainer) {
+    std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo) {
   core::SortOrder defaultPartitionSortOrder(true, true);
   auto numKeys = sortingKeys.size();
   for (int i = 0; i < numKeys; ++i) {
@@ -74,9 +72,9 @@ Window::Comparator::Comparator(
         channel != kConstantChannel,
         "Window doesn't allow constant comparison keys");
     if (i < sortingOrders.size()) {
-      keyInfo_.push_back(std::make_pair(channel, sortingOrders[i]));
+      keyInfo.push_back(std::make_pair(channel, sortingOrders[i]));
     } else {
-      keyInfo_.push_back(std::make_pair(channel, defaultPartitionSortOrder));
+      keyInfo.push_back(std::make_pair(channel, defaultPartitionSortOrder));
     }
   }
 }
@@ -97,35 +95,63 @@ void Window::addInput(RowVectorPtr input) {
       data_->store(decodedInputVectors_[col], row, newRow, col);
     }
 
-    windowPartitionsQueue_.push(newRow);
+    // windowPartitionsQueue_.push(newRow);
   }
+  numRows_ += allRows.size();
 }
 
 void Window::noMoreInput() {
   Operator::noMoreInput();
-  if (windowPartitionsQueue_.empty()) {
+  // No data.
+  if (numRows_ == 0) {
     finished_ = true;
     return;
   }
-  rows_.resize(windowPartitionsQueue_.size());
-  for (int i = rows_.size(); i > 0; --i) {
-    rows_[i - 1] = windowPartitionsQueue_.top();
-    windowPartitionsQueue_.pop();
-  }
+
+  // Sort the pointers to the rows in RowContainer (data_) instead of sorting
+  // the rows.
+  returningRows_.resize(numRows_);
+  RowContainerIterator iter;
+  data_->listRows(&iter, numRows_, returningRows_.data());
+
+  std::sort(
+      returningRows_.begin(),
+      returningRows_.end(),
+      [this](const char* leftRow, const char* rightRow) {
+        for (auto& [channelIndex, sortOrder] : allKeyInfo_) {
+          if (auto result = data_->compare(
+                  leftRow,
+                  rightRow,
+                  channelIndex,
+                  {sortOrder.isNullsFirst(), sortOrder.isAscending(), false})) {
+            return result < 0;
+          }
+        }
+        return false; // lhs == rhs.
+      });
 }
 
 RowVectorPtr Window::getOutput() {
-  if (finished_ || !noMoreInput_) {
+  if (finished_ || !noMoreInput_ || returningRows_.size() == numRowsReturned_) {
     return nullptr;
   }
 
-  int numRowsToReturn = data_->numRows();
+  size_t numRows = data_->estimatedNumRowsPerBatch(kBatchSizeInBytes);
+  int32_t numRowsToReturn =
+      std::min(numRows, returningRows_.size() - numRowsReturned_);
+
+  VELOX_CHECK_GT(numRowsToReturn, 0);
+
   auto result = std::dynamic_pointer_cast<RowVector>(
       BaseVector::create(outputType_, numRowsToReturn, operatorCtx_->pool()));
 
   // Set values of all output columns corresponding to the input columns.
   for (int i = 0; i < inputColumnsSize_; ++i) {
-    data_->extractColumn(rows_.data(), numRowsToReturn, i, result->childAt(i));
+    data_->extractColumn(
+        returningRows_.data() + numRowsReturned_,
+        numRowsToReturn,
+        i,
+        result->childAt(i));
   }
 
   std::vector<VectorPtr> windowFunctionOutputs;
@@ -137,11 +163,26 @@ RowVectorPtr Window::getOutput() {
         windowFunctionOutputs.cend(), std::move(windowOutputFlatVector));
   }
 
+  auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
+    if (lhs == rhs) {
+      return false;
+    }
+    for (auto& key : partitionKeyInfo_) {
+      if (auto result = data_->compare(
+              lhs,
+              rhs,
+              key.first,
+              {key.second.isNullsFirst(), key.second.isAscending(), false})) {
+        return result < 0;
+      }
+    }
+    return false;
+  };
   BufferPtr rowIndices = allocateIndices(numRowsToReturn, pool());
   auto* rawRowIndices = rowIndices->asMutable<vector_size_t>();
   for (int i = 0; i < numRowsToReturn; i++) {
     rawRowIndices[i] = i;
-    if (i == 0 || partitionKeysComparator_(rows_[i - 1], rows_[i])) {
+    if (i == 0 || partitionCompare(returningRows_[i - 1], returningRows_[i])) {
       // This is a new partition, so reset WindowFunction.
       for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
         // TODO : Figure the rows parameter here.
@@ -162,12 +203,10 @@ RowVectorPtr Window::getOutput() {
         windowFunctionOutputs[j - inputColumnsSize_]);
   }
 
-  finished_ = true;
+  numRowsReturned_ += numRowsToReturn;
+
+  finished_ = (numRowsReturned_ == returningRows_.size());
   return result;
 }
 
-bool Window::isFinished() {
-  // Will operate one batch at a time and leaving this simple for now.
-  return noMoreInput_ && input_ == nullptr;
-}
 } // namespace facebook::velox::exec

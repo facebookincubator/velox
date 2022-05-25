@@ -42,81 +42,44 @@ class Window : public Operator {
     return BlockingReason::kNotBlocked;
   }
 
-  bool isFinished() override;
+  bool isFinished() override {
+    return finished_;
+  }
 
   void close() override {
     Operator::close();
   }
 
  private:
-  class Comparator {
-   public:
-    Comparator(
-        const std::shared_ptr<const RowType>& outputType,
-        const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
-            sortingKeys,
-        const std::vector<core::SortOrder>& sortingOrders,
-        RowContainer* rowContainer);
+  static const int32_t kBatchSizeInBytes{2 * 1024 * 1024};
 
-    // Returns true if lhs < rhs, false otherwise.
-    bool operator()(const char* lhs, const char* rhs) {
-      if (lhs == rhs) {
-        return false;
-      }
-      for (auto& key : keyInfo_) {
-        if (auto result = rowContainer_->compare(
-                lhs,
-                rhs,
-                key.first,
-                {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-          return result < 0;
-        }
-      }
-      return false;
-    }
-
-    // Returns true if lhs < decodeVectors[index], false otherwise.
-    bool operator()(
-        const char* lhs,
-        const std::vector<DecodedVector>& decodedVectors,
-        vector_size_t index) {
-      for (auto& key : keyInfo_) {
-        if (auto result = rowContainer_->compare(
-                lhs,
-                rowContainer_->columnAt(key.first),
-                decodedVectors[key.first],
-                index,
-                {key.second.isNullsFirst(), key.second.isAscending(), false})) {
-          return result < 0;
-        }
-      }
-      return false;
-    }
-
-   private:
-    std::vector<std::pair<ChannelIndex, core::SortOrder>> keyInfo_;
-    RowContainer* rowContainer_;
-  };
+  void initKeyInfo(
+      const std::shared_ptr<const RowType>& type,
+      const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+          sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders,
+      std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo);
 
   bool finished_ = false;
 
-  // As the inputs are added to Window operator, we use windowPartitionsQueue_
-  // (a priority queue) to keep track of the pointers to rows stored in the
+  // As the inputs are added to Window operator, we store the rows in the
   // RowContainer (data_).
-  // Once all inputs are available, we can separate into partitions the rows
-  // with the same partition key in the sort order specified. This is easily
-  // available using the windowPartitionsQueue.
-  // This WindowPartition is sent to the Window function to compute its output
+  // Once all inputs are available, we can separate the input rows into Window
+  // partitions by sorting all rows with a combination of Window partitionKeys
+  // followed by sortKeys.
+  // This WindowFunction is invoked with these partition rows to compute its output
   // values.
   const int inputColumnsSize_;
   std::unique_ptr<RowContainer> data_;
   std::vector<DecodedVector> decodedInputVectors_;
 
-  Comparator allKeysComparator_;
-  Comparator partitionKeysComparator_;
-  std::priority_queue<char*, std::vector<char*>, Comparator>
-      windowPartitionsQueue_;
+  std::vector<std::pair<ChannelIndex, core::SortOrder>> allKeyInfo_;
+  std::vector<std::pair<ChannelIndex, core::SortOrder>> partitionKeyInfo_;
+
+  size_t numRows_ = 0;
+  size_t q = 0;
   std::vector<char*> rows_;
+  std::vector<char*> returningRows_;
 
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
 };
