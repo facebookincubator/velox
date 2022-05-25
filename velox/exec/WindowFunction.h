@@ -24,7 +24,13 @@ namespace facebook::velox::exec {
 
 class WindowFunction {
  public:
+  explicit WindowFunction(TypePtr resultType) : resultType_(resultType) {}
+
   virtual ~WindowFunction(){};
+
+  TypePtr resultType() const {
+    return resultType_;
+  }
 
   virtual void resetPartition(const std::vector<char*>& rows) = 0;
 
@@ -39,6 +45,9 @@ class WindowFunction {
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType);
+
+ protected:
+  const TypePtr resultType_;
 };
 
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(

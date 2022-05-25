@@ -17,7 +17,11 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
-namespace facebook::velox::exec::test {
+using namespace facebook::velox::exec::test;
+
+namespace facebook::velox::window::test {
+
+namespace {
 
 class WindowFunctionsTest : public OperatorTestBase {
  protected:
@@ -64,4 +68,5 @@ TEST_F(WindowFunctionsTest, basicRowNumber) {
       op,
       "SELECT c0, c1, row_number()  over (partition by c0 order by c1) as row_number_partition FROM tmp order by c0, c1");
 }
-}; // namespace facebook::velox::exec::test
+}; // namespace
+}; // namespace facebook::velox::window::test
