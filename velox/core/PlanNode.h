@@ -302,7 +302,7 @@ class ProjectNode : public PlanNode {
   static RowTypePtr makeOutputType(
       const std::vector<std::string>& names,
       const std::vector<TypedExprPtr>& projections) {
-    std::vector<std::shared_ptr<const Type>> types;
+    std::vector<TypePtr> types;
     for (auto& projection : projections) {
       types.push_back(projection->type());
     }
@@ -463,14 +463,11 @@ class AggregationNode : public PlanNode {
   AggregationNode(
       const PlanNodeId& id,
       Step step,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          groupingKeys,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          preGroupedKeys,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
-      const std::vector<std::shared_ptr<const CallTypedExpr>>& aggregates,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          aggregateMasks,
+      const std::vector<CallTypedExprPtr>& aggregates,
+      const std::vector<FieldAccessTypedExprPtr>& aggregateMasks,
       bool ignoreNullKeys,
       PlanNodePtr source);
 
@@ -486,13 +483,11 @@ class AggregationNode : public PlanNode {
     return step_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& groupingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& groupingKeys() const {
     return groupingKeys_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-  preGroupedKeys() const {
+  const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys() const {
     return preGroupedKeys_;
   }
 
@@ -500,12 +495,11 @@ class AggregationNode : public PlanNode {
     return aggregateNames_;
   }
 
-  const std::vector<std::shared_ptr<const CallTypedExpr>>& aggregates() const {
+  const std::vector<CallTypedExprPtr>& aggregates() const {
     return aggregates_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-  aggregateMasks() const {
+  const std::vector<FieldAccessTypedExprPtr>& aggregateMasks() const {
     return aggregateMasks_;
   }
 
@@ -521,15 +515,13 @@ class AggregationNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const Step step_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> groupingKeys_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-      preGroupedKeys_;
+  const std::vector<FieldAccessTypedExprPtr> groupingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> preGroupedKeys_;
   const std::vector<std::string> aggregateNames_;
-  const std::vector<std::shared_ptr<const CallTypedExpr>> aggregates_;
+  const std::vector<CallTypedExprPtr> aggregates_;
   // Keeps mask/'no mask' for every aggregation. Mask, if given, is a reference
   // to a boolean projection column, used to mask out rows for the aggregation.
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-      aggregateMasks_;
+  const std::vector<FieldAccessTypedExprPtr> aggregateMasks_;
   const bool ignoreNullKeys_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
@@ -665,15 +657,13 @@ class MergeExchangeNode : public ExchangeNode {
   explicit MergeExchangeNode(
       const PlanNodeId& id,
       const RowTypePtr& type,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          sortingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders)
       : ExchangeNode(id, type),
         sortingKeys_(sortingKeys),
         sortingOrders_(sortingOrders) {}
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
   }
 
@@ -688,7 +678,7 @@ class MergeExchangeNode : public ExchangeNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
 };
 
@@ -696,7 +686,7 @@ class LocalMergeNode : public PlanNode {
  public:
   LocalMergeNode(
       const PlanNodeId& id,
-      std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
       std::vector<SortOrder> sortingOrders,
       std::vector<PlanNodePtr> sources)
       : PlanNode(id),
@@ -712,8 +702,7 @@ class LocalMergeNode : public PlanNode {
     return sources_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
   }
 
@@ -729,7 +718,7 @@ class LocalMergeNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const std::vector<PlanNodePtr> sources_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
 };
 
@@ -840,7 +829,7 @@ class PartitionedOutputNode : public PlanNode {
  public:
   PartitionedOutputNode(
       const PlanNodeId& id,
-      const std::vector<std::shared_ptr<const ITypedExpr>>& keys,
+      const std::vector<TypedExprPtr>& keys,
       int numPartitions,
       bool broadcast,
       bool replicateNullsAndAny,
@@ -873,7 +862,7 @@ class PartitionedOutputNode : public PlanNode {
       int numPartitions,
       RowTypePtr outputType,
       PlanNodePtr source) {
-    std::vector<std::shared_ptr<const core::ITypedExpr>> noKeys;
+    std::vector<TypedExprPtr> noKeys;
     return std::make_shared<PartitionedOutputNode>(
         id,
         noKeys,
@@ -889,7 +878,7 @@ class PartitionedOutputNode : public PlanNode {
 
   static std::shared_ptr<PartitionedOutputNode>
   single(const PlanNodeId& id, RowTypePtr outputType, PlanNodePtr source) {
-    std::vector<std::shared_ptr<const core::ITypedExpr>> noKeys;
+    std::vector<TypedExprPtr> noKeys;
     return std::make_shared<PartitionedOutputNode>(
         id,
         noKeys,
@@ -915,7 +904,7 @@ class PartitionedOutputNode : public PlanNode {
     return sources_[0]->outputType();
   }
 
-  const std::vector<std::shared_ptr<const ITypedExpr>>& keys() const {
+  const std::vector<TypedExprPtr>& keys() const {
     return keys_;
   }
 
@@ -1006,8 +995,8 @@ class AbstractJoinNode : public PlanNode {
   AbstractJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& leftKeys,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& rightKeys,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
@@ -1049,13 +1038,11 @@ class AbstractJoinNode : public PlanNode {
     return joinType_ == JoinType::kAnti;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& leftKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
     return leftKeys_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& rightKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& rightKeys() const {
     return rightKeys_;
   }
 
@@ -1067,8 +1054,8 @@ class AbstractJoinNode : public PlanNode {
   void addDetails(std::stringstream& stream) const override;
 
   const JoinType joinType_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> leftKeys_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> rightKeys_;
+  const std::vector<FieldAccessTypedExprPtr> leftKeys_;
+  const std::vector<FieldAccessTypedExprPtr> rightKeys_;
   // Optional join filter, nullptr if absent. This is applied to
   // join hits and if this is false, the hit turns into a miss, which
   // has a special meaning for outer joins. For inner joins, this is
@@ -1086,8 +1073,8 @@ class HashJoinNode : public AbstractJoinNode {
   HashJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& leftKeys,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& rightKeys,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
@@ -1117,8 +1104,8 @@ class MergeJoinNode : public AbstractJoinNode {
   MergeJoinNode(
       const PlanNodeId& id,
       JoinType joinType,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& leftKeys,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& rightKeys,
+      const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+      const std::vector<FieldAccessTypedExprPtr>& rightKeys,
       TypedExprPtr filter,
       PlanNodePtr left,
       PlanNodePtr right,
@@ -1171,8 +1158,7 @@ class OrderByNode : public PlanNode {
  public:
   OrderByNode(
       const PlanNodeId& id,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          sortingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
       bool isPartial,
       const PlanNodePtr& source)
@@ -1188,8 +1174,7 @@ class OrderByNode : public PlanNode {
         "Number of sorting keys and sorting orders in OrderBy must be the same");
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
   }
 
@@ -1219,7 +1204,7 @@ class OrderByNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
@@ -1229,8 +1214,7 @@ class TopNNode : public PlanNode {
  public:
   TopNNode(
       const PlanNodeId& id,
-      const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-          sortingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
       int32_t count,
       bool isPartial,
@@ -1250,8 +1234,7 @@ class TopNNode : public PlanNode {
         "TopN must specify greater than zero number of rows to keep");
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>& sortingKeys()
-      const {
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
     return sortingKeys_;
   }
 
@@ -1282,7 +1265,7 @@ class TopNNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>> sortingKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
   const int32_t count_;
   const bool isPartial_;
@@ -1361,9 +1344,8 @@ class UnnestNode : public PlanNode {
   /// present, ordinality column is not produced.
   UnnestNode(
       const PlanNodeId& id,
-      std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-          replicateVariables,
-      std::vector<std::shared_ptr<const FieldAccessTypedExpr>> unnestVariables,
+      std::vector<FieldAccessTypedExprPtr> replicateVariables,
+      std::vector<FieldAccessTypedExprPtr> unnestVariables,
       const std::vector<std::string>& unnestNames,
       const std::optional<std::string>& ordinalityName,
       const PlanNodePtr& source);
@@ -1379,13 +1361,11 @@ class UnnestNode : public PlanNode {
     return sources_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-  replicateVariables() const {
+  const std::vector<FieldAccessTypedExprPtr>& replicateVariables() const {
     return replicateVariables_;
   }
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
-  unnestVariables() const {
+  const std::vector<FieldAccessTypedExprPtr>& unnestVariables() const {
     return unnestVariables_;
   }
 
@@ -1400,10 +1380,8 @@ class UnnestNode : public PlanNode {
  private:
   void addDetails(std::stringstream& stream) const override;
 
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-      replicateVariables_;
-  const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>
-      unnestVariables_;
+  const std::vector<FieldAccessTypedExprPtr> replicateVariables_;
+  const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
   const bool withOrdinality_;
   const std::vector<PlanNodePtr> sources_;
   RowTypePtr outputType_;
