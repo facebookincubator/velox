@@ -292,6 +292,8 @@ void Expr::eval(
   }
 
   if (inputs_.empty()) {
+    // If the function does not have inputs and is not constant folded, then it
+    // must be non-detetministic so we do not run peeling or cse opts.
     evalAll(rows, context, result);
     return;
   }
@@ -319,7 +321,7 @@ bool Expr::checkGetSharedSubexprValues(
   //
   // For now, disable the optimization if any encodings have been peeled off.
 
-  if (!isMultiplyReferenced_ || !sharedSubexprValues_ ||
+  if (!deterministic_ || !isMultiplyReferenced_ || !sharedSubexprValues_ ||
       context.wrapEncoding() != VectorEncoding::Simple::FLAT) {
     return false;
   }
