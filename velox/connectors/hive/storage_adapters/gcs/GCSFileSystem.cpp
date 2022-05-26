@@ -130,6 +130,7 @@ class GCSReadFile final : public ReadFile {
     stream.read(position, length);
     VELOX_CHECK_GCS_OUTCOME(
         stream.status(), "Failed to get read object", bucket_, key_);
+    bytesRead_ += length;
   }
 
   gcs::Client* client_;
@@ -202,9 +203,14 @@ class GCSWriteFile final : public WriteFile {
 } // namespace
 
 class GCSConfig {
+ private:
+  const Config* FOLLY_NONNULL config_;
+  std::shared_ptr<gc::Credentials> credentials_;
+
  public:
   GCSConfig(const Config* config) : config_(config) {
     std::string cred = config_->get("hive.gcs.credentials", std::string(""));
+    //TODO Cred expected in json format, change it to something else?
     if (!cred.empty()) {
       credentials_ = gc::MakeServiceAccountCredentials(cred);
     }
@@ -222,9 +228,6 @@ class GCSConfig {
     return credentials_;
   }
 
- private:
-  const Config* FOLLY_NONNULL config_;
-  std::shared_ptr<gc::Credentials> credentials_;
 };
 
 class GCSFileSystem::Impl {
@@ -308,6 +311,7 @@ void GCSFileSystem::remove(std::string_view path) {
   VELOX_CHECK_GCS_OUTCOME(
       ret, "Failed to get metadata for GCS object", bucket, object);
 }
+
 std::string GCSFileSystem::name() const {
   return "GCS";
 }
@@ -338,5 +342,5 @@ void registerGCSFileSystem() {
   registerFileSystem(isGCSFile, filesystemGenerator);
 }
 
-} // namespace filesystems
-} // namespace facebook::velox
+}; // namespace filesystems
+}; // namespace facebook::velox

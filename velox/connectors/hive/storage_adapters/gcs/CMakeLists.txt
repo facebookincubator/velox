@@ -15,11 +15,10 @@
 # for generated headers
 
 add_library(velox_gcs GCSFileSystem.cpp GCSUtil.cpp)
-set(GCSSDK_LIBRARIES
-    "libgoogle_cloud_cpp_common.a;libgoogle_cloud_cpp_rest_internal.a;libgoogle_cloud_cpp_storage.a"
-)
+
+find_package(google_cloud_cpp_storage REQUIRED)
 target_include_directories(velox_gcs PUBLIC ${GCSSDK_INCLUDE_DIRS})
-target_link_libraries(velox_gcs ${GCSSDK_LIBRARIES})
+target_link_libraries(velox_gcs google-cloud-cpp::storage)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

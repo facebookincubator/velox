@@ -58,9 +58,8 @@ inline std::string gcsPath(const std::string_view& path) {
     if (!outcome.ok()) {                                                                      \
       auto error = outcome.error_info();                                                      \
       VELOX_FAIL(                                                                             \
-          "{} due to: '{}'. Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'", \
+          "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",       \
           errorMsgPrefix,                                                                     \
-          error.reason(),                                                                     \
           gcsURI(bucket, key),                                                                \
           error.domain(),                                                                     \
           getErrorStringFromGCSError(outcome.code()),                                         \

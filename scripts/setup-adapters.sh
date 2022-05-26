@@ -27,7 +27,7 @@ function install_gcs-sdk-cpp {
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
   # install abseil
   echo " Installing abseil..."
-  mkdir -p $HOME/Downloads/abseil-cpp && cd $HOME/Downloads/abseil-cpp
+  mkdir -p ${DEPENDENCY_DIR}/abseil-cpp && cd ${DEPENDENCY_DIR}/abseil-cpp
   curl -sSL https://github.com/abseil/abseil-cpp/archive/20211102.0.tar.gz | \
       tar -xzf - --strip-components=1 && \
       sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h" && \
@@ -44,7 +44,7 @@ function install_gcs-sdk-cpp {
 
   # install protobuf
   echo " Installing protobuf..."
-  mkdir -p $HOME/Downloads/protobuf && cd $HOME/Downloads/protobuf
+  mkdir -p ${DEPENDENCY_DIR}/protobuf && cd ${DEPENDENCY_DIR}/protobuf
   curl -sSL https://github.com/protocolbuffers/protobuf/archive/v3.20.1.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
@@ -58,7 +58,7 @@ function install_gcs-sdk-cpp {
 
   # install gRPC
   echo " Installing gRPC..."
-  mkdir -p $HOME/Downloads/grpc && cd $HOME/Downloads/grpc
+  mkdir -p ${DEPENDENCY_DIR}/grpc && cd ${DEPENDENCY_DIR}/grpc
   curl -sSL https://github.com/grpc/grpc/archive/v1.45.2.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
@@ -78,7 +78,7 @@ function install_gcs-sdk-cpp {
 
   # install crc32c
   echo " Installing crc32c..."
-  mkdir -p $HOME/Downloads/crc32c && cd $HOME/Downloads/crc32c
+  mkdir -p ${DEPENDENCY_DIR}/crc32c && cd ${DEPENDENCY_DIR}/crc32c
   curl -sSL https://github.com/google/crc32c/archive/1.1.2.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
@@ -94,7 +94,7 @@ function install_gcs-sdk-cpp {
 
   # install nlohmann_json library
   echo " Installing nlohmann json..."
-  mkdir -p $HOME/Downloads/json && cd $HOME/Downloads/json
+  mkdir -p ${DEPENDENCY_DIR}/json && cd ${DEPENDENCY_DIR}json
   curl -sSL https://github.com/nlohmann/json/archive/v3.10.5.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
@@ -111,7 +111,7 @@ function install_gcs-sdk-cpp {
   git clone https://github.com/googleapis/google-cloud-cpp.git ${DEPENDENCY_DIR}/google-cloud-cpp
   cd ${DEPENDENCY_DIR}/google-cloud-cpp
   # Pick a location to install the artifacts, e.g., `/usr/local` or `/opt`
-  PREFIX="${DEPENDENCY_DIR}/google-cloud-cpp-installed"
+  PREFIX="/usr/local"
   cmake -H. -Bcmake-out \
     -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
     -DCMAKE_INSTALL_MESSAGE=NEVER \
@@ -119,7 +119,7 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
   cmake --build cmake-out -- -j "$(nproc)"
-  cmake --build cmake-out --target install
+  sudo cmake --build cmake-out --target install
 }
 
 function install_aws-sdk-cpp {
