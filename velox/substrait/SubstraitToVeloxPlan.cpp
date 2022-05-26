@@ -466,8 +466,16 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     return toVeloxPlan(rel.filter(), pool);
   }
   if (rel.has_read()) {
-    return toVeloxPlan(
-        rel.read(), pool, partitionIndex_, paths_, starts_, lengths_, fileFormat_);
+    u_int32_t partitionIndex;
+    std::vector<std::string> paths;
+    std::vector<u_int64_t> starts;
+    std::vector<u_int64_t> lengths;
+    int fileFormat;
+    auto planNode = toVeloxPlan(
+        rel.read(), pool, partitionIndex, paths, starts, lengths, fileFormat);
+    splitStatsMap_[planNode->id()] = std::make_shared<SplitStats>(
+        partitionIndex, paths, starts, lengths, fileFormat);
+    return planNode;
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
 }

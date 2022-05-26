@@ -25,6 +25,35 @@ namespace facebook::velox::substrait {
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
+  struct SplitStats {
+    SplitStats(
+        u_int32_t partitionIndex,
+        std::vector<std::string> paths,
+        std::vector<u_int64_t> starts,
+        std::vector<u_int64_t> lengths,
+        int fileFormat)
+        : partitionIndex_(partitionIndex),
+          paths_(paths),
+          starts_(starts),
+          lengths_(lengths),
+          fileFormat_(fileFormat) {}
+
+    /// The Partition index.
+    u_int32_t partitionIndex_;
+
+    /// The file paths to be scanned.
+    std::vector<std::string> paths_;
+
+    /// The file starts in the scan.
+    std::vector<u_int64_t> starts_;
+
+    /// The lengths to be scanned.
+    std::vector<u_int64_t> lengths_;
+
+    /// The file format of the files to be scanned.
+    int fileFormat_;
+  };
+
   /// Convert Substrait AggregateRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::AggregateRel& aggRel,
@@ -83,29 +112,10 @@ class SubstraitVeloxPlanConverter {
     return functionMap_;
   }
 
-  /// Return the index of Partition to be scanned.
-  u_int32_t getPartitionIndex() const {
-    return partitionIndex_;
-  }
-
-  /// Return the paths of the files to be scanned.
-  const std::vector<std::string>& getPaths() const {
-    return paths_;
-  }
-
-  /// Return the starts of the files to be scanned.
-  const std::vector<u_int64_t>& getStarts() const {
-    return starts_;
-  }
-
-  /// Return the lengths to be scanned for each file.
-  const std::vector<u_int64_t>& getLengths() const {
-    return lengths_;
-  }
-
-  /// Will return the file format of the files to be scanned.
-  int getFileFormat() {
-    return fileFormat_;
+  /// Return the splitStats map used by this plan converter.
+  const std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitStats>>&
+  getSplitStatsMap() const {
+    return splitStatsMap_;
   }
 
   /// Looks up a function by ID and returns function name if found. Throws if
@@ -144,27 +154,16 @@ class SubstraitVeloxPlanConverter {
   /// Velox expressions.
   std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
 
-  /// The Partition index.
-  u_int32_t partitionIndex_;
-
-  /// The file paths to be scanned.
-  std::vector<std::string> paths_;
-
-  /// The file starts in the scan.
-  std::vector<u_int64_t> starts_;
-
-  /// The lengths to be scanned.
-  std::vector<u_int64_t> lengths_;
-
-  // The file format of the files to be scanned.
-  int fileFormat_;
-
   /// The unique identification for each PlanNode.
   int planNodeId_ = 0;
 
   /// The map storing the relations between the function id and the function
   /// name. Will be constructed based on the Substrait representation.
   std::unordered_map<uint64_t, std::string> functionMap_;
+
+  /// The map storing the split stats for each PlanNode.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitStats>>
+      splitStatsMap_;
 };
 
 } // namespace facebook::velox::substrait
