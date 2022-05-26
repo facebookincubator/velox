@@ -294,8 +294,9 @@ endif()
 
 # Benchmarks and tests at some places are coupled which is not great. See
 # velox/vector/CMakeLists.txt. TODO: Decouple.
-set(VELOX_ENABLE_GOOGLETEST OFF)
-if(VELOX_BUILD_TESTING OR VELOX_ENABLE_BENCHMARKS_BASIC)
+if(NOT VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_BENCHMARKS_BASIC)
+  set(VELOX_ENABLE_GOOGLETEST OFF)
+else()
   set(VELOX_ENABLE_GOOGLETEST ON)
   add_definitions(-DVELOX_ENABLE_GOOGLETEST)
 endif()
