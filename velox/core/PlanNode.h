@@ -551,7 +551,6 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
 
 class WindowNode : public PlanNode {
  public:
-  /* TODO : add support for Window frame
   enum class WindowType { kRange, kRows };
 
   enum class BoundType {
@@ -568,11 +567,11 @@ class WindowNode : public PlanNode {
     FieldAccessTypedExprPtr startValue;
     BoundType endType;
     FieldAccessTypedExprPtr endValue;
-  }; */
+  };
 
   struct Function {
     std::shared_ptr<const CallTypedExpr> functionCall;
-    // Frame frame;
+    Frame frame;
     bool ignoreNulls;
   };
 

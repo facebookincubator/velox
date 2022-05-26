@@ -23,7 +23,7 @@ namespace facebook::velox::window::test {
 
 namespace {
 
-class WindowFunctionsTest : public OperatorTestBase {
+class RowNumberTest : public OperatorTestBase {
  protected:
   std::vector<RowVectorPtr> makeVectors(
       const std::shared_ptr<const RowType>& rowType,
@@ -50,7 +50,7 @@ class WindowFunctionsTest : public OperatorTestBase {
   folly::Random::DefaultGenerator rng_;
 };
 
-TEST_F(WindowFunctionsTest, basicRowNumber) {
+TEST_F(RowNumberTest, basicRowNumber) {
   auto vectors = makeVectors(rowType_, 10, 1);
   createDuckDbTable(vectors);
 

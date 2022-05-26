@@ -485,6 +485,12 @@ PlanBuilder& PlanBuilder::window(
   std::vector<core::WindowNode::Function> windowNodeFunctions;
   std::vector<std::string> windowColumnNames;
   std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
+  core::WindowNode::Frame defaultFrame{
+      core::WindowNode::WindowType::kRange,
+      core::WindowNode::BoundType::kUnboundedPreceding,
+      nullptr,
+      core::WindowNode::BoundType::kCurrentRow,
+      nullptr};
   for (auto i = 0; i < windowFunctions.size(); ++i) {
     auto untypedExpr = duckdb::parseExpr(windowFunctions[i]);
     auto callUnTypedExpr =
@@ -492,7 +498,8 @@ PlanBuilder& PlanBuilder::window(
     VELOX_CHECK(callUnTypedExpr->getFunctionName() == "row_number");
     auto expr =
         std::make_shared<core::CallTypedExpr>(BIGINT(), args, "row_number");
-    windowNodeFunctions.push_back({std::move(expr), true});
+    // TODO : Add parsing for the Window frame.
+    windowNodeFunctions.push_back({std::move(expr), defaultFrame, true});
     if (untypedExpr->alias().has_value()) {
       windowColumnNames.push_back(untypedExpr->alias().value());
     } else {

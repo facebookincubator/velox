@@ -78,6 +78,31 @@ Window::Window(
     const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(), argTypes, resultType));
+
+    std::optional<ChannelIndex> windowFrameStartChannel;
+    std::optional<ChannelIndex> windowFrameEndChannel;
+    if (windowNodeFunction.frame.startValue) {
+      windowFrameStartChannel = exprToChannel(
+          windowNodeFunction.frame.startValue.get(),
+          windowNode->sources()[0]->outputType());
+      VELOX_CHECK(
+          windowFrameStartChannel.value() != kConstantChannel,
+          "Window doesn't allow constant comparison keys");
+    }
+    if (windowNodeFunction.frame.endValue) {
+      windowFrameEndChannel = exprToChannel(
+          windowNodeFunction.frame.endValue.get(),
+          windowNode->sources()[0]->outputType());
+      VELOX_CHECK(
+          windowFrameEndChannel.value() != kConstantChannel,
+          "Window doesn't allow constant comparison keys");
+    }
+    windowFrames_.push_back(
+        {windowNodeFunction.frame.type,
+         windowNodeFunction.frame.startType,
+         windowNodeFunction.frame.endType,
+         windowFrameStartChannel,
+         windowFrameEndChannel});
   }
 }
 
@@ -117,8 +142,6 @@ void Window::addInput(RowVectorPtr input) {
     for (int col = 0; col < input->childrenSize(); ++col) {
       data_->store(decodedInputVectors_[col], row, newRow, col);
     }
-
-    // windowPartitionsQueue_.push(newRow);
   }
   numRows_ += allRows.size();
 }
@@ -152,6 +175,27 @@ void Window::noMoreInput() {
         }
         return false; // lhs == rhs.
       });
+}
+
+std::pair<int32_t, int32_t> Window::findFrameEndPoints(
+    int32_t windowIndex,
+    int32_t rowNumber) {
+  // TODO : We handle only the default window frame in this code. Add support
+  // for all window frames subsequently.
+  VELOX_CHECK_EQ(
+      windowFrames_[windowIndex].windowType_,
+      core::WindowNode::WindowType::kRange);
+  VELOX_CHECK_EQ(
+      windowFrames_[windowIndex].startBoundType_,
+      core::WindowNode::BoundType::kUnboundedPreceding);
+  VELOX_CHECK_EQ(
+      windowFrames_[windowIndex].endBoundType_,
+      core::WindowNode::BoundType::kCurrentRow);
+  VELOX_CHECK(!windowFrames_[windowIndex].startChannel_.has_value());
+  VELOX_CHECK(!windowFrames_[windowIndex].endChannel_.has_value());
+
+  // Default window frame is Range UNBOUNDED PRECEDING CURRENT ROW.
+  return std::make_pair(partitionStartRow_, rowNumber);
 }
 
 RowVectorPtr Window::getOutput() {
@@ -204,6 +248,7 @@ RowVectorPtr Window::getOutput() {
 
   for (int i = 0; i < numRowsToReturn; i++) {
     if (i == 0 || partitionCompare(returningRows_[i - 1], returningRows_[i])) {
+      partitionStartRow_ = i;
       // This is a new partition, so reset WindowFunction.
       for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
         // TODO : Figure the rows parameter here.
@@ -211,7 +256,10 @@ RowVectorPtr Window::getOutput() {
       }
     }
     for (int j = 0; j < outputType_->size() - inputColumnsSize_; j++) {
-      // TODO : Figure window frame end points.
+      auto frameEndPoints = findFrameEndPoints(j, i);
+      // TODO : Figure how to find the peers, frameStarts and frameEnds buffers
+      // for the function invocation.
+      VELOX_CHECK_EQ(frameEndPoints.second, i);
       windowFunctions_[j]->apply(
           nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[j]);
     }

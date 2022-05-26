@@ -51,6 +51,14 @@ class Window : public Operator {
   }
 
  private:
+  struct WindowFrame {
+    const core::WindowNode::WindowType windowType_;
+    const core::WindowNode::BoundType startBoundType_;
+    const core::WindowNode::BoundType endBoundType_;
+    std::optional<ChannelIndex> startChannel_;
+    std::optional<ChannelIndex> endChannel_;
+  };
+
   static const int32_t kBatchSizeInBytes{2 * 1024 * 1024};
 
   void initKeyInfo(
@@ -59,6 +67,10 @@ class Window : public Operator {
           sortingKeys,
       const std::vector<core::SortOrder>& sortingOrders,
       std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo);
+
+  std::pair<int32_t, int32_t> findFrameEndPoints(
+      int32_t windowIndex,
+      int32_t rowNumber);
 
   bool finished_ = false;
 
@@ -80,8 +92,18 @@ class Window : public Operator {
   size_t numRowsReturned_ = 0;
   std::vector<char*> rows_;
   std::vector<char*> returningRows_;
+  // This index captures the row index in RowContainer data_ that marks the
+  // start of the current partition being processed. This state is maintained in
+  // the class as this offset carries over across output row batches.
+  // In generality for window frame computation we need to know the size of the
+  // full partition. Those partition sizes can be computed during the big sort
+  // in noMoreInput (use HashLookup structure for this). We could also use a
+  // hash + sort based algorithm to partition the rows. If doing so, then
+  // the HashTable can maintain a count of the rows in the partition.
+  int partitionStartRow_ = 0;
 
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
+  std::vector<WindowFrame> windowFrames_;
 };
 
 } // namespace facebook::velox::exec

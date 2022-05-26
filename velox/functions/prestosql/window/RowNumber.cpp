@@ -28,7 +28,7 @@ class RowNumberFunction : public exec::WindowFunction {
   explicit RowNumberFunction() : WindowFunction(BIGINT()) {}
 
   void resetPartition(const std::vector<char*>& /*rows*/) {
-    rowNumber = 1;
+    rowNumber_ = 1;
   }
 
   void apply(
@@ -37,14 +37,16 @@ class RowNumberFunction : public exec::WindowFunction {
       const BufferPtr& /* frameStarts */,
       const BufferPtr& /* frameEnds */,
       const VectorPtr& result) {
-    result->asFlatVector<int64_t>()->mutableRawValues()[currentPosition] =
-        rowNumber++;
-    currentPosition++;
+    result->asFlatVector<int64_t>()->mutableRawValues()[currentPosition_] =
+        rowNumber_++;
+    currentPosition_++;
   }
 
  private:
-  int64_t rowNumber = 1;
-  int64_t currentPosition = 0;
+  int64_t rowNumber_ = 1;
+  // TODO : This variable presumes a single output buffer.
+  // Enhance this to handle batches of output buffers.
+  int64_t currentPosition_ = 0;
 };
 
 bool registerRowNumber(const std::string& name) {
