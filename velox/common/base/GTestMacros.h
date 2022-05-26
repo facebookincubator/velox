@@ -16,11 +16,11 @@
 
 #pragma once
 
-#ifdef VELOX_ENABLE_GOOGLETEST
-#include <gtest/gtest_prod.h>
-#define VELOX_FRIEND_TEST(X, Y) FRIEND_TEST(X, Y)
-#else
+#ifdef VELOX_DISABLE_GOOGLETEST
 // VELOX_FRIEND_TEST macro is only used when testing is enabled.
 // Replacing it with "nothing" is okay when testing is disabled.
 #define VELOX_FRIEND_TEST(X, Y)
+#else
+#include <gtest/gtest_prod.h>
+#define VELOX_FRIEND_TEST(X, Y) FRIEND_TEST(X, Y)
 #endif
