@@ -225,7 +225,7 @@ class ColumnWriter {
   // in_map stream
   const std::function<void(IndexBuilder&)> onRecordPosition_;
 
-  FRIEND_TEST(ColumnWriterTests, LowMemoryModeConfig);
+  VELOX_FRIEND_TEST(ColumnWriterTests, LowMemoryModeConfig);
   friend class ValueStatisticsBuilder;
 };
 

@@ -163,7 +163,7 @@ class WriterBase {
   void writeUserMetadata(uint32_t writerVersion);
 
   friend class WriterTest;
-  FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);
+  VELOX_FRIEND_TEST(WriterBaseTest, FlushWriterSinkUponClose);
 };
 
 } // namespace facebook::velox::dwrf

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"

@@ -197,7 +197,7 @@ class IntEncoder {
   FOLLY_ALWAYS_INLINE int32_t writeVslong(int64_t value, char* buffer);
   FOLLY_ALWAYS_INLINE int32_t writeLongLE(int64_t value, char* buffer);
 
-  FRIEND_TEST(TestIntEncoder, TestVarIntEncoder);
+  VELOX_FRIEND_TEST(TestIntEncoder, TestVarIntEncoder);
 };
 
 #define WRITE_INTS(FUNC)                                       \

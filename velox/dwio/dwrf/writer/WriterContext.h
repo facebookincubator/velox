@@ -497,8 +497,8 @@ class WriterContext : public CompressionBufferPool {
   friend class IntegerColumnWriterDirectEncodingIndexTest;
   friend class StringColumnWriterDictionaryEncodingIndexTest;
   friend class StringColumnWriterDirectEncodingIndexTest;
-  FRIEND_TEST(TestWriterContext, GetIntDictionaryEncoder);
-  FRIEND_TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode);
+  VELOX_FRIEND_TEST(TestWriterContext, GetIntDictionaryEncoder);
+  VELOX_FRIEND_TEST(TestWriterContext, RemoveIntDictionaryEncoderForNode);
   // TODO: remove once writer code is consolidated
   template <typename TestType>
   friend class WriterEncodingIndexTest2;

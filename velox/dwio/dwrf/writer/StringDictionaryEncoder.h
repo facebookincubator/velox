@@ -172,10 +172,10 @@ class StringDictionaryEncoder {
   }
 
  private:
-  FRIEND_TEST(TestStringDictionaryEncoder, GetCount);
-  FRIEND_TEST(TestStringDictionaryEncoder, GetIndex);
-  FRIEND_TEST(TestStringDictionaryEncoder, GetStride);
-  FRIEND_TEST(TestStringDictionaryEncoder, Clear);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetCount);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetIndex);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetStride);
+  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, Clear);
 
   // Intended for testing only.
   uint32_t getIndex(folly::StringPiece sp) {

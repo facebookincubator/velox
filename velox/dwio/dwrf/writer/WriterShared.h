@@ -64,8 +64,8 @@ class EncodingIter {
 
   void next();
 
-  FRIEND_TEST(TestEncodingIter, Ctor);
-  FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
+  VELOX_FRIEND_TEST(TestEncodingIter, Ctor);
+  VELOX_FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
   bool emptyEncryptionGroups() const;
 
   const proto::StripeFooter& footer_;
