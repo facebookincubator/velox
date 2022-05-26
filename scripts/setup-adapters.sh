@@ -23,16 +23,9 @@ SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 
 function install_gcs-sdk-cpp {
-  #install google-cloud-cpp dependencies (ubuntu 20.04)
-  echo " Installing apt dependencies..."
-  export DEBIAN_FRONTEND=noninteractive
-  sudo apt-get update && \
-  sudo apt-get --no-install-recommends install -y apt-transport-https apt-utils \
-          automake build-essential ccache cmake ca-certificates curl git \
-          gcc g++ libc-ares-dev libc-ares2 libcurl4-openssl-dev libre2-dev \
-          libssl-dev m4 make pkg-config tar wget zlib1g-dev
-
-  #install abseil
+  # install gcs dependencies
+  # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
+  # install abseil
   echo " Installing abseil..."
   mkdir -p $HOME/Downloads/abseil-cpp && cd $HOME/Downloads/abseil-cpp
   curl -sSL https://github.com/abseil/abseil-cpp/archive/20211102.0.tar.gz | \
@@ -49,7 +42,7 @@ function install_gcs-sdk-cpp {
   sudo ldconfig
 
 
-  #install protobuf
+  # install protobuf
   echo " Installing protobuf..."
   mkdir -p $HOME/Downloads/protobuf && cd $HOME/Downloads/protobuf
   curl -sSL https://github.com/protocolbuffers/protobuf/archive/v3.20.1.tar.gz | \
@@ -63,7 +56,7 @@ function install_gcs-sdk-cpp {
   sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
   sudo ldconfig
 
-  #install gRPC
+  # install gRPC
   echo " Installing gRPC..."
   mkdir -p $HOME/Downloads/grpc && cd $HOME/Downloads/grpc
   curl -sSL https://github.com/grpc/grpc/archive/v1.45.2.tar.gz | \
@@ -83,7 +76,7 @@ function install_gcs-sdk-cpp {
   sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
   sudo ldconfig
 
-  #install crc32c
+  # install crc32c
   echo " Installing crc32c..."
   mkdir -p $HOME/Downloads/crc32c && cd $HOME/Downloads/crc32c
   curl -sSL https://github.com/google/crc32c/archive/1.1.2.tar.gz | \
@@ -99,7 +92,7 @@ function install_gcs-sdk-cpp {
   sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
   sudo ldconfig
 
-  #install nlohmann_json library
+  # install nlohmann_json library
   echo " Installing nlohmann json..."
   mkdir -p $HOME/Downloads/json && cd $HOME/Downloads/json
   curl -sSL https://github.com/nlohmann/json/archive/v3.10.5.tar.gz | \
@@ -114,7 +107,7 @@ function install_gcs-sdk-cpp {
   sudo ldconfig
 
   echo " Clone, compile and install google-cloud-cpp..."
-  #clone and compile the main project
+  # clone and compile the main project
   git clone https://github.com/googleapis/google-cloud-cpp.git ${DEPENDENCY_DIR}/google-cloud-cpp
   cd ${DEPENDENCY_DIR}/google-cloud-cpp
   # Pick a location to install the artifacts, e.g., `/usr/local` or `/opt`
@@ -127,7 +120,6 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
   cmake --build cmake-out -- -j "$(nproc)"
   cmake --build cmake-out --target install
-
 }
 
 function install_aws-sdk-cpp {

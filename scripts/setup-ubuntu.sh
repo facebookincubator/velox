@@ -86,6 +86,17 @@ function install_velox_deps {
   run_and_time install_folly
 }
 
+function install_gcs_deps {
+  # install google-cloud-cpp dependencies (ubuntu 20.04)
+  # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
+  export DEBIAN_FRONTEND=noninteractive
+  sudo apt-get update && \
+  sudo apt-get --no-install-recommends install -y apt-transport-https apt-utils \
+          automake build-essential ccache cmake ca-certificates curl git \
+          gcc g++ libc-ares-dev libc-ares2 libcurl4-openssl-dev libre2-dev \
+          libssl-dev m4 make pkg-config tar wget zlib1g-dev
+}
+
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
 
 (
