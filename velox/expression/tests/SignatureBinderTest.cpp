@@ -36,24 +36,73 @@ void assertCannotResolve(
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_FALSE(binder.tryBind());
 
-TEST(SignatureBinderTest, decimals) {
-  // decimal(10, 3), decimal(10, 5) -> decimal()
+TEST(SignatureBinderTest, shortDecimals) {
+  // Decimal Add/Subtract.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("short_decimal(r_precision, r_scale)")
+            .argumentType("short_decimal(a_precision, a_scale)")
+            .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
+            .variableConstraint(
+                "r_precision",
+                "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
+            .variableConstraint("r_scale", "max(a_scale, b_scale)")
+            .build();
 
-  auto signature =
-      exec::FunctionSignatureBuilder()
-          .returnType("SHORT_DECIMAL(r_precision, r_scale)")
-          .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
-          .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
-          .variableConstraint(
-              "r_precision",
-              "min(b_precision - b_scale, a_precision - a_scale) + max(a_scale, b_scale)")
-          .variableConstraint("r_scale", "max(a_scale, b_scale)")
-          .build();
+    testSignatureBinder(
+        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(12, 6));
+  }
 
-  testSignatureBinder(
-      signature,
-      {SHORT_DECIMAL(11, 5), SHORT_DECIMAL(10, 6)},
-      SHORT_DECIMAL(10, 6));
+  // Decimal Multiply.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("LONG_DECIMAL(r_precision, r_scale)")
+            .argumentType("short_decimal(a_precision, a_scale)")
+            .argumentType("short_decimal(b_precision, b_scale)")
+            .variableConstraint(
+                "r_precision", "min(38, a_precision + b_precision)")
+            .variableConstraint("r_scale", "a_scale + b_scale")
+            .build();
+
+    testSignatureBinder(
+        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(21, 11));
+  }
+
+  // Decimal Divide.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("SHORT_DECIMAL(r_precision, r_scale)")
+            .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
+            .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
+            .variableConstraint(
+                "r_precision",
+                "min(38, a_precision + b_scale + max(b_scale - a_scale, 0))")
+            .variableConstraint("r_scale", "max(a_scale, b_scale)")
+            .build();
+
+    testSignatureBinder(
+        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(18, 6));
+  }
+
+  // Decimal Modulus.
+  {
+    auto signature =
+        exec::FunctionSignatureBuilder()
+            .returnType("SHORT_DECIMAL(r_precision, r_scale)")
+            .argumentType("SHORT_DECIMAL(a_precision, a_scale)")
+            .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
+            .variableConstraint(
+                "r_precision",
+                "min(b_precision - b_scale, a_precision - a_scale) + max(a_scale, b_scale)")
+            .variableConstraint("r_scale", "max(a_scale, b_scale)")
+            .build();
+
+    testSignatureBinder(
+        signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(10, 6));
+  }
 }
 
 TEST(SignatureBinderTest, generics) {

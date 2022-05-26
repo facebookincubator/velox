@@ -82,6 +82,13 @@ bool SignatureBinder::tryBind(
       variables_.emplace(variables[0], type->precision());
       variables_.emplace(variables[1], type->scale());
       return true;
+    } else if (actualType->kind() == TypeKind::LONG_DECIMAL) {
+      const auto& variables = typeSignature.variables();
+      const LongDecimalType* type =
+          static_cast<const LongDecimalType*>(actualType.get());
+      variables_.emplace(variables[0], type->precision());
+      variables_.emplace(variables[1], type->scale());
+      return true;
     }
 
     const auto& params = typeSignature.parameters();
@@ -119,9 +126,7 @@ TypePtr SignatureBinder::tryResolveType(
 std::string buildCalculation(
     const std::string& variable,
     const std::string& calculation) {
-  std::stringstream calculate;
-  calculate << variable << " = " << calculation << "\n";
-  return calculate.str();
+  return fmt::format("{}={}\n", variable, calculation);
 }
 
 // static
@@ -135,8 +140,7 @@ TypePtr SignatureBinder::tryResolveType(
   std::vector<TypePtr> children;
   children.reserve(params.size());
   for (auto& param : params) {
-    std::unordered_map<std::string, int> variables;
-    auto type = tryResolveType(param, bindings, variables);
+    auto type = tryResolveType(param, bindings);
     if (!type) {
       return nullptr;
     }
@@ -168,7 +172,8 @@ TypePtr SignatureBinder::tryResolveType(
     if (*typeKind == TypeKind::OPAQUE) {
       return OpaqueType::create<void>();
     }
-    if (*typeKind == TypeKind::SHORT_DECIMAL) {
+    if (*typeKind == TypeKind::SHORT_DECIMAL ||
+        *typeKind == TypeKind::LONG_DECIMAL) {
       const auto& precisionVar = typeSignature.variables()[0];
       const auto& scaleVar = typeSignature.variables()[1];
       // check for constraints, else set defaults.
@@ -187,7 +192,7 @@ TypePtr SignatureBinder::tryResolveType(
         expression::calculation::evaluate(calculation, variables);
         scale = variables[scaleVar];
       }
-      return SHORT_DECIMAL(precision, scale);
+      return DECIMAL(precision, scale);
     }
     return createType(*typeKind, std::move(children));
   }

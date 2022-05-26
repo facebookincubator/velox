@@ -102,11 +102,12 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   boost::algorithm::trim(token);
   nestedTypes.emplace_back(parseTypeSignature(token));
 
-  if (baseType == "SHORT_DECIMAL") {
+  auto typeName = boost::algorithm::to_upper_copy(baseType);
+  if (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL") {
     std::vector<std::string> vars(2);
     vars[0] = nestedTypes[0].baseType();
     vars[1] = nestedTypes[1].baseType();
-    return TypeSignature(baseType, {}, vars);
+    return TypeSignature(baseType, {}, std::move(vars));
   }
   return TypeSignature(baseType, std::move(nestedTypes));
 }
