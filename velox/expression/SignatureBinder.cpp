@@ -77,6 +77,7 @@ bool SignatureBinder::tryBind(
 
     if (actualType->kind() == TypeKind::SHORT_DECIMAL) {
       const auto& variables = typeSignature.variables();
+      VELOX_CHECK_EQ(variables.size(), 2);
       const ShortDecimalType* type =
           static_cast<const ShortDecimalType*>(actualType.get());
       variables_.emplace(variables[0], type->precision());
@@ -84,6 +85,7 @@ bool SignatureBinder::tryBind(
       return true;
     } else if (actualType->kind() == TypeKind::LONG_DECIMAL) {
       const auto& variables = typeSignature.variables();
+      VELOX_CHECK_EQ(variables.size(), 2);
       const LongDecimalType* type =
           static_cast<const LongDecimalType*>(actualType.get());
       variables_.emplace(variables[0], type->precision());
@@ -179,20 +181,23 @@ TypePtr SignatureBinder::tryResolveType(
       // check for constraints, else set defaults.
       const auto& precisionConstraint = constraints.find(precisionVar);
       const auto& scaleConstraint = constraints.find(scaleVar);
-      int precision = 18;
-      int scale = 0;
-      if (precisionConstraint != constraints.end()) {
-        auto calculation =
-            buildCalculation(precisionVar, precisionConstraint->second);
-        expression::calculation::evaluate(calculation, variables);
-        precision = variables[precisionVar];
+
+      if (precisionConstraint == constraints.end()) {
+        VELOX_FAIL("Missing constraint for variable {}", precisionVar);
       }
-      if (scaleConstraint != constraints.end()) {
-        auto calculation = buildCalculation(scaleVar, scaleConstraint->second);
-        expression::calculation::evaluate(calculation, variables);
-        scale = variables[scaleVar];
+      if (scaleConstraint == constraints.end()) {
+        VELOX_FAIL("Missing constraint for variable {}", scaleVar);
       }
-      return DECIMAL(precision, scale);
+
+      auto precisionCalculation =
+          buildCalculation(precisionVar, precisionConstraint->second);
+      expression::calculation::evaluate(precisionCalculation, variables);
+
+      auto scaleCalculation =
+          buildCalculation(scaleVar, scaleConstraint->second);
+      expression::calculation::evaluate(scaleCalculation, variables);
+
+      return DECIMAL(variables[precisionVar], variables[scaleVar]);
     }
     return createType(*typeKind, std::move(children));
   }

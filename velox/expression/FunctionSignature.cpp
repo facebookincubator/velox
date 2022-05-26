@@ -41,6 +41,10 @@ void toAppend(
 std::string TypeSignature::toString() const {
   std::ostringstream out;
   out << baseType_;
+  auto typeName = boost::algorithm::to_upper_copy(baseType_);
+  if (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL") {
+    out << "(" << variables_[0] << ", " << variables_[1] << ")";
+  }
   if (!parameters_.empty()) {
     out << "(" << folly::join(",", parameters_) << ")";
   }

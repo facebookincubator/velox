@@ -49,7 +49,12 @@ TEST(SignatureBinderTest, shortDecimals) {
                 "min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)")
             .variableConstraint("r_scale", "max(a_scale, b_scale)")
             .build();
-
+    ASSERT_EQ(
+        signature->argumentTypes()[0].toString(),
+        "short_decimal(a_precision, a_scale)");
+    ASSERT_EQ(
+        signature->argumentTypes()[1].toString(),
+        "SHORT_DECIMAL(b_precision, b_scale)");
     testSignatureBinder(
         signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(12, 6));
   }
@@ -102,6 +107,23 @@ TEST(SignatureBinderTest, shortDecimals) {
 
     testSignatureBinder(
         signature, {DECIMAL(11, 5), DECIMAL(10, 6)}, DECIMAL(10, 6));
+  }
+  // Error: missing constraint
+  {
+    auto signature = exec::FunctionSignatureBuilder()
+                         .returnType("short_decimal(r_precision, r_scale)")
+                         .argumentType("short_decimal(a_precision, a_scale)")
+                         .argumentType("SHORT_DECIMAL(b_precision, b_scale)")
+                         .build();
+    const std::vector<TypePtr> argTypes{DECIMAL(11, 5), DECIMAL(10, 6)};
+    exec::SignatureBinder binder(*signature, argTypes);
+    ASSERT_TRUE(binder.tryBind());
+    try {
+      binder.tryResolveReturnType();
+      FAIL();
+    } catch (const VeloxRuntimeError& e) {
+      ASSERT_EQ(e.message(), "Missing constraint for variable r_precision");
+    }
   }
 }
 
