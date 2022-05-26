@@ -354,7 +354,7 @@ if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
     set(FLEX_INCLUDE_DIR "${BREW_FLEX_PREFIX}/include")
   endif()
 endif()
-find_package(BISON 3.7.4 REQUIRED)
+find_package(BISON 3.0.4 REQUIRED)
 find_package(FLEX 2.5.13 REQUIRED)
 
 include_directories(SYSTEM velox)

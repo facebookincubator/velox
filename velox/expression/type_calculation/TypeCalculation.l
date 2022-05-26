@@ -23,8 +23,8 @@ var             ([[:alpha:]][[:alnum:]_]*)
 "="             return Parser::token::ASSIGN;
 "min"           return Parser::token::MIN;
 "max"           return Parser::token::MAX;
-{integer}       yylval->emplace<long long>(strtoll(YYText(), nullptr, 10)); return Parser::token::INT;
-{var}           yylval->emplace<std::string>(YYText()); return Parser::token::VAR;
+{integer}       yylval->build<long long>(strtoll(YYText(), nullptr, 10)); return Parser::token::INT;
+{var}           yylval->build<std::string>(YYText()); return Parser::token::VAR;
 \n              return Parser::token::EOL;
 <<EOF>>         return Parser::token::YYEOF;
 .               /* no action on unmatched input */

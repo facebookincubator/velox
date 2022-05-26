@@ -2,14 +2,14 @@
 #include <FlexLexer.h>
 #include <velox/common/base/Exceptions.h>
 %}
-%require "3.7.4"
+%require "3.0.4"
 %language "C++"
  
-%define api.parser.class {Parser}
+%define parser_class_name {Parser}
 %define api.namespace {facebook::velox::expression::calculate}
 %define api.value.type variant
 %parse-param {Scanner* scanner}
-%define parse.error detailed
+%define parse.error verbose
  
 %code requires
 {
@@ -24,9 +24,10 @@
     #define yylex(x) scanner->lex(x)
 }
 
-%token              EOL LPAREN RPAREN COMMA MIN MAX
-%token <long long>  INT
+%token               EOL LPAREN RPAREN COMMA MIN MAX
+%token <long long>   INT
 %token <std::string> VAR
+%token YYEOF         0
 
 %nterm <long long>  iexp
  
