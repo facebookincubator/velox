@@ -25,18 +25,8 @@ namespace facebook::velox::substrait {
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  struct SplitStats {
-    SplitStats(
-        u_int32_t partitionIndex,
-        std::vector<std::string> paths,
-        std::vector<u_int64_t> starts,
-        std::vector<u_int64_t> lengths,
-        int fileFormat)
-        : partitionIndex_(partitionIndex),
-          paths_(paths),
-          starts_(starts),
-          lengths_(lengths),
-          fileFormat_(fileFormat) {}
+  struct SplitInfo {
+    SplitInfo() {}
 
     /// The Partition index.
     u_int32_t partitionIndex_;
@@ -51,7 +41,7 @@ class SubstraitVeloxPlanConverter {
     std::vector<u_int64_t> lengths_;
 
     /// The file format of the files to be scanned.
-    int fileFormat_;
+    int32_t fileFormat_;
   };
 
   /// Convert Substrait AggregateRel into Velox PlanNode.
@@ -76,11 +66,7 @@ class SubstraitVeloxPlanConverter {
   core::PlanNodePtr toVeloxPlan(
       const ::substrait::ReadRel& readRel,
       memory::MemoryPool* pool,
-      u_int32_t& index,
-      std::vector<std::string>& paths,
-      std::vector<u_int64_t>& starts,
-      std::vector<u_int64_t>& lengths,
-      int& fileFormat);
+      std::shared_ptr<SplitInfo>& splitInfo);
 
   /// Convert Substrait ReadRel into Velox Values Node.
   core::PlanNodePtr toVeloxPlan(
@@ -112,10 +98,10 @@ class SubstraitVeloxPlanConverter {
     return functionMap_;
   }
 
-  /// Return the splitStats map used by this plan converter.
-  const std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitStats>>&
-  getSplitStatsMap() const {
-    return splitStatsMap_;
+  /// Return the splitInfo map used by this plan converter.
+  const std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>&
+  splitInfos() const {
+    return splitInfoMap_;
   }
 
   /// Looks up a function by ID and returns function name if found. Throws if
@@ -162,8 +148,8 @@ class SubstraitVeloxPlanConverter {
   std::unordered_map<uint64_t, std::string> functionMap_;
 
   /// The map storing the split stats for each PlanNode.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitStats>>
-      splitStatsMap_;
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
+      splitInfoMap_;
 };
 
 } // namespace facebook::velox::substrait

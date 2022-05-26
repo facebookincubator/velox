@@ -312,11 +312,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
     memory::MemoryPool* pool,
-    u_int32_t& index,
-    std::vector<std::string>& paths,
-    std::vector<u_int64_t>& starts,
-    std::vector<u_int64_t>& lengths,
-    int& fileFormat) {
+    std::shared_ptr<SplitInfo>& splitInfo) {
   // Get output names and types.
   std::vector<std::string> colNameList;
   std::vector<TypePtr> veloxTypeList;
@@ -336,16 +332,16 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Parse local files
   if (readRel.has_local_files()) {
     const auto& fileList = readRel.local_files().items();
-    paths.reserve(fileList.size());
-    starts.reserve(fileList.size());
-    lengths.reserve(fileList.size());
+    splitInfo->paths_.reserve(fileList.size());
+    splitInfo->starts_.reserve(fileList.size());
+    splitInfo->lengths_.reserve(fileList.size());
     for (const auto& file : fileList) {
       // Expect all Partitions share the same index.
-      index = file.partition_index();
-      paths.emplace_back(file.uri_file());
-      starts.emplace_back(file.start());
-      lengths.emplace_back(file.length());
-      fileFormat = file.format();
+      splitInfo->partitionIndex_ = file.partition_index();
+      splitInfo->paths_.emplace_back(file.uri_file());
+      splitInfo->starts_.emplace_back(file.start());
+      splitInfo->lengths_.emplace_back(file.length());
+      splitInfo->fileFormat_ = file.format();
     }
   }
 
@@ -466,15 +462,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     return toVeloxPlan(rel.filter(), pool);
   }
   if (rel.has_read()) {
-    u_int32_t partitionIndex;
-    std::vector<std::string> paths;
-    std::vector<u_int64_t> starts;
-    std::vector<u_int64_t> lengths;
-    int fileFormat;
-    auto planNode = toVeloxPlan(
-        rel.read(), pool, partitionIndex, paths, starts, lengths, fileFormat);
-    splitStatsMap_[planNode->id()] = std::make_shared<SplitStats>(
-        partitionIndex, paths, starts, lengths, fileFormat);
+    auto splitInfo = std::make_shared<SplitInfo>();
+
+    auto planNode = toVeloxPlan(rel.read(), pool, splitInfo);
+    splitInfoMap_[planNode->id()] = splitInfo;
     return planNode;
   }
   VELOX_NYI("Substrait conversion not supported for Rel.");
