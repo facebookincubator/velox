@@ -53,18 +53,18 @@ inline std::string gcsPath(const std::string_view& path) {
   return std::string(path.substr(kGCSScheme.length()));
 }
 
-#define VELOX_CHECK_GCS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                         \
-  {                                                                                           \
-    if (!outcome.ok()) {                                                                      \
-      auto error = outcome.error_info();                                                      \
-      VELOX_FAIL(                                                                             \
-          "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'",       \
-          errorMsgPrefix,                                                                     \
-          gcsURI(bucket, key),                                                                \
-          error.domain(),                                                                     \
-          getErrorStringFromGCSError(outcome.code()),                                         \
-          outcome.message());                                                                 \
-    }                                                                                         \
+#define VELOX_CHECK_GCS_OUTCOME(outcome, errorMsgPrefix, bucket, key)                   \
+  {                                                                                     \
+    if (!outcome.ok()) {                                                                \
+      auto error = outcome.error_info();                                                \
+      VELOX_FAIL(                                                                       \
+          "{} due to: Path:'{}', SDK Error Type:{}, GCS Status Code:{},  Message:'{}'", \
+          errorMsgPrefix,                                                               \
+          gcsURI(bucket, key),                                                          \
+          error.domain(),                                                               \
+          getErrorStringFromGCSError(outcome.code()),                                   \
+          outcome.message());                                                           \
+    }                                                                                   \
   }
 
 } // namespace facebook::velox

@@ -227,7 +227,6 @@ class GCSConfig {
   std::shared_ptr<gc::Credentials> credentials() const {
     return credentials_;
   }
-
 };
 
 class GCSFileSystem::Impl {

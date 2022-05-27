@@ -25,5 +25,4 @@ target_link_libraries(
   velox_exec
   gmock
   gtest
-  gtest_main
-  )
+  gtest_main)
