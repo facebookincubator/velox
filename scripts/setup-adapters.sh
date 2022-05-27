@@ -21,6 +21,7 @@ set -eufx -o pipefail
 
 SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
+DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
 function install_gcs-sdk-cpp {
   # install gcs dependencies
