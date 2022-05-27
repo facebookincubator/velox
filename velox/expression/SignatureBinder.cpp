@@ -120,7 +120,7 @@ TypePtr SignatureBinder::tryResolveType(
 std::string buildCalculation(
     const std::string& variable,
     const std::string& calculation) {
-  return fmt::format("{}={}\n", variable, calculation);
+  return fmt::format("{}={}", variable, calculation);
 }
 
 // static

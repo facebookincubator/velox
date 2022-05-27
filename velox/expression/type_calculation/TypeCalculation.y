@@ -24,7 +24,7 @@
     #define yylex(x) scanner->lex(x)
 }
 
-%token               EOL LPAREN RPAREN COMMA MIN MAX
+%token               LPAREN RPAREN COMMA MIN MAX
 %token <long long>   INT
 %token <std::string> VAR
 %token YYEOF         0
@@ -38,13 +38,8 @@
  
 %%
  
-lines   : %empty
-        | lines line
-        ;
- 
-line    : EOL                       { std::cerr << "Read an empty line.\n"; }
-        | VAR ASSIGN iexp EOL       { scanner->setValue($1, $3); }
-        | error EOL                 { yyerrok; }
+calc    : VAR ASSIGN iexp           { scanner->setValue($1, $3); }
+        | error                     { yyerrok; }
         ;
  
 iexp    : INT                       { $$ = $1; }

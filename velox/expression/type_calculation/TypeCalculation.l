@@ -5,9 +5,8 @@
 %}
  
 %option c++ noyywrap noyylineno nodefault
- 
-dseq            ([[:digit:]]+)
-integer         ({dseq})
+
+integer         ([[:digit:]]+)
 var             ([[:alpha:]][[:alnum:]_]*)
  
 %%
@@ -25,7 +24,6 @@ var             ([[:alpha:]][[:alnum:]_]*)
 "max"           return Parser::token::MAX;
 {integer}       yylval->build<long long>(strtoll(YYText(), nullptr, 10)); return Parser::token::INT;
 {var}           yylval->build<std::string>(YYText()); return Parser::token::VAR;
-\n              return Parser::token::EOL;
 <<EOF>>         return Parser::token::YYEOF;
 .               /* no action on unmatched input */
  
