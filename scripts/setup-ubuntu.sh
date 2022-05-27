@@ -94,7 +94,7 @@ function install_gcs_deps {
   sudo apt-get --no-install-recommends install -y apt-transport-https apt-utils \
           automake build-essential ccache cmake ca-certificates curl git \
           gcc g++ libc-ares-dev libc-ares2 libcurl4-openssl-dev libre2-dev \
-          libssl-dev m4 make pkg-config tar wget zlib1g-dev
+          libssl-dev m4 make pkg-config tar wget zlib1g-dev python3-pip
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

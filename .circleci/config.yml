@@ -412,7 +412,6 @@ jobs:
       - run:
           name: "Install testbench"
           command: |
-            sudo apt install --no-install-recommends -y python3-pip
             set -xu
             ./scripts/install_gcs_testbench.sh default
       - run:
