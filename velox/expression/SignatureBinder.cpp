@@ -75,21 +75,13 @@ bool SignatureBinder::tryBind(
       return false;
     }
 
-    if (actualType->kind() == TypeKind::SHORT_DECIMAL) {
+    if (isDecimalType(actualType->kind())) {
       const auto& variables = typeSignature.variables();
       VELOX_CHECK_EQ(variables.size(), 2);
-      const ShortDecimalType* type =
-          static_cast<const ShortDecimalType*>(actualType.get());
-      variables_.emplace(variables[0], type->precision());
-      variables_.emplace(variables[1], type->scale());
-      return true;
-    } else if (actualType->kind() == TypeKind::LONG_DECIMAL) {
-      const auto& variables = typeSignature.variables();
-      VELOX_CHECK_EQ(variables.size(), 2);
-      const LongDecimalType* type =
-          static_cast<const LongDecimalType*>(actualType.get());
-      variables_.emplace(variables[0], type->precision());
-      variables_.emplace(variables[1], type->scale());
+      int precision, scale;
+      getDecimalPrecisionScale(*actualType.get(), precision, scale);
+      variables_.emplace(variables[0], precision);
+      variables_.emplace(variables[1], scale);
       return true;
     }
 
@@ -174,8 +166,7 @@ TypePtr SignatureBinder::tryResolveType(
     if (*typeKind == TypeKind::OPAQUE) {
       return OpaqueType::create<void>();
     }
-    if (*typeKind == TypeKind::SHORT_DECIMAL ||
-        *typeKind == TypeKind::LONG_DECIMAL) {
+    if (isDecimalType(*typeKind)) {
       const auto& precisionVar = typeSignature.variables()[0];
       const auto& scaleVar = typeSignature.variables()[1];
       // check for constraints, else set defaults.
