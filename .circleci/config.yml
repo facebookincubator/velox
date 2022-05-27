@@ -409,7 +409,7 @@ jobs:
             ./scripts/setup-ubuntu.sh install_gcs_deps
             set -xu
             DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh gcs
-       - run:
+      - run:
           name: "Install testbench"
           command: |
             sudo apt install --no-install-recommends -y python3-pip
