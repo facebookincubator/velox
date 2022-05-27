@@ -304,7 +304,8 @@ struct hash<facebook::velox::exec::TypeVariableConstraint> {
   using result_type = std::size_t;
 
   result_type operator()(const argument_type& key) const noexcept {
-    return std::hash<std::string>{}(key.name());
+    return std::hash<std::string>{}(key.name()) * 31 +
+        std::hash<std::string>{}(key.constraint());
   }
 };
 
@@ -317,6 +318,9 @@ struct hash<facebook::velox::exec::TypeSignature> {
     size_t val = std::hash<std::string>{}(key.baseType());
     for (const auto& parameter : key.parameters()) {
       val = val * 31 + this->operator()(parameter);
+    }
+    for (const auto& variable : key.variables()) {
+      val = val * 31 + std::hash<std::string>{}(variable);
     }
     return val;
   }
@@ -336,6 +340,10 @@ struct hash<facebook::velox::exec::FunctionSignature> {
     size_t val = 0;
     for (const auto& constraint : key.typeVariableConstants()) {
       val = val * 31 + typeVariableConstraintHasher(constraint);
+    }
+
+    for (const auto& variable : key.variables()) {
+      val = val * 31 + typeVariableConstraintHasher(variable);
     }
 
     val = val * 31 + typeSignatureHasher(key.returnType());
