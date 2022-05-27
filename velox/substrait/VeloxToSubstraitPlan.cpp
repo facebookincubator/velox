@@ -201,7 +201,8 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     aggGroupings->add_grouping_expressions()->MergeFrom(
         exprConvertor_->toSubstraitExpr(
             arena,
-            std::dynamic_pointer_cast<const core::ITypedExpr>(groupingKeys.at(i)),
+            std::dynamic_pointer_cast<const core::ITypedExpr>(
+                groupingKeys.at(i)),
             inputType));
   }
 
