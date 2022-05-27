@@ -480,6 +480,12 @@ aggregate functions and aggregate functions result types.</p>
 <p>creates a final aggregation using an approx_percentile aggregate function with
 DOUBLE result type.</p>
 </section>
+<section id="function-names">
+<h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this headline">¶</a></h2>
+<p>Same as scalar functions, aggregate function names are case insensitive. The names
+are converted to lower case automatically when the functions are registered and
+when they are resolved for a given expression.</p>
+</section>
 <section id="documentation">
 <h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
 <p>Finally, document the new function by adding an entry to velox/docs/functions/aggregate.rst</p>
@@ -531,6 +537,7 @@ DOUBLE result type.</p>
 <li><a class="reference internal" href="#global-aggregation">Global aggregation</a></li>
 <li><a class="reference internal" href="#factory-function">Factory function</a></li>
 <li><a class="reference internal" href="#testing">Testing</a></li>
+<li><a class="reference internal" href="#function-names">Function names</a></li>
 <li><a class="reference internal" href="#documentation">Documentation</a></li>
 <li><a class="reference internal" href="#accumulator">Accumulator</a></li>
 <li><a class="reference internal" href="#end-to-end-testing">End-to-End Testing</a></li>
