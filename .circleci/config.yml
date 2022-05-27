@@ -432,13 +432,11 @@ jobs:
           key: velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
           paths:
             - .ccache/
-      #TODO
-      # - run:
-      #     name: "Run Unit Tests"
-      #     command: |
-      #       export PATH=~/adapter-deps/install/bin:${PATH}
-      #       cd _build/release && ctest -j 16 -VV --output-on-failure
-      #     no_output_timeout: 1h
+      - run:
+          name: "Run Unit Tests"
+          command: |
+            cd _build/release && ctest -j 16 -VV --output-on-failure
+          no_output_timeout: 1h
 
   format-check:
     executor: check
