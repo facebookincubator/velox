@@ -406,7 +406,7 @@ jobs:
           command: |
             mkdir -p ~/adapter-deps ~/adapter-deps/google-cloud-cpp-installed/
             source /opt/rh/gcc-toolset-9/enable
-            ./scripts/setup-ubuntu.sh install_gcs_deps
+            ./scripts/setup-circleci.sh install_gcs_deps
             set -xu
             DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh gcs
       - run:

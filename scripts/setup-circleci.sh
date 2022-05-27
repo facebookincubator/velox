@@ -58,6 +58,29 @@ function wget_and_untar {
   wget -q --max-redirect 3 -O - "${URL}" | tar -xz -C "${DIR}" --strip-components=1
 }
 
+function install_gcs_deps {
+  # install google-cloud-cpp dependencies (ubuntu 20.04)
+  # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
+
+  sudo apt-get update && \
+  dnf_install apt-transport-https \
+    apt-utils \
+    automake \
+    build-essential \
+    ca-certificates \
+    curl \
+    gcc \
+    libc-ares-dev \
+    libc-ares2 \
+    libcurl4-openssl-dev \
+    m4 \
+    make \
+    pkg-config \
+    python3-pip \
+    tar \
+    wget \
+    zlib1g-dev
+}
 # untar cmake binary release directly to /usr.
 wget_and_untar https://github.com/Kitware/CMake/releases/download/v3.17.5/cmake-3.17.5-Linux-x86_64.tar.gz /usr &
 
