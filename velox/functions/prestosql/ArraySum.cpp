@@ -181,31 +181,24 @@ std::shared_ptr<exec::VectorFunction> create(
 // array(T1) -> T2 where T1 must be coercible to bigint or double, and
 // T2 is bigint or double
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-  return {
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("array(tinyint)")
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("array(smallint)")
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("array(integer)")
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("bigint")
-          .argumentType("array(bigint)")
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("double")
-          .argumentType("array(real)")
-          .build(),
-      exec::FunctionSignatureBuilder()
-          .returnType("double")
-          .argumentType("array(double)")
-          .build()};
+  static const std::map<std::string, std::string> s = {
+    {"tinyint", "bigint"},
+    {"smallint", "bigint"},
+    {"integer", "bigint"},
+    {"bigint", "bigint"},
+    {"real", "double"},
+    {"double", "double"}
+  };
+  std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
+  signatures.reserve(s.size());
+  for (const auto& typeName : s) {
+    signatures.emplace_back(
+        exec::FunctionSignatureBuilder()
+            .returnType(typeName.second)
+            .argumentType(fmt::format("array({})", typeName.first))
+            .build());
+  }
+  return signatures;
 }
 
 } // namespace
