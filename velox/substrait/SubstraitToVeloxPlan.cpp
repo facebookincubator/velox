@@ -87,8 +87,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   // Construct Velox grouping expressions.
   auto inputTypes = childNode->outputType();
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
-      veloxGroupingExprs;
+  std::vector<core::FieldAccessTypedExprPtr> veloxGroupingExprs;
 
   const auto& groupings = aggRel.groupings();
   int inputPlanNodeId = planNodeId_ - 1;
@@ -113,12 +112,30 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Aggregation if needed.
   std::vector<core::TypedExprPtr> projectExprs;
   std::vector<std::string> projectOutNames;
-  std::vector<std::shared_ptr<const core::CallTypedExpr>> aggExprs;
-  aggExprs.reserve(aggRel.measures().size());
+  std::vector<core::CallTypedExprPtr> aggExprs;
+  auto aggMeasureSize = aggRel.measures().size();
+  aggExprs.reserve(aggMeasureSize);
+
+  std::vector<core::FieldAccessTypedExprPtr> aggregateMasks;
+  aggregateMasks.reserve(aggRel.measures().size());
 
   // Construct Velox Aggregate expressions.
-  for (const auto& sMea : aggRel.measures()) {
-    auto aggFunction = sMea.measure();
+  for (const auto& measure : aggRel.measures()) {
+    core::FieldAccessTypedExprPtr aggregateMask;
+    ::substrait::Expression substraitAggMask = measure.filter();
+    // Get Aggregation Masks.
+    if (measure.has_filter()) {
+      if (substraitAggMask.ByteSizeLong() == 0) {
+        aggregateMask = {};
+      } else {
+        aggregateMask =
+            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+                exprConverter_->toVeloxExpr(substraitAggMask, inputTypes));
+      }
+      aggregateMasks.push_back(aggregateMask);
+    }
+
+    auto aggFunction = measure.measure();
     // Get the params of this Aggregate function.
     std::vector<core::TypedExprPtr> aggParams;
     auto args = aggFunction.args();
@@ -185,15 +202,12 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
   // Construct the Aggregate Node.
   bool ignoreNullKeys = false;
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
-      outIdx);
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
-      preGroupingExprs;
+  std::vector<core::FieldAccessTypedExprPtr> preGroupingExprs;
   if (projectOutNames.size() == 0) {
     // Conduct Aggregation directly.
     std::vector<std::string> aggOutNames;
-    aggOutNames.reserve(aggExprs.size());
-    for (int idx = 0; idx < aggExprs.size(); idx++) {
+    aggOutNames.reserve(aggMeasureSize);
+    for (int idx = 0; idx < aggMeasureSize; idx++) {
       aggOutNames.emplace_back(
           substraitParser_->makeNodeName(planNodeId_, idx));
     }
@@ -215,8 +229,8 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::move(projectExprs),
         childNode);
     std::vector<std::string> aggOutNames;
-    aggOutNames.reserve(outIdx);
-    for (int idx = 0; idx < outIdx; idx++) {
+    aggOutNames.reserve(aggMeasureSize);
+    for (int idx = 0; idx < aggMeasureSize; idx++) {
       aggOutNames.emplace_back(
           substraitParser_->makeNodeName(planNodeId_, idx));
     }

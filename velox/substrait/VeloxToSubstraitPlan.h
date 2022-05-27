@@ -79,6 +79,11 @@ class VeloxToSubstraitPlanConvertor {
   ///  for these.
   ::substrait::Plan& addExtensionFunc(google::protobuf::Arena& arena);
 
+  /// Set Aggregation Function Steps.
+  const ::substrait::AggregateFunction& setAggregateSteps(
+      google::protobuf::Arena& arena,
+      const std::shared_ptr<const core::AggregationNode>& aggregateNode);
+
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.
   std::shared_ptr<VeloxToSubstraitExprConvertor> exprConvertor_;

@@ -181,7 +181,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     const std::shared_ptr<const core::AggregationNode>& aggregateNode,
     ::substrait::AggregateRel* aggregateRel) {
   // Process the source Node.
-  std::vector<core::PlanNodePtr> sources = aggregateNode->sources();
+  const auto& sources = aggregateNode->sources();
   // Check there only have one input.
   VELOX_USER_CHECK_EQ(
       1, sources.size(), "Aggregation plan node must have exactly one source.");
@@ -201,7 +201,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     aggGroupings->add_grouping_expressions()->MergeFrom(
         exprConvertor_->toSubstraitExpr(
             arena,
-            std::dynamic_pointer_cast<const ITypedExpr>(groupingKeys.at(i)),
+            std::dynamic_pointer_cast<const core::ITypedExpr>(groupingKeys.at(i)),
             inputType));
   }
 
@@ -218,14 +218,13 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     ::substrait::AggregateRel_Measure* aggMeasures =
         aggregateRel->add_measures();
 
-    std::shared_ptr<const core::FieldAccessTypedExpr> aggMaskExpr =
-        aggregateMasks.at(i);
+    auto aggMaskExpr = aggregateMasks.at(i);
     // Set substrait filter.
     ::substrait::Expression* aggFilter = aggMeasures->mutable_filter();
     if (aggMaskExpr.get()) {
       aggFilter->MergeFrom(exprConvertor_->toSubstraitExpr(
           arena,
-          std::dynamic_pointer_cast<const ITypedExpr>(aggMaskExpr),
+          std::dynamic_pointer_cast<const core::ITypedExpr>(aggMaskExpr),
           inputType));
     } else {
       // Set null.
@@ -233,28 +232,26 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     }
 
     // Process measure, eg:sum(a).
-    std::shared_ptr<const core::CallTypedExpr> aggregatesExpr =
-        aggregates.at(i);
+    const auto& aggregatesExpr = aggregates.at(i);
     ::substrait::AggregateFunction* aggFunction =
         aggMeasures->mutable_measure();
 
     // Aggregation function name.
-    std::string funName = aggregatesExpr->name();
+    const auto& funName = aggregatesExpr->name();
     // set aggFunction args.
-    std::vector<core::TypedExprPtr> aggregatesExprInputs =
-        aggregatesExpr->inputs();
+    const auto& aggregatesExprInputs = aggregatesExpr->inputs();
 
     int64_t aggregatesExprInputsSize = aggregatesExprInputs.size();
     for (int64_t j = 0; j < aggregatesExprInputsSize; j++) {
       ::substrait::Expression* aggFunctionExpr = aggFunction->add_args();
       core::TypedExprPtr expr = aggregatesExprInputs[j];
-      // In velox plan, expr can only be the FieldAccessTypedExpr.
-      // If the expr is not FieldAccess, people need do project firstly.
-      if (auto vAggregatesExprInput =
+
+      // If the expr is CallTypedExpr, people need do project firstly.
+      if (auto aggregatesExprInput =
               std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
         VELOX_NYI("In Velox Plan, the aggregates type cannot be CallTypedExpr");
       } else if (
-          auto vAggregatesExprInput =
+          auto aggregatesExprInput =
               std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr) &&
               funName == "count") {
         // For case count(1).
@@ -273,32 +270,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
 
     // Set substrait aggregate Function phase.
-    switch (aggregateNode->step()) {
-      case core::AggregationNode::Step::kPartial: {
-        aggFunction->set_phase(
-            ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE);
-        break;
-      }
-      case core::AggregationNode::Step::kIntermediate: {
-        aggFunction->set_phase(
-            ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE);
-        break;
-      }
-      case core::AggregationNode::Step::kSingle: {
-        aggFunction->set_phase(
-            ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT);
-        break;
-      }
-      case core::AggregationNode::Step::kFinal: {
-        aggFunction->set_phase(
-            ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT);
-        break;
-      }
-      default:
-        VELOX_NYI(
-            "Unsupport Aggregate Step '{}' in Substrait ",
-            mapAggregationStepToName(aggregateNode->step()));
-    }
+    aggFunction->MergeFrom(setAggregateSteps(arena, aggregateNode));
   }
 
   // Direct output.
@@ -314,6 +286,8 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   functionMap_["divide"] = 3;
   functionMap_["count"] = 4;
   functionMap_["sum"] = 5;
+  functionMap_["mod"] = 6;
+  functionMap_["eq"] = 7;
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
@@ -362,7 +336,56 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   extensionFunction->set_function_anchor(5);
   extensionFunction->set_name("sum:opt_i32");
 
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(6);
+  extensionFunction->set_name("modulus:i32_i32");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(7);
+  extensionFunction->set_name("equal:i64_i64");
+
   return *substraitPlan;
+}
+
+const ::substrait::AggregateFunction&
+VeloxToSubstraitPlanConvertor::setAggregateSteps(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const core::AggregationNode>& aggregateNode) {
+  ::substrait::AggregateFunction* aggregateFunction =
+      google::protobuf::Arena::CreateMessage<::substrait::AggregateFunction>(
+          &arena);
+  switch (aggregateNode->step()) {
+    case core::AggregationNode::Step::kPartial: {
+      aggregateFunction->set_phase(
+          ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE);
+      break;
+    }
+    case core::AggregationNode::Step::kIntermediate: {
+      aggregateFunction->set_phase(
+          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE);
+      break;
+    }
+    case core::AggregationNode::Step::kSingle: {
+      aggregateFunction->set_phase(
+          ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT);
+      break;
+    }
+    case core::AggregationNode::Step::kFinal: {
+      aggregateFunction->set_phase(
+          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT);
+      break;
+    }
+    default:
+      VELOX_NYI(
+          "Unsupport Aggregate Step '{}' in Substrait ",
+          mapAggregationStepToName(aggregateNode->step()));
+  }
+
+  return *aggregateFunction;
 }
 
 } // namespace facebook::velox::substrait

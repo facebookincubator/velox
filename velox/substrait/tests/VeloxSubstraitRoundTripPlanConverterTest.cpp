@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include <folly/Random.h>
-
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/VectorMaker.h"
@@ -61,7 +59,7 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
     auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
-
+    substraitPlan.PrintDebugString();
     // Convert Substrait Plan to the same Velox Plan.
     auto samePlan =
         substraitConverter_->toVeloxPlan(substraitPlan, pool_.get());
@@ -113,19 +111,14 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {
   assertPlanConversion(plan, "SELECT * FROM tmp");
 }
 
-TEST_F(VeloxSubstraitRoundTripPlanConverterTest, aggragateCount) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, count) {
   auto vectors = makeVectors(2, 7, 3);
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder()
                   .values(vectors)
                   .filter("c6 < 24")
-                  .aggregation(
-                      {"c0", "c1"},
-                      {"count(c4) as num_price"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
+                  .singleAggregation({"c0", "c1"}, {"count(c4) as num_price"})
                   .project({"num_price"})
                   .planNode();
 
@@ -134,19 +127,77 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, aggragateCount) {
       "SELECT count(c4) as num_price FROM tmp WHERE c6 < 24 GROUP BY c0, c1");
 }
 
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, countALL) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .filter("c6 < 24")
+                  .singleAggregation({"c0", "c1"}, {"count(1) as num_price"})
+                  .project({"num_price"})
+                  .planNode();
+
+  assertPlanConversion(
+      plan,
+      "SELECT count(*) as num_price FROM tmp WHERE c6 < 24 GROUP BY c0, c1");
+}
+
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sum) {
   auto vectors = makeVectors(2, 7, 3);
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .aggregation(
-                      {},
-                      {"sum(c1)", "count(c4)"},
-                      {},
-                      core::AggregationNode::Step::kPartial,
-                      false)
+                  .partialAggregation({}, {"sum(c1)", "count(c4)"})
                   .planNode();
 
   assertPlanConversion(plan, "SELECT sum(c1), count(c4) FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumFinal) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(c1)", "count(c4)"})
+                  .finalAggregation()
+                  .planNode();
+
+  assertPlanConversion(plan, "SELECT sum(c1), count(c4) FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumGlobal) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  // Global final aggregation.
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({}, {"sum(c0)", "sum(c1)"})
+                  .intermediateAggregation()
+                  .finalAggregation()
+                  .planNode();
+  assertPlanConversion(plan, "SELECT sum(c0), sum(c1) FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumMask) {
+  auto vectors = makeVectors(2, 7, 3);
+  createDuckDbTable(vectors);
+
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project({"c0", "c1", "c2 % 2 < 10 AS m0", "c3 % 3 = 0 AS m1"})
+          .partialAggregation(
+              {}, {"sum(c0)", "sum(c0)", "sum(c1)"}, {"m0", "m1", "m1"})
+          .finalAggregation()
+          .planNode();
+
+  assertPlanConversion(
+      plan,
+      "SELECT sum(c0) filter (where c2 % 2 < 10), "
+      "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
+      "FROM tmp");
 }
