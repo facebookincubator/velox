@@ -26,10 +26,10 @@
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnSelector;
-using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 using dwio::common::TypeWithId;
+using dwio::common::io::InputStream;
 using dwio::common::typeutils::CompatChecker;
 
 DwrfRowReaderShared::DwrfRowReaderShared(
@@ -202,7 +202,7 @@ DwrfReaderShared::DwrfReaderShared(
           options.getDecrypterFactory(),
           options.getBufferedInputFactory()
               ? options.getBufferedInputFactory()
-              : BufferedInputFactory::baseFactoryShared(),
+              : dwio::common::io::BufferedInputFactory::baseFactoryShared(),
           options.getFileNum())),
       options_(options) {}
 

@@ -26,7 +26,7 @@
 #include "velox/type/Subfield.h"
 #include "velox/vector/FlatVector.h"
 
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "velox/dwio/common/io/MemoryInputStream.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
@@ -198,7 +198,7 @@ class E2EFilterTestBase : public testing::Test {
 
   virtual std::unique_ptr<dwio::common::Reader> makeReader(
       const dwio::common::ReaderOptions& opts,
-      std::unique_ptr<dwio::common::InputStream> input) = 0;
+      std::unique_ptr<dwio::common::io::InputStream> input) = 0;
 
   void readWithoutFilter(
       std::shared_ptr<ScanSpec> spec,

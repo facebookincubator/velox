@@ -305,7 +305,7 @@ std::optional<size_t> ParquetRowReader::estimatedRowSize() const {
 }
 
 ParquetReader::ParquetReader(
-    std::unique_ptr<dwio::common::InputStream> stream,
+    std::unique_ptr<dwio::common::io::InputStream> stream,
     const dwio::common::ReaderOptions& options)
     : allocator_(options.getMemoryPool()),
       fileSystem_(

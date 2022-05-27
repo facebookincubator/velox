@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CachedBufferedInput.h"
 #include "velox/common/process/TraceContext.h"
-#include "velox/dwio/dwrf/common/CacheInputStream.h"
+#include "velox/dwio/common/io/CacheInputStream.h"
 
 DEFINE_int32(
     cache_prefetch_min_pct,
     80,
     "Minimum percentage of actual uses over references to a column for prefetching. No prefetch if > 100");
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using cache::CachePin;
 using cache::LoadState;
@@ -35,8 +35,8 @@ using cache::TrackingId;
 using memory::MappedMemory;
 
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
-    dwio::common::Region region,
-    const StreamIdentifier* si = nullptr) {
+    Region region,
+    const dwrf::StreamIdentifier* si = nullptr) {
   if (region.length == 0) {
     return std::make_unique<SeekableArrayInputStream>(
         static_cast<const char*>(nullptr), 0);
@@ -466,7 +466,7 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
   return std::make_unique<CacheInputStream>(
       const_cast<CachedBufferedInput*>(this),
       ioStats_.get(),
-      dwio::common::Region{offset, length},
+      Region{offset, length},
       input_,
       fileNum_,
       nullptr,
@@ -475,4 +475,4 @@ std::unique_ptr<SeekableInputStream> CachedBufferedInput::read(
       loadQuantum_);
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

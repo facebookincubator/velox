@@ -17,9 +17,9 @@
 
 #include <memory>
 
-#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/type/Conversions.h"
@@ -325,7 +325,7 @@ class InputStreamHolder : public dwrf::AbstractInputStreamHolder {
         fileHandle_->file.get(), dwio::common::MetricsLog::voidLog(), nullptr);
   }
 
-  dwio::common::InputStream& get() override {
+  dwio::common::io::InputStream& get() override {
     return *input_;
   }
 
@@ -334,7 +334,7 @@ class InputStreamHolder : public dwrf::AbstractInputStreamHolder {
   // Keeps the pointer alive also in case of cancellation while reads
   // proceeding on different threads.
   std::shared_ptr<dwio::common::IoStatistics> stats_;
-  std::unique_ptr<dwio::common::InputStream> input_;
+  std::unique_ptr<dwio::common::io::InputStream> input_;
 };
 
 std::unique_ptr<InputStreamHolder> makeStreamHolder(

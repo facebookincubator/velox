@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "velox/dwio/common/io/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -25,6 +25,8 @@
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 
 namespace facebook::velox::dwrf {
+
+// using namespace dwio::common::io;
 
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
@@ -63,16 +65,17 @@ class ReaderBase {
   // create reader base from input stream
   ReaderBase(
       memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::io::InputStream> stream,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
-      std::shared_ptr<BufferedInputFactory> bufferedInputFactory = nullptr,
+      std::shared_ptr<dwio::common::io::BufferedInputFactory>
+          bufferedInputFactory = nullptr,
       uint64_t fileNum = -1);
 
   // create reader base from metadata
   ReaderBase(
       memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::io::InputStream> stream,
       std::unique_ptr<proto::PostScript> ps,
       proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
@@ -106,7 +109,7 @@ class ReaderBase {
     return pool_;
   }
 
-  dwio::common::InputStream& getStream() const {
+  dwio::common::io::InputStream& getStream() const {
     return *stream_;
   }
 
@@ -138,9 +141,10 @@ class ReaderBase {
     return *input_;
   }
 
-  const BufferedInputFactory& bufferedInputFactory() const {
-    return bufferedInputFactory_ ? *bufferedInputFactory_
-                                 : *BufferedInputFactory::baseFactory();
+  const dwio::common::io::BufferedInputFactory& bufferedInputFactory() const {
+    return bufferedInputFactory_
+        ? *bufferedInputFactory_
+        : *dwio::common::io::BufferedInputFactory::baseFactory();
   }
 
   const std::unique_ptr<StripeMetadataCache>& getMetadataCache() const {
@@ -232,7 +236,7 @@ class ReaderBase {
       uint32_t index = 0);
 
   memory::MemoryPool& pool_;
-  std::unique_ptr<dwio::common::InputStream> stream_;
+  std::unique_ptr<InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<proto::PostScript> postScript_;
   proto::Footer* footer_ = nullptr;
@@ -241,7 +245,7 @@ class ReaderBase {
   // Keeps factory alive for possibly async prefetch.
   std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
+  std::shared_ptr<dwio::common::io::BufferedInputFactory> bufferedInputFactory_;
 
   std::unique_ptr<BufferedInput> input_;
   RowTypePtr schema_;

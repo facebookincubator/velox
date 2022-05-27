@@ -19,7 +19,7 @@
 #include <folly/compression/Compression.h>
 #include <folly/compression/Zlib.h>
 #include <gtest/gtest.h>
-#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 

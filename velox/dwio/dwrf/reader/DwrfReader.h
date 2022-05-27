@@ -104,7 +104,7 @@ class DwrfReader : public DwrfReaderShared {
    */
   DwrfReader(
       const dwio::common::ReaderOptions& options,
-      std::unique_ptr<dwio::common::InputStream> input)
+      std::unique_ptr<dwio::common::io::InputStream> input)
       : DwrfReaderShared{options, std::move(input)} {}
 
   ~DwrfReader() override = default;
@@ -121,7 +121,7 @@ class DwrfReader : public DwrfReaderShared {
    * @param options the options for reading the file
    */
   static std::unique_ptr<DwrfReader> create(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::io::InputStream> stream,
       const dwio::common::ReaderOptions& options);
 
   friend class E2EEncryptionTest;
@@ -132,7 +132,7 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
   DwrfReaderFactory() : ReaderFactory(dwio::common::FileFormat::ORC) {}
 
   std::unique_ptr<dwio::common::Reader> createReader(
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<dwio::common::io::InputStream> stream,
       const dwio::common::ReaderOptions& options) override {
     return DwrfReader::create(std::move(stream), options);
   }

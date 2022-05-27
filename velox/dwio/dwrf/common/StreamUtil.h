@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "velox/dwio/common/io/SeekableInputStream.h"
 
 namespace facebook::velox {
 // Corresponds to declaration in LazyVector.h but repeated here to avoid
@@ -25,6 +25,8 @@ using RowSet = folly::Range<const int32_t*>;
 } // namespace facebook::velox
 
 namespace facebook::velox::dwrf {
+
+using namespace dwio::common::io;
 
 static inline void skipBytes(
     uint64_t numBytes,

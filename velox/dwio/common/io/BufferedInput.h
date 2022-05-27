@@ -17,16 +17,15 @@
 #pragma once
 
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/io/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class BufferedInput {
  public:
   constexpr static uint64_t kMaxMergeDistance = 1024 * 1024 * 1.25;
-  BufferedInput(dwio::common::InputStream& input, memory::MemoryPool& pool)
+  BufferedInput(dwio::common::io::InputStream& input, memory::MemoryPool& pool)
       : input_{input}, pool_{pool} {}
 
   BufferedInput(BufferedInput&&) = default;
@@ -46,8 +45,8 @@ class BufferedInput {
   // 'si' allows tracking which streams actually get read. This may control
   // read-ahead and caching for BufferedInput implementations supporting these.
   virtual std::unique_ptr<SeekableInputStream> enqueue(
-      dwio::common::Region region,
-      const StreamIdentifier* FOLLY_NULLABLE si = nullptr);
+      Region region,
+      const dwrf::StreamIdentifier* FOLLY_NULLABLE si = nullptr);
 
   // load all regions to be read in an optimized way (IO efficiency)
   virtual void load(const dwio::common::LogType);
@@ -88,13 +87,13 @@ class BufferedInput {
   virtual void setNumStripes(int32_t /*numStripes*/) {}
 
  protected:
-  dwio::common::InputStream& input_;
+  dwio::common::io::InputStream& input_;
 
  private:
   memory::MemoryPool& pool_;
   std::vector<uint64_t> offsets_;
   std::vector<dwio::common::DataBuffer<char>> buffers_;
-  std::vector<dwio::common::Region> regions_;
+  std::vector<Region> regions_;
 
   std::unique_ptr<SeekableInputStream> readBuffer(
       uint64_t offset,
@@ -104,7 +103,7 @@ class BufferedInput {
       uint64_t length) const;
 
   void readRegion(
-      const dwio::common::Region& region,
+      const Region& region,
       const dwio::common::LogType logType,
       std::function<
           void(void* FOLLY_NONNULL, uint64_t, uint64_t, dwio::common::LogType)>
@@ -127,9 +126,7 @@ class BufferedInput {
           action);
 
   // tries and merges WS read regions into one
-  bool tryMerge(
-      dwio::common::Region& first,
-      const dwio::common::Region& second);
+  bool tryMerge(Region& first, const Region& second);
 };
 
 class BufferedInputFactory {
@@ -137,7 +134,7 @@ class BufferedInputFactory {
   virtual ~BufferedInputFactory() = default;
 
   virtual std::unique_ptr<BufferedInput> create(
-      dwio::common::InputStream& input,
+      dwio::common::io::InputStream& input,
       velox::memory::MemoryPool& pool,
       uint64_t /*fileNum*/) const {
     return std::make_unique<BufferedInput>(input, pool);
@@ -159,4 +156,4 @@ class BufferedInputFactory {
   }
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

@@ -19,7 +19,7 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/memory/MmapAllocator.h"
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CachedBufferedInput.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 #include <gtest/gtest.h>
@@ -29,14 +29,14 @@ using namespace facebook::velox::dwio;
 using namespace facebook::velox::cache;
 
 using facebook::velox::dwio::common::IoStatistics;
-using facebook::velox::dwio::common::Region;
+using facebook::velox::dwio::common::io::Region;
 using memory::MappedMemory;
 using IoStatisticsPtr =
     std::shared_ptr<facebook::velox::dwio::common::IoStatistics>;
 
 // Testing stream producing deterministic data. The byte at offset is
 // the low byte of 'seed_' + offset.
-class TestInputStream : public facebook::velox::dwio::common::InputStream {
+class TestInputStream : public facebook::velox::dwio::common::io::InputStream {
  public:
   TestInputStream(
       const std::string& path,
@@ -88,15 +88,15 @@ class TestInputStream : public facebook::velox::dwio::common::InputStream {
 class TestInputStreamHolder : public dwrf::AbstractInputStreamHolder {
  public:
   explicit TestInputStreamHolder(
-      std::shared_ptr<facebook::velox::dwio::common::InputStream> stream)
+      std::shared_ptr<facebook::velox::dwio::common::io::InputStream> stream)
       : stream_(std::move(stream)) {}
 
-  facebook::velox::dwio::common::InputStream& get() override {
+  facebook::velox::dwio::common::io::InputStream& get() override {
     return *stream_;
   }
 
  private:
-  std::shared_ptr<facebook::velox::dwio::common::InputStream> stream_;
+  std::shared_ptr<facebook::velox::dwio::common::io::InputStream> stream_;
 };
 
 class CacheTest : public testing::Test {
@@ -106,9 +106,9 @@ class CacheTest : public testing::Test {
   // Describes a piece of file potentially read by this test.
   struct StripeData {
     TestInputStream* file;
-    std::unique_ptr<dwrf::CachedBufferedInput> input;
-    std::vector<std::unique_ptr<dwrf::SeekableInputStream>> streams;
-    std::vector<facebook::velox::dwio::common::Region> regions;
+    std::unique_ptr<facebook::velox::dwio::common::io::CachedBufferedInput> input;
+    std::vector<std::unique_ptr<facebook::velox::dwio::common::io::SeekableInputStream>> streams;
+    std::vector<facebook::velox::dwio::common::io::Region> regions;
   };
 
   void SetUp() override {
@@ -202,7 +202,7 @@ class CacheTest : public testing::Test {
     return lease.id();
   }
 
-  std::shared_ptr<facebook::velox::dwio::common::InputStream>
+  std::shared_ptr<facebook::velox::dwio::common::io::InputStream>
   inputByPath(const std::string& path, uint64_t& fileId, uint64_t& groupId) {
     std::lock_guard<std::mutex> l(mutex_);
     StringIdLease lease(fileIds(), path);
@@ -228,7 +228,7 @@ class CacheTest : public testing::Test {
   // enqueued. 'numColumns' streams are evenly selected from
   // kMaxStreams.
   std::unique_ptr<StripeData> makeStripeData(
-      std::shared_ptr<facebook::velox::dwio::common::InputStream> inputStream,
+      std::shared_ptr<facebook::velox::dwio::common::io::InputStream> inputStream,
       int32_t numColumns,
       std::shared_ptr<ScanTracker> tracker,
       uint64_t fileId,
@@ -313,7 +313,7 @@ class CacheTest : public testing::Test {
       dwrf::SeekableInputStream& stream,
       const std::vector<uint64_t>& offsets,
       int32_t i,
-      facebook::velox::dwio::common::Region region) {
+      facebook::velox::dwio::common::io::Region region) {
     const void* data;
     int32_t size;
     int64_t numRead = 0;
@@ -365,7 +365,7 @@ class CacheTest : public testing::Test {
     std::vector<std::unique_ptr<StripeData>> stripes;
     uint64_t fileId;
     uint64_t groupId;
-    std::shared_ptr<facebook::velox::dwio::common::InputStream> input =
+    std::shared_ptr<facebook::velox::dwio::common::io::InputStream> input =
         inputByPath(filename, fileId, groupId);
     if (groupStats_) {
       groupStats_->recordFile(fileId, groupId, numStripes);
@@ -438,7 +438,7 @@ class CacheTest : public testing::Test {
   std::vector<StringIdLease> fileIds_;
   folly::F14FastMap<
       uint64_t,
-      std::shared_ptr<facebook::velox::dwio::common::InputStream>>
+      std::shared_ptr<facebook::velox::dwio::common::io::InputStream>>
       pathToInput_;
   std::shared_ptr<exec::test::TempDirectoryPath> tempDirectory_;
   cache::FileGroupStats* FOLLY_NULLABLE groupStats_ = nullptr;

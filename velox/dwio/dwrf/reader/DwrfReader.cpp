@@ -20,7 +20,7 @@
 
 namespace facebook::velox::dwrf {
 
-using dwio::common::InputStream;
+using dwio::common::io::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 

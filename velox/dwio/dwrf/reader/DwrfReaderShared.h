@@ -144,7 +144,7 @@ class DwrfReaderShared : public dwio::common::Reader {
    */
   DwrfReaderShared(
       const dwio::common::ReaderOptions& options,
-      std::unique_ptr<dwio::common::InputStream> input);
+      std::unique_ptr<dwio::common::io::InputStream> input);
 
   virtual ~DwrfReaderShared() = default;
 

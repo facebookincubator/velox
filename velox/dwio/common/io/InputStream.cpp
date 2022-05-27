@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/InputStream.h"
+#include "InputStream.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -40,10 +40,7 @@
 
 using namespace facebook::velox::dwio::common;
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common::io {
 
 folly::SemiFuture<uint64_t> InputStream::readAsync(
     const std::vector<folly::Range<char*>>& buffers,
@@ -320,7 +317,4 @@ VELOX_REGISTER_INPUT_STREAM_METHOD_DEFINITION(
     FileInputStream,
     fileInputStreamFactory)
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::io

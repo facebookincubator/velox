@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
 #include "velox/dwio/parquet/reader/duckdb/InputStreamFileHandle.h"
 #include "velox/external/duckdb/duckdb.hpp"
 
@@ -26,13 +26,13 @@
 
 namespace facebook::velox::duckdb {
 
-// Implements the DuckDB FileSystem API on top of dwio::common::InputStream.
+// Implements the DuckDB FileSystem API on top of dwio::common::io::InputStream.
 // Hence, an instance always supports only a specific path and limited API.
 // This class owns the InputStream instance passed from the HiveConnector.
 // TODO: Work with DuckDB to directly support a InputStream API.
 class InputStreamFileSystem : public ::duckdb::FileSystem {
  public:
-  InputStreamFileSystem(std::unique_ptr<dwio::common::InputStream> stream)
+  InputStreamFileSystem(std::unique_ptr<dwio::common::io::InputStream> stream)
       : stream_(std::move(stream)) {}
 
   ~InputStreamFileSystem() override = default;
@@ -143,7 +143,7 @@ class InputStreamFileSystem : public ::duckdb::FileSystem {
   }
 
  private:
-  std::unique_ptr<dwio::common::InputStream> stream_;
+  std::unique_ptr<dwio::common::io::InputStream> stream_;
 };
 
 } // namespace facebook::velox::duckdb

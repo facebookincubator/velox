@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "velox/dwio/common/io/MemoryInputStream.h"
 
+#include <cstdint>
 #include <cstring>
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common::io {
 
 uint64_t MemoryInputStream::getLength() const {
   return size;
@@ -58,7 +56,4 @@ const void* MemoryInputStream::readReferenceOnly(
   return buffer + offset;
 }
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::io

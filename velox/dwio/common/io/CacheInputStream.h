@@ -16,13 +16,13 @@
 
 #pragma once
 
+#include "InputStream.h"
+#include "dwio/common/io/SeekableInputStream.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/SsdCache.h"
-#include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 class CachedBufferedInput;
 
@@ -31,8 +31,8 @@ class CacheInputStream : public SeekableInputStream {
   CacheInputStream(
       CachedBufferedInput* cache,
       dwio::common::IoStatistics* ioStats,
-      const dwio::common::Region& region,
-      dwio::common::InputStream& input,
+      const Region& region,
+      InputStream& input,
       uint64_t fileNum,
       std::shared_ptr<cache::ScanTracker> tracker,
       cache::TrackingId trackingId,
@@ -52,26 +52,24 @@ class CacheInputStream : public SeekableInputStream {
   void loadPosition();
 
   // Synchronously sets 'pin_' to cover 'region'.
-  void loadSync(dwio::common::Region region);
+  void loadSync(Region region);
 
   // Returns true if there is an SSD ache and 'entry' is present there and
   // successfully loaded.
-  bool loadFromSsd(
-      dwio::common::Region region,
-      cache::AsyncDataCacheEntry& entry);
+  bool loadFromSsd(Region region, cache::AsyncDataCacheEntry& entry);
 
   CachedBufferedInput* const bufferedInput_;
   cache::AsyncDataCache* const cache_;
   dwio::common::IoStatistics* ioStats_;
-  dwio::common::InputStream& input_;
-  // The region of 'input' 'this' ranges over.
-  const dwio::common::Region region_;
+  InputStream& input_;
+  // The region of 'io' 'this' ranges over.
+  const Region region_;
   const uint64_t fileNum_;
   std::shared_ptr<cache::ScanTracker> tracker_;
   const cache::TrackingId trackingId_;
   const uint64_t groupId_;
 
-  // Maximum number of bytes read from 'input' at a time. This gives the maximum
+  // Maximum number of bytes read from 'io' at a time. This gives the maximum
   // pin_.entry()->size().
   const int32_t loadQuantum_;
 
@@ -94,4 +92,4 @@ class CacheInputStream : public SeekableInputStream {
   uint64_t position_ = 0;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

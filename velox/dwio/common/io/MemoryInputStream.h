@@ -20,12 +20,9 @@
 #include <cstdint>
 #include <string>
 
-#include "velox/dwio/common/InputStream.h"
+#include "dwio/common/io/InputStream.h"
 
-namespace facebook {
-namespace velox {
-namespace dwio {
-namespace common {
+namespace facebook::velox::dwio::common::io {
 
 class MemoryInputStream : public ReferenceableInputStream {
  public:
@@ -74,7 +71,4 @@ class MemoryInputStream : public ReferenceableInputStream {
   uint64_t naturalReadSize;
 };
 
-} // namespace common
-} // namespace dwio
-} // namespace velox
-} // namespace facebook
+} // namespace facebook::velox::dwio::common::io

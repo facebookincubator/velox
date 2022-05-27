@@ -15,8 +15,8 @@
  */
 
 #include <gtest/gtest.h>
-#include "velox/dwio/common/MemoryInputStream.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "velox/dwio/common/io/MemoryInputStream.h"
+#include "velox/dwio/common/io/BufferedInput.h"
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;

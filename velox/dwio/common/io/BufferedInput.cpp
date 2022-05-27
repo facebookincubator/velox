@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "BufferedInput.h"
 
 #include <fmt/format.h>
 
 DEFINE_bool(wsVRLoad, false, "Use WS VRead API to load");
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using dwio::common::LogType;
-using dwio::common::Region;
+using dwio::common::io::Region;
 
 namespace {
 
@@ -78,7 +78,7 @@ void BufferedInput::load(const LogType logType) {
 
 std::unique_ptr<SeekableInputStream> BufferedInput::enqueue(
     Region region,
-    const StreamIdentifier* /*si*/) {
+    const dwrf::StreamIdentifier* /*si*/) {
   if (region.length == 0) {
     return std::make_unique<SeekableArrayInputStream>(
         static_cast<const char*>(nullptr), 0);
@@ -117,9 +117,7 @@ void BufferedInput::loadWithAction(
   readRegion(last, logType, action);
 }
 
-bool BufferedInput::tryMerge(
-    dwio::common::Region& first,
-    const dwio::common::Region& second) {
+bool BufferedInput::tryMerge(Region& first, const Region& second) {
   DWIO_ENSURE_GE(second.offset, first.offset, "regions should be sorted.");
   int64_t gap = second.offset - first.offset - first.length;
 
@@ -194,4 +192,4 @@ BufferedInputFactory::baseFactoryShared() {
   return instance;
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

@@ -21,7 +21,7 @@
 #include <folly/Varint.h>
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "velox/dwio/common/io/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/common/StreamUtil.h"
 

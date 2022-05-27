@@ -13,28 +13,17 @@
 # limitations under the License.
 
 add_library(
-  velox_dwio_dwrf_common
-  ByteRLE.cpp
-  Common.cpp
-  Compression.cpp
-  Config.cpp
-  DataBufferHolder.cpp
-  DecoderUtil.cpp
-  Decryption.cpp
-  DirectDecoder.cpp
-  Encryption.cpp
-  EncryptionSpecification.cpp
-  IntDecoder.cpp
-  IntEncoder.cpp
-  OutputStream.cpp
-  PagedInputStream.cpp
-  PagedOutputStream.cpp
-  RLEv1.cpp
-  RLEv2.cpp
-  Range.cpp
-  Statistics.cpp
-  wrap/dwrf-proto-wrapper.cpp)
+        velox_dwio_common_io
+        BufferedInput.cpp
+        CachedBufferedInput.cpp
+        CacheInputStream.cpp
+        InputStream.cpp
+        SeekableInputStream.cpp
+        MemoryInputStream.cpp
+)
 
 target_link_libraries(
-  velox_dwio_dwrf_common velox_common_base velox_dwio_common
-  velox_dwio_common_compression velox_dwio_dwrf_proto velox_caching)
+        velox_dwio_common_io
+        xsimd
+        velox_dwio_dwrf_proto
+        ${FOLLY_WITH_DEPENDENCIES})

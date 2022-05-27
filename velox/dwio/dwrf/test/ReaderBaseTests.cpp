@@ -16,8 +16,8 @@
 
 #include <gtest/gtest.h>
 #include <cstring>
-#include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
+#include "velox/dwio/common/io/MemoryInputStream.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/reader/StripeReaderBase.h"

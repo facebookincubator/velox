@@ -21,10 +21,12 @@
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "velox/dwio/common/io/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
+
+using namespace dwio::common::io;
 
 constexpr uint8_t PAGE_HEADER_SIZE = 3;
 

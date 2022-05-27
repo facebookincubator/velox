@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "SeekableInputStream.h"
 
 #include <algorithm>
 #include <iomanip>
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
-using dwio::common::InputStream;
 using dwio::common::LogType;
+using dwio::common::io::InputStream;
 
 void printBuffer(std::ostream& out, const char* buffer, uint64_t length) {
   const uint64_t width = 24;
@@ -263,4 +263,4 @@ size_t SeekableFileInputStream::positionSize() {
   return 1;
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

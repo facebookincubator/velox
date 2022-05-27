@@ -21,7 +21,7 @@
 #include <optional>
 #include <string>
 
-#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeWithId.h"

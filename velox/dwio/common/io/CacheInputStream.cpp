@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/CacheInputStream.h"
+#include "CacheInputStream.h"
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
+#include "velox/dwio/common/io/CachedBufferedInput.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 using velox::cache::ScanTracker;
 using velox::cache::TrackingId;
@@ -29,8 +29,8 @@ using velox::memory::MappedMemory;
 CacheInputStream::CacheInputStream(
     CachedBufferedInput* bufferedInput,
     dwio::common::IoStatistics* ioStats,
-    const dwio::common::Region& region,
-    dwio::common::InputStream& input,
+    const Region& region,
+    InputStream& input,
     uint64_t fileNum,
     std::shared_ptr<ScanTracker> tracker,
     TrackingId trackingId,
@@ -128,7 +128,7 @@ std::vector<folly::Range<char*>> makeRanges(
 }
 } // namespace
 
-void CacheInputStream::loadSync(dwio::common::Region region) {
+void CacheInputStream::loadSync(Region region) {
   // rawBytesRead is the number of bytes touched. Whether they come
   // from disk, ssd or memory is itemized in different counters. A
   process::TraceContext trace("loadSync");
@@ -178,7 +178,7 @@ void CacheInputStream::loadSync(dwio::common::Region region) {
 }
 
 bool CacheInputStream::loadFromSsd(
-    dwio::common::Region region,
+    Region region,
     cache::AsyncDataCacheEntry& entry) {
   auto ssdCache = cache_->ssdCache();
   if (!ssdCache) {
@@ -290,4 +290,4 @@ void CacheInputStream::loadPosition() {
     loadPosition();
   }
 }
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

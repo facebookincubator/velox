@@ -22,9 +22,10 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
-#include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/encryption/Encryption.h"
+#include "velox/dwio/common/io/BufferedInput.h"
+#include "velox/dwio/common/io/InputStream.h"
 
 namespace facebook::velox::dwrf {
 class BufferedInputFactory;
@@ -302,7 +303,7 @@ class ReaderOptions {
   SerDeOptions serDeOptions;
   uint64_t fileNum;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  std::shared_ptr<velox::dwrf::BufferedInputFactory> bufferedInputFactory_;
+  std::shared_ptr<io::BufferedInputFactory> bufferedInputFactory_;
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
@@ -315,7 +316,7 @@ class ReaderOptions {
         memoryPool(pool),
         fileFormat(FileFormat::UNKNOWN),
         fileSchema(nullptr),
-        autoPreloadLength(DEFAULT_AUTO_PRELOAD_SIZE),
+        autoPreloadLength(io::DEFAULT_AUTO_PRELOAD_SIZE),
         prefetchMode(PrefetchMode::PREFETCH) {
     // PASS
   }
@@ -434,7 +435,7 @@ class ReaderOptions {
   }
 
   ReaderOptions& setBufferedInputFactory(
-      std::shared_ptr<velox::dwrf::BufferedInputFactory> factory) {
+      std::shared_ptr<io::BufferedInputFactory> factory) {
     bufferedInputFactory_ = factory;
     return *this;
   }
@@ -501,8 +502,8 @@ class ReaderOptions {
     return decrypterFactory_;
   }
 
-  std::shared_ptr<velox::dwrf::BufferedInputFactory> getBufferedInputFactory()
-      const {
+  std::shared_ptr<velox::dwio::common::io::BufferedInputFactory>
+  getBufferedInputFactory() const {
     return bufferedInputFactory_;
   }
 };

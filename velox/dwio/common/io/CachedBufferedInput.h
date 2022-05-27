@@ -16,18 +16,19 @@
 
 #pragma once
 
+#include "CacheInputStream.h"
+#include "InputStream.h"
 #include "velox/common/caching/FileGroupStats.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/caching/SsdCache.h"
-#include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
-#include "velox/dwio/dwrf/common/CacheInputStream.h"
+#include "velox/dwio/common/io/BufferedInput.h"
 
+#include <dwio/common/Options.h>
 #include <folly/Executor.h>
 
 DECLARE_int32(cache_load_quantum);
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common::io {
 
 // Abstract class for owning an InputStream and related structures
 // like pins into file handle caches. TODO: Make file handle cache
@@ -35,7 +36,7 @@ namespace facebook::velox::dwrf {
 class AbstractInputStreamHolder {
  public:
   virtual ~AbstractInputStreamHolder() = default;
-  virtual dwio::common::InputStream& get() = 0;
+  virtual InputStream& get() = 0;
 };
 
 // Function type for making copies of InputStream for running
@@ -72,7 +73,7 @@ struct CacheRequest {
 class CachedBufferedInput : public BufferedInput {
  public:
   CachedBufferedInput(
-      dwio::common::InputStream& input,
+      InputStream& input,
       memory::MemoryPool& pool,
       uint64_t fileNum,
       cache::AsyncDataCache* FOLLY_NONNULL cache,
@@ -106,8 +107,8 @@ class CachedBufferedInput : public BufferedInput {
   }
 
   std::unique_ptr<SeekableInputStream> enqueue(
-      dwio::common::Region region,
-      const StreamIdentifier* FOLLY_NULLABLE si) override;
+      Region region,
+      const dwrf::StreamIdentifier* FOLLY_NULLABLE si) override;
 
   void load(const dwio::common::LogType) override;
 
@@ -199,7 +200,7 @@ class CachedBufferedInputFactory : public BufferedInputFactory {
         maxCoalesceDistance_(readerOpts.maxCoalesceDistance()) {}
 
   std::unique_ptr<BufferedInput> create(
-      dwio::common::InputStream& input,
+      dwio::common::io::InputStream& input,
       velox::memory::MemoryPool& pool,
       uint64_t fileNum) const override {
     return std::make_unique<CachedBufferedInput>(
@@ -237,4 +238,4 @@ class CachedBufferedInputFactory : public BufferedInputFactory {
   int32_t loadQuantum_;
   int32_t maxCoalesceDistance_;
 };
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common::io

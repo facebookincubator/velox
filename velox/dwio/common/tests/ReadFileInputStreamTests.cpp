@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/io/InputStream.h"
 
 #include <string_view>
 
