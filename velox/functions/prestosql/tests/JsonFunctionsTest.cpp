@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 
@@ -43,18 +42,6 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
       std::optional<std::string> json,
       std::optional<std::string> path) {
     return evaluateOnce<int64_t>("json_size(c0, c1)", json, path);
-  }
-
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
-
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
   }
 };
 

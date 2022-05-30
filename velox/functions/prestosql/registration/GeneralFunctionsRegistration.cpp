@@ -16,6 +16,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/Uuid.h"
 
 namespace facebook::velox::functions {
 
@@ -36,6 +37,9 @@ void registerGeneralFunctions() {
       {"cardinality"});
 
   registerIsNullFunction("is_null");
+
+  registerType("uuid", std::make_unique<const UuidTypeFactories>());
+  registerFunction<UuidFunction, Uuid>({"uuid"});
 }
 
 } // namespace facebook::velox::functions

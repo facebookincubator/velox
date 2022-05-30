@@ -17,7 +17,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Date.h"
@@ -210,18 +209,6 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
             makeNullableFlatVector<int64_t>({timestamp}),
             makeNullableFlatVector<int16_t>({tzid}),
         })}));
-  }
-
-  static std::unordered_set<std::string> getSignatureStrings(
-      const std::string& functionName) {
-    auto allSignatures = getFunctionSignatures();
-    const auto& signatures = allSignatures.at(functionName);
-
-    std::unordered_set<std::string> signatureStrings;
-    for (const auto& signature : signatures) {
-      signatureStrings.insert(signature->toString());
-    }
-    return signatureStrings;
   }
 
   Date parseDate(const std::string& dateStr) {

@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/expression/Expr.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Type.h"
@@ -70,6 +71,18 @@ class FunctionBaseTest : public testing::Test,
       const std::string& name2,
       const TypePtr& type2) {
     return ROW({name, name2}, {type, type2});
+  }
+
+  static std::unordered_set<std::string> getSignatureStrings(
+      const std::string& functionName) {
+    auto allSignatures = getFunctionSignatures();
+    const auto& signatures = allSignatures.at(functionName);
+
+    std::unordered_set<std::string> signatureStrings;
+    for (const auto& signature : signatures) {
+      signatureStrings.insert(signature->toString());
+    }
+    return signatureStrings;
   }
 
   core::TypedExprPtr makeTypedExpr(
