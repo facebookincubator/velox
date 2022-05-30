@@ -220,8 +220,9 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
   void addValues(double value, uint64_t count = 1) {
     increaseValueCount(count);
     // min/max/sum is defined only when none of the values added is NaN
-    if (std::isnan(value)) {
+    if (hasNaN_ || std::isnan(value)) {
       clear();
+      hasNaN_ = true;
       return;
     }
 
@@ -238,7 +239,8 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
         sum_.value() += value;
       }
       if (std::isnan(sum_.value())) {
-        sum_.reset();
+        clear();
+        hasNaN_ = true;
       }
     }
   }
@@ -257,6 +259,7 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     min_ = std::numeric_limits<double>::infinity();
     max_ = -std::numeric_limits<double>::infinity();
     sum_ = 0;
+    hasNaN_ = false;
   }
 
   void clear() {
@@ -264,6 +267,10 @@ class DoubleStatisticsBuilder : public StatisticsBuilder,
     max_.reset();
     sum_.reset();
   }
+
+  // Might not be necessary if we always properly deal with
+  // nullability but is more readable.
+  bool hasNaN_{false};
 };
 
 class StringStatisticsBuilder : public StatisticsBuilder,

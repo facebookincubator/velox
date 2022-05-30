@@ -290,7 +290,8 @@ void DoubleStatisticsBuilder::merge(
   mergeMax(max_, stats->getMaximum());
   mergeCount(sum_, stats->getSum());
   if (sum_.has_value() && std::isnan(sum_.value())) {
-    sum_.reset();
+    clear();
+    hasNaN_ = true;
   }
 }
 
@@ -300,10 +301,8 @@ void DoubleStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
   if (!isEmpty(*this) &&
       (min_.has_value() || max_.has_value() || sum_.has_value())) {
     auto dStats = stats.mutable_doublestatistics();
-    if (min_.has_value()) {
+    if (min_.has_value() && max_.has_value()) {
       dStats->set_minimum(min_.value());
-    }
-    if (max_.has_value()) {
       dStats->set_maximum(max_.value());
     }
     if (sum_.has_value()) {
@@ -351,19 +350,16 @@ void StringStatisticsBuilder::merge(
 
 void StringStatisticsBuilder::toProto(proto::ColumnStatistics& stats) const {
   StatisticsBuilder::toProto(stats);
+  bool shouldKeepMinMax = shouldKeep(min_) && shouldKeep(max_);
   // If string value is too long, drop it and fall back to basic stats
-  if (!isEmpty(*this) &&
-      (shouldKeep(min_) || shouldKeep(max_) || isValidLength(length_))) {
+  if (!isEmpty(*this) && (shouldKeepMinMax || isValidLength(length_))) {
     auto dStats = stats.mutable_stringstatistics();
     if (isValidLength(length_)) {
       dStats->set_sum(length_.value());
     }
 
-    if (shouldKeep(min_)) {
+    if (shouldKeepMinMax) {
       dStats->set_minimum(min_.value());
-    }
-
-    if (shouldKeep(max_)) {
       dStats->set_maximum(max_.value());
     }
   }
