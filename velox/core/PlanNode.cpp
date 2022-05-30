@@ -149,6 +149,51 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+namespace {
+std::shared_ptr<RowType> getWindowOutputType(
+    const RowTypePtr& inputType,
+    const std::vector<std::string>& windowNames,
+    const std::vector<WindowNode::Function>& windowFunctions) {
+  VELOX_CHECK_EQ(
+      windowNames.size(),
+      windowFunctions.size(),
+      "Number of window names must be equal to number of window functions");
+
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  for (int32_t i = 0; i < windowNames.size(); i++) {
+    names.push_back(windowNames[i]);
+    types.push_back(windowFunctions[i].functionCall->type());
+  }
+
+  return std::make_shared<RowType>(std::move(names), std::move(types));
+}
+} // namespace
+
+WindowNode::WindowNode(
+    PlanNodeId id,
+    std::vector<FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<SortOrder> sortingOrders,
+    std::vector<std::string> outputNames,
+    std::vector<Function> windowFunctions,
+    PlanNodePtr source)
+    : PlanNode(std::move(id)),
+      partitionKeys_(std::move(partitionKeys)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      windowFunctions_(std::move(windowFunctions)),
+      sources_{std::move(source)},
+      outputType_(getWindowOutputType(
+          sources_[0]->outputType(),
+          outputNames,
+          windowFunctions_)) {}
+
+void WindowNode::addDetails(std::stringstream& stream) const {
+  VELOX_NYI();
+}
+
 const std::vector<PlanNodePtr>& ValuesNode::sources() const {
   return kEmptySources;
 }
