@@ -29,7 +29,8 @@ struct UuidFunction {
   static constexpr bool is_deterministic = false;
 
   FOLLY_ALWAYS_INLINE void call(out_type<Varchar>& result) {
-    auto uuid_string = boost::lexical_cast<std::string>(boost::uuids::random_generator()());
+    auto uuid_string =
+        boost::lexical_cast<std::string>(boost::uuids::random_generator()());
     result.setNoCopy(StringView(uuid_string));
   }
 };
