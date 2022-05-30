@@ -32,5 +32,6 @@ DIAGNOSTIC_IGNORE("-Wweak-vtables")
 #endif
 
 #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
+#include "velox/dwio/dwrf/proto/orc_proto.pb.h"
 
 DIAGNOSTIC_POP
