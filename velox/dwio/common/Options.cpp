@@ -38,6 +38,8 @@ FileFormat toFileFormat(std::string s) {
     return FileFormat::PARQUET;
   } else if (s == "alpha") {
     return FileFormat::ALPHA;
+  } else if (s == 'orc') {
+    return FileFormat::ORC;
   }
   return FileFormat::UNKNOWN;
 }
@@ -60,6 +62,8 @@ std::string toString(FileFormat fmt) {
       return "parquet";
     case FileFormat::ALPHA:
       return "alpha";
+    case FileFormat::ORC:
+      return "orc";
     default:
       return "unknown";
   }

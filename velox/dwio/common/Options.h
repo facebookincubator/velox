@@ -46,6 +46,7 @@ enum class FileFormat {
   JSON = 6,
   PARQUET = 7,
   ALPHA = 8,
+  ORC = 9,
 };
 
 FileFormat toFileFormat(std::string s);
