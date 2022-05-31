@@ -1031,17 +1031,14 @@ TEST_F(StringFunctionsTest, sha512) {
   };
 
   EXPECT_EQ(
-      hexToDec(
-          "05b41d06db66a1c9f3b86a4033f920c25a59624dcad4118544f32147f7d04bcdd2627710e487958da69176b6a3884d13fa85f99ccfd44f97f81877bb8c103453"),
+      hexToDec("1f6b05823a0453c1ec55009555087e8226d774c7c49d099784317b8460a0623ddaa083334f9218dda8075e0a0dc8319f89199f04e6b8f3980a73556866b388ae"),
       sha512("prestodb"));
   EXPECT_EQ(
-      hexToDec(
-          "7de872ed1c41ce3901bb7f12f20b0c0106331fe5b5ecc5fbbcf3ce6c79df4da595ebb7e221ab8b7fc5d918583eac6890ade1c26436335d3835828011204b7679"),
+      hexToDec("04f0823aefeb6e61866bdb47322ce033adb0a81684bf21fbc6e4f8513e798996e4732d28b15c631d1d6b0ca1e300c97fbadf62ea608d7d69930ddfd98f3e3a0e"),
       sha512("Infinity"));
   EXPECT_EQ(
-      hexToDec(
-          "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"),
-      sha512(""));
+      hexToDec("cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"),
+      sha512("hash"));
 
   EXPECT_EQ(std::nullopt, sha512(std::nullopt));
 }

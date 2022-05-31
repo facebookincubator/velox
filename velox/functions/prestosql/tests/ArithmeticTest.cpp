@@ -405,12 +405,12 @@ TEST_F(ArithmeticTest, degrees) {
   };
 
   EXPECT_EQ(std::nullopt, degrees(std::nullopt));
-  EXPECT_DOUBLE_EQ(57.2957795130823229, degrees(1).value());
-  EXPECT_DOUBLE_EQ(0.9994930426171028, degrees(3.14).value());
+  EXPECT_DOUBLE_EQ(57.295779513082323, degrees(1).value());
+  EXPECT_DOUBLE_EQ(179.90874767107849, degrees(3.14).value());
   EXPECT_DOUBLE_EQ(kInf, degrees(kInf).value());
   EXPECT_DOUBLE_EQ(0, degrees(0).value());
-  EXPECT_DOUBLE_EQ(57.2957795130823229, degrees(-1).value());
-  EXPECT_DOUBLE_EQ(0.9994930426171028, degrees(-3.14).value());
+  EXPECT_DOUBLE_EQ(-57.295779513082323, degrees(-1).value());
+  EXPECT_DOUBLE_EQ(-179.90874767107849, degrees(-3.14).value());
   EXPECT_DOUBLE_EQ(-kInf, degrees(-kInf).value());
 }
 
