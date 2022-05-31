@@ -22,8 +22,8 @@ namespace dwio {
 namespace common {
 
 FileFormat toFileFormat(std::string s) {
-  if (s == "orc") {
-    return FileFormat::ORC;
+  if (s == "dwrf") {
+    return FileFormat::DWRF;
   } else if (s == "rc") {
     return FileFormat::RC;
   } else if (s == "rc:text") {
@@ -44,8 +44,8 @@ FileFormat toFileFormat(std::string s) {
 
 std::string toString(FileFormat fmt) {
   switch (fmt) {
-    case FileFormat::ORC:
-      return "orc";
+    case FileFormat::DWRF:
+      return "dwrf";
     case FileFormat::RC:
       return "rc";
     case FileFormat::RC_TEXT:

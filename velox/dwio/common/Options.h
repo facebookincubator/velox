@@ -38,7 +38,7 @@ namespace common {
 
 enum class FileFormat {
   UNKNOWN = 0,
-  ORC = 1, // ORC/DWRF
+  DWRF = 1, // DWRF
   RC = 2, // RC with unknown serialization
   RC_TEXT = 3, // RC with text serialization
   RC_BINARY = 4, // RC with binary serialization
