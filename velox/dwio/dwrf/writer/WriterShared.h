@@ -23,6 +23,7 @@
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
+#include "velox/dwio/dwrf/proto/orc_proto.pb.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"

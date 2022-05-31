@@ -41,6 +41,15 @@ enum CompressionKind {
   CompressionKind_MAX = INT64_MAX
 };
 
+constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+
+enum StripeCacheMode {
+  NA = 0,
+  INDEX = 1,
+  FOOTER = 2,
+  BOTH = 3
+};
+
 /**
  * Get the name of the CompressionKind.
  */
@@ -256,5 +265,124 @@ class StripeInformation {
    */
   virtual uint64_t getNumberOfRows() const = 0;
 };
+
+class PostScript {
+  public:
+    PostScript()
+      : compression_{CompressionKind::CompressionKind_NONE}
+      , compressionBlockSize_{DEFAULT_COMPRESSION_BLOCK_SIZE}
+      , writerVersion_{WriterVersion::ORIGINAL}
+      {}
+
+    PostScript(
+        uint64_t footerLength,
+        CompressionKind compression,
+        uint64_t compressionBlockSize,
+        uint32_t writerVersion
+        ) : footerLength_{footerLength}
+      , compression_{compression}
+      , compressionBlockSize_{compressionBlockSize}
+      , writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
+
+    virtual ~PostScript() = default;
+    virtual uint64_t footerlength() const {
+      return footerLength_;
+    }
+    virtual bool has_footerlength() const {
+      return footerLength_ != 0;
+    }
+    virtual CompressionKind compression() const {
+      return compression_;
+    }
+    virtual bool has_compression() const {
+      return compression_ != CompressionKind::CompressionKind_NONE;
+    }
+    virtual uint64_t compressionblocksize() const {
+      return compressionBlockSize_;
+    }
+    virtual bool has_compressionblocksize() const {
+      return compressionBlockSize_ != 0;
+    }
+    virtual uint32_t writerversion() const {
+      return writerVersion_;
+    }
+    virtual bool has_writerversion() const {
+      return true;
+    }
+
+  private:
+    uint64_t footerLength_;
+    CompressionKind compression_;
+    uint64_t compressionBlockSize_;
+    WriterVersion writerVersion_;
+};
+
+class DWRFPostScript : public PostScript {
+  public:
+    DWRFPostScript() : PostScript() {}
+    DWRFPostScript(
+      uint64_t footerLength,
+      proto::CompressionKind compression,
+      uint64_t compressionBlockSize,
+      uint32_t writerVersion,
+      proto::StripeCacheMode cacheMode,
+      uint32_t cacheSize)
+    : PostScript(footerLength, static_cast<CompressionKind>(compression),
+        compressionBlockSize, writerVersion)
+    , cacheMode_{static_cast<StripeCacheMode>(cacheMode)}
+    , cacheSize_{cacheSize} {
+    }
+
+    StripeCacheMode cachemode() const {
+      return cacheMode_;
+    }
+
+    bool has_cachemode() const {
+      return cacheMode_ != StripeCacheMode::NA;
+    }
+
+    uint32_t cachesize() const {
+      return cacheSize_;
+    }
+    
+    bool has_cachesize() const {
+      return cacheSize_ != 0;
+    }
+
+  private:
+    StripeCacheMode cacheMode_;
+    uint32_t cacheSize_;
+};
+
+// TODO: move elsewhere
+static CompressionKind convertCompressionKind(proto::orc::CompressionKind
+    compression) {
+  auto compressionUint = static_cast<uint32_t>(compression);
+  if (compressionUint >= 4 && compressionUint <= 5) {
+    compressionUint = 9 - compressionUint;
+  }
+  return static_cast<CompressionKind>(compressionUint);
+}
+
+class ORCPostScript : public PostScript {
+  public:
+    ORCPostScript(
+      uint64_t footerLength,
+      proto::orc::CompressionKind compression,
+      uint64_t compressionBlockSize,
+      uint64_t metadataLength,
+      uint32_t writerVersion,
+      uint64_t stripeStatisticsLength)
+    : PostScript(footerLength, convertCompressionKind(compression),
+        compressionBlockSize, writerVersion)
+    , metadataLength_{metadataLength}
+    , stripeStatisticsLength_{stripeStatisticsLength} {
+    }
+
+  private:
+    uint64_t metadataLength_;
+    uint64_t stripeStatisticsLength_;
+};
+
 
 } // namespace facebook::velox::dwrf

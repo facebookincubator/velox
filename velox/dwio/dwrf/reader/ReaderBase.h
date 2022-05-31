@@ -26,7 +26,8 @@
 
 namespace facebook::velox::dwrf {
 
-constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+using dwio::common::FileFormat;
+
 constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
 constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
 
@@ -59,6 +60,10 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 };
 
 class ReaderBase {
+  using DwrfPostScript = std::unique_ptr<proto::PostScript>;
+  using OrcPostScript = std::unique_ptr<proto::orc::PostScript>;
+  using DwrfFooter = proto::Footer*;
+  using OrcFooter = proto::orc::Footer*;
  public:
   // create reader base from input stream
   ReaderBase(
@@ -67,7 +72,13 @@ class ReaderBase {
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
       std::shared_ptr<BufferedInputFactory> bufferedInputFactory = nullptr,
-      uint64_t fileNum = -1);
+      uint64_t fileNum = -1,
+      FileFormat fileFormat = FileFormat::DWRF);
+
+  ReaderBase(
+      memory::MemoryPool& pool,
+      std::unique_ptr<dwio::common::InputStream> stream,
+      FileFormat fileFormat);
 
   // create reader base from metadata
   ReaderBase(
@@ -79,7 +90,7 @@ class ReaderBase {
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
       : pool_{pool},
         stream_{std::move(stream)},
-        postScript_{std::move(ps)},
+        // postScript_{std::move(ps)},
         footer_{footer},
         cache_{std::move(cache)},
         handler_{std::move(handler)},
@@ -90,6 +101,14 @@ class ReaderBase {
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
         fileLength_{0},
         psLength_{0} {
+    // TODO: add a convert function
+    postScript_ = std::make_unique<DWRFPostScript>(
+      ps->footerlength(),
+      ps->compression(),
+      ps->compressionblocksize(),
+      ps->writerversion(),
+      ps->cachemode(),
+      ps->cachesize());
     DWIO_ENSURE(footer_->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
@@ -98,7 +117,7 @@ class ReaderBase {
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool} {}
+  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileFormat_{FileFormat::DWRF} {}
 
   virtual ~ReaderBase() = default;
 
@@ -114,7 +133,7 @@ class ReaderBase {
     return fileNum_;
   }
 
-  const proto::PostScript& getPostScript() const {
+  const PostScript& getPostScript() const {
     return *postScript_;
   }
 
@@ -162,21 +181,14 @@ class ReaderBase {
   }
 
   uint64_t getCompressionBlockSize() const {
-    return postScript_->has_compressionblocksize()
-        ? postScript_->compressionblocksize()
-        : DEFAULT_COMPRESSION_BLOCK_SIZE;
+    return postScript_->compressionblocksize();
   }
 
   CompressionKind getCompressionKind() const {
-    return postScript_->has_compression()
-        ? static_cast<CompressionKind>(postScript_->compression())
-        : CompressionKind::CompressionKind_NONE;
+    return postScript_->compression();
   }
 
   WriterVersion getWriterVersion() const {
-    if (!postScript_->has_writerversion()) {
-      return WriterVersion::ORIGINAL;
-    }
     auto version = postScript_->writerversion();
     return version <= WriterVersion_CURRENT
         ? static_cast<WriterVersion>(version)
@@ -226,6 +238,10 @@ class ReaderBase {
     return arena_.get();
   }
 
+  FileFormat getFileFormat() const {
+    return fileFormat_;
+  }
+
  private:
   static std::shared_ptr<const Type> convertType(
       const proto::Footer& footer,
@@ -234,7 +250,10 @@ class ReaderBase {
   memory::MemoryPool& pool_;
   std::unique_ptr<dwio::common::InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
-  std::unique_ptr<proto::PostScript> postScript_;
+
+  // std::unique_ptr<proto::PostScript> postScript_;
+  std::unique_ptr<PostScript> postScript_;
+
   proto::Footer* footer_ = nullptr;
   uint64_t fileNum_;
   std::unique_ptr<StripeMetadataCache> cache_;
@@ -243,6 +262,7 @@ class ReaderBase {
   std::unique_ptr<encryption::DecryptionHandler> handler_;
   std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
 
+  FileFormat fileFormat_;
   std::unique_ptr<BufferedInput> input_;
   RowTypePtr schema_;
   // Lazily populated

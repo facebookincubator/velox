@@ -31,12 +31,14 @@ using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 using dwio::common::TypeWithId;
 using dwio::common::typeutils::CompatChecker;
+using dwio::common::FileFormat;
 
 DwrfRowReaderShared::DwrfRowReaderShared(
     const std::shared_ptr<ReaderBase>& reader,
     const RowReaderOptions& opts)
     : StripeReaderBase(reader),
       options_(opts),
+      fileFormat_{reader->getFileFormat()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
   auto& footer = getReader().getFooter();
@@ -203,7 +205,9 @@ DwrfReaderShared::DwrfReaderShared(
           options.getBufferedInputFactory()
               ? options.getBufferedInputFactory()
               : BufferedInputFactory::baseFactoryShared(),
-          options.getFileNum())),
+          options.getFileNum(),
+          options.getFileFormat() == FileFormat::ORC ?
+            FileFormat::ORC : FileFormat::DWRF)),
       options_(options) {}
 
 std::unique_ptr<StripeInformation> DwrfReaderShared::getStripe(
