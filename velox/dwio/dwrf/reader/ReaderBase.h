@@ -20,6 +20,8 @@
 #include "velox/dwio/dwrf/common/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
+#include "velox/dwio/dwrf/common/DwrfMetadata.h"
+#include "velox/dwio/dwrf/common/OrcMetadata.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
