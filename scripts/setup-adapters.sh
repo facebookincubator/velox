@@ -39,8 +39,8 @@ function install_gcs-sdk-cpp {
         -DCMAKE_CXX_STANDARD=11 \
         -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  sudo ldconfig
+  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  ldconfig
 
 
   # install protobuf
@@ -54,8 +54,8 @@ function install_gcs-sdk-cpp {
           -Dprotobuf_BUILD_TESTS=OFF \
           -Hcmake -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  sudo ldconfig
+  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  ldconfig
 
   # install gRPC
   echo " Installing gRPC..."
@@ -74,8 +74,8 @@ function install_gcs-sdk-cpp {
           -DgRPC_ZLIB_PROVIDER=package \
           -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  sudo ldconfig
+  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  ldconfig
 
   # install crc32c
   echo " Installing crc32c..."
@@ -90,12 +90,12 @@ function install_gcs-sdk-cpp {
           -DCRC32C_USE_GLOG=OFF \
           -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  sudo cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  sudo ldconfig
+  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  ldconfig
 
   # install nlohmann_json library
   echo " Installing nlohmann json..."
-  mkdir -p ${DEPENDENCY_DIR}/json && cd ${DEPENDENCY_DIR}json
+  mkdir -p ${DEPENDENCY_DIR}/json && cd ${DEPENDENCY_DIR}/json
   curl -sSL https://github.com/nlohmann/json/archive/v3.10.5.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
@@ -104,8 +104,8 @@ function install_gcs-sdk-cpp {
         -DBUILD_TESTING=OFF \
         -DJSON_BuildTests=OFF \
         -H. -Bcmake-out/nlohmann/json && \
-  sudo cmake --build cmake-out/nlohmann/json --target install -- -j ${NCPU:-4} && \
-  sudo ldconfig
+  cmake --build cmake-out/nlohmann/json --target install -- -j ${NCPU:-4} && \
+  ldconfig
 
   echo " Clone, compile and install google-cloud-cpp..."
   # clone and compile the main project
@@ -120,7 +120,7 @@ function install_gcs-sdk-cpp {
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
   cmake --build cmake-out -- -j "$(nproc)"
-  sudo cmake --build cmake-out --target install
+  cmake --build cmake-out --target install
 }
 
 function install_aws-sdk-cpp {

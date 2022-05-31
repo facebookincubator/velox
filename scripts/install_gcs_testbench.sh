@@ -47,5 +47,14 @@ if [[ "${version}" -eq "default" ]]; then
   version="v0.16.0"
 fi
 
+#dnf or apt based on linux distro
+case "`/usr/bin/lsb_release -si`" in
+  Ubuntu) echo 'This is Ubuntu Linux' ; cmd="apt install -y "; sudocmd="sudo";;
+       *) echo 'This is Fedora' ; cmd="dnf install -y -q --setopt=install_weak_deps=False";sudocmd="";;
+esac
+
+echo "Running $sudocmd $cmd python3-devel"
+$sudocmd $cmd python3-devel
+
 ${PYTHON:-python3} -m pip install \
   "https://github.com/googleapis/storage-testbench/archive/${version}.tar.gz"
