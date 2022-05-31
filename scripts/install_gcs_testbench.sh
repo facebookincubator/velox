@@ -48,11 +48,16 @@ if [[ "${version}" -eq "default" ]]; then
 fi
 
 #dnf or apt based on linux distro
-case "`/usr/bin/lsb_release -si`" in
-  Ubuntu) echo 'This is Ubuntu Linux' ; cmd="apt install -y "; sudocmd="sudo";;
-       *) echo 'This is Fedora' ; cmd="dnf install -y -q --setopt=install_weak_deps=False";sudocmd="";;
+dist=`grep "^ID=" /etc/os-release | awk -F '=' '{print $2}'| sed 's/"//g'`
+case "$dist" in
+  ubuntu) echo 'This is Ubuntu Linux' ; cmd="apt install -y";;
+       *) echo 'This is Fedora' ; cmd="dnf install -y -q --setopt=install_weak_deps=False";;
 esac
-
+user=`whoami`
+case "$user" in
+  root) echo 'Running as root' ; sudocmd="";;
+     *) echo 'Running as other user than root' ; sudocmd="sudo";;
+esac
 echo "Running $sudocmd $cmd python3-devel"
 $sudocmd $cmd python3-devel
 

@@ -24,6 +24,11 @@ source $SCRIPTDIR/setup-helper-functions.sh
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 
 function install_gcs-sdk-cpp {
+  user=`whoami`
+  case "$user" in
+    root) echo 'Running as root' ; sudocmd="";;
+       *) echo 'Running as other user than root' ; sudocmd="sudo";;
+  esac
   # install gcs dependencies
   # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
   # install abseil
@@ -39,8 +44,8 @@ function install_gcs-sdk-cpp {
         -DCMAKE_CXX_STANDARD=11 \
         -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  ldconfig
+  $sudocmd cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  $sudocmd ldconfig
 
 
   # install protobuf
@@ -54,8 +59,8 @@ function install_gcs-sdk-cpp {
           -Dprotobuf_BUILD_TESTS=OFF \
           -Hcmake -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  ldconfig
+  $sudocmd cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  $sudocmd ldconfig
 
   # install gRPC
   echo " Installing gRPC..."
@@ -74,8 +79,8 @@ function install_gcs-sdk-cpp {
           -DgRPC_ZLIB_PROVIDER=package \
           -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  ldconfig
+  $sudocmd cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  $sudocmd ldconfig
 
   # install crc32c
   echo " Installing crc32c..."
@@ -90,8 +95,8 @@ function install_gcs-sdk-cpp {
           -DCRC32C_USE_GLOG=OFF \
           -H. -Bcmake-out && \
       cmake --build cmake-out -- -j ${NCPU:-4} && \
-  cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
-  ldconfig
+  $sudocmd cmake --build cmake-out --target install -- -j ${NCPU:-4} && \
+  $sudocmd ldconfig
 
   # install nlohmann_json library
   echo " Installing nlohmann json..."
@@ -104,8 +109,8 @@ function install_gcs-sdk-cpp {
         -DBUILD_TESTING=OFF \
         -DJSON_BuildTests=OFF \
         -H. -Bcmake-out/nlohmann/json && \
-  cmake --build cmake-out/nlohmann/json --target install -- -j ${NCPU:-4} && \
-  ldconfig
+  $sudocmd cmake --build cmake-out/nlohmann/json --target install -- -j ${NCPU:-4} && \
+  $sudocmd ldconfig
 
   echo " Clone, compile and install google-cloud-cpp..."
   # clone and compile the main project
@@ -119,8 +124,8 @@ function install_gcs-sdk-cpp {
     -DBUILD_TESTING=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
-  cmake --build cmake-out -- -j "$(nproc)"
-  cmake --build cmake-out --target install
+  $sudocmd cmake --build cmake-out -- -j "$(nproc)"
+  $sudocmd cmake --build cmake-out --target install
 }
 
 function install_aws-sdk-cpp {
