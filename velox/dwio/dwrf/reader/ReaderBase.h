@@ -19,9 +19,9 @@
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
-#include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/DwrfMetadata.h"
 #include "velox/dwio/dwrf/common/OrcMetadata.h"
+#include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
@@ -66,6 +66,7 @@ class ReaderBase {
   using OrcPostScript = std::unique_ptr<proto::orc::PostScript>;
   using DwrfFooter = proto::Footer*;
   using OrcFooter = proto::orc::Footer*;
+
  public:
   // create reader base from input stream
   ReaderBase(
@@ -105,12 +106,12 @@ class ReaderBase {
         psLength_{0} {
     // TODO: add a convert function
     postScript_ = std::make_unique<DWRFPostScript>(
-      ps->footerlength(),
-      ps->compression(),
-      ps->compressionblocksize(),
-      ps->writerversion(),
-      ps->cachemode(),
-      ps->cachesize());
+        ps->footerlength(),
+        ps->compression(),
+        ps->compressionblocksize(),
+        ps->writerversion(),
+        ps->cachemode(),
+        ps->cachesize());
     DWIO_ENSURE(footer_->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
@@ -119,7 +120,8 @@ class ReaderBase {
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool}, fileFormat_{FileFormat::DWRF} {}
+  explicit ReaderBase(memory::MemoryPool& pool)
+      : pool_{pool}, fileFormat_{FileFormat::DWRF} {}
 
   virtual ~ReaderBase() = default;
 

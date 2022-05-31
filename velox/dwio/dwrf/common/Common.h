@@ -43,12 +43,7 @@ enum CompressionKind {
 
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 
-enum StripeCacheMode {
-  NA = 0,
-  INDEX = 1,
-  FOOTER = 2,
-  BOTH = 3
-};
+enum StripeCacheMode { NA = 0, INDEX = 1, FOOTER = 2, BOTH = 3 };
 
 /**
  * Get the name of the CompressionKind.
@@ -267,54 +262,53 @@ class StripeInformation {
 };
 
 class PostScript {
-  public:
-    PostScript()
-      : compression_{CompressionKind::CompressionKind_NONE}
-      , compressionBlockSize_{DEFAULT_COMPRESSION_BLOCK_SIZE}
-      , writerVersion_{WriterVersion::ORIGINAL}
-      {}
+ public:
+  PostScript()
+      : compression_{CompressionKind::CompressionKind_NONE},
+        compressionBlockSize_{DEFAULT_COMPRESSION_BLOCK_SIZE},
+        writerVersion_{WriterVersion::ORIGINAL} {}
 
-    PostScript(
-        uint64_t footerLength,
-        CompressionKind compression,
-        uint64_t compressionBlockSize,
-        uint32_t writerVersion
-        ) : footerLength_{footerLength}
-      , compression_{compression}
-      , compressionBlockSize_{compressionBlockSize}
-      , writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
+  PostScript(
+      uint64_t footerLength,
+      CompressionKind compression,
+      uint64_t compressionBlockSize,
+      uint32_t writerVersion)
+      : footerLength_{footerLength},
+        compression_{compression},
+        compressionBlockSize_{compressionBlockSize},
+        writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
 
-    virtual ~PostScript() = default;
-    virtual uint64_t footerlength() const {
-      return footerLength_;
-    }
-    virtual bool has_footerlength() const {
-      return footerLength_ != 0;
-    }
-    virtual CompressionKind compression() const {
-      return compression_;
-    }
-    virtual bool has_compression() const {
-      return compression_ != CompressionKind::CompressionKind_NONE;
-    }
-    virtual uint64_t compressionblocksize() const {
-      return compressionBlockSize_;
-    }
-    virtual bool has_compressionblocksize() const {
-      return compressionBlockSize_ != 0;
-    }
-    virtual uint32_t writerversion() const {
-      return writerVersion_;
-    }
-    virtual bool has_writerversion() const {
-      return true;
-    }
+  virtual ~PostScript() = default;
+  virtual uint64_t footerlength() const {
+    return footerLength_;
+  }
+  virtual bool has_footerlength() const {
+    return footerLength_ != 0;
+  }
+  virtual CompressionKind compression() const {
+    return compression_;
+  }
+  virtual bool has_compression() const {
+    return compression_ != CompressionKind::CompressionKind_NONE;
+  }
+  virtual uint64_t compressionblocksize() const {
+    return compressionBlockSize_;
+  }
+  virtual bool has_compressionblocksize() const {
+    return compressionBlockSize_ != 0;
+  }
+  virtual uint32_t writerversion() const {
+    return writerVersion_;
+  }
+  virtual bool has_writerversion() const {
+    return true;
+  }
 
-  private:
-    uint64_t footerLength_;
-    CompressionKind compression_;
-    uint64_t compressionBlockSize_;
-    WriterVersion writerVersion_;
+ private:
+  uint64_t footerLength_;
+  CompressionKind compression_;
+  uint64_t compressionBlockSize_;
+  WriterVersion writerVersion_;
 };
 
 } // namespace facebook::velox::dwrf

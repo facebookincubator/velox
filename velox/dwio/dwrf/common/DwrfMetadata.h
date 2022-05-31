@@ -21,40 +21,42 @@
 namespace facebook::velox::dwrf {
 
 class DWRFPostScript : public PostScript {
-  public:
-    DWRFPostScript() : PostScript() {}
-    DWRFPostScript(
+ public:
+  DWRFPostScript() : PostScript() {}
+  DWRFPostScript(
       uint64_t footerLength,
       proto::CompressionKind compression,
       uint64_t compressionBlockSize,
       uint32_t writerVersion,
       proto::StripeCacheMode cacheMode,
       uint32_t cacheSize)
-    : PostScript(footerLength, static_cast<CompressionKind>(compression),
-        compressionBlockSize, writerVersion)
-    , cacheMode_{static_cast<StripeCacheMode>(cacheMode)}
-    , cacheSize_{cacheSize} {
-    }
+      : PostScript(
+            footerLength,
+            static_cast<CompressionKind>(compression),
+            compressionBlockSize,
+            writerVersion),
+        cacheMode_{static_cast<StripeCacheMode>(cacheMode)},
+        cacheSize_{cacheSize} {}
 
-    StripeCacheMode cachemode() const {
-      return cacheMode_;
-    }
+  StripeCacheMode cachemode() const {
+    return cacheMode_;
+  }
 
-    bool has_cachemode() const {
-      return cacheMode_ != StripeCacheMode::NA;
-    }
+  bool has_cachemode() const {
+    return cacheMode_ != StripeCacheMode::NA;
+  }
 
-    uint32_t cachesize() const {
-      return cacheSize_;
-    }
-    
-    bool has_cachesize() const {
-      return cacheSize_ != 0;
-    }
+  uint32_t cachesize() const {
+    return cacheSize_;
+  }
 
-  private:
-    StripeCacheMode cacheMode_;
-    uint32_t cacheSize_;
+  bool has_cachesize() const {
+    return cacheSize_ != 0;
+  }
+
+ private:
+  StripeCacheMode cacheMode_;
+  uint32_t cacheSize_;
 };
 
 } // namespace facebook::velox::dwrf

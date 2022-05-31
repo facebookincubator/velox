@@ -21,12 +21,12 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
-#include "velox/dwio/dwrf/reader/DwrfReader.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
@@ -55,8 +55,8 @@ int main(int argc, char** argv) {
   ReaderOptions readerOpts;
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(FileFormat::ORC);
-  auto reader =
-      DwrfReader::create(std::make_unique<FileInputStream>(filePath), readerOpts);
+  auto reader = DwrfReader::create(
+      std::make_unique<FileInputStream>(filePath), readerOpts);
   // std::cout << "Type:" << reader->rowType()->toString() << std::endl;
 
   VectorPtr batch;

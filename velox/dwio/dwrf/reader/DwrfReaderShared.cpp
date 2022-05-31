@@ -26,12 +26,12 @@
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnSelector;
+using dwio::common::FileFormat;
 using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
 using dwio::common::TypeWithId;
 using dwio::common::typeutils::CompatChecker;
-using dwio::common::FileFormat;
 
 DwrfRowReaderShared::DwrfRowReaderShared(
     const std::shared_ptr<ReaderBase>& reader,
@@ -206,8 +206,8 @@ DwrfReaderShared::DwrfReaderShared(
               ? options.getBufferedInputFactory()
               : BufferedInputFactory::baseFactoryShared(),
           options.getFileNum(),
-          options.getFileFormat() == FileFormat::ORC ?
-            FileFormat::ORC : FileFormat::DWRF)),
+          options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
+                                                     : FileFormat::DWRF)),
       options_(options) {}
 
 std::unique_ptr<StripeInformation> DwrfReaderShared::getStripe(

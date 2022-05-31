@@ -20,8 +20,8 @@
 
 namespace facebook::velox::dwrf {
 
-static CompressionKind convertCompressionKind(proto::orc::CompressionKind
-    compression) {
+static CompressionKind convertCompressionKind(
+    proto::orc::CompressionKind compression) {
   auto compressionUint = static_cast<uint32_t>(compression);
   if (compressionUint >= 4 && compressionUint <= 5) {
     compressionUint = 9 - compressionUint;
@@ -30,24 +30,25 @@ static CompressionKind convertCompressionKind(proto::orc::CompressionKind
 }
 
 class ORCPostScript : public PostScript {
-  public:
-    ORCPostScript(
+ public:
+  ORCPostScript(
       uint64_t footerLength,
       proto::orc::CompressionKind compression,
       uint64_t compressionBlockSize,
       uint64_t metadataLength,
       uint32_t writerVersion,
       uint64_t stripeStatisticsLength)
-    : PostScript(footerLength, convertCompressionKind(compression),
-        compressionBlockSize, writerVersion)
-    , metadataLength_{metadataLength}
-    , stripeStatisticsLength_{stripeStatisticsLength} {
-    }
+      : PostScript(
+            footerLength,
+            convertCompressionKind(compression),
+            compressionBlockSize,
+            writerVersion),
+        metadataLength_{metadataLength},
+        stripeStatisticsLength_{stripeStatisticsLength} {}
 
-  private:
-    uint64_t metadataLength_;
-    uint64_t stripeStatisticsLength_;
+ private:
+  uint64_t metadataLength_;
+  uint64_t stripeStatisticsLength_;
 };
-
 
 } // namespace facebook::velox::dwrf

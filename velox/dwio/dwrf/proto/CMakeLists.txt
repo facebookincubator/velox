@@ -18,10 +18,10 @@ protobuf_generate_cpp(VELOX_DWIO_DWRF_PROTO_SRCS VELOX_DWIO_DWRF_PROTO_HDRS
 protobuf_generate_cpp(VELOX_DWIO_ORC_PROTO_SRCS VELOX_DWIO_ORC_PROTO_HDRS
                       orc_proto.proto)
 
-add_library(velox_dwio_dwrf_proto ${VELOX_DWIO_DWRF_PROTO_SRCS}
-                                  ${VELOX_DWIO_DWRF_PROTO_HDRS}
-                                  ${VELOX_DWIO_ORC_PROTO_SRCS}
-                                  ${VELOX_DWIO_ORC_PROTO_HDRS})
+add_library(
+  velox_dwio_dwrf_proto
+  ${VELOX_DWIO_DWRF_PROTO_SRCS} ${VELOX_DWIO_DWRF_PROTO_HDRS}
+  ${VELOX_DWIO_ORC_PROTO_SRCS} ${VELOX_DWIO_ORC_PROTO_HDRS})
 
 # Access generated proto file with.
 #

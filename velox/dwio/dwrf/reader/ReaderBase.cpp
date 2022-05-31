@@ -77,9 +77,7 @@ ReaderBase::ReaderBase(
     MemoryPool& pool,
     std::unique_ptr<InputStream> stream,
     FileFormat fileFormat)
-    : ReaderBase(
-      pool, std::move(stream), nullptr, nullptr, -1, fileFormat) {
-}
+    : ReaderBase(pool, std::move(stream), nullptr, nullptr, -1, fileFormat) {}
 
 ReaderBase::ReaderBase(
     MemoryPool& pool,
@@ -97,7 +95,8 @@ ReaderBase::ReaderBase(
           bufferedInputFactory ? bufferedInputFactory
                                : BufferedInputFactory::baseFactoryShared()),
       fileFormat_{fileFormat} {
-  DWIO_ENSURE(fileFormat_ == FileFormat::DWRF || fileFormat_ == FileFormat::ORC);
+  DWIO_ENSURE(
+      fileFormat_ == FileFormat::DWRF || fileFormat_ == FileFormat::ORC);
   input_ = bufferedInputFactory_->create(*stream_, pool, fileNum);
 
   // read last bytes into buffer to get PostScript
@@ -127,33 +126,36 @@ ReaderBase::ReaderBase(
       psLength_ + 4, // 1 byte for post script len, 3 byte "ORC" header.
       fileLength_,
       "Corrupted file, Post script size is invalid");
-  
+
   std::variant<DwrfPostScript, OrcPostScript> postScriptProto;
   if (fileFormat_ == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<DWRFPostScript>(postScript->footerlength(),
-      postScript->compression(),
-      postScript->compressionblocksize(),
-      postScript->writerversion(),
-      postScript->cachemode(),
-      postScript->cachesize());
+    postScript_ = std::make_unique<DWRFPostScript>(
+        postScript->footerlength(),
+        postScript->compression(),
+        postScript->compressionblocksize(),
+        postScript->writerversion(),
+        postScript->cachemode(),
+        postScript->cachesize());
     postScriptProto = std::move(postScript);
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<ORCPostScript>(postScript->footerlength(),
-      postScript->compression(),
-      postScript->compressionblocksize(),
-      postScript->metadatalength(),
-      postScript->writerversion(),
-      postScript->stripestatisticslength());
+    postScript_ = std::make_unique<ORCPostScript>(
+        postScript->footerlength(),
+        postScript->compression(),
+        postScript->compressionblocksize(),
+        postScript->metadatalength(),
+        postScript->writerversion(),
+        postScript->stripestatisticslength());
     postScriptProto = std::move(postScript);
   }
 
   uint64_t footerSize = postScript_->footerlength();
-  uint64_t cacheSize = fileFormat_ == FileFormat::DWRF ? 
-    reinterpret_cast<DWRFPostScript*>(postScript_.get())->cachesize() : 0;
+  uint64_t cacheSize = fileFormat_ == FileFormat::DWRF
+      ? reinterpret_cast<DWRFPostScript*>(postScript_.get())->cachesize()
+      : 0;
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored
@@ -177,7 +179,7 @@ ReaderBase::ReaderBase(
           "Corrupted File, invalid compression kind ",
           postScript_->compression());
     }
-  } 
+  }
 
   if (tailSize > readSize) {
     input_->enqueue({fileLength_ - tailSize, tailSize});
@@ -202,7 +204,9 @@ ReaderBase::ReaderBase(
     input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
         ->readFully(cacheBuffer->data(), cacheSize);
     cache_ = std::make_unique<StripeMetadataCache>(
-        *std::get<DwrfPostScript>(postScriptProto), *footer_, std::move(cacheBuffer));
+        *std::get<DwrfPostScript>(postScriptProto),
+        *footer_,
+        std::move(cacheBuffer));
   }
 
   if (input_->shouldPrefetchStripes()) {

@@ -91,7 +91,9 @@ class StripeStreams {
  public:
   virtual ~StripeStreams() = default;
 
-  virtual FileFormat getFormat() const { return FileFormat::DWRF; }
+  virtual FileFormat getFormat() const {
+    return FileFormat::DWRF;
+  }
 
   /**
    * get column selector for current stripe reading session
@@ -233,7 +235,9 @@ class StripeStreamsImpl : public StripeStreamsBase {
 
   ~StripeStreamsImpl() override = default;
 
-  FileFormat getFormat() const override { return reader_.getReader().getFileFormat(); }
+  FileFormat getFormat() const override {
+    return reader_.getReader().getFileFormat();
+  }
 
   const dwio::common::ColumnSelector& getColumnSelector() const override {
     return selector_;
