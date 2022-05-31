@@ -38,7 +38,7 @@ FileFormat toFileFormat(std::string s) {
     return FileFormat::PARQUET;
   } else if (s == "alpha") {
     return FileFormat::ALPHA;
-  } else if (s == 'orc') {
+  } else if (s == "orc") {
     return FileFormat::ORC;
   }
   return FileFormat::UNKNOWN;
