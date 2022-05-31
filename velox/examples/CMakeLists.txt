@@ -39,7 +39,7 @@ target_link_libraries(
   velox_hive_connector
   velox_memory)
 
-add_executable(velox_example_scan ScanOrc.cpp)
+add_executable(velox_example_scan_orc ScanOrc.cpp)
 
 target_link_libraries(
   velox_example_scan_orc
