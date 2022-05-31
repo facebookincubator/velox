@@ -471,7 +471,19 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual std::string toString() const = 0;
 
-  virtual bool operator==(const Type& other) const = 0;
+  // Types are weakly matched.
+  // Examples: Two RowTypes are equivalent if the children types are equivalent,
+  // but the children names could be different. Two OpaqueTypes are equivalent
+  // if the typeKind matches, but the typeIndex could be different.
+  virtual bool equivalent(const Type& other) const = 0;
+
+  // Types are strongly matched.
+  // Examples: Two RowTypes are == if the children types and the children names
+  // are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
+  // same. Same as equivalent for most types except for Row, Opaque types.
+  virtual bool operator==(const Type& other) const {
+    return this->equivalent(other);
+  }
 
   inline bool operator!=(const Type& other) const {
     return !(*this == other);
@@ -492,10 +504,10 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   static std::shared_ptr<const Type> create(const folly::dynamic& obj);
 
-  // recursive kind hashing (ignores names)
+  // recursive kind hashing (uses only typeKind)
   size_t hashKind() const;
 
-  // recursive kind match (ignores names)
+  // recursive kind match (uses only typeKind)
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
 
   template <TypeKind KIND, typename... CHILDREN>
@@ -556,8 +568,49 @@ class TypeBase : public Type {
   }
 };
 
-using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
-using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
+template <TypeKind KIND>
+class ScalarType : public TypeBase<KIND> {
+ public:
+  uint32_t size() const override {
+    return 0;
+  }
+
+  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
+    throw std::invalid_argument{"scalar type has no children"};
+  }
+
+  std::string toString() const override {
+    return TypeTraits<KIND>::name;
+  }
+
+  size_t cppSizeInBytes() const override {
+    if (TypeTraits<KIND>::isFixedWidth) {
+      return sizeof(typename TypeTraits<KIND>::NativeType);
+    }
+    // TODO: velox throws here for non fixed width types.
+    return Type::cppSizeInBytes();
+  }
+
+  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
+
+  bool equivalent(const Type& other) const override {
+    return KIND == other.kind();
+  }
+
+  // TODO: velox implementation is in cpp
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = TypeTraits<KIND>::name;
+    return obj;
+  }
+};
+
+template <TypeKind KIND>
+const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
+  static const auto instance = std::make_shared<const ScalarType<KIND>>();
+  return instance;
+}
 
 /// This class represents the fixed-point numbers.
 /// The parameter "precision" represents the number of digits the
@@ -577,7 +630,7 @@ class DecimalType : public ScalarType<KIND> {
     VELOX_CHECK_LE(precision, kMaxPrecision);
   }
 
-  inline bool operator==(const Type& otherDecimal) const override {
+  inline bool equivalent(const Type& otherDecimal) const override {
     if (this->kind() != otherDecimal.kind()) {
       return false;
     }
@@ -611,49 +664,8 @@ class DecimalType : public ScalarType<KIND> {
   const uint8_t scale_;
 };
 
-template <TypeKind KIND>
-class ScalarType : public TypeBase<KIND> {
- public:
-  uint32_t size() const override {
-    return 0;
-  }
-
-  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"scalar type has no children"};
-  }
-
-  std::string toString() const override {
-    return TypeTraits<KIND>::name;
-  }
-
-  size_t cppSizeInBytes() const override {
-    if (TypeTraits<KIND>::isFixedWidth) {
-      return sizeof(typename TypeTraits<KIND>::NativeType);
-    }
-    // TODO: velox throws here for non fixed width types.
-    return Type::cppSizeInBytes();
-  }
-
-  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
-
-  bool operator==(const Type& other) const override {
-    return KIND == other.kind();
-  }
-
-  // TODO: velox implementation is in cpp
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<KIND>::name;
-    return obj;
-  }
-};
-
-template <TypeKind KIND>
-const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
-  static const auto instance = std::make_shared<const ScalarType<KIND>>();
-  return instance;
-}
+using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
+using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
@@ -675,7 +687,7 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
     return 0;
   }
 
-  bool operator==(const Type& other) const override {
+  bool equivalent(const Type& other) const override {
     return TypeKind::UNKNOWN == other.kind();
   }
 
@@ -703,7 +715,7 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   std::string toString() const override;
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   folly::dynamic serialize() const override;
 
@@ -734,6 +746,8 @@ class FixedSizeArrayType : public ArrayType {
     return "FIXED_SIZE_ARRAY";
   }
 
+  bool equivalent(const Type& other) const override;
+
   std::string toString() const override;
 
  private:
@@ -762,7 +776,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   folly::dynamic serialize() const override;
 
@@ -797,6 +811,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
   const std::string& nameOf(uint32_t idx) const {
     return names_.at(idx);
   }
+
+  bool equivalent(const Type& other) const override;
 
   bool operator==(const Type& other) const override;
 
@@ -847,7 +863,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
     return children_;
   }
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   std::string toString() const override;
 
@@ -883,6 +899,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   }
 
   std::string toString() const override;
+
+  bool equivalent(const Type& other) const override;
 
   bool operator==(const Type& other) const override;
 
