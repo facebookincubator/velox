@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/expression/EvalCtx.h"
-#include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/ComparatorUtil.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
@@ -23,14 +21,13 @@
 namespace facebook::velox::functions {
 namespace {
 
-// See documentation at https://prestodb.io/docs/current/functions/array.html
 ///
 /// Implements the array_sum function.
+/// See documentation at https://prestodb.io/docs/current/functions/array.html
 ///
 template <typename IT, typename OT>
 class ArraySumFunction : public exec::VectorFunction {
  public:
-  // Execute function.
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args, // Not using const ref so we can reuse args
@@ -45,29 +42,25 @@ class ArraySumFunction : public exec::VectorFunction {
     exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
     vector_size_t numRows = arrayVector->size();
 
-    // Allocate new vector for the result
-    memory::MemoryPool* pool = context->pool();
-    auto resultVector = BaseVector::create(outputType, numRows, pool);
-    OT* resultValues = (OT*)resultVector->valuesAsVoid();
+    // Prepare result vector for writing
+    BaseVector::ensureWritable(rows, outputType, context->pool(), result);
+    auto resultValues = (*result)->template asFlatVector<OT>();
 
-    for (int i = 0; i < numRows; i++) {
-      if (arrayVector->isNullAt(i)) {
-        resultVector->setNull(i, true);
-      } else {
-        int start = arrayVector->offsetAt(i);
-        int end = start + arrayVector->sizeAt(i);
+    rows.template applyToSelected([&](vector_size_t row) {
+          if (arrayVector->isNullAt(row)) {
+            resultValues->setNull(row, true);
+          } else {
+            int start = arrayVector->offsetAt(row);
+            int end = start + arrayVector->sizeAt(row);
 
-        OT sum = 0;
-        for (; start < end; start++) {
-          if (!elements->isNullAt(start)) {
-            sum += elements->template valueAt<IT>(start);
-          }
-        }
-        resultValues[i] = sum;
-      }
-    }
-
-    context->moveOrCopyResult(resultVector, rows, result);
+            OT sum = 0;
+            for (; start < end; start++) {
+              if (!elements->isNullAt(start)) {
+                sum += elements->template valueAt<IT>(start);
+              }
+            }
+            resultValues->set(row, sum);
+          }});
   }
 };
 
@@ -87,7 +80,8 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
       valueTypeKind == TypeKind::SMALLINT ||
       valueTypeKind == TypeKind::INTEGER || valueTypeKind == TypeKind::BIGINT ||
       valueTypeKind == TypeKind::REAL || valueTypeKind == TypeKind::DOUBLE;
-  VELOX_USER_CHECK_EQ(isCoercibleToDouble, true, "Invalid value type");
+  auto errorMessage = std::string("Invalid value type: ") + mapTypeKindToName(valueTypeKind);
+  VELOX_USER_CHECK_EQ(isCoercibleToDouble, true, "{}", errorMessage);
 }
 
 // Create function.
@@ -99,22 +93,22 @@ std::shared_ptr<exec::VectorFunction> create(
 
   switch (elementType->kind()) {
     case TypeKind::TINYINT: {
-      return std::make_shared<ArraySumFunction<int8_t, int64_t>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::TINYINT>::NativeType , int64_t>>();
     }
     case TypeKind::SMALLINT: {
-      return std::make_shared<ArraySumFunction<int16_t, int64_t>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::SMALLINT>::NativeType, int64_t>>();
     }
     case TypeKind::INTEGER: {
-      return std::make_shared<ArraySumFunction<int32_t, int64_t>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::INTEGER>::NativeType, int64_t>>();
     }
     case TypeKind::BIGINT: {
-      return std::make_shared<ArraySumFunction<int64_t, int64_t>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::BIGINT>::NativeType, int64_t>>();
     }
     case TypeKind::REAL: {
-      return std::make_shared<ArraySumFunction<float, double>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::REAL>::NativeType, double>>();
     }
     case TypeKind::DOUBLE: {
-      return std::make_shared<ArraySumFunction<double, double>>();
+      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::DOUBLE>::NativeType, double>>();
     }
     default: {
       VELOX_FAIL("Unsupported Type")
