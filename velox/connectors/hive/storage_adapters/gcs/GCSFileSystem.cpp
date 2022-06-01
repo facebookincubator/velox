@@ -210,7 +210,7 @@ class GCSConfig {
  public:
   GCSConfig(const Config* config) : config_(config) {
     std::string cred = config_->get("hive.gcs.credentials", std::string(""));
-    // TODO Cred expected in json format, change it to something else?
+    // Cred expected in json format, change it to something else?
     if (!cred.empty()) {
       credentials_ = gc::MakeServiceAccountCredentials(cred);
     }
