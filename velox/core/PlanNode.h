@@ -544,6 +544,80 @@ inline std::string mapAggregationStepToName(const AggregationNode::Step& step) {
   return ss.str();
 }
 
+class WindowNode : public PlanNode {
+ public:
+  enum class WindowType { kRange, kRows };
+
+  enum class BoundType {
+    kUnboundedPreceding,
+    kPreceding,
+    kCurrentRow,
+    kFollowing,
+    kUnboundedFollowing
+  };
+
+  struct Frame {
+    WindowType type;
+    BoundType startType;
+    FieldAccessTypedExprPtr startValue;
+    BoundType endType;
+    FieldAccessTypedExprPtr endValue;
+  };
+
+  struct Function {
+    std::shared_ptr<const CallTypedExpr> functionCall;
+    Frame frame;
+    bool ignoreNulls;
+  };
+
+  WindowNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> outputNames,
+      std::vector<Function> windowFunctions,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  const std::vector<Function>& windowFunctions() const {
+    return windowFunctions_;
+  }
+
+  std::string_view name() const override {
+    return "Window";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
+  const std::vector<SortOrder> sortingOrders_;
+  const std::vector<Function> windowFunctions_;
+  const std::vector<std::shared_ptr<const PlanNode>> sources_;
+  const RowTypePtr outputType_;
+};
+
 class ExchangeNode : public PlanNode {
  public:
   ExchangeNode(const PlanNodeId& id, RowTypePtr type)

@@ -1,0 +1,55 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+namespace facebook::velox::exec {
+
+class WindowFunction {
+ public:
+  virtual void resetPartition(const std::vector<char*>& rows) = 0;
+
+  virtual void apply(
+      const BufferPtr& peerGroupStarts,
+      const BufferPtr& peerGroupEnds,
+      const BufferPtr& frameStarts,
+      const BufferPtr& frameEnds,
+      const VectorPtr& result) = 0;
+};
+
+using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
+    const std::vector<TypePtr>& argTypes,
+    const TypePtr& resultType)>;
+
+/// Register a window function with the specified name and signatures.
+bool registerAggregateFunction(
+    const std::string& name,
+    std::vector<std::shared_ptr<FunctionSignature>> signatures,
+    WindowFunctionFactory factory);
+
+/// Returns signatures of the widnow function with the specified name.
+/// Returns empty std::optional if function with that name is not found.
+std::optional<std::vector<std::shared_ptr<FunctionSignature>>>
+getWindowFunctionSignatures(const std::string& name);
+
+struct WindowFunctionEntry {
+  std::vector<std::shared_ptr<FunctionSignature>> signatures;
+  WindowFunctionFactory factory;
+};
+
+using WindowFunctionMap = std::unordered_map<std::string, WindowFunctionEntry>;
+
+WindowFunctionMap& windowFunctions();
+} // namespace facebook::velox::exec
