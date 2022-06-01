@@ -41,14 +41,13 @@ class DwrfPostScript : public PostScript {
         cacheSize_{cacheSize} {}
 
   explicit DwrfPostScript(std::unique_ptr<proto::PostScript>& ps)
-  : DwrfPostScript(
-    ps->footerlength(),
-    ps->compression(),
-    ps->compressionblocksize(),
-    ps->writerversion(),
-    ps->cachemode(),
-    ps->cachesize()) {
-    }
+      : DwrfPostScript(
+            ps->footerlength(),
+            ps->compression(),
+            ps->compressionblocksize(),
+            ps->writerversion(),
+            ps->cachemode(),
+            ps->cachesize()) {}
 
   StripeCacheMode cachemode() const {
     return cacheMode_;

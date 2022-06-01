@@ -48,16 +48,15 @@ class OrcPostScript : public PostScript {
             writerVersion),
         metadataLength_{metadataLength},
         stripeStatisticsLength_{stripeStatisticsLength} {}
-  
+
   explicit OrcPostScript(std::unique_ptr<proto::orc::PostScript>& ps)
-  : OrcPostScript(
-    ps->footerlength(),
-    ps->compression(),
-    ps->compressionblocksize(),
-    ps->metadatalength(),
-    ps->writerversion(),
-    ps->stripestatisticslength()) {
-    }
+      : OrcPostScript(
+            ps->footerlength(),
+            ps->compression(),
+            ps->compressionblocksize(),
+            ps->metadatalength(),
+            ps->writerversion(),
+            ps->stripestatisticslength()) {}
 
  private:
   uint64_t metadataLength_;
