@@ -54,7 +54,7 @@ class DwrfPostScript : public PostScript {
   }
 
   bool has_cachemode() const {
-    return cacheMode_ != StripeCacheMode::NA;
+    return true;
   }
 
   uint32_t cachesize() const {
@@ -62,7 +62,7 @@ class DwrfPostScript : public PostScript {
   }
 
   bool has_cachesize() const {
-    return cacheSize_ != 0;
+    return true;
   }
 
  private:

@@ -91,7 +91,6 @@ class ReaderBase {
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
       : pool_{pool},
         stream_{std::move(stream)},
-        postScript_{std::make_unique<DwrfPostScript>(ps)},
         footer_{footer},
         cache_{std::move(cache)},
         handler_{std::move(handler)},
@@ -104,6 +103,9 @@ class ReaderBase {
         psLength_{0} {
     DWIO_ENSURE(footer_->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
+    if (ps != nullptr) {
+      postScript_ = std::make_unique<DwrfPostScript>(ps);
+    }
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer_);
     }

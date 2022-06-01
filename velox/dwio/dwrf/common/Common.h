@@ -283,19 +283,19 @@ class PostScript {
     return footerLength_;
   }
   virtual bool has_footerlength() const {
-    return footerLength_ != 0;
+    return true;
   }
   virtual CompressionKind compression() const {
     return compression_;
   }
   virtual bool has_compression() const {
-    return compression_ != CompressionKind::CompressionKind_NONE;
+    return true;
   }
   virtual uint64_t compressionblocksize() const {
     return compressionBlockSize_;
   }
   virtual bool has_compressionblocksize() const {
-    return compressionBlockSize_ != 0;
+    return true;
   }
   virtual uint32_t writerversion() const {
     return writerVersion_;
