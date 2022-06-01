@@ -38,7 +38,8 @@ class ArraySumFunction : public exec::VectorFunction {
     auto arrayVector = args[0]->as<ArrayVector>();
     VELOX_CHECK(arrayVector);
     auto elementsVector = arrayVector->elements();
-    auto elementsRows = toElementRows(elementsVector->size(), rows, arrayVector);
+    auto elementsRows =
+        toElementRows(elementsVector->size(), rows, arrayVector);
     exec::LocalDecodedVector elements(context, *elementsVector, elementsRows);
     vector_size_t numRows = arrayVector->size();
 
@@ -47,20 +48,21 @@ class ArraySumFunction : public exec::VectorFunction {
     auto resultValues = (*result)->template asFlatVector<OT>();
 
     rows.template applyToSelected([&](vector_size_t row) {
-          if (arrayVector->isNullAt(row)) {
-            resultValues->setNull(row, true);
-          } else {
-            int start = arrayVector->offsetAt(row);
-            int end = start + arrayVector->sizeAt(row);
+      if (arrayVector->isNullAt(row)) {
+        resultValues->setNull(row, true);
+      } else {
+        int start = arrayVector->offsetAt(row);
+        int end = start + arrayVector->sizeAt(row);
 
-            OT sum = 0;
-            for (; start < end; start++) {
-              if (!elements->isNullAt(start)) {
-                sum += elements->template valueAt<IT>(start);
-              }
-            }
-            resultValues->set(row, sum);
-          }});
+        OT sum = 0;
+        for (; start < end; start++) {
+          if (!elements->isNullAt(start)) {
+            sum += elements->template valueAt<IT>(start);
+          }
+        }
+        resultValues->set(row, sum);
+      }
+    });
   }
 };
 
@@ -80,7 +82,8 @@ void validateType(const std::vector<exec::VectorFunctionArg>& inputArgs) {
       valueTypeKind == TypeKind::SMALLINT ||
       valueTypeKind == TypeKind::INTEGER || valueTypeKind == TypeKind::BIGINT ||
       valueTypeKind == TypeKind::REAL || valueTypeKind == TypeKind::DOUBLE;
-  auto errorMessage = std::string("Invalid value type: ") + mapTypeKindToName(valueTypeKind);
+  auto errorMessage =
+      std::string("Invalid value type: ") + mapTypeKindToName(valueTypeKind);
   VELOX_USER_CHECK_EQ(isCoercibleToDouble, true, "{}", errorMessage);
 }
 
@@ -93,22 +96,32 @@ std::shared_ptr<exec::VectorFunction> create(
 
   switch (elementType->kind()) {
     case TypeKind::TINYINT: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::TINYINT>::NativeType , int64_t>>();
+      return std::make_shared<ArraySumFunction<
+          TypeTraits<TypeKind::TINYINT>::NativeType,
+          int64_t>>();
     }
     case TypeKind::SMALLINT: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::SMALLINT>::NativeType, int64_t>>();
+      return std::make_shared<ArraySumFunction<
+          TypeTraits<TypeKind::SMALLINT>::NativeType,
+          int64_t>>();
     }
     case TypeKind::INTEGER: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::INTEGER>::NativeType, int64_t>>();
+      return std::make_shared<ArraySumFunction<
+          TypeTraits<TypeKind::INTEGER>::NativeType,
+          int64_t>>();
     }
     case TypeKind::BIGINT: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::BIGINT>::NativeType, int64_t>>();
+      return std::make_shared<ArraySumFunction<
+          TypeTraits<TypeKind::BIGINT>::NativeType,
+          int64_t>>();
     }
     case TypeKind::REAL: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::REAL>::NativeType, double>>();
+      return std::make_shared<
+          ArraySumFunction<TypeTraits<TypeKind::REAL>::NativeType, double>>();
     }
     case TypeKind::DOUBLE: {
-      return std::make_shared<ArraySumFunction<TypeTraits<TypeKind::DOUBLE>::NativeType, double>>();
+      return std::make_shared<
+          ArraySumFunction<TypeTraits<TypeKind::DOUBLE>::NativeType, double>>();
     }
     default: {
       VELOX_FAIL("Unsupported Type")
@@ -121,21 +134,19 @@ std::shared_ptr<exec::VectorFunction> create(
 // T2 is bigint or double
 std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
   static const std::map<std::string, std::string> s = {
-    {"tinyint", "bigint"},
-    {"smallint", "bigint"},
-    {"integer", "bigint"},
-    {"bigint", "bigint"},
-    {"real", "double"},
-    {"double", "double"}
-  };
+      {"tinyint", "bigint"},
+      {"smallint", "bigint"},
+      {"integer", "bigint"},
+      {"bigint", "bigint"},
+      {"real", "double"},
+      {"double", "double"}};
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
   signatures.reserve(s.size());
-  for (const auto&[argType, returnType] : s) {
-    signatures.emplace_back(
-        exec::FunctionSignatureBuilder()
-            .returnType(returnType)
-            .argumentType(fmt::format("array({})", argType))
-            .build());
+  for (const auto& [argType, returnType] : s) {
+    signatures.emplace_back(exec::FunctionSignatureBuilder()
+                                .returnType(returnType)
+                                .argumentType(fmt::format("array({})", argType))
+                                .build());
   }
   return signatures;
 }
