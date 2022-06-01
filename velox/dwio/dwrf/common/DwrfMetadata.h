@@ -17,13 +17,15 @@
 #pragma once
 
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
 namespace facebook::velox::dwrf {
 
-class DWRFPostScript : public PostScript {
+class DwrfPostScript : public PostScript {
  public:
-  DWRFPostScript() : PostScript() {}
-  DWRFPostScript(
+  DwrfPostScript() = default;
+
+  DwrfPostScript(
       uint64_t footerLength,
       proto::CompressionKind compression,
       uint64_t compressionBlockSize,
@@ -37,6 +39,16 @@ class DWRFPostScript : public PostScript {
             writerVersion),
         cacheMode_{static_cast<StripeCacheMode>(cacheMode)},
         cacheSize_{cacheSize} {}
+
+  explicit DwrfPostScript(std::unique_ptr<proto::PostScript>& ps)
+  : DwrfPostScript(
+    ps->footerlength(),
+    ps->compression(),
+    ps->compressionblocksize(),
+    ps->writerversion(),
+    ps->cachemode(),
+    ps->cachesize()) {
+    }
 
   StripeCacheMode cachemode() const {
     return cacheMode_;

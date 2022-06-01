@@ -62,10 +62,8 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 };
 
 class ReaderBase {
-  using DwrfPostScript = std::unique_ptr<proto::PostScript>;
-  using OrcPostScript = std::unique_ptr<proto::orc::PostScript>;
-  using DwrfFooter = proto::Footer*;
-  using OrcFooter = proto::orc::Footer*;
+  using DwrfPostScriptPtr = std::unique_ptr<proto::PostScript>;
+  using OrcPostScriptPtr = std::unique_ptr<proto::orc::PostScript>;
 
  public:
   // create reader base from input stream
@@ -93,7 +91,7 @@ class ReaderBase {
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
       : pool_{pool},
         stream_{std::move(stream)},
-        // postScript_{std::move(ps)},
+        postScript_{std::make_unique<DwrfPostScript>(ps)},
         footer_{footer},
         cache_{std::move(cache)},
         handler_{std::move(handler)},
@@ -104,14 +102,6 @@ class ReaderBase {
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
         fileLength_{0},
         psLength_{0} {
-    // TODO: add a convert function
-    postScript_ = std::make_unique<DWRFPostScript>(
-        ps->footerlength(),
-        ps->compression(),
-        ps->compressionblocksize(),
-        ps->writerversion(),
-        ps->cachemode(),
-        ps->cachesize());
     DWIO_ENSURE(footer_->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
     if (!handler_) {
@@ -255,7 +245,6 @@ class ReaderBase {
   std::unique_ptr<dwio::common::InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
 
-  // std::unique_ptr<proto::PostScript> postScript_;
   std::unique_ptr<PostScript> postScript_;
 
   proto::Footer* footer_ = nullptr;

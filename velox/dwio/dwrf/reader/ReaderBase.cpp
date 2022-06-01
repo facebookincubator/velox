@@ -127,34 +127,22 @@ ReaderBase::ReaderBase(
       fileLength_,
       "Corrupted file, Post script size is invalid");
 
-  std::variant<DwrfPostScript, OrcPostScript> postScriptProto;
+  std::variant<DwrfPostScriptPtr, OrcPostScriptPtr> postScriptProto;
   if (fileFormat_ == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<DWRFPostScript>(
-        postScript->footerlength(),
-        postScript->compression(),
-        postScript->compressionblocksize(),
-        postScript->writerversion(),
-        postScript->cachemode(),
-        postScript->cachesize());
+    postScript_ = std::make_unique<DwrfPostScript>(postScript);
     postScriptProto = std::move(postScript);
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<ORCPostScript>(
-        postScript->footerlength(),
-        postScript->compression(),
-        postScript->compressionblocksize(),
-        postScript->metadatalength(),
-        postScript->writerversion(),
-        postScript->stripestatisticslength());
+    postScript_ = std::make_unique<OrcPostScript>(postScript);
     postScriptProto = std::move(postScript);
   }
 
   uint64_t footerSize = postScript_->footerlength();
   uint64_t cacheSize = fileFormat_ == FileFormat::DWRF
-      ? reinterpret_cast<DWRFPostScript*>(postScript_.get())->cachesize()
+      ? reinterpret_cast<DwrfPostScript*>(postScript_.get())->cachesize()
       : 0;
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
@@ -204,7 +192,7 @@ ReaderBase::ReaderBase(
     input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
         ->readFully(cacheBuffer->data(), cacheSize);
     cache_ = std::make_unique<StripeMetadataCache>(
-        *std::get<DwrfPostScript>(postScriptProto),
+        *std::get<DwrfPostScriptPtr>(postScriptProto),
         *footer_,
         std::move(cacheBuffer));
   }
