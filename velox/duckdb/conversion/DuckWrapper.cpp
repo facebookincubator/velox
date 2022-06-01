@@ -242,29 +242,86 @@ double NumericCastToDouble::operation(hugeint_t input) {
   return Hugeint::Cast<double>(input);
 }
 
-template <class T>
-VectorPtr convertDecimalToDouble(
+template <class OP, typename I>
+VectorPtr convertDuckToVeloxDecimal(
     ::duckdb::Vector& duckVector,
-    size_t size,
-    const TypePtr& veloxType,
+    TypePtr veloxType,
+    int32_t size,
     memory::MemoryPool* pool,
-    uint8_t scale) {
-  auto* duckData = ::duckdb::FlatVector::GetData<T>(duckVector);
-  auto& duckValidity = ::duckdb::FlatVector::Validity(duckVector);
-
-  auto result = BaseVector::create(veloxType, size, pool);
-  auto flatResult = result->as<FlatVector<double>>();
-  double dividend = std::pow(10, scale);
-  for (auto i = 0; i < size; i++) {
-    if (duckValidity.RowIsValid(i)) {
-      double converted =
-          NumericCastToDouble::template operation<T>(duckData[i]) / dividend;
-      flatResult->set(i, converted);
-    } else {
-      result->setNull(i, true);
+    uint8_t* validity = nullptr) {
+  auto vectorType = duckVector.GetVectorType();
+  auto internalType = duckVector.GetType().InternalType();
+  switch (vectorType) {
+    case ::duckdb::VectorType::FLAT_VECTOR: {
+      VectorPtr result;
+      auto& duckValidity = ::duckdb::FlatVector::Validity(duckVector);
+      auto* duckData = ::duckdb::FlatVector::GetData<I>(duckVector);
+      result = BaseVector::create(veloxType, size, pool);
+      auto flatResult = result->as<FlatVector<typename OP::VELOX_TYPE>>();
+      if (internalType == PhysicalType::INT16 ||
+          internalType == PhysicalType::INT32) {
+        // Cannot re-use duckdb buffers. Create a copy of the vector.
+        for (auto i = 0; i < size; i++) {
+          if (duckValidity.RowIsValid(i) &&
+              (!validity || bits::isBitSet(validity, i))) {
+            flatResult->set(i, OP::toVelox(duckData[i]));
+          }
+        }
+        if (!duckValidity.AllValid()) {
+          auto rawNulls = flatResult->mutableRawNulls();
+          memcpy(rawNulls, duckValidity.GetData(), bits::nbytes(size));
+        }
+      } else if (
+          internalType == PhysicalType::INT64 ||
+          internalType == PhysicalType::INT128) {
+        // Re-use duckdb buffers.
+        auto valuesView = BufferView<DuckDBBufferReleaser>::create(
+            reinterpret_cast<const uint8_t*>(duckData),
+            size * sizeof(typename OP::VELOX_TYPE),
+            DuckDBBufferReleaser(duckVector.GetBuffer()));
+        BufferPtr nullsView(nullptr);
+        if (!duckValidity.AllValid()) {
+          nullsView = BufferView<DuckDBValidityReleaser>::create(
+              reinterpret_cast<const uint8_t*>(duckValidity.GetData()),
+              bits::nbytes(size),
+              DuckDBValidityReleaser(duckValidity));
+        }
+        result = std::make_shared<FlatVector<typename OP::VELOX_TYPE>>(
+            pool,
+            veloxType,
+            nullsView,
+            size,
+            valuesView,
+            std::vector<BufferPtr>());
+      } else {
+        VELOX_UNSUPPORTED(
+            "Unsupported DuckDB LogicalType:{} to ShortDecimal "
+            "conversion",
+            duckVector.GetType().ToString());
+      }
+      return result;
     }
+    case ::duckdb::VectorType::DICTIONARY_VECTOR: {
+      auto& child = ::duckdb::DictionaryVector::Child(duckVector);
+      auto& selection = ::duckdb::DictionaryVector::SelVector(duckVector);
+
+      // DuckDB vectors doesn't tell what their size is. We are going to use max
+      // index + 1 instead as the vector is guaranteed to be at least that
+      // large.
+      vector_size_t maxIndex = 0;
+      for (auto i = 0; i < size; i++) {
+        maxIndex = std::max(maxIndex, (vector_size_t)selection.get_index(i));
+      }
+      // Unused dictionary elements can be uninitialized. That can cause
+      // errors if we try to decode them. Here we create a bitmap of
+      // used values to avoid that.
+      return convertDuckToVeloxDecimal<OP, I>(child, veloxType, size, pool);
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Unsupported DuckDB vector encoding: {}",
+          ::duckdb::VectorTypeToString(vectorType));
   }
-  return result;
 }
 
 VectorPtr toVeloxVector(
@@ -301,19 +358,21 @@ VectorPtr toVeloxVector(
       uint8_t width;
       uint8_t scale;
       type.GetDecimalProperties(width, scale);
+      auto veloxDecimalType = DECIMAL(width, scale);
       switch (type.InternalType()) {
         case PhysicalType::INT16:
-          return convertDecimalToDouble<int16_t>(
-              duckVector, size, veloxType, pool, scale);
+          return convertDuckToVeloxDecimal<DuckShortDecimalConversion, int16_t>(
+              duckVector, veloxDecimalType, size, pool);
         case PhysicalType::INT32:
-          return convertDecimalToDouble<int32_t>(
-              duckVector, size, veloxType, pool, scale);
+          return convertDuckToVeloxDecimal<DuckShortDecimalConversion, int32_t>(
+              duckVector, veloxDecimalType, size, pool);
         case PhysicalType::INT64:
-          return convertDecimalToDouble<int64_t>(
-              duckVector, size, veloxType, pool, scale);
+          return convertDuckToVeloxDecimal<DuckShortDecimalConversion, int64_t>(
+              duckVector, veloxDecimalType, size, pool);
         case PhysicalType::INT128:
-          return convertDecimalToDouble<hugeint_t>(
-              duckVector, size, veloxType, pool, scale);
+          return convertDuckToVeloxDecimal<
+              DuckLongDecimalConversion,
+              hugeint_t>(duckVector, veloxDecimalType, size, pool);
         default:
           throw std::runtime_error(
               "unrecognized internal type for decimal (this shouldn't happen");

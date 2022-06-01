@@ -61,6 +61,29 @@ class BaseDuckWrapperTest : public testing::Test {
     verifyUnaryResult<T>(move(query), move(expectedOutput), move(nulls));
   }
 
+  template <class T>
+  void verifyDuckToVeloxDecimal(
+      const std::string& query,
+      const std::vector<std::optional<T>>& expected) {
+    auto result = db_->execute(query);
+    ASSERT_EQ(result->success(), true)
+        << "Query failed: " << result->errorMessage();
+    ASSERT_EQ(result->columnCount(), 1);
+    size_t currentOffset = 0;
+    while (result->next()) {
+      auto rowVector = result->getVector();
+      auto simpleVector = rowVector->childAt(0)->as<SimpleVector<T>>();
+      ASSERT_NE(simpleVector, nullptr);
+      for (auto i = 0; i < simpleVector->size(); i++) {
+        if (simpleVector->isNullAt(i)) {
+          ASSERT_FALSE(expected[i].has_value());
+          continue;
+        }
+        ASSERT_EQ(simpleVector->valueAt(i), expected[i]);
+      }
+    }
+  }
+
   void execute(const std::string& query) {
     auto result = db_->execute(query);
     ASSERT_EQ(result->success(), true)
@@ -188,12 +211,52 @@ TEST_F(BaseDuckWrapperTest, tpchSF1) {
   // test TPC-H loading and querying SF0.01
   execute("CALL dbgen(sf=0.01)");
   // test conversion of date, decimal and string
-  verifyUnaryResult<double>("SELECT l_discount FROM lineitem LIMIT 1", {0.04});
+  verifyUnaryResult<ShortDecimal>(
+      "SELECT l_discount FROM lineitem LIMIT 1", {ShortDecimal(4)});
   verifyUnaryResult<Date>(
       "SELECT l_shipdate FROM lineitem LIMIT 1", {Date(9568)});
   verifyUnaryResult<StringView>(
       "SELECT l_comment FROM lineitem LIMIT 1",
       {StringView("egular courts above the")});
+}
+
+TEST_F(BaseDuckWrapperTest, duckToVeloxDecimal) {
+  // test SMALLINT conversion.
+  verifyDuckToVeloxDecimal<ShortDecimal>(
+      "select * from (values (NULL), ('1.2'::decimal(2,1)),"
+      "('2.2'::decimal(2,1)),('-4.2'::decimal(2,1)), (NULL))",
+      {std::nullopt,
+       ShortDecimal(12),
+       ShortDecimal(22),
+       ShortDecimal(-42),
+       std::nullopt});
+
+  // test INTEGER conversion.
+  verifyDuckToVeloxDecimal<ShortDecimal>(
+      "select * from (values ('1111.1111'::decimal(8,4)),"
+      "('2222.2222'::decimal(8,4)),('-3333.3333'::decimal(8,4)))",
+      {ShortDecimal(11111111),
+       ShortDecimal(22222222),
+       ShortDecimal(-33333333)});
+
+  // test BIGINT conversion.
+  verifyDuckToVeloxDecimal<ShortDecimal>(
+      "select * from (values ('-111111.111111'::decimal(12,6)),"
+      "('222222.222222'::decimal(12,6)),('333333.333333'::decimal(12,6)))",
+      {ShortDecimal(-111111111111),
+       ShortDecimal(222222222222),
+       ShortDecimal(333333333333)});
+
+  verifyDuckToVeloxDecimal<LongDecimal>(
+      "select * from (values (NULL),"
+      "('12345678901234.789'::decimal(18,3) * 10000.555::decimal(20,3)),"
+      "('-55555555555555.789'::decimal(18,3) * 10000.555::decimal(20,3)), (NULL),"
+      "('-22222222222222.789'::decimal(18,3) * 10000.555::decimal(20,3)))",
+      {std::nullopt,
+       LongDecimal(buildInt128(0X1a24, 0Xfa35bb8777ffff77)),
+       LongDecimal(buildInt128(0XFFFFFFFFFFFF8A59, 0X99FC706655BFAC11)),
+       std::nullopt,
+       LongDecimal(buildInt128(0XFFFFFFFFFFFFD0F0, 0XA3FE935B081D8D69))});
 }
 
 TEST_F(BaseDuckWrapperTest, dictConversion) {

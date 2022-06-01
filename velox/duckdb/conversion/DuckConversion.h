@@ -87,6 +87,38 @@ struct DuckStringConversion {
   }
 };
 
+struct DuckShortDecimalConversion {
+  typedef int64_t DUCK_TYPE;
+  typedef ShortDecimal VELOX_TYPE;
+
+  static int64_t toDuck(
+      const ShortDecimal& input,
+      ::duckdb::Vector& /* unused */) {
+    return input.unscaledValue();
+  }
+
+  template <typename T>
+  static ShortDecimal toVelox(const T input) {
+    return ShortDecimal(input);
+  }
+};
+
+struct DuckLongDecimalConversion {
+  typedef ::duckdb::hugeint_t DUCK_TYPE;
+  typedef LongDecimal VELOX_TYPE;
+
+  static int64_t toDuck(
+      const ShortDecimal& input,
+      ::duckdb::Vector& /* unused */) {
+    return input.unscaledValue();
+  }
+
+  template <typename T>
+  static LongDecimal toVelox(const T input) {
+    return LongDecimal(buildInt128(input.upper, input.lower));
+  }
+};
+
 struct DuckTimestampConversion {
   typedef ::duckdb::timestamp_t DUCK_TYPE;
   typedef Timestamp VELOX_TYPE;
