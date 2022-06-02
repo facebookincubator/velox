@@ -36,6 +36,8 @@ class TrackingId {
 
   TrackingId() : id_(-1) {}
 
+  TrackingId(int32_t id) : id_(id) {}
+
   TrackingId(int32_t node, int8_t kind) : id_((node << kNodeShift) | kind) {
     VELOX_CHECK_LT(kind, (1 << kNodeShift), "Tracker kind out of range");
   }

@@ -144,7 +144,7 @@ class CacheTest : public testing::Test {
         std::move(ssd));
     cache_->setVerifyHook(checkEntry);
     for (auto i = 0; i < kMaxStreams; ++i) {
-      streamIds_.push_back(std::make_unique<dwrf::StreamIdentifier>(
+      streamIds_.push_back(std::make_unique<dwrf::DwrfStreamIdentifier>(
           i, i, 0, dwrf::StreamKind_DATA));
     }
     streamStarts_.resize(kMaxStreams + 1);
