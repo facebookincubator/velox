@@ -69,7 +69,7 @@ class Window : public Operator {
       std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo);
 
   std::pair<int32_t, int32_t> findFrameEndPoints(
-      int32_t windowIndex,
+      int32_t windowFunctionIndex,
       int32_t rowNumber);
 
   bool finished_ = false;
@@ -93,14 +93,20 @@ class Window : public Operator {
   std::vector<char*> rows_;
   std::vector<char*> returningRows_;
   // This index captures the row index in RowContainer data_ that marks the
-  // start of the current partition being processed. This state is maintained in
+  // start of the current partition being processed. (The partitionIter_
+  // captures an iterator to the same row index). This state is maintained in
   // the class as this offset carries over across output row batches.
   // In generality for window frame computation we need to know the size of the
   // full partition. Those partition sizes can be computed during the big sort
   // in noMoreInput (use HashLookup structure for this). We could also use a
   // hash + sort based algorithm to partition the rows. If doing so, then
   // the HashTable can maintain a count of the rows in the partition.
+
+  // The current code also assumes that all partition rows fit within a single
+  // output block of rows. We do not consider partitions that overlap over output
+  // blocks.
   int partitionStartRow_ = 0;
+  RowContainerIterator partitionIter_;
 
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
   std::vector<WindowFrame> windowFrames_;
