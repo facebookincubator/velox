@@ -16,11 +16,13 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::dwrf {
+
+using dwio::common::SeekableInputStream;
 
 class ProtoUtils final {
  public:

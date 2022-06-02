@@ -16,15 +16,17 @@
 
 #pragma once
 
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/CompressionBufferPool.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 #include "velox/dwio/dwrf/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
+
+using namespace dwio::common;
 
 constexpr uint8_t PAGE_HEADER_SIZE = 3;
 

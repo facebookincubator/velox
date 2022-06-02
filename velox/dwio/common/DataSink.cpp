@@ -26,7 +26,7 @@ namespace facebook::velox::dwio::common {
 FileSink::FileSink(
     const std::string& name,
     const common::MetricsLogPtr& metricLogger,
-    common::IoStatistics* stats)
+    IoStatistics* stats)
     : DataSink{name, metricLogger, stats} {
   file_ = open(name_.c_str(), O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
   if (file_ == -1) {
@@ -85,7 +85,7 @@ bool DataSink::registerFactory(const DataSink::Factory& factory) {
 std::unique_ptr<DataSink> DataSink::create(
     const std::string& path,
     const common::MetricsLogPtr& metricsLog,
-    common::IoStatistics* stats) {
+    IoStatistics* stats) {
   DWIO_ENSURE_NOT_NULL(metricsLog.get());
   for (auto& factory : factories()) {
     auto result = factory(path, metricsLog, stats);
@@ -99,7 +99,7 @@ std::unique_ptr<DataSink> DataSink::create(
 static std::unique_ptr<DataSink> fileSink(
     const std::string& filename,
     const common::MetricsLogPtr& metricsLog,
-    common::IoStatistics* stats = nullptr) {
+    IoStatistics* stats = nullptr) {
   if (strncmp(filename.c_str(), "file:", 5) == 0) {
     return std::make_unique<FileSink>(filename.substr(5), metricsLog, stats);
   }

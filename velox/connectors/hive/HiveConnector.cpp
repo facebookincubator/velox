@@ -17,9 +17,9 @@
 
 #include <memory>
 
-#include "velox/dwio/common/InputStream.h"
+#include "dwio/common/CachedBufferedInput.h"
+#include "dwio/common/InputStream.h"
 #include "velox/dwio/common/ScanSpec.h"
-#include "velox/dwio/dwrf/common/CachedBufferedInput.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/expression/ControlExpr.h"
 #include "velox/type/Conversions.h"

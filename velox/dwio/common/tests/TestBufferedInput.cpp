@@ -15,11 +15,11 @@
  */
 
 #include <gtest/gtest.h>
-#include "velox/dwio/common/MemoryInputStream.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "dwio/common/BufferedInput.h"
+#include "dwio/common/MemoryInputStream.h"
 
 using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::dwrf;
+
 
 TEST(TestBufferedInput, ZeroLengthStream) {
   MemoryInputStream stream{nullptr, 0};

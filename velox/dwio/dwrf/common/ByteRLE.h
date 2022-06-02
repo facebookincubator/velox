@@ -17,10 +17,10 @@
 #pragma once
 
 #include <memory>
+#include "dwio/common/SeekableInputStream.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/dwrf/common/Common.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/Range.h"
@@ -28,6 +28,8 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::dwrf {
+
+using namespace dwio::common;
 
 class ByteRleEncoder {
  public:

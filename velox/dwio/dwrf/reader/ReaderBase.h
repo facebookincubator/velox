@@ -16,8 +16,8 @@
 
 #pragma once
 
+#include "dwio/common/BufferedInput.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -25,6 +25,8 @@
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 
 namespace facebook::velox::dwrf {
+
+using namespace dwio::common;
 
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
@@ -63,7 +65,7 @@ class ReaderBase {
   // create reader base from input stream
   ReaderBase(
       memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<InputStream> stream,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
       std::shared_ptr<BufferedInputFactory> bufferedInputFactory = nullptr,
@@ -72,7 +74,7 @@ class ReaderBase {
   // create reader base from metadata
   ReaderBase(
       memory::MemoryPool& pool,
-      std::unique_ptr<dwio::common::InputStream> stream,
+      std::unique_ptr<InputStream> stream,
       std::unique_ptr<proto::PostScript> ps,
       proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
@@ -106,7 +108,7 @@ class ReaderBase {
     return pool_;
   }
 
-  dwio::common::InputStream& getStream() const {
+  InputStream& getStream() const {
     return *stream_;
   }
 
@@ -232,7 +234,7 @@ class ReaderBase {
       uint32_t index = 0);
 
   memory::MemoryPool& pool_;
-  std::unique_ptr<dwio::common::InputStream> stream_;
+  std::unique_ptr<InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<proto::PostScript> postScript_;
   proto::Footer* footer_ = nullptr;

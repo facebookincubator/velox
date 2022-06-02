@@ -18,7 +18,7 @@
 
 #include <memory>
 
-#include "velox/dwio/common/InputStream.h"
+#include "InputStream.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"
 

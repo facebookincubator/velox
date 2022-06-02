@@ -17,8 +17,8 @@
 #include <folly/Random.h>
 #include <gtest/gtest.h>
 
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"

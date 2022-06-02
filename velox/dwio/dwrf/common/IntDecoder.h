@@ -19,9 +19,9 @@
 #include <folly/Likely.h>
 #include <folly/Range.h>
 #include <folly/Varint.h>
+#include "dwio/common/SeekableInputStream.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/common/StreamUtil.h"
 

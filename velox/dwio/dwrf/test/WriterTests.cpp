@@ -17,7 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"

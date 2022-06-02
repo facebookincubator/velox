@@ -202,7 +202,7 @@ DwrfReaderShared::DwrfReaderShared(
           options.getDecrypterFactory(),
           options.getBufferedInputFactory()
               ? options.getBufferedInputFactory()
-              : BufferedInputFactory::baseFactoryShared(),
+              : dwio::common::BufferedInputFactory::baseFactoryShared(),
           options.getFileNum())),
       options_(options) {}
 

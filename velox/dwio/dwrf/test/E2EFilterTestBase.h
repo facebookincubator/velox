@@ -26,7 +26,7 @@
 #include "velox/type/Subfield.h"
 #include "velox/vector/FlatVector.h"
 
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"

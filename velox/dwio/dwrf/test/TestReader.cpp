@@ -16,11 +16,11 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "dwio/common/MemoryInputStream.h"
 #include "folly/Random.h"
 #include "folly/lang/Assume.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/DataSink.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"

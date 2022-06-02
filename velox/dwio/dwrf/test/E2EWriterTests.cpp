@@ -16,7 +16,7 @@
 
 #include <folly/Random.h>
 #include <random>
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"

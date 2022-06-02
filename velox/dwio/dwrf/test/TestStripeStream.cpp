@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/MemoryInputStream.h"
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"

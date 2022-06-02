@@ -20,8 +20,8 @@
 #include <algorithm>
 #include <optional>
 #include <vector>
+#include "dwio/common/MemoryInputStream.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/IntDecoder.h"
