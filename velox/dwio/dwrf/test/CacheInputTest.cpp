@@ -85,7 +85,7 @@ class TestInputStream : public facebook::velox::dwio::common::InputStream {
   IoStatisticsPtr ioStats_;
 };
 
-class TestInputStreamHolder : public dwrf::AbstractInputStreamHolder {
+class TestInputStreamHolder : public dwio::common::AbstractInputStreamHolder {
  public:
   explicit TestInputStreamHolder(
       std::shared_ptr<facebook::velox::dwio::common::InputStream> stream)
