@@ -252,49 +252,53 @@ RowVectorPtr Window::getOutput() {
     partitionStartRow_ = numRowsReturned_ + i;
     partitionStartRow = i;
     if ((numRowsReturned_ + i == returningRows_.size() - 1)) {
-        // This is the last row of the input.
-        // Fake partitionEnd row to be one row beyond the output block. This works for this logic but is a bit
-        // hacky.
-        partitionEndRow = i + 1;
+      // This is the last row of the input.
+      // Fake partitionEnd row to be one row beyond the output block. This works
+      // for this logic but is a bit hacky.
+      partitionEndRow = i + 1;
     } else {
-        // Lookahead and find partition end. The java code uses a binary search style lookup instead of iterating over
-        // consecutive rows.
-        partitionEndRow = 0;
-        for (int j = i + 1; j < numRowsToReturn; j++) {
-            // Compare the partition start row with the current row to check if the partition has changed.
-            if (partitionCompare(returningRows_[i], returningRows_[j])) {
-                // Partition end found.
-                partitionEndRow = j;
-                break;
-            }
+      // Lookahead and find partition end. The java code uses a binary search
+      // style lookup instead of iterating over consecutive rows.
+      partitionEndRow = 0;
+      for (int j = i + 1; j < numRowsToReturn; j++) {
+        // Compare the partition start row with the current row to check if the
+        // partition has changed.
+        if (partitionCompare(returningRows_[i], returningRows_[j])) {
+          // Partition end found.
+          partitionEndRow = j;
+          break;
         }
+      }
     }
 
     if (partitionEndRow == 0) {
-        // This means we cannot ascertain this partition can complete in this getOutput call. So defer until next
-        // getOutput call.
-        break;
+      // This means we cannot ascertain this partition can complete in this
+      // getOutput call. So defer until next getOutput call.
+      break;
     }
 
     std::vector<char*> partitionRows;
     partitionRows.resize(partitionEndRow - partitionStartRow);
     // partitionIter_ retains the positional information across getOutput calls.
-    data_->listRows(&partitionIter_, partitionEndRow - partitionStartRow, partitionRows.data());
+    data_->listRows(
+        &partitionIter_,
+        partitionEndRow - partitionStartRow,
+        partitionRows.data());
     for (int w = 0; w < outputType_->size() - inputColumnsSize_; w++) {
-        windowFunctions_[w]->resetPartition(partitionRows);
+      windowFunctions_[w]->resetPartition(partitionRows);
     }
 
     for (int j = partitionStartRow; j < partitionEndRow; j++) {
-        for (int w = 0; w < outputType_->size() - inputColumnsSize_; w++) {
-            // TODO : The end point is a row within this block. Do the cross block output case.
-            auto frameEndPoints = findFrameEndPoints(w, j);
-            // TODO : Figure how to find the peers, frameStarts and frameEnds buffers
-            // for the function invocation.
-            VELOX_CHECK_EQ(frameEndPoints.second, j);
-            windowFunctions_[w]->apply(
-                    nullptr, nullptr, nullptr, nullptr,
-                    windowFunctionOutputs[w]);
-        }
+      for (int w = 0; w < outputType_->size() - inputColumnsSize_; w++) {
+        // TODO : The end point is a row within this block. Do the cross block
+        // output case.
+        auto frameEndPoints = findFrameEndPoints(w, j);
+        // TODO : Figure how to find the peers, frameStarts and frameEnds
+        // buffers for the function invocation.
+        VELOX_CHECK_EQ(frameEndPoints.second, j);
+        windowFunctions_[w]->apply(
+            nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[w]);
+      }
     }
 
     i = partitionEndRow;

@@ -103,8 +103,8 @@ class Window : public Operator {
   // the HashTable can maintain a count of the rows in the partition.
 
   // The current code also assumes that all partition rows fit within a single
-  // output block of rows. We do not consider partitions that overlap over output
-  // blocks.
+  // output block of rows. We do not consider partitions that overlap over
+  // output blocks.
   int partitionStartRow_ = 0;
   RowContainerIterator partitionIter_;
 
