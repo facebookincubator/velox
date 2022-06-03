@@ -3,9 +3,13 @@ trigger: change
 jobs:
   build:
     name: unit test
-    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    image: hub.byted.org/base/velox.ci:3af98fe94bb3ad769e823952369eb021
     working-directory: velox
     steps:
+      - name: Init Submodules
+        commands:
+          - git submodule sync --recursive
+          - git submodule update --init --recursive
       - name: Build
         commands:
           - make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
@@ -19,10 +23,30 @@ jobs:
         commands:
           - _build/debug/velox/examples/velox_example_expression_eval
           - _build/debug/velox/examples/velox_example_opaque_type
-
+  hdfs-build:
+    name: hdfs tests
+    image: hub.byted.org/base/velox.ci:3af98fe94bb3ad769e823952369eb021
+    working-directory: velox
+    steps:
+      - name: Init Submodules
+        commands:
+          - git submodule sync --recursive
+          - git submodule update --init --recursive
+      - name: Get Hdfs Dependencies
+        commands:
+          - git clone --single-branch https://code.byted.org/cpputil/infsec.git velox/connectors/hive/storage_adapters/hdfs/infsec
+          - git clone --single-branch --branch hdfs_for_velox https://code.byted.org/dp/libhdfs3.git velox/connectors/hive/storage_adapters/hdfs/libhdfs3/
+          - git clone --single-branch --branch 1.0.0 https://code.byted.org/cpputil/consul.git velox/connectors/hive/storage_adapters/hdfs/service_discover/consul
+          - git clone --single-branch https://code.byted.org/cpputil/minizip.git velox/connectors/hive/storage_adapters/hdfs/service_discover/minizip
+      - name: Build
+        commands:
+          - make hdfs-debug-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+      - name: Run Hdfs Tests
+        commands:
+          - make NUM_THREADS=16 hdfstest
   format-check:
     name: format check
-    image: hub.byted.org/base/presto.cpp.ci:b70cae0f212c3f97f41aae5b7f123306
+    image: hub.byted.org/base/velox.ci:3af98fe94bb3ad769e823952369eb021
     steps:
       - name: Check formatting
         commands:

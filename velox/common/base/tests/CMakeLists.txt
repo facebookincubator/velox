@@ -12,18 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  velox_base_test
-  AsyncSourceTest.cpp
-  BitUtilTest.cpp
-  BloomFilterTest.cpp
-  CoalesceIoTest.cpp
-  ExceptionTest.cpp
-  RangeTest.cpp
-  RawVectorTest.cpp
-  SimdUtilTest.cpp
-  StatsReporterTest.cpp
-  SuccinctPrinterTest.cpp)
+if(${VELOX_ENABLE_METRICS})
+  add_executable(
+    velox_base_test
+    AsyncSourceTest.cpp
+    BitUtilTest.cpp
+    BloomFilterTest.cpp
+    CoalesceIoTest.cpp
+    ExceptionTest.cpp
+    RangeTest.cpp
+    RawVectorTest.cpp
+    SimdUtilTest.cpp
+    StatsReporterTest.cpp
+    SuccinctPrinterTest.cpp
+    MetricsStatsReporterTest.cpp)
+else()
+  add_executable(
+    velox_base_test
+    AsyncSourceTest.cpp
+    BitUtilTest.cpp
+    BloomFilterTest.cpp
+    CoalesceIoTest.cpp
+    ExceptionTest.cpp
+    RangeTest.cpp
+    RawVectorTest.cpp
+    SimdUtilTest.cpp
+    StatsReporterTest.cpp
+    SuccinctPrinterTest.cpp)
+endif()
 
 add_test(velox_base_test velox_base_test)
 
@@ -35,3 +51,7 @@ target_link_libraries(
   gtest
   gtest_main
   pthread)
+
+if(${VELOX_ENABLE_METRICS})
+  target_link_libraries(velox_base_test metrics2)
+endif()

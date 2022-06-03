@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if(VELOX_ENABLE_S3)
-  add_subdirectory(s3fs)
-endif()
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error")
+set(SRCS consul/base64.cpp consul/bridge.cpp consul/discovery.cpp
+         consul/register.cpp consul/requests.cpp consul/easy_curl.cpp)
 
-if(${VELOX_ENABLE_HDFS})
-  add_subdirectory(hdfs)
-endif()
+add_library(consul ${SRCS})
+target_include_directories(consul PUBLIC consul)
+target_include_directories(consul PRIVATE minizip)
+
+# CURL
+find_package(CURL REQUIRED)
+target_include_directories(consul PRIVATE ${CURL_INCLUDE_DIRS})
+target_link_libraries(consul ${CURL_LIBRARIES})

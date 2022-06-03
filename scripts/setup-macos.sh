@@ -37,7 +37,8 @@ NPROC=$(getconf _NPROCESSORS_ONLN)
 COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
-MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
+VELOX_DIR=$DEPENDENCY_DIR
+MACOS_DEPS="ninja cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1 gsasl libxml2 rapidjson"
 
 function run_and_time {
   time "$@"
@@ -118,6 +119,15 @@ function install_velox_deps {
   run_and_time install_double_conversion
   run_and_time install_folly
   run_and_time install_re2
+  run_and_time install_libhdfs3
+}
+
+function install_libhdfs3 {
+  cd "${VELOX_DIR}"
+  git clone --single-branch https://code.byted.org/cpputil/infsec.git velox/connectors/hive/storage_adapters/hdfs/infsec
+  git clone --single-branch --branch hdfs_for_velox https://code.byted.org/dp/libhdfs3.git velox/connectors/hive/storage_adapters/hdfs/libhdfs3/
+  git clone --single-branch --branch 1.0.0 https://code.byted.org/cpputil/consul.git velox/connectors/hive/storage_adapters/hdfs/service_discover/consul
+  git clone --single-branch https://code.byted.org/cpputil/minizip.git velox/connectors/hive/storage_adapters/hdfs/service_discover/minizip
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.

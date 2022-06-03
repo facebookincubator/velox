@@ -81,6 +81,9 @@ debug:					#: Build with debugging symbols
 	$(MAKE) cmake BUILD_DIR=debug BUILD_TYPE=Debug
 	$(MAKE) build BUILD_DIR=debug
 
+hdfs-debug-build:			#: Build the debug version with HDFS enabled
+	$(MAKE) debug EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_HDFS=ON"
+
 release:				#: Build the release version
 	$(MAKE) cmake BUILD_DIR=release BUILD_TYPE=Release && \
 	$(MAKE) build BUILD_DIR=release
@@ -102,6 +105,9 @@ benchmarks-basic-dump:
 
 unittest: debug			#: Build with debugging and run unit tests
 	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
+
+hdfstest: hdfs-debug-build #: Build with debugging, hdfs enabled and run hdfs tests
+	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure -R velox_hdfs_file_test
 
 fuzzertest: debug		#: Build with debugging and run expression fuzzer test.
 	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0

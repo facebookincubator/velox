@@ -28,6 +28,11 @@ add_library(
 
 target_link_libraries(velox_common_base velox_exception velox_process xsimd)
 
+if(${VELOX_ENABLE_METRICS})
+  add_subdirectory(metrics_client)
+  target_link_libraries(velox_common_base metrics2)
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
