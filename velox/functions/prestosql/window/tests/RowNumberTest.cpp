@@ -68,5 +68,38 @@ TEST_F(RowNumberTest, basicRowNumber) {
       op,
       "SELECT c0, c1, row_number()  over (partition by c0 order by c1) as row_number_partition FROM tmp order by c0, c1");
 }
+
+/*TEST_F(RowNumberTest, basicRowNumber2) {
+    vector_size_t size = 10;
+    auto valueAtC0 = [](auto row) -> int32_t {
+        return row % 5;
+    };
+    auto valueAtC1 = [](auto row) -> int32_t {
+        return row % 5;
+    };
+
+    auto vectors = makeRowVector({
+        makeFlatVector<int32_t>(size, valueAtC0),
+        makeFlatVector<double>(size, valueAtC1),
+    });
+
+    createDuckDbTable({vectors});
+
+    auto op = PlanBuilder()
+            .values({vectors})
+            .project({"c0 as c0", "c1 as c1"})
+            .window(
+                    {0},
+                    {1},
+                    {core::kAscNullsLast},
+                    {"row_number() as row_number_partition"})
+            .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
+            .planNode();
+    assertQuery(
+            op,
+            "SELECT c0, c1, rank()  over (partition by c0 order by c1) as
+row_number_partition FROM tmp order by c0, c1");
+
+}  */
 }; // namespace
 }; // namespace facebook::velox::window::test

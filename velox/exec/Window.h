@@ -70,7 +70,9 @@ class Window : public Operator {
 
   std::pair<int32_t, int32_t> findFrameEndPoints(
       int32_t windowFunctionIndex,
-      int32_t rowNumber);
+      int32_t partitionStartRow,
+      int32_t partitionEndRow,
+      int32_t currentRow);
 
   bool finished_ = false;
 
@@ -87,6 +89,7 @@ class Window : public Operator {
 
   std::vector<std::pair<ChannelIndex, core::SortOrder>> allKeyInfo_;
   std::vector<std::pair<ChannelIndex, core::SortOrder>> partitionKeyInfo_;
+  std::vector<std::pair<ChannelIndex, core::SortOrder>> sortKeyInfo_;
 
   size_t numRows_ = 0;
   size_t numRowsReturned_ = 0;

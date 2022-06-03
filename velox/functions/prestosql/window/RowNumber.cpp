@@ -32,21 +32,19 @@ class RowNumberFunction : public exec::WindowFunction {
   }
 
   void apply(
-      const BufferPtr& /* peerGroupStarts */,
-      const BufferPtr& /* peerGroupEnds */,
-      const BufferPtr& /* frameStarts */,
-      const BufferPtr& /* frameEnds */,
+      int32_t /* peerGroupStarts */,
+      int32_t /* peerGroupEnds */,
+      int32_t /* frameStarts */,
+      int32_t /* frameEnds */,
+      int32_t currentOutputRow,
       const VectorPtr& result) {
-    result->asFlatVector<int64_t>()->mutableRawValues()[currentPosition_] =
-        rowNumber_++;
-    currentPosition_++;
+    result->asFlatVector<int64_t>()->mutableRawValues()[currentOutputRow] =
+        rowNumber_;
+    rowNumber_++;
   }
 
  private:
   int64_t rowNumber_ = 1;
-  // TODO : This variable presumes a single output buffer.
-  // Enhance this to handle batches of output buffers.
-  int64_t currentPosition_ = 0;
 };
 
 bool registerRowNumber(const std::string& name) {

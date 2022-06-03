@@ -495,9 +495,11 @@ PlanBuilder& PlanBuilder::window(
     auto untypedExpr = duckdb::parseExpr(windowFunctions[i]);
     auto callUnTypedExpr =
         std::dynamic_pointer_cast<const core::CallExpr>(untypedExpr);
-    VELOX_CHECK(callUnTypedExpr->getFunctionName() == "row_number");
-    auto expr =
-        std::make_shared<core::CallTypedExpr>(BIGINT(), args, "row_number");
+    VELOX_CHECK(
+        callUnTypedExpr->getFunctionName() == "row_number" ||
+        callUnTypedExpr->getFunctionName() == "rank");
+    auto expr = std::make_shared<core::CallTypedExpr>(
+        BIGINT(), args, callUnTypedExpr->getFunctionName());
     // TODO : Add parsing for the Window frame.
     windowNodeFunctions.push_back({std::move(expr), defaultFrame, true});
     if (untypedExpr->alias().has_value()) {

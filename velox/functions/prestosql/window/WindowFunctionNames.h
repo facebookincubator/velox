@@ -18,5 +18,6 @@
 
 namespace facebook::velox::window {
 const char* const kRowNumber = "row_number";
+const char* const kRank = "rank";
 
 } // namespace facebook::velox::window

@@ -69,6 +69,11 @@ Window::Window(
       windowNode->partitionKeys(),
       {},
       partitionKeyInfo_);
+  initKeyInfo(
+      windowNode->sources()[0]->outputType(),
+      windowNode->sortingKeys(),
+      windowNode->sortingOrders(),
+      sortKeyInfo_);
   for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
     const auto& windowNodeFunction = windowNode->windowFunctions()[i];
     std::vector<TypePtr> argTypes;
@@ -179,7 +184,9 @@ void Window::noMoreInput() {
 
 std::pair<int32_t, int32_t> Window::findFrameEndPoints(
     int32_t windowFunctionIndex,
-    int32_t rowNumber) {
+    int32_t partitionStartRow,
+    int32_t /*partitionEndRow*/,
+    int32_t currentRow) {
   // TODO : We handle only the default window frame in this code. Add support
   // for all window frames subsequently.
   VELOX_CHECK_EQ(
@@ -195,7 +202,7 @@ std::pair<int32_t, int32_t> Window::findFrameEndPoints(
   VELOX_CHECK(!windowFrames_[windowFunctionIndex].endChannel_.has_value());
 
   // Default window frame is Range UNBOUNDED PRECEDING CURRENT ROW.
-  return std::make_pair(partitionStartRow_, rowNumber);
+  return std::make_pair(partitionStartRow, currentRow);
 }
 
 RowVectorPtr Window::getOutput() {
@@ -246,24 +253,42 @@ RowVectorPtr Window::getOutput() {
     return false;
   };
 
-  int partitionStartRow;
+  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
+    if (lhs == rhs) {
+      return false;
+    }
+    for (auto& key : sortKeyInfo_) {
+      if (auto result = data_->compare(
+              lhs,
+              rhs,
+              key.first,
+              {key.second.isNullsFirst(), key.second.isAscending(), false})) {
+        return result < 0;
+      }
+    }
+    return false;
+  };
+
+  int bufferEndRow = partitionStartRow_ + numRowsToReturn;
+  bool lastOutputBlock = (bufferEndRow == returningRows_.size()) ? true : false;
+  // Both partitionStartRow_ and partitionEndRow are the offsets in the
+  // returningRows_ buffer.
   int partitionEndRow;
   for (int i = 0; i < numRowsToReturn;) {
-    partitionStartRow_ = numRowsReturned_ + i;
-    partitionStartRow = i;
     if ((numRowsReturned_ + i == returningRows_.size() - 1)) {
       // This is the last row of the input.
       // Fake partitionEnd row to be one row beyond the output block. This works
       // for this logic but is a bit hacky.
-      partitionEndRow = i + 1;
+      partitionEndRow = partitionStartRow_ + 1;
     } else {
       // Lookahead and find partition end. The java code uses a binary search
       // style lookup instead of iterating over consecutive rows.
       partitionEndRow = 0;
-      for (int j = i + 1; j < numRowsToReturn; j++) {
+      for (int j = partitionStartRow_ + 1; j < bufferEndRow; j++) {
         // Compare the partition start row with the current row to check if the
         // partition has changed.
-        if (partitionCompare(returningRows_[i], returningRows_[j])) {
+        if (partitionCompare(
+                returningRows_[partitionStartRow_], returningRows_[j])) {
           // Partition end found.
           partitionEndRow = j;
           break;
@@ -272,36 +297,76 @@ RowVectorPtr Window::getOutput() {
     }
 
     if (partitionEndRow == 0) {
-      // This means we cannot ascertain this partition can complete in this
-      // getOutput call. So defer until next getOutput call.
-      break;
+      if (!lastOutputBlock) {
+        // This means we cannot ascertain this partition can complete in this
+        // getOutput call. So don't continue outputing rows in this output
+        // block. Defer until next getOutput call. But correctly set the number
+        // of rows returned in this block.
+        numRowsToReturn = i + 1;
+        break;
+      } else {
+        partitionEndRow = returningRows_.size();
+      }
     }
 
     std::vector<char*> partitionRows;
-    partitionRows.resize(partitionEndRow - partitionStartRow);
+    size_t partitionSize = partitionEndRow - partitionStartRow_;
+    partitionRows.resize(partitionSize);
     // partitionIter_ retains the positional information across getOutput calls.
-    data_->listRows(
-        &partitionIter_,
-        partitionEndRow - partitionStartRow,
-        partitionRows.data());
+    data_->listRows(&partitionIter_, partitionSize, partitionRows.data());
     for (int w = 0; w < outputType_->size() - inputColumnsSize_; w++) {
       windowFunctions_[w]->resetPartition(partitionRows);
     }
 
-    for (int j = partitionStartRow; j < partitionEndRow; j++) {
+    int peerStartRow = partitionStartRow_;
+    int peerEndRow = peerStartRow + 1;
+    for (int j = 0; j < partitionSize; j++) {
+      int currentRow = partitionStartRow_ + j;
+      // Find peers for the row. Peer computation happens only after the
+      // rows of the previous peer are traversed. The peer computation
+      // is done only until the end of the partition, so the values can
+      // be safely used for traversal of input and output buffers.
+      if (currentRow == partitionStartRow_ ||
+          (currentRow == peerEndRow && currentRow != (partitionEndRow - 1))) {
+        if (peerStartRow != partitionStartRow_) {
+          peerStartRow = peerEndRow;
+        }
+        peerEndRow = peerStartRow + 1;
+        for (int p = peerEndRow; p < partitionEndRow; p++) {
+          if (peerCompare(
+                  returningRows_[peerStartRow], returningRows_[peerEndRow])) {
+            peerEndRow = p;
+            break;
+          }
+        }
+      }
+
       for (int w = 0; w < outputType_->size() - inputColumnsSize_; w++) {
-        // TODO : The end point is a row within this block. Do the cross block
-        // output case.
-        auto frameEndPoints = findFrameEndPoints(w, j);
-        // TODO : Figure how to find the peers, frameStarts and frameEnds
-        // buffers for the function invocation.
-        VELOX_CHECK_EQ(frameEndPoints.second, j);
+        // As we ensure that all the rows of a partition fit into the output
+        // block, then the peer and frame rows also will belong to this block.
+        auto frameEndPoints = findFrameEndPoints(
+            w, partitionStartRow_, partitionEndRow, currentRow);
+        VELOX_CHECK_EQ(frameEndPoints.second, currentRow);
+        // Find offsets for peer rows and frame rows in the current
+        // partitionRowBuffer for the function.
+        int32_t peerStartOffset = peerStartRow - partitionStartRow_;
+        int32_t peerEndOffset = peerEndRow - partitionStartRow_;
+        int32_t frameStartOffset = frameEndPoints.first - partitionStartRow_;
+        int32_t frameEndOffset = frameEndPoints.second - partitionStartRow_;
+        // This is the offset of the current row in the output buffer.
+        int32_t currentRowOffset = i + j;
         windowFunctions_[w]->apply(
-            nullptr, nullptr, nullptr, nullptr, windowFunctionOutputs[w]);
+            peerStartOffset,
+            peerEndOffset,
+            frameStartOffset,
+            frameEndOffset,
+            currentRowOffset,
+            windowFunctionOutputs[w]);
       }
     }
 
-    i = partitionEndRow;
+    i += partitionSize;
+    partitionStartRow_ = partitionEndRow;
   }
 
   for (int j = inputColumnsSize_; j < outputType_->size(); j++) {
