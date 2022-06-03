@@ -155,8 +155,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 execute_process(
   COMMAND
     bash -c
-    "( source ./scripts/setup-helper-functions.sh; echo -n $(get_cxx_flags))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS)
+    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+  RESULT_VARIABLE COMMAND_STATUS)
+
+if(COMMAND_STATUS EQUAL "1")
+  message(FATAL_ERROR "Unable to determine compiler flags!")
+endif()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
@@ -302,6 +307,16 @@ if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
     FATAL_ERROR
       "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or VELOX_BUILD_TESTING=OFF)"
   )
+endif()
+
+# Benchmarks and tests at some places are coupled which is not great. See
+# velox/vector/CMakeLists.txt. TODO: Decouple.
+set(VELOX_DISABLE_GOOGLETEST OFF)
+if(NOT VELOX_BUILD_TEST_UTILS
+   AND NOT VELOX_BUILD_TESTING
+   AND NOT VELOX_ENABLE_BENCHMARKS_BASIC)
+  set(VELOX_DISABLE_GOOGLETEST ON)
+  add_definitions(-DVELOX_DISABLE_GOOGLETEST)
 endif()
 
 include_directories(SYSTEM velox)

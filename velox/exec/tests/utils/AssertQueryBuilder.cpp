@@ -169,7 +169,7 @@ RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
       BaseVector::create(results[0]->type(), totalCount, pool));
   auto copyCount = 0;
   for (const auto& result : results) {
-    copy->copy(result.get(), 0, copyCount, result->size());
+    copy->copy(result.get(), copyCount, 0, result->size());
     copyCount += result->size();
   }
 
@@ -181,7 +181,9 @@ AssertQueryBuilder::readCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
   if (!configs_.empty()) {
-    params_.queryCtx = core::QueryCtx::createForTest();
+    if (!params_.queryCtx) {
+      params_.queryCtx = core::QueryCtx::createForTest();
+    }
     params_.queryCtx->setConfigOverridesUnsafe(std::move(configs_));
   }
 

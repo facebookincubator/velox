@@ -110,13 +110,20 @@ class VectorTest : public testing::Test {
     return indices;
   }
 
+  BufferPtr makeNulls(
+      vector_size_t size,
+      std::function<bool(vector_size_t /*row*/)> isNullAt) {
+    auto nulls = AlignedBuffer::allocate<bool>(size, pool_.get());
+    auto rawNulls = nulls->asMutable<uint64_t>();
+    for (auto i = 0; i < size; i++) {
+      bits::setNull(rawNulls, i, isNullAt(i));
+    }
+    return nulls;
+  }
+
   template <typename T>
   T testValue(int32_t i, BufferPtr& space) {
-    if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-      return std::make_shared<NonPOD>(i);
-    } else {
-      return i;
-    }
+    return i;
   }
 
   template <TypeKind KIND>
@@ -766,6 +773,16 @@ Date VectorTest::testValue(int32_t i, BufferPtr& space) {
   return Date(i);
 }
 
+template <>
+std::shared_ptr<void> VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return std::make_shared<NonPOD>(i);
+}
+
+template <>
+IntervalDayTime VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return IntervalDayTime(i);
+}
+
 VectorPtr VectorTest::createMap(int32_t numRows, bool withNulls) {
   BufferPtr nulls;
   BufferPtr offsets;
@@ -830,6 +847,7 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::BOOLEAN>(BOOLEAN(), vectorSize_);
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
+  testFlat<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME(), vectorSize_);
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1037,6 +1055,35 @@ TEST_F(VectorTest, wrapInConstant) {
   EXPECT_EQ(constVector->valueVector(), nullptr);
   for (auto i = 0; i < size; i++) {
     ASSERT_TRUE(constVector->isNullAt(i));
+  }
+}
+
+TEST_F(VectorTest, wrapConstantInDictionary) {
+  // Wrap Constant in Dictionary with no extra nulls. Expect Constant.
+  auto indices = makeIndices(10, [](auto row) { return row % 2; });
+  auto vector = BaseVector::wrapInDictionary(
+      nullptr, indices, 10, BaseVector::createConstant(7, 100, pool_.get()));
+  ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
+  auto constantVector =
+      std::dynamic_pointer_cast<ConstantVector<int32_t>>(vector);
+  for (auto i = 0; i < 10; ++i) {
+    ASSERT_FALSE(constantVector->isNullAt(i));
+    ASSERT_EQ(7, constantVector->valueAt(i));
+  }
+
+  // Wrap Constant in Dictionary with extra nulls. Expect Dictionary.
+  auto nulls = makeNulls(10, [](auto row) { return row % 3 == 0; });
+  vector = BaseVector::wrapInDictionary(
+      nulls, indices, 10, BaseVector::createConstant(11, 100, pool_.get()));
+  ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::DICTIONARY);
+  auto dictVector = std::dynamic_pointer_cast<SimpleVector<int32_t>>(vector);
+  for (auto i = 0; i < 10; ++i) {
+    if (i % 3 == 0) {
+      ASSERT_TRUE(dictVector->isNullAt(i));
+    } else {
+      ASSERT_FALSE(dictVector->isNullAt(i));
+      ASSERT_EQ(11, dictVector->valueAt(i));
+    }
   }
 }
 
@@ -1331,6 +1378,7 @@ TEST_F(VectorCreateConstantTest, null) {
 
   testNullConstant<TypeKind::TIMESTAMP>(TIMESTAMP());
   testNullConstant<TypeKind::DATE>(DATE());
+  testNullConstant<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME());
 
   testNullConstant<TypeKind::VARCHAR>(VARCHAR());
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());

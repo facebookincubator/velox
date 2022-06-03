@@ -43,6 +43,9 @@ namespace facebook::velox::exec {
       case TypeKind::DATE: {                                             \
         return TEMPLATE_FUNC<TypeKind::DATE>(__VA_ARGS__);               \
       }                                                                  \
+      case TypeKind::INTERVAL_DAY_TIME: {                                \
+        return TEMPLATE_FUNC<TypeKind::INTERVAL_DAY_TIME>(__VA_ARGS__);  \
+      }                                                                  \
       case TypeKind::VARCHAR:                                            \
       case TypeKind::VARBINARY: {                                        \
         return TEMPLATE_FUNC<TypeKind::VARCHAR>(__VA_ARGS__);            \
@@ -180,7 +183,7 @@ template <typename T>
 bool VectorHasher::makeValueIdsFlatNoNulls(
     const SelectivityVector& rows,
     uint64_t* result) {
-  const auto* values = decoded_.values<T>();
+  const auto* values = decoded_.data<T>();
   if (isRange_ && tryMapToRange(values, rows, result)) {
     return true;
   }
@@ -210,7 +213,7 @@ template <typename T>
 bool VectorHasher::makeValueIdsFlatWithNulls(
     const SelectivityVector& rows,
     uint64_t* result) {
-  const auto* values = decoded_.values<T>();
+  const auto* values = decoded_.data<T>();
   const auto* nulls = decoded_.nulls();
 
   bool success = true;
@@ -247,7 +250,7 @@ bool VectorHasher::makeValueIdsDecoded(
   std::fill(cachedHashes_.begin(), cachedHashes_.end(), 0);
 
   auto indices = decoded_.indices();
-  auto values = decoded_.values<T>();
+  auto values = decoded_.data<T>();
 
   bool success = true;
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
@@ -288,7 +291,7 @@ bool VectorHasher::makeValueIdsDecoded<bool, true>(
     const SelectivityVector& rows,
     uint64_t* result) {
   auto indices = decoded_.indices();
-  auto values = decoded_.values<uint64_t>();
+  auto values = decoded_.data<uint64_t>();
 
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
     if (decoded_.isNullAt(row)) {
@@ -310,7 +313,7 @@ bool VectorHasher::makeValueIdsDecoded<bool, false>(
     const SelectivityVector& rows,
     uint64_t* result) {
   auto indices = decoded_.indices();
-  auto values = decoded_.values<uint64_t>();
+  auto values = decoded_.data<uint64_t>();
 
   rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
     bool value = bits::isBitSet(values, indices[row]);

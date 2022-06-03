@@ -228,12 +228,6 @@ class Expr {
   void
   evalAll(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
 
-  static void setDictionaryWrapping(
-      DecodedVector& decoded,
-      const SelectivityVector& rows,
-      BaseVector& firstWrapper,
-      EvalCtx& context);
-
   // Adds nulls from 'rawNulls' to positions of 'result' given by
   // 'rows'. Ensures that '*result' is writable, of sufficient size
   // and that it can take nulls. Makes a new '*result' when
@@ -421,6 +415,11 @@ class ExprSet {
     memoizingExprs_.insert(expr);
   }
 
+  /// Returns text representation of the expression set.
+  /// @param compact If true, uses one-line representation for each expression.
+  /// Otherwise, prints a tree of expressions one node per line.
+  std::string toString(bool compact = true) const;
+
  protected:
   void clearSharedSubexprs();
 
@@ -491,7 +490,20 @@ class ExprSetListener {
   virtual void onCompletion(
       const std::string& uuid,
       const ExprSetCompletionEvent& event) = 0;
+
+  /// Called when a batch of rows encounters errors processing one or more
+  /// rows in a try expression to provide information about these errors. This
+  /// function must neither change rows nor errors.
+  /// @param rows Rows where errors exist.
+  /// @param errors Error vector produced inside the try expression.
+  virtual void onError(
+      const SelectivityVector& rows,
+      const EvalCtx::ErrorVector& errors) = 0;
 };
+
+/// Return the ExprSetListeners having been registered.
+folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>&
+exprSetListeners();
 
 /// Register a listener to be invoked on ExprSet destruction. Returns true if
 /// listener was successfully registered, false if listener is already

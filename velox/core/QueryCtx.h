@@ -51,13 +51,15 @@ class QueryCtx : public Context {
           connectorConfigs = {},
       memory::MappedMemory* FOLLY_NONNULL mappedMemory =
           memory::MappedMemory::getInstance(),
-      std::unique_ptr<memory::MemoryPool> pool = nullptr)
+      std::unique_ptr<memory::MemoryPool> pool = nullptr,
+      std::shared_ptr<folly::Executor> spillExecutor = nullptr)
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
         mappedMemory_(mappedMemory),
         connectorConfigs_(connectorConfigs),
         executor_{std::move(executor)},
-        config_{this} {
+        config_{this},
+        spillExecutor_(std::move(spillExecutor)) {
     setConfigOverrides(config);
     if (!pool_) {
       initPool();
@@ -136,6 +138,10 @@ class QueryCtx : public Context {
         std::make_shared<const MemConfig>(std::move(configOverrides)));
   }
 
+  folly::Executor* FOLLY_NULLABLE spillExecutor() const {
+    return spillExecutor_.get();
+  }
+
  private:
   static Config* FOLLY_NONNULL getEmptyConfig() {
     static const std::unique_ptr<Config> kEmptyConfig =
@@ -160,6 +166,7 @@ class QueryCtx : public Context {
   std::shared_ptr<folly::Executor> executor_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig config_;
+  std::shared_ptr<folly::Executor> spillExecutor_;
 };
 
 // Represents the state of one thread of query execution.
@@ -178,9 +185,9 @@ class ExecCtx : public Context {
     return queryCtx_;
   }
 
-  /// Returns a SelectivityVector from a pool. Allocates new one if none is
-  /// available. Make sure to call 'releaseSelectivityVector' when done using
-  /// the vector to allow for reuse.
+  /// Returns an uninitialized  SelectivityVector from a pool. Allocates new one
+  /// if none is available. Make sure to call 'releaseSelectivityVector' when
+  /// done using the vector to allow for reuse.
   ///
   /// Prefer using LocalSelectivityVector which takes care of returning the
   /// vector to the pool on destruction.
@@ -191,6 +198,18 @@ class ExecCtx : public Context {
     auto vector = std::move(selectivityVectorPool_.back());
     selectivityVectorPool_.pop_back();
     vector->resize(size);
+    return vector;
+  }
+
+  // Returns an arbitrary SelectivityVector with undefined
+  // content. The caller is responsible for setting the size and
+  // assigning the contents.
+  std::unique_ptr<SelectivityVector> getSelectivityVector() {
+    if (selectivityVectorPool_.empty()) {
+      return std::make_unique<SelectivityVector>();
+    }
+    auto vector = std::move(selectivityVectorPool_.back());
+    selectivityVectorPool_.pop_back();
     return vector;
   }
 

@@ -36,9 +36,8 @@ void ConstantExpr::evalSpecialForm(
   if (needToSetIsAscii_) {
     auto* vector =
         sharedSubexprValues_->asUnchecked<SimpleVector<StringView>>();
-    LocalSelectivityVector singleRow(context, 1);
-    singleRow.get()->setAll();
-    bool isAscii = vector->computeAndSetIsAscii(*singleRow.get());
+    LocalSelectivityVector singleRow(context);
+    bool isAscii = vector->computeAndSetIsAscii(*singleRow.get(1, true));
     vector->setAllIsAscii(isAscii);
     needToSetIsAscii_ = false;
   }
@@ -124,7 +123,7 @@ void FieldReference::evalSpecialForm(
   }
   // If we refer to a column of the context row, this may have been
   // peeled due to peeling off encoding, hence access it via
-  // 'context'.  Chekc if the child is unique before taking the second
+  // 'context'.  Check if the child is unique before taking the second
   // reference. Unique constant vectors can be resized in place, non-unique
   // must be copied to set the size.
   bool isUniqueChild = inputs_.empty() ? context.getField(index_).unique()
@@ -173,10 +172,9 @@ void SwitchExpr::evalSpecialForm(
   ExceptionContextSetter exceptionContext(
       {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
 
-  LocalSelectivityVector remainingRows(context, rows.end());
-  *remainingRows.get() = rows;
+  LocalSelectivityVector remainingRows(context, rows);
 
-  LocalSelectivityVector thenRows(context, rows.end());
+  LocalSelectivityVector thenRows(context);
 
   VectorPtr condition;
   const uint64_t* values;
@@ -214,7 +212,7 @@ void SwitchExpr::evalSpecialForm(
         continue;
       default: {
         bits::andBits(
-            thenRows.get()->asMutableRange().bits(),
+            thenRows.get(rows.end(), false)->asMutableRange().bits(),
             remainingRows.get()->asRange().bits(),
             values,
             0,
@@ -308,7 +306,7 @@ uint64_t* rowsWithError(
   uint64_t* errorMask = nullptr;
   SelectivityVector* errorRows = errorRowsHolder.get();
   if (!errorRows) {
-    errorRows = errorRowsHolder.get(rows.end());
+    errorRows = errorRowsHolder.get(rows.end(), false);
   }
   errorMask = errorRows->asMutableRange().bits();
   std::fill(errorMask, errorMask + bits::nwords(rows.end()), 0);
@@ -376,8 +374,8 @@ void ConjunctExpr::evalSpecialForm(
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {
-    auto nulls = flatResult->mutableNulls(rows.end())->asMutable<uint64_t>();
-    bits::orBits(nulls, rows.asRange().bits(), rows.begin(), rows.end());
+    auto nulls = flatResult->mutableNulls(rows.end());
+    rows.clearNulls(nulls);
   }
   // Initialize result to all true for AND and all false for OR.
   auto values = flatResult->mutableValues(rows.end())->asMutable<uint64_t>();
@@ -398,10 +396,9 @@ void ConjunctExpr::evalSpecialForm(
 
   bool handleErrors = false;
   LocalSelectivityVector errorRows(context);
-  LocalSelectivityVector activeRowsHolder(context, rows.end());
+  LocalSelectivityVector activeRowsHolder(context, rows);
   auto activeRows = activeRowsHolder.get();
   assert(activeRows); // lint
-  *activeRows = rows;
   int32_t numActive = activeRows->countSelected();
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
@@ -500,11 +497,7 @@ void ConjunctExpr::updateResult(
       if (isAnd_) {
         // Clear the nulls and values for all active rows.
         if (result->mayHaveNulls()) {
-          bits::orBits(
-              result->mutableRawNulls(),
-              activeRows->asRange().bits(),
-              activeRows->begin(),
-              activeRows->end());
+          activeRows->clearNulls(result->mutableRawNulls());
         }
         bits::andWithNegatedBits(
             result->mutableRawValues<uint64_t>(),
@@ -771,6 +764,36 @@ void LambdaExpr::makeTypeWithCapture(EvalCtx& context) {
   }
 }
 
+// Apply onError methods of registered listeners on every row that encounters
+// errors. The error vector must exist.
+void applyListenersOnError(
+    const SelectivityVector& rows,
+    const EvalCtx& context) {
+  auto errors = context.errors();
+  VELOX_CHECK_NOT_NULL(errors);
+
+  exec::LocalSelectivityVector errorRows(context.execCtx(), errors->size());
+  errorRows->clearAll();
+  rows.applyToSelected([&](auto row) {
+    if (row < errors->size() && !errors->isNullAt(row)) {
+      errorRows->setValid(row, true);
+    }
+  });
+  errorRows->updateBounds();
+
+  if (!errorRows->hasSelections()) {
+    return;
+  }
+
+  exprSetListeners().withRLock([&](auto& listeners) {
+    if (!listeners.empty()) {
+      for (auto& listener : listeners) {
+        listener->onError(*errorRows, *errors);
+      }
+    }
+  });
+}
+
 void TryExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -818,6 +841,8 @@ void TryExpr::nullOutErrors(
     VectorPtr& result) {
   auto errors = context.errors();
   if (errors) {
+    applyListenersOnError(rows, context);
+
     if (result->encoding() == VectorEncoding::Simple::CONSTANT) {
       // Since it's constant, if any row is NULL they're all NULL, so check row
       // 0 arbitrarily.

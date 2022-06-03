@@ -129,6 +129,15 @@ VectorPtr BaseVector::wrapInDictionary(
     BufferPtr indices,
     vector_size_t size,
     VectorPtr vector) {
+  // Dictionary that doesn't add nulls over constant is same as constant. Just
+  // make sure to adjust the size.
+  if (vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
+    if (size == vector->size()) {
+      return vector;
+    }
+    return BaseVector::wrapInConstant(size, 0, vector);
+  }
+
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       addDictionary, kind, nulls, indices, size, std::move(vector));
@@ -228,19 +237,22 @@ static VectorPtr createEmpty(
     velox::memory::MemoryPool* pool,
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
-  BufferPtr values = AlignedBuffer::allocate<T>(size, pool);
+
+  BufferPtr values;
+  if constexpr (std::is_same<T, StringView>::value) {
+    // Make sure to initialize StringView values so they can be safely accessed.
+    values = AlignedBuffer::allocate<T>(size, pool, T());
+  } else {
+    values = AlignedBuffer::allocate<T>(size, pool);
+  }
+
   return std::make_shared<FlatVector<T>>(
       pool,
       type,
       BufferPtr(nullptr),
       size,
       std::move(values),
-      std::vector<BufferPtr>(),
-      SimpleVectorStats<T>{},
-      0 /*distinctValueCount*/,
-      0 /*nullCount*/,
-      false /*isSorted*/,
-      0 /*representedBytes*/);
+      std::vector<BufferPtr>());
 }
 
 // static
