@@ -25,6 +25,7 @@ add_library(
   KllSketch-inl.h
   LambdaFunctionUtil.cpp
   Re2Functions.cpp
+  LikeFunctionUtils.cpp
   StringEncodingUtils.cpp
   ZetaDistribution.h)
 

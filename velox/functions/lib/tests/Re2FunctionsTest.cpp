@@ -384,6 +384,45 @@ TEST_F(Re2FunctionsTest, likePattern) {
   EXPECT_EQ(like("abc", "MEDIUM POLISHED%"), false);
 }
 
+TEST_F(Re2FunctionsTest, likePatternOptimizedCases) {
+  auto like = [&](std::optional<std::string> str,
+                  std::optional<std::string> pattern) {
+    return evaluateOnce<bool>("like(c0, '" + *pattern + "')", str);
+  };
+
+  EXPECT_EQ(like("abcde", "abcde"), true);
+  EXPECT_EQ(like("ABCDE", "ABCDE"), true);
+  EXPECT_EQ(like("abcde", "uvwxy"), false);
+  EXPECT_EQ(like("ABCDE", "abcde"), false);
+
+  EXPECT_EQ(like("abcde", "%bcd%"), true);
+  EXPECT_EQ(like("ABCDE", "%BC%"), true);
+  EXPECT_EQ(like("abcde", "%cd%"), true);
+  EXPECT_EQ(like("ABCDE", "%CD%"), true);
+  EXPECT_EQ(like("abcde", "%bcf%"), false);
+  EXPECT_EQ(like("ABCDE", "%CF%"), false);
+  EXPECT_EQ(like("abcde", "%zc%"), false);
+  EXPECT_EQ(like("ABCDE", "%cd%"), false);
+
+  EXPECT_EQ(like("abcde", "%bcde"), true);
+  EXPECT_EQ(like("ABCDE", "%CDE"), true);
+  EXPECT_EQ(like("abcde", "%de"), true);
+  EXPECT_EQ(like("ABCDE", "%DE"), true);
+  EXPECT_EQ(like("abcde", "%ccde"), false);
+  EXPECT_EQ(like("ABCDE", "%BDE"), false);
+  EXPECT_EQ(like("abcde", "%be"), false);
+  EXPECT_EQ(like("ABCDE", "%de"), false);
+
+  EXPECT_EQ(like("abcde", "abcd%"), true);
+  EXPECT_EQ(like("ABCDE", "ABC%"), true);
+  EXPECT_EQ(like("abcde", "ab%"), true);
+  EXPECT_EQ(like("ABCDE", "AB%"), true);
+  EXPECT_EQ(like("abcde", "abce%"), false);
+  EXPECT_EQ(like("ABCDE", "ABD%"), false);
+  EXPECT_EQ(like("abcde", "ad%"), false);
+  EXPECT_EQ(like("ABCDE", "abc%"), false);
+}
+
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {
   auto like = ([&](std::optional<std::string> str,
                    std::optional<std::string> pattern,

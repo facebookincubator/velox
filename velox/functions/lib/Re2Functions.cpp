@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/LikeFunctionUtils.h"
 
 #include <re2/re2.h>
 #include <optional>
@@ -378,9 +379,124 @@ class Re2SearchAndExtract final : public VectorFunction {
 
 class LikeConstantPattern final : public VectorFunction {
  public:
+  // Constructor to preprocess and save the state of the string 'pattern' to be
+  // matched in 'like' expression, specifically for the following cases: 1)
+  // Constant pattern search: 'pattern' is an exact pattern i.e it has no
+  // wildcard ('_', '%') or escape characters 2) 'pattern' has an exact pattern
+  // as prefix followed by one or more '%' 3) 'pattern' has an exact pattern as
+  // suffix preceded by one or more '%' 4) 'pattern' contains an exact pattern
+  // with one or more preceding and succeeding '%' If the pattern matches any of
+  // these four cases, we maintain the state, which allows us to invoke a
+  // simplified pattern match function.
   LikeConstantPattern(StringView pattern, std::optional<char> escapeChar)
       : re_(toStringPiece(likePatternToRe2(pattern, escapeChar, validPattern_)),
-            RE2::Quiet) {}
+            RE2::Quiet) {
+    pattern_ = pattern;
+    isConstPattern_ = false;
+    hasConstStrPattern_ = false;
+    hasPrefixPattern_ = false;
+    hasSuffixPattern_ = false;
+
+    if (escapeChar) {
+      return;
+    } else if (!likeutils::checkWildcardInPattern(pattern_)) {
+      isConstPattern_ = true;
+    } else if (checkSimplifiablePattern(pattern_)) {
+      hasConstStrPattern_ = true;
+    } else if (likeutils::checkPrefixPattern(pattern_)) {
+      hasPrefixPattern_ = true;
+    } else if (likeutils::checkSuffixPattern(pattern_)) {
+      hasSuffixPattern_ = true;
+    }
+  }
+
+  // In this function, we check if the string 'pattern' contains an exact
+  // pattern (i.e a string with no wildcard characters, where a wildcard
+  // character is either a '_' or '%') and one or more preceding and succeeding
+  // '%'. Let us refer to such a pattern as a simplifiable pattern. If the
+  // pattern is a simplifiable pattern, we store the indices for the starting
+  // and ending indices of the exact pattern in 'pattern'. This state helps
+  // avoid comparison of characters when checking for a match between the
+  // 'pattern' and the 'inputString'. We then construct the auxiliary 'lps'
+  // array by invoking the following procedure: void
+  // kmpSearchPreprocessPattern(const std::string& pattern, std::vector<int>&
+  // lps); The 'lps' array is used by the following function which performs the
+  // matching using KMP algorithm: bool matchSimplifiedPattern(const
+  // std::string& inputString);
+  bool checkSimplifiablePattern(const std::string& pattern) {
+    size_t start = 0;
+    size_t patternLength = pattern.size();
+    size_t end = patternLength - 1;
+
+    while (start < patternLength) {
+      if (pattern[start] != '%') {
+        break;
+      }
+      start++;
+    }
+    while (end >= 0) {
+      if (pattern[end] != '%') {
+        break;
+      }
+      end--;
+    }
+
+    if ((start == 0) || (end == patternLength - 1)) {
+      return false;
+    }
+
+    pStartIdx_ = start;
+    pEndIdx_ = end;
+
+    while (start <= end) {
+      if (pattern[start] == '%' || pattern[start] == '_') {
+        return false;
+      }
+      start++;
+    }
+
+    lpsKmp_.resize(patternLength);
+    likeutils::kmpSearchPreprocessPattern(pattern_, lpsKmp_);
+    return true;
+  }
+
+  // This function is called if the pattern is simplifiable, as defined and
+  // dtermined by the following procedure: bool checkSimplifiablePattern(const
+  // std::string& pattern); If the pattern is simplifiable, this function
+  // extracts the exact pattern from the string 'pattern' using the indices from
+  // the state saved in the former function. Then, the KMP algorithm is used to
+  // find this exact pattern in the 'inputString' More details about the KMP
+  // algorithm can be found here:
+  // https://www.geeksforgeeks.org/kmp-algorithm-for-pattern-searching/
+  // https://cmps-people.ok.ubc.ca/ylucet/DS/KnuthMorrisPratt.html
+  bool matchSimplifiedPattern(const std::string& inputString) const {
+    size_t patternIndex = 0;
+    std::string constStrPattern =
+        pattern_.substr(pStartIdx_, pEndIdx_ - pStartIdx_ + 1);
+    size_t inputStringLength = inputString.size();
+    size_t patternLength = constStrPattern.size();
+
+    for (size_t inputStringIndex = 0; inputStringIndex < inputStringLength;) {
+      if (inputString[inputStringIndex] == constStrPattern[patternIndex]) {
+        inputStringIndex++;
+        patternIndex++;
+      }
+
+      if (patternIndex == patternLength) {
+        return true;
+      } else if (
+          (inputStringIndex < inputStringLength) &&
+          (inputString[inputStringIndex] != constStrPattern[patternIndex])) {
+        if (patternIndex != 0) {
+          patternIndex = lpsKmp_[patternIndex - 1];
+        } else {
+          inputStringIndex++;
+        }
+      }
+    }
+
+    return false;
+  }
 
   void apply(
       const SelectivityVector& rows,
@@ -406,15 +522,60 @@ class LikeConstantPattern final : public VectorFunction {
     auto toSearch = decodedArgs.at(0);
     if (toSearch->isIdentityMapping()) {
       auto rawStrings = toSearch->data<StringView>();
-      rows.applyToSelected([&](vector_size_t i) {
-        result.set(i, re2FullMatch(rawStrings[i], re_));
-      });
+
+      if (isConstPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          auto inputString = rawStrings[i].str();
+          result.set(i, likeutils::matchExactPattern(rawStrings[i], pattern_));
+        });
+      } else if (hasConstStrPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          auto inputString = rawStrings[i].str();
+          result.set(i, matchSimplifiedPattern(rawStrings[i]));
+        });
+      } else if (hasPrefixPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          auto inputString = rawStrings[i].str();
+          result.set(i, likeutils::matchPrefixPattern(rawStrings[i], pattern_));
+        });
+      } else if (hasSuffixPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          auto inputString = rawStrings[i].str();
+          result.set(i, likeutils::matchSuffixPattern(rawStrings[i], pattern_));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, re2FullMatch(rawStrings[i], re_));
+        });
+      }
       return;
     }
 
     if (toSearch->isConstantMapping()) {
-      bool match = re2FullMatch(toSearch->valueAt<StringView>(0), re_);
-      rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
+      auto rawString = toSearch->valueAt<StringView>(0);
+      auto inputString = rawString;
+
+      if (isConstPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, likeutils::matchExactPattern(inputString, pattern_));
+        });
+      } else if (hasConstStrPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, matchSimplifiedPattern(inputString));
+        });
+      } else if (hasPrefixPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, likeutils::matchPrefixPattern(inputString, pattern_));
+        });
+      } else if (hasSuffixPattern_) {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, likeutils::matchSuffixPattern(inputString, pattern_));
+        });
+      } else {
+        rows.applyToSelected([&](vector_size_t i) {
+          result.set(i, re2FullMatch(rawString, re_));
+        });
+      }
       return;
     }
 
@@ -427,6 +588,14 @@ class LikeConstantPattern final : public VectorFunction {
  private:
   RE2 re_;
   bool validPattern_;
+  bool isConstPattern_;
+  bool hasConstStrPattern_;
+  bool hasPrefixPattern_;
+  bool hasSuffixPattern_;
+  int pStartIdx_;
+  int pEndIdx_;
+  std::string pattern_;
+  std::vector<int> lpsKmp_;
 };
 
 void re2ExtractAll(
