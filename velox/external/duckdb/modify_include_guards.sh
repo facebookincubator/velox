@@ -28,6 +28,7 @@
 echo $1
 TAGS=$(sed -n 's/^#ifndef \(_THRIFT_[A-Z][A-Z_]*_\)/\1/p' ${1})
 PREFIX=_DUCKDB
+# Substitute each tag for the same tag with '_DUCKDB' prepended.
 for TAG in ${TAGS}
 do
 	echo "Substituting ${TAG} with ${PREFIX}${TAG} in ${1}"
