@@ -37,6 +37,9 @@ void registerSimpleFunctions() {
   registerFunction<MonthFunction, int64_t, Timestamp>({"month"});
   registerFunction<MonthFunction, int64_t, Date>({"month"});
   registerFunction<MonthFunction, int64_t, TimestampWithTimezone>({"month"});
+  registerFunction<WeekFunction, int64_t, Timestamp>({"week", "week_of_year"});
+  registerFunction<WeekFunction, int64_t, Date>({"week", "week_of_year"});
+  registerFunction<WeekFunction, int64_t, TimestampWithTimezone>({"week", "week_of_year"});
   registerFunction<DayFunction, int64_t, Timestamp>({"day", "day_of_month"});
   registerFunction<DayFunction, int64_t, Date>({"day", "day_of_month"});
   registerFunction<DateMinusIntervalDayTime, Date, Date, IntervalDayTime>(
