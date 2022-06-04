@@ -33,17 +33,15 @@ DEFINE_bool(
 
 namespace facebook::velox::exec {
 
-namespace {
 folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>&
-listeners() {
+exprSetListeners() {
   static folly::Synchronized<std::vector<std::shared_ptr<ExprSetListener>>>
       kListeners;
   return kListeners;
 }
-} // namespace
 
 bool registerExprSetListener(std::shared_ptr<ExprSetListener> listener) {
-  return listeners().withWLock([&](auto& listeners) {
+  return exprSetListeners().withWLock([&](auto& listeners) {
     for (const auto& existingListener : listeners) {
       if (existingListener == listener) {
         // Listener already registered. Do not register again.
@@ -57,7 +55,7 @@ bool registerExprSetListener(std::shared_ptr<ExprSetListener> listener) {
 
 bool unregisterExprSetListener(
     const std::shared_ptr<ExprSetListener>& listener) {
-  return listeners().withWLock([&](auto& listeners) {
+  return exprSetListeners().withWLock([&](auto& listeners) {
     for (auto it = listeners.begin(); it != listeners.end(); ++it) {
       if ((*it) == listener) {
         listeners.erase(it);
@@ -388,8 +386,7 @@ SelectivityVector* translateToInnerRows(
   // null-propagating Exprs.
   auto flatNulls = decoded.nullIndices() != indices ? decoded.nulls() : nullptr;
 
-  auto* newRows = newRowsHolder.get(baseSize);
-  newRows->clearAll();
+  auto* newRows = newRowsHolder.get(baseSize, false);
   rows.applyToSelected([&](vector_size_t row) {
     if (!flatNulls || !bits::isBitNull(flatNulls, row)) {
       newRows->setValid(indices[row], true);
@@ -400,43 +397,25 @@ SelectivityVector* translateToInnerRows(
   return newRows;
 }
 
-template <typename T, typename U>
-BufferPtr newBuffer(const U* data, size_t size, memory::MemoryPool* pool) {
-  BufferPtr buffer = AlignedBuffer::allocate<T>(size, pool);
-  memcpy(buffer->asMutable<char>(), data, BaseVector::byteSize<T>(size));
-  return buffer;
-}
-
 SelectivityVector* singleRow(
     LocalSelectivityVector& holder,
     vector_size_t row) {
-  holder.allocate(row + 1);
-  auto rows = holder.get();
-  rows->clearAll();
+  auto rows = holder.get(row + 1, false);
   rows->setValid(row, true);
   rows->updateBounds();
   return rows;
 }
-} // namespace
 
-void Expr::setDictionaryWrapping(
+void setDictionaryWrapping(
     DecodedVector& decoded,
     const SelectivityVector& rows,
     BaseVector& firstWrapper,
     EvalCtx& context) {
-  if (decoded.indicesNotCopied() && decoded.nullsNotCopied()) {
-    context.setDictionaryWrap(firstWrapper.wrapInfo(), firstWrapper.nulls());
-  } else {
-    auto wrap = newBuffer<vector_size_t>(
-        decoded.indices(), rows.end(), context.execCtx()->pool());
-    // If nulls are added by wrapping add a null wrap.
-    auto wrapNulls = decoded.hasExtraNulls()
-        ? newBuffer<bool>(
-              decoded.nulls(), rows.end(), context.execCtx()->pool())
-        : BufferPtr(nullptr);
-    context.setDictionaryWrap(std::move(wrap), std::move(wrapNulls));
-  }
+  auto wrapping = decoded.dictionaryWrapping(firstWrapper, rows);
+  context.setDictionaryWrap(
+      std::move(wrapping.indices), std::move(wrapping.nulls));
 }
+} // namespace
 
 Expr::PeelEncodingsResult Expr::peelEncodings(
     EvalCtx& context,
@@ -564,7 +543,7 @@ Expr::PeelEncodingsResult Expr::peelEncodings(
       *context.mutableFinalSelection() = newFinalSelection;
     }
 
-    setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
+    setDictionaryWrapping(*decoded, rowsToDecode, *firstWrapper, context);
   }
   int numPeeled = 0;
   for (int i = 0; i < peeledVectors.size(); ++i) {
@@ -643,8 +622,7 @@ bool Expr::removeSureNulls(
       auto nulls = values->flatRawNulls(rows);
       if (nulls) {
         if (!result) {
-          result = nullHolder.get(rows.size());
-          *result = rows;
+          result = nullHolder.get(rows);
         }
         auto bits = result->asMutableRange().bits();
         bits::andBits(bits, nulls, rows.begin(), rows.end());
@@ -1105,7 +1083,7 @@ bool Expr::applyFunctionWithPeeling(
     context.setConstantWrap(rows.begin());
   } else {
     auto decoded = localDecoded.get();
-    decoded->makeIndices(*firstWrapper, applyRows, numLevels);
+    decoded->makeIndices(*firstWrapper, rows, numLevels);
     newRows = translateToInnerRows(applyRows, *decoded, newRowsHolder);
     context.saveAndReset(saver, rows);
     setDictionaryWrapping(*decoded, rows, *firstWrapper, context);
@@ -1289,7 +1267,7 @@ std::string makeUuid() {
 } // namespace
 
 ExprSet::~ExprSet() {
-  listeners().withRLock([&](auto& listeners) {
+  exprSetListeners().withRLock([&](auto& listeners) {
     if (!listeners.empty()) {
       std::unordered_map<std::string, exec::ExprStats> stats;
       std::unordered_set<const exec::Expr*> uniqueExprs;

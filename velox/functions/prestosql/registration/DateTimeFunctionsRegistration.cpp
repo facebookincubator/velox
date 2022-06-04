@@ -39,17 +39,27 @@ void registerSimpleFunctions() {
   registerFunction<MonthFunction, int64_t, TimestampWithTimezone>({"month"});
   registerFunction<DayFunction, int64_t, Timestamp>({"day", "day_of_month"});
   registerFunction<DayFunction, int64_t, Date>({"day", "day_of_month"});
+  registerFunction<DateMinusIntervalDayTime, Date, Date, IntervalDayTime>(
+      {"minus"});
+  registerFunction<DatePlusIntervalDayTime, Date, Date, IntervalDayTime>(
+      {"plus"});
   registerFunction<DayFunction, int64_t, TimestampWithTimezone>(
       {"day", "day_of_month"});
   registerFunction<DayOfWeekFunction, int64_t, Timestamp>(
       {"dow", "day_of_week"});
   registerFunction<DayOfWeekFunction, int64_t, Date>({"dow", "day_of_week"});
+  registerFunction<DayOfWeekFunction, int64_t, TimestampWithTimezone>(
+      {"dow", "day_of_week"});
   registerFunction<DayOfYearFunction, int64_t, Timestamp>(
+      {"doy", "day_of_year"});
+  registerFunction<DayOfYearFunction, int64_t, Date>({"doy", "day_of_year"});
+  registerFunction<DayOfYearFunction, int64_t, TimestampWithTimezone>(
       {"doy", "day_of_year"});
   registerFunction<YearOfWeekFunction, int64_t, Timestamp>(
       {"yow", "year_of_week"});
   registerFunction<YearOfWeekFunction, int64_t, Date>({"yow", "year_of_week"});
-  registerFunction<DayOfYearFunction, int64_t, Date>({"doy", "day_of_year"});
+  registerFunction<YearOfWeekFunction, int64_t, TimestampWithTimezone>(
+      {"yow", "year_of_week"});
   registerFunction<HourFunction, int64_t, Timestamp>({"hour"});
   registerFunction<HourFunction, int64_t, Date>({"hour"});
   registerFunction<HourFunction, int64_t, TimestampWithTimezone>({"hour"});

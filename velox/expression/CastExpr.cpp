@@ -256,6 +256,9 @@ void CastExpr::applyCast(
       return applyCastWithTry<To, StringView>(
           rows, context, input, resultFlatVector);
     }
+    case TypeKind::DATE: {
+      return applyCastWithTry<To, Date>(rows, context, input, resultFlatVector);
+    }
     // TODO(beroy2000): Will add support for TimeStamp after the converters are
     // fixed
     default: {
@@ -530,34 +533,23 @@ void CastExpr::apply(
         input->flatRawNulls(rows), rows.begin(), rows.end());
   }
 
-  CastOperatorPtr castOperator;
-  if ((castOperator = getCastOperator(toType->toString()))) {
-    if (!castOperator->isSupportedType(fromType)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
-    }
-
+  if (castToOperator_) {
     applyCustomTypeCast<true>(
         input,
         rows,
         *nonNullRows,
-        castOperator,
+        castToOperator_,
         toType,
         fromType,
         context,
         nullOnFailure_,
         result);
-  } else if ((castOperator = getCastOperator(fromType->toString()))) {
-    if (!castOperator->isSupportedType(toType)) {
-      VELOX_FAIL(
-          "Cannot cast {} to {}.", fromType->toString(), toType->toString());
-    }
-
+  } else if (castFromOperator_) {
     applyCustomTypeCast<false>(
         input,
         rows,
         *nonNullRows,
-        castOperator,
+        castFromOperator_,
         fromType,
         toType,
         context,
