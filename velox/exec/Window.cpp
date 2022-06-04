@@ -108,6 +108,21 @@ Window::Window(
          windowNodeFunction.frame.endType,
          windowFrameStartChannel,
          windowFrameEndChannel});
+
+    std::vector<ChannelIndex> argChannels;
+    for (auto& arg : windowNodeFunction.functionCall->inputs()) {
+      if (auto fae =
+              std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+                  arg)) {
+        std::optional<ChannelIndex> argChannel =
+            exprToChannel(fae.get(), windowNode->sources()[0]->outputType());
+        VELOX_CHECK(
+            argChannel.value() != kConstantChannel,
+            "Window doesn't allow constant comparison keys");
+        argChannels.push_back(argChannel.value());
+      }
+    }
+    funcArgChannels_.push_back(argChannels);
   }
 }
 
@@ -226,6 +241,16 @@ RowVectorPtr Window::getOutput() {
         numRowsToReturn,
         i,
         result->childAt(i));
+  }
+
+  std::vector<std::vector<VectorPtr>> functionArgVectors;
+  functionArgVectors.resize(outputType_->size() - inputColumnsSize_);
+  for (auto i = 0; i < funcArgChannels_.size(); i++) {
+    const auto& funcChannels = funcArgChannels_[i];
+    functionArgVectors[i].resize(funcChannels.size());
+    for (auto j = 0; j < funcChannels.size(); j++) {
+      functionArgVectors[i][j] = result->childAt(funcChannels[j]);
+    }
   }
 
   std::vector<VectorPtr> windowFunctionOutputs;
@@ -361,6 +386,7 @@ RowVectorPtr Window::getOutput() {
             frameStartOffset,
             frameEndOffset,
             currentRowOffset,
+            functionArgVectors[w],
             windowFunctionOutputs[w]);
       }
     }

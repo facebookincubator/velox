@@ -37,6 +37,7 @@ class RowNumberFunction : public exec::WindowFunction {
       int32_t /* frameStarts */,
       int32_t /* frameEnds */,
       int32_t currentOutputRow,
+      const std::vector<VectorPtr>& /* argVectors */,
       const VectorPtr& result) {
     result->asFlatVector<int64_t>()->mutableRawValues()[currentOutputRow] =
         rowNumber_;

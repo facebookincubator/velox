@@ -17,6 +17,7 @@
 #pragma once
 
 namespace facebook::velox::window {
+const char* const kNthValue = "nth_value";
 const char* const kRowNumber = "row_number";
 const char* const kRank = "rank";
 

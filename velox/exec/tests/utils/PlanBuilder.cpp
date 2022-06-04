@@ -484,7 +484,6 @@ PlanBuilder& PlanBuilder::window(
   std::vector<std::shared_ptr<const core::CallTypedExpr>> windowFunctionExprs;
   std::vector<core::WindowNode::Function> windowNodeFunctions;
   std::vector<std::string> windowColumnNames;
-  std::vector<std::shared_ptr<const velox::core::ITypedExpr>> args;
   core::WindowNode::Frame defaultFrame{
       core::WindowNode::WindowType::kRange,
       core::WindowNode::BoundType::kUnboundedPreceding,
@@ -495,13 +494,29 @@ PlanBuilder& PlanBuilder::window(
     auto untypedExpr = duckdb::parseExpr(windowFunctions[i]);
     auto callUnTypedExpr =
         std::dynamic_pointer_cast<const core::CallExpr>(untypedExpr);
+
+    // TODO : Ideally, this code should use the window function registry.
+    // But this will require a bit of refactoring of this PR.
+    // Handwriting some of this for now.
     VELOX_CHECK(
         callUnTypedExpr->getFunctionName() == "row_number" ||
-        callUnTypedExpr->getFunctionName() == "rank");
-    auto expr = std::make_shared<core::CallTypedExpr>(
-        BIGINT(), args, callUnTypedExpr->getFunctionName());
-    // TODO : Add parsing for the Window frame.
-    windowNodeFunctions.push_back({std::move(expr), defaultFrame, true});
+        callUnTypedExpr->getFunctionName() == "rank" ||
+        callUnTypedExpr->getFunctionName() == "nth_value");
+    std::vector<core::TypedExprPtr> args;
+    for (auto& child : callUnTypedExpr->getInputs()) {
+      args.push_back(inferTypes(child));
+    }
+    TypePtr returnType;
+    if (callUnTypedExpr->getFunctionName() == "nth_value") {
+      returnType = args[0]->type();
+    } else {
+      returnType = BIGINT();
+    }
+    auto callTypedExpr = std::make_shared<core::CallTypedExpr>(
+        returnType, args, callUnTypedExpr->getFunctionName());
+    // TODO : Add parsing for the Window frame. This code assumes default frame.
+    windowNodeFunctions.push_back(
+        {std::move(callTypedExpr), defaultFrame, true});
     if (untypedExpr->alias().has_value()) {
       windowColumnNames.push_back(untypedExpr->alias().value());
     } else {

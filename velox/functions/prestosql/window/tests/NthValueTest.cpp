@@ -23,7 +23,7 @@ namespace facebook::velox::window::test {
 
 namespace {
 
-class RankTest : public OperatorTestBase {
+class NthValueTest : public OperatorTestBase {
  protected:
   std::vector<RowVectorPtr> makeVectors(
       const std::shared_ptr<const RowType>& rowType,
@@ -50,23 +50,26 @@ class RankTest : public OperatorTestBase {
   folly::Random::DefaultGenerator rng_;
 };
 
-TEST_F(RankTest, basicRank) {
+TEST_F(NthValueTest, basicNthValue) {
   auto vectors = makeVectors(rowType_, 10, 1);
   createDuckDbTable(vectors);
 
-  auto op =
-      PlanBuilder()
-          .values(vectors)
-          .project({"c0 as c0", "c1 as c1"})
-          .window({0}, {1}, {core::kAscNullsLast}, {"rank() as rank_partition"})
-          .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
-          .planNode();
+  auto op = PlanBuilder()
+                .values(vectors)
+                .project({"c0 as c0", "c1 as c1"})
+                .window(
+                    {0},
+                    {1},
+                    {core::kAscNullsLast},
+                    {"nth_value(c0, 1) as nth_value_partition"})
+                .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
+                .planNode();
   assertQuery(
       op,
-      "SELECT c0, c1, rank()  over (partition by c0 order by c1) as rank_partition FROM tmp order by c0, c1");
+      "SELECT c0, c1, nth_value(c0, 1) over (partition by c0 order by c1) as nth_value_partition FROM tmp order by c0, c1");
 }
 
-TEST_F(RankTest, basicRank2) {
+TEST_F(NthValueTest, basicNthValue2) {
   vector_size_t size = 10;
   auto valueAtC0 = [](auto row) -> int32_t { return row % 5; };
   auto valueAtC1 = [](auto row) -> int32_t { return row % 5; };
@@ -78,17 +81,19 @@ TEST_F(RankTest, basicRank2) {
 
   createDuckDbTable({vectors});
 
-  auto op =
-      PlanBuilder()
-          .values({vectors})
-          .project({"c0 as c0", "c1 as c1"})
-          .window({0}, {1}, {core::kAscNullsLast}, {"rank() as rank_partition"})
-          .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
-          .planNode();
+  auto op = PlanBuilder()
+                .values({vectors})
+                .project({"c0 as c0", "c1 as c1", "1 as c2"})
+                .window(
+                    {0},
+                    {1},
+                    {core::kAscNullsLast},
+                    {"nth_value(c0, c2) as nth_value_partition"})
+                .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
+                .planNode();
   assertQuery(
       op,
-      "SELECT c0, c1, rank()  over (partition by c0 order by c1) as rank_partition FROM tmp order by c0, c1");
+      "SELECT c0, c1, 1 as c2, nth_value(c0, 1) over (partition by c0 order by c1) as nth_value_partition FROM tmp order by c0, c1");
 }
-
 }; // namespace
 }; // namespace facebook::velox::window::test

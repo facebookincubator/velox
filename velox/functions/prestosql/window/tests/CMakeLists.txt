@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_windows_test RankTest.cpp RowNumberTest.cpp)
+add_executable(velox_windows_test NthValueTest.cpp RankTest.cpp
+                                  RowNumberTest.cpp)
 
 add_test(
   NAME velox_windows_test

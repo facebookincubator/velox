@@ -39,6 +39,7 @@ class RankFunction : public exec::WindowFunction {
       int32_t /* frameStarts */,
       int32_t /* frameEnds */,
       int32_t currentOutputRow,
+      const std::vector<VectorPtr>& /* argVectors */,
       const VectorPtr& result) {
     if (peerGroupStarts != currentPeerGroupStart_) {
       currentPeerGroupStart_ = peerGroupStarts;

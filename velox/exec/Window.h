@@ -113,6 +113,8 @@ class Window : public Operator {
 
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
   std::vector<WindowFrame> windowFrames_;
+
+  std::vector<std::vector<ChannelIndex>> funcArgChannels_;
 };
 
 } // namespace facebook::velox::exec
