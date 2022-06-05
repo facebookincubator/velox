@@ -86,3 +86,13 @@ wait
 # Folly fails to build in release-mode due
 # AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
 cmake_install folly
+
+(
+  git clone https://github.com/facebook/fbthrift &&
+  cd fbthrift &&
+  git checkout $FB_OS_VERSION &&
+  cd build &&
+  cmake -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" -DBUILD_TESTS=OFF .. &&
+  make "-j$(nproc)" &&
+  make install
+)

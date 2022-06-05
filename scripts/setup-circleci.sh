@@ -94,4 +94,14 @@ cmake_install fmt -DFMT_TEST=OFF
 cmake_install folly
 # cmake_install ranges-v3
 
+(
+  git clone https://github.com/facebook/fbthrift &&
+  cd fbthrift &&
+  git checkout $FB_OS_VERSION &&
+  cd build &&
+  cmake -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" -DBUILD_TESTS=OFF .. &&
+  make "-j$(nproc)" &&
+  make install
+)
+
 dnf clean all

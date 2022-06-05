@@ -93,6 +93,12 @@ function install_double_conversion {
   cmake_install -DBUILD_TESTING=OFF
 }
 
+function install_fbthrift {
+  github_checkout facebook/fbthrift "${FB_OS_VERSION}"
+  OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
+    cmake_install -DBUILD_TESTS=OFF
+}
+
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
   OPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) \
@@ -118,6 +124,7 @@ function install_velox_deps {
   run_and_time install_double_conversion
   run_and_time install_folly
   run_and_time install_re2
+  run_and_time install_fbthrift
 }
 
 (return 2> /dev/null) && return # If script was sourced, don't run commands.
