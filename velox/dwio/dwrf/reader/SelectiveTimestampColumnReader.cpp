@@ -60,7 +60,8 @@ void SelectiveTimestampColumnReader::seekToRowGroup(uint32_t index) {
   auto positions = toPositions(index_->entry(index));
   PositionProvider positionsProvider(positions);
   if (notNullDecoder_) {
-    notNullDecoder_->seekToRowGroup(positionsProvider);
+    std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+        ->seekToRowGroup(positionsProvider);
   }
 
   seconds_->seekToRowGroup(positionsProvider);
@@ -96,7 +97,8 @@ void SelectiveTimestampColumnReader::readHelper(RowSet rows) {
 
   // Save the seconds into their own buffer before reading nanos into
   // 'values_'
-  detail::ensureCapacity<uint64_t>(secondsValues_, numValues_, &memoryPool_);
+  dwio::common::reader::detail::ensureCapacity<uint64_t>(
+      secondsValues_, numValues_, &memoryPool_);
   secondsValues_->setSize(numValues_ * sizeof(int64_t));
   memcpy(
       secondsValues_->asMutable<char>(),
@@ -151,7 +153,8 @@ void SelectiveTimestampColumnReader::getValues(RowSet rows, VectorPtr* result) {
       ? (returnReaderNulls_ ? nullsInReadRange_->as<uint64_t>()
                             : rawResultNulls_)
       : nullptr;
-  detail::fillTimestamps(rawTs, rawNulls, secondsData, nanosData, numValues_);
+  dwio::common::reader::detail::fillTimestamps(
+      rawTs, rawNulls, secondsData, nanosData, numValues_);
   values_ = tsValues;
   rawValues_ = values_->asMutable<char>();
   getFlatValues<Timestamp, Timestamp>(rows, result, type_, true);

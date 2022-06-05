@@ -27,6 +27,8 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/vector/TypeAliases.h"
 
+#include "velox/dwio/common/AbstractByteRleDecoder.h"
+
 namespace facebook::velox::dwrf {
 
 class ByteRleEncoder {
@@ -90,15 +92,11 @@ class ByteRleEncoder {
       int32_t strideIndex = -1) const = 0;
 };
 
-class ByteRleDecoder {
+class ByteRleDecoder : public dwio::common::AbstractByteRleDecoder {
  public:
   ByteRleDecoder(std::unique_ptr<SeekableInputStream> input, EncodingKey ek)
-      : inputStream{std::move(input)},
-        remainingValues{0},
-        value{0},
-        bufferStart{nullptr},
-        bufferEnd{nullptr},
-        repeating{false},
+      : dwio::common::AbstractByteRleDecoder(),
+        inputStream{std::move(input)},
         encodingKey_{ek} {}
 
   virtual ~ByteRleDecoder() = default;
@@ -215,11 +213,7 @@ class ByteRleDecoder {
   }
 
   std::unique_ptr<SeekableInputStream> inputStream;
-  size_t remainingValues;
-  char value;
-  const char* bufferStart;
-  const char* bufferEnd;
-  bool repeating;
+
   EncodingKey encodingKey_;
 };
 

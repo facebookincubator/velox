@@ -82,7 +82,7 @@ void SelectiveIntegerDictionaryColumnReader::read(
     int32_t numFlags = (isBulk && nullsInReadRange_)
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
-    detail::ensureCapacity<uint64_t>(
+    dwio::common::reader::detail::ensureCapacity<uint64_t>(
         scanState_.inDictionary, bits::nwords(numFlags), &memoryPool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.

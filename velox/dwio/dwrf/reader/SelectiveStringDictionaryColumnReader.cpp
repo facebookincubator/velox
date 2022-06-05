@@ -101,7 +101,7 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
     IntDecoder</*isSigned*/ false>& lengthDecoder,
     DictionaryValues& values) {
   // read lengths from length reader
-  detail::ensureCapacity<StringView>(
+  dwio::common::reader::detail::ensureCapacity<StringView>(
       values.values, values.numValues, &memoryPool_);
   // The lengths are read in the low addresses of the string views array.
   int64_t* int64Values = values.values->asMutable<int64_t>();
@@ -211,7 +211,7 @@ void SelectiveStringDictionaryColumnReader::read(
     int32_t numFlags = (isBulk && nullsInReadRange_)
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
-    detail::ensureCapacity<uint64_t>(
+    dwio::common::reader::detail::ensureCapacity<uint64_t>(
         scanState_.inDictionary, bits::nwords(numFlags), &memoryPool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.
@@ -302,7 +302,8 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
         ? flatMapContext_.inMapDecoder->loadIndices(0)
         : 0;
     positionOffset_ = notNullDecoder_
-        ? notNullDecoder_->loadIndices(indexStartOffset)
+        ? std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+              ->loadIndices(indexStartOffset)
         : indexStartOffset;
     size_t offset = strideDictStream_->positionSize() + positionOffset_;
     strideDictSizeOffset_ = strideDictLengthDecoder_->loadIndices(offset);

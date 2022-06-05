@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "velox/dwio/common/reader/ColumnReader.h"
+
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -31,52 +33,23 @@ namespace facebook::velox::dwrf {
 /**
  * The interface for reading ORC data types.
  */
-class ColumnReader {
+class DwrfColumnReader : public dwio::common::reader::ColumnReader {
  protected:
-  explicit ColumnReader(
+  explicit DwrfColumnReader(
       memory::MemoryPool& memoryPool,
       const std::shared_ptr<const dwio::common::TypeWithId>& type)
-      : notNullDecoder_{},
-        nodeType_{type},
-        memoryPool_{memoryPool},
+      : dwio::common::reader::ColumnReader(type, memoryPool),
         flatMapContext_{FlatMapContext::nonFlatMapContext()} {}
 
-  // Reads nulls, if any. Sets '*nulls' to nullptr if void
-  // the reader has no nulls and there are no incoming
-  //          nulls.Takes 'nulls' from 'result' if '*result' is non -
-  //      null.Otherwise ensures that 'nulls' has a buffer of sufficient
-  //          size and uses this.
-  void readNulls(
-      vector_size_t numValues,
-      const uint64_t* incomingNulls,
-      VectorPtr* result,
-      BufferPtr& nulls);
-
-  // Shorthand for long form of readNulls for use in next().
-  BufferPtr readNulls(
-      vector_size_t numValues,
-      VectorPtr& result,
-      const uint64_t* incomingNulls);
-
-  std::unique_ptr<ByteRleDecoder> notNullDecoder_;
-  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
-  memory::MemoryPool& memoryPool_;
   FlatMapContext flatMapContext_;
 
  public:
-  ColumnReader(
+  DwrfColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> nodeId,
       StripeStreams& stripe,
       FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
 
-  virtual ~ColumnReader() = default;
-
-  /**
-   * Skip number of specified rows.
-   * @param numValues the number of values to skip
-   * @return the number of non-null values skipped
-   */
-  virtual uint64_t skip(uint64_t numValues);
+  virtual ~DwrfColumnReader() = default;
 
   /**
    * Read the next group of values into a RowVector.
@@ -107,78 +80,26 @@ class ColumnReader {
   /**
    * Create a reader for the given stripe.
    */
-  static std::unique_ptr<ColumnReader> build(
+  static std::unique_ptr<DwrfColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,
       FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
 };
 
-class ColumnReaderFactory {
+class DwrfColumnReaderFactory {
  public:
-  virtual ~ColumnReaderFactory() = default;
-  virtual std::unique_ptr<ColumnReader> build(
+  virtual ~DwrfColumnReaderFactory() = default;
+  virtual std::unique_ptr<DwrfColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,
       FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext()) {
-    return ColumnReader::build(
+    return DwrfColumnReader::build(
         requestedType, dataType, stripe, std::move(flatMapContext));
   }
 
-  static ColumnReaderFactory* baseFactory();
+  static DwrfColumnReaderFactory* baseFactory();
 };
 
-namespace detail {
-
-template <typename T>
-inline void ensureCapacity(
-    BufferPtr& data,
-    size_t capacity,
-    velox::memory::MemoryPool* pool) {
-  if (!data || !data->unique() ||
-      data->capacity() < BaseVector::byteSize<T>(capacity)) {
-    data = AlignedBuffer::allocate<T>(capacity, pool);
-  }
-}
-
-template <typename T>
-inline T* resetIfWrongVectorType(VectorPtr& result) {
-  if (result) {
-    auto casted = result->as<T>();
-    // We only expect vector to be used by a single thread.
-    if (casted && result.use_count() == 1) {
-      return casted;
-    }
-    result.reset();
-  }
-  return nullptr;
-}
-
-template <typename... T>
-inline void resetIfNotWritable(VectorPtr& result, T&... buffer) {
-  // The result vector and the buffer both hold reference, so refCount is at
-  // least 2
-  auto resetIfShared = [](auto& buffer) {
-    const bool reset = buffer->refCount() > 2;
-    if (reset) {
-      buffer.reset();
-    }
-    return reset;
-  };
-
-  if ((... | resetIfShared(buffer))) {
-    result.reset();
-  }
-}
-
-// Helper method to build timestamps based on nulls/seconds/nanos
-void fillTimestamps(
-    Timestamp* timestamps,
-    const uint64_t* nulls,
-    const int64_t* seconds,
-    const uint64_t* nanos,
-    vector_size_t numValues);
-
-} // namespace detail
 } // namespace facebook::velox::dwrf

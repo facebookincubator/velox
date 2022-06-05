@@ -41,7 +41,8 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
     }
 
     if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
+      std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+          ->seekToRowGroup(positionsProvider);
     }
 
     if (strideDictStream_) {
