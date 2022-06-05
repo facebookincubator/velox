@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(thrift)
-add_subdirectory(duckdb_reader)
-add_subdirectory(reader)
+#set(THRIFT_LIB_DIR "/usr/local/lib")
+#find_library(THRIFTLIB thrift PATHS ${THRIFT_LIB_DIR})
+#message("Found Thrift lib: ${THRIFTLIB} at ${THRIFT_LIB_DIR}")
+find_library(THRIFTLIB thrift)
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+add_library(velox_dwio_parquet_thrift ParquetThriftTypes.cpp)
+
+target_link_libraries(velox_dwio_parquet_thrift ${THRIFTLIB})
+target_include_directories(velox_dwio_parquet_thrift PUBLIC /usr/local/include/)

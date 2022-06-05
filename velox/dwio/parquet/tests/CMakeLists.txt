@@ -30,3 +30,4 @@ set(VELOX_LINK_LIBS
     ${FMT})
 
 add_subdirectory(duckdb_reader)
+add_subdirectory(reader)

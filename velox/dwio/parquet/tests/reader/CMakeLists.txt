@@ -12,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(thrift)
-add_subdirectory(duckdb_reader)
-add_subdirectory(reader)
+# for generated headers
+include_directories(${CMAKE_BINARY_DIR})
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
+set(TEST_LINK_LIBS ${gflags_LIBRARIES} gtest gtest_main gmock ${GLOG}
+                   ${FILESYSTEM})
+
+add_executable(velox_dwio_parquet_reader_test ParquetReaderTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_reader_test
+  COMMAND velox_dwio_parquet_reader_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(velox_dwio_parquet_reader_test velox_dwio_parquet_reader
+                      ${VELOX_LINK_LIBS} ${TEST_LINK_LIBS})

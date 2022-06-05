@@ -26,7 +26,7 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
  public:
   TypeWithId(
       std::shared_ptr<const velox::Type> type,
-      std::vector<std::shared_ptr<const TypeWithId>>&& children,
+      const std::vector<std::shared_ptr<const TypeWithId>>&& children,
       uint32_t id,
       uint32_t maxId,
       uint32_t column);
@@ -43,6 +43,10 @@ class TypeWithId : public velox::Tree<std::shared_ptr<const TypeWithId>> {
       const std::string& name) const {
     VELOX_CHECK_EQ(type->kind(), velox::TypeKind::ROW);
     return childAt(type->as<velox::TypeKind::ROW>().getChildIdx(name));
+  }
+
+  const std::vector<std::shared_ptr<const TypeWithId>>& getChildren() const {
+    return children_;
   }
 
   const std::shared_ptr<const velox::Type> type;
