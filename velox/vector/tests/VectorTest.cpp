@@ -123,11 +123,7 @@ class VectorTest : public testing::Test {
 
   template <typename T>
   T testValue(int32_t i, BufferPtr& space) {
-    if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-      return std::make_shared<NonPOD>(i);
-    } else {
-      return i;
-    }
+    return i;
   }
 
   template <TypeKind KIND>
@@ -746,21 +742,6 @@ class VectorTest : public testing::Test {
 };
 
 template <>
-ShortDecimal VectorTest::testValue<ShortDecimal>(
-    int32_t i,
-    BufferPtr& /*space*/) {
-  return ShortDecimal(i);
-}
-
-template <>
-LongDecimal VectorTest::testValue<LongDecimal>(
-    int32_t i,
-    BufferPtr& /*space*/) {
-  int128_t value = buildInt128(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
-  return LongDecimal(value);
-}
-
-template <>
 StringView VectorTest::testValue(int32_t n, BufferPtr& buffer) {
   if (!buffer || buffer->capacity() < 1000) {
     buffer = AlignedBuffer::allocate<char>(1000, pool_.get());
@@ -790,6 +771,16 @@ Timestamp VectorTest::testValue(int32_t i, BufferPtr& space) {
 template <>
 Date VectorTest::testValue(int32_t i, BufferPtr& space) {
   return Date(i);
+}
+
+template <>
+std::shared_ptr<void> VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return std::make_shared<NonPOD>(i);
+}
+
+template <>
+IntervalDayTime VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return IntervalDayTime(i);
 }
 
 VectorPtr VectorTest::createMap(int32_t numRows, bool withNulls) {
@@ -856,11 +847,7 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::BOOLEAN>(BOOLEAN(), vectorSize_);
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
-}
-
-TEST_F(VectorTest, createDecimal) {
-  testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
-  testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
+  testFlat<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME(), vectorSize_);
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1391,6 +1378,7 @@ TEST_F(VectorCreateConstantTest, null) {
 
   testNullConstant<TypeKind::TIMESTAMP>(TIMESTAMP());
   testNullConstant<TypeKind::DATE>(DATE());
+  testNullConstant<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME());
 
   testNullConstant<TypeKind::VARCHAR>(VARCHAR());
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());

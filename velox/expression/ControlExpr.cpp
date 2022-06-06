@@ -698,10 +698,6 @@ class ExprCallable : public Callable {
         rows.end(),
         std::move(allVectors));
     EvalCtx lambdaCtx(context->execCtx(), context->exprSet(), row.get());
-    if (!context->isFinalSelection()) {
-      *lambdaCtx.mutableIsFinalSelection() = false;
-      *lambdaCtx.mutableFinalSelection() = context->finalSelection();
-    }
     body_->eval(rows, lambdaCtx, *result);
   }
 
@@ -768,6 +764,36 @@ void LambdaExpr::makeTypeWithCapture(EvalCtx& context) {
   }
 }
 
+// Apply onError methods of registered listeners on every row that encounters
+// errors. The error vector must exist.
+void applyListenersOnError(
+    const SelectivityVector& rows,
+    const EvalCtx& context) {
+  auto errors = context.errors();
+  VELOX_CHECK_NOT_NULL(errors);
+
+  exec::LocalSelectivityVector errorRows(context.execCtx(), errors->size());
+  errorRows->clearAll();
+  rows.applyToSelected([&](auto row) {
+    if (row < errors->size() && !errors->isNullAt(row)) {
+      errorRows->setValid(row, true);
+    }
+  });
+  errorRows->updateBounds();
+
+  if (!errorRows->hasSelections()) {
+    return;
+  }
+
+  exprSetListeners().withRLock([&](auto& listeners) {
+    if (!listeners.empty()) {
+      for (auto& listener : listeners) {
+        listener->onError(*errorRows, *errors);
+      }
+    }
+  });
+}
+
 void TryExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -815,6 +841,8 @@ void TryExpr::nullOutErrors(
     VectorPtr& result) {
   auto errors = context.errors();
   if (errors) {
+    applyListenersOnError(rows, context);
+
     if (result->encoding() == VectorEncoding::Simple::CONSTANT) {
       // Since it's constant, if any row is NULL they're all NULL, so check row
       // 0 arbitrarily.
