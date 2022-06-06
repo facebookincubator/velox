@@ -26,7 +26,6 @@ namespace facebook::velox::substrait {
 class SubstraitVeloxPlanConverter {
  public:
   struct SplitInfo {
- 
     /// The Partition index.
     u_int32_t partitionIndex;
 

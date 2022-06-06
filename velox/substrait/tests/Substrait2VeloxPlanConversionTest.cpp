@@ -34,8 +34,9 @@ class Substrait2VeloxPlanConversionTest
     : public exec::test::HiveConnectorTestBase {
  protected:
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-  makeSplits(const facebook::velox::substrait::SubstraitVeloxPlanConverter&
-                 converter, std::shared_ptr<const core::PlanNode> planNode) {
+  makeSplits(
+      const facebook::velox::substrait::SubstraitVeloxPlanConverter& converter,
+      std::shared_ptr<const core::PlanNode> planNode) {
     auto splitInfos = converter.splitInfos();
     auto leafPlanNodeIds = planNode->leafPlanNodeIds();  
     // Here only one leaf node is expected here.
@@ -62,12 +63,11 @@ class Substrait2VeloxPlanConversionTest
       auto path = fmt::format("{}{}", tmpDir_->path, paths[i]);
       auto start = starts[i];
       auto length = lengths[i];
-      auto split =
-              facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
-                  .fileFormat(format)
-                  .start(start)
-                  .length(length)
-                  .build();
+      auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
+                       .fileFormat(format)
+                       .start(start)
+                       .length(length)
+                       .build();
       splits.emplace_back(split);
     }
     return splits;
@@ -274,8 +274,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       {makeRowVector(type->names(), vectors)});
 
   // Find and deserialize Substrait plan json file.
-  std::string planPath = "/home/jk/projects/velox/velox/substrait/tests/data/sub.json";
-     // getDataFilePath("velox/substrait/tests", "data/sub.json");
+  std::string planPath =
+      getDataFilePath("velox/substrait/tests", "data/sub.json");
 
   // Read sub.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
