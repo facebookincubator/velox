@@ -43,6 +43,7 @@ add_custom_command(
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
 
+
 set(SRCS
     ${PROTO_SRCS}
     SubstraitParser.cpp
@@ -61,7 +62,7 @@ add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
                            PUBLIC ${PROTO_OUTPUT_DIR})
 target_link_libraries(velox_substrait_plan_converter velox_connector
-                      velox_dwio_dwrf_common)
+                      velox_dwio_dwrf_common velox_functions_spark)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

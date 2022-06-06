@@ -65,6 +65,9 @@ std::string Filter::toString() const {
     case FilterKind::kDoubleRange:
       strKind = "DoubleRange";
       break;
+    case FilterKind::kDoubleValues:
+      strKind = "DoubleValues";
+      break;
     case FilterKind::kFloatRange:
       strKind = "FloatRange";
       break;
@@ -206,6 +209,103 @@ bool BigintValuesUsingHashTable::testInt64(int64_t value) const {
     }
   }
   return false;
+}
+
+DoubleValues::DoubleValues(
+    double min,
+    double max,
+    const std::vector<double>& values,
+    bool nullAllowed)
+    : Filter(true, nullAllowed, FilterKind::kDoubleValues),
+      min_(min),
+      max_(max) {
+  VELOX_CHECK(min < max, "min must be less than max");
+  VELOX_CHECK(values.size() > 1, "values must contain at least 2 entries");
+
+  bitmask_.resize(toInt64(max) - toInt64(min) + 1);
+
+  for (double value : values) {
+    bitmask_[toInt64(value) - toInt64(min)] = true;
+  }
+}
+
+bool DoubleValues::testDouble(double value) const {
+  if (value < min_ || value > max_) {
+    return false;
+  }
+  return bitmask_[toInt64(value) - toInt64(min_)];
+}
+
+std::vector<double> DoubleValues::values() const {
+  std::vector<double> values;
+  for (int i = 0; i < bitmask_.size(); i++) {
+    if (bitmask_[i]) {
+      values.push_back(min_ + i);
+    }
+  }
+  return values;
+}
+
+bool DoubleValues::testDoubleRange(double min, double max, bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  if (toInt64(min) == toInt64(max)) {
+    return testDouble(min);
+  }
+
+  return !(min > max_ || max < min_);
+}
+
+std::unique_ptr<Filter> DoubleValues::mergeWith(const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return std::make_unique<DoubleValues>(*this, false);
+    case FilterKind::kDoubleRange: {
+      auto otherRange = dynamic_cast<const DoubleRange*>(other);
+
+      auto min = std::max(min_, otherRange->lower());
+      auto max = std::min(max_, otherRange->upper());
+
+      return mergeWith(min, max, other);
+    }
+    case FilterKind::kFloatRange: {
+      auto otherRange = dynamic_cast<const FloatRange*>(other);
+
+      auto min = std::max(min_, otherRange->lower());
+      auto max = std::min(max_, otherRange->upper());
+
+      return mergeWith(min, max, other);
+    }
+    case FilterKind::kDoubleValues: {
+      auto otherValues = dynamic_cast<const DoubleValues*>(other);
+
+      auto min = std::max(min_, otherValues->min_);
+      auto max = std::min(max_, otherValues->max_);
+
+      return mergeWith(min, max, other);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+std::unique_ptr<Filter>
+DoubleValues::mergeWith(double min, double max, const Filter* other) const {
+  bool bothNullAllowed = nullAllowed_ && other->testNull();
+
+  std::vector<double> valuesToKeep;
+  for (auto i = min; i <= max; ++i) {
+    if (bitmask_[toInt64(i) - toInt64(min_)] && other->testDouble(i)) {
+      valuesToKeep.push_back(i);
+    }
+  }
+  return createDoubleValues(valuesToKeep, bothNullAllowed);
 }
 
 xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
@@ -394,6 +494,31 @@ std::unique_ptr<Filter> notNullOrTrue(bool nullAllowed) {
     return std::make_unique<AlwaysTrue>();
   }
   return std::make_unique<IsNotNull>();
+}
+
+std::unique_ptr<Filter> createDoubleValues(
+    const std::vector<double>& values,
+    bool nullAllowed) {
+  if (values.empty()) {
+    return nullOrFalse(nullAllowed);
+  }
+  if (values.size() == 1) {
+    return std::make_unique<DoubleRange>(
+        values.front(),
+        false,
+        false,
+        values.front(),
+        false,
+        false,
+        nullAllowed);
+  }
+  double min = values.front();
+  double max = values.front();
+  for (const auto& value : values) {
+    min = (value < min) ? value : min;
+    max = (value > max) ? value : max;
+  }
+  return std::make_unique<DoubleValues>(min, max, values, nullAllowed);
 }
 
 std::unique_ptr<Filter> createBigintValuesFilter(

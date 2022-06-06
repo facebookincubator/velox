@@ -43,22 +43,6 @@ using namespace facebook::velox::exec::test;
 class PlanConversionTest : public virtual HiveConnectorTestBase,
                            public testing::WithParamInterface<bool> {
  protected:
-  void SetUp() override {
-    useAsyncCache_ = GetParam();
-    HiveConnectorTestBase::SetUp();
-  }
-
-  static void SetUpTestCase() {
-    HiveConnectorTestBase::SetUpTestCase();
-  }
-
-  std::vector<RowVectorPtr> makeVectors(
-      int32_t count,
-      int32_t rowsPerVector,
-      const std::shared_ptr<const RowType>& rowType) {
-    return HiveConnectorTestBase::makeVectors(rowType, count, rowsPerVector);
-  }
-
   class VeloxConverter {
    public:
     // This class is an iterator for Velox computing.
@@ -165,7 +149,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       google::protobuf::util::JsonStringToMessage(subData, &subPlan);
 
       auto planConverter = std::make_shared<
-          facebook::velox::substrait::SubstraitVeloxPlanConverter>();
+          facebook::velox::substrait::SubstraitVeloxPlanConverter>(
+          memoryPool_.get());
       // Convert to Velox PlanNode.
       auto planNode = planConverter->toVeloxPlan(subPlan);
 
@@ -196,7 +181,30 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
 
     std::shared_ptr<exec::test::TempDirectoryPath> tmpDir_{
         exec::test::TempDirectoryPath::create()};
+
+   private:
+    std::unique_ptr<memory::MemoryPool> memoryPool_{
+        memory::getDefaultScopedMemoryPool()};
   };
+
+  void SetUp() override {
+    useAsyncCache_ = GetParam();
+    HiveConnectorTestBase::SetUp();
+  }
+
+  static void SetUpTestCase() {
+    HiveConnectorTestBase::SetUpTestCase();
+  }
+
+  std::vector<RowVectorPtr> makeVectors(
+      int32_t count,
+      int32_t rowsPerVector,
+      const std::shared_ptr<const RowType>& rowType) {
+    return HiveConnectorTestBase::makeVectors(rowType, count, rowsPerVector);
+  }
+
+  std::unique_ptr<memory::MemoryPool> pool_{
+      facebook::velox::memory::getDefaultScopedMemoryPool()};
 
   // This method can be used to create a Fixed-width type of Vector without Null
   // values.
@@ -204,15 +212,15 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
   VectorPtr createSpecificScalar(
       size_t size,
       std::vector<T> vals,
-      facebook::velox::memory::MemoryPool& pool) {
-    facebook::velox::BufferPtr values = AlignedBuffer::allocate<T>(size, &pool);
+      memory::MemoryPool* pool) {
+    facebook::velox::BufferPtr values = AlignedBuffer::allocate<T>(size, pool);
     auto valuesPtr = values->asMutableRange<T>();
     facebook::velox::BufferPtr nulls = nullptr;
     for (size_t i = 0; i < size; ++i) {
       valuesPtr[i] = vals[i];
     }
     return std::make_shared<facebook::velox::FlatVector<T>>(
-        &pool, nulls, size, values, std::vector<BufferPtr>{});
+        pool, nulls, size, values, std::vector<BufferPtr>{});
   }
 
   // This method can be used to create a String type of Vector without Null
@@ -220,8 +228,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
   VectorPtr createSpecificStringVector(
       size_t size,
       std::vector<std::string> vals,
-      facebook::velox::memory::MemoryPool& pool) {
-    auto vector = BaseVector::create(VARCHAR(), size, &pool);
+      memory::MemoryPool* pool) {
+    auto vector = BaseVector::create(VARCHAR(), size, pool);
     auto flatVector = vector->asFlatVector<StringView>();
 
     size_t childSize = 0;
@@ -236,7 +244,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
     }
     vector->setNullCount(0);
 
-    BufferPtr buf = AlignedBuffer::allocate<char>(childSize, &pool);
+    BufferPtr buf = AlignedBuffer::allocate<char>(childSize, pool);
     char* bufPtr = buf->asMutable<char>();
     char* dest = bufPtr;
     for (size_t i = 0; i < size; ++i) {
@@ -291,8 +299,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
              VARCHAR(),
              VARCHAR(),
              VARCHAR()});
-    std::unique_ptr<facebook::velox::memory::MemoryPool> pool{
-        facebook::velox::memory::getDefaultScopedMemoryPool()};
+
     std::vector<VectorPtr> vectors;
     // TPC-H lineitem table has 16 columns.
     int colNum = 16;
@@ -309,7 +316,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         6354246853,
         4141748419};
     vectors.emplace_back(
-        createSpecificScalar<int64_t>(10, lOrderkeyData, *pool));
+        createSpecificScalar<int64_t>(10, lOrderkeyData, pool_.get()));
     std::vector<int64_t> lPartkeyData = {
         263222018,
         255918298,
@@ -322,7 +329,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         112999357,
         299103530};
     vectors.emplace_back(
-        createSpecificScalar<int64_t>(10, lPartkeyData, *pool));
+        createSpecificScalar<int64_t>(10, lPartkeyData, pool_.get()));
     std::vector<int64_t> lSuppkeyData = {
         2102019,
         13998315,
@@ -335,14 +342,14 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         1639379,
         3423588};
     vectors.emplace_back(
-        createSpecificScalar<int64_t>(10, lSuppkeyData, *pool));
+        createSpecificScalar<int64_t>(10, lSuppkeyData, pool_.get()));
     std::vector<int32_t> lLinenumberData = {4, 6, 1, 5, 1, 2, 1, 5, 2, 6};
     vectors.emplace_back(
-        createSpecificScalar<int32_t>(10, lLinenumberData, *pool));
+        createSpecificScalar<int32_t>(10, lLinenumberData, pool_.get()));
     std::vector<double> lQuantityData = {
         6.0, 1.0, 19.0, 4.0, 6.0, 12.0, 23.0, 11.0, 16.0, 19.0};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lQuantityData, *pool));
+        createSpecificScalar<double>(10, lQuantityData, pool_.get()));
     std::vector<double> lExtendedpriceData = {
         30586.05,
         7821.0,
@@ -355,22 +362,23 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         8704.26,
         63780.36};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lExtendedpriceData, *pool));
+        createSpecificScalar<double>(10, lExtendedpriceData, pool_.get()));
     std::vector<double> lDiscountData = {
         0.05, 0.06, 0.01, 0.07, 0.05, 0.06, 0.07, 0.05, 0.06, 0.07};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lDiscountData, *pool));
+        createSpecificScalar<double>(10, lDiscountData, pool_.get()));
     std::vector<double> lTaxData = {
         0.02, 0.03, 0.01, 0.0, 0.01, 0.01, 0.03, 0.07, 0.01, 0.04};
-    vectors.emplace_back(createSpecificScalar<double>(10, lTaxData, *pool));
+    vectors.emplace_back(
+        createSpecificScalar<double>(10, lTaxData, pool_.get()));
     std::vector<std::string> lReturnflagData = {
         "N", "A", "A", "R", "A", "N", "A", "A", "N", "R"};
     vectors.emplace_back(
-        createSpecificStringVector(10, lReturnflagData, *pool));
+        createSpecificStringVector(10, lReturnflagData, pool_.get()));
     std::vector<std::string> lLinestatusData = {
         "O", "F", "F", "F", "F", "O", "F", "F", "O", "F"};
     vectors.emplace_back(
-        createSpecificStringVector(10, lLinestatusData, *pool));
+        createSpecificStringVector(10, lLinestatusData, pool_.get()));
     std::vector<double> lShipdateNewData = {
         8953.666666666666,
         8773.666666666666,
@@ -383,7 +391,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         9013.666666666666,
         8832.666666666666};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lShipdateNewData, *pool));
+        createSpecificScalar<double>(10, lShipdateNewData, pool_.get()));
     std::vector<double> lCommitdateNewData = {
         10447.666666666666,
         8953.666666666666,
@@ -396,7 +404,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         9519.666666666666,
         9138.666666666666};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lCommitdateNewData, *pool));
+        createSpecificScalar<double>(10, lCommitdateNewData, pool_.get()));
     std::vector<double> lReceiptdateNewData = {
         10456.666666666666,
         8979.666666666666,
@@ -409,7 +417,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         9593.666666666666,
         9178.666666666666};
     vectors.emplace_back(
-        createSpecificScalar<double>(10, lReceiptdateNewData, *pool));
+        createSpecificScalar<double>(10, lReceiptdateNewData, pool_.get()));
     std::vector<std::string> lShipinstructData = {
         "COLLECT COD",
         "NONE",
@@ -422,7 +430,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         "TAKE BACK RETURN",
         "NONE"};
     vectors.emplace_back(
-        createSpecificStringVector(10, lShipinstructData, *pool));
+        createSpecificStringVector(10, lShipinstructData, pool_.get()));
     std::vector<std::string> lShipmodeData = {
         "FOB",
         "REG AIR",
@@ -434,7 +442,8 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         "REG AIR",
         "TRUCK",
         "AIR"};
-    vectors.emplace_back(createSpecificStringVector(10, lShipmodeData, *pool));
+    vectors.emplace_back(
+        createSpecificStringVector(10, lShipmodeData, pool_.get()));
     std::vector<std::string> lCommentData = {
         " the furiously final foxes. quickly final p",
         "thely ironic",
@@ -446,12 +455,13 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         "lyly regular excuses affi",
         "lly unusual theodolites grow slyly above",
         " the quickly ironic pains lose car"};
-    vectors.emplace_back(createSpecificStringVector(10, lCommentData, *pool));
+    vectors.emplace_back(
+        createSpecificStringVector(10, lCommentData, pool_.get()));
 
     // Batches has only one RowVector here.
     uint64_t nullCount = 0;
     std::vector<RowVectorPtr> batches{std::make_shared<RowVector>(
-        pool.get(), type, nullptr, 10, vectors, nullCount)};
+        pool_.get(), type, nullptr, 10, vectors, nullCount)};
 
     // Writes data into an ORC file.
     auto sink = std::make_unique<facebook::velox::dwio::common::FileSink>(

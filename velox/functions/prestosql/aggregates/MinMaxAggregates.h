@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/functions/prestosql/aggregates/MinMaxAggregates.h"
+#include <limits>
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/AggregationHook.h"
+#include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
+#include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 
-namespace facebook::velox::aggregate::prestosql {
-
-namespace {
+namespace facebook::velox::aggregate {
 
 template <typename T>
 struct MinMaxTrait : public std::numeric_limits<T> {};
@@ -43,17 +46,6 @@ struct MinMaxTrait<Date> {
 
   static constexpr Date max() {
     return Date(std::numeric_limits<int32_t>::max());
-  }
-};
-
-template <>
-struct MinMaxTrait<IntervalDayTime> {
-  static constexpr IntervalDayTime min() {
-    return IntervalDayTime(std::numeric_limits<int64_t>::min());
-  }
-
-  static constexpr IntervalDayTime max() {
-    return IntervalDayTime(std::numeric_limits<int64_t>::max());
   }
 };
 
@@ -153,11 +145,7 @@ class MaxAggregate : public MinMaxAggregate<T> {
         group,
         rows,
         args[0],
-        [](T& result, T value) {
-          if (result < value) {
-            result = value;
-          }
-        },
+        [](T& result, T value) { result = result > value ? result : value; },
         [](T& result, T value, int /* unused */) { result = value; },
         mayPushdown,
         kInitialValue_);
@@ -264,6 +252,10 @@ class NonNumericMinMaxAggregateBase : public exec::Aggregate {
     for (auto i : indices) {
       new (groups[i] + offset_) SingleValueAccumulator();
     }
+  }
+
+  void finalize(char** /* groups */, int32_t /* numGroups */) override {
+    // Nothing to do
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -472,8 +464,6 @@ bool registerMinMaxAggregate(const std::string& name) {
         VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
         auto inputType = argTypes[0];
         switch (inputType->kind()) {
-          case TypeKind::BOOLEAN:
-            return std::make_unique<TNumeric<bool>>(resultType);
           case TypeKind::TINYINT:
             return std::make_unique<TNumeric<int8_t>>(resultType);
           case TypeKind::SMALLINT:
@@ -490,8 +480,6 @@ bool registerMinMaxAggregate(const std::string& name) {
             return std::make_unique<TNumeric<Timestamp>>(resultType);
           case TypeKind::DATE:
             return std::make_unique<TNumeric<Date>>(resultType);
-          case TypeKind::INTERVAL_DAY_TIME:
-            return std::make_unique<TNumeric<IntervalDayTime>>(resultType);
           case TypeKind::VARCHAR:
           case TypeKind::ARRAY:
           case TypeKind::MAP:
@@ -507,11 +495,4 @@ bool registerMinMaxAggregate(const std::string& name) {
       });
 }
 
-} // namespace
-
-void registerMinMaxAggregates() {
-  registerMinMaxAggregate<MinAggregate, NonNumericMinAggregate>(kMin);
-  registerMinMaxAggregate<MaxAggregate, NonNumericMaxAggregate>(kMax);
-}
-
-} // namespace facebook::velox::aggregate::prestosql
+} // namespace facebook::velox::aggregate

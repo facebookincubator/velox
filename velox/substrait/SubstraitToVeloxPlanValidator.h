@@ -24,6 +24,11 @@ namespace facebook::velox::substrait {
 /// a Substrait plan is supported in Velox.
 class SubstraitToVeloxPlanValidator {
  public:
+  SubstraitToVeloxPlanValidator(
+      memory::MemoryPool* pool,
+      core::ExecCtx* execCtx)
+      : pool_(pool), execCtx_(execCtx) {}
+
   /// Used to validate whether the computing of this type is supported.
   bool validate(const ::substrait::Type& sType);
 
@@ -52,19 +57,15 @@ class SubstraitToVeloxPlanValidator {
   bool validate(const ::substrait::Plan& sPlan);
 
  private:
-  /// A query context used for function validation.
-  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
-
   /// A memory pool used for function validation.
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
+  memory::MemoryPool* pool_;
 
   /// An execution context used for function validation.
-  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
+  core::ExecCtx* execCtx_;
 
   /// A converter used to convert Substrait plan into Velox's plan node.
   std::shared_ptr<SubstraitVeloxPlanConverter> planConverter_ =
-      std::make_shared<SubstraitVeloxPlanConverter>();
+      std::make_shared<SubstraitVeloxPlanConverter>(pool_, true);
 
   /// A parser used to convert Substrait plan into recognizable representations.
   std::shared_ptr<SubstraitParser> subParser_ =

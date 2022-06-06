@@ -19,30 +19,36 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/PlanNode.h"
 #include "velox/substrait/SubstraitToVeloxExpr.h"
+#include "velox/substrait/TypeUtils.h"
 
 namespace facebook::velox::substrait {
+struct SplitInfo {
+  /// Whether the split comes from arrow array stream node.
+  bool isStream = false;
+
+  /// The Partition index.
+  u_int32_t partitionIndex;
+
+  /// The file paths to be scanned.
+  std::vector<std::string> paths;
+
+  /// The file starts in the scan.
+  std::vector<u_int64_t> starts;
+
+  /// The lengths to be scanned.
+  std::vector<u_int64_t> lengths;
+
+  /// The file format of the files to be scanned.
+  dwio::common::FileFormat format;
+};
 
 /// This class is used to convert the Substrait plan into Velox plan.
 class SubstraitVeloxPlanConverter {
  public:
-  explicit SubstraitVeloxPlanConverter(memory::MemoryPool* pool)
-      : pool_(pool) {}
-  struct SplitInfo {
-    /// The Partition index.
-    u_int32_t partitionIndex;
-
-    /// The file paths to be scanned.
-    std::vector<std::string> paths;
-
-    /// The file starts in the scan.
-    std::vector<u_int64_t> starts;
-
-    /// The lengths to be scanned.
-    std::vector<u_int64_t> lengths;
-
-    /// The file format of the files to be scanned.
-    dwio::common::FileFormat format;
-  };
+  SubstraitVeloxPlanConverter(
+      memory::MemoryPool* pool,
+      bool validationMode = false)
+      : pool_(pool), validationMode_(validationMode) {}
 
   /// Used to convert Substrait JoinRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::JoinRel& sJoin);
@@ -173,6 +179,224 @@ class SubstraitVeloxPlanConverter {
       std::vector<const ::substrait::Expression::FieldReference*>& rightExprs);
 
  private:
+  /// Filter info for a column used in filter push down.
+  class FilterInfo {
+   public:
+    // Disable null allow.
+    void forbidsNull() {
+      nullAllowed_ = false;
+      if (!isInitialized_) {
+        isInitialized_ = true;
+      }
+    }
+
+    // Return the initialization status.
+    bool isInitialized() {
+      return isInitialized_ ? true : false;
+    }
+
+    // Add a lower bound to the range. Multiple lower bounds are
+    // regarded to be in 'or' relation.
+    void setLower(const std::optional<variant>& left, bool isExclusive) {
+      lowerBounds_.emplace_back(left);
+      lowerExclusives_.emplace_back(isExclusive);
+      if (!isInitialized_) {
+        isInitialized_ = true;
+      }
+    }
+
+    // Add a upper bound to the range. Multiple upper bounds are
+    // regarded to be in 'or' relation.
+    void setUpper(const std::optional<variant>& right, bool isExclusive) {
+      upperBounds_.emplace_back(right);
+      upperExclusives_.emplace_back(isExclusive);
+      if (!isInitialized_) {
+        isInitialized_ = true;
+      }
+    }
+
+    // Set a list of values to be used in the push down of 'in' expression.
+    void setValues(const std::vector<variant>& values) {
+      for (const auto& value : values) {
+        valuesVector_.emplace_back(value);
+      }
+      if (!isInitialized_) {
+        isInitialized_ = true;
+      }
+    }
+
+    // Set a value for the not(equal) condition.
+    void setNotValue(const std::optional<variant>& notValue) {
+      notValue_ = notValue;
+      if (!isInitialized_) {
+        isInitialized_ = true;
+      }
+    }
+
+    // Whether this filter map is initialized.
+    bool isInitialized_ = false;
+
+    // The null allow.
+    bool nullAllowed_ = true;
+
+    // If true, left bound will be exclusive.
+    std::vector<bool> lowerExclusives_;
+
+    // If true, right bound will be exclusive.
+    std::vector<bool> upperExclusives_;
+
+    // A value should not be equal to.
+    std::optional<variant> notValue_ = std::nullopt;
+
+    // The lower bounds in 'or' relation.
+    std::vector<std::optional<variant>> lowerBounds_;
+
+    // The upper bounds in 'or' relation.
+    std::vector<std::optional<variant>> upperBounds_;
+
+    // The list of values used in 'in' expression.
+    std::vector<variant> valuesVector_;
+  };
+
+  /// Helper Function to convert Substrait sortField to Velox sortingKeys and
+  /// sortingOrders.
+  std::pair<
+      std::vector<core::FieldAccessTypedExprPtr>,
+      std::vector<core::SortOrder>>
+  processSortField(
+      const ::google::protobuf::RepeatedPtrField<::substrait::SortField>&
+          sortField,
+      const RowTypePtr& inputType);
+
+  /// A function returning current function id and adding the plan node id by
+  /// one once called.
+  std::string nextPlanNodeId();
+
+  /// Check the args of the scalar function. Should be field or
+  /// field with literal.
+  bool fieldOrWithLiteral(
+      const ::substrait::Expression_ScalarFunction& function);
+
+  /// Separate the functions to be two parts:
+  /// subfield functions to be handled by the subfieldFilters in
+  /// HiveConnector, and remaining functions to be handled by the
+  /// remainingFilter in HiveConnector.
+  void separateFilters(
+      const std::vector<::substrait::Expression_ScalarFunction>&
+          scalarFunctions,
+      std::vector<::substrait::Expression_ScalarFunction>& subfieldFunctions,
+      std::vector<::substrait::Expression_ScalarFunction>& remainingFunctions);
+
+  /// Check whether the chidren functions of this scalar function have the
+  /// same column index. Curretly used to check whether the two chilren
+  /// functions of 'or' expression are effective on the same column.
+  bool chidrenFunctionsOnSameField(
+      const ::substrait::Expression_ScalarFunction& function);
+
+  /// Extract the list from in function, and set it to the filter info.
+  void setInValues(
+      const ::substrait::Expression_ScalarFunction& scalarFunction,
+      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap);
+
+  /// Extract the scalar function, and set the filter info for different types
+  /// of columns. If reverse is true, the opposite filter info will be set.
+  void setFilterMap(
+      const ::substrait::Expression_ScalarFunction& scalarFunction,
+      const std::vector<TypePtr>& inputTypeList,
+      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap,
+      bool reverse = false);
+
+  /// Set the filter info for a column base on the information
+  /// extracted from filter condition.
+  template <typename T>
+  void setColInfoMap(
+      const std::string& filterName,
+      uint32_t colIdx,
+      std::optional<variant> literalVariant,
+      bool reverse,
+      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap);
+
+  /// Create a multirange to specify the filter 'x != notValue' with:
+  /// x > notValue or x < notValue.
+  template <TypeKind KIND, typename FilterType>
+  void createNotEqualFilter(
+      variant notVariant,
+      bool nullAllowed,
+      std::vector<std::unique_ptr<FilterType>>& colFilters);
+
+  /// Create a values range to handle in filter.
+  /// variants: the list of values extracted from the in expression.
+  /// inputName: the column input name.
+  template <TypeKind KIND>
+  void setInFilter(
+      const std::vector<variant>& variants,
+      bool nullAllowed,
+      const std::string& inputName,
+      connector::hive::SubfieldFilters& filters);
+
+  /// Set the constructed filters into SubfieldFilters.
+  /// The FilterType is used to distinguish BigintRange and
+  /// Filter (the base class). This is needed because BigintMultiRange
+  /// can only accept the unique ptr of BigintRange as parameter.
+  template <TypeKind KIND, typename FilterType>
+  void setSubfieldFilter(
+      std::vector<std::unique_ptr<FilterType>> colFilters,
+      const std::string& inputName,
+      bool nullAllowed,
+      connector::hive::SubfieldFilters& filters);
+
+  /// Create the subfield filter based on the constructed filter info.
+  /// inputName: the input name of a column.
+  template <TypeKind KIND, typename FilterType>
+  void constructSubfieldFilters(
+      uint32_t colIdx,
+      const std::string& inputName,
+      const std::shared_ptr<FilterInfo>& filterInfo,
+      connector::hive::SubfieldFilters& filters);
+
+  /// Construct subfield filters according to the pre-set map of filter info.
+  connector::hive::SubfieldFilters mapToFilters(
+      const std::vector<std::string>& inputNameList,
+      const std::vector<TypePtr>& inputTypeList,
+      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>> colInfoMap);
+
+  /// Convert subfield functions into subfieldFilters to
+  /// be used in Hive Connector.
+  connector::hive::SubfieldFilters toSubfieldFilters(
+      const std::vector<std::string>& inputNameList,
+      const std::vector<TypePtr>& inputTypeList,
+      const std::vector<::substrait::Expression_ScalarFunction>&
+          subfieldFunctions);
+
+  /// Connect all remaining functions with 'and' relation
+  /// for the use of remaingFilter in Hive Connector.
+  std::shared_ptr<const core::ITypedExpr> connectWithAnd(
+      std::vector<std::string> inputNameList,
+      std::vector<TypePtr> inputTypeList,
+      const std::vector<::substrait::Expression_ScalarFunction>&
+          remainingFunctions);
+
+  /// Used to convert Substrait Filter into Velox SubfieldFilters which will
+  /// be used in TableScan.
+  connector::hive::SubfieldFilters toVeloxFilter(
+      const std::vector<std::string>& inputNameList,
+      const std::vector<TypePtr>& inputTypeList,
+      const ::substrait::Expression& substraitFilter);
+
+  /// Used to convert AggregateRel into Velox plan node.
+  /// The output of child node will be used as the input of Aggregation.
+  std::shared_ptr<const core::PlanNode> toVeloxAgg(
+      const ::substrait::AggregateRel& sAgg,
+      const std::shared_ptr<const core::PlanNode>& childNode,
+      const core::AggregationNode::Step& aggStep);
+
+  /// Helper function to convert the input of Substrait Rel to Velox Node.
+  template <typename T>
+  core::PlanNodePtr convertSingleInput(T rel) {
+    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
+    return toVeloxPlan(rel.input());
+  }
+
   /// The Partition index.
   u_int32_t partitionIndex_;
 
@@ -202,32 +426,6 @@ class SubstraitVeloxPlanConverter {
   /// recognizable representations.
   std::shared_ptr<SubstraitParser> subParser_{
       std::make_shared<SubstraitParser>()};
-
-  /// Helper Function to convert Substrait sortField to Velox sortingKeys and
-  /// sortingOrders.
-  std::pair<
-      std::vector<core::FieldAccessTypedExprPtr>,
-      std::vector<core::SortOrder>>
-  processSortField(
-      const ::google::protobuf::RepeatedPtrField<::substrait::SortField>&
-          sortField,
-      const RowTypePtr& inputType);
-
-  /// The Expression converter used to convert Substrait representations into
-  /// Velox expressions.
-  std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
-
-  /// A function returning current function id and adding the plan node id by
-  /// one once called.
-  std::string nextPlanNodeId();
-
-  /// Used to convert Substrait Filter into Velox SubfieldFilters which will
-  /// be used in TableScan.
-  connector::hive::SubfieldFilters toVeloxFilter(
-      const std::vector<std::string>& inputNameList,
-      const std::vector<TypePtr>& inputTypeList,
-      const ::substrait::Expression& substraitFilter);
-
   /// Mapping from leaf plan node ID to splits.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
       splitInfoMap_;
@@ -235,19 +433,12 @@ class SubstraitVeloxPlanConverter {
   /// Memory pool.
   memory::MemoryPool* pool_;
 
-  /// Helper function to convert the input of Substrait Rel to Velox Node.
-  template <typename T>
-  core::PlanNodePtr convertSingleInput(T rel) {
-    VELOX_CHECK(rel.has_input(), "Child Rel is expected here.");
-    return toVeloxPlan(rel.input());
-  }
+  /// A flag used to specify validation.
+  bool validationMode_ = false;
 
-  /// Used to convert AggregateRel into Velox plan node.
-  /// The output of child node will be used as the input of Aggregation.
-  std::shared_ptr<const core::PlanNode> toVeloxAgg(
-      const ::substrait::AggregateRel& sAgg,
-      const std::shared_ptr<const core::PlanNode>& childNode,
-      const core::AggregationNode::Step& aggStep);
+  /// The Expression converter used to convert Substrait representations into
+  /// Velox expressions.
+  std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
 };
 
 } // namespace facebook::velox::substrait

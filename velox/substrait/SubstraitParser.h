@@ -37,8 +37,8 @@ class SubstraitParser {
     bool nullable;
   };
 
-  /// Parse Substrait NamedStruct.
-  std::vector<std::shared_ptr<SubstraitParser::SubstraitType>> parseNamedStruct(
+  /// Used to parse Substrait NamedStruct.
+  std::vector<std::shared_ptr<SubstraitType>> parseNamedStruct(
       const ::substrait::NamedStruct& namedStruct);
 
   /// Parse Substrait Type.
@@ -102,6 +102,8 @@ class SubstraitParser {
       {"subtract", "minus"},
       {"modulus", "mod"},
       {"not_equal", "neq"},
+      {"ends_with", "endswith"},
+      {"starts_with", "startswith"},
       {"equal", "eq"}};
 };
 
