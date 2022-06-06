@@ -99,8 +99,8 @@ struct Sha512Function {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   template <typename TTo, typename TFrom>
-  FOLLY_ALWAYS_INLINE bool call(TTo& result, const TFrom& input) {
-    return stringImpl::sha512(result, input);
+  FOLLY_ALWAYS_INLINE void call(TTo& result, const TFrom& input) {
+    stringImpl::sha512(result, input);
   }
 };
 

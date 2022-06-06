@@ -412,7 +412,8 @@ TEST_F(ArithmeticTest, degrees) {
   EXPECT_DOUBLE_EQ(-57.295779513082323, degrees(-1).value());
   EXPECT_DOUBLE_EQ(-179.90874767107849, degrees(-3.14).value());
   EXPECT_DOUBLE_EQ(-kInf, degrees(-kInf).value());
-  EXPECT_DOUBLE_EQ(1.2748734119735194e-306,
+  EXPECT_DOUBLE_EQ(
+      1.2748734119735194e-306,
       degrees(std::numeric_limits<double>::min()).value());
   EXPECT_DOUBLE_EQ(kInf, degrees(std::numeric_limits<double>::max()).value());
 }
