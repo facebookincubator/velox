@@ -332,16 +332,16 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   // Parse local files
   if (readRel.has_local_files()) {
     const auto& fileList = readRel.local_files().items();
-    splitInfo->paths_.reserve(fileList.size());
-    splitInfo->starts_.reserve(fileList.size());
-    splitInfo->lengths_.reserve(fileList.size());
+    splitInfo->paths.reserve(fileList.size());
+    splitInfo->starts.reserve(fileList.size());
+    splitInfo->lengths.reserve(fileList.size());
     for (const auto& file : fileList) {
       // Expect all Partitions share the same index.
-      splitInfo->partitionIndex_ = file.partition_index();
-      splitInfo->paths_.emplace_back(file.uri_file());
-      splitInfo->starts_.emplace_back(file.start());
-      splitInfo->lengths_.emplace_back(file.length());
-      splitInfo->fileFormat_ = file.format();
+      splitInfo->partitionIndex = file.partition_index();
+      splitInfo->paths.emplace_back(file.uri_file());
+      splitInfo->starts.emplace_back(file.start());
+      splitInfo->lengths.emplace_back(file.length());
+      splitInfo->fileFormat = file.format();
     }
   }
 

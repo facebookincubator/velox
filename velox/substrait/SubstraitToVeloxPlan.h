@@ -26,22 +26,21 @@ namespace facebook::velox::substrait {
 class SubstraitVeloxPlanConverter {
  public:
   struct SplitInfo {
-    SplitInfo() {}
-
+ 
     /// The Partition index.
-    u_int32_t partitionIndex_;
+    u_int32_t partitionIndex;
 
     /// The file paths to be scanned.
-    std::vector<std::string> paths_;
+    std::vector<std::string> paths;
 
     /// The file starts in the scan.
-    std::vector<u_int64_t> starts_;
+    std::vector<u_int64_t> starts;
 
     /// The lengths to be scanned.
-    std::vector<u_int64_t> lengths_;
+    std::vector<u_int64_t> lengths;
 
     /// The file format of the files to be scanned.
-    int32_t fileFormat_;
+    int32_t fileFormat;
   };
 
   /// Convert Substrait AggregateRel into Velox PlanNode.

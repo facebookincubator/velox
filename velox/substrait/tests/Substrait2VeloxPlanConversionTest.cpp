@@ -35,19 +35,40 @@ class Substrait2VeloxPlanConversionTest
  protected:
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
   makeSplits(const facebook::velox::substrait::SubstraitVeloxPlanConverter&
-                 converter) {
-    const auto& paths = converter.getPaths();
-    const auto& starts = converter.getStarts();
-    const auto& lengths = converter.getLengths();
+                 converter, std::shared_ptr<const core::PlanNode> planNode) {
+    auto splitInfos = converter.splitInfos();
+    auto leafPlanNodeIds = planNode->leafPlanNodeIds();  
+    // Here only one leaf node is expected here.
+    EXPECT_EQ(1, leafPlanNodeIds.size());
+    auto iter = leafPlanNodeIds.begin();
+    auto splitInfo = splitInfos[*iter].get();
+
+    const auto& paths = splitInfo->paths;
+    const auto& starts = splitInfo->starts;
+    const auto& lengths = splitInfo->lengths;
+    const auto fileFormat = splitInfo->fileFormat;
+    auto format = dwio::common::FileFormat::UNKNOWN;
+    if (fileFormat == 0) {
+      format = dwio::common::FileFormat::ORC;
+    } else if (fileFormat == 1) {
+      format = dwio::common::FileFormat::PARQUET;
+    }
 
     std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
         splits;
     splits.reserve(paths.size());
+
     for (int i = 0; i < paths.size(); i++) {
       auto path = fmt::format("{}{}", tmpDir_->path, paths[i]);
       auto start = starts[i];
       auto length = lengths[i];
-      splits.emplace_back(makeHiveConnectorSplit(path, start, length));
+      auto split =
+              facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
+                  .fileFormat(format)
+                  .start(start)
+                  .length(length)
+                  .build();
+      splits.emplace_back(split);
     }
     return splits;
   }
@@ -253,8 +274,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       {makeRowVector(type->names(), vectors)});
 
   // Find and deserialize Substrait plan json file.
-  std::string planPath =
-      getDataFilePath("velox/substrait/tests", "data/sub.json");
+  std::string planPath = "/home/jk/projects/velox/velox/substrait/tests/data/sub.json";
+     // getDataFilePath("velox/substrait/tests", "data/sub.json");
 
   // Read sub.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
@@ -269,6 +290,6 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
   });
 
   exec::test::AssertQueryBuilder(planNode)
-      .splits(makeSplits(planConverter))
+      .splits(makeSplits(planConverter, planNode))
       .assertResults(expectedResult);
 }
