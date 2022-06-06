@@ -38,7 +38,7 @@ class Substrait2VeloxPlanConversionTest
       const facebook::velox::substrait::SubstraitVeloxPlanConverter& converter,
       std::shared_ptr<const core::PlanNode> planNode) {
     auto splitInfos = converter.splitInfos();
-    auto leafPlanNodeIds = planNode->leafPlanNodeIds();  
+    auto leafPlanNodeIds = planNode->leafPlanNodeIds();
     // Here only one leaf node is expected here.
     EXPECT_EQ(1, leafPlanNodeIds.size());
     auto iter = leafPlanNodeIds.begin();
