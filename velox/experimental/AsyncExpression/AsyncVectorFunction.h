@@ -18,6 +18,7 @@
 
 #include <folly/experimental/coro/BlockingWait.h>
 #include <folly/experimental/coro/Task.h>
+#include <iostream>
 
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/Type.h"
@@ -32,7 +33,7 @@ class AsyncVectorFunction : public VectorFunction {
       EvalCtx* context,
       VectorPtr* result) const = 0;
 
-  // Calls `applyAsync` and block.
+  // Calls `applyAsyn` and block.
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,

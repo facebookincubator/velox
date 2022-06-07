@@ -30,10 +30,12 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec {
-
-// For every row, it will sleep input[i] ms, and the result will be the order
-// at which execution of the row is completed. Hence we expect that to match
-// the sleep durations order.
+namespace {
+// For every row, the execution will async sleep input[row]ms, and then result
+// will be the number of rows that were completed before the execution of the
+// row starts.
+// This is used to make sure all rows from multiple functions start
+// before any complete. Hence guarantee no blocking.
 class RecordWakeUpOrder : public AsyncVectorFunction {
  public:
   // Such expansion of the work shall be done through the
@@ -79,6 +81,7 @@ class RecordWakeUpOrder : public AsyncVectorFunction {
     co_return true;
   }
 };
+} // namespace
 
 class AsyncVectorFunctionTest : public functions::test::FunctionBaseTest {};
 

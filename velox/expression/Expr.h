@@ -356,6 +356,8 @@ class Expr {
 
   /// Runtime statistics. CPU time, wall time and number of processed rows.
   ExprStats stats_;
+
+  friend class AsyncExprEval;
 };
 
 using ExprPtr = std::shared_ptr<Expr>;
@@ -432,6 +434,7 @@ class ExprSet {
   // Exprs which retain memoized state, e.g. from running over dictionaries.
   std::unordered_set<Expr*> memoizingExprs_;
   core::ExecCtx* FOLLY_NONNULL const execCtx_;
+  friend class AsyncExprEval;
 };
 
 class ExprSetSimplified : public ExprSet {
