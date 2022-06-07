@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/executors/ThreadedExecutor.h>
+#include <velox/exec/Driver.h>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorUtils.h"
@@ -45,8 +47,15 @@ class FilterProject : public Operator {
 
   RowVectorPtr getOutput() override;
 
-  BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return BlockingReason::kNotBlocked;
+  BlockingReason isBlocked(ContinueFuture* continueFuture) override {
+    if (!isBlocked_) {
+      return BlockingReason::kNotBlocked;
+    } else {
+      // If is blocked then the future shall be valid
+      VELOX_CHECK(continueFuture_.valid());
+      *continueFuture = std::move(continueFuture_);
+      return BlockingReason::kOperatorAsync;
+    }
   }
 
   bool isFinished() override;
@@ -62,11 +71,11 @@ class FilterProject : public Operator {
   // should return nullptr.
   bool allInputProcessed();
 
-  // Evaluate filter on all rows. Return number of rows that passed the filter.
-  // Populate filterEvalCtx_.selectedBits and selectedIndices with the indices
-  // of the passing rows if only some rows pass the filter. If all or no rows
-  // passed the filter filterEvalCtx_.selectedBits and selectedIndices are not
-  // updated.
+  // Evaluate filter on all rows. Return number of rows that passed the
+  // filter. Populate filterEvalCtx_.selectedBits and selectedIndices with the
+  // indices of the passing rows if only some rows pass the filter. If all or
+  // no rows passed the filter filterEvalCtx_.selectedBits and selectedIndices
+  // are not updated.
   vector_size_t filter(EvalCtx* evalCtx, const SelectivityVector& allRows);
 
   // Evaluate projections on the specified rows and populate results_.
@@ -81,5 +90,17 @@ class FilterProject : public Operator {
   FilterEvalCtx filterEvalCtx_;
 
   vector_size_t numProcessedInputRows_{0};
+
+  bool isAsync_ = false;
+  bool noYield_ = false;
+
+  bool isBlocked_ = false;
+
+  folly::Promise<bool> promise_;
+
+  ContinueFuture continueFuture_{ContinueFuture::makeEmpty()};
+  bool asyncProjectedNotConsumed = false;
+  std::shared_ptr<LocalSelectivityVector> localRows_;
+  std::shared_ptr<EvalCtx> evalCtx_;
 };
 } // namespace facebook::velox::exec

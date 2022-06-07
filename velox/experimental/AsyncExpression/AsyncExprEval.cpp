@@ -20,22 +20,36 @@
 #include "velox/experimental/AsyncExpression/AsyncVectorFunction.h"
 namespace facebook::velox::exec {
 
+double AsyncExprEval::maxLatency = 0;
 folly::coro::Task<void> AsyncExprEval::evalExprAsyncIntenral(
     Expr& expr,
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
+  // static std::mutex mtx; // mutex for critical section
+  // not thread safe portion, unless we gurantee that executor is signel
+  // threadded need locks~ or make it thread safe.
   if (!rows.hasSelections()) {
+    // mtx.lock();
+
     // Empty input, return an empty vector of the right type.ß
     result = BaseVector::createNullConstant(expr.type(), 0, context.pool());
+    // mtx.unlock();
     co_return;
   }
 
   if (auto fieldReference = dynamic_cast<FieldReference*>(&expr)) {
+    // mtx.lock();
+
     fieldReference->evalSpecialForm(rows, context, result);
+    // mtx.unlock();
     co_return;
+
   } else if (auto constantExpr = dynamic_cast<ConstantExpr*>(&expr)) {
-    fieldReference->evalSpecialForm(rows, context, result);
+    // mtx.lock();
+
+    constantExpr->evalSpecialForm(rows, context, result);
+    // mtx.unlock();
     co_return;
   }
 

@@ -31,6 +31,8 @@ struct ContextSaver;
 // flags for Expr interpreter.
 class EvalCtx {
  public:
+  // must be copy initialized after
+  EvalCtx() = default;
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
       ExprSet* FOLLY_NULLABLE exprSet,

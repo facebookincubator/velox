@@ -26,6 +26,8 @@ namespace facebook::velox::exec {
 
 class AsyncExprEval {
  public:
+  static double maxLatency;
+
   // Async path to execute an expression that is composed of supported async
   // expressions. For now only AsyncVectorFunctions.
   static folly::coro::Task<void> evalExprAsync(
@@ -37,8 +39,18 @@ class AsyncExprEval {
         isSupportedAsyncExpression(expression_),
         "expression is not supported in asyncEval")
 
-    co_return co_await evalExprAsyncIntenral(
-        expression_, rows, context, result);
+    auto start = std::chrono::high_resolution_clock::now();
+    co_await evalExprAsyncIntenral(expression_, rows, context, result);
+    auto finish = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = finish - start;
+    static std::mutex mtx; // mutex for critical section
+    mtx.lock();
+
+    if (elapsed.count() > maxLatency) {
+      maxLatency = elapsed.count();
+    }
+    mtx.unlock();
+    co_return;
   }
 
   // Async path to execute an expression that is composed of supported async

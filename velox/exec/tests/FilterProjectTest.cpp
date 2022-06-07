@@ -13,10 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/Executor.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
+#include <folly/experimental/coro/Collect.h>
+#include <folly/experimental/coro/Task.h>
+#include <velox/exec/tests/utils/Cursor.h>
+#include <atomic>
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/AsyncExpression/AsyncVectorFunction.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;

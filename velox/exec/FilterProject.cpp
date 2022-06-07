@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 #include "velox/exec/FilterProject.h"
+#include <folly/Executor.h>
+#include <folly/executors/GlobalExecutor.h>
+#include <folly/experimental/coro/Collect.h>
+#include <velox/expression/EvalCtx.h>
+#include <velox/vector/SimpleVector.h>
+#include <memory>
 #include "velox/core/Expressions.h"
+#include "velox/experimental/AsyncExpression/AsyncExprEval.h"
 #include "velox/expression/Expr.h"
 
 namespace facebook::velox::exec {
@@ -67,6 +74,8 @@ FilterProject::FilterProject(
         resultProjections_.emplace_back(allExprs.size() - 1, i);
       }
     }
+    isAsync_ = project->isAsync();
+    noYield_ = project->noYield();
   } else {
     for (ChannelIndex i = 0; i < outputType_->size(); ++i) {
       identityProjections_.emplace_back(i, i);
@@ -114,15 +123,77 @@ RowVectorPtr FilterProject::getOutput() {
   }
 
   vector_size_t size = input_->size();
-  LocalSelectivityVector localRows(*operatorCtx_->execCtx(), size);
-  auto* rows = localRows.get();
+  localRows_ =
+      std::make_shared<LocalSelectivityVector>(*operatorCtx_->execCtx(), size);
+  auto* rows = localRows_->get();
   rows->setAll();
-  EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
-  if (!hasFilter_) {
-    numProcessedInputRows_ = size;
-    VELOX_CHECK(!isIdentityProjection_);
-    project(*rows, &evalCtx);
+  // EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
+  evalCtx_ = std::make_shared<EvalCtx>(
+      operatorCtx_->execCtx(), exprs_.get(), input_.get());
+  if (isAsync_) {
+    VELOX_CHECK(
+        !hasFilter_,
+        "filter async not supported yet, this is just POC(proof of concept)");
+  }
 
+  if (!hasFilter_) {
+    VELOX_CHECK(!isIdentityProjection_);
+    if (isAsync_ && !noYield_) {
+      if (!asyncProjectedNotConsumed) {
+        // future.
+        VELOX_CHECK(!continueFuture_.valid());
+        promise_ = folly::Promise<bool>();
+        continueFuture_ = promise_.getFuture();
+        isBlocked_ = true;
+        VELOX_CHECK(continueFuture_.valid());
+        // std::vector<VectorPtr> result;
+
+        // In order to make this valid in OSS we shall re-write
+        // evalExprSetAsync using future, or move the new AsyncProject
+        // operator internally.
+        auto task = AsyncExprEval::evalExprSetAsync(
+            *exprs_.get(), *rows, *evalCtx_, results_);
+
+        // We can use getGlobalIOExecutor() also or different executors for
+        // drivers vs tasks wit in operators.
+
+        // We can use a single threaded executor per driver if we dont want to
+        // make the eval thread safe. or force
+        // evalCtx.execCtx()->queryCtx()->executor() to be single thread.
+        auto future = std::move(task)
+                          .scheduleOn(exec::executorIO_.get()
+                                      /* folly::getGlobalIOExecutor()*/)
+                          .start()
+                          .via(&folly::QueuedImmediateExecutor::instance())
+                          .then([&](auto) {
+                            // fullfil the contunue future
+                            isBlocked_ = false;
+                            asyncProjectedNotConsumed = true;
+                            promise_.setValue(true);
+                          });
+
+        // The driver will call isBlocked when it see nullptr to extract the
+        // future. Then once the future is fulfiled, gettOutput will be called
+        // again while asyncProjectedNotConsumed=true so we go directlt to
+        // filloutput.
+        return nullptr;
+      }
+    } else {
+      if (isAsync_ && noYield_) {
+        auto task = AsyncExprEval::evalExprSetAsync(
+            *exprs_.get(), *rows, *evalCtx_, results_);
+        folly::coro::blockingWait(std::move(task));
+        // std::move(task)
+        //     .scheduleOn(evalCtx_->execCtx()->queryCtx()->executor())
+        //     .start()
+        //     .wait();
+
+      } else {
+        project(*rows, evalCtx_.get());
+      }
+      asyncProjectedNotConsumed = true;
+    }
+    VELOX_CHECK(asyncProjectedNotConsumed);
     if (results_.size() > 0) {
       auto outCol = results_[0];
       if (outCol && outCol->isCodegenOutput()) {
@@ -134,11 +205,14 @@ RowVectorPtr FilterProject::getOutput() {
       }
     }
 
-    return fillOutput(size, nullptr);
+    auto result = fillOutput(size, nullptr);
+    asyncProjectedNotConsumed = false;
+    numProcessedInputRows_ = size;
+    return result;
   }
 
   // evaluate filter
-  auto numOut = filter(&evalCtx, *rows);
+  auto numOut = filter(evalCtx_.get(), *rows);
   numProcessedInputRows_ = size;
   if (numOut == 0) { // no rows passed the filer
     input_ = nullptr;
@@ -152,7 +226,7 @@ RowVectorPtr FilterProject::getOutput() {
     if (!allRowsSelected) {
       rows->setFromBits(filterEvalCtx_.selectedBits->as<uint64_t>(), size);
     }
-    project(*rows, &evalCtx);
+    project(*rows, evalCtx_.get());
   }
 
   return fillOutput(

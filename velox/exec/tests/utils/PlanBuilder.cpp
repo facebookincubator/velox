@@ -572,8 +572,11 @@ PlanBuilder& PlanBuilder::mergeExchange(
   return *this;
 }
 
-PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
-  std::vector<core::TypedExprPtr> expressions;
+PlanBuilder& PlanBuilder::project(
+    const std::vector<std::string>& projections,
+    bool isAsync,
+    bool noYield) {
+  std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
   std::vector<std::string> projectNames;
   for (auto i = 0; i < projections.size(); ++i) {
     auto untypedExpr = duckdb::parseExpr(projections[i]);
@@ -592,7 +595,9 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
       nextPlanNodeId(),
       std::move(projectNames),
       std::move(expressions),
-      planNode_);
+      planNode_,
+      isAsync,
+      noYield);
   return *this;
 }
 
