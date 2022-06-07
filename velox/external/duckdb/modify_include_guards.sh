@@ -36,3 +36,8 @@ do
 	echo $COMMAND
 	$(sed -i '' ${COMMAND} ${1})
 done
+
+# Wrap the bitwise_cast function inside of duckdb_apache::thrift namespace
+awk '/^template <typename To, typename From>/,/^}/{if (/^template <typename To, typename From>/) print "namespace duckdb_apache { namespace thrift {"; if(/^}/) print "}} // namespace duckdb_apache::thrift"} 1' ${1} > tmp
+mv tmp ${1}
+

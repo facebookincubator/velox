@@ -1267,6 +1267,7 @@ protected:
 // but that doesn't work.
 // For a pretty in-depth explanation of the problem, see
 // http://cellperformance.beyond3d.com/articles/2006/06/understanding-strict-aliasing.html
+namespace duckdb_apache { namespace thrift {
 template <typename To, typename From>
 static inline To bitwise_cast(From from) {
   static_assert(sizeof(From) == sizeof(To), "sizeof(From) == sizeof(To)");
@@ -1297,6 +1298,7 @@ static inline To bitwise_cast(From from) {
   } u;
   u.f = from;
   return u.t;
+}} // namespace duckdb_apache::thrift
 }
 
 
