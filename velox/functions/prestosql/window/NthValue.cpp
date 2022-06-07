@@ -73,7 +73,7 @@ bool registerNthValue(const std::string& name) {
           .typeVariable("T")
           .returnType("T")
           .argumentType("T")
-          .argumentType("integer")
+          .argumentType("bigint")
           .build(),
   };
 
