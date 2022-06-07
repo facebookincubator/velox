@@ -78,6 +78,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
   switch (queryId) {
     case 1:
       return getQ1Plan();
+    case 4:
+      return getQ4Plan();
     case 6:
       return getQ6Plan();
     case 13:
@@ -149,6 +151,74 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ4Plan() const {
+  static const std::string kOrders = "orders";
+  static const std::string kLineitem = "lineitem";
+
+  std::vector<std::string> lineitemColumns = {
+      "l_orderkey",
+      "l_commitdate",
+      "l_orderkey"};
+  std::vector<std::string> ordersColumns = {
+      "o_orderkey",
+      "o_orderdate",
+      "o_orderpriority"};
+
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+
+  // dateVal :2 = '1993-07-01'
+  const auto orderDate = "o_orderdate";
+  std::string orderDateFilter;
+
+  // DWRF does not support Date type. Use Varchar instead.
+  if (ordersSelectedRowType->findChild(orderDate)->isVarchar()) {
+    orderDateFilter = "o_orderdate between '1993-07-01' and '1993-09-30'";
+  } else {
+    orderDateFilter = "o_orderdate between '1993-07-01'::DATE and '1993-09-30'::DATE";
+  }
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId lineitemPlanNodeId;
+  core::PlanNodeId ordersPlanNodeId;
+
+  auto planLineitem =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kLineitem, lineitemSelectedRowType,
+                     lineitemFileColumns, {"l_receiptdate > l_commitdate"})
+          .capturePlanNodeId(lineitemPlanNodeId)
+          .filter("count(*) >= 1")
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(kOrders, ordersSelectedRowType,
+                              ordersFileColumns, {orderDateFilter})
+                   .capturePlanNodeId(ordersPlanNodeId)
+                   .hashJoin(
+                       {"l_orderkey"},
+                       {"o_orderkey"},
+                       planLineitem,
+                       "",
+                       {"o_orderpriority"})
+                   .planNode()})
+          .orderBy({"o_orderpriority"}, false)
+          .limit(0, 10, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersPlanNodeId] = getTableFilePaths(kOrders);
   context.dataFileFormat = format_;
   return context;
 }

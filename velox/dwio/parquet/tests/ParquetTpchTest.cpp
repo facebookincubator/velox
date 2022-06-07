@@ -160,6 +160,10 @@ TEST_F(ParquetTpchTest, Q1) {
   assertQuery(1, 2, 10);
 }
 
+TEST_F(ParquetTpchTest, Q4) {
+  assertQuery(4, 2, 10);
+}
+
 TEST_F(ParquetTpchTest, Q6) {
   assertQuery(6, 2, 10);
 }
