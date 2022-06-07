@@ -61,7 +61,7 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
     auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
-    substraitPlan.PrintDebugString();
+
     // Convert Substrait Plan to the same Velox Plan.
     auto samePlan =
         substraitConverter_->toVeloxPlan(substraitPlan, pool_.get());
@@ -74,8 +74,6 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
       std::make_shared<VeloxToSubstraitPlanConvertor>();
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
       std::make_shared<SubstraitVeloxPlanConverter>();
-  std::unique_ptr<memory::ScopedMemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
 };
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, project) {
@@ -129,7 +127,7 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, count) {
       "SELECT count(c4) as num_price FROM tmp WHERE c6 < 24 GROUP BY c0, c1");
 }
 
-TEST_F(VeloxSubstraitRoundTripPlanConverterTest, countALL) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, countAll) {
   auto vectors = makeVectors(2, 7, 3);
   createDuckDbTable(vectors);
 
@@ -157,7 +155,7 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sum) {
   assertPlanConversion(plan, "SELECT sum(c1), count(c4) FROM tmp");
 }
 
-TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumFinal) {
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumAndCount) {
   auto vectors = makeVectors(2, 7, 3);
   createDuckDbTable(vectors);
 
@@ -177,11 +175,11 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumGlobal) {
   // Global final aggregation.
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .partialAggregation({}, {"sum(c0)", "sum(c1)"})
+                  .partialAggregation({"c0"}, {"sum(c0)", "sum(c1)"})
                   .intermediateAggregation()
                   .finalAggregation()
                   .planNode();
-  assertPlanConversion(plan, "SELECT sum(c0), sum(c1) FROM tmp");
+  assertPlanConversion(plan, "SELECT sum(c0), sum(c1) FROM tmp GROUP BY c0");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumMask) {
@@ -199,7 +197,7 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumMask) {
 
   assertPlanConversion(
       plan,
-      "SELECT sum(c0) filter (where c2 % 2 < 10), "
-      "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
+      "SELECT sum(c0) FILTER (WHERE c2 % 2 < 10), "
+      "sum(c0) FILTER (WHERE c3 % 3 = 0), sum(c1) FILTER (WHERE c3 % 3 = 0) "
       "FROM tmp");
 }

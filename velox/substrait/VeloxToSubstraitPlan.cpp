@@ -18,6 +18,44 @@
 
 namespace facebook::velox::substrait {
 
+namespace {
+::substrait::AggregationPhase toAggregationPhase(
+    core::AggregationNode::Step step) {
+  ::substrait::AggregationPhase substraitAggregationPhase;
+  switch (step) {
+    case core::AggregationNode::Step::kPartial: {
+      substraitAggregationPhase =
+          ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE;
+      break;
+    }
+    case core::AggregationNode::Step::kIntermediate: {
+      substraitAggregationPhase =
+          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE;
+
+      break;
+    }
+    case core::AggregationNode::Step::kSingle: {
+      substraitAggregationPhase =
+          ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT;
+
+      break;
+    }
+    case core::AggregationNode::Step::kFinal: {
+      substraitAggregationPhase =
+          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT;
+
+      break;
+    }
+    default:
+      VELOX_NYI(
+          "Unsupport Aggregate Step '{}' in Substrait ",
+          mapAggregationStepToName(step));
+  }
+  return substraitAggregationPhase;
+}
+
+} // namespace
+
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
@@ -265,13 +303,17 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     }
 
     // Set substrait aggregate Function reference and output type.
-    aggFunction->set_function_reference(functionMap_[funName]);
+    if (functionMap_.find(funName) != functionMap_.end()) {
+      aggFunction->set_function_reference(functionMap_[funName]);
+    } else {
+      VELOX_NYI("Couldn't find the function '{}' ", funName);
+    }
 
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
 
     // Set substrait aggregate Function phase.
-    aggFunction->MergeFrom(setAggregateSteps(arena, aggregateNode));
+    aggFunction->set_phase(toAggregationPhase(aggregateNode->step()));
   }
 
   // Direct output.
@@ -350,43 +392,6 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   extensionFunction->set_name("equal:i64_i64");
 
   return *substraitPlan;
-}
-
-const ::substrait::AggregateFunction&
-VeloxToSubstraitPlanConvertor::setAggregateSteps(
-    google::protobuf::Arena& arena,
-    const std::shared_ptr<const core::AggregationNode>& aggregateNode) {
-  ::substrait::AggregateFunction* aggregateFunction =
-      google::protobuf::Arena::CreateMessage<::substrait::AggregateFunction>(
-          &arena);
-  switch (aggregateNode->step()) {
-    case core::AggregationNode::Step::kPartial: {
-      aggregateFunction->set_phase(
-          ::substrait::AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE);
-      break;
-    }
-    case core::AggregationNode::Step::kIntermediate: {
-      aggregateFunction->set_phase(
-          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_INTERMEDIATE);
-      break;
-    }
-    case core::AggregationNode::Step::kSingle: {
-      aggregateFunction->set_phase(
-          ::substrait::AGGREGATION_PHASE_INITIAL_TO_RESULT);
-      break;
-    }
-    case core::AggregationNode::Step::kFinal: {
-      aggregateFunction->set_phase(
-          ::substrait::AGGREGATION_PHASE_INTERMEDIATE_TO_RESULT);
-      break;
-    }
-    default:
-      VELOX_NYI(
-          "Unsupport Aggregate Step '{}' in Substrait ",
-          mapAggregationStepToName(aggregateNode->step()));
-  }
-
-  return *aggregateFunction;
 }
 
 } // namespace facebook::velox::substrait
