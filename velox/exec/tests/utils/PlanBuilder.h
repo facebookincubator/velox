@@ -709,12 +709,12 @@ class PlanBuilder {
   std::shared_ptr<const core::ITypedExpr> inferTypes(
       const std::shared_ptr<const core::IExpr>& untypedExpr);
 
-  struct AggregateExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> aggregates;
+  struct ExpressionsAndNames {
+    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
   };
 
-  AggregateExpressionsAndNames createAggregateExpressionsAndNames(
+  ExpressionsAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
@@ -723,6 +723,10 @@ class PlanBuilder {
   createAggregateMasks(
       size_t numAggregates,
       const std::vector<std::string>& masks);
+
+  ExpressionsAndNames createWindowExpressionsAndNames(
+      const std::vector<std::string>& windowFunctions,
+      const std::vector<TypePtr>& resultTypes);
 
   std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
   std::shared_ptr<core::PlanNode> planNode_;
