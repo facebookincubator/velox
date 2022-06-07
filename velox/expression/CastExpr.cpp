@@ -256,8 +256,13 @@ void CastExpr::applyCast(
       return applyCastWithTry<To, StringView>(
           rows, context, input, resultFlatVector);
     }
-    // TODO(beroy2000): Will add support for TimeStamp after the converters are
-    // fixed
+    case TypeKind::DATE: {
+      return applyCastWithTry<To, Date>(rows, context, input, resultFlatVector);
+    }
+    case TypeKind::TIMESTAMP: {
+      return applyCastWithTry<To, Timestamp>(
+          rows, context, input, resultFlatVector);
+    }
     default: {
       VELOX_UNSUPPORTED("Invalid from type in casting: {}", fromType);
     }

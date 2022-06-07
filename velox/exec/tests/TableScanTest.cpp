@@ -913,42 +913,34 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   writeToFile(filePaths[0]->path, rowVector);
   createDuckDbTable({rowVector});
 
-  // skip whole file
-  auto filters = singleSubfieldFilter("c0", in({0, 10, 100, 1000}));
-
-  auto assertQuery = [&](const std::string& query) {
-    auto tableHandle = makeTableHandle(std::move(filters));
-    auto rowType = ROW({"c1"}, {INTEGER()});
-    auto assignments = allRegularColumns(rowType);
+  auto assertQuery = [&](const std::string& filter) {
     return TableScanTest::assertQuery(
-        PlanBuilder().tableScan(rowType, tableHandle, assignments).planNode(),
+        PlanBuilder(pool_.get())
+            .tableScan(asRowType(rowVector->type()), {filter})
+            .planNode(),
         filePaths,
-        query);
+        "SELECT * FROM tmp WHERE " + filter);
   };
 
-  auto task = assertQuery("SELECT c1 FROM tmp WHERE c0 in (0, 10, 100, 1000)");
+  // skip whole file
+  auto task = assertQuery("c0 in (0, 10, 100, 1000)");
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // skip all but first rowgroup
-  filters = singleSubfieldFilter("c1", in({0, 10, 100, 1000}));
-  task = assertQuery("SELECT c1 FROM tmp WHERE c1 in (0, 10, 100, 1000)");
+  task = assertQuery("c1 in (0, 10, 100, 1000)");
 
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
 
   // skip whole file
-  filters = singleSubfieldFilter(
-      "c2", in(std::vector<std::string>{"apple", "cherry"}));
-  task = assertQuery("SELECT c1 FROM tmp WHERE c2 in ('apple', 'cherry')");
+  task = assertQuery("c2 in ('apple', 'cherry')");
 
   EXPECT_EQ(0, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(1, getSkippedSplitsStat(task));
 
   // skip all but second rowgroup
-  filters = singleSubfieldFilter(
-      "c3", in(std::vector<std::string>{"banana", "grapefruit"}));
-  task = assertQuery("SELECT c1 FROM tmp WHERE c3 in ('banana', 'grapefruit')");
+  task = assertQuery("c3 in ('banana', 'grapefruit')");
 
   EXPECT_EQ(10'000, getTableScanStats(task).rawInputRows);
   EXPECT_EQ(3, getSkippedStridesStat(task));
@@ -1608,6 +1600,55 @@ TEST_F(TableScanTest, remainingFilter) {
           .planNode(),
       filePaths,
       "SELECT c1, c2 FROM tmp WHERE c1 > c0");
+}
+
+/// Test the handling of constant remaining filter results which occur when
+/// filter input is a dictionary vector with all indices being the same (i.e.
+/// DictionaryVector::isConstant() == true).
+TEST_F(TableScanTest, remainingFilterConstantResult) {
+  /// Make 2 batches of 10K rows each. 10K is the default batch size in
+  /// TableScan. Use a pushed down and a remaining filter. Make it so that
+  /// pushed down filter passes only for a subset of rows from each batch, e.g.
+  /// pass for the first 100 rows in the first batch and for the first 5 rows
+  /// in the second batch. Then, use remaining filter that passes for a subset
+  /// of rows that passed the pushed down filter in the first batch and all rows
+  /// in the second batch. Make sure that remaining filter doesn't pass on the
+  /// first 5 rows in the first batch, e.g. passing row numbers for the first
+  /// batch start with 11. Also, make sure that remaining filter inputs for the
+  /// second batch are dictionary encoded and constant. This makes it so that
+  /// first batch is producing results using dictionary encoding with indices
+  /// starting at 11 and second batch cannot re-use these indices as they point
+  /// past the vector size (5).
+  vector_size_t size = 10'000;
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<StringView>(
+              size,
+              [](auto row) { return StringView(fmt::format("{}", row % 23)); }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              size, [](auto row) { return row < 5 ? row : 1000; }),
+          makeFlatVector<StringView>(size, [](auto row) { return "15"_sv; }),
+      }),
+  };
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->path, data);
+  createDuckDbTable(data);
+
+  auto rowType = asRowType(data[0]->type());
+
+  auto plan =
+      PlanBuilder()
+          .tableScan(rowType, {"c0 < 100"}, "cast(c1 as bigint) % 23 > 10")
+          .planNode();
+
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT * FROM tmp WHERE c0 < 100 AND c1::bigint % 23 > 10");
 }
 
 TEST_F(TableScanTest, aggregationPushdown) {
