@@ -102,10 +102,10 @@ void FlatMapColumnWriter<K>::clearNodes() {
   });
 
   context_.removeStreams([this](const DwrfStreamIdentifier& identifier) {
-    return identifier.encodingKey_.node >= valueType_.id &&
-        identifier.encodingKey_.node <= valueType_.maxId &&
-        (identifier.kind_ == StreamKind::StreamKind_DICTIONARY_DATA ||
-         identifier.encodingKey_.sequence > 0);
+    return identifier.encodingKey().node >= valueType_.id &&
+        identifier.encodingKey().node <= valueType_.maxId &&
+        (identifier.kind() == StreamKind::StreamKind_DICTIONARY_DATA ||
+         identifier.encodingKey().sequence > 0);
   });
 }
 

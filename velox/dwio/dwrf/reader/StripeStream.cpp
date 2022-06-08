@@ -216,7 +216,7 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getCompressedStream(
   const auto& info = getStreamInfo(si);
 
   std::unique_ptr<SeekableInputStream> streamRead;
-  if (si.kind_ == StreamKind::StreamKind_ROW_INDEX) {
+  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -251,7 +251,7 @@ StripeStreamsImpl::getStreamIdentifiers() const {
       nodeToStreamIdMap;
 
   for (const auto& kv : streams_) {
-    nodeToStreamIdMap[kv.first.encodingKey_.node].push_back(kv.first);
+    nodeToStreamIdMap[kv.first.encodingKey().node].push_back(kv.first);
   }
 
   return nodeToStreamIdMap;
@@ -267,7 +267,7 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getStream(
   }
 
   std::unique_ptr<SeekableInputStream> streamRead;
-  if (si.kind_ == StreamKind::StreamKind_ROW_INDEX) {
+  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -285,7 +285,7 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getStream(
   return reader_.getReader().createDecompressedStream(
       std::move(streamRead),
       streamDebugInfo,
-      getDecrypter(si.encodingKey_.node));
+      getDecrypter(si.encodingKey().node));
 }
 
 uint32_t StripeStreamsImpl::visitStreamsOfNode(
@@ -293,7 +293,7 @@ uint32_t StripeStreamsImpl::visitStreamsOfNode(
     std::function<void(const StreamInformation&)> visitor) const {
   uint32_t count = 0;
   for (auto& item : streams_) {
-    if (item.first.encodingKey_.node == node) {
+    if (item.first.encodingKey().node == node) {
       visitor(item.second);
       ++count;
     }

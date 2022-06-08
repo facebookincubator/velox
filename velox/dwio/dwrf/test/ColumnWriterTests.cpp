@@ -52,15 +52,15 @@ class MockStreamInformation : public StreamInformation {
       : streamIdentifier_{streamIdentifier} {}
 
   StreamKind getKind() const override {
-    return streamIdentifier_.kind_;
+    return streamIdentifier_.kind();
   }
 
   uint32_t getNode() const override {
-    return streamIdentifier_.encodingKey_.node;
+    return streamIdentifier_.encodingKey().node;
   }
 
   uint32_t getSequence() const override {
-    return streamIdentifier_.encodingKey_.sequence;
+    return streamIdentifier_.encodingKey().sequence;
   }
 
   MOCK_CONST_METHOD0(getOffset, uint64_t());
@@ -97,10 +97,10 @@ class TestStripeStreams : public StripeStreamsBase {
       if (throwIfNotFound) {
         DWIO_RAISE(fmt::format(
             "stream (node = {}, seq = {}, column = {}, kind = {}) not found",
-            si.encodingKey_.node,
-            si.encodingKey_.sequence,
-            si.column_,
-            si.kind_));
+            si.encodingKey().node,
+            si.encodingKey().sequence,
+            si.column(),
+            si.kind()));
       } else {
         return nullptr;
       }
@@ -136,7 +136,7 @@ class TestStripeStreams : public StripeStreamsBase {
       std::function<void(const StreamInformation&)> visitor) const override {
     uint32_t count = 0;
     context_.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.encodingKey_.node == node) {
+      if (pair.first.encodingKey().node == node) {
         visitor(MockStreamInformation(pair.first));
         ++count;
       }
@@ -808,7 +808,7 @@ void testMapWriter(
     auto valueNodeId = dataTypeWithId->childAt(1)->id;
     auto streamCount = 0;
     context.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.encodingKey_.node == valueNodeId) {
+      if (pair.first.encodingKey().node == valueNodeId) {
         ++streamCount;
       }
     });
@@ -819,7 +819,7 @@ void testMapWriter(
 
     streamCount = 0;
     context.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.encodingKey_.node == valueNodeId) {
+      if (pair.first.encodingKey().node == valueNodeId) {
         ++streamCount;
       }
     });

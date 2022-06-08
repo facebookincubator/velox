@@ -44,8 +44,8 @@ class MockStripeStreams : public StripeStreams {
       const DwrfStreamIdentifier& si,
       bool throwIfNotFound) const override {
     return std::unique_ptr<SeekableInputStream>(getStreamProxy(
-        si.encodingKey_.node,
-        static_cast<proto::Stream_Kind>(si.kind_),
+        si.encodingKey().node,
+        static_cast<proto::Stream_Kind>(si.kind()),
         throwIfNotFound));
   }
 

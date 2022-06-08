@@ -510,9 +510,9 @@ class TestStripeStreams : public StripeStreamsBase {
       const DwrfStreamIdentifier& si,
       bool throwIfNotFound) const override {
     return std::unique_ptr<SeekableInputStream>(getStreamProxy(
-        si.encodingKey_.node,
-        si.encodingKey_.sequence,
-        static_cast<proto::Stream_Kind>(si.kind_),
+        si.encodingKey().node,
+        si.encodingKey().sequence,
+        static_cast<proto::Stream_Kind>(si.kind()),
         throwIfNotFound));
   }
 

@@ -108,9 +108,9 @@ class WriterContext : public CompressionBufferPool {
             getConfig(Config::COMPRESSION_BLOCK_SIZE_MIN),
             getConfig(Config::COMPRESSION_BLOCK_SIZE_EXTEND_RATIO)));
     auto& holder = streams_.at(stream);
-    auto encrypter = handler_->isEncrypted(stream.encodingKey_.node)
+    auto encrypter = handler_->isEncrypted(stream.encodingKey().node)
         ? std::addressof(
-              handler_->getEncryptionProvider(stream.encodingKey_.node))
+              handler_->getEncryptionProvider(stream.encodingKey().node))
         : nullptr;
     return newStream(compression, holder, encrypter);
   }
@@ -445,9 +445,11 @@ class WriterContext : public CompressionBufferPool {
   memory::MemoryPool& generalPool_;
   // Map needs referential stability because reference to map value is stored by
   // another class.
-  folly::
-      F14NodeMap<DwrfStreamIdentifier, DataBufferHolder, StreamIdentifierHash>
-          streams_;
+  folly::F14NodeMap<
+      DwrfStreamIdentifier,
+      DataBufferHolder,
+      dwio::common::StreamIdentifierHash>
+      streams_;
   folly::F14FastMap<
       EncodingKey,
       std::unique_ptr<AbstractIntegerDictionaryEncoder>,

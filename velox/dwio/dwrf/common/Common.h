@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <dwio/common/Common.h>
 #include <fmt/format.h>
 #include <string>
 
@@ -26,8 +27,6 @@
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
 namespace facebook::velox::dwrf {
-
-using namespace dwio::common;
 
 // Writer version
 constexpr folly::StringPiece WRITER_NAME_KEY{"orc.writer.name"};
@@ -115,7 +114,8 @@ class EncodingKey {
   }
 
  public:
-  EncodingKey() : EncodingKey(MAX_UINT32, MAX_UINT32) {}
+  EncodingKey()
+      : EncodingKey(dwio::common::MAX_UINT32, dwio::common::MAX_UINT32) {}
 
   /* implicit */ EncodingKey(uint32_t n, uint32_t s = 0)
       : node{n}, sequence{s} {}
@@ -131,7 +131,7 @@ class EncodingKey {
   }
 
   bool valid() const {
-    return node != MAX_UINT32 && sequence >= 0;
+    return node != dwio::common::MAX_UINT32 && sequence >= 0;
   }
 
   std::string toString() const {
@@ -147,7 +147,7 @@ struct EncodingKeyHash {
   }
 };
 
-class DwrfStreamIdentifier : public StreamIdentifier {
+class DwrfStreamIdentifier : public dwio::common::StreamIdentifier {
  public:
   static const DwrfStreamIdentifier& getInvalid() {
     static const DwrfStreamIdentifier INVALID;
@@ -155,13 +155,14 @@ class DwrfStreamIdentifier : public StreamIdentifier {
   }
 
  public:
-  DwrfStreamIdentifier() : kind_(StreamKind_DATA) {}
+  DwrfStreamIdentifier()
+      : column_(dwio::common::MAX_UINT32), kind_(StreamKind_DATA) {}
 
   /* implicit */ DwrfStreamIdentifier(const proto::Stream& stream)
       : DwrfStreamIdentifier(
             stream.node(),
             stream.has_sequence() ? stream.sequence() : 0,
-            stream.has_column() ? stream.column() : MAX_UINT32,
+            stream.has_column() ? stream.column() : dwio::common::MAX_UINT32,
             stream.kind()) {}
 
   DwrfStreamIdentifier(
@@ -169,7 +170,8 @@ class DwrfStreamIdentifier : public StreamIdentifier {
       uint32_t sequence,
       uint32_t column,
       StreamKind kind)
-      : StreamIdentifier(velox::cache::TrackingId(node, kind).id()),
+      : StreamIdentifier(
+            velox::cache::TrackingId((node << kNodeShift) | kind).id()),
         column_{column},
         kind_(kind),
         encodingKey_{node, sequence} {}
@@ -197,6 +199,18 @@ class DwrfStreamIdentifier : public StreamIdentifier {
     return encodingKey_.hash() ^ std::hash<uint32_t>()(kind_);
   }
 
+  uint32_t column() const {
+    return column_;
+  }
+
+  const StreamKind& kind() const {
+    return kind_;
+  }
+
+  const EncodingKey& encodingKey() const {
+    return encodingKey_;
+  }
+
   std::string toString() const {
     return fmt::format(
         "[id={}, node={}, sequence={}, column={}, kind={}]",
@@ -206,6 +220,9 @@ class DwrfStreamIdentifier : public StreamIdentifier {
         column_,
         static_cast<uint32_t>(kind_));
   }
+
+ private:
+  static constexpr int32_t kNodeShift = 5;
 
   uint32_t column_;
   StreamKind kind_;

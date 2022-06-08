@@ -53,7 +53,7 @@ void LayoutPlanner::plan() {
   // place index before data
   auto iter =
       std::partition(streams_.begin(), streams_.end(), [](auto& stream) {
-        return stream.first->kind_ == StreamKind::StreamKind_ROW_INDEX;
+        return stream.first->kind() == StreamKind::StreamKind_ROW_INDEX;
       });
   indexCount_ = iter - streams_.begin();
 
@@ -74,8 +74,8 @@ void LayoutPlanner::NodeSizeSorter::sort(
 
   // calculate node size
   auto getNodeKey = [](const DwrfStreamIdentifier& stream) {
-    return static_cast<uint64_t>(stream.encodingKey_.node) << 32 |
-        stream.encodingKey_.sequence;
+    return static_cast<uint64_t>(stream.encodingKey().node) << 32 |
+        stream.encodingKey().sequence;
   };
 
   std::unordered_map<uint64_t, uint64_t> nodeSize;
@@ -99,19 +99,19 @@ void LayoutPlanner::NodeSizeSorter::sort(
     }
 
     // if size is the same, sort by node and sequence
-    auto nodeA = a.first->encodingKey_.node;
-    auto nodeB = b.first->encodingKey_.node;
+    auto nodeA = a.first->encodingKey().node;
+    auto nodeB = b.first->encodingKey().node;
     if (nodeA != nodeB) {
       return nodeA < nodeB;
     }
 
-    auto seqA = a.first->encodingKey_.sequence;
-    auto seqB = b.first->encodingKey_.sequence;
+    auto seqA = a.first->encodingKey().sequence;
+    auto seqB = b.first->encodingKey().sequence;
     if (seqA != seqB) {
       return seqA < seqB;
     }
 
-    return a.first->kind_ < b.first->kind_;
+    return a.first->kind() < b.first->kind();
   });
 }
 

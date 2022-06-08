@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <fmt/core.h>
+#include <cstdint>
+#include <limits>
+#include <string>
+
 namespace facebook::velox::dwio::common {
 
 constexpr uint32_t MAX_UINT32 = std::numeric_limits<uint32_t>::max();

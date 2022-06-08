@@ -59,15 +59,15 @@ class StreamInformationImpl : public StreamInformation {
   ~StreamInformationImpl() override = default;
 
   StreamKind getKind() const override {
-    return streamId_.kind_;
+    return streamId_.kind();
   }
 
   uint32_t getNode() const override {
-    return streamId_.encodingKey_.node;
+    return streamId_.encodingKey().node;
   }
 
   uint32_t getSequence() const override {
-    return streamId_.encodingKey_.sequence;
+    return streamId_.encodingKey().sequence;
   }
 
   uint64_t getOffset() const override {
@@ -83,7 +83,7 @@ class StreamInformationImpl : public StreamInformation {
   }
 
   bool valid() const override {
-    return streamId_.encodingKey_.valid();
+    return streamId_.encodingKey().valid();
   }
 };
 
@@ -204,7 +204,7 @@ class StripeStreamsImpl : public StripeStreamsBase {
   std::unordered_map<
       DwrfStreamIdentifier,
       StreamInformationImpl,
-      StreamIdentifierHash>
+      dwio::common::StreamIdentifierHash>
       streams_;
   std::unordered_map<EncodingKey, uint32_t, EncodingKeyHash> encodings_;
   std::unordered_map<EncodingKey, proto::ColumnEncoding, EncodingKeyHash>
