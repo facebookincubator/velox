@@ -47,20 +47,20 @@ namespace facebook::velox {
 
 using int128_t = __int128_t;
 
-// Velox type system supports a small set of SQL-compatible composeable types:
-// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
-// VARBINARY, TIMESTAMP, DATE, INTERVAL_DAY_TIME, ARRAY, MAP, ROW
-//
-// This file has multiple C++ type definitions for each of these logical types.
-// These logical definitions each serve slightly different purposes.
-// These type sets are:
-// - TypeKind
-// - Type (RowType, BigIntType, ect.)
-// - Templated Types (Row<T...>, Map<K, V>, ...)
-//     C++ templated classes. Never instantiated, used to pass limited type
-//     information into template parameters.
+/// Velox type system supports a small set of SQL-compatible composeable types:
+/// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+/// VARBINARY, TIMESTAMP, DATE, INTERVAL_DAY_TIME, ARRAY, MAP, ROW
+///
+/// This file has multiple C++ type definitions for each of these logical types.
+/// These logical definitions each serve slightly different purposes.
+/// These type sets are:
+/// - TypeKind
+/// - Type (RowType, BigIntType, ect.)
+/// - Templated Types (Row<T...>, Map<K, V>, ...)
+///     C++ templated classes. Never instantiated, used to pass limited type
+///     information into template parameters.
 
-// Simple enum with type category.
+/// Simple enum with type category.
 enum class TypeKind : int8_t {
   BOOLEAN = 0,
   TINYINT = 1,
@@ -88,11 +88,11 @@ enum class TypeKind : int8_t {
   INVALID = 36
 };
 
-// Returns the typekind represented by the `name`. Throws if no match found.
+/// Returns the typekind represented by the `name`. Throws if no match found.
 TypeKind mapNameToTypeKind(const std::string& name);
 
-// Returns the typekind represented by the `name` and std::nullopt if no
-// match found.
+/// Returns the typekind represented by the `name` and std::nullopt if no
+/// match found.
 std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name);
 
 std::string mapTypeKindToName(const TypeKind& typeKind);
@@ -434,18 +434,18 @@ struct TypeFactory;
     return this->kind() == TypeKind::KIND;                                \
   }
 
-// Abstract class hierarchy. Instances of these classes carry full
-// information about types, including for example field names.
-// Can be instantiated by factory methods, like INTEGER()
-// or MAP(INTEGER(), BIGINT()).
-// Instances of these classes form a tree, and are immutable.
-// For example, MAP<INTEGER, ARRAY<BIGINT>> will form a tree like:
-//
-//             MapType
-//           /         \
-//   IntegerType    ArrayType
-//                     |
-//                   BigintType
+/// Abstract class hierarchy. Instances of these classes carry full
+/// information about types, including for example field names.
+/// Can be instantiated by factory methods, like INTEGER()
+/// or MAP(INTEGER(), BIGINT()).
+/// Instances of these classes form a tree, and are immutable.
+/// For example, MAP<INTEGER, ARRAY<BIGINT>> will form a tree like:
+///
+///             MapType
+///           /         \
+///   IntegerType    ArrayType
+///                     |
+///                   BigintType
 class Type : public Tree<const std::shared_ptr<const Type>>,
              public velox::ISerializable {
  public:
@@ -457,9 +457,9 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual ~Type() = default;
 
-  // this convenience method makes pattern matching easier. Rather than having
-  // to know the implementation type up front, just use as<TypeKind::MAP> (for
-  // example) to dynamically cast to the appropriate type.
+  /// This convenience method makes pattern matching easier. Rather than having
+  /// to know the implementation type up front, just use as<TypeKind::MAP> (for
+  /// example) to dynamically cast to the appropriate type.
   template <TypeKind KIND>
   const typename TypeTraits<KIND>::ImplType& as() const {
     return dynamic_cast<const typename TypeTraits<KIND>::ImplType&>(*this);
@@ -471,16 +471,16 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual std::string toString() const = 0;
 
-  // Types are weakly matched.
-  // Examples: Two RowTypes are equivalent if the children types are equivalent,
-  // but the children names could be different. Two OpaqueTypes are equivalent
-  // if the typeKind matches, but the typeIndex could be different.
+  /// Types are weakly matched.
+  /// Examples: Two RowTypes are equivalent if the children types are
+  /// equivalent, but the children names could be different. Two OpaqueTypes are
+  /// equivalent if the typeKind matches, but the typeIndex could be different.
   virtual bool equivalent(const Type& other) const = 0;
 
-  // Types are strongly matched.
-  // Examples: Two RowTypes are == if the children types and the children names
-  // are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
-  // same. Same as equivalent for most types except for Row, Opaque types.
+  /// Types are strongly matched.
+  /// Examples: Two RowTypes are == if the children types and the children names
+  /// are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
+  /// same. Same as equivalent for most types except for Row, Opaque types.
   virtual bool operator==(const Type& other) const {
     return this->equivalent(other);
   }
@@ -497,17 +497,17 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual bool isFixedWidth() const = 0;
 
-  // Used in FixedSizeArrayType to return the width constraint of the type.
+  /// Used in FixedSizeArrayType to return the width constraint of the type.
   virtual size_type fixedElementsWidth() const {
     throw std::invalid_argument{"unimplemented"};
   }
 
   static std::shared_ptr<const Type> create(const folly::dynamic& obj);
 
-  // recursive kind hashing (uses only typeKind)
+  /// Recursive kind hashing (uses only TypeKind).
   size_t hashKind() const;
 
-  // recursive kind match (uses only typeKind)
+  /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
 
   template <TypeKind KIND, typename... CHILDREN>
@@ -723,13 +723,13 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
   std::shared_ptr<const Type> child_;
 };
 
-// FixedSizeArrayType implements an Array that is constrained to
-// always be a fixed size (width). When passing this type on the wire,
-// a FixedSizeArrayType may change into a general variable width array
-// as Presto/Spark do not have a notion of fixed size array.
-//
-// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
-// used.
+/// FixedSizeArrayType implements an Array that is constrained to
+/// always be a fixed size (width). When passing this type on the wire,
+/// a FixedSizeArrayType may change into a general variable width array
+/// as Presto/Spark do not have a notion of fixed size array.
+///
+/// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
+/// used.
 class FixedSizeArrayType : public ArrayType {
  public:
   explicit FixedSizeArrayType(size_type len, std::shared_ptr<const Type> child);
@@ -841,8 +841,8 @@ inline RowTypePtr asRowType(const TypePtr& type) {
   return std::dynamic_pointer_cast<const RowType>(type);
 }
 
-// Represents a lambda function. The children are the argument types
-// followed by the return value type.
+/// Represents a lambda function. The children are the argument types
+/// followed by the return value type.
 class FunctionType : public TypeBase<TypeKind::FUNCTION> {
  public:
   FunctionType(
@@ -909,34 +909,34 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   }
 
   folly::dynamic serialize() const override;
-  // In special cases specific OpaqueTypes might want to serialize additional
-  // metadata. In those cases we need to deserialize it back. Since
-  // OpaqueType::create<T>() returns canonical type for T without metadata, we
-  // allow to create new instance here or return nullptr if the same one can be
-  // used. Note that it's about deserialization of type itself, DeserializeFunc
-  // above is about deserializing instances of the type. It's implemented as a
-  // virtual member instead of a standalone registry just for convenience.
+  /// In special cases specific OpaqueTypes might want to serialize additional
+  /// metadata. In those cases we need to deserialize it back. Since
+  /// OpaqueType::create<T>() returns canonical type for T without metadata, we
+  /// allow to create new instance here or return nullptr if the same one can be
+  /// used. Note that it's about deserialization of type itself, DeserializeFunc
+  /// above is about deserializing instances of the type. It's implemented as a
+  /// virtual member instead of a standalone registry just for convenience.
   virtual std::shared_ptr<const OpaqueType> deserializeExtra(
       const folly::dynamic& json) const;
 
-  // Function for converting std::shared_ptr<T> into a string. Always returns
-  // non-nullptr function or throws if not function has been registered.
+  /// Function for converting std::shared_ptr<T> into a string. Always returns
+  /// non-nullptr function or throws if not function has been registered.
   SerializeFunc<void> getSerializeFunc() const;
   DeserializeFunc<void> getDeserializeFunc() const;
 
   template <typename Class>
   FOLLY_NOINLINE static std::shared_ptr<const OpaqueType> create() {
-    // static vars in templates are dangerous across DSOs, but it's just a
-    // performance optimization. Comparison looks at type_index anyway.
+    /// static vars in templates are dangerous across DSOs, but it's just a
+    /// performance optimization. Comparison looks at type_index anyway.
     static const auto instance =
         std::make_shared<const OpaqueType>(std::type_index(typeid(Class)));
     return instance;
   }
 
-  // This function currently doesn't do synchronization neither with reads
-  // or writes, so it's caller's responsibility to not invoke it concurrently
-  // with other Velox code. Usually it'd be invoked at static initialization
-  // time. It can be changed in the future if it becomes a problem.
+  /// This function currently doesn't do synchronization neither with reads
+  /// or writes, so it's caller's responsibility to not invoke it concurrently
+  /// with other Velox code. Usually it'd be invoked at static initialization
+  /// time. It can be changed in the future if it becomes a problem.
   template <typename T>
   FOLLY_NOINLINE static void registerSerialization(
       const std::string& persistentName,
@@ -986,11 +986,11 @@ using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
 using IntervalDayTimeType = ScalarType<TypeKind::INTERVAL_DAY_TIME>;
 
-// Used as T for SimpleVector subclasses that wrap another vector when
-// the wrapped vector is of a complex type. Applies to
-// DictionaryVector, SequenceVector and ConstantVector. This must have
-// a size different from any of the scalar data type sizes to enable
-// run time checking with 'elementSize_'.
+/// Used as T for SimpleVector subclasses that wrap another vector when
+/// the wrapped vector is of a complex type. Applies to
+/// DictionaryVector, SequenceVector and ConstantVector. This must have
+/// a size different from any of the scalar data type sizes to enable
+/// run time checking with 'elementSize_'.
 struct ComplexType {
   TypePtr create() {
     VELOX_NYI();
@@ -1846,7 +1846,7 @@ class FormatValue<facebook::velox::TypeKind> {
   facebook::velox::TypeKind type_;
 };
 
-// Prints all types derived from `velox::Type`.
+/// Prints all types derived from `velox::Type`.
 template <typename T>
 class FormatValue<
     std::shared_ptr<T>,
