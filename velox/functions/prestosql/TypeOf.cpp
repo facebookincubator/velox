@@ -25,14 +25,14 @@ class TypeOfFunction : public exec::VectorFunction {
       const TypePtr& outputType,
       exec::EvalCtx* context,
       VectorPtr* result) const override {
-    auto type_string = args[0]->type()->toString();
+    auto typeString = args[0]->type()->toString();
     auto localResult = BaseVector::createConstant(
-        variant::binary(type_string), rows.end(), context->pool());
+        variant::binary(typeString), rows.end(), context->pool());
     context->moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // varchar -> varbinary
+    // T -> varchar
     return {exec::FunctionSignatureBuilder()
                 .typeVariable("T")
                 .returnType("varchar")
