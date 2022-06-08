@@ -56,17 +56,17 @@ TEST_F(NthValueTest, basicNthValue) {
 
   auto op = PlanBuilder()
                 .values(vectors)
-                .project({"c0 as c0", "c1 as c1"})
+                .project({"c0 as c0", "c1 as c1", "1 as c2"})
                 .window(
                     {0},
                     {1},
                     {core::kAscNullsLast},
-                    {"nth_value(c0, 1) as nth_value_partition"})
+                    {"nth_value(c0, c2) as nth_value_partition"})
                 .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
                 .planNode();
   assertQuery(
       op,
-      "SELECT c0, c1, nth_value(c0, 1) over (partition by c0 order by c1) as nth_value_partition FROM tmp order by c0, c1");
+      "SELECT c0, c1, 1 as c2, nth_value(c0, 1) over (partition by c0 order by c1) as nth_value_partition FROM tmp order by c0, c1");
 }
 
 TEST_F(NthValueTest, basicNthValue2) {

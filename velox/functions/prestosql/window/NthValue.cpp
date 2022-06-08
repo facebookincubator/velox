@@ -26,45 +26,72 @@ namespace {
 template <typename T>
 class NthValueFunction : public exec::WindowFunction {
  public:
-  explicit NthValueFunction(const TypePtr& resultType)
-      : WindowFunction(resultType) {}
+  explicit NthValueFunction(
+      const std::vector<exec::RowColumn>& argColumns,
+      const TypePtr& resultType)
+      : WindowFunction(resultType),
+        argColumns_(argColumns),
+        partitionRows_(nullptr) {}
 
-  void resetPartition(const std::vector<char*>& /*rows*/) {}
+  void resetPartition(const std::vector<char*>& rows) {
+    partitionRows_ = &rows;
+    /*firstArgVector_->resize(rows.size());
+    exec::RowContainer::extractColumn(
+      rows.data(), rows.size(), argColumns_[0], firstArgVector_);
+
+    offsetsVector_->resize(rows.size());
+    exec::RowContainer::extractColumn(
+      rows.data(), rows.size(), argColumns_[1], offsetsVector_); */
+  }
 
   void apply(
-      int32_t /* peerGroupStarts */,
-      int32_t /* peerGroupEnds */,
-      int32_t frameStarts,
-      int32_t /* frameEnds */,
-      int32_t currentOutputRow,
-      const std::vector<VectorPtr>& argVectors,
+      const BufferPtr& peerGroupStarts,
+      const BufferPtr& /*peerGroupEnds*/,
+      const BufferPtr& frameStarts,
+      const BufferPtr& /*frameEnds*/,
+      int32_t startPartitionRow,
+      int32_t resultIndex,
       const VectorPtr& result) {
     FlatVector<T>* resultVector = result->as<FlatVector<T>>();
-    FlatVector<T>* firstArgVector = argVectors[0]->as<FlatVector<T>>();
+    auto firstArgVector =
+        BaseVector::create(resultVector->type(), 1, peerGroupStarts->pool());
+    auto offsetsVector =
+        BaseVector::create(BIGINT(), 1, peerGroupStarts->pool());
 
-    const int64_t offset =
-        argVectors[1]->as<FlatVector<int64_t>>()->valueAt(currentOutputRow);
-    // TODO : Add more validations here.
-    VELOX_CHECK_GE(offset, 1);
-    VELOX_CHECK_GE(frameStarts, 0);
-
-    resultVector->mutableRawValues()[currentOutputRow] =
-        firstArgVector->valueAt(
-            partitionStartOffset_ + frameStarts + offset - 1);
-    partitionStartOffset_++;
+    int numRows = peerGroupStarts->size();
+    for (int i = 0; i < numRows; i++) {
+      exec::RowContainer::extractColumn(
+          partitionRows_->data() + startPartitionRow + i,
+          1,
+          argColumns_[1],
+          offsetsVector);
+      const int64_t offset = offsetsVector->values()->as<int64_t>()[0];
+      VELOX_CHECK_GE(offset, 1);
+      const int64_t frameStart = frameStarts->as<size_t>()[i];
+      VELOX_CHECK_GE(frameStart, 0);
+      exec::RowContainer::extractColumn(
+          partitionRows_->data() + frameStart + offset - 1,
+          1,
+          argColumns_[0],
+          firstArgVector);
+      resultVector->mutableRawValues()[resultIndex + i] =
+          firstArgVector->values()->template as<T>()[0];
+    }
   }
 
  private:
-  // TODO : Kind of ugly hack to know where in the buffer the partition starts
-  // as the frameOffset is relative to the partition start.
-  int32_t partitionStartOffset_ = 0;
+  const std::vector<exec::RowColumn>& argColumns_;
+  const std::vector<char*>* partitionRows_;
+  // VectorPtr offsetsVector_;
+  // VectorPtr firstArgVector_;
 };
 
 template <TypeKind kind>
 std::unique_ptr<exec::WindowFunction> createNthValueFunction(
+    const std::vector<exec::RowColumn>& argColumns,
     const TypePtr& resultType) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<NthValueFunction<T>>(resultType);
+  return std::make_unique<NthValueFunction<T>>(argColumns, resultType);
 }
 
 bool registerNthValue(const std::string& name) {
@@ -80,12 +107,15 @@ bool registerNthValue(const std::string& name) {
   exec::registerWindowFunction(
       name,
       std::move(signatures),
-      [name](const std::vector<TypePtr>& argTypes, const TypePtr& resultType)
-          -> std::unique_ptr<exec::WindowFunction> {
+      [name](
+          const std::vector<exec::RowColumn>& argColumns,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType) -> std::unique_ptr<exec::WindowFunction> {
+        VELOX_CHECK_EQ(argColumns.size(), 2, "{} takes two arguments", name);
         VELOX_CHECK_EQ(argTypes.size(), 2, "{} takes two arguments", name);
         auto typeKind = argTypes[0]->kind();
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createNthValueFunction, typeKind, resultType);
+            createNthValueFunction, typeKind, argColumns, resultType);
       });
   return true;
 }

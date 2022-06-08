@@ -55,11 +55,12 @@ getWindowFunctionSignatures(const std::string& name) {
 
 std::unique_ptr<WindowFunction> WindowFunction::create(
     const std::string& name,
+    const std::vector<exec::RowColumn>& argColumns,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType) {
   // Lookup the function in the new registry first.
   if (auto func = getWindowFunctionEntry(name)) {
-    return func.value()->factory(argTypes, resultType);
+    return func.value()->factory(argColumns, argTypes, resultType);
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);

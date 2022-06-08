@@ -59,8 +59,6 @@ class Window : public Operator {
     std::optional<ChannelIndex> endChannel_;
   };
 
-  static const int32_t kBatchSizeInBytes{2 * 1024 * 1024};
-
   void initKeyInfo(
       const std::shared_ptr<const RowType>& type,
       const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
@@ -68,8 +66,19 @@ class Window : public Operator {
       const std::vector<core::SortOrder>& sortingOrders,
       std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo);
 
+  std::pair<RowVectorPtr, std::vector<VectorPtr>> setupBufferForOutput(
+      size_t noRows);
+
+  void callResetPartition(size_t idx);
+
+  void outputCurrentPartition(
+      size_t startRow,
+      size_t endRow,
+      const std::vector<VectorPtr>& windowFunctionOutputs,
+      const size_t bufferIndex);
+
   std::pair<int32_t, int32_t> findFrameEndPoints(
-      int32_t windowFunctionIndex,
+      int32_t idx,
       int32_t partitionStartRow,
       int32_t partitionEndRow,
       int32_t currentRow);
@@ -91,8 +100,9 @@ class Window : public Operator {
   std::vector<std::pair<ChannelIndex, core::SortOrder>> partitionKeyInfo_;
   std::vector<std::pair<ChannelIndex, core::SortOrder>> sortKeyInfo_;
 
+  static const int32_t kBatchSizeInBytes{2 * 1024 * 1024};
   size_t numRows_ = 0;
-  size_t numRowsReturned_ = 0;
+
   std::vector<char*> rows_;
   std::vector<char*> returningRows_;
   // This index captures the row index in RowContainer data_ that marks the
@@ -108,13 +118,23 @@ class Window : public Operator {
   // The current code also assumes that all partition rows fit within a single
   // output block of rows. We do not consider partitions that overlap over
   // output blocks.
-  int partitionStartRow_ = 0;
+  // int partitionStartRow_ = 0;
   RowContainerIterator partitionIter_;
+  std::vector<char*> partitionRows_;
 
   std::vector<std::unique_ptr<exec::WindowFunction>> windowFunctions_;
   std::vector<WindowFrame> windowFrames_;
 
-  std::vector<std::vector<ChannelIndex>> funcArgChannels_;
+  // Number of rows that be fit into an output block.
+  size_t numRowsPerOutput_;
+  size_t numRowsReturned_ = 0;
+
+  std::vector<size_t> partitionStartRows_;
+  size_t currentPartitionIndex_;
+  size_t numberOfPartitions_;
+
+  size_t peerStartRow_ = 0;
+  size_t peerEndRow_ = 0;
 };
 
 } // namespace facebook::velox::exec

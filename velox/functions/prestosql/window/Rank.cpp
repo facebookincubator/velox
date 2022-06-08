@@ -34,20 +34,23 @@ class RankFunction : public exec::WindowFunction {
   }
 
   void apply(
-      int32_t peerGroupStarts,
-      int32_t peerGroupEnds,
-      int32_t /* frameStarts */,
-      int32_t /* frameEnds */,
-      int32_t currentOutputRow,
-      const std::vector<VectorPtr>& /* argVectors */,
+      const BufferPtr& peerGroupStarts,
+      const BufferPtr& peerGroupEnds,
+      const BufferPtr& frameStarts,
+      const BufferPtr& frameEnds,
+      int32_t startPartitionRow,
+      int32_t resultIndex,
       const VectorPtr& result) {
-    if (peerGroupStarts != currentPeerGroupStart_) {
-      currentPeerGroupStart_ = peerGroupStarts;
-      rank_ += previousPeerCount_;
+    int numRows = peerGroupStarts->size();
+    for (int i = 0; i < numRows; i++) {
+      if (peerGroupStarts->as<size_t>()[i] != currentPeerGroupStart_) {
+        currentPeerGroupStart_ = peerGroupStarts->as<size_t>()[i];
+        rank_ += previousPeerCount_;
+      }
+      previousPeerCount_ += 1;
+      result->asFlatVector<int64_t>()->mutableRawValues()[resultIndex + i] =
+          rank_;
     }
-    previousPeerCount_ += 1;
-    result->asFlatVector<int64_t>()->mutableRawValues()[currentOutputRow] =
-        rank_;
   }
 
  private:
@@ -65,9 +68,12 @@ bool registerRank(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          const std::vector<TypePtr>& argTypes, const TypePtr&
-          /*resultType*/) -> std::unique_ptr<exec::WindowFunction> {
-        VELOX_CHECK_LE(argTypes.size(), 0, "{} takes no arguments", name);
+          const std::vector<exec::RowColumn>& argColumns,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& /*resultType*/)
+          -> std::unique_ptr<exec::WindowFunction> {
+        VELOX_CHECK_EQ(argColumns.size(), 0, "{} takes no arguments", name);
+        VELOX_CHECK_EQ(argTypes.size(), 0, "{} takes no arguments", name);
         return std::make_unique<RankFunction>();
       });
   return true;
