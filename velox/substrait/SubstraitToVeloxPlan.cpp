@@ -148,6 +148,16 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
               exprConverter_->toVeloxExpr(arg.selection(), inputTypes));
           break;
         }
+        case ::substrait::Expression::RexTypeCase::kCast: {
+          aggParams.emplace_back(
+              exprConverter_->toVeloxExpr(arg.cast(), inputTypes));
+          break;
+        }
+        case ::substrait::Expression::RexTypeCase::kLiteral: {
+          aggParams.emplace_back(
+              exprConverter_->toVeloxExpr(arg.literal()));
+          break;
+        }
         case ::substrait::Expression::RexTypeCase::kScalarFunction: {
           // Pre-projection is needed before Aggregate.
           // The input of Aggregatation will be the output of the

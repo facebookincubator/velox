@@ -149,10 +149,10 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sum) {
 
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .partialAggregation({}, {"sum(c1)", "count(c4)"})
+                  .partialAggregation({}, {"sum(1)", "count(c4)"})
                   .planNode();
 
-  assertPlanConversion(plan, "SELECT sum(c1), count(c4) FROM tmp");
+  assertPlanConversion(plan, "SELECT sum(1), count(c4) FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumAndCount) {

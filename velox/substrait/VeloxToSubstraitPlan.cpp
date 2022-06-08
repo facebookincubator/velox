@@ -282,22 +282,14 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
     int64_t aggregatesExprInputsSize = aggregatesExprInputs.size();
     for (int64_t j = 0; j < aggregatesExprInputsSize; j++) {
-      ::substrait::Expression* aggFunctionExpr = aggFunction->add_args();
       core::TypedExprPtr expr = aggregatesExprInputs[j];
 
       // If the expr is CallTypedExpr, people need do project firstly.
       if (auto aggregatesExprInput =
               std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
         VELOX_NYI("In Velox Plan, the aggregates type cannot be CallTypedExpr");
-      } else if (
-          auto aggregatesExprInput =
-              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr) &&
-              funName == "count") {
-        // For case count(1).
-        aggFunction->clear_args();
       } else {
-        // FieldAccessTypedExpr and Cast.
-        aggFunctionExpr->MergeFrom(
+        aggFunction->add_args()->MergeFrom(
             exprConvertor_->toSubstraitExpr(arena, expr, inputType));
       }
     }
