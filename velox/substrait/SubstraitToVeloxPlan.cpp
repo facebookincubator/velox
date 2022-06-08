@@ -154,8 +154,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
           break;
         }
         case ::substrait::Expression::RexTypeCase::kLiteral: {
-          aggParams.emplace_back(
-              exprConverter_->toVeloxExpr(arg.literal()));
+          aggParams.emplace_back(exprConverter_->toVeloxExpr(arg.literal()));
           break;
         }
         case ::substrait::Expression::RexTypeCase::kScalarFunction: {
