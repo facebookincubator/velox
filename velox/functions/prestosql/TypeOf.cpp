@@ -40,11 +40,11 @@ class TypeOfFunction : public exec::VectorFunction {
                 .build()};
   }
 };
-}
+} // namespace
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_typeof,
     TypeOfFunction::signatures(),
     std::make_unique<TypeOfFunction>());
 
-}
+} // namespace facebook::velox::functions
