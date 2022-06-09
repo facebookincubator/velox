@@ -24,6 +24,10 @@ namespace facebook::velox::exec {
 
 std::string sanitizeFunctionName(const std::string& name);
 
+inline bool isCommonDecimalName(const std::string& typeName) {
+  return (typeName == "DECIMAL");
+}
+
 // A type name (e.g. K or V in map(K, V)) and optionally constraints, e.g.
 // expression over the variable, etc.
 class TypeVariableConstraint {

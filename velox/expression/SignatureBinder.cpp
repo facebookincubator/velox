@@ -71,10 +71,10 @@ bool SignatureBinder::tryBind(
   if (it == bindings_.end()) {
     // concrete type
     auto typeName = boost::algorithm::to_upper_copy(typeSignature.baseType());
-    if (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL") {
+    if (isDecimalName(typeName)) {
       VELOX_USER_FAIL("Use 'DECIMAL' in the signature.");
     }
-    if (isDecimalKind(actualType->kind()) && typeName == "DECIMAL") {
+    if (isDecimalKind(actualType->kind()) && isCommonDecimalName(typeName)) {
       const auto& variables = typeSignature.variables();
       VELOX_CHECK_EQ(variables.size(), 2);
       int precision, scale;
@@ -149,7 +149,7 @@ TypePtr SignatureBinder::tryResolveType(
     // concrete type
     auto typeName = boost::algorithm::to_upper_copy(typeSignature.baseType());
 
-    if (typeName == "DECIMAL") {
+    if (isCommonDecimalName(typeName)) {
       const auto& precisionVar = typeSignature.variables()[0];
       const auto& scaleVar = typeSignature.variables()[1];
       // check for constraints, else set defaults.
