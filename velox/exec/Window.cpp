@@ -77,13 +77,9 @@ Window::Window(
   for (auto i = 0; i < windowNode->windowFunctions().size(); i++) {
     const auto& windowNodeFunction = windowNode->windowFunctions()[i];
     std::vector<TypePtr> argTypes;
-    for (auto& arg : windowNodeFunction.functionCall->inputs()) {
-      argTypes.push_back(arg->type());
-    }
-    const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
-
     std::vector<exec::RowColumn> argColumns;
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
+      argTypes.push_back(arg->type());
       if (auto fae =
               std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
                   arg)) {
@@ -95,6 +91,7 @@ Window::Window(
         argColumns.push_back(data_->columnAt(argChannel.value()));
       }
     }
+    const auto& resultType = outputType_->childAt(inputColumnsSize_ + i);
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(),
         argColumns,
@@ -222,9 +219,11 @@ void Window::noMoreInput() {
   };
 
   // Using a sequential traversal to find changing partitions.
-  // This algorithm can be changed to use a binary search kind of strategy. Or
-  // if we use a HashTable for grouping then the count of rows in each group can
-  // be used directly.
+  // This algorithm is inefficient and can be changed
+  // i) Use a binary search kind of strategy.
+  // ii) Count in the above sort somehow.
+  // iii) If we use a Hashtable for the previous grouping then the count
+  // of rows in the group can be directly used.
   int j = 0;
   partitionStartRows_[0] = 0;
   // We directly return above if there are no rows. So we can safely assume here
@@ -444,8 +443,8 @@ RowVectorPtr Window::getOutput() {
       rowsForOutput -= rowsForCurrentPartition;
     } else {
       // Current partition can fit partially in the output buffer.
-      // Output "rowsLeftForApply" number of rows and break from the outputing
-      // rows.
+      // Output "rowsLeftForApply" number of rows left and break from
+      // outputting the rows.
       callApplyForPartitionRows(
           numRowsApplied_,
           numRowsApplied_ + rowsForOutput,
