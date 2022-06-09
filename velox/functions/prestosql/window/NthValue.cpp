@@ -34,7 +34,7 @@ class NthValueFunction : public exec::WindowFunction {
         partitionRows_(nullptr) {}
 
   void resetPartition(const std::vector<char*>& rows) {
-    partitionRows_ = &rows;
+    partitionRows_ = reinterpret_cast<char* const*>(rows.data());
     /*firstArgVector_->resize(rows.size());
     exec::RowContainer::extractColumn(
       rows.data(), rows.size(), argColumns_[0], firstArgVector_);
@@ -61,7 +61,7 @@ class NthValueFunction : public exec::WindowFunction {
     int numRows = peerGroupStarts->size();
     for (int i = 0; i < numRows; i++) {
       exec::RowContainer::extractColumn(
-          partitionRows_->data() + startPartitionRow + i,
+          partitionRows_ + startPartitionRow + i,
           1,
           argColumns_[1],
           offsetsVector);
@@ -70,7 +70,7 @@ class NthValueFunction : public exec::WindowFunction {
       const int64_t frameStart = frameStarts->as<size_t>()[i];
       VELOX_CHECK_GE(frameStart, 0);
       exec::RowContainer::extractColumn(
-          partitionRows_->data() + frameStart + offset - 1,
+          partitionRows_ + frameStart + offset - 1,
           1,
           argColumns_[0],
           firstArgVector);
@@ -81,7 +81,7 @@ class NthValueFunction : public exec::WindowFunction {
 
  private:
   const std::vector<exec::RowColumn>& argColumns_;
-  const std::vector<char*>* partitionRows_;
+  char* const* partitionRows_;
   // VectorPtr offsetsVector_;
   // VectorPtr firstArgVector_;
 };

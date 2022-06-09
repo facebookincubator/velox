@@ -267,6 +267,7 @@ std::pair<int32_t, int32_t> Window::findFrameEndPoints(
 void Window::callResetPartition(size_t idx) {
   size_t partitionSize =
       partitionStartRows_[idx + 1] - partitionStartRows_[idx];
+  partitionRows_.clear();
   partitionRows_.resize(partitionSize);
   // partitionIter_ retains the positional information across getOutput calls.
   data_->listRows(&partitionIter_, partitionSize, partitionRows_.data());
