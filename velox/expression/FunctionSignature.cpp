@@ -42,7 +42,7 @@ std::string TypeSignature::toString() const {
   std::ostringstream out;
   out << baseType_;
   auto typeName = boost::algorithm::to_upper_copy(baseType_);
-  if (isDecimalType(typeName)) {
+  if (typeName == "DECIMAL") {
     out << "(" << variables_[0] << ", " << variables_[1] << ")";
   }
   if (!parameters_.empty()) {
@@ -107,7 +107,7 @@ TypeSignature parseTypeSignature(const std::string& signature) {
   nestedTypes.emplace_back(parseTypeSignature(token));
 
   auto typeName = boost::algorithm::to_upper_copy(baseType);
-  if (isDecimalType(typeName)) {
+  if (typeName == "DECIMAL") {
     std::vector<std::string> vars(2);
     vars[0] = nestedTypes[0].baseType();
     vars[1] = nestedTypes[1].baseType();
@@ -127,6 +127,14 @@ void validateBaseTypeAndCollectTypeParams(
     if (typeName == "ANY") {
       VELOX_USER_CHECK(
           arg.parameters().empty(), "Type 'Any' cannot have parameters")
+      return;
+    }
+
+    if (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL") {
+      VELOX_USER_FAIL("Use 'DECIMAL' in the signature.");
+    }
+
+    if (typeName == "DECIMAL") {
       return;
     }
 

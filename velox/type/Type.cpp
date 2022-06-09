@@ -121,18 +121,14 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
-bool isDecimalType(TypeKind typeKind) {
+bool isDecimalKind(TypeKind typeKind) {
   return (
       typeKind == TypeKind::SHORT_DECIMAL ||
       typeKind == TypeKind::LONG_DECIMAL);
 }
 
-bool isDecimalType(const std::string& typeName) {
-  return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
-}
-
 void getDecimalPrecisionScale(const Type& type, int& precision, int& scale) {
-  VELOX_CHECK(isDecimalType(type.kind()));
+  VELOX_CHECK(isDecimalKind(type.kind()));
   if (type.kind() == TypeKind::SHORT_DECIMAL) {
     const ShortDecimalType* decimalType =
         static_cast<const ShortDecimalType*>(&type);

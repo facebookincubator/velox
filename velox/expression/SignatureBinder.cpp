@@ -70,12 +70,11 @@ bool SignatureBinder::tryBind(
   auto it = bindings_.find(typeSignature.baseType());
   if (it == bindings_.end()) {
     // concrete type
-    if (boost::algorithm::to_upper_copy(typeSignature.baseType()) !=
-        actualType->kindName()) {
-      return false;
+    auto typeName = boost::algorithm::to_upper_copy(typeSignature.baseType());
+    if (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL") {
+      VELOX_USER_FAIL("Use 'DECIMAL' in the signature.");
     }
-
-    if (isDecimalType(actualType->kind())) {
+    if (isDecimalKind(actualType->kind()) && typeName == "DECIMAL") {
       const auto& variables = typeSignature.variables();
       VELOX_CHECK_EQ(variables.size(), 2);
       int precision, scale;
@@ -83,6 +82,10 @@ bool SignatureBinder::tryBind(
       variables_.emplace(variables[0], precision);
       variables_.emplace(variables[1], scale);
       return true;
+    }
+
+    if (typeName != actualType->kindName()) {
+      return false;
     }
 
     const auto& params = typeSignature.parameters();
@@ -146,27 +149,7 @@ TypePtr SignatureBinder::tryResolveType(
     // concrete type
     auto typeName = boost::algorithm::to_upper_copy(typeSignature.baseType());
 
-    if (auto type = getType(typeName, children)) {
-      return type;
-    }
-
-    auto typeKind = tryMapNameToTypeKind(typeName);
-    if (!typeKind.has_value()) {
-      return nullptr;
-    }
-
-    // createType(kind) function doesn't support ROW, UNKNOWN and OPAQUE type
-    // kinds.
-    if (*typeKind == TypeKind::ROW) {
-      return ROW(std::move(children));
-    }
-    if (*typeKind == TypeKind::UNKNOWN) {
-      return UNKNOWN();
-    }
-    if (*typeKind == TypeKind::OPAQUE) {
-      return OpaqueType::create<void>();
-    }
-    if (isDecimalType(*typeKind)) {
+    if (typeName == "DECIMAL") {
       const auto& precisionVar = typeSignature.variables()[0];
       const auto& scaleVar = typeSignature.variables()[1];
       // check for constraints, else set defaults.
@@ -189,6 +172,27 @@ TypePtr SignatureBinder::tryResolveType(
       expression::calculation::evaluate(scaleCalculation, variables);
 
       return DECIMAL(variables[precisionVar], variables[scaleVar]);
+    }
+
+    if (auto type = getType(typeName, children)) {
+      return type;
+    }
+
+    auto typeKind = tryMapNameToTypeKind(typeName);
+    if (!typeKind.has_value()) {
+      return nullptr;
+    }
+
+    // createType(kind) function doesn't support ROW, UNKNOWN and OPAQUE type
+    // kinds.
+    if (*typeKind == TypeKind::ROW) {
+      return ROW(std::move(children));
+    }
+    if (*typeKind == TypeKind::UNKNOWN) {
+      return UNKNOWN();
+    }
+    if (*typeKind == TypeKind::OPAQUE) {
+      return OpaqueType::create<void>();
     }
     return createType(*typeKind, std::move(children));
   }
