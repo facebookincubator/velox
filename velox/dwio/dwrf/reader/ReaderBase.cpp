@@ -27,8 +27,11 @@ using dwio::common::InputStream;
 using dwio::common::LogType;
 using dwio::common::Statistics;
 using dwio::common::encryption::DecrypterFactory;
+using dwio::common::FileFormat;
 using encryption::DecryptionHandler;
 using memory::MemoryPool;
+using DwrfPostScriptPtr = std::unique_ptr<proto::PostScript>;
+using OrcPostScriptPtr = std::unique_ptr<proto::orc::PostScript>;
 
 FooterStatisticsImpl::FooterStatisticsImpl(
     const ReaderBase& reader,
@@ -131,19 +134,17 @@ ReaderBase::ReaderBase(
   if (fileFormat_ == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<DwrfPostScript>(postScript);
+    postScript_ = std::make_unique<PostScript>(*postScript);
     postScriptProto = std::move(postScript);
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<OrcPostScript>(postScript);
+    postScript_ = std::make_unique<PostScript>(*postScript);
     postScriptProto = std::move(postScript);
   }
 
   uint64_t footerSize = postScript_->footerlength();
-  uint64_t cacheSize = fileFormat_ == FileFormat::DWRF
-      ? reinterpret_cast<DwrfPostScript*>(postScript_.get())->cachesize()
-      : 0;
+  uint64_t cacheSize = postScript_->cachesize();
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored

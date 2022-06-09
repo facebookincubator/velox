@@ -47,17 +47,12 @@ int main(int argc, char** argv) {
   filesystems::registerLocalFileSystem();
   dwrf::registerDwrfReaderFactory();
 
-  // Ensures that the task is finished before moving on. 0 timeout means it will
-  // block forever until the task finishes.
-  auto& inlineExecutor = folly::QueuedImmediateExecutor::instance();
-
   std::string filePath{argv[1]};
   ReaderOptions readerOpts;
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(FileFormat::ORC);
   auto reader = DwrfReader::create(
       std::make_unique<FileInputStream>(filePath), readerOpts);
-  // std::cout << "Type:" << reader->rowType()->toString() << std::endl;
 
   VectorPtr batch;
   RowReaderOptions rowReaderOptions;

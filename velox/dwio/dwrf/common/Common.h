@@ -261,13 +261,17 @@ class StripeInformation {
   virtual uint64_t getNumberOfRows() const = 0;
 };
 
+static CompressionKind convertCompressionKind(
+    proto::orc::CompressionKind compression) {
+  auto compressionUint = static_cast<uint32_t>(compression);
+  if (compressionUint >= 4 && compressionUint <= 5) {
+    compressionUint = 9 - compressionUint;
+  }
+  return static_cast<CompressionKind>(compressionUint);
+}
+
 class PostScript {
  public:
-  PostScript()
-      : compression_{CompressionKind::CompressionKind_NONE},
-        compressionBlockSize_{DEFAULT_COMPRESSION_BLOCK_SIZE},
-        writerVersion_{WriterVersion::ORIGINAL} {}
-
   PostScript(
       uint64_t footerLength,
       CompressionKind compression,
@@ -278,37 +282,93 @@ class PostScript {
         compressionBlockSize_{compressionBlockSize},
         writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
 
-  virtual ~PostScript() = default;
-  virtual uint64_t footerlength() const {
+  explicit PostScript(const proto::PostScript& ps)
+    : PostScript(
+          ps.footerlength(),
+          static_cast<CompressionKind>(ps.compression()),
+          ps.compressionblocksize(),
+          ps.writerversion()) {
+    cacheMode_ = static_cast<StripeCacheMode>(ps.cachemode());
+    cacheSize_ = ps.cachesize();
+  }
+
+  explicit PostScript(const proto::orc::PostScript& ps)
+    : PostScript(
+          ps.footerlength(),
+          convertCompressionKind(ps.compression()),
+          ps.compressionblocksize(),
+          ps.writerversion()) {
+    isDwrf_ = false;
+    metadataLength_ = ps.metadatalength();
+    stripeStatisticsLength_ = ps.stripestatisticslength();
+  }
+
+  // General methods
+  uint64_t footerlength() const {
     return footerLength_;
   }
-  virtual bool has_footerlength() const {
-    return true;
-  }
-  virtual CompressionKind compression() const {
-    return compression_;
-  }
-  virtual bool has_compression() const {
-    return true;
-  }
-  virtual uint64_t compressionblocksize() const {
-    return compressionBlockSize_;
-  }
-  virtual bool has_compressionblocksize() const {
-    return true;
-  }
-  virtual uint32_t writerversion() const {
-    return writerVersion_;
-  }
-  virtual bool has_writerversion() const {
+
+  bool has_footerlength() const {
     return true;
   }
 
+  CompressionKind compression() const {
+    return compression_;
+  }
+
+  bool has_compression() const {
+    return true;
+  }
+
+  uint64_t compressionblocksize() const {
+    return compressionBlockSize_;
+  }
+
+  bool has_compressionblocksize() const {
+    return true;
+  }
+
+  uint32_t writerversion() const {
+    return writerVersion_;
+  }
+
+  bool has_writerversion() const {
+    return true;
+  }
+
+  // DWRF-specific methods
+  StripeCacheMode cachemode() const {
+    return cacheMode_;
+  }
+
+  bool has_cachemode() const {
+    return isDwrf_;
+  }
+
+  uint32_t cachesize() const {
+    return cacheSize_;
+  }
+
+  bool has_cachesize() const {
+    return isDwrf_;
+  }
+
  private:
+  // General attributes
+  bool isDwrf_ = true;
   uint64_t footerLength_;
-  CompressionKind compression_;
-  uint64_t compressionBlockSize_;
-  WriterVersion writerVersion_;
+  CompressionKind compression_ = CompressionKind::CompressionKind_NONE;
+  uint64_t compressionBlockSize_ = DEFAULT_COMPRESSION_BLOCK_SIZE;
+  WriterVersion writerVersion_ = WriterVersion::ORIGINAL;
+
+  // DWRF-specific attributes
+  StripeCacheMode cacheMode_;
+  uint32_t cacheSize_ = 0;
+
+  // ORC-specific attributes
+  // TODO: add getter
+  uint64_t metadataLength_;
+  uint64_t stripeStatisticsLength_;
 };
 
 } // namespace facebook::velox::dwrf

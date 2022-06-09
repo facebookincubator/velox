@@ -19,16 +19,12 @@
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/dwrf/common/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
-#include "velox/dwio/dwrf/common/DwrfMetadata.h"
-#include "velox/dwio/dwrf/common/OrcMetadata.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 
 namespace facebook::velox::dwrf {
-
-using dwio::common::FileFormat;
 
 constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
 constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
@@ -62,9 +58,6 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 };
 
 class ReaderBase {
-  using DwrfPostScriptPtr = std::unique_ptr<proto::PostScript>;
-  using OrcPostScriptPtr = std::unique_ptr<proto::orc::PostScript>;
-
  public:
   // create reader base from input stream
   ReaderBase(
@@ -74,12 +67,12 @@ class ReaderBase {
           decryptorFactory = nullptr,
       std::shared_ptr<BufferedInputFactory> bufferedInputFactory = nullptr,
       uint64_t fileNum = -1,
-      FileFormat fileFormat = FileFormat::DWRF);
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
 
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::InputStream> stream,
-      FileFormat fileFormat);
+      dwio::common::FileFormat fileFormat);
 
   // create reader base from metadata
   ReaderBase(
@@ -104,7 +97,7 @@ class ReaderBase {
     DWIO_ENSURE(footer_->GetArena());
     DWIO_ENSURE_NOT_NULL(schema_, "invalid schema");
     if (ps != nullptr) {
-      postScript_ = std::make_unique<DwrfPostScript>(ps);
+      postScript_ = std::make_unique<PostScript>(*ps);
     }
     if (!handler_) {
       handler_ = encryption::DecryptionHandler::create(*footer_);
@@ -113,7 +106,7 @@ class ReaderBase {
 
   // for testing
   explicit ReaderBase(memory::MemoryPool& pool)
-      : pool_{pool}, fileFormat_{FileFormat::DWRF} {}
+      : pool_{pool}, fileFormat_{dwio::common::FileFormat::DWRF} {}
 
   virtual ~ReaderBase() = default;
 
@@ -234,7 +227,7 @@ class ReaderBase {
     return arena_.get();
   }
 
-  FileFormat getFileFormat() const {
+  dwio::common::FileFormat getFileFormat() const {
     return fileFormat_;
   }
 
@@ -257,7 +250,7 @@ class ReaderBase {
   std::unique_ptr<encryption::DecryptionHandler> handler_;
   std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
 
-  FileFormat fileFormat_;
+  dwio::common::FileFormat fileFormat_;
   std::unique_ptr<BufferedInput> input_;
   RowTypePtr schema_;
   // Lazily populated

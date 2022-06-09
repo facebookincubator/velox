@@ -38,7 +38,6 @@ DwrfRowReaderShared::DwrfRowReaderShared(
     const RowReaderOptions& opts)
     : StripeReaderBase(reader),
       options_(opts),
-      fileFormat_{reader->getFileFormat()},
       columnSelector_{std::make_shared<ColumnSelector>(
           ColumnSelector::apply(opts.getSelector(), reader->getSchema()))} {
   auto& footer = getReader().getFooter();
