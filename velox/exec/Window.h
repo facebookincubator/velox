@@ -66,12 +66,9 @@ class Window : public Operator {
       const std::vector<core::SortOrder>& sortingOrders,
       std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo);
 
-  std::pair<RowVectorPtr, std::vector<VectorPtr>> setupBufferForOutput(
-      size_t noRows);
-
   void callResetPartition(size_t idx);
 
-  void outputCurrentPartition(
+  void callApplyForPartitionRows(
       size_t startRow,
       size_t endRow,
       const std::vector<VectorPtr>& windowFunctionOutputs,
@@ -105,20 +102,11 @@ class Window : public Operator {
 
   std::vector<char*> rows_;
   std::vector<char*> returningRows_;
-  // This index captures the row index in RowContainer data_ that marks the
-  // start of the current partition being processed. (The partitionIter_
-  // captures an iterator to the same row index). This state is maintained in
-  // the class as this offset carries over across output row batches.
-  // In generality for window frame computation we need to know the size of the
-  // full partition. Those partition sizes can be computed during the big sort
-  // in noMoreInput (use HashLookup structure for this). We could also use a
-  // hash + sort based algorithm to partition the rows. If doing so, then
-  // the HashTable can maintain a count of the rows in the partition.
 
-  // The current code also assumes that all partition rows fit within a single
-  // output block of rows. We do not consider partitions that overlap over
-  // output blocks.
-  // int partitionStartRow_ = 0;
+  // The RowContainer data_ is traversed a partition at a time.
+  // At the beginning of the partition we call the resetPartition function.
+  // The partitionIter_ points to starting row of the next partition.
+  // It is updated each time resetPartition is called.
   RowContainerIterator partitionIter_;
   std::vector<char*> partitionRows_;
 
@@ -127,12 +115,23 @@ class Window : public Operator {
 
   // Number of rows that be fit into an output block.
   size_t numRowsPerOutput_;
-  size_t numRowsReturned_ = 0;
 
+  // This is a vector that gives the start row of each partition
+  // in the RowContainer data_. This auxiliary structure helps
+  // demarcate partitions in getOutput calls.
   std::vector<size_t> partitionStartRows_;
-  size_t currentPartitionIndex_;
   size_t numberOfPartitions_;
 
+  // Some variables that maintain state across getOutput() calls.
+  // Number of rows traversed in data_ RowContainer so far. This
+  // value is updated as the apply() function is called on the
+  // partition blocks.
+  size_t numRowsApplied_ = 0;
+  // This indicates the partition currently being output, and the peers
+  // demarcated. Since a partition can be spread over multiple
+  // getOutput calls, these variables allow us to continue outputting
+  // data in subsequent getOutput calls.
+  size_t currentPartitionIndex_;
   size_t peerStartRow_ = 0;
   size_t peerEndRow_ = 0;
 };

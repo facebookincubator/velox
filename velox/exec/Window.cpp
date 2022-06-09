@@ -199,9 +199,11 @@ void Window::noMoreInput() {
       });
 
   numRowsPerOutput_ = data_->estimatedNumRowsPerBatch(kBatchSizeInBytes);
+
+  // Find the starting row number for each partition (in the order they
+  // are in returningRows_). Having this
+  // array handy makes the getOutput logic simpler.
   // Randomly assuming that max 10000 partitions are in the data.
-  // Find the number of rows per partition (in order as they are present in
-  // returningRows_).
   partitionStartRows_.reserve(10000);
   auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
     if (lhs == rhs) {
@@ -218,6 +220,7 @@ void Window::noMoreInput() {
     }
     return false;
   };
+
   // Using a sequential traversal to find changing partitions.
   // This algorithm can be changed to use a binary search kind of strategy. Or
   // if we use a HashTable for grouping then the count of rows in each group can
@@ -261,32 +264,6 @@ std::pair<int32_t, int32_t> Window::findFrameEndPoints(
   return std::make_pair(partitionStartRow, currentRow);
 }
 
-std::pair<RowVectorPtr, std::vector<VectorPtr>> Window::setupBufferForOutput(
-    size_t noRows) {
-  auto result = std::dynamic_pointer_cast<RowVector>(
-      BaseVector::create(outputType_, noRows, operatorCtx_->pool()));
-
-  // Set values of all output columns corresponding to the input columns.
-  // ExtractColumn might be doing a copy. Try to avoid that.
-  for (int i = 0; i < inputColumnsSize_; ++i) {
-    data_->extractColumn(
-        returningRows_.data() + numRowsReturned_,
-        noRows,
-        i,
-        result->childAt(i));
-  }
-
-  std::vector<VectorPtr> windowFunctionOutputs;
-  windowFunctionOutputs.reserve(outputType_->size() - inputColumnsSize_);
-  for (int j = inputColumnsSize_; j < outputType_->size(); j++) {
-    auto windowOutputFlatVector = BaseVector::create(
-        outputType_->childAt(j), noRows, operatorCtx_->pool());
-    windowFunctionOutputs.insert(
-        windowFunctionOutputs.cend(), std::move(windowOutputFlatVector));
-  }
-  return std::make_pair(result, windowFunctionOutputs);
-}
-
 void Window::callResetPartition(size_t idx) {
   size_t partitionSize =
       partitionStartRows_[idx + 1] - partitionStartRows_[idx];
@@ -298,7 +275,9 @@ void Window::callResetPartition(size_t idx) {
   }
 }
 
-void Window::outputCurrentPartition(
+// Call WindowFunction::apply for the rows between startRow and endRow in
+// data_ RowContainer.
+void Window::callApplyForPartitionRows(
     size_t startRow,
     size_t endRow,
     const std::vector<VectorPtr>& windowFunctionOutputs,
@@ -366,12 +345,12 @@ void Window::outputCurrentPartition(
     allFuncsRawFrameEndBuffer[w] = rawFrameEndBuffer;
   }
 
-  size_t lastPartitionRow = partitionStartRows_[currentPartitionIndex_ + 1] - 1;
   size_t firstPartitionRow = partitionStartRows_[currentPartitionIndex_];
+  size_t lastPartitionRow = partitionStartRows_[currentPartitionIndex_ + 1] - 1;
   for (int i = startRow, j = 0; i < endRow; i++, j++) {
     // Compute the next peerStart and peerEnd rows (if this is the first row
-    // of the partition or we are past previous peerGroup).
-    if (i == partitionStartRows_[currentPartitionIndex_] || i >= peerEndRow_) {
+    // of the partition or if we are past previous peerGroup).
+    if (i == firstPartitionRow || i >= peerEndRow_) {
       peerStartRow_ = i;
       peerEndRow_ = i;
       while (peerEndRow_ <= lastPartitionRow) {
@@ -383,8 +362,9 @@ void Window::outputCurrentPartition(
       }
     }
     for (int w = 0; w < numFuncs; w++) {
-      // The peer and frame values set in the input buffers to the function
-      // are the offsets within the current partition.
+      // The peer and frame values set in the WindowFunction::apply buffers
+      // are the offsets within the current partition, so offset all row
+      // indexes correctly.
       allFuncsRawPeerStartBuffer[w][j] = peerStartRow_ - firstPartitionRow;
       allFuncsRawPeerEndBuffer[w][j] = peerEndRow_ - 1 - firstPartitionRow;
 
@@ -409,19 +389,19 @@ void Window::outputCurrentPartition(
         windowFunctionOutputs[w]);
   }
 
-  numRowsReturned_ += numRows;
+  numRowsApplied_ += numRows;
   if (endRow == partitionStartRows_[currentPartitionIndex_ + 1]) {
     currentPartitionIndex_++;
   }
 }
 
 RowVectorPtr Window::getOutput() {
-  if (finished_ || !noMoreInput_ || returningRows_.size() == numRowsReturned_) {
+  if (finished_ || !noMoreInput_ || returningRows_.size() == numRowsApplied_) {
     return nullptr;
   }
 
   size_t rowsForOutput =
-      std::min(numRowsPerOutput_, returningRows_.size() - numRowsReturned_);
+      std::min(numRowsPerOutput_, returningRows_.size() - numRowsApplied_);
   auto result = std::dynamic_pointer_cast<RowVector>(
       BaseVector::create(outputType_, rowsForOutput, operatorCtx_->pool()));
 
@@ -429,7 +409,7 @@ RowVectorPtr Window::getOutput() {
   // ExtractColumn might be doing a copy. Try to avoid that.
   for (int i = 0; i < inputColumnsSize_; ++i) {
     data_->extractColumn(
-        returningRows_.data() + numRowsReturned_,
+        returningRows_.data() + numRowsApplied_,
         rowsForOutput,
         i,
         result->childAt(i));
@@ -444,30 +424,30 @@ RowVectorPtr Window::getOutput() {
         windowFunctionOutputs.cend(), std::move(windowOutputFlatVector));
   }
 
-  size_t rowsLeftForOutput = rowsForOutput;
   int bufferRowIndex = 0;
-  while (rowsLeftForOutput > 0 &&
-         currentPartitionIndex_ < numberOfPartitions_) {
+  // Compute output buffer by traversing as many partitions as possible. This
+  // logic takes care of partial partitions output also.
+  while (rowsForOutput > 0 && currentPartitionIndex_ < numberOfPartitions_) {
     size_t rowsForCurrentPartition =
-        partitionStartRows_[currentPartitionIndex_ + 1] - numRowsReturned_;
-    if (rowsForCurrentPartition <= rowsLeftForOutput) {
+        partitionStartRows_[currentPartitionIndex_ + 1] - numRowsApplied_;
+    if (rowsForCurrentPartition <= rowsForOutput) {
       // Current partition can fit completely in the output buffer.
-      // The currentPartitionIndex_ will be updated in outputCurrentPartition,
-      // so no need to update it here.
-      outputCurrentPartition(
-          numRowsReturned_,
-          numRowsReturned_ + rowsForCurrentPartition,
+      // The currentPartitionIndex_ will be updated in
+      // callApplyForPartitionRows, so no need to update it here.
+      callApplyForPartitionRows(
+          numRowsApplied_,
+          numRowsApplied_ + rowsForCurrentPartition,
           windowFunctionOutputs,
           bufferRowIndex);
       bufferRowIndex += rowsForCurrentPartition;
-      rowsLeftForOutput -= rowsForCurrentPartition;
+      rowsForOutput -= rowsForCurrentPartition;
     } else {
       // Current partition can fit partially in the output buffer.
-      // Output "rowsLeftForOutput" number of rows and break from the outputing
+      // Output "rowsLeftForApply" number of rows and break from the outputing
       // rows.
-      outputCurrentPartition(
-          numRowsReturned_,
-          numRowsReturned_ + rowsLeftForOutput,
+      callApplyForPartitionRows(
+          numRowsApplied_,
+          numRowsApplied_ + rowsForOutput,
           windowFunctionOutputs,
           bufferRowIndex);
       break;
@@ -478,7 +458,7 @@ RowVectorPtr Window::getOutput() {
     result->childAt(j) = windowFunctionOutputs[j - inputColumnsSize_];
   }
 
-  finished_ = (numRowsReturned_ == returningRows_.size());
+  finished_ = (numRowsApplied_ == returningRows_.size());
   return result;
 }
 
