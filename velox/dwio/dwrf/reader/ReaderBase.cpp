@@ -23,11 +23,11 @@
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnStatistics;
+using dwio::common::FileFormat;
 using dwio::common::InputStream;
 using dwio::common::LogType;
 using dwio::common::Statistics;
 using dwio::common::encryption::DecrypterFactory;
-using dwio::common::FileFormat;
 using encryption::DecryptionHandler;
 using memory::MemoryPool;
 using DwrfPostScriptPtr = std::unique_ptr<proto::PostScript>;

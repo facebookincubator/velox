@@ -1254,8 +1254,8 @@ TEST(TetstReader, testOrcReaderSimple) {
   ReaderOptions readerOpts;
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  auto reader = DwrfReader::create(
-      std::make_unique<FileInputStream>(test1), readerOpts);
+  auto reader =
+      DwrfReader::create(std::make_unique<FileInputStream>(test1), readerOpts);
 
   RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);

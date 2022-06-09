@@ -283,21 +283,21 @@ class PostScript {
         writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
 
   explicit PostScript(const proto::PostScript& ps)
-    : PostScript(
-          ps.footerlength(),
-          static_cast<CompressionKind>(ps.compression()),
-          ps.compressionblocksize(),
-          ps.writerversion()) {
+      : PostScript(
+            ps.footerlength(),
+            static_cast<CompressionKind>(ps.compression()),
+            ps.compressionblocksize(),
+            ps.writerversion()) {
     cacheMode_ = static_cast<StripeCacheMode>(ps.cachemode());
     cacheSize_ = ps.cachesize();
   }
 
   explicit PostScript(const proto::orc::PostScript& ps)
-    : PostScript(
-          ps.footerlength(),
-          convertCompressionKind(ps.compression()),
-          ps.compressionblocksize(),
-          ps.writerversion()) {
+      : PostScript(
+            ps.footerlength(),
+            convertCompressionKind(ps.compression()),
+            ps.compressionblocksize(),
+            ps.writerversion()) {
     isDwrf_ = false;
     metadataLength_ = ps.metadatalength();
     stripeStatisticsLength_ = ps.stripestatisticslength();
