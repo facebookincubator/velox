@@ -35,6 +35,7 @@ void assertCannotResolve(
     const std::vector<TypePtr>& actualTypes) {
   exec::SignatureBinder binder(*signature, actualTypes);
   ASSERT_FALSE(binder.tryBind());
+}
 
 TEST(SignatureBinderTest, shortDecimals) {
   // Decimal Add/Subtract.
