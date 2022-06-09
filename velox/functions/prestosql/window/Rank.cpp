@@ -42,14 +42,15 @@ class RankFunction : public exec::WindowFunction {
       int32_t resultIndex,
       const VectorPtr& result) {
     int numRows = peerGroupStarts->size();
+    auto* rawResultsVector =
+        result->asFlatVector<int64_t>()->mutableRawValues();
     for (int i = 0; i < numRows; i++) {
       if (peerGroupStarts->as<size_t>()[i] != currentPeerGroupStart_) {
         currentPeerGroupStart_ = peerGroupStarts->as<size_t>()[i];
         rank_ += previousPeerCount_;
       }
       previousPeerCount_ += 1;
-      result->asFlatVector<int64_t>()->mutableRawValues()[resultIndex + i] =
-          rank_;
+      rawResultsVector[resultIndex + i] = rank_;
     }
   }
 

@@ -40,9 +40,10 @@ class RowNumberFunction : public exec::WindowFunction {
       int32_t resultIndex,
       const VectorPtr& result) {
     int numRows = peerGroupStarts->size();
+    auto* rawResultsVector =
+        result->asFlatVector<int64_t>()->mutableRawValues();
     for (int i = 0; i < numRows; i++) {
-      result->asFlatVector<int64_t>()->mutableRawValues()[resultIndex + i] =
-          rowNumber_++;
+      rawResultsVector[resultIndex + i] = rowNumber_++;
     }
   }
 
