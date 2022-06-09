@@ -116,16 +116,16 @@ TEST_F(WriterTest, WriteFooter) {
   auto reader = std::make_unique<ReaderBase>(pool, std::move(input));
 
   auto& ps = reader->getPostScript();
-  ASSERT_TRUE(ps.has_writerversion());
+  ASSERT_TRUE(ps.hasWriterVersion());
   ASSERT_EQ(reader->getWriterVersion(), config->get(Config::WRITER_VERSION));
-  ASSERT_TRUE(ps.has_compression());
+  ASSERT_TRUE(ps.hasCompression());
   ASSERT_EQ(reader->getCompressionKind(), config->get(Config::COMPRESSION));
-  ASSERT_TRUE(ps.has_compressionblocksize());
+  ASSERT_TRUE(ps.hasCompressionBlockSize());
   ASSERT_EQ(
       reader->getCompressionBlockSize(),
       config->get(Config::COMPRESSION_BLOCK_SIZE));
-  ASSERT_EQ(ps.cachesize(), (10 + 10) * 3);
-  ASSERT_EQ(ps.cachemode(), config->get(Config::STRIPE_CACHE_MODE));
+  ASSERT_EQ(ps.cacheSize(), (10 + 10) * 3);
+  ASSERT_EQ(ps.cacheMode(), config->get(Config::STRIPE_CACHE_MODE));
 
   auto& footer = reader->getFooter();
   ASSERT_TRUE(footer.has_headerlength());
@@ -258,10 +258,10 @@ TEST_F(WriterTest, NoCache) {
   auto& footer = reader->getFooter();
   ASSERT_EQ(footer.stripecacheoffsets_size(), 0);
   auto& ps = reader->getPostScript();
-  ASSERT_TRUE(ps.has_cachemode());
-  ASSERT_EQ(ps.cachemode(), proto::StripeCacheMode::NA);
-  ASSERT_TRUE(ps.has_cachesize());
-  ASSERT_EQ(ps.cachesize(), 0);
+  ASSERT_TRUE(ps.hasCacheMode());
+  ASSERT_EQ(ps.cacheMode(), proto::StripeCacheMode::NA);
+  ASSERT_TRUE(ps.hasCacheSize());
+  ASSERT_EQ(ps.cacheSize(), 0);
   ASSERT_EQ(reader->getMetadataCache(), nullptr);
 }
 

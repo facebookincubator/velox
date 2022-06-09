@@ -170,7 +170,7 @@ class ReaderBase {
   }
 
   uint64_t getCompressionBlockSize() const {
-    return postScript_->compressionblocksize();
+    return postScript_->compressionBlockSize();
   }
 
   CompressionKind getCompressionKind() const {
@@ -178,7 +178,7 @@ class ReaderBase {
   }
 
   WriterVersion getWriterVersion() const {
-    auto version = postScript_->writerversion();
+    auto version = postScript_->writerVersion();
     return version <= WriterVersion_CURRENT
         ? static_cast<WriterVersion>(version)
         : WriterVersion::FUTURE;

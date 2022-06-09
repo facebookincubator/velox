@@ -143,8 +143,8 @@ ReaderBase::ReaderBase(
     postScriptProto = std::move(postScript);
   }
 
-  uint64_t footerSize = postScript_->footerlength();
-  uint64_t cacheSize = postScript_->cachesize();
+  uint64_t footerSize = postScript_->footerLength();
+  uint64_t cacheSize = postScript_->cacheSize();
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored
@@ -156,7 +156,7 @@ ReaderBase::ReaderBase(
       cacheSize, fileLength_, "Corrupted file, cache size is invalid");
   DWIO_ENSURE_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
 
-  if (postScript_->has_compression()) {
+  if (postScript_->hasCompression()) {
     if (fileFormat_ == FileFormat::DWRF) {
       DWIO_ENSURE(
           proto::CompressionKind_IsValid(postScript_->compression()),

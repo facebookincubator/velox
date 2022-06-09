@@ -358,7 +358,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
             nSelectedStreams * readerBase.getStream().getNaturalReadSize());
 
   // Do we need even more memory to read the footer or the metadata?
-  auto footerLength = readerBase.getPostScript().footerlength();
+  auto footerLength = readerBase.getPostScript().footerLength();
   if (memory < footerLength + DIRECTORY_SIZE_GUESS) {
     memory = footerLength + DIRECTORY_SIZE_GUESS;
   }

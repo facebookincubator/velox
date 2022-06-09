@@ -304,11 +304,11 @@ class PostScript {
   }
 
   // General methods
-  uint64_t footerlength() const {
+  uint64_t footerLength() const {
     return footerLength_;
   }
 
-  bool has_footerlength() const {
+  bool hasFooterLength() const {
     return true;
   }
 
@@ -316,40 +316,40 @@ class PostScript {
     return compression_;
   }
 
-  bool has_compression() const {
+  bool hasCompression() const {
     return true;
   }
 
-  uint64_t compressionblocksize() const {
+  uint64_t compressionBlockSize() const {
     return compressionBlockSize_;
   }
 
-  bool has_compressionblocksize() const {
+  bool hasCompressionBlockSize() const {
     return true;
   }
 
-  uint32_t writerversion() const {
+  uint32_t writerVersion() const {
     return writerVersion_;
   }
 
-  bool has_writerversion() const {
+  bool hasWriterVersion() const {
     return true;
   }
 
   // DWRF-specific methods
-  StripeCacheMode cachemode() const {
+  StripeCacheMode cacheMode() const {
     return cacheMode_;
   }
 
-  bool has_cachemode() const {
+  bool hasCacheMode() const {
     return isDwrf_;
   }
 
-  uint32_t cachesize() const {
+  uint32_t cacheSize() const {
     return cacheSize_;
   }
 
-  bool has_cachesize() const {
+  bool hasCacheSize() const {
     return isDwrf_;
   }
 
