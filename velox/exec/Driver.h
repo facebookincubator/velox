@@ -15,15 +15,19 @@
  */
 #pragma once
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/futures/Future.h>
 #include <folly/portability/SysSyscall.h>
 
+#include <folly/executors/IOThreadPoolExecutor.h>
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::exec {
+static thread_local std::shared_ptr<folly::Executor> executorIO_ =
+    std::make_shared<folly::IOThreadPoolExecutor>(1);
 
 class Driver;
 class ExchangeClient;
@@ -124,7 +128,8 @@ enum class BlockingReason {
   kWaitForSplit,
   kWaitForExchange,
   kWaitForJoinBuild,
-  kWaitForMemory
+  kWaitForMemory,
+  kOperatorAsync
 };
 
 std::string blockingReasonToString(BlockingReason reason);

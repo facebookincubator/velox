@@ -221,7 +221,10 @@ class PlanBuilder {
   ///     project({"a + b AS sum_ab", "c", "d * 7")
   ///
   /// will produce projected columns named sum_ab, c and p2.
-  PlanBuilder& project(const std::vector<std::string>& projections);
+  PlanBuilder& project(
+      const std::vector<std::string>& projections,
+      bool async = false,
+      bool noYield = false);
 
   /// Add a FilterNode using specified SQL expression.
   ///

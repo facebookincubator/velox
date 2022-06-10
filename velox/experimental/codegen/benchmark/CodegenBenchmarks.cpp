@@ -18,7 +18,7 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 #include "velox/experimental/codegen/CodegenCompiledExpressionTransform.h"
-#include "velox/experimental/codegen/benchmark/CodegenBenchmark.h"
+#include "velox/experimental/codegen/benchmark/benchmarkExpressions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::codegen;

@@ -253,26 +253,43 @@ class ProjectNode : public PlanNode {
       const PlanNodeId& id,
       std::vector<std::string>&& names,
       std::vector<TypedExprPtr>&& projections,
-      PlanNodePtr source)
+      PlanNodePtr source,
+      bool isAsync = false,
+      bool noYield = false)
       : PlanNode(id),
         sources_{source},
         names_(std::move(names)),
         projections_(std::move(projections)),
-        outputType_(makeOutputType(names_, projections_)) {}
+        outputType_(makeOutputType(names_, projections_)),
+        isAsync_(isAsync),
+        noYield_(noYield) {}
 
   ProjectNode(
       const PlanNodeId& id,
       const std::vector<std::string>& names,
       const std::vector<TypedExprPtr>& projections,
-      PlanNodePtr source)
+      PlanNodePtr source,
+      bool isAsync = false,
+      bool noYield = false)
+
       : PlanNode(id),
         sources_{source},
         names_(names),
         projections_(projections),
-        outputType_(makeOutputType(names_, projections_)) {}
+        outputType_(makeOutputType(names_, projections_)),
+        isAsync_(isAsync),
+        noYield_(noYield) {}
 
   const RowTypePtr& outputType() const override {
     return outputType_;
+  }
+
+  bool isAsync() const {
+    return isAsync_;
+  }
+
+  bool noYield() const {
+    return noYield_;
   }
 
   const std::vector<PlanNodePtr>& sources() const override {
@@ -310,6 +327,8 @@ class ProjectNode : public PlanNode {
   const std::vector<std::string> names_;
   const std::vector<TypedExprPtr> projections_;
   const RowTypePtr outputType_;
+  bool isAsync_;
+  bool noYield_;
 };
 
 class TableScanNode : public PlanNode {
