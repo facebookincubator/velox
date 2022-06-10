@@ -1,0 +1,239 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/exec/Aggregate.h"
+#include "velox/expression/FunctionSignature.h"
+#include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/DecodedVector.h"
+
+namespace facebook::velox::aggregate {
+
+namespace {
+std::unique_ptr<VectorSerde>& getVectorSerde() {
+  static std::unique_ptr<VectorSerde> serde =
+      std::make_unique<serializer::presto::PrestoVectorSerde>();
+  return serde;
+}
+} // namespace
+
+namespace {
+
+class MaxSizeForStatsAggregate
+    : public SimpleNumericAggregate<int64_t, int64_t, int64_t> {
+  using BaseAggregate = SimpleNumericAggregate<int64_t, int64_t, int64_t>;
+
+ private:
+  std::vector<vector_size_t> elementSizes_;
+  std::vector<vector_size_t*> elementSizePtrs_;
+  std::vector<IndexRange> elementIndices_;
+  DecodedVector decoded_;
+
+ public:
+  explicit MaxSizeForStatsAggregate(TypePtr resultType)
+      : BaseAggregate(resultType) {}
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return sizeof(int64_t);
+  }
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
+      return *BaseAggregate::Aggregate::template value<int64_t>(group);
+    });
+  }
+
+  void initializeNewGroups(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      *BaseAggregate ::value<int64_t>(groups[i]) = 0;
+    }
+  }
+
+  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    // Partial and final aggregations are the same.
+    extractValues(groups, numGroups, result);
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    BaseAggregate::template updateGroups<true, int64_t>(
+        groups,
+        rows,
+        args[0],
+        [](int64_t& result, int64_t value) {
+          if (result < value) {
+            result = value;
+          }
+        },
+        mayPushdown);
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    BaseAggregate::updateOneGroup(
+        group,
+        rows,
+        args[0],
+        [](int64_t& result, int64_t value) {
+          result = std::max(result, value);
+        },
+        [](int64_t& result, int64_t value, int /* unused */) {
+          result = value;
+        },
+        mayPushdown,
+        (int64_t)0);
+  }
+
+  void addSingleGroupRawInput(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    doUpdateSingleGroup(group, rows, args[0]);
+  }
+
+  void addRawInput(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    doUpdate(groups, rows, args[0]);
+  }
+
+ protected:
+  void upsertOneAccumulatorNew(
+      char* const group,
+      std::vector<vector_size_t>& rowSizes,
+      vector_size_t idx) {
+    if (decoded_.isNullAt(idx)) {
+      return;
+    }
+
+    // Clear null.
+    clearNull(group);
+    // Set max(current, this).
+    int64_t& current = *value<int64_t>(group);
+    current = std::max(current, (int64_t)rowSizes[idx]);
+  }
+
+  void
+  doUpdate(char** groups, const SelectivityVector& rows, const VectorPtr& arg) {
+    decoded_.decode(*arg, rows, true);
+
+    if (decoded_.isConstantMapping() && decoded_.isNullAt(0)) {
+      // There's nothing to do; all values are null.
+      return;
+    }
+
+    if (decoded_.isConstantMapping()) {
+      estimateSerializedSizes(arg, 1);
+      std::fill(elementSizes_.begin(), elementSizes_.end(), elementSizes_[0]);
+    } else {
+      estimateSerializedSizes(arg, arg->size());
+    }
+    rows.applyToSelected([&](vector_size_t i) {
+      upsertOneAccumulatorNew(groups[i], elementSizes_, i);
+    });
+  }
+
+  // Estimate the sizes of first numRows elements in vector.
+  void estimateSerializedSizes(VectorPtr vector, vector_size_t numRows) {
+    elementSizes_.resize(numRows);
+    std::fill(elementSizes_.begin(), elementSizes_.end(), 0);
+    elementSizePtrs_.resize(numRows);
+    elementIndices_.resize(numRows);
+
+    for (int i = 0; i < numRows; i++) {
+      elementIndices_[i] = IndexRange{i, 1};
+      elementSizePtrs_[i] = &elementSizes_[i];
+    }
+
+    getVectorSerde()->estimateSerializedSize(
+        vector,
+        folly::Range(elementIndices_.data(), numRows),
+        elementSizePtrs_.data());
+  }
+  void doUpdateSingleGroup(
+      char* group,
+      const SelectivityVector& rows,
+      const VectorPtr& arg) {
+    decoded_.decode(*arg, rows, true);
+
+    if (decoded_.isConstantMapping()) {
+      if (decoded_.isNullAt(0)) {
+        // There's nothing to do; all values are null.
+        return;
+      }
+      // Estimate first element because it is constant mapping.
+      estimateSerializedSizes(arg, 1);
+      upsertOneAccumulatorNew(group, elementSizes_, 0);
+    }
+
+    estimateSerializedSizes(arg, arg->size());
+    rows.applyToSelected([&](vector_size_t i) {
+      upsertOneAccumulatorNew(group, elementSizes_, i);
+    });
+  }
+};
+
+bool registerMaxSizeForStatsAggregate(const std::string& name) {
+  // Types here are used by PlanBuilder to populate partial and final
+  // aggregation input and output types. E.g. intermediate results will be of
+  // type vector<intermediateType> and used to serve as the input vector type to
+  // final aggregation. argumentType is type of vector to AddRawInput
+  // intermediateType is the type of vector that extractAccumulator write to and
+  // that addIntermediateResults reads out of
+  // returnType is the type of vector that extractValues write to.
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
+
+  signatures.push_back(exec::AggregateFunctionSignatureBuilder()
+                           .typeVariable("T")
+                           .returnType("BIGINT")
+                           .intermediateType("BIGINT")
+                           .argumentType("T")
+                           .build());
+
+  return exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [name](
+          core::AggregationNode::Step step,
+          const std::vector<TypePtr>& argTypes,
+          const TypePtr& resultType) -> std::unique_ptr<exec::Aggregate> {
+        VELOX_CHECK_EQ(argTypes.size(), 1, "{} takes only one argument", name);
+        auto inputType = argTypes[0];
+
+        return std::make_unique<MaxSizeForStatsAggregate>(resultType);
+      });
+}
+
+static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
+    registerMaxSizeForStatsAggregate(kMaxSizeForStats);
+
+} // namespace
+} // namespace facebook::velox::aggregate
