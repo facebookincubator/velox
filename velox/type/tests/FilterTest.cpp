@@ -198,10 +198,43 @@ TEST(FilterTest, bigintValuesUsingHashTable) {
 
   EXPECT_TRUE(filter->testInt64Range(5, 50, false));
   EXPECT_FALSE(filter->testInt64Range(11, 11, false));
+  EXPECT_FALSE(filter->testInt64Range(15, 17, false)); // 15, 16, 17 all false
   EXPECT_FALSE(filter->testInt64Range(-10, -5, false));
   EXPECT_TRUE(filter->testInt64Range(10'000, 20'000, false));
   EXPECT_FALSE(filter->testInt64Range(9'000, 9'999, false));
   EXPECT_TRUE(filter->testInt64Range(9'000, 10'000, false));
+  EXPECT_TRUE(filter->testInt64Range(0, 1, false));
+}
+
+TEST(FilterTest, negatedBigintValuesUsingHashTable) {
+  auto filter = createNegatedBigintValues({1, 6, 10'000, 8, 9, 100, 10}, false);
+  ASSERT_TRUE(dynamic_cast<NegatedBigintValuesUsingHashTable*>(filter.get()));
+
+  EXPECT_FALSE(filter->testInt64(1));
+  EXPECT_FALSE(filter->testInt64(10));
+  EXPECT_FALSE(filter->testInt64(100));
+  EXPECT_FALSE(filter->testInt64(10'000));
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testInt64(-1));
+  EXPECT_TRUE(filter->testInt64(2));
+  EXPECT_TRUE(filter->testInt64(102));
+  EXPECT_TRUE(filter->testInt64(0xdeadbeefbadefeed));
+  EXPECT_TRUE(filter->testInt64(INT64_MAX));
+
+  EXPECT_TRUE(filter->testInt64Range(5, 50, false));
+  EXPECT_TRUE(filter->testInt64Range(11, 11, false));
+  EXPECT_TRUE(filter->testInt64Range(-10, -5, false));
+  EXPECT_TRUE(filter->testInt64Range(10'234, 20'000, false));
+  EXPECT_TRUE(filter->testInt64Range(0, 1, false));
+  EXPECT_TRUE(filter->testInt64(102));
+  EXPECT_TRUE(filter->testInt64(INT64_MAX));
+  EXPECT_FALSE(filter->testInt64Range(10, 10, false));
+  EXPECT_FALSE(filter->testInt64Range(100, 100, false));
+  EXPECT_FALSE(filter->testInt64Range(8, 10, false));
+  EXPECT_FALSE(filter->testInt64Range(8, 9, false));
+  EXPECT_TRUE(filter->testInt64Range(6, 10, false));
+  EXPECT_TRUE(filter->testInt64Range(20, 99, false));
   EXPECT_TRUE(filter->testInt64Range(0, 1, false));
 }
 
@@ -259,6 +292,35 @@ TEST(FilterTest, bigintValuesUsingHashTableSimd) {
   applySimdTestToVector(numbers32, *filter, verify);
 }
 
+TEST(FilterTest, negatedBigintValuesUsingHashTableSimd) {
+  std::vector<int64_t> numbers;
+  // make a worst case filter where every item falls on the same slot.
+  for (auto i = 0; i < 1000; ++i) {
+    numbers.push_back(i * 0x10000);
+  }
+  auto filter = createNegatedBigintValues(numbers, false);
+  ASSERT_TRUE(dynamic_cast<NegatedBigintValuesUsingHashTable*>(filter.get()));
+  int64_t outOfRange[] = {-100, -20000, 0x10000000, 0x20000000};
+  auto verify = [&](int64_t x) { return filter->testInt64(x); };
+  checkSimd(filter.get(), outOfRange, verify);
+  applySimdTestToVector(numbers, *filter, verify);
+  // Make a filter with reasonably distributed entries and retry.
+  numbers.clear();
+  for (auto i = 0; i < 1000; ++i) {
+    numbers.push_back(i * 1209);
+  }
+  filter = createNegatedBigintValues(numbers, false);
+  ASSERT_TRUE(dynamic_cast<NegatedBigintValuesUsingHashTable*>(filter.get()));
+  applySimdTestToVector(numbers, *filter, verify);
+
+  std::vector<int32_t> numbers32(numbers.size());
+  for (auto n : numbers) {
+    numbers32.push_back(n);
+  }
+
+  applySimdTestToVector(numbers32, *filter, verify);
+}
+
 TEST(FilterTest, bigintValuesUsingBitmask) {
   auto filter = createBigintValues({1, 10, 100, 1000}, false);
   ASSERT_TRUE(dynamic_cast<BigintValuesUsingBitmask*>(filter.get()));
@@ -276,8 +338,41 @@ TEST(FilterTest, bigintValuesUsingBitmask) {
 
   EXPECT_TRUE(filter->testInt64Range(5, 50, false));
   EXPECT_FALSE(filter->testInt64Range(11, 11, false));
+  // EXPECT_FALSE(filter->testInt64Range(15, 17, false)); - 15, 16, 17 all false
   EXPECT_FALSE(filter->testInt64Range(-10, -5, false));
   EXPECT_FALSE(filter->testInt64Range(1234, 2000, false));
+}
+
+TEST(FilterTest, negatedBigintValuesUsingBitmask) {
+  auto filter = createNegatedBigintValues({1, 6, 1000, 8, 9, 100, 10}, false);
+  ASSERT_TRUE(dynamic_cast<NegatedBigintValuesUsingBitmask*>(filter.get()));
+
+  EXPECT_FALSE(filter->testInt64(1));
+  EXPECT_FALSE(filter->testInt64(10));
+  EXPECT_FALSE(filter->testInt64(100));
+  EXPECT_FALSE(filter->testInt64(1000));
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->testInt64(-1));
+  EXPECT_TRUE(filter->testInt64(0));
+  EXPECT_TRUE(filter->testInt64(2));
+  EXPECT_TRUE(filter->testInt64(102));
+  EXPECT_TRUE(filter->testInt64(INT64_MAX));
+
+  EXPECT_TRUE(filter->testInt64Range(5, 50, false));
+  EXPECT_TRUE(filter->testInt64Range(11, 11, false));
+  EXPECT_TRUE(filter->testInt64Range(-10, -5, false));
+  EXPECT_TRUE(filter->testInt64Range(10'234, 20'000, false));
+  EXPECT_TRUE(filter->testInt64Range(0, 1, false));
+  EXPECT_TRUE(filter->testInt64(102));
+  EXPECT_TRUE(filter->testInt64(INT64_MAX));
+  EXPECT_FALSE(filter->testInt64Range(10, 10, false));
+  EXPECT_FALSE(filter->testInt64Range(100, 100, false));
+  EXPECT_FALSE(filter->testInt64Range(8, 10, false));
+  EXPECT_FALSE(filter->testInt64Range(8, 9, false));
+  EXPECT_TRUE(filter->testInt64Range(6, 10, false));
+  EXPECT_TRUE(filter->testInt64Range(20, 99, false));
+  EXPECT_TRUE(filter->testInt64Range(0, 1, false));
 }
 
 TEST(FilterTest, bigintMultiRange) {
