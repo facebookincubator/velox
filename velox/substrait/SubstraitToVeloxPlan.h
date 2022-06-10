@@ -39,7 +39,7 @@ class SubstraitVeloxPlanConverter {
     std::vector<u_int64_t> lengths;
 
     /// The file format of the files to be scanned.
-    int32_t fileFormat;
+    dwio::common::FileFormat format;
   };
 
   /// Convert Substrait AggregateRel into Velox PlanNode.

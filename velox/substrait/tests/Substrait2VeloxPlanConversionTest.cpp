@@ -47,13 +47,7 @@ class Substrait2VeloxPlanConversionTest
     const auto& paths = splitInfo->paths;
     const auto& starts = splitInfo->starts;
     const auto& lengths = splitInfo->lengths;
-    const auto fileFormat = splitInfo->fileFormat;
-    auto format = dwio::common::FileFormat::UNKNOWN;
-    if (fileFormat == 0) {
-      format = dwio::common::FileFormat::ORC;
-    } else if (fileFormat == 1) {
-      format = dwio::common::FileFormat::PARQUET;
-    }
+    const auto fileFormat = splitInfo->format;
 
     std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
         splits;
@@ -64,7 +58,7 @@ class Substrait2VeloxPlanConversionTest
       auto start = starts[i];
       auto length = lengths[i];
       auto split = facebook::velox::exec::test::HiveConnectorSplitBuilder(path)
-                       .fileFormat(format)
+                       .fileFormat(fileFormat)
                        .start(start)
                        .length(length)
                        .build();
@@ -275,7 +269,8 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
 
   // Find and deserialize Substrait plan json file.
   std::string planPath =
-      getDataFilePath("velox/substrait/tests", "data/sub.json");
+      "/home/jk/projects/velox/velox/substrait/tests/data/sub.json";
+  // getDataFilePath("velox/substrait/tests", "data/sub.json");
 
   // Read sub.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;

@@ -341,7 +341,14 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       splitInfo->paths.emplace_back(file.uri_file());
       splitInfo->starts.emplace_back(file.start());
       splitInfo->lengths.emplace_back(file.length());
-      splitInfo->fileFormat = file.format();
+      auto format = file.format();
+      if (format == 0) {
+        splitInfo->format = dwio::common::FileFormat::ORC;
+      } else if (format == 1) {
+        splitInfo->format = dwio::common::FileFormat::PARQUET;
+      } else {
+        splitInfo->format = dwio::common::FileFormat::UNKNOWN;
+      }
     }
   }
 
