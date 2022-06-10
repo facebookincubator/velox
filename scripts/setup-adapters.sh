@@ -111,8 +111,8 @@ function install_gcs-sdk-cpp {
         -H. -Bcmake-out/nlohmann/json && \
   $sudocmd cmake --build cmake-out/nlohmann/json --target install -- -j ${NCPU:-4} && \
   $sudocmd ldconfig
-
   echo " Clone, compile and install google-cloud-cpp..."
+  $sudocmd rm -rf ${DEPENDENCY_DIR}/google-cloud-cpp
   # clone and compile the main project
   git clone https://github.com/googleapis/google-cloud-cpp.git ${DEPENDENCY_DIR}/google-cloud-cpp
   cd ${DEPENDENCY_DIR}/google-cloud-cpp

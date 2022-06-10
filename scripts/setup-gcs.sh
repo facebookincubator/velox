@@ -29,6 +29,8 @@ case "$user" in
 esac
 if [[ $dist == "ubuntu" ]]; then
   # install google-cloud-cpp dependencies (ubuntu 20.04)
+  # https://github.com/googleapis/google-cloud-cpp/blob/main/doc/packaging.md#required-libraries
+
   export DEBIAN_FRONTEND=noninteractive
   $sudocmd apt-get update && \
   $sudocmd apt install -y apt-transport-https \
