@@ -269,8 +269,7 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
 
   // Find and deserialize Substrait plan json file.
   std::string planPath =
-      "/home/jk/projects/velox/velox/substrait/tests/data/sub.json";
-  // getDataFilePath("velox/substrait/tests", "data/sub.json");
+      getDataFilePath("velox/substrait/tests", "data/sub.json");
 
   // Read sub.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
