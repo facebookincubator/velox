@@ -262,7 +262,7 @@ void ByteRleColumnReader<DataType, RequestedType>::next(
   values->setSize(BaseVector::byteSize<RequestedType>(numValues));
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result = makeFlatVector<RequestedType>(
@@ -395,7 +395,7 @@ void IntegerDirectColumnReader<ReqT>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result =
@@ -535,7 +535,7 @@ void IntegerDictionaryColumnReader<ReqT>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result =
@@ -642,7 +642,7 @@ void TimestampColumnReader::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result = makeFlatVector<Timestamp>(
@@ -779,7 +779,7 @@ void FloatingPointColumnReader<DataT, ReqT>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result =
@@ -1216,7 +1216,7 @@ void StringDictionaryColumnReader::readDictionaryVector(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
     result->as<DictionaryVector<StringView>>()->setDictionaryValues(
         dictionaryValues);
@@ -1318,7 +1318,7 @@ void StringDictionaryColumnReader::readFlatVector(
     stringBuffers.emplace_back(strideDict);
   }
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
     flatVector->setStringBuffers(stringBuffers);
   } else {
@@ -1500,7 +1500,7 @@ void StringDirectColumnReader::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
     flatVector->setStringBuffers(std::vector<BufferPtr>{data});
   } else {
@@ -1623,7 +1623,7 @@ void StructColumnReader::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
@@ -1780,7 +1780,7 @@ void ListColumnReader::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
@@ -1942,7 +1942,7 @@ void MapColumnReader::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     // When read-string-as-row flag is on, string readers produce ROW(BIGINT,
