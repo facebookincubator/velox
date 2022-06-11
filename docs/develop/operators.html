@@ -93,67 +93,71 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>HashAggregation or StreamingAggregation</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>HashJoinNode</p></td>
+<tr class="row-even"><td><p>GroupIdNode</p></td>
+<td><p>GroupId</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>HashJoinNode</p></td>
 <td><p>HashProbe and HashBuild</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>MergeJoinNode</p></td>
+<tr class="row-even"><td><p>MergeJoinNode</p></td>
 <td><p>MergeJoin</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>CrossJoinNode</p></td>
+<tr class="row-odd"><td><p>CrossJoinNode</p></td>
 <td><p>CrossJoinProbe and CrossJoinBuild</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>OrderByNode</p></td>
+<tr class="row-even"><td><p>OrderByNode</p></td>
 <td><p>OrderBy</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>TopNNode</p></td>
+<tr class="row-odd"><td><p>TopNNode</p></td>
 <td><p>TopN</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>LimitNode</p></td>
+<tr class="row-even"><td><p>LimitNode</p></td>
 <td><p>Limit</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>UnnestNode</p></td>
+<tr class="row-odd"><td><p>UnnestNode</p></td>
 <td><p>Unnest</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>TableWriteNode</p></td>
+<tr class="row-even"><td><p>TableWriteNode</p></td>
 <td><p>TableWrite</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>PartitionedOutputNode</p></td>
+<tr class="row-odd"><td><p>PartitionedOutputNode</p></td>
 <td><p>PartitionedOutput</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>ExchangeNode</p></td>
+<tr class="row-even"><td><p>ExchangeNode</p></td>
 <td><p>Exchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>MergeExchangeNode</p></td>
+<tr class="row-odd"><td><p>MergeExchangeNode</p></td>
 <td><p>MergeExchange</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-odd"><td><p>ValuesNode</p></td>
+<tr class="row-even"><td><p>ValuesNode</p></td>
 <td><p>Values</p></td>
 <td><p>Y</p></td>
 </tr>
-<tr class="row-even"><td><p>LocalMergeNode</p></td>
+<tr class="row-odd"><td><p>LocalMergeNode</p></td>
 <td><p>LocalMerge</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>LocalPartitionNode</p></td>
+<tr class="row-even"><td><p>LocalPartitionNode</p></td>
 <td><p>LocalPartition and LocalExchange</p></td>
 <td></td>
 </tr>
-<tr class="row-even"><td><p>EnforceSingleRowNode</p></td>
+<tr class="row-odd"><td><p>EnforceSingleRowNode</p></td>
 <td><p>EnforceSingleRow</p></td>
 <td></td>
 </tr>
-<tr class="row-odd"><td><p>AssignUniqueIdNode</p></td>
+<tr class="row-even"><td><p>AssignUniqueIdNode</p></td>
 <td><p>AssignUniqueId</p></td>
 <td></td>
 </tr>
@@ -269,6 +273,36 @@ each measure for each combination of the grouping keys.</p>
 </tr>
 <tr class="row-even"><td><p>ignoreNullKeys</p></td>
 <td><p>A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="groupidnode">
+<h3>GroupIdNode<a class="headerlink" href="#groupidnode" title="Permalink to this headline">¶</a></h3>
+<p>Duplicates the input for each of the specified grouping key sets. Used to
+implement aggregations over grouping sets.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>groupingSets</p></td>
+<td><p>List of grouping key sets. Keys within each set must be unique, but keys can repeat across the sets.</p></td>
+</tr>
+<tr class="row-odd"><td><p>outputGroupingKeyNames</p></td>
+<td><p>Output names for the grouping key columns.</p></td>
+</tr>
+<tr class="row-even"><td><p>aggregationInputs</p></td>
+<td><p>Input columns to duplicate.</p></td>
+</tr>
+<tr class="row-odd"><td><p>groupIdName</p></td>
+<td><p>The name for the group-id column that identifies the grouping set. Zero-based integer corresponding to the position of the grouping set in the ‘groupingSets’ list.</p></td>
 </tr>
 </tbody>
 </table>
@@ -745,6 +779,7 @@ ALL.</p>
 <li><a class="reference internal" href="#filternode">FilterNode</a></li>
 <li><a class="reference internal" href="#projectnode">ProjectNode</a></li>
 <li><a class="reference internal" href="#aggregationnode">AggregationNode</a></li>
+<li><a class="reference internal" href="#groupidnode">GroupIdNode</a></li>
 <li><a class="reference internal" href="#hashjoinnode-and-mergejoinnode">HashJoinNode and MergeJoinNode</a></li>
 <li><a class="reference internal" href="#crossjoinnode">CrossJoinNode</a></li>
 <li><a class="reference internal" href="#orderbynode">OrderByNode</a></li>
