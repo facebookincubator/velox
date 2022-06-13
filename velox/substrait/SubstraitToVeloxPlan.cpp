@@ -543,7 +543,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::ReadRel& readRel,
-    memory::MemoryPool* pool,
     const RowTypePtr& type) {
   ::substrait::ReadRel_VirtualTable readVirtualTable = readRel.virtual_table();
   int64_t numVectors = readVirtualTable.values_size();
@@ -586,11 +585,11 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         }
       }
       children.emplace_back(
-          setVectorFromVariants(outputChildType, batchChild, pool));
+          setVectorFromVariants(outputChildType, batchChild, pool_));
     }
 
     vectors.emplace_back(
-        std::make_shared<RowVector>(pool, type, nullptr, batchSize, children));
+        std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
   return std::make_shared<core::ValuesNode>(nextPlanNodeId(), vectors);
 }

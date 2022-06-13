@@ -299,12 +299,7 @@ bool SubstraitToVeloxPlanValidator::validate(
 bool SubstraitToVeloxPlanValidator::validate(
     const ::substrait::ReadRel& sRead) {
   try {
-    u_int32_t index;
-    std::vector<std::string> paths;
-    std::vector<u_int64_t> starts;
-    std::vector<u_int64_t> lengths;
-
-    planConverter_->toVeloxPlan(sRead, index, paths, starts, lengths);
+    planConverter_->toVeloxPlan(sRead);
   } catch (const VeloxException& err) {
     std::cout << "ReadRel validation failed due to:" << err.message()
               << std::endl;

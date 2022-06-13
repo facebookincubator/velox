@@ -29,6 +29,9 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/functions/prestosql/aggregates/AverageAggregate.h"
+#include "velox/functions/prestosql/aggregates/CountAggregate.h"
+#include "velox/functions/sparksql/Register.h"
 #include "velox/substrait/SubstraitToVeloxPlan.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/FilterBuilder.h"
@@ -53,12 +56,14 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
           u_int32_t index,
           const std::vector<std::string>& paths,
           const std::vector<u_int64_t>& starts,
-          const std::vector<u_int64_t>& lengths)
+          const std::vector<u_int64_t>& lengths,
+          const dwio::common::FileFormat& format)
           : planNode_(planNode),
             index_(index),
             paths_(paths),
             starts_(starts),
-            lengths_(lengths) {
+            lengths_(lengths),
+            format_(format) {
         // Construct the splits.
         std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
             connectorSplits;
@@ -71,7 +76,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
               facebook::velox::connector::hive::HiveConnectorSplit>(
               facebook::velox::exec::test::kHiveConnectorId,
               path,
-              facebook::velox::dwio::common::FileFormat::ORC,
+              format,
               start,
               length);
           connectorSplits.emplace_back(split);
@@ -130,6 +135,7 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       std::vector<std::string> paths_;
       std::vector<u_int64_t> starts_;
       std::vector<u_int64_t> lengths_;
+      dwio::common::FileFormat format_;
       uint64_t numRows_ = 0;
       bool mayHasNext_ = true;
       RowVectorPtr result_;
@@ -154,9 +160,16 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
       // Convert to Velox PlanNode.
       auto planNode = planConverter->toVeloxPlan(subPlan);
 
+      auto splitInfos = planConverter->splitInfos();
+      auto leafPlanNodeIds = planNode->leafPlanNodeIds();
+      // Here only one leaf node is expected here.
+      EXPECT_EQ(1, leafPlanNodeIds.size());
+      auto iter = leafPlanNodeIds.begin();
+      auto splitInfo = splitInfos[*iter].get();
+
       // Get the information for TableScan.
-      u_int32_t partitionIndex = planConverter->getPartitionIndex();
-      std::vector<std::string> paths = planConverter->getPaths();
+      u_int32_t partitionIndex = splitInfo->partitionIndex;
+      std::vector<std::string> paths = splitInfo->paths;
 
       // In test, need to get the absolute path of the generated ORC file.
       auto tempPath = getTmpDirPath();
@@ -167,11 +180,12 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
         absolutePaths.emplace_back(fmt::format("file://{}{}", tempPath, path));
       }
 
-      std::vector<u_int64_t> starts = planConverter->getStarts();
-      std::vector<u_int64_t> lengths = planConverter->getLengths();
+      std::vector<u_int64_t> starts = splitInfo->starts;
+      std::vector<u_int64_t> lengths = splitInfo->lengths;
+      auto format = splitInfo->format;
       // Construct the result iterator.
       auto resIter = std::make_shared<WholeComputeResultIterator>(
-          planNode, partitionIndex, absolutePaths, starts, lengths);
+          planNode, partitionIndex, absolutePaths, starts, lengths, format);
       return resIter;
     }
 
@@ -190,6 +204,10 @@ class PlanConversionTest : public virtual HiveConnectorTestBase,
   void SetUp() override {
     useAsyncCache_ = GetParam();
     HiveConnectorTestBase::SetUp();
+
+    aggregate::registerSumAggregate<aggregate::SumAggregate>("sum");
+    aggregate::registerAverageAggregate("avg");
+    aggregate::registerCountAggregate("count");
   }
 
   static void SetUpTestCase() {

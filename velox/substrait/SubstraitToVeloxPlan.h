@@ -98,11 +98,7 @@ class SubstraitVeloxPlanConverter {
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::ReadRel& sRead,
-      u_int32_t& index,
-      std::vector<std::string>& paths,
-      std::vector<u_int64_t>& starts,
-      std::vector<u_int64_t>& lengths);
+      const ::substrait::ReadRel& sRead);
 
   /// Used to convert Substrait Rel into Velox PlanNode.
   std::shared_ptr<const core::PlanNode> toVeloxPlan(
@@ -136,13 +132,6 @@ class SubstraitVeloxPlanConverter {
   splitInfos() const {
     return splitInfoMap_;
   }
-
-  /// Looks up a function by ID and returns function name if found. Throws if
-  /// function with specified ID doesn't exist. Returns a compound
-  /// function specification consisting of the function name and the input
-  /// types. The format is as follows: <function
-  /// name>:<arg_type0>_<arg_type1>_..._<arg_typeN>
-  const std::string& findFunction(uint64_t id) const;
 
   /// Used to insert certain plan node as input. The plan node
   /// id will start from the setted one.

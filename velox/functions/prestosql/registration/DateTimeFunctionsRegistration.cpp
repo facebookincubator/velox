@@ -30,13 +30,13 @@ void registerSimpleFunctions() {
   registerFunction<YearFunction, int32_t, Timestamp>({"year"});
   registerFunction<YearFunction, int32_t, Date>({"year"});
   registerFunction<YearFunction, int32_t, TimestampWithTimezone>({"year"});
-  registerFunction<YearFunction, int64_t, Timestamp>({"year"});
-  registerFunction<YearFunction, int64_t, Date>({"year"});
-  registerFunction<YearFunction, int64_t, TimestampWithTimezone>({"year"});
   registerFunction<WeekFunction, int64_t, Timestamp>({"week", "week_of_year"});
   registerFunction<WeekFunction, int64_t, Date>({"week", "week_of_year"});
   registerFunction<WeekFunction, int64_t, TimestampWithTimezone>(
       {"week", "week_of_year"});
+  //   registerFunction<YearFunction, int64_t, Timestamp>({"year"});
+  //   registerFunction<YearFunction, int64_t, Date>({"year"});
+  //   registerFunction<YearFunction, int64_t, TimestampWithTimezone>({"year"});
   registerFunction<QuarterFunction, int64_t, Timestamp>({"quarter"});
   registerFunction<QuarterFunction, int64_t, Date>({"quarter"});
   registerFunction<QuarterFunction, int64_t, TimestampWithTimezone>(
