@@ -77,9 +77,14 @@ class TpchQueryBuilder {
 
  private:
   TpchPlan getQ1Plan() const;
+  TpchPlan getQ2Plan() const;
   TpchPlan getQ6Plan() const;
   TpchPlan getQ13Plan() const;
   TpchPlan getQ18Plan() const;
+
+  std::shared_ptr<core::PlanNode> getQ2MinimumCostSupplierPlan(
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+      TpchPlan& context) const;
 
   const std::vector<std::string>& getTableFilePaths(
       const std::string& tableName) const {
