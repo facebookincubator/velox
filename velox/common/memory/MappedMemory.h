@@ -221,11 +221,11 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   // Stats on memory allocated by allocateBytes().
   struct AllocateBytesCounters {
     // Total size of small allocations.
-    uint64_t totalSmall;
+    uint64_t totalSmallAllocateBytes;
     // Total size of allocations from some size class.
-    uint64_t totalInSizeClasses;
+    uint64_t totalSizeClassAllocateBytes;
     // Total in standalone large allocations via allocateContiguous().
-    uint64_t totalLarge;
+    uint64_t totalLargeAllocateBytes;
   };
 
   MappedMemory() {}
