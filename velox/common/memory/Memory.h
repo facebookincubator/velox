@@ -24,6 +24,8 @@
 #include <string>
 
 #include <fmt/format.h>
+#include <folly/Synchronized.h>
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include "folly/CPortability.h"
@@ -32,6 +34,7 @@
 #include "folly/SharedMutex.h"
 #include "folly/experimental/FunctionScheduler.h"
 #include "velox/common/base/GTestMacros.h"
+#include "velox/common/memory/MappedMemory.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
@@ -182,7 +185,7 @@ class ScopedMemoryPool final : public MemoryPool {
     return pool_.reallocate(p, size, newSize);
   }
 
-  void free(void* p, int64_t size) override {
+  void free(void* FOLLY_NULLABLE p, int64_t size) override {
     return pool_.free(p, size);
   }
 
@@ -287,21 +290,55 @@ class ScopedMemoryPool final : public MemoryPool {
 // node tree.
 class MemoryAllocator {
  public:
-  // TODO: move to factory pattern with type trait.
   static std::shared_ptr<MemoryAllocator> createDefaultAllocator();
 
-  void* FOLLY_NULLABLE alloc(int64_t size);
-  void* FOLLY_NULLABLE allocZeroFilled(int64_t numMembers, int64_t sizeEach);
+  virtual ~MemoryAllocator() {}
+
+  virtual void* FOLLY_NULLABLE alloc(int64_t size);
+  virtual void* FOLLY_NULLABLE
+  allocZeroFilled(int64_t numMembers, int64_t sizeEach);
   // TODO: might be able to collapse this with templated class
-  void* FOLLY_NULLABLE allocAligned(uint16_t alignment, int64_t size);
-  void* FOLLY_NULLABLE
+  virtual void* FOLLY_NULLABLE allocAligned(uint16_t alignment, int64_t size);
+  virtual void* FOLLY_NULLABLE
   realloc(void* FOLLY_NULLABLE p, int64_t size, int64_t newSize);
-  void* FOLLY_NULLABLE reallocAligned(
+  virtual void* FOLLY_NULLABLE reallocAligned(
       void* FOLLY_NULLABLE p,
       uint16_t alignment,
       int64_t size,
       int64_t newSize);
-  void free(void* FOLLY_NULLABLE p, int64_t size);
+  virtual void free(void* FOLLY_NULLABLE p, int64_t size);
+};
+
+// An allocator that uses memory::MappedMemory to allocate memory. We leverage
+// MappedMemory for relatively small allocations. Allocations less than 3/4 of
+// smallest size class and larger than largest size class are delegated to
+// jemalloc still.
+class MmapMemoryAllocator : public MemoryAllocator {
+ public:
+  static std::shared_ptr<MmapMemoryAllocator> createDefaultAllocator();
+
+  MmapMemoryAllocator() : mappedMemory_(MappedMemory::getInstance()) {}
+  ~MmapMemoryAllocator() override {}
+
+  void* FOLLY_NULLABLE alloc(int64_t size) override;
+  void* FOLLY_NULLABLE
+  allocZeroFilled(int64_t numMembers, int64_t sizeEach) override;
+  void* FOLLY_NULLABLE allocAligned(uint16_t alignment, int64_t size) override;
+  void* FOLLY_NULLABLE
+  realloc(void* FOLLY_NULLABLE p, int64_t size, int64_t newSize) override;
+  void* FOLLY_NULLABLE reallocAligned(
+      void* FOLLY_NULLABLE p,
+      uint16_t alignment,
+      int64_t size,
+      int64_t newSize) override;
+  void free(void* FOLLY_NULLABLE p, int64_t size) override;
+
+  MappedMemory* FOLLY_NONNULL mappedMemory() {
+    return mappedMemory_;
+  }
+
+ private:
+  MappedMemory* FOLLY_NONNULL mappedMemory_;
 };
 
 class MemoryPoolBase : public std::enable_shared_from_this<MemoryPoolBase>,
