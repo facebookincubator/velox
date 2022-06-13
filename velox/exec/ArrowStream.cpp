@@ -30,27 +30,53 @@ ArrowStream::ArrowStream(
   arrowStream_ = arrowStream->arrowStream();
 }
 
+ArrowStream::~ArrowStream() {
+  if (!isFinished0()) {
+    close0();
+  }
+}
+
 RowVectorPtr ArrowStream::getOutput() {
   struct ArrowArray arrowArray;
-  arrowStream_->get_next(&(*arrowStream_), &arrowArray);
+  if (arrowStream_->get_next(&(*arrowStream_), &arrowArray)) {
+    VELOX_FAIL(
+        "Failed to call get_next on ArrowStream: " + std::string(GetError()))
+  }
   if (arrowArray.release == NULL) {
     // End of Stream.
     closed_ = true;
     return nullptr;
   }
   struct ArrowSchema arrowSchema;
-  arrowStream_->get_schema(&(*arrowStream_), &arrowSchema);
+  if (arrowStream_->get_schema(&(*arrowStream_), &arrowSchema)) {
+    VELOX_FAIL(
+        "Failed to call get_schema on ArrowStream: " + std::string(GetError()))
+  }
   // Convert Arrow data into RowVector.
   rowVector_ = std::dynamic_pointer_cast<RowVector>(
       facebook::velox::importFromArrowAsViewer(arrowSchema, arrowArray));
   return rowVector_;
 }
 
+const char* ArrowStream::GetError() {
+  return arrowStream_->get_last_error(arrowStream_.get());
+}
+
 void ArrowStream::close() {
-  closed_ = true;
+  close0();
+  SourceOperator::close();
 }
 
 bool ArrowStream::isFinished() {
+  return isFinished0();
+}
+
+void ArrowStream::close0() {
+  arrowStream_->release(arrowStream_.get());
+  closed_ = true;
+}
+
+bool ArrowStream::isFinished0() {
   return closed_;
 }
 

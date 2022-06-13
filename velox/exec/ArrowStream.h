@@ -27,25 +27,31 @@ class ArrowStream : public SourceOperator {
       DriverCtx* driverCtx,
       std::shared_ptr<const core::ArrowStreamNode> arrowStream);
 
+  virtual ~ArrowStream();
+
   RowVectorPtr getOutput() override;
 
   BlockingReason isBlocked(ContinueFuture* /* unused */) override {
     return BlockingReason::kNotBlocked;
   }
-
   void noMoreInput() override {
     Operator::noMoreInput();
     close();
   }
 
-  bool isFinished() override;
+  const char* GetError();
 
+  bool isFinished() override;
   void close() override;
 
  private:
   bool closed_ = false;
   RowVectorPtr rowVector_;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
+
+  // For calls from destructor
+  bool isFinished0();
+  void close0();
 };
 
 } // namespace facebook::velox::exec
