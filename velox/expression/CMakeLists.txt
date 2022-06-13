@@ -25,6 +25,7 @@ add_library(
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
+  ExprToSubfieldFilter.cpp
   VectorFunction.cpp
   SimpleFunctionRegistry.cpp)
 
