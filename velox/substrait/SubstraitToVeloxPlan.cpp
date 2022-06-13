@@ -1280,15 +1280,15 @@ void SubstraitVeloxPlanConverter::createNotEqualFilter(
     variant notVariant,
     bool nullAllowed,
     std::vector<std::unique_ptr<FilterType>>& colFilters) {
-  using T = typename RangeTraits<KIND>::NativeType;
+  using NativeType = typename RangeTraits<KIND>::NativeType;
   using RangeType = typename RangeTraits<KIND>::RangeType;
 
   // Value > lower
   std::unique_ptr<FilterType> lowerFilter = std::make_unique<RangeType>(
-      notVariant.value<T>(), /*lower*/
+      notVariant.value<NativeType>(), /*lower*/
       false, /*lowerUnbounded*/
       true, /*lowerExclusive*/
-      getMax<T>(), /*upper*/
+      getMax<NativeType>(), /*upper*/
       true, /*upperUnbounded*/
       false, /*upperExclusive*/
       nullAllowed); /*nullAllowed*/
@@ -1296,10 +1296,10 @@ void SubstraitVeloxPlanConverter::createNotEqualFilter(
 
   // Value < upper
   std::unique_ptr<FilterType> upperFilter = std::make_unique<RangeType>(
-      getLowest<T>(), /*lower*/
+      getLowest<NativeType>(), /*lower*/
       true, /*lowerUnbounded*/
       false, /*lowerExclusive*/
-      notVariant.value<T>(), /*upper*/
+      notVariant.value<NativeType>(), /*upper*/
       false, /*upperUnbounded*/
       true, /*upperExclusive*/
       nullAllowed); /*nullAllowed*/
@@ -1339,6 +1339,24 @@ void SubstraitVeloxPlanConverter::setInFilter<TypeKind::BIGINT>(
   values.reserve(variants.size());
   for (const auto& variant : variants) {
     int64_t value = variant.value<int64_t>();
+    values.emplace_back(value);
+  }
+  filters[common::Subfield(inputName)] =
+      common::createBigintValues(values, nullAllowed);
+}
+
+template <>
+void SubstraitVeloxPlanConverter::setInFilter<TypeKind::INTEGER>(
+    const std::vector<variant>& variants,
+    bool nullAllowed,
+    const std::string& inputName,
+    connector::hive::SubfieldFilters& filters) {
+  // Use bigint values for int type.
+  std::vector<int64_t> values;
+  values.reserve(variants.size());
+  for (const auto& variant : variants) {
+    // Use the matched type to get value from variant.
+    int64_t value = variant.value<int32_t>();
     values.emplace_back(value);
   }
   filters[common::Subfield(inputName)] =
@@ -1540,7 +1558,7 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::mapToFilters(
     auto inputType = inputTypeList[colIdx];
     switch (inputType->kind()) {
       case TypeKind::INTEGER:
-        constructSubfieldFilters<TypeKind::BIGINT, common::BigintRange>(
+        constructSubfieldFilters<TypeKind::INTEGER, common::BigintRange>(
             colIdx, inputNameList[colIdx], colInfoMap[colIdx], filters);
         break;
       case TypeKind::BIGINT:
