@@ -20,7 +20,7 @@
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ScanSpec.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "velox/dwio/dwrf/reader/DwrfColumnReader.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::dwrf {
@@ -98,7 +98,7 @@ struct ScanState {
   RawScanState rawState;
 };
 
-class SelectiveColumnReader : public ColumnReader {
+class SelectiveColumnReader : public DwrfColumnReader {
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
 
@@ -478,12 +478,12 @@ inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   addStringValue(value);
 }
 
-class SelectiveColumnReaderFactory : public ColumnReaderFactory {
+class SelectiveColumnReaderFactory : public DwrfColumnReaderFactory {
  public:
   explicit SelectiveColumnReaderFactory(
       std::shared_ptr<common::ScanSpec> scanSpec)
       : scanSpec_(scanSpec) {}
-  std::unique_ptr<ColumnReader> build(
+  std::unique_ptr<DwrfColumnReader> build(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,

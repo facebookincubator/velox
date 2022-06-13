@@ -44,7 +44,8 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
       ensureRowGroupIndex();
       auto positions = toPositions(index_->entry(index));
       PositionProvider positionsProvider(positions);
-      notNullDecoder_->seekToRowGroup(positionsProvider);
+      std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+          ->seekToRowGroup(positionsProvider);
     }
     // Set the read offset recursively. Do this before seeking the
     // children because list/map children will reset the offsets for

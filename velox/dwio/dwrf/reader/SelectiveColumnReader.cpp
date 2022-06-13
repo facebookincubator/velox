@@ -61,7 +61,10 @@ SelectiveColumnReader::SelectiveColumnReader(
     // TODO: why is data type instead of requested type passed in?
     const TypePtr& type,
     FlatMapContext flatMapContext)
-    : ColumnReader(std::move(requestedType), stripe, std::move(flatMapContext)),
+    : DwrfColumnReader(
+          std::move(requestedType),
+          stripe,
+          std::move(flatMapContext)),
       scanSpec_(scanSpec),
       type_{type},
       rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
@@ -79,7 +82,7 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
     const StatsContext& context) const {
   if ((!index_ && !indexStream_) || !scanSpec_->filter()) {
-    return ColumnReader::filterRowGroups(rowGroupSize, context);
+    return DwrfColumnReader::filterRowGroups(rowGroupSize, context);
   }
 
   ensureRowGroupIndex();

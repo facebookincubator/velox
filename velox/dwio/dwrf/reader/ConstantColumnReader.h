@@ -16,17 +16,17 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "velox/dwio/dwrf/reader/DwrfColumnReader.h"
 #include "velox/vector/ConstantVector.h"
 
 namespace facebook::velox::dwrf {
 
-class NullColumnReader : public ColumnReader {
+class NullColumnReader : public DwrfColumnReader {
  public:
   NullColumnReader(
       const StripeStreams& stripe,
       const std::shared_ptr<const Type>& type)
-      : ColumnReader(
+      : DwrfColumnReader(
             stripe.getMemoryPool(),
             dwio::common::TypeWithId::create(type)) {}
   ~NullColumnReader() override = default;

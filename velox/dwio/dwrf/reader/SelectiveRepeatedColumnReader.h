@@ -64,8 +64,10 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
     // Reads the lengths, leaves an uninitialized gap for a null
     // map/list. Reading these checks the null nask.
     length_->next(allLengths_.data(), rows.back() + 1, nulls);
-    detail::ensureCapacity<vector_size_t>(offsets_, rows.size(), &memoryPool_);
-    detail::ensureCapacity<vector_size_t>(sizes_, rows.size(), &memoryPool_);
+    dwio::common::reader::detail::ensureCapacity<vector_size_t>(
+        offsets_, rows.size(), &memoryPool_);
+    dwio::common::reader::detail::ensureCapacity<vector_size_t>(
+        sizes_, rows.size(), &memoryPool_);
     auto rawOffsets = offsets_->asMutable<vector_size_t>();
     auto rawSizes = sizes_->asMutable<vector_size_t>();
     vector_size_t nestedLength = 0;
@@ -191,7 +193,8 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
     PositionProvider positionsProvider(positions);
 
     if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
+      std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+          ->seekToRowGroup(positionsProvider);
     }
 
     length_->seekToRowGroup(positionsProvider);
@@ -236,7 +239,8 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
     PositionProvider positionsProvider(positions);
 
     if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
+      std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+          ->seekToRowGroup(positionsProvider);
     }
 
     length_->seekToRowGroup(positionsProvider);

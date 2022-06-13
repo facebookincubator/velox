@@ -157,7 +157,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
                 createBooleanRleDecoder(std::move(inMap), seqEk);
 
             // std::unique_ptr<ColumnReader>
-            auto valueReader = ColumnReader::build(
+            auto valueReader = DwrfColumnReader::build(
                 requestedValueType,
                 dataValueType,
                 stripe,
@@ -260,7 +260,7 @@ FlatMapColumnReader<T>::FlatMapColumnReader(
     const std::shared_ptr<const TypeWithId>& dataType,
     StripeStreams& stripe,
     FlatMapContext flatMapContext)
-    : ColumnReader(dataType, stripe, std::move(flatMapContext)),
+    : DwrfColumnReader(dataType, stripe, std::move(flatMapContext)),
       requestedType_{requestedType},
       returnFlatVector_{stripe.getRowReaderOptions().getReturnFlatVector()} {
   DWIO_ENSURE_EQ(nodeType_->id, dataType->id);
@@ -321,7 +321,8 @@ void FlatMapColumnReader<T>::next(
     uint64_t numValues,
     VectorPtr& result,
     const uint64_t* incomingNulls) {
-  auto mapVector = detail::resetIfWrongVectorType<MapVector>(result);
+  auto mapVector =
+      dwio::common::reader::detail::resetIfWrongVectorType<MapVector>(result);
   VectorPtr keysVector;
   VectorPtr valuesVector;
   BufferPtr offsets;
@@ -340,7 +341,7 @@ void FlatMapColumnReader<T>::next(
   uint64_t nullCount = nullsPtr ? bits::countNulls(nullsPtr, 0, numValues) : 0;
 
   if (mapVector) {
-    detail::resetIfNotWritable(result, offsets, lengths);
+    dwio::common::reader::detail::resetIfNotWritable(result, offsets, lengths);
   }
 
   if (!offsets) {
@@ -617,7 +618,7 @@ FlatMapStructEncodingColumnReader<T>::FlatMapStructEncodingColumnReader(
     const std::shared_ptr<const TypeWithId>& dataType,
     StripeStreams& stripe,
     FlatMapContext flatMapContext)
-    : ColumnReader(requestedType, stripe, std::move(flatMapContext)),
+    : DwrfColumnReader(requestedType, stripe, std::move(flatMapContext)),
       requestedType_{requestedType},
       keyNodes_{getKeyNodesForStructEncoding<T>(
           requestedType,
@@ -652,7 +653,8 @@ void FlatMapStructEncodingColumnReader<T>::next(
     uint64_t numValues,
     VectorPtr& result,
     const uint64_t* FOLLY_NULLABLE incomingNulls) {
-  auto rowVector = detail::resetIfWrongVectorType<RowVector>(result);
+  auto rowVector =
+      dwio::common::reader::detail::resetIfWrongVectorType<RowVector>(result);
   std::vector<VectorPtr> children;
   if (rowVector) {
     // Track children vectors in a local variable because readNulls may reset
@@ -712,7 +714,7 @@ inline bool isRequiringStructEncoding(
 }
 
 template <typename T>
-std::unique_ptr<ColumnReader> createFlatMapColumnReader(
+std::unique_ptr<DwrfColumnReader> createFlatMapColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     StripeStreams& stripe,
@@ -726,7 +728,8 @@ std::unique_ptr<ColumnReader> createFlatMapColumnReader(
   }
 }
 
-/* static */ std::unique_ptr<ColumnReader> FlatMapColumnReaderFactory::create(
+/* static */ std::unique_ptr<DwrfColumnReader>
+FlatMapColumnReaderFactory::create(
     const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
     const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
     StripeStreams& stripe,

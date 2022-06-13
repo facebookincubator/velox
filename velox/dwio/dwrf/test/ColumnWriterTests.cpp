@@ -325,7 +325,7 @@ void testDataTypeWriter(
     TestStripeStreams streams(context, sf, rowType);
     auto typeWithId = TypeWithId::create(rowType);
     auto reqType = typeWithId->childAt(0);
-    auto reader = ColumnReader::build(
+    auto reader = DwrfColumnReader::build(
         reqType, reqType, streams, FlatMapContext{sequence, nullptr});
     VectorPtr out;
     for (auto strideI = 0; strideI < strideCount; ++strideI) {
@@ -773,7 +773,7 @@ void testMapWriter(
     auto validate = [&](bool returnFlatVector = false) {
       TestStripeStreams streams(context, sf, rowType, returnFlatVector);
       const auto reader =
-          ColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
+          DwrfColumnReader::build(dataTypeWithId, dataTypeWithId, streams);
       VectorPtr out;
 
       // Read map
@@ -1690,7 +1690,7 @@ struct IntegerColumnWriterTypedTestCase {
       }
       typeWithId = TypeWithId::create(rowType);
       auto reqType = typeWithId->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams);
+      auto columnReader = DwrfColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO Make reuse work
@@ -2923,7 +2923,7 @@ struct StringColumnWriterTestCase {
       }
       typeWithId = TypeWithId::create(rowType);
       auto reqType = typeWithId->childAt(0);
-      auto columnReader = ColumnReader::build(reqType, reqType, streams);
+      auto columnReader = DwrfColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         if (!writeDirect) {
@@ -3952,7 +3952,7 @@ struct DictColumnWriterTestCase {
         .WillRepeatedly(Return(0));
     auto rowTypeWithId = TypeWithId::create(rowType);
     auto reqType = rowTypeWithId->childAt(0);
-    auto reader = ColumnReader::build(reqType, reqType, streams);
+    auto reader = DwrfColumnReader::build(reqType, reqType, streams);
     VectorPtr out;
     reader->next(batch->size(), out);
     compareResults(batch, out);

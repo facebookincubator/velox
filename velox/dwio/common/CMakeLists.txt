@@ -14,6 +14,7 @@
 add_subdirectory(compression)
 add_subdirectory(encryption)
 add_subdirectory(exception)
+add_subdirectory(reader)
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
@@ -33,6 +34,7 @@ add_library(
 
 target_link_libraries(
   velox_dwio_common
+  velox_dwio_common_reader
   velox_buffer
   velox_exception
   velox_dwio_common_encryption

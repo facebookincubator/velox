@@ -42,7 +42,8 @@ class SelectiveFloatingPointColumnReader : public SelectiveColumnReader {
     PositionProvider positionsProvider(positions);
 
     if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
+      std::dynamic_pointer_cast<ByteRleDecoder>(notNullDecoder_)
+          ->seekToRowGroup(positionsProvider);
     }
 
     decoder_.seekToRowGroup(positionsProvider);

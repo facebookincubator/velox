@@ -31,6 +31,7 @@
 #include "folly/Random.h"
 #include "folly/SharedMutex.h"
 #include "folly/experimental/FunctionScheduler.h"
+#include "third_party/googletest/googletest/include/gtest/gtest_prod.h"
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"

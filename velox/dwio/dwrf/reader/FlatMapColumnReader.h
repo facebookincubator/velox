@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/reader/DwrfColumnReader.h"
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
+
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
 #include "velox/dwio/dwrf/utils/BitIterator.h"
 
@@ -63,7 +65,7 @@ class StringKeyBuffer;
 template <typename T>
 class KeyNode {
  private:
-  std::unique_ptr<ColumnReader> reader_;
+  std::unique_ptr<DwrfColumnReader> reader_;
   std::unique_ptr<ByteRleDecoder> inMap_;
   dwio::common::DataBuffer<char> inMapData_;
   KeyValue<T> key_;
@@ -76,7 +78,7 @@ class KeyNode {
 
  public:
   KeyNode(
-      std::unique_ptr<ColumnReader> valueReader,
+      std::unique_ptr<DwrfColumnReader> valueReader,
       std::unique_ptr<ByteRleDecoder> inMapDecoder,
       const KeyValue<T>& keyValue,
       uint32_t sequence,
@@ -199,7 +201,7 @@ class KeyPredicate {
 };
 
 template <typename T>
-class FlatMapColumnReader : public ColumnReader {
+class FlatMapColumnReader : public DwrfColumnReader {
  public:
   FlatMapColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
@@ -227,7 +229,7 @@ class FlatMapColumnReader : public ColumnReader {
 };
 
 template <typename T>
-class FlatMapStructEncodingColumnReader : public ColumnReader {
+class FlatMapStructEncodingColumnReader : public DwrfColumnReader {
  public:
   FlatMapStructEncodingColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
@@ -252,7 +254,7 @@ class FlatMapStructEncodingColumnReader : public ColumnReader {
 
 class FlatMapColumnReaderFactory {
  public:
-  static std::unique_ptr<ColumnReader> create(
+  static std::unique_ptr<DwrfColumnReader> create(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
       StripeStreams& stripe,

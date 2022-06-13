@@ -862,7 +862,7 @@ TEST(TestReader, testUpcastBoolean) {
           HiveTypeParser().parse("struct<col0:int>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
-  std::unique_ptr<ColumnReader> reader = ColumnReader::build(
+  std::unique_ptr<DwrfColumnReader> reader = DwrfColumnReader::build(
       TypeWithId::create(reqType),
       TypeWithId::create(rowType),
       streams,
@@ -909,7 +909,7 @@ TEST(TestReader, testUpcastIntDirect) {
 
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
-  std::unique_ptr<ColumnReader> reader = ColumnReader::build(
+  std::unique_ptr<DwrfColumnReader> reader = DwrfColumnReader::build(
       TypeWithId::create(reqType),
       TypeWithId::create(rowType),
       streams,
@@ -973,7 +973,7 @@ TEST(TestReader, testUpcastIntDict) {
           HiveTypeParser().parse("struct<col0:bigint>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
-  std::unique_ptr<ColumnReader> reader = ColumnReader::build(
+  std::unique_ptr<DwrfColumnReader> reader = DwrfColumnReader::build(
       TypeWithId::create(reqType),
       TypeWithId::create(rowType),
       streams,
@@ -1025,7 +1025,7 @@ TEST(TestReader, testUpcastFloat) {
           HiveTypeParser().parse("struct<col0:double>"));
   ColumnSelector cs(reqType, rowType);
   EXPECT_CALL(streams, getColumnSelectorProxy()).WillRepeatedly(Return(&cs));
-  std::unique_ptr<ColumnReader> reader = ColumnReader::build(
+  std::unique_ptr<DwrfColumnReader> reader = DwrfColumnReader::build(
       TypeWithId::create(reqType),
       TypeWithId::create(rowType),
       streams,

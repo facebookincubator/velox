@@ -21,7 +21,7 @@
 #include "velox/common/base/Exceptions.h"
 
 #include <folly/Likely.h>
-#include <xsimd/xsimd.hpp>
+#include "third_party/xsimd/include/xsimd/xsimd.hpp"
 
 namespace facebook::velox::simd {
 
