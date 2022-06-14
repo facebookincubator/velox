@@ -169,7 +169,10 @@ install_gcs=0
 install_hdfs=0
 
 if [ "$#" -eq 0 ]; then
-    install_aws=1 #install it if no other arguments are specified
+    #install all if none is specifically picked
+    install_aws=1
+    install_gcs=1
+    install_hdfs=1
 fi
 
 while [[ $# -gt 0 ]]; do
