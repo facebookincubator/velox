@@ -16,6 +16,7 @@
 
 #include "velox/common/memory/MappedMemory.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/process/StackTrace.h"
 
 #include <sys/mman.h>
 
@@ -309,6 +310,10 @@ std::mutex MappedMemory::initMutex_;
 std::atomic<uint64_t> MappedMemory::totalSmallAllocateBytes_;
 std::atomic<uint64_t> MappedMemory::totalSizeClassAllocateBytes_;
 std::atomic<uint64_t> MappedMemory::totalLargeAllocateBytes_;
+std::atomic<uint64_t> MappedMemory::numSmallAllocations_;
+std::atomic<uint64_t> MappedMemory::numSizeClassAllocations_;
+std::atomic<uint64_t> MappedMemory::numLargeAllocations_;
+std::atomic<uint64_t> MappedMemory::numLargeAllocationsIncrementOnly_;
 
 // static
 MappedMemory* MappedMemory::getInstance() {
@@ -355,10 +360,12 @@ MachinePageCount roundUpToSizeClassSize(
 
 void* FOLLY_NULLABLE
 MappedMemory::allocateBytes(uint64_t bytes, uint64_t maxMallocSize) {
+  // if (bytes <= maxMallocSize or bytes > sizeClassSizes_.back() * kPageSize) {
   if (bytes <= maxMallocSize) {
     auto result = ::malloc(bytes);
     if (result) {
       totalSmallAllocateBytes_ += bytes;
+      numSmallAllocations_++;
     }
     return result;
   }
@@ -373,6 +380,7 @@ MappedMemory::allocateBytes(uint64_t bytes, uint64_t maxMallocSize) {
           "A size class allocateBytes must produce one run");
       allocation.clear();
       totalSizeClassAllocateBytes_ += numPages * kPageSize;
+      numSizeClassAllocations_++;
       return run.data<char>();
     }
     return nullptr;
@@ -383,6 +391,13 @@ MappedMemory::allocateBytes(uint64_t bytes, uint64_t maxMallocSize) {
     char* data = allocation.data<char>();
     allocation.reset(nullptr, nullptr, 0);
     totalLargeAllocateBytes_ += numPages * kPageSize;
+    numLargeAllocations_++;
+    if (numLargeAllocationsIncrementOnly_++ % 100 == 0) {
+      numLargeAllocationsIncrementOnly_ = 0;
+      LOG(INFO) << "[Large Allocation] Requesting " << bytes
+                << " bytes with stacktrace:\n"
+                << process::StackTrace().toString();
+    }
     return data;
   }
   return nullptr;
@@ -392,20 +407,26 @@ void MappedMemory::freeBytes(
     void* FOLLY_NONNULL p,
     uint64_t bytes,
     uint64_t maxMallocSize) noexcept {
-  if (bytes <= maxMallocSize) {
-    ::free(p); // NOLINT
-    totalSmallAllocateBytes_ -= bytes;
-  } else if (bytes <= sizeClassSizes_.back() * kPageSize) {
-    Allocation allocation(this);
-    auto numPages = roundUpToSizeClassSize(bytes, sizeClassSizes_);
-    allocation.append(reinterpret_cast<uint8_t*>(p), numPages);
-    free(allocation);
-    totalSizeClassAllocateBytes_ -= numPages * kPageSize;
-  } else {
-    ContiguousAllocation allocation;
-    allocation.reset(this, p, bytes);
-    freeContiguous(allocation);
-    totalLargeAllocateBytes_ -= bits::roundUp(bytes, kPageSize);
+  if (bytes <= maxMallocSize or bytes > sizeClassSizes_.back() * kPageSize) {
+    if (bytes <= maxMallocSize) {
+      ::free(p); // NOLINT
+      totalSmallAllocateBytes_ -= bytes;
+      numSmallAllocations_--;
+    } else if (bytes <= sizeClassSizes_.back() * kPageSize) {
+      Allocation allocation(this);
+      auto numPages = roundUpToSizeClassSize(bytes, sizeClassSizes_);
+      allocation.append(reinterpret_cast<uint8_t*>(p), numPages);
+      free(allocation);
+      totalSizeClassAllocateBytes_ -= numPages * kPageSize;
+      numSizeClassAllocations_--;
+    } else {
+      ContiguousAllocation allocation;
+      allocation.reset(this, p, bytes);
+      freeContiguous(allocation);
+      totalLargeAllocateBytes_ -= bits::roundUp(bytes, kPageSize);
+      numLargeAllocations_--;
+      // VELOX_FAIL("SHOULD NOT REACH HERE");
+    }
   }
 }
 

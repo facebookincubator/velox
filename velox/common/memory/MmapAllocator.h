@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -36,6 +37,62 @@ struct MmapAllocatorOptions {
   //  Capacity in bytes, default 512MB
   uint64_t capacity = 1L << 29;
 };
+
+static constexpr uint64_t kMinGrainSizeBytes = 1024 * 1024;
+
+class Arena {
+ public:
+  Arena(size_t capacityBytes);
+  ~Arena();
+
+  void* allocate(uint64_t bytes);
+  void free(void* address, uint64_t bytes);
+  void* address() const {
+    return reinterpret_cast<void*>(address_);
+  }
+
+  uint64_t byteSize() const {
+    return byteSize_;
+  }
+
+  const std::map<uint64_t, uint64_t>& freeList() const {
+    return freeList_;
+  }
+
+  const std::map<uint64_t, std::unordered_set<uint64_t>>& freeLookup() const {
+    return freeLookup_;
+  }
+
+ private:
+  // Rounds up size to the next power of 2 if the asked size is larger than 3
+  // quarters of the next power of 2. Otherwise rounds up to the 3 quarters.
+  static uint64_t roundBytes(uint64_t bytes);
+
+  std::map<uint64_t, uint64_t>::iterator addFreeBlock(
+      uint64_t addr,
+      uint64_t bytes);
+
+  void removeFromLookup(uint64_t addr, uint64_t bytes);
+
+  void removeFreeBlock(uint64_t addr, uint64_t bytes);
+
+  void removeFreeBlock(std::map<uint64_t, uint64_t>::iterator& itr);
+
+  // Starting address of this arena
+  uint8_t* FOLLY_NONNULL address_;
+
+  // Total size of this arena
+  const uint64_t byteSize_;
+
+  // A sorted list with each entry mapping from free block address to size of
+  // the free block
+  std::map<uint64_t, uint64_t> freeList_;
+
+  // A sorted look up structure that stores the block size as key and a set of
+  // address of that size as value.
+  std::map<uint64_t, std::unordered_set<uint64_t>> freeLookup_;
+};
+
 // Implementation of MappedMemory with mmap and madvise. Each size
 // class is mmapped for the whole capacity. Each size class has a
 // bitmap of allocated entries and entries that are backed by
@@ -93,6 +150,10 @@ class MmapAllocator : public MappedMemory {
   // function for validating otherwise unreachable error paths.
   void injectFailure(Failure failure) {
     injectedFailure_ = failure;
+  }
+
+  MachinePageCount numExternalMapped() const {
+    return numExternalMapped_;
   }
 
   std::string toString() const override;
@@ -265,6 +326,9 @@ class MmapAllocator : public MappedMemory {
   MachinePageCount capacity_ = 0;
 
   std::vector<std::unique_ptr<SizeClass>> sizeClasses_;
+
+  std::mutex arenaMutex_;
+  std::unique_ptr<Arena> arena_;
 
   // Statistics. Not atomic.
   uint64_t numAllocations_ = 0;

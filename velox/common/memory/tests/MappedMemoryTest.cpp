@@ -566,82 +566,219 @@ TEST_P(MappedMemoryTest, allocContiguousFail) {
 }
 
 TEST_P(MappedMemoryTest, allocateBytes) {
-  constexpr int32_t kNumAllocs = 50;
-  // Different sizes, including below minimum and above largest size class.
-  std::vector<MachinePageCount> sizes = {
-      MappedMemory::kMaxMallocBytes / 2,
-      100000,
-      1000000,
-      instance_->sizeClasses().back() * MappedMemory::kPageSize + 100000};
-  folly::Random::DefaultGenerator rng;
-  rng.seed(1);
+  // constexpr int32_t kNumAllocs = 50;
+  // // Different sizes, including below minimum and above largest size class.
+  // std::vector<MachinePageCount> sizes = {
+  //     MappedMemory::kMaxMallocBytes / 2,
+  //     100000,
+  //     1000000,
+  //     instance_->sizeClasses().back() * MappedMemory::kPageSize + 100000};
+  // folly::Random::DefaultGenerator rng;
+  // rng.seed(1);
 
-  // We fill 'data' with random size allocations. Each is filled with its index
-  // in 'data' cast to char.
-  std::vector<folly::Range<char*>> data(kNumAllocs);
-  for (auto counter = 0; counter < data.size() * 4; ++counter) {
-    int32_t index = folly::Random::rand32(rng) % kNumAllocs;
-    int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
-    char expected = static_cast<char>(index);
-    if (data[index].data()) {
-      // If there is pre-existing data, we check that it has not been
-      // overwritten.
-      for (auto byte : data[index]) {
-        EXPECT_EQ(expected, byte);
-      }
-      instance_->freeBytes(data[index].data(), data[index].size());
-    }
-    data[index] = folly::Range<char*>(
-        reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
-    for (auto& byte : data[index]) {
-      byte = expected;
-    }
-  }
-  EXPECT_TRUE(instance_->checkConsistency());
-  for (auto& range : data) {
-    if (range.data()) {
-      instance_->freeBytes(range.data(), range.size());
-    }
-  }
-  auto stats = MappedMemory::allocateBytesStats();
-  EXPECT_EQ(0, stats.totalSmall);
-  EXPECT_EQ(0, stats.totalInSizeClasses);
-  EXPECT_EQ(0, stats.totalLarge);
+  // // We fill 'data' with random size allocations. Each is filled with its index
+  // // in 'data' cast to char.
+  // std::vector<folly::Range<char*>> data(kNumAllocs);
+  // for (auto counter = 0; counter < data.size() * 4; ++counter) {
+  //   int32_t index = folly::Random::rand32(rng) % kNumAllocs;
+  //   int32_t bytes = sizes[folly::Random::rand32() % sizes.size()];
+  //   char expected = static_cast<char>(index);
+  //   if (data[index].data()) {
+  //     // If there is pre-existing data, we check that it has not been
+  //     // overwritten.
+  //     for (auto byte : data[index]) {
+  //       EXPECT_EQ(expected, byte);
+  //     }
+  //     instance_->freeBytes(data[index].data(), data[index].size());
+  //   }
+  //   data[index] = folly::Range<char*>(
+  //       reinterpret_cast<char*>(instance_->allocateBytes(bytes)), bytes);
+  //   for (auto& byte : data[index]) {
+  //     byte = expected;
+  //   }
+  // }
+  // EXPECT_TRUE(instance_->checkConsistency());
+  // for (auto& range : data) {
+  //   if (range.data()) {
+  //     instance_->freeBytes(range.data(), range.size());
+  //   }
+  // }
+  // auto stats = MappedMemory::allocateBytesStats();
+  // EXPECT_EQ(0, stats.totalSmall);
+  // EXPECT_EQ(0, stats.totalInSizeClasses);
+  // EXPECT_EQ(0, stats.totalLarge);
 
-  EXPECT_EQ(0, instance_->numAllocated());
-  EXPECT_TRUE(instance_->checkConsistency());
+  // EXPECT_EQ(0, instance_->numAllocated());
+  // EXPECT_TRUE(instance_->checkConsistency());
 }
 
 TEST_P(MappedMemoryTest, stlMappedMemoryAllocator) {
-  {
-    std::vector<double, StlMappedMemoryAllocator<double>> data(
-        0, StlMappedMemoryAllocator<double>(instance_));
-    // The contiguous size goes to 2MB, covering malloc, size
-    // Allocation from classes and ContiguousAllocation outside size
-    // classes.
-    constexpr int32_t kNumDoubles = 256 * 1024;
-    size_t capacity = 0;
-    for (auto i = 0; i < kNumDoubles; i++) {
-      data.push_back(i);
-      if (data.capacity() != capacity) {
-        capacity = data.capacity();
-        auto stats = MappedMemory::allocateBytesStats();
-        EXPECT_EQ(
-            capacity * sizeof(double),
-            stats.totalSmall + stats.totalInSizeClasses + stats.totalLarge);
-      }
-    }
-    for (auto i = 0; i < kNumDoubles; i++) {
-      ASSERT_EQ(i, data[i]);
-    }
-    EXPECT_EQ(512, instance_->numAllocated());
-    auto stats = MappedMemory::allocateBytesStats();
-    EXPECT_EQ(0, stats.totalSmall);
-    EXPECT_EQ(0, stats.totalInSizeClasses);
-    EXPECT_EQ(2 << 20, stats.totalLarge);
+  // {
+  //   std::vector<double, StlMappedMemoryAllocator<double>> data(
+  //       0, StlMappedMemoryAllocator<double>(instance_));
+  //   // The contiguous size goes to 2MB, covering malloc, size
+  //   // Allocation from classes and ContiguousAllocation outside size
+  //   // classes.
+  //   constexpr int32_t kNumDoubles = 256 * 1024;
+  //   size_t capacity = 0;
+  //   for (auto i = 0; i < kNumDoubles; i++) {
+  //     data.push_back(i);
+  //     if (data.capacity() != capacity) {
+  //       capacity = data.capacity();
+  //       auto stats = MappedMemory::allocateBytesStats();
+  //       EXPECT_EQ(
+  //           capacity * sizeof(double),
+  //           stats.totalSmall + stats.totalInSizeClasses + stats.totalLarge);
+  //     }
+  //   }
+  //   for (auto i = 0; i < kNumDoubles; i++) {
+  //     ASSERT_EQ(i, data[i]);
+  //   }
+  //   EXPECT_EQ(512, instance_->numAllocated());
+  //   auto stats = MappedMemory::allocateBytesStats();
+  //   EXPECT_EQ(0, stats.totalSmall);
+  //   EXPECT_EQ(0, stats.totalInSizeClasses);
+  //   EXPECT_EQ(2 << 20, stats.totalLarge);
+  // }
+  // EXPECT_EQ(0, instance_->numAllocated());
+  // EXPECT_TRUE(instance_->checkConsistency());
+}
+
+class ArenaTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    rng_.seed(1);
   }
-  EXPECT_EQ(0, instance_->numAllocated());
-  EXPECT_TRUE(instance_->checkConsistency());
+
+  void* allocateAndPad(Arena* arena, uint64_t bytes) {
+    void* buffer = arena->allocate(bytes);
+    memset(buffer, 0xff, bytes);
+    return buffer;
+  }
+
+  void unpadAndFree(Arena* arena, void* buffer, uint64_t bytes) {
+    memset(buffer, 0x00, bytes);
+    arena->free(buffer, bytes);
+  }
+
+  void checkArenaConsistency(Arena* arena, uint64_t expectedBytesInUse) {
+    uint64_t bytes = 0;
+    auto arenaEndAddr =
+        reinterpret_cast<uint64_t>(arena->address()) + arena->byteSize();
+    const auto& freeLookup = arena->freeLookup();
+    auto itr = arena->freeList().begin();
+    auto end = arena->freeList().end();
+    uint8_t* cur = reinterpret_cast<uint8_t*>(arena->address());
+    while (itr != end) {
+      // Check consistency of lookup list
+      EXPECT_NE(freeLookup.find(itr->second), freeLookup.end());
+      EXPECT_NE(
+          freeLookup.at(itr->second).find(itr->first),
+          freeLookup.at(itr->second).end());
+
+      EXPECT_LE(reinterpret_cast<uint64_t>(cur), itr->first);
+      if (itr->first > reinterpret_cast<uint64_t>(cur)) {
+        // From cur to itr->first should be all used (padded)
+        for (; reinterpret_cast<uint64_t>(cur) < itr->first; cur++) {
+          EXPECT_EQ(*cur, 0xff);
+          bytes++;
+        }
+      }
+
+      // Verify current free block end
+      EXPECT_LE(itr->first + itr->second, arenaEndAddr);
+
+      // Verify next free block not overlapping
+      auto next = std::next(itr);
+      if (next != end) {
+        EXPECT_LT(itr->first + itr->second, next->first);
+      }
+
+      // Now cur is in free block, verify they are all unpaded
+      for (; reinterpret_cast<uint64_t>(cur) < itr->first + itr->second;
+           cur++) {
+        EXPECT_EQ(*cur, 0x00);
+      }
+      itr++;
+    }
+
+    // Check consistency of lookup list
+    for (auto itr = freeLookup.begin(); itr != freeLookup.end(); itr++) {
+      EXPECT_FALSE(itr->second.empty());
+    }
+
+    for (; reinterpret_cast<uint64_t>(cur) < arenaEndAddr; cur++) {
+      EXPECT_EQ(*cur, 0xff);
+      bytes++;
+    }
+    EXPECT_EQ(bytes, expectedBytesInUse);
+  }
+
+  uint64_t randomPowTwo(uint64_t lowerBound, uint64_t upperBound) {
+    lowerBound = bits::nextPowerOfTwo(lowerBound);
+    auto attemptedUpperBound = bits::nextPowerOfTwo(upperBound);
+    upperBound = attemptedUpperBound == upperBound ? upperBound
+                                                   : attemptedUpperBound / 2;
+    return lowerBound
+        << (folly::Random::rand64(
+                bits::countLeadingZeros(lowerBound) -
+                    bits::countLeadingZeros(upperBound),
+                rng_) +
+            1);
+  }
+
+  folly::Random::DefaultGenerator rng_;
+};
+
+TEST_F(ArenaTest, arenaTest) {
+  // 32 MB arena space
+  const uint64_t kArenaCapacityBytes = 1l << 25;
+
+  // 32 Byte lower bound
+  const uint64_t kAllocLowerBound = 1l << 5;
+
+  // 1 KB upper bound
+  const uint64_t kAllocUpperBound = 1l << 10;
+  std::unique_ptr<Arena> arena = std::make_unique<Arena>(kArenaCapacityBytes);
+  memset(arena->address(), 0x00, kArenaCapacityBytes);
+
+  std::unordered_map<uint64_t, uint64_t> allocations;
+  uint64_t totalBytes = 0;
+
+  // First phase allocate only
+  for (size_t i = 0; i < 1000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+    totalBytes += bytes;
+  }
+  checkArenaConsistency(arena.get(), totalBytes);
+
+  // Second phase alloc and free called in an interleaving way
+  for (size_t i = 0; i < 10000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+    totalBytes += bytes;
+
+    auto itrToFree = allocations.begin();
+    auto bytesFree = itrToFree->second;
+    unpadAndFree(
+        arena.get(), reinterpret_cast<void*>(itrToFree->first), bytesFree);
+    totalBytes -= bytesFree;
+    allocations.erase(itrToFree);
+  }
+  checkArenaConsistency(arena.get(), totalBytes);
+
+  // Third phase free only
+  auto itr = allocations.begin();
+  while (itr != allocations.end()) {
+    auto bytes = itr->second;
+    unpadAndFree(arena.get(), reinterpret_cast<void*>(itr->first), bytes);
+    totalBytes -= bytes;
+    itr++;
+  }
+  checkArenaConsistency(arena.get(), totalBytes);
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
