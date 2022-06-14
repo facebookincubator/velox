@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/DecoderUtil.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
 
 namespace facebook::velox::dwrf {

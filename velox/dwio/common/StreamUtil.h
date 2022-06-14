@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/dwio/common/AbstractSeekableInputStream.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 
 namespace facebook::velox {
 // Corresponds to declaration in LazyVector.h but repeated here to avoid
@@ -29,7 +29,7 @@ namespace facebook::velox::dwio::common {
 
 static inline void skipBytes(
     uint64_t numBytes,
-    AbstractSeekableInputStream* input,
+    SeekableInputStream* input,
     const char*& bufferStart,
     const char*& bufferEnd) {
   // bufferStart and bufferEnd may be null if we haven't started reading yet.
@@ -44,7 +44,7 @@ static inline void skipBytes(
 
 static inline void readBytes(
     int64_t numBytes,
-    AbstractSeekableInputStream* input,
+    SeekableInputStream* input,
     void* bytes,
     const char*& bufferStart,
     const char*& bufferEnd) {
@@ -103,7 +103,7 @@ void rowLoop(
 template <typename T, typename TResult>
 inline void readContiguous(
     int32_t size,
-    AbstractSeekableInputStream& input,
+    SeekableInputStream& input,
     TResult* output,
     const char*& bufferStart,
     const char*& bufferEnd) {
@@ -152,7 +152,7 @@ template <typename T, typename SingleValue, typename SparseRange>
 inline void loopOverBuffers(
     folly::Range<const int32_t*> rows,
     int32_t initialRow,
-    AbstractSeekableInputStream& input,
+    SeekableInputStream& input,
     const char*& bufferStart,
     const char*& bufferEnd,
     SingleValue singleValue,
@@ -203,7 +203,7 @@ template <typename T, typename TResult>
 inline void readRows(
     folly::Range<const int32_t*> rows,
     int32_t initialRow,
-    AbstractSeekableInputStream& input,
+    SeekableInputStream& input,
     TResult* output,
     const char*& bufferStart,
     const char*& bufferEnd) {
