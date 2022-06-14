@@ -123,11 +123,7 @@ class VectorTest : public testing::Test {
 
   template <typename T>
   T testValue(int32_t i, BufferPtr& space) {
-    if constexpr (std::is_same_v<T, std::shared_ptr<void>>) {
-      return std::make_shared<NonPOD>(i);
-    } else {
-      return i;
-    }
+    return i;
   }
 
   template <TypeKind KIND>
@@ -792,6 +788,16 @@ Date VectorTest::testValue(int32_t i, BufferPtr& space) {
   return Date(i);
 }
 
+template <>
+std::shared_ptr<void> VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return std::make_shared<NonPOD>(i);
+}
+
+template <>
+IntervalDayTime VectorTest::testValue(int32_t i, BufferPtr& space) {
+  return IntervalDayTime(i);
+}
+
 VectorPtr VectorTest::createMap(int32_t numRows, bool withNulls) {
   BufferPtr nulls;
   BufferPtr offsets;
@@ -856,6 +862,7 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::BOOLEAN>(BOOLEAN(), vectorSize_);
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
+  testFlat<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME(), vectorSize_);
 }
 
 TEST_F(VectorTest, createDecimal) {
@@ -1103,9 +1110,31 @@ TEST_F(VectorTest, wrapConstantInDictionary) {
 TEST_F(VectorTest, setFlatVectorStringView) {
   auto vector = BaseVector::create(VARCHAR(), 1, pool_.get());
   auto flat = vector->asFlatVector<StringView>();
-  flat->set(0, StringView("This string is too long to be inlined"));
-  EXPECT_EQ(
-      flat->valueAt(0).getString(), "This string is too long to be inlined");
+  EXPECT_EQ(0, flat->stringBuffers().size());
+
+  const std::string originalString = "This string is too long to be inlined";
+
+  flat->set(0, StringView(originalString));
+  EXPECT_EQ(flat->valueAt(0).getString(), originalString);
+  EXPECT_EQ(1, flat->stringBuffers().size());
+  EXPECT_EQ(originalString.size(), flat->stringBuffers()[0]->size());
+
+  // Make a copy of the vector. Verify that string buffer is shared.
+  auto copy = BaseVector::create(VARCHAR(), 1, pool_.get());
+  copy->copy(flat, 0, 0, 1);
+
+  auto flatCopy = copy->asFlatVector<StringView>();
+  EXPECT_EQ(1, flatCopy->stringBuffers().size());
+  EXPECT_EQ(flat->stringBuffers()[0].get(), flatCopy->stringBuffers()[0].get());
+
+  // Modify the string in the copy. Make sure it is written into a new string
+  // buffer.
+  const std::string newString = "A different string";
+  flatCopy->set(0, StringView(newString));
+  EXPECT_EQ(2, flatCopy->stringBuffers().size());
+  EXPECT_EQ(flat->stringBuffers()[0].get(), flatCopy->stringBuffers()[0].get());
+  EXPECT_EQ(originalString.size(), flatCopy->stringBuffers()[0]->size());
+  EXPECT_EQ(newString.size(), flatCopy->stringBuffers()[1]->size());
 }
 
 TEST_F(VectorTest, resizeAtConstruction) {
@@ -1391,6 +1420,7 @@ TEST_F(VectorCreateConstantTest, null) {
 
   testNullConstant<TypeKind::TIMESTAMP>(TIMESTAMP());
   testNullConstant<TypeKind::DATE>(DATE());
+  testNullConstant<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME());
 
   testNullConstant<TypeKind::VARCHAR>(VARCHAR());
   testNullConstant<TypeKind::VARBINARY>(VARBINARY());

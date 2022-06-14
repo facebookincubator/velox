@@ -86,7 +86,7 @@ ReaderBase::ReaderBase(
     MemoryPool& pool,
     std::unique_ptr<InputStream> stream,
     std::shared_ptr<DecrypterFactory> decryptorFactory,
-    std::shared_ptr<BufferedInputFactory> bufferedInputFactory,
+    std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory,
     uint64_t fileNum,
     FileFormat fileFormat)
     : pool_{pool},
@@ -95,11 +95,10 @@ ReaderBase::ReaderBase(
       fileNum_(fileNum),
       decryptorFactory_(decryptorFactory),
       bufferedInputFactory_(
-          bufferedInputFactory ? bufferedInputFactory
-                               : BufferedInputFactory::baseFactoryShared()),
+          bufferedInputFactory
+              ? bufferedInputFactory
+              : dwio::common::BufferedInputFactory::baseFactoryShared()),
       fileFormat_{fileFormat} {
-  DWIO_ENSURE(
-      fileFormat_ == FileFormat::DWRF || fileFormat_ == FileFormat::ORC);
   input_ = bufferedInputFactory_->create(*stream_, pool, fileNum);
 
   // read last bytes into buffer to get PostScript

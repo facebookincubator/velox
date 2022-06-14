@@ -16,18 +16,11 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/Adaptor.h"
+#include <string>
+#include <unordered_map>
 
-DIAGNOSTIC_PUSH
-
-DIAGNOSTIC_IGNORE("-Wdeprecated")
-DIAGNOSTIC_IGNORE("-Wpadded")
-DIAGNOSTIC_IGNORE("-Wunused-parameter")
-
-#ifdef __clang__
-DIAGNOSTIC_IGNORE("-Wreserved-id-macro")
-#endif
-
-#include <google/protobuf/io/zero_copy_stream.h>
-
-DIAGNOSTIC_POP
+namespace facebook::velox::expression::calculation {
+void evaluate(
+    const std::string& calculation,
+    std::unordered_map<std::string, int>& variables);
+}

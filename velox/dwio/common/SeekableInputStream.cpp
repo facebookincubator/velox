@@ -14,15 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/InputStream.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 
 #include <algorithm>
 #include <iomanip>
 
-namespace facebook::velox::dwrf {
-
-using dwio::common::InputStream;
-using dwio::common::LogType;
+namespace facebook::velox::dwio::common {
 
 void printBuffer(std::ostream& out, const char* buffer, uint64_t length) {
   const uint64_t width = 24;
@@ -112,7 +109,7 @@ void SeekableArrayInputStream::loadIfAvailable() {
   if (UNLIKELY(!!dataRead)) {
     const auto result = dataRead();
     auto size = std::get<1>(result);
-    DWIO_ENSURE_LT(size, dwio::common::MAX_UINT64, "invalid data size");
+    DWIO_ENSURE_LT(size, MAX_UINT64, "invalid data size");
     data = std::get<0>(result);
     length = size;
     if (blockSize == 0) {
@@ -178,11 +175,9 @@ std::string SeekableArrayInputStream::getName() const {
       "SeekableArrayInputStream ", position, " of ", length);
 }
 
-size_t SeekableArrayInputStream::loadIndices(
-    const proto::RowIndex& /*rowIndex*/,
-    size_t startIndex) {
-  // not compressed, so only need to skip 1 value (uncompressed position)
-  return startIndex + 1;
+size_t SeekableArrayInputStream::positionSize() {
+  // not compressed, so only need 1 position (uncompressed position)
+  return 1;
 }
 
 static uint64_t computeBlock(uint64_t request, uint64_t length) {
@@ -260,11 +255,9 @@ std::string SeekableFileInputStream::getName() const {
       input.getName(), " from ", start, " for ", length);
 }
 
-size_t SeekableFileInputStream::loadIndices(
-    const proto::RowIndex& /*rowIndex*/,
-    size_t startIndex) {
-  // not compressed, so only need to skip 1 value: uncompressed position
-  return startIndex + 1;
+size_t SeekableFileInputStream::positionSize() {
+  // not compressed, so only need 1 position (uncompressed position)
+  return 1;
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

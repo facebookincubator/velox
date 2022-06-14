@@ -713,6 +713,31 @@ class ExprCallable : public Callable {
 
 } // namespace
 
+std::string LambdaExpr::toString(bool recursive) const {
+  if (!recursive) {
+    return name_;
+  }
+
+  std::string inputs;
+  for (int i = 0; i < signature_->size(); ++i) {
+    inputs.append(signature_->nameOf(i));
+    if (!inputs.empty()) {
+      inputs.append(", ");
+    }
+  }
+
+  for (const auto& field : capture_) {
+    inputs.append(field->field());
+    if (!inputs.empty()) {
+      inputs.append(", ");
+    }
+  }
+  inputs.pop_back();
+  inputs.pop_back();
+
+  return fmt::format("({}) -> {}", inputs, body_->toString());
+}
+
 void LambdaExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -768,6 +793,36 @@ void LambdaExpr::makeTypeWithCapture(EvalCtx& context) {
   }
 }
 
+// Apply onError methods of registered listeners on every row that encounters
+// errors. The error vector must exist.
+void applyListenersOnError(
+    const SelectivityVector& rows,
+    const EvalCtx& context) {
+  auto errors = context.errors();
+  VELOX_CHECK_NOT_NULL(errors);
+
+  exec::LocalSelectivityVector errorRows(context.execCtx(), errors->size());
+  errorRows->clearAll();
+  rows.applyToSelected([&](auto row) {
+    if (row < errors->size() && !errors->isNullAt(row)) {
+      errorRows->setValid(row, true);
+    }
+  });
+  errorRows->updateBounds();
+
+  if (!errorRows->hasSelections()) {
+    return;
+  }
+
+  exprSetListeners().withRLock([&](auto& listeners) {
+    if (!listeners.empty()) {
+      for (auto& listener : listeners) {
+        listener->onError(*errorRows, *errors);
+      }
+    }
+  });
+}
+
 void TryExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -815,6 +870,8 @@ void TryExpr::nullOutErrors(
     VectorPtr& result) {
   auto errors = context.errors();
   if (errors) {
+    applyListenersOnError(rows, context);
+
     if (result->encoding() == VectorEncoding::Simple::CONSTANT) {
       // Since it's constant, if any row is NULL they're all NULL, so check row
       // 0 arbitrarily.

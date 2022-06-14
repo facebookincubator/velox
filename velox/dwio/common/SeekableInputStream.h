@@ -16,14 +16,13 @@
 
 #pragma once
 
-#include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
-#include "velox/dwio/dwrf/common/wrap/zero-copy-stream-wrapper.h"
-
 #include <vector>
 
-namespace facebook::velox::dwrf {
+#include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/InputStream.h"
+#include "velox/dwio/common/wrap/zero-copy-stream-wrapper.h"
+
+namespace facebook::velox::dwio::common {
 
 void printBuffer(std::ostream& out, const char* buffer, uint64_t length);
 
@@ -54,9 +53,9 @@ class SeekableInputStream : public google::protobuf::io::ZeroCopyInputStream {
 
   virtual std::string getName() const = 0;
 
-  virtual size_t loadIndices(
-      const proto::RowIndex& rowIndex,
-      size_t startIndex) = 0;
+  // Returns the number of position values this input stream uses to identify an
+  // ORC/DWRF stream address.
+  virtual size_t positionSize() = 0;
 
   void readFully(char* buffer, size_t bufferSize);
 };
@@ -101,32 +100,31 @@ class SeekableArrayInputStream : public SeekableInputStream {
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
+  virtual size_t positionSize() override;
 };
 
 /**
- * Create a seekable input stream based on an input stream.
+ * Create a seekable input stream based on an io stream.
  */
 class SeekableFileInputStream : public SeekableInputStream {
  private:
   memory::MemoryPool& pool;
-  dwio::common::InputStream& input;
-  dwio::common::LogType logType;
+  InputStream& input;
+  LogType logType;
   const uint64_t start;
   const uint64_t length;
   const uint64_t blockSize;
-  dwio::common::DataBuffer<char> buffer;
+  DataBuffer<char> buffer;
   uint64_t position;
   uint64_t pushBack;
 
  public:
   SeekableFileInputStream(
-      dwio::common::InputStream& input,
+      InputStream& input,
       uint64_t offset,
       uint64_t byteCount,
       memory::MemoryPool& pool,
-      dwio::common::LogType logType,
+      LogType logType,
       uint64_t blockSize = 0);
   ~SeekableFileInputStream() override = default;
 
@@ -136,8 +134,7 @@ class SeekableFileInputStream : public SeekableInputStream {
   virtual google::protobuf::int64 ByteCount() const override;
   virtual void seekToPosition(PositionProvider& position) override;
   virtual std::string getName() const override;
-  virtual size_t loadIndices(const proto::RowIndex& rowIndex, size_t startIndex)
-      override;
+  virtual size_t positionSize() override;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

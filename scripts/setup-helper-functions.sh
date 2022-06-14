@@ -22,7 +22,6 @@ function github_checkout {
   shift
   local GIT_CLONE_PARAMS=$@
   local DIRNAME=$(basename $REPO)
-  echo $DIRNAME
   cd "${DEPENDENCY_DIR}"
   if [ -z "${DIRNAME}" ]; then
     echo "Failed to get repo name from ${REPO}"
@@ -124,6 +123,8 @@ function cmake_install {
     rm -rf "${BINARY_DIR}"
   fi
   mkdir -p "${BINARY_DIR}"
+  CPU_TARGET="${CPU_TARGET:-avx}"
+  COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
   cmake -Wno-dev -B"${BINARY_DIR}" \
@@ -132,7 +133,7 @@ function cmake_install {
     -DCMAKE_CXX_STANDARD=17 \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
-    -DCMAKE_CXX_FLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt" \
+    -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DBUILD_TESTING=OFF \
     "$@"
   ninja -C "${BINARY_DIR}" install

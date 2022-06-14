@@ -16,11 +16,12 @@
 
 #pragma once
 
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 
 namespace facebook::velox::dwrf {
 
-class PagedInputStream : public SeekableInputStream {
+class PagedInputStream : public dwio::common::SeekableInputStream {
  public:
   PagedInputStream(
       std::unique_ptr<SeekableInputStream> inStream,
@@ -45,7 +46,7 @@ class PagedInputStream : public SeekableInputStream {
   google::protobuf::int64 ByteCount() const override {
     return bytesReturned_;
   }
-  void seekToPosition(PositionProvider& position) override;
+  void seekToPosition(dwio::common::PositionProvider& position) override;
   std::string getName() const override {
     return folly::to<std::string>(
         "PagedInputStream StreamInfo (",
@@ -59,10 +60,10 @@ class PagedInputStream : public SeekableInputStream {
         ")");
   }
 
-  size_t loadIndices(const proto::RowIndex& /* unused */, size_t startIndex)
-      override {
-    // need to skip 2 values: compressed position + uncompressed position
-    return startIndex + 2;
+  size_t positionSize() override {
+    // not compressed, so need 2 positions (compressed position + uncompressed
+    // position)
+    return 2;
   }
 
  protected:

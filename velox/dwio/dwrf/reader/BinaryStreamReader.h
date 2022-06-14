@@ -32,7 +32,7 @@ class BinaryStripeStreams {
 
   std::vector<proto::ColumnEncoding> getEncodings(uint32_t nodeId) const;
 
-  std::vector<StreamIdentifier> getStreamIdentifiers(uint32_t nodeId) const;
+  std::vector<DwrfStreamIdentifier> getStreamIdentifiers(uint32_t nodeId) const;
 
   std::unique_ptr<proto::RowIndex> getRowGroupIndex(
       const EncodingKey ek) const {
@@ -40,12 +40,12 @@ class BinaryStripeStreams {
         ek.forKind(proto::Stream_Kind_ROW_INDEX), false));
   }
 
-  std::unique_ptr<SeekableInputStream> getStream(
-      const StreamIdentifier& si) const {
+  std::unique_ptr<dwio::common::SeekableInputStream> getStream(
+      const DwrfStreamIdentifier& si) const {
     return stripeStreams_.getCompressedStream(si);
   }
 
-  uint64_t getStreamLength(const StreamIdentifier& si) const {
+  uint64_t getStreamLength(const DwrfStreamIdentifier& si) const {
     return stripeStreams_.getStreamLength(si);
   }
 
@@ -59,7 +59,7 @@ class BinaryStripeStreams {
   dwio::common::RowReaderOptions options_;
   StripeStreamsImpl stripeStreams_;
   std::unordered_map<uint32_t, std::vector<uint32_t>> encodingKeys_;
-  std::unordered_map<uint32_t, std::vector<StreamIdentifier>>
+  std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
       nodeToStreamIdMap_;
 };
 

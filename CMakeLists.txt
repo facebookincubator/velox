@@ -45,6 +45,7 @@ option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Build velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Build velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
+option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
 
@@ -107,6 +108,14 @@ if(VELOX_ENABLE_S3)
   endif()
   find_package(AWSSDK REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
+endif()
+
+if(VELOX_ENABLE_HDFS)
+  find_library(
+    LIBHDFS3
+    NAMES libhdfs3.so libhdfs3.dylib
+    HINTS "${CMAKE_SOURCE_DIR}/hawq/depends/libhdfs3/_build/src/" REQUIRED)
+  add_definitions(-DVELOX_ENABLE_HDFS3)
 endif()
 
 if(VELOX_ENABLE_PARQUET)
@@ -312,10 +321,41 @@ endif()
 # Benchmarks and tests at some places are coupled which is not great. See
 # velox/vector/CMakeLists.txt. TODO: Decouple.
 set(VELOX_DISABLE_GOOGLETEST OFF)
-if(NOT VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_BENCHMARKS_BASIC)
+if(NOT VELOX_BUILD_TEST_UTILS
+   AND NOT VELOX_BUILD_TESTING
+   AND NOT VELOX_ENABLE_BENCHMARKS_BASIC)
   set(VELOX_DISABLE_GOOGLETEST ON)
   add_definitions(-DVELOX_DISABLE_GOOGLETEST)
 endif()
+
+# On macOS, search Homebrew for keg-only versions of Bison and Flex. Xcode does
+# not provide new enough versions for us to use.
+if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+  execute_process(
+    COMMAND brew --prefix bison
+    RESULT_VARIABLE BREW_BISON
+    OUTPUT_VARIABLE BREW_BISON_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(BREW_BISON EQUAL 0 AND EXISTS "${BREW_BISON_PREFIX}")
+    message(
+      STATUS "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}")
+    set(BISON_EXECUTABLE "${BREW_BISON_PREFIX}/bin/bison")
+  endif()
+
+  execute_process(
+    COMMAND brew --prefix flex
+    RESULT_VARIABLE BREW_FLEX
+    OUTPUT_VARIABLE BREW_FLEX_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(BREW_FLEX EQUAL 0 AND EXISTS "${BREW_FLEX_PREFIX}")
+    message(
+      STATUS "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}")
+    set(FLEX_EXECUTABLE "${BREW_FLEX_PREFIX}/bin/flex")
+    set(FLEX_INCLUDE_DIR "${BREW_FLEX_PREFIX}/include")
+  endif()
+endif()
+find_package(BISON 3.0.4 REQUIRED)
+find_package(FLEX 2.5.13 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
