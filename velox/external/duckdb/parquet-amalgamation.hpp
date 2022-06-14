@@ -1298,8 +1298,8 @@ static inline To bitwise_cast(From from) {
   } u;
   u.f = from;
   return u.t;
-}} // namespace duckdb_apache::thrift
 }
+}} // namespace duckdb_apache::thrift
 
 
 #ifdef HAVE_SYS_PARAM_H

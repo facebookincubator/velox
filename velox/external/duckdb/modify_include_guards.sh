@@ -13,18 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This script documents setting up a macOS host for presto_cpp
-# development.  Running it should make you ready to compile.
-#
-# Environment variables:
-# * INSTALL_PREREQUISITES="N": Skip installation of brew/pip deps.
-# * PROMPT_ALWAYS_RESPOND="n": Automatically respond to interactive prompts.
-#     Use "n" to never wipe directories.
-#
-# You can also run individual functions below by specifying them as arguments:
-# $ scripts/setup-macos.sh install_googletest install_fmt
-#
-
 echo $1
 TAGS=$(sed -n 's/^#ifndef \(_THRIFT_[A-Z][A-Z_]*_\)/\1/p' ${1})
 PREFIX=_DUCKDB
@@ -38,6 +26,6 @@ do
 done
 
 # Wrap the bitwise_cast function inside of duckdb_apache::thrift namespace
-awk '/^template <typename To, typename From>/,/^}/{if (/^template <typename To, typename From>/) print "namespace duckdb_apache { namespace thrift {"; if(/^}/) print "}} // namespace duckdb_apache::thrift"} 1' ${1} > tmp
+awk -f wrap_namespace.awk ${1} > tmp
 mv tmp ${1}
 
