@@ -445,6 +445,22 @@ class PlanBuilder {
       const std::vector<std::string>& aggregationInputs,
       std::string groupIdName = "group_id");
 
+  /// Add a WindowNode using the specified partition keys, order by clauses
+  /// and window functions.
+  /// @partitionKeys : A list of columns for the window partition. Can be empty
+  /// for a global window.
+  /// @orderByKeys : A list of ORDER BY clauses. Can be empty for a
+  /// non-deterministic ordering of partition rows.
+  /// @windowFunctions : A list of window functions. Window functions are
+  /// specified as function calls over unmodified input columns,
+  /// e.g. sum(a). SQL statement AS can be used to specify names
+  /// for the window function result columns. In the absence of AS statement,
+  /// result columns are named a0, a1, a2, etc.
+  PlanBuilder& window(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& orderByKeys,
+      const std::vector<std::string>& windowFunctions);
+
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///
   /// For example,
@@ -711,12 +727,12 @@ class PlanBuilder {
   std::shared_ptr<const core::ITypedExpr> inferTypes(
       const std::shared_ptr<const core::IExpr>& untypedExpr);
 
-  struct AggregateExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> aggregates;
+  struct ExpressionsAndNames {
+    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
   };
 
-  AggregateExpressionsAndNames createAggregateExpressionsAndNames(
+  ExpressionsAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
@@ -725,6 +741,10 @@ class PlanBuilder {
   createAggregateMasks(
       size_t numAggregates,
       const std::vector<std::string>& masks);
+
+  ExpressionsAndNames createWindowExpressionsAndNames(
+      const std::vector<std::string>& windowFunctions,
+      const std::vector<TypePtr>& resultTypes);
 
   std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
   std::shared_ptr<core::PlanNode> planNode_;

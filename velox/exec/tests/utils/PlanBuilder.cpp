@@ -24,6 +24,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
 #include "velox/type/tests/FilterBuilder.h"
@@ -461,6 +462,34 @@ std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
 
   VELOX_NYI("Unsupported expression for range filter: {}", expr->toString());
 }
+
+std::pair<
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
+    std::vector<core::SortOrder>>
+parseOrderByClauses(
+    const std::vector<std::string>& keys,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool) {
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  for (const auto& key : keys) {
+    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
+    auto typedExpr =
+        core::Expressions::inferTypes(untypedExpr, inputType, pool);
+
+    auto sortingKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        sortingKey,
+        "ORDER BY clause must use a column name, not an expression: {}",
+        key);
+    sortingKeys.emplace_back(sortingKey);
+    sortingOrders.emplace_back(sortOrder);
+  }
+
+  return {sortingKeys, sortingOrders};
+}
+
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -566,6 +595,44 @@ PlanBuilder& PlanBuilder::tableScan(
       assignmentsMap);
 }
 
+PlanBuilder& PlanBuilder::window(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& orderByKeys,
+    const std::vector<std::string>& windowFunctions) {
+  auto [sortingKeys, sortingOrders] =
+      parseOrderByClauses(orderByKeys, planNode_->outputType(), pool_);
+
+  std::vector<core::CallTypedExprPtr> windowFunctionExprs;
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<std::string> windowColumnNames;
+  core::WindowNode::Frame defaultFrame{
+      core::WindowNode::WindowType::kRange,
+      core::WindowNode::BoundType::kUnboundedPreceding,
+      nullptr,
+      core::WindowNode::BoundType::kCurrentRow,
+      nullptr};
+  std::vector<TypePtr> resultTypes;
+  auto windowExpressionsAndNames =
+      createWindowExpressionsAndNames(windowFunctions, resultTypes);
+  for (auto i = 0; i < windowExpressionsAndNames.expressions.size(); ++i) {
+    // TODO : Add parsing for the Window frame. This code assumes default frame.
+    windowNodeFunctions.push_back(
+        {std::move(windowExpressionsAndNames.expressions[i]),
+         defaultFrame,
+         true});
+  }
+
+  planNode_ = std::make_shared<core::WindowNode>(
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      sortingKeys,
+      sortingOrders,
+      windowExpressionsAndNames.names,
+      windowNodeFunctions,
+      planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::values(
     const std::vector<RowVectorPtr>& values,
     bool parallelizable) {
@@ -581,35 +648,6 @@ PlanBuilder& PlanBuilder::exchange(const RowTypePtr& outputType) {
       std::make_shared<core::ExchangeNode>(nextPlanNodeId(), outputType);
   return *this;
 }
-
-namespace {
-std::pair<
-    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
-    std::vector<core::SortOrder>>
-parseOrderByClauses(
-    const std::vector<std::string>& keys,
-    const RowTypePtr& inputType,
-    memory::MemoryPool* pool) {
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
-  std::vector<core::SortOrder> sortingOrders;
-  for (const auto& key : keys) {
-    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
-    auto typedExpr =
-        core::Expressions::inferTypes(untypedExpr, inputType, pool);
-
-    auto sortingKey =
-        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
-    VELOX_CHECK_NOT_NULL(
-        sortingKey,
-        "ORDER BY clause must use a column name, not an expression: {}",
-        key);
-    sortingKeys.emplace_back(sortingKey);
-    sortingOrders.emplace_back(sortOrder);
-  }
-
-  return {sortingKeys, sortingOrders};
-}
-} // namespace
 
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
@@ -817,6 +855,99 @@ class AggregateTypeResolver {
   TypePtr resultType_;
 };
 
+std::string toString(
+    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
+std::string throwWindowFunctionDoesntExist(const std::string& name) {
+  std::stringstream error;
+  error << "Window function doesn't exist: " << name << ".";
+  if (exec::windowFunctions().empty()) {
+    error << " Registry of window functions is empty. "
+             "Make sure to register some window functions.";
+  }
+  VELOX_USER_FAIL(error.str());
+}
+
+std::string throwWindowFunctionSignatureNotSupported(
+    const std::string& name,
+    const std::vector<TypePtr>& types,
+    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+  std::stringstream error;
+  error << "Window function signature is not supported: "
+        << toString(name, types)
+        << ". Supported signatures: " << toString(signatures) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
+TypePtr resolveWindowType(
+    const std::string& windowFunctionName,
+    const std::vector<TypePtr>& inputTypes) {
+  if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
+    for (const auto& signature : signatures.value()) {
+      exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->returnType());
+      }
+    }
+
+    throwWindowFunctionSignatureNotSupported(
+        windowFunctionName, inputTypes, signatures.value());
+  }
+
+  throwWindowFunctionDoesntExist(windowFunctionName);
+  return nullptr;
+}
+
+// TODO : Add "nullOnFailure" logic
+class WindowTypeResolver {
+ public:
+  explicit WindowTypeResolver()
+      : previousHook_(core::Expressions::getResolverHook()) {
+    core::Expressions::setTypeResolverHook(
+        [&](const auto& inputs, const auto& expr, bool /* nullOnFailure */) {
+          return resolveType(inputs, expr);
+        });
+  }
+
+  ~WindowTypeResolver() {
+    core::Expressions::setTypeResolverHook(previousHook_);
+  }
+
+  void setResultType(const TypePtr& type) {
+    resultType_ = type;
+  }
+
+ private:
+  TypePtr resolveType(
+      const std::vector<core::TypedExprPtr>& inputs,
+      const std::shared_ptr<const core::CallExpr>& expr) const {
+    if (resultType_) {
+      return resultType_;
+    }
+
+    std::vector<TypePtr> types;
+    for (auto& input : inputs) {
+      types.push_back(input->type());
+    }
+
+    auto functionName = expr->getFunctionName();
+
+    return resolveWindowType(functionName, types);
+  }
+
+  const core::Expressions::TypeResolverHook previousHook_;
+  TypePtr resultType_;
+};
+
 } // namespace
 
 std::shared_ptr<core::PlanNode>
@@ -917,13 +1048,13 @@ PlanBuilder& PlanBuilder::finalAggregation() {
   return *this;
 }
 
-PlanBuilder::AggregateExpressionsAndNames
+PlanBuilder::ExpressionsAndNames
 PlanBuilder::createAggregateExpressionsAndNames(
     const std::vector<std::string>& aggregates,
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& resultTypes) {
   AggregateTypeResolver resolver(step);
-  std::vector<std::shared_ptr<const core::CallTypedExpr>> exprs;
+  std::vector<core::CallTypedExprPtr> exprs;
   std::vector<std::string> names;
   exprs.reserve(aggregates.size());
   names.reserve(aggregates.size());
@@ -934,6 +1065,36 @@ PlanBuilder::createAggregateExpressionsAndNames(
     }
 
     auto untypedExpr = duckdb::parseExpr(agg);
+
+    auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
+        inferTypes(untypedExpr));
+    exprs.emplace_back(expr);
+
+    if (untypedExpr->alias().has_value()) {
+      names.push_back(untypedExpr->alias().value());
+    } else {
+      names.push_back(fmt::format("a{}", i));
+    }
+  }
+
+  return {exprs, names};
+}
+
+PlanBuilder::ExpressionsAndNames PlanBuilder::createWindowExpressionsAndNames(
+    const std::vector<std::string>& windowFunctions,
+    const std::vector<TypePtr>& resultTypes) {
+  WindowTypeResolver windowResolver;
+  std::vector<core::CallTypedExprPtr> exprs;
+  std::vector<std::string> names;
+  exprs.reserve(windowFunctions.size());
+  names.reserve(windowFunctions.size());
+  for (auto i = 0; i < windowFunctions.size(); i++) {
+    auto& window = windowFunctions[i];
+    if (i < resultTypes.size()) {
+      windowResolver.setResultType(resultTypes[i]);
+    }
+
+    auto untypedExpr = duckdb::parseExpr(window);
 
     auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr));
@@ -986,7 +1147,7 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(groupingKeys),
       fields(preGroupedKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -1009,7 +1170,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       fields(groupingKeys),
       fields(groupingKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
