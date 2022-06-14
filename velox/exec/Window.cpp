@@ -24,7 +24,7 @@ void initKeyInfo(
     const RowTypePtr& type,
     const std::vector<core::FieldAccessTypedExprPtr>& keys,
     const std::vector<core::SortOrder>& orders,
-    std::vector<std::pair<ChannelIndex, core::SortOrder>>& keyInfo) {
+    std::vector<std::pair<column_index_t , core::SortOrder>>& keyInfo) {
   core::SortOrder defaultPartitionSortOrder(true, true);
 
   keyInfo.reserve(keys.size());
@@ -86,9 +86,9 @@ Window::Window(
       allKeyInfo_.cend(), sortKeyInfo_.begin(), sortKeyInfo_.end());
 
   auto fieldArgToChannel =
-      [&](const core::TypedExprPtr arg) -> std::optional<ChannelIndex> {
+      [&](const core::TypedExprPtr arg) -> std::optional<column_index_t> {
     if (arg) {
-      std::optional<ChannelIndex> argChannel =
+      std::optional<column_index_t> argChannel =
           exprToChannel(arg.get(), inputType);
       VELOX_CHECK(
           argChannel.value() != kConstantChannel,

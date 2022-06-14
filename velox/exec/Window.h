@@ -51,8 +51,8 @@ class Window : public Operator {
     const core::WindowNode::WindowType type;
     const core::WindowNode::BoundType startType;
     const core::WindowNode::BoundType endType;
-    const std::optional<ChannelIndex> startChannel;
-    const std::optional<ChannelIndex> endChannel;
+    const std::optional<column_index_t> startChannel;
+    const std::optional<column_index_t> endChannel;
   };
 
   void setupPeerAndFrameBuffers();
@@ -78,7 +78,7 @@ class Window : public Operator {
   inline bool compareRowsWithKeys(
       const char* lhs,
       const char* rhs,
-      const std::vector<std::pair<ChannelIndex, core::SortOrder>>& keys);
+      const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
 
   bool finished_ = false;
   const vector_size_t outputBatchSizeInBytes_;
@@ -96,9 +96,9 @@ class Window : public Operator {
   // The below 3 vectors represent the ChannelIndex of the partition keys,
   // the order by keys and the concatenation of the 2. These keyInfo are
   // used for sorting by those key combinations during the processing.
-  std::vector<std::pair<ChannelIndex, core::SortOrder>> partitionKeyInfo_;
-  std::vector<std::pair<ChannelIndex, core::SortOrder>> sortKeyInfo_;
-  std::vector<std::pair<ChannelIndex, core::SortOrder>> allKeyInfo_;
+  std::vector<std::pair<column_index_t, core::SortOrder>> partitionKeyInfo_;
+  std::vector<std::pair<column_index_t, core::SortOrder>> sortKeyInfo_;
+  std::vector<std::pair<column_index_t, core::SortOrder>> allKeyInfo_;
 
   // Vector of WindowFunction objects required by this operator.
   // WindowFunction is the base API implemented by all the window functions.
