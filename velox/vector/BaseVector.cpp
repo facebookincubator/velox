@@ -589,19 +589,9 @@ VectorPtr newConstant<TypeKind::LONG_DECIMAL>(
     variant& value,
     vector_size_t size,
     velox::memory::MemoryPool* pool) {
-  if (value.isNull()) {
-    // NULL literals.
-    return std::make_shared<ConstantVector<LongDecimal>>(
-        pool,
-        size,
-        true,
-        DECIMAL(DecimalType<TypeKind::LONG_DECIMAL>::kMaxPrecision, 0),
-        LongDecimal(),
-        SimpleVectorStats<LongDecimal>{},
-        sizeof(LongDecimal));
-  }
-  VELOX_UNSUPPORTED(
-      "Decimal variant is not supported to create a ConstantVector");
+  // LongDecimal variant is not supported to create
+  // constant vector.
+  VELOX_UNSUPPORTED();
 }
 
 template <>
@@ -639,7 +629,6 @@ std::shared_ptr<BaseVector> BaseVector::createNullConstant(
     return std::make_shared<ConstantVector<ComplexType>>(
         pool, size, true, type, ComplexType());
   }
-
   return BaseVector::createConstant(variant(type->kind()), size, pool);
 }
 

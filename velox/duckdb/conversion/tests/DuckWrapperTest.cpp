@@ -221,7 +221,7 @@ TEST_F(BaseDuckWrapperTest, tpchSF1) {
 }
 
 TEST_F(BaseDuckWrapperTest, duckToVeloxDecimal) {
-  // test SMALLINT conversion.
+  // Test SMALLINT decimal to ShortDecimal conversion.
   verifyDuckToVeloxDecimal<ShortDecimal>(
       "select * from (values (NULL), ('1.2'::decimal(2,1)),"
       "('2.2'::decimal(2,1)),('-4.2'::decimal(2,1)), (NULL))",
@@ -231,7 +231,7 @@ TEST_F(BaseDuckWrapperTest, duckToVeloxDecimal) {
        ShortDecimal(-42),
        std::nullopt});
 
-  // test INTEGER conversion.
+  // Test INTEGER decimal to ShortDecimal conversion.
   verifyDuckToVeloxDecimal<ShortDecimal>(
       "select * from (values ('1111.1111'::decimal(8,4)),"
       "('2222.2222'::decimal(8,4)),('-3333.3333'::decimal(8,4)))",
@@ -239,7 +239,7 @@ TEST_F(BaseDuckWrapperTest, duckToVeloxDecimal) {
        ShortDecimal(22222222),
        ShortDecimal(-33333333)});
 
-  // test BIGINT conversion.
+  // Test BIGINT decimal to LongDecimal conversion.
   verifyDuckToVeloxDecimal<ShortDecimal>(
       "select * from (values ('-111111.111111'::decimal(12,6)),"
       "('222222.222222'::decimal(12,6)),('333333.333333'::decimal(12,6)))",
@@ -257,6 +257,50 @@ TEST_F(BaseDuckWrapperTest, duckToVeloxDecimal) {
        LongDecimal(buildInt128(0XFFFFFFFFFFFF8A59, 0X99FC706655BFAC11)),
        std::nullopt,
        LongDecimal(buildInt128(0XFFFFFFFFFFFFD0F0, 0XA3FE935B081D8D69))});
+}
+
+TEST_F(BaseDuckWrapperTest, decimalDictCoversion) {
+  constexpr int32_t size = 6;
+  ::duckdb::LogicalType* duckDecimalType =
+      static_cast<::duckdb::LogicalType*>(duckdb_create_decimal_type(4, 2));
+  ::duckdb::Vector data(*duckDecimalType, size);
+  auto dataPtr = reinterpret_cast<int16_t*>(data.GetBuffer()->GetData());
+  // Make dirty data which shouldn't be accessed.
+  memset(dataPtr, 0xAB, sizeof(int16_t) * size);
+  dataPtr[0] = 5000;
+  dataPtr[2] = 1000;
+  dataPtr[4] = 2000;
+  // Turn vector into dictionary.
+  ::duckdb::SelectionVector sel(size);
+  sel.set_index(0, 2);
+  sel.set_index(1, 4);
+  sel.set_index(2, 0);
+  sel.set_index(3, 4);
+  sel.set_index(4, 2);
+  sel.set_index(5, 0);
+  data.Slice(sel, size);
+
+  auto decimalType = DECIMAL(4, 2);
+  auto actual = toVeloxVector(size, data, decimalType, pool_.get());
+  std::vector<ShortDecimal> expectedData(
+      {ShortDecimal(1000),
+       ShortDecimal(2000),
+       ShortDecimal(5000),
+       ShortDecimal(2000),
+       ShortDecimal(1000),
+       ShortDecimal(5000)});
+
+  test::VectorMaker maker(pool_.get());
+  auto expectedFlatVector = maker.flatVector<ShortDecimal>(size, decimalType);
+
+  for (auto i = 0; i < expectedData.size(); ++i) {
+    expectedFlatVector->set(i, expectedData[i]);
+  }
+
+  for (auto i = 0; i < actual->size(); i++) {
+    ASSERT_TRUE(expectedFlatVector->equalValueAt(actual.get(), i, i));
+  }
+  delete duckDecimalType;
 }
 
 TEST_F(BaseDuckWrapperTest, dictConversion) {
