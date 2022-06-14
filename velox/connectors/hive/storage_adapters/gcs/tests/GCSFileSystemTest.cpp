@@ -30,7 +30,7 @@
 namespace bp = boost::process;
 namespace gc = google::cloud;
 namespace gcs = google::cloud::storage;
-constexpr char const* kTestBenchPort{"9000"}; // Use same as s3 port
+constexpr char const* kTestBenchPort{"9001"};
 
 const std::string kLoremIpsum =
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor"
