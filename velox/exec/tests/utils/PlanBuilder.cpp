@@ -25,6 +25,7 @@
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
 
@@ -53,6 +54,442 @@ typename TypeTraits<ToKind>::NativeType cast(const variant& v) {
   return util::Converter<ToKind, void, false>::cast(
       v.value<FromKind>(), nullOutput);
 }
+
+VectorPtr toConstant(
+    const core::TypedExprPtr& expr,
+    const std::shared_ptr<core::QueryCtx>& queryCtx) {
+  auto data = std::make_shared<RowVector>(
+      queryCtx->pool(), ROW({}, {}), nullptr, 1, std::vector<VectorPtr>{});
+  core::ExecCtx execCtx{queryCtx->pool(), queryCtx.get()};
+  ExprSet exprSet({expr}, &execCtx);
+  exec::EvalCtx evalCtx(&execCtx, &exprSet, data.get());
+
+  SelectivityVector rows(1);
+  std::vector<VectorPtr> results(1);
+  exprSet.eval(rows, &evalCtx, &results);
+
+  return results[0];
+}
+
+template <typename T>
+T singleValue(const VectorPtr& vector) {
+  auto simpleVector = vector->as<SimpleVector<T>>();
+  VELOX_CHECK_NOT_NULL(simpleVector);
+  return simpleVector->valueAt(0);
+}
+
+const core::FieldAccessTypedExpr* asField(
+    const core::ITypedExpr* expr,
+    int index) {
+  return dynamic_cast<const core::FieldAccessTypedExpr*>(
+      expr->inputs()[index].get());
+}
+
+const core::CallTypedExpr* asCall(const core::ITypedExpr* expr) {
+  return dynamic_cast<const core::CallTypedExpr*>(expr);
+}
+
+common::BigintRange* asBigintRange(std::unique_ptr<common::Filter>& filter) {
+  return dynamic_cast<common::BigintRange*>(filter.get());
+}
+
+common::BigintMultiRange* asBigintMultiRange(
+    std::unique_ptr<common::Filter>& filter) {
+  return dynamic_cast<common::BigintMultiRange*>(filter.get());
+}
+
+template <typename T, typename U>
+std::unique_ptr<T> asUniquePtr(std::unique_ptr<U> ptr) {
+  return std::unique_ptr<T>(static_cast<T*>(ptr.release()));
+}
+
+std::unique_ptr<common::Filter> makeOrFilter(
+    std::unique_ptr<common::Filter> a,
+    std::unique_ptr<common::Filter> b) {
+  if (asBigintRange(a) && asBigintRange(b)) {
+    return common::test::bigintOr(
+        asUniquePtr<common::BigintRange>(std::move(a)),
+        asUniquePtr<common::BigintRange>(std::move(b)));
+  }
+
+  if (asBigintRange(a) && asBigintMultiRange(b)) {
+    const auto& ranges = asBigintMultiRange(b)->ranges();
+    std::vector<std::unique_ptr<common::BigintRange>> newRanges;
+    newRanges.emplace_back(asUniquePtr<common::BigintRange>(std::move(a)));
+    for (const auto& range : ranges) {
+      newRanges.emplace_back(asUniquePtr<common::BigintRange>(range->clone()));
+    }
+
+    std::sort(
+        newRanges.begin(), newRanges.end(), [](const auto& a, const auto& b) {
+          return a->lower() < b->lower();
+        });
+
+    return std::make_unique<common::BigintMultiRange>(
+        std::move(newRanges), false);
+  }
+
+  if (asBigintMultiRange(a) && asBigintRange(b)) {
+    return makeOrFilter(std::move(b), std::move(a));
+  }
+
+  return common::test::orFilter(std::move(a), std::move(b));
+}
+
+std::unique_ptr<common::Filter> makeLessThanOrEqualFilter(
+    const core::TypedExprPtr& upperExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto upper = toConstant(upperExpr, queryCtx);
+  switch (upper->typeKind()) {
+    case TypeKind::TINYINT:
+      return common::test::lessThanOrEqual(singleValue<int8_t>(upper));
+    case TypeKind::SMALLINT:
+      return common::test::lessThanOrEqual(singleValue<int16_t>(upper));
+    case TypeKind::INTEGER:
+      return common::test::lessThanOrEqual(singleValue<int32_t>(upper));
+    case TypeKind::BIGINT:
+      return common::test::lessThanOrEqual(singleValue<int64_t>(upper));
+    case TypeKind::DOUBLE:
+      return common::test::lessThanOrEqualDouble(singleValue<double>(upper));
+    case TypeKind::REAL:
+      return common::test::lessThanOrEqualFloat(singleValue<float>(upper));
+    case TypeKind::VARCHAR:
+      return common::test::lessThanOrEqual(singleValue<StringView>(upper));
+    case TypeKind::DATE:
+      return common::test::lessThanOrEqual(singleValue<Date>(upper).days());
+    default:
+      VELOX_NYI(
+          "Unsupported value for less than or equals filter: {} <= {}",
+          upper->type()->toString(),
+          upper->toString(0));
+  }
+}
+
+std::unique_ptr<common::Filter> makeLessThanFilter(
+    const core::TypedExprPtr& upperExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto upper = toConstant(upperExpr, queryCtx);
+  switch (upper->typeKind()) {
+    case TypeKind::TINYINT:
+      return common::test::lessThan(singleValue<int8_t>(upper));
+    case TypeKind::SMALLINT:
+      return common::test::lessThan(singleValue<int16_t>(upper));
+    case TypeKind::INTEGER:
+      return common::test::lessThan(singleValue<int32_t>(upper));
+    case TypeKind::BIGINT:
+      return common::test::lessThan(singleValue<int64_t>(upper));
+    case TypeKind::DOUBLE:
+      return common::test::lessThanDouble(singleValue<double>(upper));
+    case TypeKind::REAL:
+      return common::test::lessThanFloat(singleValue<float>(upper));
+    case TypeKind::VARCHAR:
+      return common::test::lessThan(singleValue<StringView>(upper));
+    case TypeKind::DATE:
+      return common::test::lessThan(singleValue<Date>(upper).days());
+    default:
+      VELOX_NYI(
+          "Unsupported value for less than filter: {} <= {}",
+          upper->type()->toString(),
+          upper->toString(0));
+  }
+}
+
+std::unique_ptr<common::Filter> makeGreaterThanOrEqualFilter(
+    const core::TypedExprPtr& lowerExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto lower = toConstant(lowerExpr, queryCtx);
+  switch (lower->typeKind()) {
+    case TypeKind::TINYINT:
+      return common::test::greaterThanOrEqual(singleValue<int8_t>(lower));
+    case TypeKind::SMALLINT:
+      return common::test::greaterThanOrEqual(singleValue<int16_t>(lower));
+    case TypeKind::INTEGER:
+      return common::test::greaterThanOrEqual(singleValue<int32_t>(lower));
+    case TypeKind::BIGINT:
+      return common::test::greaterThanOrEqual(singleValue<int64_t>(lower));
+    case TypeKind::DOUBLE:
+      return common::test::greaterThanOrEqualDouble(singleValue<double>(lower));
+    case TypeKind::REAL:
+      return common::test::greaterThanOrEqualFloat(singleValue<float>(lower));
+    case TypeKind::VARCHAR:
+      return common::test::greaterThanOrEqual(singleValue<StringView>(lower));
+    case TypeKind::DATE:
+      return common::test::greaterThanOrEqual(singleValue<Date>(lower).days());
+    default:
+      VELOX_NYI(
+          "Unsupported value for greater than or equals filter: {} >= {}",
+          lower->type()->toString(),
+          lower->toString(0));
+  }
+}
+
+std::unique_ptr<common::Filter> makeGreaterThanFilter(
+    const core::TypedExprPtr& lowerExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto lower = toConstant(lowerExpr, queryCtx);
+  switch (lower->typeKind()) {
+    case TypeKind::TINYINT:
+      return common::test::greaterThan(singleValue<int8_t>(lower));
+    case TypeKind::SMALLINT:
+      return common::test::greaterThan(singleValue<int16_t>(lower));
+    case TypeKind::INTEGER:
+      return common::test::greaterThan(singleValue<int32_t>(lower));
+    case TypeKind::BIGINT:
+      return common::test::greaterThan(singleValue<int64_t>(lower));
+    case TypeKind::DOUBLE:
+      return common::test::greaterThanDouble(singleValue<double>(lower));
+    case TypeKind::REAL:
+      return common::test::greaterThanFloat(singleValue<float>(lower));
+    case TypeKind::VARCHAR:
+      return common::test::greaterThan(singleValue<StringView>(lower));
+    case TypeKind::DATE:
+      return common::test::greaterThan(singleValue<Date>(lower).days());
+    default:
+      VELOX_NYI(
+          "Unsupported value for greater than filter: {} > {}",
+          lower->type()->toString(),
+          lower->toString(0));
+  }
+}
+
+std::unique_ptr<common::Filter> makeEqualFilter(
+    const core::TypedExprPtr& valueExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto value = toConstant(valueExpr, queryCtx);
+  switch (value->typeKind()) {
+    case TypeKind::BOOLEAN:
+      return common::test::boolEqual(singleValue<bool>(value));
+    case TypeKind::TINYINT:
+      return common::test::equal(singleValue<int8_t>(value));
+    case TypeKind::SMALLINT:
+      return common::test::equal(singleValue<int16_t>(value));
+    case TypeKind::INTEGER:
+      return common::test::equal(singleValue<int32_t>(value));
+    case TypeKind::BIGINT:
+      return common::test::equal(singleValue<int64_t>(value));
+    case TypeKind::VARCHAR:
+      return common::test::equal(singleValue<StringView>(value));
+    case TypeKind::DATE:
+      return common::test::equal(singleValue<Date>(value).days());
+    default:
+      VELOX_NYI(
+          "Unsupported value for equals filter: {} = {}",
+          value->type()->toString(),
+          value->toString(0));
+  }
+}
+
+std::unique_ptr<common::Filter> makeNotEqualFilter(
+    const core::TypedExprPtr& valueExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto value = toConstant(valueExpr, queryCtx);
+
+  std::unique_ptr<common::Filter> lessThanFilter =
+      makeLessThanFilter(valueExpr);
+  std::unique_ptr<common::Filter> greaterThanFilter =
+      makeGreaterThanFilter(valueExpr);
+
+  if (value->typeKind() == TypeKind::TINYINT ||
+      value->typeKind() == TypeKind::SMALLINT ||
+      value->typeKind() == TypeKind::INTEGER ||
+      value->typeKind() == TypeKind::BIGINT) {
+    // Cast lessThanFilter and greaterThanFilter to
+    // std::unique_ptr<common::BigintRange>.
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    auto lessRange =
+        dynamic_cast<common::BigintRange*>(lessThanFilter.release());
+    VELOX_CHECK_NOT_NULL(lessRange, "Less-than range is null");
+    ranges.emplace_back(std::unique_ptr<common::BigintRange>(lessRange));
+
+    auto greaterRange =
+        dynamic_cast<common::BigintRange*>(greaterThanFilter.release());
+    VELOX_CHECK_NOT_NULL(greaterRange, "Greater-than range is null");
+    ranges.emplace_back(std::unique_ptr<common::BigintRange>(greaterRange));
+
+    return std::make_unique<common::BigintMultiRange>(std::move(ranges), false);
+  } else {
+    std::vector<std::unique_ptr<common::Filter>> filters;
+    filters.emplace_back(std::move(lessThanFilter));
+    filters.emplace_back(std::move(greaterThanFilter));
+    return std::make_unique<common::MultiRange>(
+        std::move(filters), false, false);
+  }
+}
+
+template <typename T>
+std::vector<int64_t>
+toInt64List(const VectorPtr& vector, vector_size_t start, vector_size_t size) {
+  auto ints = vector->as<SimpleVector<T>>();
+  std::vector<int64_t> values;
+  for (auto i = 0; i < size; i++) {
+    values.push_back(ints->valueAt(start + i));
+  }
+  return values;
+}
+
+std::unique_ptr<common::Filter> makeInFilter(const core::TypedExprPtr& expr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto vector = toConstant(expr, queryCtx);
+  VELOX_CHECK_EQ(vector->typeKind(), TypeKind::ARRAY);
+
+  auto arrayVector = vector->valueVector()->as<ArrayVector>();
+  auto index = vector->as<ConstantVector<ComplexType>>()->index();
+  auto offset = arrayVector->offsetAt(index);
+  auto size = arrayVector->sizeAt(index);
+  auto elements = arrayVector->elements();
+
+  auto elementType = arrayVector->type()->asArray().elementType();
+  switch (elementType->kind()) {
+    case TypeKind::TINYINT:
+      return common::test::in(toInt64List<int16_t>(elements, offset, size));
+    case TypeKind::SMALLINT:
+      return common::test::in(toInt64List<int16_t>(elements, offset, size));
+    case TypeKind::INTEGER:
+      return common::test::in(toInt64List<int32_t>(elements, offset, size));
+    case TypeKind::BIGINT:
+      return common::test::in(toInt64List<int64_t>(elements, offset, size));
+    case TypeKind::VARCHAR: {
+      auto stringElements = elements->as<SimpleVector<StringView>>();
+      std::vector<std::string> values;
+      for (auto i = 0; i < size; i++) {
+        values.push_back(stringElements->valueAt(offset + i).str());
+      }
+      return common::test::in(values);
+    }
+    default:
+      VELOX_NYI(
+          "Unsupported value type for 'in' filter: {}",
+          elementType->toString());
+  }
+}
+
+std::unique_ptr<common::Filter> makeBetweenFilter(
+    const core::TypedExprPtr& lowerExpr,
+    const core::TypedExprPtr& upperExpr) {
+  auto queryCtx = core::QueryCtx::createForTest();
+  auto lower = toConstant(lowerExpr, queryCtx);
+  auto upper = toConstant(upperExpr, queryCtx);
+  switch (lower->typeKind()) {
+    case TypeKind::BIGINT:
+      return common::test::between(
+          singleValue<int64_t>(lower), singleValue<int64_t>(upper));
+    case TypeKind::DOUBLE:
+      return common::test::betweenDouble(
+          singleValue<double>(lower), singleValue<double>(upper));
+    case TypeKind::REAL:
+      return common::test::betweenFloat(
+          singleValue<float>(lower), singleValue<float>(upper));
+    case TypeKind::DATE:
+      return common::test::between(
+          singleValue<Date>(lower).days(), singleValue<Date>(upper).days());
+    case TypeKind::VARCHAR:
+      return common::test::between(
+          singleValue<StringView>(lower), singleValue<StringView>(upper));
+    default:
+      VELOX_NYI(
+          "Unsupported value for 'between' filter: {} BETWEEN {} AND {}",
+          lower->type()->toString(),
+          lower->toString(0),
+          upper->toString(0));
+  }
+}
+
+std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+    const core::TypedExprPtr& expr) {
+  using common::Subfield;
+
+  if (auto call = asCall(expr.get())) {
+    if (call->name() == "or") {
+      auto left = toSubfieldFilter(call->inputs()[0]);
+      auto right = toSubfieldFilter(call->inputs()[1]);
+      VELOX_CHECK(left.first == right.first);
+      return {
+          std::move(left.first),
+          makeOrFilter(std::move(left.second), std::move(right.second))};
+    } else if (call->name() == "eq") {
+      if (auto field = asField(call, 0)) {
+        return {Subfield(field->name()), makeEqualFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "neq") {
+      if (auto field = asField(call, 0)) {
+        return {Subfield(field->name()), makeNotEqualFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "lte") {
+      if (auto field = asField(call, 0)) {
+        return {
+            Subfield(field->name()),
+            makeLessThanOrEqualFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "lt") {
+      if (auto field = asField(call, 0)) {
+        return {Subfield(field->name()), makeLessThanFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "gte") {
+      if (auto field = asField(call, 0)) {
+        return {
+            Subfield(field->name()),
+            makeGreaterThanOrEqualFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "gt") {
+      if (auto field = asField(call, 0)) {
+        return {
+            Subfield(field->name()), makeGreaterThanFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "between") {
+      if (auto field = asField(call, 0)) {
+        return {
+            Subfield(field->name()),
+            makeBetweenFilter(call->inputs()[1], call->inputs()[2])};
+      }
+    } else if (call->name() == "in") {
+      if (auto field = asField(call, 0)) {
+        return {Subfield(field->name()), makeInFilter(call->inputs()[1])};
+      }
+    } else if (call->name() == "is_null") {
+      if (auto field = asField(call, 0)) {
+        return {Subfield(field->name()), common::test::isNull()};
+      }
+    } else if (call->name() == "not") {
+      if (auto nestedCall = asCall(call->inputs()[0].get())) {
+        if (nestedCall->name() == "is_null") {
+          if (auto field = asField(nestedCall, 0)) {
+            return {Subfield(field->name()), common::test::isNotNull()};
+          }
+        }
+      }
+    }
+  }
+
+  VELOX_NYI("Unsupported expression for range filter: {}", expr->toString());
+}
+
+std::pair<
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
+    std::vector<core::SortOrder>>
+parseOrderByClauses(
+    const std::vector<std::string>& keys,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool) {
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  for (const auto& key : keys) {
+    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
+    auto typedExpr =
+        core::Expressions::inferTypes(untypedExpr, inputType, pool);
+
+    auto sortingKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        sortingKey,
+        "ORDER BY clause must use a column name, not an expression: {}",
+        key);
+    sortingKeys.emplace_back(sortingKey);
+    sortingOrders.emplace_back(sortOrder);
+  }
+
+  return {sortingKeys, sortingOrders};
+}
+
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -157,6 +594,44 @@ PlanBuilder& PlanBuilder::tableScan(
       assignmentsMap);
 }
 
+PlanBuilder& PlanBuilder::window(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& orderByKeys,
+    const std::vector<std::string>& windowFunctions) {
+  auto [sortingKeys, sortingOrders] =
+      parseOrderByClauses(orderByKeys, planNode_->outputType(), pool_);
+
+  std::vector<core::CallTypedExprPtr> windowFunctionExprs;
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<std::string> windowColumnNames;
+  core::WindowNode::Frame defaultFrame{
+      core::WindowNode::WindowType::kRange,
+      core::WindowNode::BoundType::kUnboundedPreceding,
+      nullptr,
+      core::WindowNode::BoundType::kCurrentRow,
+      nullptr};
+  std::vector<TypePtr> resultTypes;
+  auto windowExpressionsAndNames =
+      createWindowExpressionsAndNames(windowFunctions, resultTypes);
+  for (auto i = 0; i < windowExpressionsAndNames.expressions.size(); ++i) {
+    // TODO : Add parsing for the Window frame. This code assumes default frame.
+    windowNodeFunctions.push_back(
+        {std::move(windowExpressionsAndNames.expressions[i]),
+         defaultFrame,
+         true});
+  }
+
+  planNode_ = std::make_shared<core::WindowNode>(
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      sortingKeys,
+      sortingOrders,
+      windowExpressionsAndNames.names,
+      windowNodeFunctions,
+      planNode_);
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::values(
     const std::vector<RowVectorPtr>& values,
     bool parallelizable) {
@@ -172,35 +647,6 @@ PlanBuilder& PlanBuilder::exchange(const RowTypePtr& outputType) {
       std::make_shared<core::ExchangeNode>(nextPlanNodeId(), outputType);
   return *this;
 }
-
-namespace {
-std::pair<
-    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
-    std::vector<core::SortOrder>>
-parseOrderByClauses(
-    const std::vector<std::string>& keys,
-    const RowTypePtr& inputType,
-    memory::MemoryPool* pool) {
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
-  std::vector<core::SortOrder> sortingOrders;
-  for (const auto& key : keys) {
-    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
-    auto typedExpr =
-        core::Expressions::inferTypes(untypedExpr, inputType, pool);
-
-    auto sortingKey =
-        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
-    VELOX_CHECK_NOT_NULL(
-        sortingKey,
-        "ORDER BY clause must use a column name, not an expression: {}",
-        key);
-    sortingKeys.emplace_back(sortingKey);
-    sortingOrders.emplace_back(sortOrder);
-  }
-
-  return {sortingKeys, sortingOrders};
-}
-} // namespace
 
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
@@ -408,6 +854,99 @@ class AggregateTypeResolver {
   TypePtr resultType_;
 };
 
+std::string toString(
+    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
+std::string throwWindowFunctionDoesntExist(const std::string& name) {
+  std::stringstream error;
+  error << "Window function doesn't exist: " << name << ".";
+  if (exec::windowFunctions().empty()) {
+    error << " Registry of window functions is empty. "
+             "Make sure to register some window functions.";
+  }
+  VELOX_USER_FAIL(error.str());
+}
+
+std::string throwWindowFunctionSignatureNotSupported(
+    const std::string& name,
+    const std::vector<TypePtr>& types,
+    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+  std::stringstream error;
+  error << "Window function signature is not supported: "
+        << toString(name, types)
+        << ". Supported signatures: " << toString(signatures) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
+TypePtr resolveWindowType(
+    const std::string& windowFunctionName,
+    const std::vector<TypePtr>& inputTypes) {
+  if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
+    for (const auto& signature : signatures.value()) {
+      exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->returnType());
+      }
+    }
+
+    throwWindowFunctionSignatureNotSupported(
+        windowFunctionName, inputTypes, signatures.value());
+  }
+
+  throwWindowFunctionDoesntExist(windowFunctionName);
+  return nullptr;
+}
+
+// TODO : Add "nullOnFailure" logic
+class WindowTypeResolver {
+ public:
+  explicit WindowTypeResolver()
+      : previousHook_(core::Expressions::getResolverHook()) {
+    core::Expressions::setTypeResolverHook(
+        [&](const auto& inputs, const auto& expr, bool /* nullOnFailure */) {
+          return resolveType(inputs, expr);
+        });
+  }
+
+  ~WindowTypeResolver() {
+    core::Expressions::setTypeResolverHook(previousHook_);
+  }
+
+  void setResultType(const TypePtr& type) {
+    resultType_ = type;
+  }
+
+ private:
+  TypePtr resolveType(
+      const std::vector<core::TypedExprPtr>& inputs,
+      const std::shared_ptr<const core::CallExpr>& expr) const {
+    if (resultType_) {
+      return resultType_;
+    }
+
+    std::vector<TypePtr> types;
+    for (auto& input : inputs) {
+      types.push_back(input->type());
+    }
+
+    auto functionName = expr->getFunctionName();
+
+    return resolveWindowType(functionName, types);
+  }
+
+  const core::Expressions::TypeResolverHook previousHook_;
+  TypePtr resultType_;
+};
+
 } // namespace
 
 std::shared_ptr<core::PlanNode>
@@ -508,13 +1047,13 @@ PlanBuilder& PlanBuilder::finalAggregation() {
   return *this;
 }
 
-PlanBuilder::AggregateExpressionsAndNames
+PlanBuilder::ExpressionsAndNames
 PlanBuilder::createAggregateExpressionsAndNames(
     const std::vector<std::string>& aggregates,
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& resultTypes) {
   AggregateTypeResolver resolver(step);
-  std::vector<std::shared_ptr<const core::CallTypedExpr>> exprs;
+  std::vector<core::CallTypedExprPtr> exprs;
   std::vector<std::string> names;
   exprs.reserve(aggregates.size());
   names.reserve(aggregates.size());
@@ -525,6 +1064,36 @@ PlanBuilder::createAggregateExpressionsAndNames(
     }
 
     auto untypedExpr = duckdb::parseExpr(agg);
+
+    auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
+        inferTypes(untypedExpr));
+    exprs.emplace_back(expr);
+
+    if (untypedExpr->alias().has_value()) {
+      names.push_back(untypedExpr->alias().value());
+    } else {
+      names.push_back(fmt::format("a{}", i));
+    }
+  }
+
+  return {exprs, names};
+}
+
+PlanBuilder::ExpressionsAndNames PlanBuilder::createWindowExpressionsAndNames(
+    const std::vector<std::string>& windowFunctions,
+    const std::vector<TypePtr>& resultTypes) {
+  WindowTypeResolver windowResolver;
+  std::vector<core::CallTypedExprPtr> exprs;
+  std::vector<std::string> names;
+  exprs.reserve(windowFunctions.size());
+  names.reserve(windowFunctions.size());
+  for (auto i = 0; i < windowFunctions.size(); i++) {
+    auto& window = windowFunctions[i];
+    if (i < resultTypes.size()) {
+      windowResolver.setResultType(resultTypes[i]);
+    }
+
+    auto untypedExpr = duckdb::parseExpr(window);
 
     auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr));
@@ -577,7 +1146,7 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(groupingKeys),
       fields(preGroupedKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -600,7 +1169,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       fields(groupingKeys),
       fields(groupingKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
