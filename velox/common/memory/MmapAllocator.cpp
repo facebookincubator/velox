@@ -610,4 +610,172 @@ std::string MmapAllocator::toString() const {
   return out.str();
 }
 
+uint64_t Arena::roundBytes(uint64_t bytes) {
+  return bits::nextPowerOfTwo(bytes);
+}
+
+Arena::Arena(size_t capacityBytes) : byteSize_(capacityBytes) {
+  VELOX_CHECK(
+      byteSize_ % kMinGrainSizeBytes == 0,
+      "Arena must have a multiple of ",
+      kMinGrainSizeBytes,
+      " bytes capacity.");
+  void* ptr = mmap(
+      nullptr,
+      capacityBytes,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS,
+      -1,
+      0);
+  if (ptr == MAP_FAILED || !ptr) {
+    VELOX_FAIL(
+        "Could not allocate working memory"
+        "mmap failed with errno {}",
+        errno);
+  }
+  address_ = reinterpret_cast<uint8_t*>(ptr);
+  addFreeBlock(reinterpret_cast<uint64_t>(address_), byteSize_);
+}
+
+Arena::~Arena() {
+  munmap(address_, byteSize_);
+}
+
+void* Arena::allocate(uint64_t bytes) {
+  if (bytes == 0) {
+    return nullptr;
+  }
+  bytes = roundBytes(bytes);
+
+  // First match in the list that can give this many bytes
+  auto lookupItr = freeLookup_.lower_bound(bytes);
+  if (lookupItr == freeLookup_.end()) {
+    LOG(ERROR) << "Cannot find a free block that is large enough to allocate "
+               << bytes << " bytes. Current arena freeBytes " << freeBytes_
+               << " & lookup table" << freeLookupStr();
+    return nullptr;
+  }
+  freeBytes_ -= bytes;
+  auto address = *(lookupItr->second.begin());
+  auto curFreeBytes = lookupItr->first;
+  void* result = reinterpret_cast<void*>(address);
+  if (curFreeBytes == bytes) {
+    removeFreeBlock(address, curFreeBytes);
+    return result;
+  }
+  addFreeBlock(address + bytes, curFreeBytes - bytes);
+  removeFreeBlock(address, curFreeBytes);
+  return result;
+}
+
+void Arena::free(void* address, uint64_t bytes) {
+  if (address == nullptr || bytes == 0) {
+    return;
+  }
+  bytes = roundBytes(bytes);
+
+  madvise(address, bytes, MADV_DONTNEED);
+  freeBytes_ += bytes;
+  auto curAddr = reinterpret_cast<uint64_t>(address);
+
+  bool mergePrev = false;
+  bool mergeNext = false;
+
+  auto curItr = addFreeBlock(curAddr, bytes);
+  auto prevItr = freeList_.end();
+  uint64_t prevAddr;
+  uint64_t prevBytes;
+  if (curItr != freeList_.begin()) {
+    prevItr = std::prev(curItr);
+    prevAddr = prevItr->first;
+    prevBytes = prevItr->second;
+    auto prevEndAddr = prevAddr + prevBytes;
+    VELOX_CHECK_LE(
+        prevEndAddr,
+        curAddr,
+        "New free node (addr:{} size:{}) overlaps with previous free node (addr:{} size:{}) in free list",
+        curAddr,
+        bytes,
+        prevAddr,
+        prevBytes);
+    mergePrev = prevEndAddr == curAddr;
+  }
+
+  auto nextItr = std::next(curItr);
+  uint64_t nextAddr;
+  uint64_t nextBytes;
+  if (nextItr != freeList_.end()) {
+    nextAddr = nextItr->first;
+    nextBytes = nextItr->second;
+    auto curEndAddr = curAddr + bytes;
+    VELOX_CHECK_LE(
+        curEndAddr,
+        nextAddr,
+        "New free node (addr:{} size:{}) overlaps with next free node (addr:{} size:{}) in free list",
+        curAddr,
+        bytes,
+        nextAddr,
+        nextBytes);
+    mergeNext = curEndAddr == nextAddr;
+  }
+
+  if (!mergePrev && !mergeNext) {
+    return;
+  }
+  if (mergePrev) {
+    removeFreeBlock(curItr);
+    if (mergeNext) {
+      removeFromLookup(prevAddr, prevBytes);
+      auto newFreeSize = nextAddr - prevAddr + nextBytes;
+      freeList_[prevItr->first] = newFreeSize;
+      freeLookup_[newFreeSize].emplace(prevAddr);
+      removeFreeBlock(nextItr);
+      return;
+    }
+    removeFromLookup(prevAddr, prevBytes);
+    prevItr->second = curAddr - prevAddr + bytes;
+    freeLookup_[prevItr->second].emplace(prevAddr);
+    return;
+  }
+  if (mergeNext) {
+    removeFreeBlock(nextItr);
+    removeFromLookup(curAddr, bytes);
+    auto newFreeSize = nextAddr - curAddr + nextBytes;
+    freeList_[curItr->first] = newFreeSize;
+    freeLookup_[newFreeSize].emplace(curAddr);
+  }
+}
+
+void Arena::removeFromLookup(uint64_t addr, uint64_t bytes) {
+  freeLookup_[bytes].erase(addr);
+  if (freeLookup_[bytes].empty()) {
+    freeLookup_.erase(bytes);
+  }
+}
+
+std::map<uint64_t, uint64_t>::iterator Arena::addFreeBlock(
+    uint64_t address,
+    uint64_t bytes) {
+  auto insertResult = freeList_.emplace(address, bytes);
+  VELOX_CHECK(
+      insertResult.second,
+      "Trying to free a memory space that is already freed. Already in free list address {} size {}. Attempted to free address {} size {}",
+      address,
+      freeList_[address],
+      address,
+      bytes);
+  freeLookup_[bytes].emplace(address);
+  return insertResult.first;
+}
+
+void Arena::removeFreeBlock(uint64_t addr, uint64_t bytes) {
+  freeList_.erase(addr);
+  removeFromLookup(addr, bytes);
+}
+
+void Arena::removeFreeBlock(std::map<uint64_t, uint64_t>::iterator& itr) {
+  removeFromLookup(itr->first, itr->second);
+  freeList_.erase(itr);
+}
+
 } // namespace facebook::velox::memory
