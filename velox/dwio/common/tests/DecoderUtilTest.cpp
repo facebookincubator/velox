@@ -111,9 +111,8 @@ class DecoderUtilTest : public testing::Test {
     raw_vector<int32_t> testOuter;
     std::vector<uint64_t> testNulls(bits::nwords(rows.size()), ~0ULL);
     int32_t testSkip;
-    auto testAnyNull =
-        dwio::common::nonNullRowsFromSparse<isFilter, outputNulls>(
-            nulls, rows, testInner, testOuter, testNulls.data(), testSkip);
+    auto testAnyNull = nonNullRowsFromSparse<isFilter, outputNulls>(
+        nulls, rows, testInner, testOuter, testNulls.data(), testSkip);
 
     EXPECT_EQ(testAnyNull, referenceAnyNull);
     EXPECT_EQ(testSkip, referenceSkip);
@@ -212,7 +211,7 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
         numInput * sizeof(results[0]));
 
     NoHook noHook;
-    dwio::common::processFixedWidthRun<int32_t, false, true, false>(
+    processFixedWidthRun<int32_t, false, true, false>(
         rows,
         rowIndex,
         numInput,

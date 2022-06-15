@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 
 namespace facebook::velox {
@@ -226,4 +225,4 @@ inline void readRows(
       });
 }
 
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::dwrf

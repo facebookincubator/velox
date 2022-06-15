@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "folly/Range.h"
+#include <string>
 
 namespace facebook::velox::dwio::common {
 
