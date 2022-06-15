@@ -446,8 +446,7 @@ class AggregateTypeResolver {
   TypePtr resultType_;
 };
 
-std::string toString(
-    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
   std::stringstream out;
   for (auto i = 0; i < signatures.size(); ++i) {
     if (i > 0) {
@@ -471,7 +470,7 @@ std::string throwWindowFunctionDoesntExist(const std::string& name) {
 std::string throwWindowFunctionSignatureNotSupported(
     const std::string& name,
     const std::vector<TypePtr>& types,
-    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+    const std::vector<FunctionSignaturePtr>& signatures) {
   std::stringstream error;
   error << "Window function signature is not supported: "
         << toString(name, types)
