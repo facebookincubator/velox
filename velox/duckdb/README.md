@@ -3,7 +3,7 @@ used in tests as a reference in-memory database to check results of Velox
 evaluation for correctness. If you need to update it to pick up a bug fix or
 a new feature, first clone DuckDB git repository:
 
-    git clone https://github.com/cwida/duckdb.git
+    git clone https://github.com/duckdb/duckdb.git
     cd duckdb/
 
 Then generate the amalgamated .cpp and .hpp files:
@@ -15,6 +15,13 @@ Then copy the generated files to velox/external/duckdb:
 
     rsync -vrh src/amalgamation/duckdb.* <path/to/velox>/velox/external/duckdb/
     rsync -vrh src/amalgamation/parquet* <path/to/velox>/velox/external/duckdb/
+
+Then modify the include guard variables in parquet-amalgamation.hpp by prefixing them with  
+DUCKDB (This is to avoid conflicts with Thrift headers also included for the parquet reader) using the script velox/external/duckdb/modify_include_guards.sh as follows:
+
+    cd <path/to/velox>/velox/external/duckdb/
+    ./modify_include_guards.sh parquet-amalgamation.hpp
+    ./modify_include_guards.sh parquet-amalgamation.cpp
 
 We also maintain a copy of TPC-H dataset generators that need to be updated:
 
