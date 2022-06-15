@@ -17,10 +17,6 @@
 
 namespace facebook::velox::window {
 
-namespace registration {
-
 void registerWindowFunctions();
-
-} // namespace registration
 
 } // namespace facebook::velox::window

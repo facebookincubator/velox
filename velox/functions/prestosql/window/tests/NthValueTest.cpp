@@ -27,7 +27,7 @@ namespace {
 class NthValueTest : public OperatorTestBase {
  protected:
   void SetUp() {
-    velox::window::registration::registerWindowFunctions();
+    velox::window::registerWindowFunctions();
   }
 
   std::vector<RowVectorPtr> makeVectors(

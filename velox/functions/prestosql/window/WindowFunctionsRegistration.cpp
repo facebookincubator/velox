@@ -22,14 +22,10 @@ extern void registerRowNumber(const std::string& name);
 extern void registerRank(const std::string& name);
 extern void registerNthValue(const std::string& name);
 
-namespace registration {
-
 void registerWindowFunctions() {
   window::registerRowNumber("row_number");
   window::registerRank("rank");
   window::registerNthValue("nth_value");
 }
-
-} // namespace registration
 
 } // namespace facebook::velox::window
