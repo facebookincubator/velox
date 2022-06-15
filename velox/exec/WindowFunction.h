@@ -53,7 +53,14 @@ class WindowFunction {
   /// frame for the current row starts.
   /// @frameEnds : A buffer of the indexes of rows at which the frame
   /// for the current row ends.
-  /// @resultOffset
+  /// @resultOffset : This function is invoked multiple times for a
+  /// partition as output buffers are available for it. resultOffset
+  /// is the offset in the result buffer corresponding to the current
+  /// block of rows.
+  /// Note : It can be assumed that the function will be invoked for
+  /// rows of the partition in the order of the ORDER BY clause.
+  /// Subsequent calls to apply(...) will not work on a prior
+  /// portion of the partition.
   /// @result : The vector of result values to be populated.
   virtual void apply(
       const BufferPtr& peerGroupStarts,
