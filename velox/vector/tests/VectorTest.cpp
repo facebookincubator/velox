@@ -742,6 +742,21 @@ class VectorTest : public testing::Test {
 };
 
 template <>
+ShortDecimal VectorTest::testValue<ShortDecimal>(
+    int32_t i,
+    BufferPtr& /*space*/) {
+  return ShortDecimal(i);
+}
+
+template <>
+LongDecimal VectorTest::testValue<LongDecimal>(
+    int32_t i,
+    BufferPtr& /*space*/) {
+  int128_t value = buildInt128(i % 2 ? (i * -1) : i, 0xAAAAAAAAAAAAAAAA);
+  return LongDecimal(value);
+}
+
+template <>
 StringView VectorTest::testValue(int32_t n, BufferPtr& buffer) {
   if (!buffer || buffer->capacity() < 1000) {
     buffer = AlignedBuffer::allocate<char>(1000, pool_.get());
@@ -848,6 +863,11 @@ TEST_F(VectorTest, createOther) {
   testFlat<TypeKind::TIMESTAMP>(TIMESTAMP(), vectorSize_);
   testFlat<TypeKind::DATE>(DATE(), vectorSize_);
   testFlat<TypeKind::INTERVAL_DAY_TIME>(INTERVAL_DAY_TIME(), vectorSize_);
+}
+
+TEST_F(VectorTest, createDecimal) {
+  testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
+  testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1090,9 +1110,31 @@ TEST_F(VectorTest, wrapConstantInDictionary) {
 TEST_F(VectorTest, setFlatVectorStringView) {
   auto vector = BaseVector::create(VARCHAR(), 1, pool_.get());
   auto flat = vector->asFlatVector<StringView>();
-  flat->set(0, StringView("This string is too long to be inlined"));
-  EXPECT_EQ(
-      flat->valueAt(0).getString(), "This string is too long to be inlined");
+  EXPECT_EQ(0, flat->stringBuffers().size());
+
+  const std::string originalString = "This string is too long to be inlined";
+
+  flat->set(0, StringView(originalString));
+  EXPECT_EQ(flat->valueAt(0).getString(), originalString);
+  EXPECT_EQ(1, flat->stringBuffers().size());
+  EXPECT_EQ(originalString.size(), flat->stringBuffers()[0]->size());
+
+  // Make a copy of the vector. Verify that string buffer is shared.
+  auto copy = BaseVector::create(VARCHAR(), 1, pool_.get());
+  copy->copy(flat, 0, 0, 1);
+
+  auto flatCopy = copy->asFlatVector<StringView>();
+  EXPECT_EQ(1, flatCopy->stringBuffers().size());
+  EXPECT_EQ(flat->stringBuffers()[0].get(), flatCopy->stringBuffers()[0].get());
+
+  // Modify the string in the copy. Make sure it is written into a new string
+  // buffer.
+  const std::string newString = "A different string";
+  flatCopy->set(0, StringView(newString));
+  EXPECT_EQ(2, flatCopy->stringBuffers().size());
+  EXPECT_EQ(flat->stringBuffers()[0].get(), flatCopy->stringBuffers()[0].get());
+  EXPECT_EQ(originalString.size(), flatCopy->stringBuffers()[0]->size());
+  EXPECT_EQ(newString.size(), flatCopy->stringBuffers()[1]->size());
 }
 
 TEST_F(VectorTest, resizeAtConstruction) {

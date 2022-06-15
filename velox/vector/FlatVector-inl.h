@@ -331,8 +331,14 @@ template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
   auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
   if (values_ && !values_->unique()) {
-    BufferPtr newValues =
-        AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
+    BufferPtr newValues;
+    if constexpr (std::is_same<T, StringView>::value) {
+      // Make sure to initialize StringView values so they can be safely
+      // accessed.
+      newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, T());
+    } else {
+      newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
+    }
 
     auto rawNewValues = newValues->asMutable<T>();
     SelectivityVector rowsToCopy(BaseVector::length_);
@@ -340,7 +346,10 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
     rowsToCopy.applyToSelected(
         [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
 
-    // string buffers are append only, hence, safe to share
+    // Keep the string buffers even if multiply referenced. These are
+    // append-only and are written to in FlatVector::set which calls
+    // getBufferWithSpace which allocates a new buffer if existing buffers
+    // are multiply-referenced.
 
     // TODO Optimization: check and remove string buffers not referenced by
     // rowsToCopy
@@ -361,24 +370,6 @@ void FlatVector<T>::prepareForReuse() {
   if (values_ && !(values_->unique() && values_->isMutable())) {
     values_ = nullptr;
     rawValues_ = nullptr;
-  }
-
-  // Check string buffers. Keep at most one singly-referenced buffer if it is
-  // not too large.
-  if (!stringBuffers_.empty()) {
-    auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->unique() && firstBuffer->isMutable() &&
-        firstBuffer->capacity() <= kMaxStringSizeForReuse) {
-      firstBuffer->setSize(0);
-      stringBuffers_.resize(1);
-    } else {
-      stringBuffers_.clear();
-    }
-  }
-
-  // Clear ASCII-ness.
-  if constexpr (std::is_same_v<T, StringView>) {
-    SimpleVector<StringView>::invalidateIsAscii();
   }
 }
 } // namespace velox

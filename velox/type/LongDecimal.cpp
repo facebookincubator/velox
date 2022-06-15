@@ -14,22 +14,25 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-#include "velox/dwio/common/MemoryInputStream.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
+#include "velox/type/LongDecimal.h"
 
-using namespace facebook::velox::dwio::common;
-using namespace facebook::velox::dwrf;
+namespace std {
 
-TEST(TestBufferedInput, ZeroLengthStream) {
-  MemoryInputStream stream{nullptr, 0};
-  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
-  auto& pool = scopedPool->getPool();
-  BufferedInput input{stream, pool};
-  auto ret = input.enqueue({0, 0});
-  EXPECT_NE(ret, nullptr);
-  const void* buf = nullptr;
-  int32_t size = 1;
-  EXPECT_FALSE(ret->Next(&buf, &size));
-  EXPECT_EQ(size, 0);
+string to_string(facebook::velox::int128_t x) {
+  if (x == 0) {
+    return "0";
+  }
+  string ans;
+  bool negative = x < 0;
+  while (x != 0) {
+    ans += '0' + abs(static_cast<int>(x % 10));
+    x /= 10;
+  }
+  if (negative) {
+    ans += '-';
+  }
+  reverse(ans.begin(), ans.end());
+  return ans;
 }
+
+} // namespace std

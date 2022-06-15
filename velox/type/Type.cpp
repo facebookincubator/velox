@@ -121,6 +121,21 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
+void getDecimalPrecisionScale(const Type& type, int& precision, int& scale) {
+  VELOX_CHECK(isDecimalKind(type.kind()));
+  if (type.kind() == TypeKind::SHORT_DECIMAL) {
+    const ShortDecimalType* decimalType =
+        static_cast<const ShortDecimalType*>(&type);
+    precision = decimalType->precision();
+    scale = decimalType->scale();
+  } else {
+    const LongDecimalType* decimalType =
+        static_cast<const LongDecimalType*>(&type);
+    precision = decimalType->precision();
+    scale = decimalType->scale();
+  }
+}
+
 namespace {
 struct OpaqueSerdeRegistry {
   struct Entry {
@@ -196,7 +211,7 @@ const std::shared_ptr<const Type>& ArrayType::childAt(uint32_t idx) const {
 ArrayType::ArrayType(std::shared_ptr<const Type> child)
     : child_{std::move(child)} {}
 
-bool ArrayType::operator==(const Type& other) const {
+bool ArrayType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
@@ -228,6 +243,20 @@ std::string FixedSizeArrayType::toString() const {
   std::stringstream ss;
   ss << "FIXED_SIZE_ARRAY(" << len_ << ")<" << child_->toString() << ">";
   return ss.str();
+}
+
+bool FixedSizeArrayType::equivalent(const Type& other) const {
+  if (!ArrayType::equivalent(other)) {
+    return false;
+  }
+  auto otherFixedSizeArray = dynamic_cast<const FixedSizeArrayType*>(&other);
+  if (!otherFixedSizeArray) {
+    return false;
+  }
+  if (fixedElementsWidth() != otherFixedSizeArray->fixedElementsWidth()) {
+    return false;
+  }
+  return true;
 }
 
 const std::shared_ptr<const Type>& MapType::childAt(uint32_t idx) const {
@@ -329,7 +358,7 @@ std::optional<uint32_t> RowType::getChildIdxIfExists(
   return std::nullopt;
 }
 
-bool RowType::operator==(const Type& other) const {
+bool RowType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
@@ -341,11 +370,21 @@ bool RowType::operator==(const Type& other) const {
     return false;
   }
   for (size_t i = 0; i < size(); ++i) {
-    // todo: case sensitivity
-    if (nameOf(i) != otherTyped.nameOf(i)) {
+    if (*childAt(i) != *otherTyped.childAt(i)) {
       return false;
     }
-    if (*childAt(i) != *otherTyped.childAt(i)) {
+  }
+  return true;
+}
+
+bool RowType::operator==(const Type& other) const {
+  if (!this->equivalent(other)) {
+    return false;
+  }
+  auto& otherTyped = other.asRow();
+  for (size_t i = 0; i < size(); ++i) {
+    // todo: case sensitivity
+    if (nameOf(i) != otherTyped.nameOf(i)) {
       return false;
     }
   }
@@ -411,7 +450,7 @@ bool Type::kindEquals(const std::shared_ptr<const Type>& other) const {
   return true;
 }
 
-bool MapType::operator==(const Type& other) const {
+bool MapType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
@@ -422,7 +461,7 @@ bool MapType::operator==(const Type& other) const {
   return *keyType_ == *otherMap.keyType_ && *valueType_ == *otherMap.valueType_;
 }
 
-bool FunctionType::operator==(const Type& other) const {
+bool FunctionType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
@@ -450,11 +489,18 @@ folly::dynamic FunctionType::serialize() const {
 OpaqueType::OpaqueType(const std::type_index& typeIndex)
     : typeIndex_(typeIndex) {}
 
-bool OpaqueType::operator==(const Type& other) const {
+bool OpaqueType::equivalent(const Type& other) const {
   if (&other == this) {
     return true;
   }
   if (other.kind() != TypeKind::OPAQUE) {
+    return false;
+  }
+  return true;
+}
+
+bool OpaqueType::operator==(const Type& other) const {
+  if (!this->equivalent(other)) {
     return false;
   }
   auto& otherTyped = *reinterpret_cast<const OpaqueType*>(&other);

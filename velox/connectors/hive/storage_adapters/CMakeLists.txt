@@ -15,3 +15,6 @@
 if(VELOX_ENABLE_S3)
   add_subdirectory(s3fs)
 endif()
+if(VELOX_ENABLE_HDFS)
+  add_subdirectory(hdfs)
+endif()

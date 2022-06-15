@@ -698,6 +698,10 @@ class ExprCallable : public Callable {
         rows.end(),
         std::move(allVectors));
     EvalCtx lambdaCtx(context->execCtx(), context->exprSet(), row.get());
+    if (!context->isFinalSelection()) {
+      *lambdaCtx.mutableIsFinalSelection() = false;
+      *lambdaCtx.mutableFinalSelection() = context->finalSelection();
+    }
     body_->eval(rows, lambdaCtx, *result);
   }
 
@@ -708,6 +712,31 @@ class ExprCallable : public Callable {
 };
 
 } // namespace
+
+std::string LambdaExpr::toString(bool recursive) const {
+  if (!recursive) {
+    return name_;
+  }
+
+  std::string inputs;
+  for (int i = 0; i < signature_->size(); ++i) {
+    inputs.append(signature_->nameOf(i));
+    if (!inputs.empty()) {
+      inputs.append(", ");
+    }
+  }
+
+  for (const auto& field : capture_) {
+    inputs.append(field->field());
+    if (!inputs.empty()) {
+      inputs.append(", ");
+    }
+  }
+  inputs.pop_back();
+  inputs.pop_back();
+
+  return fmt::format("({}) -> {}", inputs, body_->toString());
+}
 
 void LambdaExpr::evalSpecialForm(
     const SelectivityVector& rows,

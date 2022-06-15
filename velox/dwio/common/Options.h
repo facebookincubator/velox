@@ -20,6 +20,7 @@
 #include <unordered_set>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/ErrorTolerance.h"
 #include "velox/dwio/common/InputStream.h"
@@ -27,7 +28,6 @@
 #include "velox/dwio/common/encryption/Encryption.h"
 
 namespace facebook::velox::dwrf {
-class BufferedInputFactory;
 class ColumnReaderFactory;
 } // namespace facebook::velox::dwrf
 
@@ -97,6 +97,12 @@ class RowReaderOptions {
   std::shared_ptr<velox::common::ScanSpec> scanSpec_ = nullptr;
   // Node id for map column to a list of keys to be projected as a struct.
   std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
+  // Optional executors to enable internal reader parallelism.
+  // 'decodingExecutor' allow parallelising the vector decoding process.
+  // 'ioExecutor' enables parallelism when performing file system read
+  // operations.
+  std::shared_ptr<folly::Executor> decodingExecutor_;
+  std::shared_ptr<folly::Executor> ioExecutor_;
 
  public:
   RowReaderOptions(const RowReaderOptions& other) {
@@ -251,6 +257,22 @@ class RowReaderOptions {
   getMapColumnIdAsStruct() const {
     return flatmapNodeIdAsStruct_;
   }
+
+  void setDecodingExecutor(std::shared_ptr<folly::Executor> executor) {
+    decodingExecutor_ = executor;
+  }
+
+  void setIOExecutor(std::shared_ptr<folly::Executor> executor) {
+    ioExecutor_ = executor;
+  }
+
+  const std::shared_ptr<folly::Executor>& getDecodingExecutor() const {
+    return decodingExecutor_;
+  }
+
+  const std::shared_ptr<folly::Executor>& getIOExecutor() const {
+    return ioExecutor_;
+  }
 };
 
 /**
@@ -302,7 +324,7 @@ class ReaderOptions {
   SerDeOptions serDeOptions;
   uint64_t fileNum;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
-  std::shared_ptr<velox::dwrf::BufferedInputFactory> bufferedInputFactory_;
+  std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
 
  public:
   static constexpr int32_t kDefaultLoadQuantum = 8 << 20; // 8MB
@@ -434,7 +456,7 @@ class ReaderOptions {
   }
 
   ReaderOptions& setBufferedInputFactory(
-      std::shared_ptr<velox::dwrf::BufferedInputFactory> factory) {
+      std::shared_ptr<BufferedInputFactory> factory) {
     bufferedInputFactory_ = factory;
     return *this;
   }
@@ -501,8 +523,7 @@ class ReaderOptions {
     return decrypterFactory_;
   }
 
-  std::shared_ptr<velox::dwrf::BufferedInputFactory> getBufferedInputFactory()
-      const {
+  std::shared_ptr<BufferedInputFactory> getBufferedInputFactory() const {
     return bufferedInputFactory_;
   }
 };

@@ -38,6 +38,7 @@
 #include "velox/common/serialization/Serializable.h"
 #include "velox/type/Date.h"
 #include "velox/type/IntervalDayTime.h"
+#include "velox/type/LongDecimal.h"
 #include "velox/type/ShortDecimal.h"
 #include "velox/type/StringView.h"
 #include "velox/type/Timestamp.h"
@@ -47,20 +48,20 @@ namespace facebook::velox {
 
 using int128_t = __int128_t;
 
-// Velox type system supports a small set of SQL-compatible composeable types:
-// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
-// VARBINARY, TIMESTAMP, DATE, INTERVAL_DAY_TIME, ARRAY, MAP, ROW
-//
-// This file has multiple C++ type definitions for each of these logical types.
-// These logical definitions each serve slightly different purposes.
-// These type sets are:
-// - TypeKind
-// - Type (RowType, BigIntType, ect.)
-// - Templated Types (Row<T...>, Map<K, V>, ...)
-//     C++ templated classes. Never instantiated, used to pass limited type
-//     information into template parameters.
+/// Velox type system supports a small set of SQL-compatible composeable types:
+/// BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
+/// VARBINARY, TIMESTAMP, DATE, INTERVAL_DAY_TIME, ARRAY, MAP, ROW
+///
+/// This file has multiple C++ type definitions for each of these logical types.
+/// These logical definitions each serve slightly different purposes.
+/// These type sets are:
+/// - TypeKind
+/// - Type (RowType, BigIntType, ect.)
+/// - Templated Types (Row<T...>, Map<K, V>, ...)
+///     C++ templated classes. Never instantiated, used to pass limited type
+///     information into template parameters.
 
-// Simple enum with type category.
+/// Simple enum with type category.
 enum class TypeKind : int8_t {
   BOOLEAN = 0,
   TINYINT = 1,
@@ -88,11 +89,11 @@ enum class TypeKind : int8_t {
   INVALID = 36
 };
 
-// Returns the typekind represented by the `name`. Throws if no match found.
+/// Returns the typekind represented by the `name`. Throws if no match found.
 TypeKind mapNameToTypeKind(const std::string& name);
 
-// Returns the typekind represented by the `name` and std::nullopt if no
-// match found.
+/// Returns the typekind represented by the `name` and std::nullopt if no
+/// match found.
 std::optional<TypeKind> tryMapNameToTypeKind(const std::string& name);
 
 std::string mapTypeKindToName(const TypeKind& typeKind);
@@ -309,7 +310,7 @@ struct TypeTraits<TypeKind::SHORT_DECIMAL> {
 template <>
 struct TypeTraits<TypeKind::LONG_DECIMAL> {
   using ImplType = DecimalType<TypeKind::LONG_DECIMAL>;
-  using NativeType = int128_t;
+  using NativeType = LongDecimal;
   using DeepCopiedType = NativeType;
   static constexpr uint32_t minSubTypes = 0;
   static constexpr uint32_t maxSubTypes = 0;
@@ -434,18 +435,18 @@ struct TypeFactory;
     return this->kind() == TypeKind::KIND;                                \
   }
 
-// Abstract class hierarchy. Instances of these classes carry full
-// information about types, including for example field names.
-// Can be instantiated by factory methods, like INTEGER()
-// or MAP(INTEGER(), BIGINT()).
-// Instances of these classes form a tree, and are immutable.
-// For example, MAP<INTEGER, ARRAY<BIGINT>> will form a tree like:
-//
-//             MapType
-//           /         \
-//   IntegerType    ArrayType
-//                     |
-//                   BigintType
+/// Abstract class hierarchy. Instances of these classes carry full
+/// information about types, including for example field names.
+/// Can be instantiated by factory methods, like INTEGER()
+/// or MAP(INTEGER(), BIGINT()).
+/// Instances of these classes form a tree, and are immutable.
+/// For example, MAP<INTEGER, ARRAY<BIGINT>> will form a tree like:
+///
+///             MapType
+///           /         \
+///   IntegerType    ArrayType
+///                     |
+///                   BigintType
 class Type : public Tree<const std::shared_ptr<const Type>>,
              public velox::ISerializable {
  public:
@@ -457,9 +458,9 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual ~Type() = default;
 
-  // this convenience method makes pattern matching easier. Rather than having
-  // to know the implementation type up front, just use as<TypeKind::MAP> (for
-  // example) to dynamically cast to the appropriate type.
+  /// This convenience method makes pattern matching easier. Rather than having
+  /// to know the implementation type up front, just use as<TypeKind::MAP> (for
+  /// example) to dynamically cast to the appropriate type.
   template <TypeKind KIND>
   const typename TypeTraits<KIND>::ImplType& as() const {
     return dynamic_cast<const typename TypeTraits<KIND>::ImplType&>(*this);
@@ -471,7 +472,19 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual std::string toString() const = 0;
 
-  virtual bool operator==(const Type& other) const = 0;
+  /// Types are weakly matched.
+  /// Examples: Two RowTypes are equivalent if the children types are
+  /// equivalent, but the children names could be different. Two OpaqueTypes are
+  /// equivalent if the typeKind matches, but the typeIndex could be different.
+  virtual bool equivalent(const Type& other) const = 0;
+
+  /// Types are strongly matched.
+  /// Examples: Two RowTypes are == if the children types and the children names
+  /// are same. Two OpaqueTypes are == if the typeKind and the typeIndex are
+  /// same. Same as equivalent for most types except for Row, Opaque types.
+  virtual bool operator==(const Type& other) const {
+    return this->equivalent(other);
+  }
 
   inline bool operator!=(const Type& other) const {
     return !(*this == other);
@@ -485,17 +498,17 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
   virtual bool isFixedWidth() const = 0;
 
-  // Used in FixedSizeArrayType to return the width constraint of the type.
+  /// Used in FixedSizeArrayType to return the width constraint of the type.
   virtual size_type fixedElementsWidth() const {
     throw std::invalid_argument{"unimplemented"};
   }
 
   static std::shared_ptr<const Type> create(const folly::dynamic& obj);
 
-  // recursive kind hashing (ignores names)
+  /// Recursive kind hashing (uses only TypeKind).
   size_t hashKind() const;
 
-  // recursive kind match (ignores names)
+  /// Recursive kind match (uses only TypeKind).
   bool kindEquals(const std::shared_ptr<const Type>& other) const;
 
   template <TypeKind KIND, typename... CHILDREN>
@@ -556,8 +569,49 @@ class TypeBase : public Type {
   }
 };
 
-using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
-using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
+template <TypeKind KIND>
+class ScalarType : public TypeBase<KIND> {
+ public:
+  uint32_t size() const override {
+    return 0;
+  }
+
+  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
+    throw std::invalid_argument{"scalar type has no children"};
+  }
+
+  std::string toString() const override {
+    return TypeTraits<KIND>::name;
+  }
+
+  size_t cppSizeInBytes() const override {
+    if (TypeTraits<KIND>::isFixedWidth) {
+      return sizeof(typename TypeTraits<KIND>::NativeType);
+    }
+    // TODO: velox throws here for non fixed width types.
+    return Type::cppSizeInBytes();
+  }
+
+  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
+
+  bool equivalent(const Type& other) const override {
+    return KIND == other.kind();
+  }
+
+  // TODO: velox implementation is in cpp
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "Type";
+    obj["type"] = TypeTraits<KIND>::name;
+    return obj;
+  }
+};
+
+template <TypeKind KIND>
+const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
+  static const auto instance = std::make_shared<const ScalarType<KIND>>();
+  return instance;
+}
 
 /// This class represents the fixed-point numbers.
 /// The parameter "precision" represents the number of digits the
@@ -577,7 +631,7 @@ class DecimalType : public ScalarType<KIND> {
     VELOX_CHECK_LE(precision, kMaxPrecision);
   }
 
-  inline bool operator==(const Type& otherDecimal) const override {
+  inline bool equivalent(const Type& otherDecimal) const override {
     if (this->kind() != otherDecimal.kind()) {
       return false;
     }
@@ -611,49 +665,20 @@ class DecimalType : public ScalarType<KIND> {
   const uint8_t scale_;
 };
 
-template <TypeKind KIND>
-class ScalarType : public TypeBase<KIND> {
- public:
-  uint32_t size() const override {
-    return 0;
-  }
+using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
+using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 
-  const std::shared_ptr<const Type>& childAt(uint32_t) const override {
-    throw std::invalid_argument{"scalar type has no children"};
-  }
-
-  std::string toString() const override {
-    return TypeTraits<KIND>::name;
-  }
-
-  size_t cppSizeInBytes() const override {
-    if (TypeTraits<KIND>::isFixedWidth) {
-      return sizeof(typename TypeTraits<KIND>::NativeType);
-    }
-    // TODO: velox throws here for non fixed width types.
-    return Type::cppSizeInBytes();
-  }
-
-  FOLLY_NOINLINE static const std::shared_ptr<const ScalarType<KIND>> create();
-
-  bool operator==(const Type& other) const override {
-    return KIND == other.kind();
-  }
-
-  // TODO: velox implementation is in cpp
-  folly::dynamic serialize() const override {
-    folly::dynamic obj = folly::dynamic::object;
-    obj["name"] = "Type";
-    obj["type"] = TypeTraits<KIND>::name;
-    return obj;
-  }
-};
-
-template <TypeKind KIND>
-const std::shared_ptr<const ScalarType<KIND>> ScalarType<KIND>::create() {
-  static const auto instance = std::make_shared<const ScalarType<KIND>>();
-  return instance;
+inline bool isDecimalKind(TypeKind typeKind) {
+  return (
+      typeKind == TypeKind::SHORT_DECIMAL ||
+      typeKind == TypeKind::LONG_DECIMAL);
 }
+
+inline bool isDecimalName(const std::string& typeName) {
+  return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
+}
+
+void getDecimalPrecisionScale(const Type& type, int& precision, int& scale);
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
@@ -675,7 +700,7 @@ class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
     return 0;
   }
 
-  bool operator==(const Type& other) const override {
+  bool equivalent(const Type& other) const override {
     return TypeKind::UNKNOWN == other.kind();
   }
 
@@ -703,7 +728,7 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
 
   std::string toString() const override;
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   folly::dynamic serialize() const override;
 
@@ -711,13 +736,13 @@ class ArrayType : public TypeBase<TypeKind::ARRAY> {
   std::shared_ptr<const Type> child_;
 };
 
-// FixedSizeArrayType implements an Array that is constrained to
-// always be a fixed size (width). When passing this type on the wire,
-// a FixedSizeArrayType may change into a general variable width array
-// as Presto/Spark do not have a notion of fixed size array.
-//
-// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
-// used.
+/// FixedSizeArrayType implements an Array that is constrained to
+/// always be a fixed size (width). When passing this type on the wire,
+/// a FixedSizeArrayType may change into a general variable width array
+/// as Presto/Spark do not have a notion of fixed size array.
+///
+/// Anywhere an ArrayType can be used, a FixedSizeArrayType can be
+/// used.
 class FixedSizeArrayType : public ArrayType {
  public:
   explicit FixedSizeArrayType(size_type len, std::shared_ptr<const Type> child);
@@ -733,6 +758,8 @@ class FixedSizeArrayType : public ArrayType {
   const char* kindName() const override {
     return "FIXED_SIZE_ARRAY";
   }
+
+  bool equivalent(const Type& other) const override;
 
   std::string toString() const override;
 
@@ -762,7 +789,7 @@ class MapType : public TypeBase<TypeKind::MAP> {
 
   const std::shared_ptr<const Type>& childAt(uint32_t idx) const override;
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   folly::dynamic serialize() const override;
 
@@ -798,6 +825,8 @@ class RowType : public TypeBase<TypeKind::ROW> {
     return names_.at(idx);
   }
 
+  bool equivalent(const Type& other) const override;
+
   bool operator==(const Type& other) const override;
 
   std::string toString() const override;
@@ -825,8 +854,8 @@ inline RowTypePtr asRowType(const TypePtr& type) {
   return std::dynamic_pointer_cast<const RowType>(type);
 }
 
-// Represents a lambda function. The children are the argument types
-// followed by the return value type.
+/// Represents a lambda function. The children are the argument types
+/// followed by the return value type.
 class FunctionType : public TypeBase<TypeKind::FUNCTION> {
  public:
   FunctionType(
@@ -847,7 +876,7 @@ class FunctionType : public TypeBase<TypeKind::FUNCTION> {
     return children_;
   }
 
-  bool operator==(const Type& other) const override;
+  bool equivalent(const Type& other) const override;
 
   std::string toString() const override;
 
@@ -884,6 +913,8 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
 
   std::string toString() const override;
 
+  bool equivalent(const Type& other) const override;
+
   bool operator==(const Type& other) const override;
 
   const std::type_index& typeIndex() const {
@@ -891,34 +922,34 @@ class OpaqueType : public TypeBase<TypeKind::OPAQUE> {
   }
 
   folly::dynamic serialize() const override;
-  // In special cases specific OpaqueTypes might want to serialize additional
-  // metadata. In those cases we need to deserialize it back. Since
-  // OpaqueType::create<T>() returns canonical type for T without metadata, we
-  // allow to create new instance here or return nullptr if the same one can be
-  // used. Note that it's about deserialization of type itself, DeserializeFunc
-  // above is about deserializing instances of the type. It's implemented as a
-  // virtual member instead of a standalone registry just for convenience.
+  /// In special cases specific OpaqueTypes might want to serialize additional
+  /// metadata. In those cases we need to deserialize it back. Since
+  /// OpaqueType::create<T>() returns canonical type for T without metadata, we
+  /// allow to create new instance here or return nullptr if the same one can be
+  /// used. Note that it's about deserialization of type itself, DeserializeFunc
+  /// above is about deserializing instances of the type. It's implemented as a
+  /// virtual member instead of a standalone registry just for convenience.
   virtual std::shared_ptr<const OpaqueType> deserializeExtra(
       const folly::dynamic& json) const;
 
-  // Function for converting std::shared_ptr<T> into a string. Always returns
-  // non-nullptr function or throws if not function has been registered.
+  /// Function for converting std::shared_ptr<T> into a string. Always returns
+  /// non-nullptr function or throws if not function has been registered.
   SerializeFunc<void> getSerializeFunc() const;
   DeserializeFunc<void> getDeserializeFunc() const;
 
   template <typename Class>
   FOLLY_NOINLINE static std::shared_ptr<const OpaqueType> create() {
-    // static vars in templates are dangerous across DSOs, but it's just a
-    // performance optimization. Comparison looks at type_index anyway.
+    /// static vars in templates are dangerous across DSOs, but it's just a
+    /// performance optimization. Comparison looks at type_index anyway.
     static const auto instance =
         std::make_shared<const OpaqueType>(std::type_index(typeid(Class)));
     return instance;
   }
 
-  // This function currently doesn't do synchronization neither with reads
-  // or writes, so it's caller's responsibility to not invoke it concurrently
-  // with other Velox code. Usually it'd be invoked at static initialization
-  // time. It can be changed in the future if it becomes a problem.
+  /// This function currently doesn't do synchronization neither with reads
+  /// or writes, so it's caller's responsibility to not invoke it concurrently
+  /// with other Velox code. Usually it'd be invoked at static initialization
+  /// time. It can be changed in the future if it becomes a problem.
   template <typename T>
   FOLLY_NOINLINE static void registerSerialization(
       const std::string& persistentName,
@@ -968,11 +999,11 @@ using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 using DateType = ScalarType<TypeKind::DATE>;
 using IntervalDayTimeType = ScalarType<TypeKind::INTERVAL_DAY_TIME>;
 
-// Used as T for SimpleVector subclasses that wrap another vector when
-// the wrapped vector is of a complex type. Applies to
-// DictionaryVector, SequenceVector and ConstantVector. This must have
-// a size different from any of the scalar data type sizes to enable
-// run time checking with 'elementSize_'.
+/// Used as T for SimpleVector subclasses that wrap another vector when
+/// the wrapped vector is of a complex type. Applies to
+/// DictionaryVector, SequenceVector and ConstantVector. This must have
+/// a size different from any of the scalar data type sizes to enable
+/// run time checking with 'elementSize_'.
 struct ComplexType {
   TypePtr create() {
     VELOX_NYI();
@@ -1184,6 +1215,12 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL) {     \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::SHORT_DECIMAL>(        \
+          __VA_ARGS__);                                                        \
+    } else if ((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL) {      \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::LONG_DECIMAL>(         \
+          __VA_ARGS__);                                                        \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
@@ -1262,6 +1299,12 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else if (((typeKind) == ::facebook::velox::TypeKind::SHORT_DECIMAL)) {   \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::SHORT_DECIMAL>(        \
+          __VA_ARGS__);                                                        \
+    } else if (((typeKind) == ::facebook::velox::TypeKind::LONG_DECIMAL)) {    \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::LONG_DECIMAL>(         \
+          __VA_ARGS__);                                                        \
     } else {                                                                   \
       return VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(                                 \
           TEMPLATE_FUNC, , typeKind, __VA_ARGS__);                             \
@@ -1394,7 +1437,7 @@ std::shared_ptr<const Type> createType(
         std::string(TypeTraits<KIND>::name) +
         " primitive type takes no childern"};
   }
-  VELOX_USER_CHECK(TypeTraits<KIND>::isPrimitiveType);
+  static_assert(TypeTraits<KIND>::isPrimitiveType);
   return ScalarType<KIND>::create();
 }
 
@@ -1640,6 +1683,20 @@ struct CppToType<DynamicRow> : public TypeTraits<TypeKind::ROW> {
 };
 
 template <>
+struct CppToType<ShortDecimal> : public TypeTraits<TypeKind::SHORT_DECIMAL> {
+  static std::shared_ptr<const Type> create() {
+    throw std::logic_error{"can't determine exact type for ShortDecimal"};
+  }
+};
+
+template <>
+struct CppToType<LongDecimal> : public TypeTraits<TypeKind::LONG_DECIMAL> {
+  static std::shared_ptr<const Type> create() {
+    throw std::logic_error{"can't determine exact type for LongDecimal"};
+  }
+};
+
+template <>
 struct CppToType<UnknownValue> : public CppToTypeBase<TypeKind::UNKNOWN> {};
 
 // todo: remaining cpp2type
@@ -1667,6 +1724,16 @@ inline Timestamp to(const std::string& value) {
 }
 
 template <>
+inline ShortDecimal to(const std::string& value) {
+  VELOX_UNSUPPORTED();
+}
+
+template <>
+inline LongDecimal to(const std::string& value) {
+  VELOX_UNSUPPORTED();
+}
+
+template <>
 inline UnknownValue to(const std::string& /* value */) {
   return UnknownValue();
 }
@@ -1674,6 +1741,20 @@ inline UnknownValue to(const std::string& /* value */) {
 template <>
 inline std::string to(const Timestamp& value) {
   return value.toString();
+}
+
+template <>
+inline std::string to(const ShortDecimal& value) {
+  // ShortDecimal doesn't have precision and scale information to
+  // be serialized into string.
+  VELOX_UNSUPPORTED();
+}
+
+template <>
+inline std::string to(const LongDecimal& value) {
+  // LongDecimal doesn't have precision and scale information to
+  // be serialized into string.
+  VELOX_UNSUPPORTED();
 }
 
 template <>
@@ -1828,7 +1909,7 @@ class FormatValue<facebook::velox::TypeKind> {
   facebook::velox::TypeKind type_;
 };
 
-// Prints all types derived from `velox::Type`.
+/// Prints all types derived from `velox::Type`.
 template <typename T>
 class FormatValue<
     std::shared_ptr<T>,

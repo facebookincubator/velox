@@ -343,12 +343,13 @@ class PlanBuilder {
   /// types of aggregate expressions.
   PlanBuilder& singleAggregation(
       const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates) {
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& masks = {}) {
     return aggregation(
         groupingKeys,
         {},
         aggregates,
-        {},
+        masks,
         core::AggregationNode::Step::kSingle,
         false);
   }
@@ -436,6 +437,13 @@ class PlanBuilder {
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
       const std::vector<TypePtr>& resultTypes = {});
+
+  /// Add a GroupIdNode using the specified grouping sets, aggregation inputs
+  /// and a groupId column name.
+  PlanBuilder& groupId(
+      const std::vector<std::vector<std::string>>& groupingSets,
+      const std::vector<std::string>& aggregationInputs,
+      std::string groupIdName = "group_id");
 
   /// Add a LocalMergeNode using specified ORDER BY clauses.
   ///

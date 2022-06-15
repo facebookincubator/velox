@@ -15,7 +15,8 @@
 add_library(velox_expression_functions FunctionRegistry.h FunctionSignature.cpp
                                        SignatureBinder.cpp)
 
-target_link_libraries(velox_expression_functions velox_common_base)
+target_link_libraries(velox_expression_functions velox_common_base
+                      velox_type_calculation)
 
 add_library(
   velox_expression
@@ -25,11 +26,14 @@ add_library(
   EvalCtx.cpp
   Expr.cpp
   ExprCompiler.cpp
+  ExprToSubfieldFilter.cpp
   VectorFunction.cpp
   SimpleFunctionRegistry.cpp)
 
 target_link_libraries(velox_expression velox_core velox_vector
                       velox_common_base velox_expression_functions)
+
+add_subdirectory(type_calculation)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

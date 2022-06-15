@@ -14,20 +14,21 @@
  * limitations under the License.
  */
 
-#pragma once
+#include <gtest/gtest.h>
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/MemoryInputStream.h"
 
-#include "velox/dwio/dwrf/common/Adaptor.h"
+using namespace facebook::velox::dwio::common;
 
-DIAGNOSTIC_PUSH
-
-DIAGNOSTIC_IGNORE("-Wdeprecated")
-DIAGNOSTIC_IGNORE("-Wpadded")
-DIAGNOSTIC_IGNORE("-Wunused-parameter")
-
-#ifdef __clang__
-DIAGNOSTIC_IGNORE("-Wreserved-id-macro")
-#endif
-
-#include <google/protobuf/io/zero_copy_stream.h>
-
-DIAGNOSTIC_POP
+TEST(TestBufferedInput, ZeroLengthStream) {
+  MemoryInputStream stream{nullptr, 0};
+  auto scopedPool = facebook::velox::memory::getDefaultScopedMemoryPool();
+  auto& pool = scopedPool->getPool();
+  BufferedInput input{stream, pool};
+  auto ret = input.enqueue({0, 0});
+  EXPECT_NE(ret, nullptr);
+  const void* buf = nullptr;
+  int32_t size = 1;
+  EXPECT_FALSE(ret->Next(&buf, &size));
+  EXPECT_EQ(size, 0);
+}
