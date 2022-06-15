@@ -82,33 +82,6 @@ parseOrderByClauses(
   return {sortingKeys, sortingOrders};
 }
 
-std::pair<
-    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
-    std::vector<core::SortOrder>>
-parseOrderByClauses(
-    const std::vector<std::string>& keys,
-    const RowTypePtr& inputType,
-    memory::MemoryPool* pool) {
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
-  std::vector<core::SortOrder> sortingOrders;
-  for (const auto& key : keys) {
-    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
-    auto typedExpr =
-        core::Expressions::inferTypes(untypedExpr, inputType, pool);
-
-    auto sortingKey =
-        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
-    VELOX_CHECK_NOT_NULL(
-        sortingKey,
-        "ORDER BY clause must use a column name, not an expression: {}",
-        key);
-    sortingKeys.emplace_back(sortingKey);
-    sortingOrders.emplace_back(sortOrder);
-  }
-
-  return {sortingKeys, sortingOrders};
-}
-
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(
@@ -473,8 +446,7 @@ class AggregateTypeResolver {
   TypePtr resultType_;
 };
 
-std::string toString(
-    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
   std::stringstream out;
   for (auto i = 0; i < signatures.size(); ++i) {
     if (i > 0) {
@@ -498,7 +470,7 @@ std::string throwWindowFunctionDoesntExist(const std::string& name) {
 std::string throwWindowFunctionSignatureNotSupported(
     const std::string& name,
     const std::vector<TypePtr>& types,
-    const std::vector<std::shared_ptr<FunctionSignature>>& signatures) {
+    const std::vector<FunctionSignaturePtr>& signatures) {
   std::stringstream error;
   error << "Window function signature is not supported: "
         << toString(name, types)
