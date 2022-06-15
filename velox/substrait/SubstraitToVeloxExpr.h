@@ -69,6 +69,11 @@ class SubstraitVeloxExprConverter {
       const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
       const TypePtr& outputType);
 
+  /// Create expression for extract.
+  std::shared_ptr<const core::ITypedExpr> toExtractExpr(
+      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
+      const TypePtr& outputType);
+
   /// Used to convert Substrait Literal into Velox Expression.
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
       const ::substrait::Expression::Literal& substraitLit);

@@ -27,6 +27,9 @@ void registerSimpleFunctions() {
       {"to_unixtime"});
   registerFunction<FromUnixtimeFunction, Timestamp, double>({"from_unixtime"});
 
+  registerFunction<YearFunction, int32_t, Timestamp>({"year"});
+  registerFunction<YearFunction, int32_t, Date>({"year"});
+  registerFunction<YearFunction, int32_t, TimestampWithTimezone>({"year"});
   registerFunction<YearFunction, int64_t, Timestamp>({"year"});
   registerFunction<YearFunction, int64_t, Date>({"year"});
   registerFunction<YearFunction, int64_t, TimestampWithTimezone>({"year"});

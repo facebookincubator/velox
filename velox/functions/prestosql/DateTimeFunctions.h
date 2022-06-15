@@ -202,22 +202,28 @@ struct YearFunction : public InitSessionTimezone<T>,
                       public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE int64_t getYear(const std::tm& time) {
+  FOLLY_ALWAYS_INLINE int32_t getYear(const std::tm& time) {
     return 1900 + time.tm_year;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE
+  void call(
+      TInput& result,
       const arg_type<Timestamp>& timestamp) {
     result = getYear(getDateTime(timestamp, this->timeZone_));
   }
 
-  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE
+  void call(TInput& result, const arg_type<Date>& date) {
     result = getYear(getDateTime(date));
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE
+  void call(
+      TInput& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
     auto timestamp = this->toTimestamp(timestampWithTimezone);
     result = getYear(getDateTime(timestamp, nullptr));

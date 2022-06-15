@@ -247,10 +247,12 @@ class ArrowStreamNode : public PlanNode {
       const PlanNodeId& id,
       const RowTypePtr& outputType,
       std::shared_ptr<ArrowArrayStream> arrowStream,
+      memory::MemoryPool* pool,
       bool parallelizable = false)
       : PlanNode(id),
         outputType_(outputType),
         arrowStream_(arrowStream),
+        pool_(pool),
         parallelizable_(parallelizable) {
     VELOX_CHECK(arrowStream != nullptr);
   }
@@ -274,6 +276,11 @@ class ArrowStreamNode : public PlanNode {
     return arrowStream_;
   }
 
+
+  memory::MemoryPool* memoryPool() const {
+    return pool_;
+  }
+
   std::string_view name() const override {
     return "ArrowStream";
   }
@@ -283,6 +290,7 @@ class ArrowStreamNode : public PlanNode {
 
   const RowTypePtr outputType_;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
+  memory::MemoryPool* pool_;
   const bool parallelizable_;
 };
 

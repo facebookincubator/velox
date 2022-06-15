@@ -48,6 +48,7 @@ class ArrowStream : public SourceOperator {
   bool closed_ = false;
   RowVectorPtr rowVector_;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
+  memory::MemoryPool* pool_;
 
   // For calls from destructor
   bool isFinished0();

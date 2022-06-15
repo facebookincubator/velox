@@ -50,6 +50,7 @@ class SubstraitVeloxPlanConverter {
       bool validationMode = false)
       : pool_(pool), validationMode_(validationMode) {}
 
+  /// This class is used to convert the Substrait plan into Velox plan.
   /// Used to convert Substrait JoinRel into Velox PlanNode.
   core::PlanNodePtr toVeloxPlan(const ::substrait::JoinRel& sJoin);
 
@@ -116,7 +117,8 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::Plan& sPlan);
 
   /// Used to construct the function map between the index
-  /// and the Substrait function name.
+  /// and the Substrait function name. Initialize the expression
+  /// converter based on the constructed function map.
   void constructFuncMap(const ::substrait::Plan& sPlan);
 
   /// Will return the function map used by this plan converter.
@@ -397,24 +399,16 @@ class SubstraitVeloxPlanConverter {
     return toVeloxPlan(rel.input());
   }
 
-  /// The Partition index.
-  u_int32_t partitionIndex_;
-
-  /// The file paths to be scanned.
-  std::vector<std::string> paths_;
-
-  /// The file starts in the scan.
-  std::vector<u_int64_t> starts_;
-
-  /// The lengths to be scanned.
-  std::vector<u_int64_t> lengths_;
-
   /// The unique identification for each PlanNode.
   int planNodeId_ = 0;
 
   /// The map storing the relations between the function id and the function
   /// name. Will be constructed based on the Substrait representation.
   std::unordered_map<uint64_t, std::string> functionMap_;
+
+  /// The map storing the split stats for each PlanNode.
+  std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
+      splitInfoMap_;
 
   /// The map storing the pre-built plan nodes which can be accessed through
   /// index. This map is only used when the computation of a Substrait plan
@@ -426,19 +420,16 @@ class SubstraitVeloxPlanConverter {
   /// recognizable representations.
   std::shared_ptr<SubstraitParser> subParser_{
       std::make_shared<SubstraitParser>()};
-  /// Mapping from leaf plan node ID to splits.
-  std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
-      splitInfoMap_;
+
+  /// The Expression converter used to convert Substrait representations into
+  /// Velox expressions.
+  std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
 
   /// Memory pool.
   memory::MemoryPool* pool_;
 
   /// A flag used to specify validation.
   bool validationMode_ = false;
-
-  /// The Expression converter used to convert Substrait representations into
-  /// Velox expressions.
-  std::shared_ptr<SubstraitVeloxExprConverter> exprConverter_;
 };
 
 } // namespace facebook::velox::substrait

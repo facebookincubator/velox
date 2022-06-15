@@ -28,6 +28,7 @@ ArrowStream::ArrowStream(
           arrowStream->id(),
           "Arrow Stream") {
   arrowStream_ = arrowStream->arrowStream();
+  pool_ = arrowStream->memoryPool();
 }
 
 ArrowStream::~ArrowStream() {
@@ -54,7 +55,7 @@ RowVectorPtr ArrowStream::getOutput() {
   }
   // Convert Arrow data into RowVector.
   rowVector_ = std::dynamic_pointer_cast<RowVector>(
-      facebook::velox::importFromArrowAsViewer(arrowSchema, arrowArray));
+      facebook::velox::importFromArrowAsOwner(arrowSchema, arrowArray, pool_));
   return rowVector_;
 }
 
