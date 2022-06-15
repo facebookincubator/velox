@@ -18,4 +18,5 @@ endif()
 add_library(velox_window OBJECT NthValue.cpp Rank.cpp RowNumber.cpp
                                 WindowFunctionsRegistration.cpp)
 
-target_link_libraries(velox_window velox_exec ${FOLLY_WITH_DEPENDENCIES})
+target_link_libraries(velox_window velox_buffer velox_exec
+                      ${FOLLY_WITH_DEPENDENCIES})
