@@ -85,7 +85,7 @@ Window::Window(
   allKeyInfo_.insert(
       allKeyInfo_.cend(), sortKeyInfo_.begin(), sortKeyInfo_.end());
 
-  auto fieldTypeToChannel =
+  auto fieldArgToChannel =
       [&](const core::TypedExprPtr arg) -> std::optional<ChannelIndex> {
     if (arg) {
       std::optional<ChannelIndex> argChannel =
@@ -105,14 +105,14 @@ Window::Window(
     argColumns.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       argTypes.push_back(arg->type());
-      argColumns.push_back(data_->columnAt(fieldTypeToChannel(arg).value()));
+      argColumns.push_back(data_->columnAt(fieldArgToChannel(arg).value()));
     }
-    const auto& resultType = windowNodeFunction.functionCall->type();
+
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(),
         argColumns,
         argTypes,
-        resultType,
+        windowNodeFunction.functionCall->type(),
         operatorCtx_->pool()));
 
     checkDefaultWindowFrame(windowNodeFunction);
@@ -121,8 +121,8 @@ Window::Window(
         {windowNodeFunction.frame.type,
          windowNodeFunction.frame.startType,
          windowNodeFunction.frame.endType,
-         fieldTypeToChannel(windowNodeFunction.frame.startValue),
-         fieldTypeToChannel(windowNodeFunction.frame.endValue)});
+         fieldArgToChannel(windowNodeFunction.frame.startValue),
+         fieldArgToChannel(windowNodeFunction.frame.endValue)});
   }
 }
 
@@ -313,9 +313,7 @@ void Window::callApplyForPartitionRows(
   vector_size_t numRows = endRow - startRow;
   vector_size_t numFuncs = windowFunctions_.size();
 
-  // TODO : How do we restrict these buffers to numRows() ? If we don't then
-  // doing int numRows = peerGroupStarts->size(); is incorrect.
-  // Another option is we send the number of rows in the apply function.
+  // Size buffers for the call to WindowFunction::apply.
   peerStartBuffer_->setSize(numRows);
   peerEndBuffer_->setSize(numRows);
   for (auto w = 0; w < numFuncs; w++) {
@@ -390,7 +388,7 @@ RowVectorPtr Window::getOutput() {
   auto result = std::dynamic_pointer_cast<RowVector>(
       BaseVector::create(outputType_, numOutputRows, operatorCtx_->pool()));
 
-  // Set values of all output columns corresponding to the input columns.
+  // Set all passthrough input columns.
   for (int i = 0; i < numInputColumns_; ++i) {
     data_->extractColumn(
         sortedRows_.data() + numProcessedRows_,
@@ -399,6 +397,7 @@ RowVectorPtr Window::getOutput() {
         result->childAt(i));
   }
 
+  // Construct vectors for the window function output columns.
   std::vector<VectorPtr> windowOutputs;
   windowOutputs.reserve(windowFunctions_.size());
   for (int i = numInputColumns_; i < outputType_->size(); i++) {
@@ -407,9 +406,9 @@ RowVectorPtr Window::getOutput() {
     windowOutputs.emplace_back(std::move(output));
   }
 
-  vector_size_t bufferRowIndex = 0;
+  vector_size_t resultIndex = 0;
   // The last entry in partitionStartRows_ is a fake row beyond the input
-  // data.
+  // data. So is accounted for the lastPartitionNumber value.
   auto lastPartitionNumber = partitionStartRows_.size() - 1;
   // Compute output buffer by traversing as many partitions as possible. This
   // logic takes care of partial partitions output also.
@@ -424,8 +423,8 @@ RowVectorPtr Window::getOutput() {
           numProcessedRows_,
           numProcessedRows_ + rowsForCurrentPartition,
           windowOutputs,
-          bufferRowIndex);
-      bufferRowIndex += rowsForCurrentPartition;
+          resultIndex);
+      resultIndex += rowsForCurrentPartition;
       numOutputRows -= rowsForCurrentPartition;
     } else {
       // Current partition can fit partially in the output buffer.
@@ -435,7 +434,7 @@ RowVectorPtr Window::getOutput() {
           numProcessedRows_,
           numProcessedRows_ + numOutputRows,
           windowOutputs,
-          bufferRowIndex);
+          resultIndex);
       break;
     }
   }
