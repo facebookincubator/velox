@@ -82,6 +82,33 @@ parseOrderByClauses(
   return {sortingKeys, sortingOrders};
 }
 
+std::pair<
+    std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>,
+    std::vector<core::SortOrder>>
+parseOrderByClauses(
+    const std::vector<std::string>& keys,
+    const RowTypePtr& inputType,
+    memory::MemoryPool* pool) {
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  for (const auto& key : keys) {
+    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
+    auto typedExpr =
+        core::Expressions::inferTypes(untypedExpr, inputType, pool);
+
+    auto sortingKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        sortingKey,
+        "ORDER BY clause must use a column name, not an expression: {}",
+        key);
+    sortingKeys.emplace_back(sortingKey);
+    sortingOrders.emplace_back(sortOrder);
+  }
+
+  return {sortingKeys, sortingOrders};
+}
+
 } // namespace
 
 PlanBuilder& PlanBuilder::tableScan(

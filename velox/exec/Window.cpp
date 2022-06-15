@@ -85,7 +85,11 @@ Window::Window(
   allKeyInfo_.insert(
       allKeyInfo_.cend(), sortKeyInfo_.begin(), sortKeyInfo_.end());
 
+<<<<<<< HEAD
   auto fieldArgToChannel =
+=======
+  auto fieldTypeToChannel =
+>>>>>>> c969c17d1d39ccf08f3c223a1b3f1cdf7f66de64
       [&](const core::TypedExprPtr arg) -> std::optional<ChannelIndex> {
     if (arg) {
       std::optional<ChannelIndex> argChannel =
@@ -105,14 +109,24 @@ Window::Window(
     argColumns.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       argTypes.push_back(arg->type());
+<<<<<<< HEAD
       argColumns.push_back(data_->columnAt(fieldArgToChannel(arg).value()));
     }
 
+=======
+      argColumns.push_back(data_->columnAt(fieldTypeToChannel(arg).value()));
+    }
+    const auto& resultType = windowNodeFunction.functionCall->type();
+>>>>>>> c969c17d1d39ccf08f3c223a1b3f1cdf7f66de64
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(),
         argColumns,
         argTypes,
+<<<<<<< HEAD
         windowNodeFunction.functionCall->type(),
+=======
+        resultType,
+>>>>>>> c969c17d1d39ccf08f3c223a1b3f1cdf7f66de64
         operatorCtx_->pool()));
 
     checkDefaultWindowFrame(windowNodeFunction);
@@ -121,8 +135,13 @@ Window::Window(
         {windowNodeFunction.frame.type,
          windowNodeFunction.frame.startType,
          windowNodeFunction.frame.endType,
+<<<<<<< HEAD
          fieldArgToChannel(windowNodeFunction.frame.startValue),
          fieldArgToChannel(windowNodeFunction.frame.endValue)});
+=======
+         fieldTypeToChannel(windowNodeFunction.frame.startValue),
+         fieldTypeToChannel(windowNodeFunction.frame.endValue)});
+>>>>>>> c969c17d1d39ccf08f3c223a1b3f1cdf7f66de64
   }
 }
 
@@ -313,7 +332,13 @@ void Window::callApplyForPartitionRows(
   vector_size_t numRows = endRow - startRow;
   vector_size_t numFuncs = windowFunctions_.size();
 
+<<<<<<< HEAD
   // Size buffers for the call to WindowFunction::apply.
+=======
+  // TODO : How do we restrict these buffers to numRows() ? If we don't then
+  // doing int numRows = peerGroupStarts->size(); is incorrect.
+  // Another option is we send the number of rows in the apply function.
+>>>>>>> c969c17d1d39ccf08f3c223a1b3f1cdf7f66de64
   peerStartBuffer_->setSize(numRows);
   peerEndBuffer_->setSize(numRows);
   for (auto w = 0; w < numFuncs; w++) {
