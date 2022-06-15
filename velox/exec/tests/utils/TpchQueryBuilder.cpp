@@ -75,20 +75,20 @@ const std::vector<std::string>& TpchQueryBuilder::getTableNames() {
 }
 
 TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
- switch (queryId) {
-   case 1:
-     return getQ1Plan();
-   case 4:
-     return getQ4Plan();
-   case 6:
-     return getQ6Plan();
-   case 13:
-     return getQ13Plan();
-   case 18:
-     return getQ18Plan();
-   default:
-     VELOX_NYI("TPC-H query {} is not supported yet", queryId);
- }
+  switch (queryId) {
+    case 1:
+      return getQ1Plan();
+    case 4:
+      return getQ4Plan();
+    case 6:
+      return getQ6Plan();
+    case 13:
+      return getQ13Plan();
+    case 18:
+      return getQ18Plan();
+    default:
+      VELOX_NYI("TPC-H query {} is not supported yet", queryId);
+  }
 }
 
 TpchPlan TpchQueryBuilder::getQ1Plan() const {
