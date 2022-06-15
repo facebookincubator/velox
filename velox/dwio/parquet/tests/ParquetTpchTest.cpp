@@ -24,12 +24,15 @@
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/tpch/gen/TpchGen.h"
 
 #include <vector>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
+using namespace facebook::velox::tpch;
 
 static const int kNumDrivers = 4;
 
@@ -161,7 +164,7 @@ TEST_F(ParquetTpchTest, Q1) {
 }
 
 TEST_F(ParquetTpchTest, Q4) {
-  assertQuery(4, 2, 10);
+  assertQuery(4, 3, 20);
 }
 
 TEST_F(ParquetTpchTest, Q6) {
