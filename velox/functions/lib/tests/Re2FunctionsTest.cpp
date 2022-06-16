@@ -382,6 +382,7 @@ TEST_F(Re2FunctionsTest, likePattern) {
       false);
 
   EXPECT_EQ(like("abc", "MEDIUM POLISHED%"), false);
+  EXPECT_EQ(like("e special requests", "%special%requests%"), true);
 }
 
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {
