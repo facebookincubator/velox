@@ -14,23 +14,27 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
+#pragma once
 
-namespace facebook::velox::dwrf {
+#include <string>
 
-uint64_t SelectiveIntegerDirectColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
-  ints->skip(numValues);
-  return numValues;
-}
+namespace facebook::velox::dwio::common {
 
-void SelectiveIntegerDirectColumnReader::read(
-    vector_size_t offset,
-    RowSet rows,
-    const uint64_t* incomingNulls) {
-  VELOX_WIDTH_DISPATCH(
-      sizeOfIntKind(type_->kind()), prepareRead, offset, rows, incomingNulls);
-  readCommon<SelectiveIntegerDirectColumnReader>(rows);
-}
+enum CompressionKind {
+  CompressionKind_NONE = 0,
+  CompressionKind_ZLIB = 1,
+  CompressionKind_SNAPPY = 2,
+  CompressionKind_LZO = 3,
+  CompressionKind_ZSTD = 4,
+  CompressionKind_LZ4 = 5,
+  CompressionKind_MAX = INT64_MAX
+};
 
-} // namespace facebook::velox::dwrf
+/**
+ * Get the name of the CompressionKind.
+ */
+std::string compressionKindToString(CompressionKind kind);
+
+constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+
+} // namespace facebook::velox::dwio::common

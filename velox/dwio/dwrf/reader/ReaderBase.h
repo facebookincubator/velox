@@ -177,7 +177,7 @@ class ReaderBase {
     return postScript_->compressionBlockSize();
   }
 
-  CompressionKind getCompressionKind() const {
+  dwio::common::CompressionKind getCompressionKind() const {
     return postScript_->compression();
   }
 

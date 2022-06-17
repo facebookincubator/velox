@@ -20,9 +20,9 @@
 #include <string>
 
 #include "folly/Range.h"
-
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/Common.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
@@ -34,24 +34,7 @@ constexpr folly::StringPiece WRITER_VERSION_KEY{"orc.writer.version"};
 constexpr folly::StringPiece kDwioWriter{"dwio"};
 constexpr folly::StringPiece kPrestoWriter{"presto"};
 
-enum CompressionKind {
-  CompressionKind_NONE = 0,
-  CompressionKind_ZLIB = 1,
-  CompressionKind_SNAPPY = 2,
-  CompressionKind_LZO = 3,
-  CompressionKind_ZSTD = 4,
-  CompressionKind_LZ4 = 5,
-  CompressionKind_MAX = INT64_MAX
-};
-
-constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
-
 enum StripeCacheMode { NA = 0, INDEX = 1, FOOTER = 2, BOTH = 3 };
-
-/**
- * Get the name of the CompressionKind.
- */
-std::string compressionKindToString(CompressionKind kind);
 
 enum WriterVersion {
   ORIGINAL = 0, // all default versions including files written by Presto
@@ -280,7 +263,7 @@ class PostScript {
  public:
   PostScript(
       uint64_t footerLength,
-      CompressionKind compression,
+      dwio::common::CompressionKind compression,
       uint64_t compressionBlockSize,
       uint32_t writerVersion)
       : footerLength_{footerLength},
@@ -290,7 +273,7 @@ class PostScript {
 
   explicit PostScript(const proto::PostScript& ps)
       : footerLength_{ps.footerlength()},
-        compression_{static_cast<CompressionKind>(ps.compression())},
+        compression_{static_cast<dwio::common::CompressionKind>(ps.compression())},
         compressionBlockSize_{ps.compressionblocksize()},
         writerVersion_{static_cast<WriterVersion>(ps.writerversion())},
         cacheMode_{static_cast<StripeCacheMode>(ps.cachemode())},
@@ -311,7 +294,7 @@ class PostScript {
     return true;
   }
 
-  CompressionKind compression() const {
+  dwio::common::CompressionKind compression() const {
     return compression_;
   }
 
@@ -356,8 +339,9 @@ class PostScript {
   // General attributes
   dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
   uint64_t footerLength_;
-  CompressionKind compression_ = CompressionKind::CompressionKind_NONE;
-  uint64_t compressionBlockSize_ = DEFAULT_COMPRESSION_BLOCK_SIZE;
+  dwio::common::CompressionKind compression_ =
+    dwio::common::CompressionKind::CompressionKind_NONE;
+  uint64_t compressionBlockSize_ = dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
   WriterVersion writerVersion_ = WriterVersion::ORIGINAL;
 
   // DWRF-specific attributes

@@ -34,4 +34,4 @@ DIAGNOSTIC_IGNORE("-Wshorten-64-to-32")
 DIAGNOSTIC_IGNORE("-Wweak-vtables")
 #endif
 
-#include "velox/dwio/dwrf/proto/dwrf_proto.pb.cc"
+#include "velox/dwio/dwrf/proto/orc_proto.pb.cc"
