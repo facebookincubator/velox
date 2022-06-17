@@ -233,4 +233,32 @@ RowVectorPtr genTpchRegion(
     memory::MemoryPool* pool =
         &velox::memory::getProcessDefaultMemoryManager().getRoot());
 
+FlatVector<StringView> genTpchPartType(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+FlatVector<StringView> genTpchPartName(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+FlatVector<StringView> genTpchOrderComment(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
+FlatVector<StringView> genTpchSupplierComment(
+    size_t maxRows = 10000,
+    size_t offset = 0,
+    size_t scaleFactor = 1,
+    memory::MemoryPool* pool =
+        &velox::memory::getProcessDefaultMemoryManager().getRoot());
+
 } // namespace facebook::velox::tpch
