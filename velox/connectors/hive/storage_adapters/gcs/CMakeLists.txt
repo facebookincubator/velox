@@ -17,8 +17,9 @@
 add_library(velox_gcs GCSFileSystem.cpp GCSUtil.cpp)
 
 find_package(google_cloud_cpp_storage REQUIRED)
+link_directories("${GCSSDK_ROOT_DIR}/lib")
 target_include_directories(velox_gcs PUBLIC ${GCSSDK_INCLUDE_DIRS})
-target_link_libraries(velox_gcs google-cloud-cpp::storage)
+target_link_libraries(velox_gcs google-cloud-cpp::storage absl_base absl_int128)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
