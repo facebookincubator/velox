@@ -21,8 +21,8 @@
 
 #include "folly/Range.h"
 #include "velox/common/caching/ScanTracker.h"
-#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Common.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
@@ -273,7 +273,8 @@ class PostScript {
 
   explicit PostScript(const proto::PostScript& ps)
       : footerLength_{ps.footerlength()},
-        compression_{static_cast<dwio::common::CompressionKind>(ps.compression())},
+        compression_{
+            static_cast<dwio::common::CompressionKind>(ps.compression())},
         compressionBlockSize_{ps.compressionblocksize()},
         writerVersion_{static_cast<WriterVersion>(ps.writerversion())},
         cacheMode_{static_cast<StripeCacheMode>(ps.cachemode())},
@@ -340,7 +341,7 @@ class PostScript {
   dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
   uint64_t footerLength_;
   dwio::common::CompressionKind compression_ =
-    dwio::common::CompressionKind::CompressionKind_NONE;
+      dwio::common::CompressionKind::CompressionKind_NONE;
   uint64_t compressionBlockSize_ = dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
   WriterVersion writerVersion_ = WriterVersion::ORIGINAL;
 

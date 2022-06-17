@@ -83,7 +83,7 @@ DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
 }
 
 namespace {
-  using dwio::common::CompressionKind;
+using dwio::common::CompressionKind;
 
 CompressionKind orcCompressionToCompressionKind(
     proto::orc::CompressionKind compression) {
