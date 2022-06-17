@@ -22,6 +22,7 @@
 #include "folly/Range.h"
 
 #include "velox/common/caching/ScanTracker.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/StreamIdentifier.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
@@ -275,15 +276,6 @@ class StripeInformation {
   virtual uint64_t getNumberOfRows() const = 0;
 };
 
-static CompressionKind convertCompressionKind(
-    proto::orc::CompressionKind compression) {
-  auto compressionUint = static_cast<uint32_t>(compression);
-  if (compressionUint >= 4 && compressionUint <= 5) {
-    compressionUint = 9 - compressionUint;
-  }
-  return static_cast<CompressionKind>(compressionUint);
-}
-
 class PostScript {
  public:
   PostScript(
@@ -297,24 +289,17 @@ class PostScript {
         writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
 
   explicit PostScript(const proto::PostScript& ps)
-      : PostScript(
-            ps.footerlength(),
-            static_cast<CompressionKind>(ps.compression()),
-            ps.compressionblocksize(),
-            ps.writerversion()) {
-    cacheMode_ = static_cast<StripeCacheMode>(ps.cachemode());
-    cacheSize_ = ps.cachesize();
-  }
+      : footerLength_{ps.footerlength()},
+        compression_{static_cast<CompressionKind>(ps.compression())},
+        compressionBlockSize_{ps.compressionblocksize()},
+        writerVersion_{static_cast<WriterVersion>(ps.writerversion())},
+        cacheMode_{static_cast<StripeCacheMode>(ps.cachemode())},
+        cacheSize_{ps.cachesize()} {}
 
-  explicit PostScript(const proto::orc::PostScript& ps)
-      : PostScript(
-            ps.footerlength(),
-            convertCompressionKind(ps.compression()),
-            ps.compressionblocksize(),
-            ps.writerversion()) {
-    isDwrf_ = false;
-    metadataLength_ = ps.metadatalength();
-    stripeStatisticsLength_ = ps.stripestatisticslength();
+  explicit PostScript(const proto::orc::PostScript& ps);
+
+  dwio::common::FileFormat fileFormat() const {
+    return fileFormat_;
   }
 
   // General methods
@@ -356,7 +341,7 @@ class PostScript {
   }
 
   bool hasCacheMode() const {
-    return isDwrf_;
+    return fileFormat_ == dwio::common::FileFormat::DWRF;
   }
 
   uint32_t cacheSize() const {
@@ -364,12 +349,12 @@ class PostScript {
   }
 
   bool hasCacheSize() const {
-    return isDwrf_;
+    return fileFormat_ == dwio::common::FileFormat::DWRF;
   }
 
  private:
   // General attributes
-  bool isDwrf_ = true;
+  dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
   uint64_t footerLength_;
   CompressionKind compression_ = CompressionKind::CompressionKind_NONE;
   uint64_t compressionBlockSize_ = DEFAULT_COMPRESSION_BLOCK_SIZE;

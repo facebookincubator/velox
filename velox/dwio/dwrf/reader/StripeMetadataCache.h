@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/SeekableInputStream.h"
+#include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
 namespace facebook::velox::dwrf {
@@ -26,11 +27,11 @@ constexpr uint64_t INVALID_INDEX = std::numeric_limits<uint64_t>::max();
 class StripeMetadataCache {
  public:
   StripeMetadataCache(
-      const proto::PostScript& ps,
+      const PostScript& ps,
       const proto::Footer& footer,
       std::shared_ptr<dwio::common::DataBuffer<char>> buffer)
       : StripeMetadataCache{
-            ps.cachemode(),
+            static_cast<proto::StripeCacheMode>(ps.cacheMode()),
             std::move(buffer),
             getOffsets(footer)} {}
 

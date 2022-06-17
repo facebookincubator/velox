@@ -30,8 +30,6 @@ using dwio::common::Statistics;
 using dwio::common::encryption::DecrypterFactory;
 using encryption::DecryptionHandler;
 using memory::MemoryPool;
-using DwrfPostScriptPtr = std::unique_ptr<proto::PostScript>;
-using OrcPostScriptPtr = std::unique_ptr<proto::orc::PostScript>;
 
 FooterStatisticsImpl::FooterStatisticsImpl(
     const ReaderBase& reader,
@@ -97,8 +95,7 @@ ReaderBase::ReaderBase(
       bufferedInputFactory_(
           bufferedInputFactory
               ? bufferedInputFactory
-              : dwio::common::BufferedInputFactory::baseFactoryShared()),
-      fileFormat_{fileFormat} {
+              : dwio::common::BufferedInputFactory::baseFactoryShared()) {
   input_ = bufferedInputFactory_->create(*stream_, pool, fileNum);
 
   // read last bytes into buffer to get PostScript
@@ -129,17 +126,14 @@ ReaderBase::ReaderBase(
       fileLength_,
       "Corrupted file, Post script size is invalid");
 
-  std::variant<DwrfPostScriptPtr, OrcPostScriptPtr> postScriptProto;
-  if (fileFormat_ == FileFormat::DWRF) {
+  if (fileFormat == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
     postScript_ = std::make_unique<PostScript>(*postScript);
-    postScriptProto = std::move(postScript);
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
     postScript_ = std::make_unique<PostScript>(*postScript);
-    postScriptProto = std::move(postScript);
   }
 
   uint64_t footerSize = postScript_->footerLength();
@@ -156,7 +150,7 @@ ReaderBase::ReaderBase(
   DWIO_ENSURE_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
 
   if (postScript_->hasCompression()) {
-    if (fileFormat_ == FileFormat::DWRF) {
+    if (getFileFormat() == FileFormat::DWRF) {
       DWIO_ENSURE(
           proto::CompressionKind_IsValid(postScript_->compression()),
           "Corrupted File, invalid compression kind ",
@@ -186,15 +180,13 @@ ReaderBase::ReaderBase(
 
   // load stripe index/footer cache
   if (cacheSize > 0) {
-    DWIO_ENSURE_EQ(fileFormat_, FileFormat::DWRF);
+    DWIO_ENSURE_EQ(getFileFormat(), FileFormat::DWRF);
     auto cacheBuffer =
         std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
     input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
         ->readFully(cacheBuffer->data(), cacheSize);
     cache_ = std::make_unique<StripeMetadataCache>(
-        *std::get<DwrfPostScriptPtr>(postScriptProto),
-        *footer_,
-        std::move(cacheBuffer));
+        *postScript_, *footer_, std::move(cacheBuffer));
   }
 
   if (input_->shouldPrefetchStripes()) {

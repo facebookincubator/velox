@@ -282,7 +282,7 @@ TEST(StripeStream, planReadsIndex) {
   auto cacheBuffer = std::make_shared<DataBuffer<char>>(pool, str.size());
   memcpy(cacheBuffer->data(), str.data(), str.size());
   auto cache = std::make_unique<StripeMetadataCache>(
-      *ps, *footer, std::move(cacheBuffer));
+      PostScript(*ps), *footer, std::move(cacheBuffer));
 
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();

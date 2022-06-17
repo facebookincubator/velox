@@ -109,8 +109,7 @@ class ReaderBase {
   }
 
   // for testing
-  explicit ReaderBase(memory::MemoryPool& pool)
-      : pool_{pool}, fileFormat_{dwio::common::FileFormat::DWRF} {}
+  explicit ReaderBase(memory::MemoryPool& pool) : pool_{pool} {}
 
   virtual ~ReaderBase() = default;
 
@@ -233,7 +232,7 @@ class ReaderBase {
   }
 
   dwio::common::FileFormat getFileFormat() const {
-    return fileFormat_;
+    return postScript_->fileFormat();
   }
 
  private:
@@ -255,7 +254,6 @@ class ReaderBase {
   std::unique_ptr<encryption::DecryptionHandler> handler_;
   std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory_;
 
-  dwio::common::FileFormat fileFormat_;
   std::unique_ptr<dwio::common::BufferedInput> input_;
   RowTypePtr schema_;
   // Lazily populated
