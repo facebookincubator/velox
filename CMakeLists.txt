@@ -128,6 +128,8 @@ if(VELOX_ENABLE_GCS)
     message(FATAL_ERROR "no GCSSDK_ROOT_DIR provided!")
   endif()
   link_directories("${GCSSDK_ROOT_DIR}/lib")
+  set(Crc32c_DIR "${GCSSDK_ROOT_DIR}/lib/cmake/Crc32c/")
+  set(nlohmann_json_DIR "${GCSSDK_ROOT_DIR}/lib/cmake/nlohmann_json")
   set(GCSSDK_INCLUDE_DIRS "${GCSSDK_ROOT_DIR}/include")
 endif()
 
