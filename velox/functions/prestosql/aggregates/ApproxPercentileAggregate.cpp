@@ -441,7 +441,7 @@ class ApproxPercentileAggregate : public exec::Aggregate {
     }
     // If 'data' is inline, this function will return a local
     // address. Assert data is not inline.
-    assert(!data.isInline());
+    VELOX_DCHECK(!data.isInline());
     // Some compilers cannot deduce that the StringView cannot be inline from
     // the assert above. Suppress warning.
     VELOX_SUPPRESS_RETURN_LOCAL_ADDR_WARNING
