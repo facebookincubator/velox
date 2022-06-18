@@ -50,16 +50,16 @@ fi
 #dnf or apt based on linux distro
 dist=`grep "^ID=" /etc/os-release | awk -F '=' '{print $2}'| sed 's/"//g'`
 case "$dist" in
-  ubuntu) echo 'This is Ubuntu Linux' ; cmd="apt install -y";;
-       *) echo 'This is Fedora' ; cmd="dnf install -y -q --setopt=install_weak_deps=False";;
+  ubuntu) echo 'This is Ubuntu Linux' ; python_install_cmd="apt install -y python3-dev";;
+       *) echo 'This is Fedora' ; python_install_cmd="dnf install -y -q --setopt=install_weak_deps=False python3-devel";;
 esac
 user=`whoami`
 case "$user" in
   root) echo 'Running as root' ; sudocmd="";;
      *) echo 'Running as other user than root' ; sudocmd="sudo";;
 esac
-echo "Running $sudocmd $cmd python3-devel"
-$sudocmd $cmd python3-devel
+echo "Running $sudocmd $python_install_cmd"
+$sudocmd $python_install_cmd
 
 ${PYTHON:-python3} -m pip install \
   "https://github.com/googleapis/storage-testbench/archive/${version}.tar.gz"

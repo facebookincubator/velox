@@ -150,6 +150,13 @@ function install_aws-sdk-cpp {
 }
 
 function install_libhdfs3 {
+  if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+     yum -y install libxml2-devel libgsasl-devel libuuid-devel
+  fi
+
+  if [[ "$OSTYPE" == darwin* ]]; then
+    brew install libxml2 gsasl
+  fi
   github_checkout apache/hawq master
   cd $DEPENDENCY_DIR/hawq/depends/libhdfs3
   if [[ "$OSTYPE" == darwin* ]]; then
@@ -167,15 +174,6 @@ function install_libhdfs3 {
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 cd "${DEPENDENCY_DIR}" || exit
 # aws-sdk-cpp missing dependencies
-
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-   yum -y install libxml2-devel libgsasl-devel libuuid-devel
-fi
-
-if [[ "$OSTYPE" == darwin* ]]; then
-   brew install libxml2 gsasl
-fi
-
 
 install_aws=0
 install_gcs=0
