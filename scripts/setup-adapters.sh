@@ -133,8 +133,8 @@ function install_gcs-sdk-cpp {
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
     -DBUILD_TESTING=OFF \
-    -DCrc32c_DIR="${ARTIFACTS_PREFIX}/lib/cmake/Crc32c/" \
-    -Dnlohmann_json_DIR="${ARTIFACTS_PREFIX}/lib/cmake/nlohmann_json" \
+    -DCrc32c_DIR="${ARTIFACTS_PREFIX}/lib64/cmake/Crc32c/" \
+    -Dnlohmann_json_DIR="${ARTIFACTS_PREFIX}/lib64/cmake/nlohmann_json" \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
   $sudocmd cmake --build cmake-out -- -j "$(nproc)"
