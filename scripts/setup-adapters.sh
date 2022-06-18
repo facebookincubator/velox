@@ -41,8 +41,6 @@ function install_gcs-sdk-cpp {
       sed -i 's/^#define ABSL_OPTION_USE_\(.*\) 2/#define ABSL_OPTION_USE_\1 0/' "absl/base/options.h" && \
       cmake \
         -DCMAKE_BUILD_TYPE=Release \
-	-DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
-        #-DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
         -DBUILD_TESTING=OFF \
         -DBUILD_SHARED_LIBS=yes \
         -DCMAKE_CXX_STANDARD=11 \
@@ -59,7 +57,7 @@ function install_gcs-sdk-cpp {
       tar -xzf - --strip-components=1 && \
       cmake \
           -DCMAKE_BUILD_TYPE=Release \
-	  -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
+          -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
           -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
           -DBUILD_SHARED_LIBS=yes \
           -Dprotobuf_BUILD_TESTS=OFF \
@@ -76,7 +74,7 @@ function install_gcs-sdk-cpp {
       cmake \
           -DCMAKE_BUILD_TYPE=Release \
           -DgRPC_INSTALL=ON \
-	  -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
+          -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
           -DgRPC_BUILD_TESTS=OFF \
           -DgRPC_ABSL_PROVIDER=package \
           -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
@@ -98,7 +96,7 @@ function install_gcs-sdk-cpp {
       cmake \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_SHARED_LIBS=yes \
-	  -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
+          -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
           -DCRC32C_BUILD_TESTS=OFF \
           -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
           -DCRC32C_BUILD_BENCHMARKS=OFF \
@@ -114,7 +112,7 @@ function install_gcs-sdk-cpp {
   curl -sSL https://github.com/nlohmann/json/archive/v3.10.5.tar.gz | \
       tar -xzf - --strip-components=1 && \
       cmake \
-	-DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
+        -DCMAKE_INSTALL_PREFIX="${ARTIFACTS_PREFIX}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=yes \
         -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
@@ -135,6 +133,8 @@ function install_gcs-sdk-cpp {
     -DCMAKE_INSTALL_MESSAGE=NEVER \
     -DCMAKE_MODULE_PATH="${ARTIFACTS_PREFIX}" \
     -DBUILD_TESTING=OFF \
+    -DCrc32c_DIR="${ARTIFACTS_PREFIX}/lib/cmake/Crc32c/" \
+    -Dnlohmann_json_DIR="${ARTIFACTS_PREFIX}/lib/cmake/nlohmann_json" \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
     -DGOOGLE_CLOUD_CPP_ENABLE=storage
   $sudocmd cmake --build cmake-out -- -j "$(nproc)"

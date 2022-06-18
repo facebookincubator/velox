@@ -14,12 +14,6 @@
 
 add_executable(velox_gcsfile_test GCSUtilTest.cpp GCSFileSystemTest.cpp)
 add_test(velox_gcsfile_test velox_gcsfile_test)
-if(absl_DIR)
-	message(INFO " absl_DIR provided ${absl_DIR} ${GCSSDK_ROOT_DIR}/lib!")
-else()
-  message(FATAL_ERROR " no absl_DIR provided!")
-endif()
-link_directories("${GCSSDK_ROOT_DIR}/lib")
 target_link_libraries(
   velox_gcsfile_test
   velox_file
@@ -29,8 +23,6 @@ target_link_libraries(
   velox_hive_connector
   velox_dwio_common_exception
   velox_exec
-  absl_base
-  absl_int128
   gmock
   gtest
   gtest_main)
