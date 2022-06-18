@@ -18,14 +18,12 @@ add_library(
   Common.cpp
   Compression.cpp
   Config.cpp
-  DataBufferHolder.cpp
   Decryption.cpp
   DirectDecoder.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
   IntDecoder.cpp
   IntEncoder.cpp
-  OutputStream.cpp
   PagedInputStream.cpp
   PagedOutputStream.cpp
   RLEv1.cpp

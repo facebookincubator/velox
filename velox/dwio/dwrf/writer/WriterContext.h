@@ -18,6 +18,7 @@
 
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
@@ -77,7 +78,8 @@ class WriterContext : public CompressionBufferPool {
     return streams_.find(stream) != streams_.end();
   }
 
-  const DataBufferHolder& getStream(const DwrfStreamIdentifier& stream) const {
+  const dwio::common::DataBufferHolder& getStream(
+      const DwrfStreamIdentifier& stream) const {
     return streams_.at(stream);
   }
 
@@ -95,7 +97,7 @@ class WriterContext : public CompressionBufferPool {
   // so accounting for the memory usage can be inflated even aside from the
   // capacity vs actual usage problem. However, this is ok as an upperbound for
   // flush policy evaluation and would be more accurate after flush.
-  std::unique_ptr<BufferedOutputStream> newStream(
+  std::unique_ptr<dwio::common::BufferedOutputStream> newStream(
       const DwrfStreamIdentifier& stream) {
     DWIO_ENSURE(
         !hasStream(stream), "Stream already exists ", stream.toString());
@@ -115,9 +117,9 @@ class WriterContext : public CompressionBufferPool {
     return newStream(compression, holder, encrypter);
   }
 
-  std::unique_ptr<DataBufferHolder> newDataBufferHolder(
+  std::unique_ptr<dwio::common::DataBufferHolder> newDataBufferHolder(
       dwio::common::DataSink* sink = nullptr) {
-    return std::make_unique<DataBufferHolder>(
+    return std::make_unique<dwio::common::DataBufferHolder>(
         getMemoryPool(MemoryUsageCategory::OUTPUT_STREAM),
         compressionBlockSize,
         getConfig(Config::COMPRESSION_BLOCK_SIZE_MIN),
@@ -125,9 +127,9 @@ class WriterContext : public CompressionBufferPool {
         sink);
   }
 
-  std::unique_ptr<BufferedOutputStream> newStream(
+  std::unique_ptr<dwio::common::BufferedOutputStream> newStream(
       dwio::common::CompressionKind kind,
-      DataBufferHolder& holder,
+      dwio::common::DataBufferHolder& holder,
       const dwio::common::encryption::Encrypter* encrypter = nullptr) {
     return createCompressor(kind, *this, holder, *config_, encrypter);
   }
@@ -161,7 +163,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   std::unique_ptr<IndexBuilder> newIndexBuilder(
-      std::unique_ptr<BufferedOutputStream> stream) const {
+      std::unique_ptr<dwio::common::BufferedOutputStream> stream) const {
     return indexBuilderFactory_
         ? indexBuilderFactory_(std::move(stream))
         : std::make_unique<IndexBuilder>(std::move(stream));
@@ -257,8 +259,9 @@ class WriterContext : public CompressionBufferPool {
   }
 
   void iterateUnSuppressedStreams(
-      std::function<void(
-          std::pair<const DwrfStreamIdentifier, DataBufferHolder>&)> callback) {
+      std::function<void(std::pair<
+                         const DwrfStreamIdentifier,
+                         dwio::common::DataBufferHolder>&)> callback) {
     for (auto& pair : streams_) {
       if (!pair.second.isSuppressed()) {
         callback(pair);
@@ -448,7 +451,7 @@ class WriterContext : public CompressionBufferPool {
   // another class.
   folly::F14NodeMap<
       DwrfStreamIdentifier,
-      DataBufferHolder,
+      dwio::common::DataBufferHolder,
       dwio::common::StreamIdentifierHash>
       streams_;
   folly::F14FastMap<
@@ -457,7 +460,7 @@ class WriterContext : public CompressionBufferPool {
       EncodingKeyHash>
       dictEncoders_;
   std::function<std::unique_ptr<IndexBuilder>(
-      std::unique_ptr<BufferedOutputStream>)>
+      std::unique_ptr<dwio::common::BufferedOutputStream>)>
       indexBuilderFactory_;
   std::unique_ptr<dwio::common::DataBuffer<char>> compressionBuffer_;
   // A pool of reusable DecodedVectors.

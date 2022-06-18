@@ -17,12 +17,13 @@
 #pragma once
 
 #include <memory>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/Range.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/vector/TypeAliases.h"
@@ -86,7 +87,7 @@ class ByteRleEncoder {
    * @param strideIndex the index of the stride to backfill
    */
   virtual void recordPosition(
-      PositionRecorder& recorder,
+      dwio::common::PositionRecorder& recorder,
       int32_t strideIndex = -1) const = 0;
 };
 
@@ -230,14 +231,14 @@ class ByteRleDecoder {
  * @param output the output stream to write to
  */
 std::unique_ptr<ByteRleEncoder> createByteRleEncoder(
-    std::unique_ptr<BufferedOutputStream> output);
+    std::unique_ptr<dwio::common::BufferedOutputStream> output);
 
 /**
  * Create a boolean RLE encoder.
  * @param output the output stream to write to
  */
 std::unique_ptr<ByteRleEncoder> createBooleanRleEncoder(
-    std::unique_ptr<BufferedOutputStream> output);
+    std::unique_ptr<dwio::common::BufferedOutputStream> output);
 
 /**
  * Create a byte RLE decoder.

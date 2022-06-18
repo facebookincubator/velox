@@ -18,7 +18,7 @@
 #include <folly/Varint.h>
 #include <folly/init/Init.h>
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/dwrf/common/DataBufferHolder.h"
+#include "velox/dwio/common/DataBufferHolder.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 #include "velox/dwio/dwrf/common/Range.h"
 

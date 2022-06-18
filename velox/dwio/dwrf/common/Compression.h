@@ -17,13 +17,13 @@
 #pragma once
 
 #include "velox/dwio/common/Common.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/CompressionBufferPool.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
-#include "velox/dwio/dwrf/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
 
@@ -88,10 +88,10 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
  * collection
  * @param level compression level
  */
-std::unique_ptr<BufferedOutputStream> createCompressor(
+std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
     dwio::common::CompressionKind kind,
     CompressionBufferPool& bufferPool,
-    DataBufferHolder& bufferHolder,
+    dwio::common::DataBufferHolder& bufferHolder,
     const Config& config,
     const dwio::common::encryption::Encrypter* encrypter = nullptr);
 

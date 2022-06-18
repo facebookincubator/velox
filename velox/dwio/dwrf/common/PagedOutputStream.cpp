@@ -116,7 +116,7 @@ bool PagedOutputStream::Next(void** data, int32_t* size, uint64_t increment) {
 }
 
 void PagedOutputStream::recordPosition(
-    PositionRecorder& recorder,
+    dwio::common::PositionRecorder& recorder,
     int32_t bufferLength,
     int32_t bufferOffset,
     int32_t strideOffset) const {

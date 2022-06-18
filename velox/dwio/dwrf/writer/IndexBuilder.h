@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/OutputStream.h"
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 
@@ -30,9 +30,9 @@ constexpr int32_t PRESENT_STREAM_INDEX_ENTRIES_PAGED =
 
 } // namespace
 
-class IndexBuilder : public PositionRecorder {
+class IndexBuilder : public dwio::common::PositionRecorder {
  public:
-  IndexBuilder(std::unique_ptr<BufferedOutputStream> out)
+  IndexBuilder(std::unique_ptr<dwio::common::BufferedOutputStream> out)
       : out_{std::move(out)} {}
 
   virtual ~IndexBuilder() = default;
@@ -84,7 +84,7 @@ class IndexBuilder : public PositionRecorder {
  private:
   friend class IndexBuilderTest;
 
-  std::unique_ptr<BufferedOutputStream> out_;
+  std::unique_ptr<dwio::common::BufferedOutputStream> out_;
   proto::RowIndex index_;
   proto::RowIndexEntry entry_;
   std::optional<int32_t> presentStreamOffset_;

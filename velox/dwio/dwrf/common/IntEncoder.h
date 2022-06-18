@@ -17,12 +17,12 @@
 #pragma once
 
 #include <folly/Varint.h>
+#include "dwio/common/OutputStream.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/Range.h"
 
 namespace facebook::velox::dwrf {
@@ -31,7 +31,7 @@ template <bool isSigned>
 class IntEncoder {
  public:
   IntEncoder(
-      std::unique_ptr<BufferedOutputStream> output,
+      std::unique_ptr<dwio::common::BufferedOutputStream> output,
       bool useVInts,
       uint32_t numBytes)
       : output_{std::move(output)},
@@ -123,7 +123,7 @@ class IntEncoder {
    * @param strideIndex the index of the stride to backfill
    */
   virtual void recordPosition(
-      PositionRecorder& recorder,
+      dwio::common::PositionRecorder& recorder,
       int32_t strideIndex = -1) const {
     output_->recordPosition(
         recorder, bufferLength_, bufferPosition_, strideIndex);
@@ -138,7 +138,7 @@ class IntEncoder {
    */
   static std::unique_ptr<IntEncoder<isSigned>> createRle(
       RleVersion version,
-      std::unique_ptr<BufferedOutputStream> output,
+      std::unique_ptr<dwio::common::BufferedOutputStream> output,
       bool useVInts,
       uint32_t numBytes);
 
@@ -146,12 +146,12 @@ class IntEncoder {
    * Create a direct encoder
    */
   static std::unique_ptr<IntEncoder<isSigned>> createDirect(
-      std::unique_ptr<BufferedOutputStream> output,
+      std::unique_ptr<dwio::common::BufferedOutputStream> output,
       bool useVInts,
       uint32_t numBytes);
 
  protected:
-  std::unique_ptr<BufferedOutputStream> output_;
+  std::unique_ptr<dwio::common::BufferedOutputStream> output_;
   const bool useVInts_;
   const uint32_t numBytes_;
 

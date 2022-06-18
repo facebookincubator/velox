@@ -19,7 +19,7 @@
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/DataSink.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 constexpr float DEFAULT_PAGE_GROW_RATIO = 2.0f;
 constexpr float MIN_PAGE_GROW_RATIO = 1.2f;
@@ -34,7 +34,7 @@ class DataBufferHolder {
       uint64_t maxSize,
       uint64_t initialSize = 0,
       float growRatio = DEFAULT_PAGE_GROW_RATIO,
-      dwio::common::DataSink* sink = nullptr)
+      DataSink* sink = nullptr)
       : pool_{pool},
         sink_{sink},
         maxSize_{maxSize},
@@ -54,7 +54,7 @@ class DataBufferHolder {
       totalSize += buf.size();
     }
     if (totalSize > 0) {
-      dwio::common::DataBuffer<char> buf(pool_, totalSize);
+      DataBuffer<char> buf(pool_, totalSize);
       auto data = buf.data();
       for (auto& buffer : buffers) {
         auto size = buffer.size();
@@ -76,7 +76,7 @@ class DataBufferHolder {
     take(std::vector<folly::StringPiece>{buffer});
   }
 
-  void take(const dwio::common::DataBuffer<char>& buffer) {
+  void take(const DataBuffer<char>& buffer) {
     take(folly::StringPiece{buffer.data(), buffer.size()});
   }
 
@@ -144,7 +144,7 @@ class DataBufferHolder {
   // - size() increases by grow ratio until increment fits or exceeds max size
   // Return true when buffer size is increased
   bool tryResize(
-      dwio::common::DataBuffer<char>& buffer,
+      DataBuffer<char>& buffer,
       uint64_t headerSize = 0,
       uint64_t increment = 1) const;
 
@@ -159,7 +159,7 @@ class DataBufferHolder {
 
   memory::MemoryPool& pool_;
   std::vector<dwio::common::DataBuffer<char>> buffers_;
-  dwio::common::DataSink* sink_;
+  DataSink* sink_;
 
   // state
   bool suppressed_{false};
@@ -171,4 +171,4 @@ class DataBufferHolder {
   float growRatio_;
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

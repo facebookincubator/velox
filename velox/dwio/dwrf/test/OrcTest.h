@@ -182,7 +182,7 @@ inline BufferPtr sequence(MemoryPool* pool, int64_t begin, int64_t end) {
   return buffer;
 }
 
-class TestPositionRecorder : public PositionRecorder {
+class TestPositionRecorder : public dwio::common::PositionRecorder {
  public:
   explicit TestPositionRecorder() {
     addEntry();

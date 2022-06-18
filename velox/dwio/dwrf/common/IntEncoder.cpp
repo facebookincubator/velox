@@ -33,7 +33,7 @@ template uint64_t IntEncoder<false>::flush();
 template <bool isSigned>
 std::unique_ptr<IntEncoder<isSigned>> IntEncoder<isSigned>::createRle(
     RleVersion version,
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes) {
   switch (static_cast<int64_t>(version)) {
@@ -49,18 +49,18 @@ std::unique_ptr<IntEncoder<isSigned>> IntEncoder<isSigned>::createRle(
 
 template std::unique_ptr<IntEncoder<true>> IntEncoder<true>::createRle(
     RleVersion version,
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes);
 template std::unique_ptr<IntEncoder<false>> IntEncoder<false>::createRle(
     RleVersion version,
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes);
 
 template <bool isSigned>
 std::unique_ptr<IntEncoder<isSigned>> IntEncoder<isSigned>::createDirect(
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes) {
   return std::make_unique<IntEncoder<isSigned>>(
@@ -68,11 +68,11 @@ std::unique_ptr<IntEncoder<isSigned>> IntEncoder<isSigned>::createDirect(
 }
 
 template std::unique_ptr<IntEncoder<true>> IntEncoder<true>::createDirect(
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes);
 template std::unique_ptr<IntEncoder<false>> IntEncoder<false>::createDirect(
-    std::unique_ptr<BufferedOutputStream> output,
+    std::unique_ptr<dwio::common::BufferedOutputStream> output,
     bool useVInts,
     uint32_t numBytes);
 

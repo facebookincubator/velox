@@ -31,7 +31,7 @@ template <bool isSigned>
 class RleEncoderV1 : public IntEncoder<isSigned> {
  public:
   RleEncoderV1(
-      std::unique_ptr<BufferedOutputStream> outStream,
+      std::unique_ptr<dwio::common::BufferedOutputStream> outStream,
       bool useVInts,
       uint32_t numBytes)
       : IntEncoder<isSigned>{std::move(outStream), useVInts, numBytes},
@@ -82,8 +82,9 @@ class RleEncoderV1 : public IntEncoder<isSigned> {
     return IntEncoder<isSigned>::flush();
   }
 
-  void recordPosition(PositionRecorder& recorder, int32_t strideIndex = -1)
-      const override {
+  void recordPosition(
+      dwio::common::PositionRecorder& recorder,
+      int32_t strideIndex = -1) const override {
     IntEncoder<isSigned>::recordPosition(recorder, strideIndex);
     recorder.add(static_cast<uint64_t>(numLiterals), strideIndex);
   }

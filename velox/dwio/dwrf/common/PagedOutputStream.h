@@ -20,11 +20,11 @@
 
 namespace facebook::velox::dwrf {
 
-class PagedOutputStream : public BufferedOutputStream {
+class PagedOutputStream : public dwio::common::BufferedOutputStream {
  public:
   PagedOutputStream(
       CompressionBufferPool& pool,
-      DataBufferHolder& bufferHolder,
+      dwio::common::DataBufferHolder& bufferHolder,
       const Config& config,
       std::unique_ptr<Compressor> compressor,
       const dwio::common::encryption::Encrypter* encrypter)
@@ -52,7 +52,7 @@ class PagedOutputStream : public BufferedOutputStream {
   }
 
   void recordPosition(
-      PositionRecorder& recorder,
+      dwio::common::PositionRecorder& recorder,
       int32_t bufferLength,
       int32_t bufferOffset,
       int32_t strideOffset = -1) const override;

@@ -32,7 +32,8 @@ LayoutPlanner::LayoutPlanner(StreamList streams)
     : streams_{std::move(streams)} {}
 
 void LayoutPlanner::iterateIndexStreams(
-    std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
+    std::function<
+        void(const DwrfStreamIdentifier&, dwio::common::DataBufferHolder&)>
         consumer) {
   for (auto iter = streams_.begin(), end = iter + indexCount_; iter != end;
        ++iter) {
@@ -41,7 +42,8 @@ void LayoutPlanner::iterateIndexStreams(
 }
 
 void LayoutPlanner::iterateDataStreams(
-    std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
+    std::function<
+        void(const DwrfStreamIdentifier&, dwio::common::DataBufferHolder&)>
         consumer) {
   for (auto iter = streams_.begin() + indexCount_; iter != streams_.end();
        ++iter) {

@@ -16,11 +16,10 @@
 
 #pragma once
 
+#include "velox/dwio/common/DataBufferHolder.h"
 #include "velox/dwio/common/wrap/zero-copy-stream-wrapper.h"
-#include "velox/dwio/dwrf/common/DataBufferHolder.h"
-#include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 /**
  * Record write position for creating index stream
@@ -91,7 +90,7 @@ class BufferedOutputStream : public google::protobuf::io::ZeroCopyOutputStream {
 
  protected:
   DataBufferHolder& bufferHolder_;
-  dwio::common::DataBuffer<char> buffer_;
+  DataBuffer<char> buffer_;
 
   // try increase buffer size, and then assign to output buffer/size. Returns
   // false if buffer size remained the same
@@ -163,4 +162,4 @@ class AppendOnlyBufferedStream {
   }
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

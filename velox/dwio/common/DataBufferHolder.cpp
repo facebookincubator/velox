@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/DataBufferHolder.h"
+#include "velox/dwio/common/DataBufferHolder.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 bool DataBufferHolder::tryResize(
-    dwio::common::DataBuffer<char>& buffer,
+    DataBuffer<char>& buffer,
     uint64_t headerSize,
     uint64_t increment) const {
   auto size = buffer.size();
@@ -53,4 +53,4 @@ bool DataBufferHolder::tryResize(
   return true;
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

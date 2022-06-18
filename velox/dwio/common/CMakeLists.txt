@@ -27,6 +27,7 @@ add_library(
   ColumnSelector.cpp
   Common.cpp
   DataBuffer.cpp
+  DataBufferHolder.cpp
   DataSink.cpp
   DecoderUtil.cpp
   DwioMetricsLog.cpp
@@ -34,6 +35,7 @@ add_library(
   IoStatistics.cpp
   MemoryInputStream.cpp
   Options.cpp
+  OutputStream.cpp
   ReaderFactory.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp

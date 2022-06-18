@@ -15,6 +15,7 @@
  */
 #include <algorithm>
 
+#include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 
@@ -22,7 +23,8 @@ namespace facebook::velox::dwrf {
 
 class ByteRleEncoderImpl : public ByteRleEncoder {
  public:
-  explicit ByteRleEncoderImpl(std::unique_ptr<BufferedOutputStream> output)
+  explicit ByteRleEncoderImpl(
+      std::unique_ptr<dwio::common::BufferedOutputStream> output)
       : outputStream{std::move(output)},
         numLiterals{0},
         repeat{false},
@@ -61,11 +63,12 @@ class ByteRleEncoderImpl : public ByteRleEncoder {
 
   uint64_t flush() override;
 
-  void recordPosition(PositionRecorder& recorder, int32_t strideIndex = -1)
-      const override;
+  void recordPosition(
+      dwio::common::PositionRecorder& recorder,
+      int32_t strideIndex = -1) const override;
 
  protected:
-  std::unique_ptr<BufferedOutputStream> outputStream;
+  std::unique_ptr<dwio::common::BufferedOutputStream> outputStream;
   std::array<char, RLE_MAX_LITERAL_SIZE> literals;
   int32_t numLiterals;
   bool repeat;
@@ -196,7 +199,7 @@ void ByteRleEncoderImpl::write(char value) {
 }
 
 void ByteRleEncoderImpl::recordPosition(
-    PositionRecorder& recorder,
+    dwio::common::PositionRecorder& recorder,
     int32_t strideIndex) const {
   outputStream->recordPosition(
       recorder, bufferLength, bufferPosition, strideIndex);
@@ -204,13 +207,14 @@ void ByteRleEncoderImpl::recordPosition(
 }
 
 std::unique_ptr<ByteRleEncoder> createByteRleEncoder(
-    std::unique_ptr<BufferedOutputStream> output) {
+    std::unique_ptr<dwio::common::BufferedOutputStream> output) {
   return std::make_unique<ByteRleEncoderImpl>(std::move(output));
 }
 
 class BooleanRleEncoderImpl : public ByteRleEncoderImpl {
  public:
-  explicit BooleanRleEncoderImpl(std::unique_ptr<BufferedOutputStream> output)
+  explicit BooleanRleEncoderImpl(
+      std::unique_ptr<dwio::common::BufferedOutputStream> output)
       : ByteRleEncoderImpl{std::move(output)}, bitsRemained{8}, current{0} {}
 
   uint64_t add(const char* data, const Ranges& ranges, const uint64_t* nulls)
@@ -235,8 +239,9 @@ class BooleanRleEncoderImpl : public ByteRleEncoderImpl {
     return ByteRleEncoderImpl::flush();
   }
 
-  void recordPosition(PositionRecorder& recorder, int32_t strideIndex = -1)
-      const override {
+  void recordPosition(
+      dwio::common::PositionRecorder& recorder,
+      int32_t strideIndex = -1) const override {
     ByteRleEncoderImpl::recordPosition(recorder, strideIndex);
     recorder.add(static_cast<uint64_t>(8 - bitsRemained), strideIndex);
   }
@@ -330,7 +335,7 @@ uint64_t BooleanRleEncoderImpl::addBits(
 }
 
 std::unique_ptr<ByteRleEncoder> createBooleanRleEncoder(
-    std::unique_ptr<BufferedOutputStream> output) {
+    std::unique_ptr<dwio::common::BufferedOutputStream> output) {
   return std::make_unique<BooleanRleEncoderImpl>(std::move(output));
 }
 

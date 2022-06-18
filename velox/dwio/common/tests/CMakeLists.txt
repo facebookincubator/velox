@@ -21,6 +21,7 @@ add_executable(
   TestBufferedInput.cpp
   TestColumnSelector.cpp
   TypeTests.cpp)
+
 add_test(velox_dwio_common_test velox_dwio_common_test)
 target_link_libraries(
   velox_dwio_common_test

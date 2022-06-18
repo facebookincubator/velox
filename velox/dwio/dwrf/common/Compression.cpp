@@ -15,7 +15,6 @@
  */
 
 #include "velox/dwio/dwrf/common/Compression.h"
-
 #include "velox/dwio/common/Common.h"
 #include "velox/dwio/common/compression/LzoDecompressor.h"
 #include "velox/dwio/common/exception/Exception.h"
@@ -433,17 +432,18 @@ bool ZlibDecompressionStream::Next(const void** data, int32_t* size) {
 
 } // namespace
 
-std::unique_ptr<BufferedOutputStream> createCompressor(
+std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
     dwio::common::CompressionKind kind,
     CompressionBufferPool& bufferPool,
-    DataBufferHolder& bufferHolder,
+    dwio::common::DataBufferHolder& bufferHolder,
     const Config& config,
     const Encrypter* encrypter) {
   std::unique_ptr<Compressor> compressor;
   switch (static_cast<int64_t>(kind)) {
     case dwio::common::CompressionKind_NONE:
       if (!encrypter) {
-        return std::make_unique<BufferedOutputStream>(bufferHolder);
+        return std::make_unique<dwio::common::BufferedOutputStream>(
+            bufferHolder);
       }
       // compressor remain as nullptr
       break;

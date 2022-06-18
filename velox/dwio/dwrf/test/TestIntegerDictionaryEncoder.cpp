@@ -16,6 +16,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
 
 using namespace testing;
