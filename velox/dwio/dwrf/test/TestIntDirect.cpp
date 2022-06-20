@@ -16,8 +16,7 @@
 
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
-#include "velox/dwio/dwrf/common/IntEncoder.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
 #include <gtest/gtest.h>

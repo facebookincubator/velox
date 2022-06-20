@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/IntEncoder.h"
-#include "velox/dwio/dwrf/common/RLEv1.h"
+#include "velox/dwio/common/IntEncoder.h"
+#include "velox/dwio/common/RLEv1.h"
 
 namespace facebook::velox::dwrf {
 

@@ -17,10 +17,10 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
+#include "velox/dwio/common/DirectDecoder.h"
+#include "velox/dwio/common/RLEv1.h"
 #include "velox/dwio/common/TypeUtils.h"
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
 #include "velox/dwio/dwrf/common/FloatingPointDecoder.h"
-#include "velox/dwio/dwrf/common/RLEv1.h"
 #include "velox/dwio/dwrf/reader/ColumnVisitors.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"

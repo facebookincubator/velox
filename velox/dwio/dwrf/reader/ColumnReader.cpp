@@ -15,10 +15,10 @@
  */
 
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exceptions.h"
-#include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
 #include "velox/type/Type.h"

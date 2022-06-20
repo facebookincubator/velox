@@ -20,8 +20,8 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
-#include "velox/dwio/dwrf/common/IntEncoder.h"
+#include "velox/dwio/common/IntDecoder.h"
+#include "velox/dwio/common/IntEncoder.h"
 
 #include <memory>
 

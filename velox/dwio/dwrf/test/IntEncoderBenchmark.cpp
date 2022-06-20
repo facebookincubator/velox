@@ -19,8 +19,8 @@
 #include <folly/init/Init.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/DataBufferHolder.h"
-#include "velox/dwio/dwrf/common/IntEncoder.h"
-#include "velox/dwio/dwrf/common/Range.h"
+#include "velox/dwio/common/IntEncoder.h"
+#include "velox/dwio/common/Range.h"
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;

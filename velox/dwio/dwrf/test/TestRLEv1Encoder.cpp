@@ -15,7 +15,7 @@
  */
 
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/dwrf/common/RLEv1.h"
+#include "velox/dwio/common/RLEv1.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 

@@ -17,13 +17,13 @@
 #pragma once
 
 #include <folly/Varint.h>
-#include "dwio/common/OutputStream.h"
+#include "velox/dwio/common/Range.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"
-#include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/Range.h"
+#include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
 

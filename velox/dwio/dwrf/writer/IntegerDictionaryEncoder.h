@@ -19,7 +19,7 @@
 #include <folly/container/F14Set.h>
 #include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
-#include "velox/dwio/dwrf/common/IntEncoder.h"
+#include "velox/dwio/common/IntEncoder.h"
 #include "velox/dwio/dwrf/writer/DictionaryEncodingUtils.h"
 
 namespace facebook::velox::dwrf {

@@ -17,7 +17,7 @@
 #include <folly/Varint.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "velox/dwio/dwrf/common/IntEncoder.h"
+#include "velox/dwio/common/IntEncoder.h"
 
 using namespace ::testing;
 

@@ -18,7 +18,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
+#include "velox/dwio/common/IntDecoder.h"
 
 namespace facebook::velox::dwrf {
 

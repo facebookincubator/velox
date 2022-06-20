@@ -30,13 +30,19 @@ add_library(
   DataBufferHolder.cpp
   DataSink.cpp
   DecoderUtil.cpp
+  DirectDecoder.cpp
   DwioMetricsLog.cpp
   InputStream.cpp
+  IntDecoder.cpp
+  IntEncoder.cpp
   IoStatistics.cpp
   MemoryInputStream.cpp
   Options.cpp
   OutputStream.cpp
+  Range.cpp
   ReaderFactory.cpp
+  RLEv1.cpp
+  RLEv2.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp
   TypeWithId.cpp)

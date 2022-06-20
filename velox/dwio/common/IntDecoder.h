@@ -20,10 +20,10 @@
 #include <folly/Range.h>
 #include <folly/Varint.h>
 #include "velox/common/encode/Coding.h"
+#include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/IntCodecCommon.h"
 
 namespace facebook::velox::dwrf {
 

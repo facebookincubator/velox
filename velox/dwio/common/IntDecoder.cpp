@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/common/base/SimdUtil.h"
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
-#include "velox/dwio/dwrf/common/RLEv1.h"
-#include "velox/dwio/dwrf/common/RLEv2.h"
+#include "velox/dwio/common/DirectDecoder.h"
+#include "velox/dwio/common/RLEv1.h"
+#include "velox/dwio/common/RLEv2.h"
 
 namespace facebook::velox::dwrf {
 

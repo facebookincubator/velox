@@ -23,9 +23,9 @@
 #include "folly/init/Init.h"
 #include "folly/lang/Bits.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/IntCodecCommon.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 
 using namespace facebook::velox::dwio;
 using namespace facebook::velox::dwrf;

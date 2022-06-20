@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/Range.h"
+#include "velox/dwio/common/Range.h"
 #include "velox/dwio/dwrf/writer/StatisticsBuilder.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"

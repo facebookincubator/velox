@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/RLEv1.h"
+#include "velox/dwio/common/RLEv1.h"
 
 #include <algorithm>
 

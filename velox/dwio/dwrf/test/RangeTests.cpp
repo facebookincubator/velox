@@ -16,7 +16,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "velox/dwio/dwrf/common/Range.h"
+#include "velox/dwio/common/Range.h"
 
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;

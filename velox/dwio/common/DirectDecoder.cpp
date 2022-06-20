@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
+#include "velox/dwio/common/DirectDecoder.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 

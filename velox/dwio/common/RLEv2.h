@@ -20,8 +20,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/DataBuffer.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 
 #include <vector>
 

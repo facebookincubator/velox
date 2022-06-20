@@ -19,16 +19,10 @@ add_library(
   Compression.cpp
   Config.cpp
   Decryption.cpp
-  DirectDecoder.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
-  IntDecoder.cpp
-  IntEncoder.cpp
   PagedInputStream.cpp
   PagedOutputStream.cpp
-  RLEv1.cpp
-  RLEv2.cpp
-  Range.cpp
   Statistics.cpp
   wrap/dwrf-proto-wrapper.cpp)
 

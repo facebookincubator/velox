@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/RLEv2.h"
+#include "velox/dwio/common/RLEv2.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 
 namespace facebook::velox::dwrf {
