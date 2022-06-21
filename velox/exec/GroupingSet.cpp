@@ -174,26 +174,15 @@ void GroupingSet::addInputForActiveRows(
   if (ignoreNullKeys_) {
     // A null in any of the keys disables the row.
     deselectRowsWithNulls(*input, keyChannels_, activeRows_, execCtx_);
-    for (int32_t i = 0; i < hashers.size(); ++i) {
-      auto key = input->loadedChildAt(hashers[i]->channel());
-      if (mode != BaseHashTable::HashMode::kHash) {
-        if (!hashers[i]->computeValueIds(*key, activeRows_, lookup_->hashes)) {
-          rehash = true;
-        }
-      } else {
-        hashers[i]->hash(*key, activeRows_, i > 0, lookup_->hashes);
+  }
+  for (int32_t i = 0; i < hashers.size(); ++i) {
+    auto key = input->loadedChildAt(hashers[i]->channel());
+    if (mode != BaseHashTable::HashMode::kHash) {
+      if (!hashers[i]->computeValueIds(*key, activeRows_, lookup_->hashes)) {
+        rehash = true;
       }
-    }
-  } else {
-    for (int32_t i = 0; i < hashers.size(); ++i) {
-      auto key = input->loadedChildAt(hashers[i]->channel());
-      if (mode != BaseHashTable::HashMode::kHash) {
-        if (!hashers[i]->computeValueIds(*key, activeRows_, lookup_->hashes)) {
-          rehash = true;
-        }
-      } else {
-        hashers[i]->hash(*key, activeRows_, i > 0, lookup_->hashes);
-      }
+    } else {
+      hashers[i]->hash(*key, activeRows_, i > 0, lookup_->hashes);
     }
   }
 
