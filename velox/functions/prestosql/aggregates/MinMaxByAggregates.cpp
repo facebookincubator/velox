@@ -1686,7 +1686,6 @@ class NonNumericMinMaxByAggregate : public exec::Aggregate {
   inline SingleValueAccumulator* valueAccumulator(char* group) {
     auto* object = reinterpret_cast<SingleValueAccumulator*>(
         group + valueAccumulatorOffset());
-    SingleValueAccumulator& objectRef = *object;
     return reinterpret_cast<SingleValueAccumulator*>(
         group + valueAccumulatorOffset());
   }
