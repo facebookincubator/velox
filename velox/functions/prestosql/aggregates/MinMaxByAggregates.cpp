@@ -341,7 +341,9 @@ template <typename T, typename U>
 class NumericMaxByAggregate : public NumericMinMaxByAggregate<T, U> {
  public:
   explicit NumericMaxByAggregate(TypePtr resultType)
-      : NumericMinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::min()) {}
+      : NumericMinMaxByAggregate<T, U>(
+            resultType,
+            std::numeric_limits<U>::min()) {}
 
   void addRawInput(
       char** groups,
@@ -392,8 +394,9 @@ template <typename T, typename U>
 class NumericMinByAggregate : public NumericMinMaxByAggregate<T, U> {
  public:
   explicit NumericMinByAggregate(TypePtr resultType)
-      : NumericMinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::max()) {
-  }
+      : NumericMinMaxByAggregate<T, U>(
+            resultType,
+            std::numeric_limits<U>::max()) {}
 
   void addRawInput(
       char** groups,
@@ -520,6 +523,7 @@ class MinMaxByAggregateWithNonNumericValue : public exec::Aggregate {
       valueAccumulator(group)->destroy(allocator_);
     }
   }
+
  protected:
   template <typename MayUpdate>
   void addRawInput(
@@ -659,7 +663,8 @@ class MinMaxByAggregateWithNonNumericValue : public exec::Aggregate {
             nullValue,
             mayUpdate);
       });
-    } else if (decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
+    } else if (
+        decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedComparisonValue.isNullAt(i)) {
           return;
@@ -1210,10 +1215,10 @@ class MinMaxByAggregateWithNonNumericComparison : public exec::Aggregate {
       return;
     }
     valueIsNull(group) = isValueNull;
-      if (LIKELY((!isValueNull))) {
+    if (LIKELY((!isValueNull))) {
       value(group) = newValue;
-      }
-      accumulator->write(decodedComparisonVector.base(), index, allocator_);
+    }
+    accumulator->write(decodedComparisonVector.base(), index, allocator_);
   }
 
   inline T& value(char* group) {
@@ -1457,7 +1462,12 @@ class NonNumericMinMaxByAggregate : public exec::Aggregate {
       const bool nullValue = decodedValue.isNullAt(0);
       rows.applyToSelected([&](vector_size_t i) {
         updateValues(
-            groups[i], i, decodedValue, decodedComparisonValue, nullValue, mayUpdate);
+            groups[i],
+            i,
+            decodedValue,
+            decodedComparisonValue,
+            nullValue,
+            mayUpdate);
       });
     } else if (
         decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
@@ -1560,7 +1570,12 @@ class NonNumericMinMaxByAggregate : public exec::Aggregate {
       const bool nullValue = decodedValue.isNullAt(0);
       rows.applyToSelected([&](vector_size_t /*i*/) {
         updateValues(
-            group, 0, decodedValue, decodedComparisonValue, nullValue, mayUpdate);
+            group,
+            0,
+            decodedValue,
+            decodedComparisonValue,
+            nullValue,
+            mayUpdate);
       });
     } else if (
         decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
@@ -1693,9 +1708,7 @@ class NonNumericMinMaxByAggregate : public exec::Aggregate {
 
 class NonNumericMaxByAggregate : public NonNumericMinMaxByAggregate {
  public:
-  explicit NonNumericMaxByAggregate(
-      TypePtr resultType,
-      TypePtr comparisonType)
+  explicit NonNumericMaxByAggregate(TypePtr resultType, TypePtr comparisonType)
       : NonNumericMinMaxByAggregate(resultType, comparisonType) {}
 
   void addRawInput(
@@ -1745,9 +1758,7 @@ class NonNumericMaxByAggregate : public NonNumericMinMaxByAggregate {
 
 class NonNumericMinByAggregate : public NonNumericMinMaxByAggregate {
  public:
-  explicit NonNumericMinByAggregate(
-      TypePtr resultType,
-      TypePtr comparisonType)
+  explicit NonNumericMinByAggregate(TypePtr resultType, TypePtr comparisonType)
       : NonNumericMinMaxByAggregate(resultType, comparisonType) {}
 
   void addRawInput(
@@ -1839,11 +1850,14 @@ std::unique_ptr<exec::Aggregate> createWithNonNumericValue(
     case TypeKind::TINYINT:
       return std::make_unique<AggregateWithNonNumericValue<int8_t>>(resultType);
     case TypeKind::SMALLINT:
-      return std::make_unique<AggregateWithNonNumericValue<int16_t>>(resultType);
+      return std::make_unique<AggregateWithNonNumericValue<int16_t>>(
+          resultType);
     case TypeKind::INTEGER:
-      return std::make_unique<AggregateWithNonNumericValue<int32_t>>(resultType);
+      return std::make_unique<AggregateWithNonNumericValue<int32_t>>(
+          resultType);
     case TypeKind::BIGINT:
-      return std::make_unique<AggregateWithNonNumericValue<int64_t>>(resultType);
+      return std::make_unique<AggregateWithNonNumericValue<int64_t>>(
+          resultType);
     case TypeKind::REAL:
       return std::make_unique<AggregateWithNonNumericValue<float>>(resultType);
     case TypeKind::DOUBLE:

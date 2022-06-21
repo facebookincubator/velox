@@ -1408,13 +1408,8 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       // Max by non-numeric comparison type.
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8, 30, 10}),
-           makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ewd",
-                 std::nullopt}),
+            makeNullableFlatVector<std::string>(
+                {"abc", std::nullopt, "wef", "wef", "ewd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3})}),
        "c2",
        "max_by(c0, c1)",
@@ -1422,12 +1417,7 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8, 30, 10}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "whd",
-                 std::nullopt}),
+                {"abc", std::nullopt, "wef", "wef", "whd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1})}),
        "c2",
        "max_by(c0, c1)",
@@ -1435,36 +1425,18 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       // Max by both non-numeric value and comparison types.
       {makeRowVector(
            {makeNullableFlatVector<std::string>(
-                {std::nullopt, "abc",
-                 "tgi",
-                 "wef",
-                 "abc",
-                 std::nullopt}),
+                {std::nullopt, "abc", "tgi", "wef", "abc", std::nullopt}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ewd",
-                 std::nullopt}),
+                {"abc", std::nullopt, "wef", "wef", "ewd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3})}),
        "c2",
        "max_by(c0, c1)",
        "SELECT * FROM( VALUES (1, NULL), (2, 'tgi'), (3, 'abc')) AS t"},
       {makeRowVector(
            {makeNullableFlatVector<std::string>(
-                {std::nullopt, "abc",
-                 "tgi",
-                 "wef",
-                 "abc",
-                 std::nullopt}),
+                {std::nullopt, "abc", "tgi", "wef", "abc", std::nullopt}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ewd",
-                 std::nullopt}),
+                {"abc", std::nullopt, "wef", "wef", "ewd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1})}),
        "c2",
        "max_by(c0, c1)",
@@ -1513,12 +1485,7 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8, 30, 10}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ewd",
-                 "wef"}),
+                {"abc", std::nullopt, "wef", "wef", "ewd", "wef"}),
             makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3})}),
        "c2",
        "min_by(c0, c1)",
@@ -1526,12 +1493,7 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8, 30, 10}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ab",
-                 std::nullopt}),
+                {"abc", std::nullopt, "wef", "wef", "ab", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1})}),
        "c2",
        "min_by(c0, c1)",
@@ -1539,27 +1501,16 @@ TEST_F(MinMaxByAggregationTest, minMaxByFinalGroupByCase) {
       // Min by both non-numeric value and comparison types.
       {makeRowVector(
            {makeNullableFlatVector<std::string>(
-                {std::nullopt, "abc",
-                 "tgi",
-                 "wef",
-                 "abc",
-                 std::nullopt}),
+                {std::nullopt, "abc", "tgi", "wef", "abc", std::nullopt}),
             makeNullableFlatVector<std::string>(
-                {"abc",
-                 std::nullopt,
-                 "wef",
-                 "wef",
-                 "ewd",
-                 std::nullopt}),
+                {"abc", std::nullopt, "wef", "wef", "ewd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 2, 2, 3, 3})}),
        "c2",
        "min_by(c0, c1)",
        "SELECT * FROM( VALUES (1, NULL), (2, 'tgi'), (3, 'abc')) AS t"},
       {makeRowVector(
            {makeNullableFlatVector<std::string>(
-                {std::nullopt, "abc",
-                 "tgi",
-                 "wef", "abc", std::nullopt}),
+                {std::nullopt, "abc", "tgi", "wef", "abc", std::nullopt}),
             makeNullableFlatVector<std::string>(
                 {"abc", std::nullopt, "wef", "ab", "ewd", std::nullopt}),
             makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1})}),
