@@ -15,10 +15,9 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <memory>
 #include <type_traits>
-
-#include <folly/container/F14Map.h>
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/vector/SimpleVector.h"
@@ -176,6 +175,21 @@ class DictionaryVector : public SimpleVector<T> {
   void addNulls(const uint64_t* bits, const SelectivityVector& rows) override {
     flatNullsBuffer_ = nullptr;
     BaseVector::addNulls(bits, rows);
+
+    // Resize indices_ to be as large as nulls buffer.
+    // We do this only when we know that the indices
+    // are not being used elsewhere.
+    if (indices_->refCount() == 1) {
+      auto indices = mutableIndices(std::max(rows.end(), BaseVector::length_));
+      auto rawIndices = indices->template asMutable<vector_size_t>();
+
+      // Set the new indices_ to point to 0.
+      bits::forEachUnsetBit(
+          BaseVector::rawNulls_,
+          rows.begin(),
+          rows.end(),
+          [&rawIndices](auto row) { rawIndices[row] = 0; });
+    }
   }
 
   void clearNulls(const SelectivityVector& rows) override {

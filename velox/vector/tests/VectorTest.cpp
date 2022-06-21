@@ -1671,3 +1671,33 @@ TEST_F(VectorTest, multipleDictionariesOverLazy) {
     ASSERT_EQ(i, dict->as<SimpleVector<int32_t>>()->valueAt(i));
   }
 }
+
+TEST_F(VectorTest, dictionaryAddNulls) {
+  auto vectorMaker = test::VectorMaker(pool_.get());
+  auto flatVector = vectorMaker.flatVector<int32_t>({1, 2, 3, 4});
+
+  auto dictionarySize = flatVector->size();
+  auto indices = allocateIndices(dictionarySize, pool_.get());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (auto i = 0; i < dictionarySize; i++) {
+    rawIndices[i] = i;
+  }
+  auto dictionaryVector = BaseVector::wrapInDictionary(
+      nullptr, indices, dictionarySize, flatVector);
+
+  // Try and append nulls at the end of dictionary vector.
+  auto newDictionarySize = dictionarySize * 2;
+  SelectivityVector rows(newDictionarySize);
+
+  rows.setValidRange(dictionarySize, newDictionarySize, false);
+  rows.updateBounds();
+
+  dictionaryVector->addNulls(nullptr, rows);
+  auto vectorIndices =
+      dictionaryVector->as<DictionaryVector<int32_t>>()->indices();
+  auto rawVectorIndices = vectorIndices->as<vector_size_t>();
+
+  for (auto i = dictionarySize; i < newDictionarySize; i++) {
+    ASSERT_EQ(0, rawVectorIndices[i]);
+  }
+}
