@@ -1539,7 +1539,7 @@ TEST_F(MinMaxByAggregationTest, randomMinMaxByGlobalBy) {
   }
 }
 
-TEST_F(MinMaxByAggregationTest, minMaxByGroupBy) {
+TEST_F(MinMaxByAggregationTest, randomMinMaxByGroupBy) {
   const auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
   for (const bool isMinBy : {false, true}) {
