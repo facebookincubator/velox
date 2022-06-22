@@ -20,7 +20,7 @@
 
 DEFINE_bool(
     use_mmap_allocator_for_memory_pool,
-    false,
+    true,
     "If true, use MmapMemoryAllocator to allocate memroy for MemoryPool");
 
 namespace facebook {

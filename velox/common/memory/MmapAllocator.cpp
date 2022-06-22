@@ -19,6 +19,11 @@
 
 #include <sys/mman.h>
 
+DEFINE_bool(
+    use_large_pool,
+    true,
+    "Keep separate pool for allocations over max size class");
+
 namespace facebook::velox::memory {
 
 MmapAllocator::MmapAllocator(const MmapAllocatorOptions& options)
@@ -32,6 +37,7 @@ MmapAllocator::MmapAllocator(const MmapAllocatorOptions& options)
   for (int size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
   }
+  arena_ = std::make_unique<Arena>(capacity_ * kPageSize);
 }
 
 bool MmapAllocator::allocate(
@@ -157,9 +163,14 @@ bool MmapAllocator::allocateContiguous(
   }
   int64_t numLargeCollateralPages = allocation.numPages();
   if (numLargeCollateralPages) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
-      LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+    if (FLAGS_use_large_pool) {
+      std::lock_guard<std::mutex> l(arenaMutex_);
+      arena_->free(allocation.data(), allocation.size());
+    } else {
+      if (munmap(allocation.data(), allocation.size()) < 0) {
+        LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
+                   << ", " << allocation.size();
+      }
     }
     allocation.reset(nullptr, nullptr, 0);
   }
@@ -229,13 +240,18 @@ bool MmapAllocator::allocateContiguous(
     injectedFailure_ = Failure::kNone;
     data = nullptr;
   } else {
-    data = mmap(
-        nullptr,
-        numPages * kPageSize,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0);
+    if (FLAGS_use_large_pool) {
+      std::lock_guard<std::mutex> l(arenaMutex_);
+      data = arena_->allocate(numPages * kPageSize);
+    } else {
+      data = mmap(
+          nullptr,
+          numPages * kPageSize,
+          PROT_READ | PROT_WRITE,
+          MAP_PRIVATE | MAP_ANONYMOUS,
+          -1,
+          0);
+    }
   }
   if (!data) {
     // If the mmap failed, we have unmapped former 'allocation' and
@@ -250,9 +266,14 @@ bool MmapAllocator::allocateContiguous(
 
 void MmapAllocator::freeContiguous(ContiguousAllocation& allocation) {
   if (allocation.data() && allocation.size()) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
-      LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+    if (FLAGS_use_large_pool) {
+      std::lock_guard<std::mutex> l(arenaMutex_);
+      arena_->free(allocation.data(), allocation.size());
+    } else {
+      if (munmap(allocation.data(), allocation.size()) < 0) {
+        LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
+                   << ", " << allocation.size();
+      }
     }
     numMapped_ -= allocation.numPages();
     numExternalMapped_ -= allocation.numPages();

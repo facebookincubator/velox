@@ -347,6 +347,9 @@ class MmapAllocator : public MappedMemory {
 
   std::vector<std::unique_ptr<SizeClass>> sizeClasses_;
 
+  std::mutex arenaMutex_;
+  std::unique_ptr<Arena> arena_;
+
   // Statistics. Not atomic.
   uint64_t numAllocations_ = 0;
   uint64_t numAllocatedPages_ = 0;
