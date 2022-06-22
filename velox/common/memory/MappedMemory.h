@@ -26,11 +26,82 @@
 #include <gflags/gflags.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
+#include "velox/common/time/Timer.h"
 
 DECLARE_bool(velox_use_malloc);
 DECLARE_int32(velox_memory_pool_mb);
 
 namespace facebook::velox::memory {
+
+struct SizeStats {
+  int32_t size;
+  int64_t allocClocks;
+  int64_t freeClocks;
+  int64_t numAlloc;
+  int64_t cumBytes;
+
+  SizeStats operator-(const SizeStats& other) const {
+    SizeStats result;
+    result.size = size;
+    result.allocClocks = allocClocks - other.allocClocks;
+    result.allocClocks = freeClocks - other.freeClocks;
+    result.numAlloc = numAlloc - other.numAlloc;
+    result.cumBytes = cumBytes - other.cumBytes;
+    return result;
+  }
+
+  uint64_t clocks() const {
+    return allocClocks + freeClocks;
+  }
+};
+
+struct Stats {
+  static constexpr int32_t kNumSizes = 20;
+  Stats() {
+    for (auto i = 0; i < sizes.size(); ++i) {
+      sizes[i].size = 1 << i;
+    }
+  }
+
+  Stats operator-(const Stats& stats) const;
+
+  template <typename Op>
+  void recordAlloc(int64_t bytes, Op op) {
+    uint64_t clocks{0};
+    auto index = sizeIndex(bytes);
+    {
+      velox::ClockTimer timer(&clocks);
+      op();
+    }
+    ++sizes[index].numAlloc;
+    sizes[index].cumBytes += bytes;
+    sizes[index].allocClocks += clocks;
+  }
+
+  template <typename Op>
+  void recordFree(int64_t bytes, Op op) {
+    uint64_t clocks = 0;
+    auto index = sizeIndex(bytes);
+    {
+      ClockTimer timer(&clocks);
+      op();
+    }
+    sizes[index].freeClocks += clocks;
+  }
+
+  std::string toString() const;
+
+  int32_t sizeIndex(int64_t size) {
+    if (!size) {
+      return 0;
+    }
+    int64_t power = bits::nextPowerOfTwo(size / 4096);
+    return std::min(kNumSizes - 1, 63 - bits::countLeadingZeros(power));
+  }
+
+  std::array<SizeStats, kNumSizes> sizes;
+  int64_t numAdvise;
+};
 
 class ScopedMappedMemory;
 
@@ -325,6 +396,10 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
         totalLargeAllocateBytes_};
   }
 
+  virtual Stats stats() const {
+    return Stats();
+  }
+
   virtual std::string toString() const;
 
  protected:
@@ -361,6 +436,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   // by getInstance().
   static MappedMemory* FOLLY_NULLABLE customInstance_;
   static std::mutex initMutex_;
+
   // Static counters for STL and memoryPool users of
   // MappedMemory. Updated by allocateBytes() and freeBytes(). These
   // are intended to be exported via StatsReporter. These are
@@ -443,6 +519,10 @@ class ScopedMappedMemory final : public MappedMemory {
 
   MemoryUsageTracker* FOLLY_NULLABLE tracker() const override {
     return tracker_.get();
+  }
+
+  Stats stats() const override {
+    return parent_->stats();
   }
 
  private:

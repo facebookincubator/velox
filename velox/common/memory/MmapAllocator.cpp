@@ -64,8 +64,13 @@ bool MmapAllocator::allocate(
   }
   MachinePageCount newMapsNeeded = 0;
   for (int i = 0; i < mix.numSizes; ++i) {
-    if (!sizeClasses_[mix.sizeIndices[i]]->allocate(
-            mix.sizeCounts[i], owner, newMapsNeeded, out)) {
+    bool success;
+    stats_.recordAlloc(
+        mix.sizeCounts[i] * sizeClassSizes_[i] * kPageSize, [&]() {
+          success = sizeClasses_[mix.sizeIndices[i]]->allocate(
+              mix.sizeCounts[i], owner, newMapsNeeded, out);
+        });
+    if (!success) {
       // This does not normally happen since any size class can accommodate
       // all the capacity. 'allocatedPages_' must be out of sync.
       LOG(WARNING) << "Failed allocation in size class " << i << " for "
@@ -123,14 +128,23 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
   }
   MachinePageCount numFreed = 0;
 
-  for (auto& sizeClass : sizeClasses_) {
-    numFreed += sizeClass->free(allocation);
+  for (auto i = 0; i < sizeClasses_.size(); ++i) {
+    auto& sizeClass = sizeClasses_[i];
+    int32_t pages = 0;
+    uint64_t clocks = 0;
+    {
+      ClockTimer timer(&clocks);
+      pages = sizeClass->free(allocation);
+    }
+    if (pages)
+      stats_.sizes[i].freeClocks += clocks;
+    numFreed += pages;
   }
   allocation.clear();
   return numFreed;
 }
 
-bool MmapAllocator::allocateContiguous(
+bool MmapAllocator::allocateContiguousImpl(
     MachinePageCount numPages,
     MmapAllocator::Allocation* FOLLY_NULLABLE collateral,
     MmapAllocator::ContiguousAllocation& allocation,
@@ -248,7 +262,7 @@ bool MmapAllocator::allocateContiguous(
   return true;
 }
 
-void MmapAllocator::freeContiguous(ContiguousAllocation& allocation) {
+void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
   if (allocation.data() && allocation.size()) {
     if (munmap(allocation.data(), allocation.size()) < 0) {
       LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()

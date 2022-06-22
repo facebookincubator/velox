@@ -380,6 +380,7 @@ TEST_P(MappedMemoryTest, increasingSizeWithThreadsTest) {
   allocations.clear();
   EXPECT_TRUE(instance_->checkConsistency());
   EXPECT_EQ(instance_->numAllocated(), 0);
+  LOG(INFO) << "Stats: " << instance_->stats().toString();
 }
 
 TEST_P(MappedMemoryTest, scopedMemoryUsageTracking) {

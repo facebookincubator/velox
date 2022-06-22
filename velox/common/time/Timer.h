@@ -16,6 +16,7 @@
 #pragma once
 
 #include <chrono>
+#include <folly/chrono/Hardware.h>
 
 namespace facebook::velox {
 
@@ -35,6 +36,19 @@ class MicrosecondTimer {
  private:
   std::chrono::steady_clock::time_point start_;
   uint64_t* timer_;
+};
+
+class ClockTimer {
+ public:
+  explicit ClockTimer(uint64_t* FOLLY_NONNULL total)
+    : total_(total), start_(folly::hardware_timestamp()) {}
+  ~ClockTimer() {
+    *total_ += folly::hardware_timestamp() - start_;
+  }
+
+ private:
+  uint64_t* FOLLY_NONNULL total_;
+  uint64_t start_;
 };
 
 // Returns the current epoch time in milliseconds.
