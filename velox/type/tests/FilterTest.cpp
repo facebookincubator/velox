@@ -1148,6 +1148,16 @@ TEST(FilterTest, mergeWithBigint) {
   filters.push_back(in({1, 2, 3, 67, 10'134}));
   filters.push_back(in({1, 2, 3, 67, 10'134}, true));
 
+  // NOT IN-list.
+  filters.push_back(notIn({1, 2, 3, 67'000'000'000, 134}));
+  filters.push_back(notIn({1, 2, 3, 67'000'000'000, 134}, true));
+  filters.push_back(notIn({1, 3, 5, 7, 67'000'000'000, 122}));
+  filters.push_back(notIn({1, 3, 5, 7, 67'000'000'000, 122}, true));
+  filters.push_back(notIn({-4, -3, -2, -1, 0, 1, 2}));
+  filters.push_back(notIn({-4, -3, -2, -1, 0, 1, 2}, true));
+  filters.push_back(notIn({122, 150, 151, 210, 213, 251}));
+  filters.push_back(notIn({122, 150, 151, 210, 213, 251}, true));
+
   for (const auto& left : filters) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
@@ -1236,6 +1246,24 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
   // IN-list using hash table.
   filters.push_back(in({1, 2, 3, 67, 10'134}));
   filters.push_back(in({1, 2, 3, 67, 10'134}, true));
+
+  // NOT IN-list using bitmask.
+  filters.push_back(notIn({0, 3, 5, 20, 32, 210}));
+  filters.push_back(notIn({0, 3, 5, 20, 32, 210}, true));
+  filters.push_back(notIn({3, 7, 9, 45, 46, 47, 48}));
+  filters.push_back(notIn({3, 7, 9, 45, 46, 47, 48}, true));
+
+  filters.push_back(notIn({12, 18}));
+  std::vector<int64_t> rejectionRange;
+  rejectionRange.push_back(12);
+  for (int i = 25; i <= 47; ++i) {
+    rejectionRange.push_back(i);
+  }
+  filters.push_back(notIn(rejectionRange));
+
+  // NOT IN-list using hash table.
+  filters.push_back(notIn({0, 3, 5, 20, 32, 15'210}));
+  filters.push_back(notIn({0, 3, 5, 20, 32, 15'210}, true));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {
