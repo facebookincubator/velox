@@ -15,8 +15,10 @@
  */
 
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
+
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
@@ -362,12 +364,12 @@ IntegerDirectColumnReader<ReqT>::IntegerDirectColumnReader(
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
   if (stripe.getFormat() == dwio::common::FileFormat::DWRF) {
-    ints = IntDecoder</*isSigned*/ true>::createDirect(
+    ints = createDirectDecoder</*isSigned*/ true>(
         stripe.getStream(data, true), dataVInts, numBytes);
   } else {
     auto encoding = stripe.getEncoding(encodingKey);
     RleVersion vers = convertRleVersion(encoding.kind());
-    ints = IntDecoder</*isSigned*/ true>::createRle(
+    ints = createRleDecoder</*isSigned*/ true>(
         stripe.getStream(data, true), vers, memoryPool_, dataVInts, numBytes);
   }
 }
@@ -495,7 +497,7 @@ IntegerDictionaryColumnReader<ReqT>::IntegerDictionaryColumnReader(
   RleVersion vers = convertRleVersion(encoding.kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
-  dataReader = IntDecoder</* isSigned = */ false>::createRle(
+  dataReader = createRleDecoder</* isSigned = */ false>(
       stripe.getStream(data, true), vers, memoryPool_, dataVInts, numBytes);
 
   // make a lazy dictionary initializer
@@ -608,11 +610,11 @@ TimestampColumnReader::TimestampColumnReader(
   RleVersion vers = convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool vints = stripe.getUseVInts(data);
-  seconds = IntDecoder</*isSigned*/ true>::createRle(
+  seconds = createRleDecoder</*isSigned*/ true>(
       stripe.getStream(data, true), vers, memoryPool_, vints, LONG_BYTE_SIZE);
   auto nanoData = encodingKey.forKind(proto::Stream_Kind_NANO_DATA);
   bool nanoVInts = stripe.getUseVInts(nanoData);
-  nano = IntDecoder</*isSigned*/ false>::createRle(
+  nano = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(nanoData, true),
       vers,
       memoryPool_,
@@ -922,7 +924,7 @@ StringDictionaryColumnReader::StringDictionaryColumnReader(
 
   const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dictVInts = stripe.getUseVInts(dataId);
-  dictIndex = IntDecoder</*isSigned*/ false>::createRle(
+  dictIndex = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(dataId, true),
       rleVersion,
       memoryPool_,
@@ -931,7 +933,7 @@ StringDictionaryColumnReader::StringDictionaryColumnReader(
 
   const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
-  lengthDecoder = IntDecoder</*isSigned*/ false>::createRle(
+  lengthDecoder = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, false),
       rleVersion,
       memoryPool_,
@@ -961,7 +963,7 @@ StringDictionaryColumnReader::StringDictionaryColumnReader(
     const auto strideDictLenId =
         encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
     bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
-    strideDictLengthDecoder = IntDecoder</*isSigned*/ false>::createRle(
+    strideDictLengthDecoder = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(strideDictLenId, true),
         rleVersion,
         memoryPool_,
@@ -1408,7 +1410,7 @@ StringDirectColumnReader::StringDirectColumnReader(
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
-  length = IntDecoder</*isSigned*/ false>::createRle(
+  length = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true),
       rleVersion,
       memoryPool_,
@@ -1692,7 +1694,7 @@ ListColumnReader::ListColumnReader(
 
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool vints = stripe.getUseVInts(lenId);
-  length = IntDecoder</*isSigned*/ false>::createRle(
+  length = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true), vers, memoryPool_, vints, INT_BYTE_SIZE);
 
   const auto& cs = stripe.getColumnSelector();
@@ -1850,7 +1852,7 @@ MapColumnReader::MapColumnReader(
 
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool vints = stripe.getUseVInts(lenId);
-  length = IntDecoder</*isSigned*/ false>::createRle(
+  length = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true), vers, memoryPool_, vints, INT_BYTE_SIZE);
 
   const auto& cs = stripe.getColumnSelector();

@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-#include <folly/ScopeGuard.h>
+#include "velox/dwio/dwrf/reader/StripeStream.h"
 
 #include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/wrap/coded-stream-wrapper.h"
-#include "velox/dwio/dwrf/reader/StripeStream.h"
+
+#include <folly/ScopeGuard.h>
 
 namespace facebook::velox::dwrf {
 
@@ -121,7 +123,7 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
   DWIO_ENSURE(dataStream.get());
   stripeDictionaryCache_->registerIntDictionary(
       localEk,
-      [dictReader = IntDecoder</* isSigned = */ true>::createDirect(
+      [dictReader = createDirectDecoder</* isSigned = */ true>(
            std::move(dataStream), dictVInts, elementWidth),
        dictionaryWidth,
        dictionarySize](velox::memory::MemoryPool* pool) mutable {

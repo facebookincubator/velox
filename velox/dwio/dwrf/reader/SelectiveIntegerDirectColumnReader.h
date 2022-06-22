@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerColumnReader.h"
 
 namespace facebook::velox::dwrf {
@@ -38,7 +39,7 @@ class SelectiveIntegerDirectColumnReader : public SelectiveIntegerColumnReader {
     EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
     auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
     bool dataVInts = stripe.getUseVInts(data);
-    auto decoder = IntDecoder</*isSigned*/ true>::createDirect(
+    auto decoder = createDirectDecoder</*isSigned*/ true>(
         stripe.getStream(data, true), dataVInts, numBytes);
     auto rawDecoder = decoder.release();
     auto directDecoder = dynamic_cast<DirectDecoder<true>*>(rawDecoder);

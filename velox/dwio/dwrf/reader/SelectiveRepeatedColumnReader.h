@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
@@ -48,7 +49,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
     auto rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
     auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
     bool lenVints = stripe.getUseVInts(lenId);
-    length_ = IntDecoder</*isSigned*/ false>::createRle(
+    length_ = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(lenId, true),
         rleVersion,
         memoryPool_,
