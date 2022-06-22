@@ -16,14 +16,15 @@
 
 #pragma once
 
-#include <folly/Likely.h>
-#include <folly/Range.h>
-#include <folly/Varint.h>
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/StreamUtil.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/IntCodecCommon.h"
+
+#include <folly/Likely.h>
+#include <folly/Range.h>
+#include <folly/Varint.h>
 
 namespace facebook::velox::dwrf {
 
@@ -102,27 +103,6 @@ class IntDecoder {
   size_t loadIndices(size_t startIndex) {
     return inputStream->positionSize() + startIndex + 1;
   }
-
-  /**
-   * Create an RLE decoder.
-   * @param input the input stream to read from
-   * @param version version of RLE decoding to do
-   * @param pool memory pool to use for allocation
-   */
-  static std::unique_ptr<IntDecoder<isSigned>> createRle(
-      std::unique_ptr<dwio::common::SeekableInputStream> input,
-      RleVersion version,
-      memory::MemoryPool& pool,
-      bool useVInts,
-      uint32_t numBytes);
-
-  /**
-   * Create a direct decoder
-   */
-  static std::unique_ptr<IntDecoder<isSigned>> createDirect(
-      std::unique_ptr<dwio::common::SeekableInputStream> input,
-      bool useVInts,
-      uint32_t numBytes);
 
   void skipLongs(uint64_t numValues);
 
