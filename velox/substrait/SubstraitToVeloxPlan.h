@@ -109,17 +109,56 @@ class SubstraitVeloxPlanConverter {
   /// name>:<arg_type0>_<arg_type1>_..._<arg_typeN>
   const std::string& findFunction(uint64_t id) const;
 
+  /// Used to insert certain plan node as input. The plan node
+  /// id will start from the setted one.
+  void insertInputNode(
+      uint64_t inputIdx,
+      const core::PlanNodePtr& inputNode,
+      int planNodeId) {
+    inputNodesMap_[inputIdx] = inputNode;
+    planNodeId_ = planNodeId;
+  }
+
+  /// Used to check if ReadRel specifies an input of stream.
+  /// If yes, the index of input stream will be returned.
+  /// If not, -1 will be returned.
+  int32_t streamIsInput(const ::substrait::ReadRel& sRel);
+
  private:
   /// Returns unique ID to use for plan node. Produces sequential numbers
   /// starting from zero.
   std::string nextPlanNodeId();
 
-  /// Used to convert Substrait Filter into Velox SubfieldFilters which will
+  /// Convert Substrait Filter into Velox SubfieldFilters which will
   /// be used in TableScan.
   connector::hive::SubfieldFilters toVeloxFilter(
       const std::vector<std::string>& inputNameList,
       const std::vector<TypePtr>& inputTypeList,
       const ::substrait::Expression& substraitFilter);
+
+  /// Used to check whether aggregate function intermediateType is row.
+  bool isRowIntermediateType(std::string name);
+
+  /// Used to check if some of the input columns of Aggregation
+  /// should be combined into a single column. Currently, this case occurs in
+  /// final Average. The phase of Aggregation will also be set.
+  bool needsRowConstruct(
+      const ::substrait::AggregateRel& sAgg,
+      core::AggregationNode::Step& aggStep);
+
+  /// convert AggregateRel into Velox plan node.
+  /// This method will add a Project node before Aggregation to combine columns.
+  core::PlanNodePtr toVeloxAggWithRowConstruct(
+      const ::substrait::AggregateRel& sAgg,
+      const core::PlanNodePtr& childNode,
+      const core::AggregationNode::Step& aggStep);
+
+  /// Used to convert AggregateRel into Velox plan node.
+  /// The output of child node will be used as the input of Aggregation.
+  core::PlanNodePtr toVeloxAgg(
+      const ::substrait::AggregateRel& sAgg,
+      const core::PlanNodePtr& childNode,
+      const core::AggregationNode::Step& aggStep);
 
   /// Multiple conditions are connected to a binary tree structure with
   /// the relation key words, including AND, OR, and etc. Currently, only
@@ -148,6 +187,14 @@ class SubstraitVeloxPlanConverter {
   /// Mapping from leaf plan node ID to splits.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<SplitInfo>>
       splitInfoMap_;
+
+  /// The map storing the pre-built plan nodes which can be accessed through
+  /// index. This map is only used when the computation of a Substrait plan
+  /// depends on other input nodes.
+  std::unordered_map<uint64_t, core::PlanNodePtr> inputNodesMap_;
+
+  /// A flag used to specify validation.
+  bool validationMode_ = false;
 };
 
 } // namespace facebook::velox::substrait
