@@ -116,7 +116,7 @@ class MmapAllocator : public MappedMemory {
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
   static constexpr int32_t kNoLastLookup = -1;
-  
+
   // Represents a range of virtual addresses used for allocating entries of
   // 'unitSize_' machine pages.
   class SizeClass {
@@ -202,10 +202,10 @@ class MmapAllocator : public MappedMemory {
         MachinePageCount& numUnmapped,
         Allocation& allocation);
 
-    //int32_t findCandidateWord();
-    //void markFree(int32_t page);
-    //void markAllocated(int32_t page);
-    
+    // int32_t findCandidateWord();
+    // void markFree(int32_t page);
+    // void markAllocated(int32_t page);
+
     // Serializes access to all data members and private methods.
     std::mutex mutex_;
 

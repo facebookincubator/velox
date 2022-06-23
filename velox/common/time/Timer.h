@@ -15,8 +15,8 @@
  */
 #pragma once
 
-#include <chrono>
 #include <folly/chrono/Hardware.h>
+#include <chrono>
 
 namespace facebook::velox {
 
@@ -41,7 +41,7 @@ class MicrosecondTimer {
 class ClockTimer {
  public:
   explicit ClockTimer(uint64_t* FOLLY_NONNULL total)
-    : total_(total), start_(folly::hardware_timestamp()) {}
+      : total_(total), start_(folly::hardware_timestamp()) {}
   ~ClockTimer() {
     *total_ += folly::hardware_timestamp() - start_;
   }
