@@ -72,7 +72,7 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
   auto& exec = folly::QueuedImmediateExecutor::instance();
   std::move(state->future_)
       .via(&exec)
-      .thenValue([state](bool /* unused */) {
+      .thenValue([state](auto&& /* unused */) {
         state->operator_->recordBlockingTime(state->sinceMicros_);
         auto driver = state->driver_;
         auto task = driver->task();
@@ -168,9 +168,9 @@ Driver::Driver(
 namespace {
 /// Checks if output channel is produced using identity projection and returns
 /// input channel if so.
-std::optional<ChannelIndex> getIdentityProjection(
+std::optional<column_index_t> getIdentityProjection(
     const std::vector<IdentityProjection>& projections,
-    ChannelIndex outputChannel) {
+    column_index_t outputChannel) {
   for (const auto& projection : projections) {
     if (projection.outputChannel == outputChannel) {
       return projection.inputChannel;
@@ -292,7 +292,7 @@ StopReason Driver::runInternal(
 
   try {
     int32_t numOperators = operators_.size();
-    ContinueFuture future(false);
+    ContinueFuture future;
 
     for (;;) {
       for (int32_t i = numOperators - 1; i >= 0; --i) {
@@ -498,9 +498,9 @@ bool Driver::mayPushdownAggregation(Operator* aggregation) const {
       aggregation->toString());
 }
 
-std::unordered_set<ChannelIndex> Driver::canPushdownFilters(
+std::unordered_set<column_index_t> Driver::canPushdownFilters(
     const Operator* FOLLY_NONNULL filterSource,
-    const std::vector<ChannelIndex>& channels) const {
+    const std::vector<column_index_t>& channels) const {
   int filterSourceIndex = -1;
   for (auto i = 0; i < operators_.size(); ++i) {
     auto op = operators_[i].get();
@@ -515,7 +515,7 @@ std::unordered_set<ChannelIndex> Driver::canPushdownFilters(
       "Operator not found in its Driver: {}",
       filterSource->toString());
 
-  std::unordered_set<ChannelIndex> supportedChannels;
+  std::unordered_set<column_index_t> supportedChannels;
   for (auto i = 0; i < channels.size(); ++i) {
     auto channel = channels[i];
     for (auto j = filterSourceIndex - 1; j >= 0; --j) {

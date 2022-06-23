@@ -44,7 +44,7 @@ class TableScan : public SourceOperator {
   }
 
   void addDynamicFilter(
-      ChannelIndex outputChannel,
+      column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
  private:
@@ -58,14 +58,14 @@ class TableScan : public SourceOperator {
       unordered_map<std::string, std::shared_ptr<connector::ColumnHandle>>
           columnHandles_;
   DriverCtx* driverCtx_;
-  ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
+  ContinueFuture blockingFuture_;
   bool needNewSplit_ = true;
   std::shared_ptr<connector::Connector> connector_;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::shared_ptr<connector::DataSource> dataSource_;
   bool noMoreSplits_ = false;
   // Dynamic filters to add to the data source when it gets created.
-  std::unordered_map<ChannelIndex, std::shared_ptr<common::Filter>>
+  std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       pendingDynamicFilters_;
   int32_t readBatchSize_{kDefaultBatchSize};
 

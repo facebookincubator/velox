@@ -32,8 +32,7 @@ TableScan::TableScan(
           "TableScan"),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
-      driverCtx_(driverCtx),
-      blockingFuture_(false) {
+      driverCtx_(driverCtx) {
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
@@ -147,7 +146,7 @@ void TableScan::setBatchSize() {
 }
 
 void TableScan::addDynamicFilter(
-    ChannelIndex outputChannel,
+    column_index_t outputChannel,
     const std::shared_ptr<common::Filter>& filter) {
   if (dataSource_) {
     dataSource_->addDynamicFilter(outputChannel, filter);
