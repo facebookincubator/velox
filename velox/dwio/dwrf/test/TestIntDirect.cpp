@@ -16,6 +16,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
+#include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -45,7 +46,7 @@ void testInts(std::function<T()> generator) {
   DataBufferHolder holder{pool, capacity, 0, DEFAULT_PAGE_GROW_RATIO, &sink};
   auto output = std::make_unique<BufferedOutputStream>(holder);
   auto encoder =
-      IntEncoder<isSigned>::createDirect(std::move(output), vInt, sizeof(T));
+      createDirectEncoder<isSigned>(std::move(output), vInt, sizeof(T));
 
   encoder->add(buffer.data(), Ranges::of(0, count), nulls.data());
 
