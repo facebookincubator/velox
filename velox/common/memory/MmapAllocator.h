@@ -115,7 +115,8 @@ class MmapAllocator : public MappedMemory {
 
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
-
+  static constexpr int32_t kNoLastLookup = -1;
+  
   // Represents a range of virtual addresses used for allocating entries of
   // 'unitSize_' machine pages.
   class SizeClass {
@@ -201,6 +202,10 @@ class MmapAllocator : public MappedMemory {
         MachinePageCount& numUnmapped,
         Allocation& allocation);
 
+    //int32_t findCandidateWord();
+    //void markFree(int32_t page);
+    //void markAllocated(int32_t page);
+    
     // Serializes access to all data members and private methods.
     std::mutex mutex_;
 
@@ -222,6 +227,13 @@ class MmapAllocator : public MappedMemory {
 
     // Count of free pages backed by memory.
     ClassPageCount numMappedFreePages_ = 0;
+
+    // Last used index in 'mappedFreeLookup_' -1 if none.
+    int32_t lastLookupIndex_{kNoLastLookup};
+    // has a 1 bit if the corresponding 8 word range in
+    // pageAllocated/pageMapped_ has at least one mapped free bit. Has
+    // 1 bit for each 8 words of pageAllocated/pageMapped.
+    std::vector<uint64_t> mappedFreeLookup_;
 
     // Has a 1 bit if the corresponding size class page is allocated.
     std::vector<uint64_t> pageAllocated_;
