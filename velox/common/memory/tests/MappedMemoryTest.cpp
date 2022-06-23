@@ -577,7 +577,8 @@ TEST_P(MappedMemoryTest, allocateBytes) {
   // folly::Random::DefaultGenerator rng;
   // rng.seed(1);
 
-  // // We fill 'data' with random size allocations. Each is filled with its index
+  // // We fill 'data' with random size allocations. Each is filled with its
+  // index
   // // in 'data' cast to char.
   // std::vector<folly::Range<char*>> data(kNumAllocs);
   // for (auto counter = 0; counter < data.size() * 4; ++counter) {
