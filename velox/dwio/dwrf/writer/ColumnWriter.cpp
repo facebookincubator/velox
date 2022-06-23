@@ -15,7 +15,9 @@
  */
 
 #include "velox/dwio/dwrf/writer/ColumnWriter.h"
+
 #include "velox/dwio/common/ChainedBuffer.h"
+#include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/writer/DictionaryEncodingUtils.h"
 #include "velox/dwio/dwrf/writer/EntropyEncodingSelector.h"
 #include "velox/dwio/dwrf/writer/FlatMapColumnWriter.h"
@@ -384,7 +386,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
   void initStreamWriters(bool dictEncoding) {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
-        data_ = IntEncoder</* isSigned = */ false>::createRle(
+        data_ = createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
@@ -392,7 +394,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
         inDictionary_ = createBooleanRleEncoder(
             newStream(StreamKind::StreamKind_IN_DICTIONARY));
       } else {
-        dataDirect_ = IntEncoder</* isSigned = */ true>::createDirect(
+        dataDirect_ = createDirectEncoder</* isSigned */ true>(
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(T));
@@ -656,12 +658,12 @@ class TimestampColumnWriter : public BaseColumnWriter {
       const uint32_t sequence,
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
-        seconds_{IntEncoder</* isSigned = */ true>::createRle(
+        seconds_{createRleEncoder</* isSigned = */ true>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             context.getConfig(Config::USE_VINTS),
             LONG_BYTE_SIZE)},
-        nanos_{IntEncoder</* isSigned = */ false>::createRle(
+        nanos_{createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_NANO_DATA),
             context.getConfig(Config::USE_VINTS),
@@ -978,14 +980,14 @@ class StringColumnWriter : public BaseColumnWriter {
   void initStreamWriters(bool dictEncoding) {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
-        data_ = IntEncoder</* isSigned = */ false>::createRle(
+        data_ = createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
         dictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DICTIONARY_DATA));
-        dictionaryDataLength_ = IntEncoder</* isSigned = */ false>::createRle(
+        dictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
@@ -994,16 +996,15 @@ class StringColumnWriter : public BaseColumnWriter {
             newStream(StreamKind::StreamKind_IN_DICTIONARY));
         strideDictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_STRIDE_DICTIONARY));
-        strideDictionaryDataLength_ =
-            IntEncoder</* isSigned = */ false>::createRle(
-                RleVersion_1,
-                newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
-                getConfig(Config::USE_VINTS),
-                sizeof(uint32_t));
+        strideDictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
+            RleVersion_1,
+            newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
+            getConfig(Config::USE_VINTS),
+            sizeof(uint32_t));
       } else {
         dataDirect_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DATA));
-        dataDirectLength_ = IntEncoder</* isSigned = */ false>::createRle(
+        dataDirectLength_ = createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
@@ -1456,7 +1457,7 @@ class BinaryColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         data_{newStream(StreamKind::StreamKind_DATA)},
-        lengths_{IntEncoder<false>::createRle(
+        lengths_{createRleEncoder</* isSigned */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
@@ -1698,7 +1699,7 @@ class ListColumnWriter : public BaseColumnWriter {
       const uint32_t sequence,
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
-        lengths_{IntEncoder</* isSigned = */ false>::createRle(
+        lengths_{createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
@@ -1821,7 +1822,7 @@ class MapColumnWriter : public BaseColumnWriter {
       const uint32_t sequence,
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
-        lengths_{IntEncoder</* isSigned = */ false>::createRle(
+        lengths_{createRleEncoder</* isSigned = */ false>(
             RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
