@@ -169,7 +169,6 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
   auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
   const auto& customerFileColumns = getFileColumnNames(kCustomer);
 
-  // dateVal :2 = '1995-03-15'
   const auto orderDate = "o_orderdate";
   const auto shipDate = "l_shipdate";
   std::string orderDateFilter;
@@ -189,7 +188,6 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
     shipDateFilter = "l_shipdate > '1995-03-15'::DATE";
   }
 
-  // MarketSegment filter value :1 = 'BUILDING'
   customerFilter = "c_mktsegment = 'BUILDING'";
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
@@ -206,49 +204,40 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
                        .capturePlanNodeId(customerPlanNodeId)
                        .planNode();
 
-  auto orders = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(
-                        kOrders,
-                        ordersSelectedRowType,
-                        ordersFileColumns,
-                        {orderDateFilter})
-                    .capturePlanNodeId(ordersPlanNodeId)
-                    .planNode();
+  auto custkeyJoinNode =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kOrders,
+              ordersSelectedRowType,
+              ordersFileColumns,
+              {orderDateFilter})
+          .capturePlanNodeId(ordersPlanNodeId)
+          .hashJoin(
+              {"o_custkey"},
+              {"c_custkey"},
+              customers,
+              "",
+              {"o_orderdate", "o_shippriority", "o_orderkey"})
+          .planNode();
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {},
-              {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(
-                       kLineitem,
-                       lineitemSelectedRowType,
-                       lineitemFileColumns,
-                       {shipDateFilter})
-                   .capturePlanNodeId(lineitemPlanNodeId)
-                   .project(
-                       {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
-                        "l_orderkey"})
-                   .hashJoin(
-                       {"l_orderkey"},
-                       {"o_orderkey"},
-                       orders,
-                       "",
-                       {"l_orderkey",
-                        "o_custkey",
-                        "o_orderdate",
-                        "o_shippriority",
-                        "part_revenue"})
-                   .hashJoin(
-                       {"o_custkey"},
-                       {"c_custkey"},
-                       customers,
-                       "",
-                       {"l_orderkey",
-                        "o_orderdate",
-                        "o_shippriority",
-                        "part_revenue"})
-                   .planNode()})
+          .tableScan(
+              kLineitem,
+              lineitemSelectedRowType,
+              lineitemFileColumns,
+              {shipDateFilter})
+          .capturePlanNodeId(lineitemPlanNodeId)
+          .project(
+              {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
+               "l_orderkey"})
+          .hashJoin(
+              {"l_orderkey"},
+              {"o_orderkey"},
+              custkeyJoinNode,
+              "",
+              {"l_orderkey", "o_orderdate", "o_shippriority", "part_revenue"})
+          .localPartition({})
           .finalAggregation(
               {"l_orderkey", "o_orderdate", "o_shippriority"},
               {"sum(part_revenue) as revenue"},
