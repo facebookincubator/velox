@@ -15,9 +15,10 @@
  */
 
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/SeekableInputStream.h"
+#include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
 #include <gtest/gtest.h>
@@ -32,12 +33,12 @@ std::vector<int64_t> decodeRLEv2(
     size_t count,
     const uint64_t* nulls = nullptr) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::make_unique<dwio::common::SeekableArrayInputStream>(bytes, l),
-      RleVersion_2,
+      RleVersion::RleVersion_2,
       *scopedPool,
       true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+      dwio::common::INT_BYTE_SIZE /* doesn't matter */);
   std::vector<int64_t> results;
   size_t totalRead = 0;
   std::vector<uint64_t> remainingNulls;
@@ -177,14 +178,15 @@ TEST(RLEv2, delta0Width) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {
       0x4e, 0x2, 0x0, 0x1, 0x2, 0xc0, 0x2, 0x42, 0x0};
-  std::unique_ptr<IntDecoder<false>> decoder = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(
-          new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_2,
-      *scopedPool,
-      true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+  std::unique_ptr<dwio::common::IntDecoder<false>> decoder =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(
+              new dwio::common::SeekableArrayInputStream(
+                  buffer, VELOX_ARRAY_SIZE(buffer))),
+          RleVersion::RleVersion_2,
+          *scopedPool,
+          true /* doesn't matter */,
+          dwio::common::INT_BYTE_SIZE /* doesn't matter */);
   int64_t values[6];
   decoder->next(values, 6, 0);
   EXPECT_EQ(0, values[0]);
@@ -269,14 +271,14 @@ TEST(RLEv2, multiByteShortRepeats) {
 TEST(RLEv2, 0to2Repeat1Direct) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {0x46, 0x02, 0x02, 0x40};
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
               buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_2,
+      RleVersion::RleVersion_2,
       *scopedPool,
       true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+      dwio::common::INT_BYTE_SIZE /* doesn't matter */);
   std::vector<int64_t> data(3);
   rle->next(data.data(), 3, nullptr);
 
@@ -371,14 +373,14 @@ TEST(RLEv2, largeNegativesDirect) {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x02, 0x99, 0xa5, 0xcc, 0x28, 0x03, 0xf7, 0xe0, 0xff};
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
               buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_2,
+      RleVersion::RleVersion_2,
       *scopedPool,
       true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+      dwio::common::INT_BYTE_SIZE /* doesn't matter */);
   std::vector<int64_t> data(5);
   rle->next(data.data(), 5, nullptr);
 
@@ -573,13 +575,13 @@ TEST(RLEv2, basicDirectSeek) {
       0x04};
   unsigned long l = sizeof(bytes) / sizeof(char);
 
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(bytes, l)),
-      RleVersion_2,
+      RleVersion::RleVersion_2,
       *scopedPool,
       true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+      dwio::common::INT_BYTE_SIZE /* doesn't matter */);
   std::vector<uint64_t> position;
   position.push_back(7); // byte position; skip first 20 [0 to 19]
   position.push_back(13); // value position; skip 13 more [20 to 32]
@@ -649,13 +651,13 @@ TEST(RLEv2, bitsLeftByPreviousStream) {
               9,  141, 12,   6,   15, 25};
   unsigned long D = 118, P = sizeof(v) / sizeof(long), N = D + P;
 
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(bytes, l)),
-      RleVersion_2,
+      RleVersion::RleVersion_2,
       *scopedPool,
       true /* doesn't matter */,
-      INT_BYTE_SIZE /* doesn't matter */);
+      dwio::common::INT_BYTE_SIZE /* doesn't matter */);
 
   std::vector<int64_t> data(N);
   rle->next(data.data(), N, nullptr);
@@ -669,14 +671,15 @@ TEST(RLEv1, simpleTest) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {
       0x61, 0xff, 0x64, 0xfb, 0x02, 0x03, 0x5, 0x7, 0xb};
-  std::unique_ptr<IntDecoder<false>> rle = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(
-          new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_1,
-      *scopedPool,
-      true,
-      INT_BYTE_SIZE);
+  std::unique_ptr<dwio::common::IntDecoder<false>> rle =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(
+              new dwio::common::SeekableArrayInputStream(
+                  buffer, VELOX_ARRAY_SIZE(buffer))),
+          RleVersion::RleVersion_1,
+          *scopedPool,
+          true,
+          dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(105);
   rle->next(data.data(), 105, nullptr);
 
@@ -693,14 +696,14 @@ TEST(RLEv1, simpleTest) {
 TEST(RLEv1, signedNullLiteralTest) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {0xf8, 0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7};
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(
           new dwio::common::SeekableArrayInputStream(
               buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_1,
+      RleVersion::RleVersion_1,
       *scopedPool,
       true,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(8);
   std::vector<uint64_t> nulls(1, ~0);
   rle->next(data.data(), 8, nulls.data());
@@ -713,14 +716,15 @@ TEST(RLEv1, signedNullLiteralTest) {
 TEST(RLEv1, splitHeader) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {0x0, 0x00, 0xdc, 0xba, 0x98, 0x76};
-  std::unique_ptr<IntDecoder<false>> rle = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(
-          new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer), 4)),
-      RleVersion_1,
-      *scopedPool,
-      true,
-      INT_BYTE_SIZE);
+  std::unique_ptr<dwio::common::IntDecoder<false>> rle =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(
+              new dwio::common::SeekableArrayInputStream(
+                  buffer, VELOX_ARRAY_SIZE(buffer), 4)),
+          RleVersion::RleVersion_1,
+          *scopedPool,
+          true,
+          dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(200);
   rle->next(data.data(), 3, nullptr);
 
@@ -736,12 +740,13 @@ TEST(RLEv1, splitRuns) {
   dwio::common::SeekableInputStream* const stream =
       new dwio::common::SeekableArrayInputStream(
           buffer, VELOX_ARRAY_SIZE(buffer));
-  std::unique_ptr<IntDecoder<false>> rle = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
-      *scopedPool,
-      true,
-      INT_BYTE_SIZE);
+  std::unique_ptr<dwio::common::IntDecoder<false>> rle =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(stream),
+          RleVersion::RleVersion_1,
+          *scopedPool,
+          true,
+          dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(200);
   for (size_t i = 0; i < 42; ++i) {
     rle->next(data.data(), 3, nullptr);
@@ -768,12 +773,12 @@ TEST(RLEv1, testSigned) {
   dwio::common::SeekableInputStream* const stream =
       new dwio::common::SeekableArrayInputStream(
           buffer, VELOX_ARRAY_SIZE(buffer));
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
+      RleVersion::RleVersion_1,
       *scopedPool,
       true,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(100);
   rle->next(data.data(), data.size(), nullptr);
   for (size_t i = 0; i < data.size(); ++i) {
@@ -792,12 +797,12 @@ TEST(RLEv1, testNull) {
   dwio::common::SeekableInputStream* const stream =
       new dwio::common::SeekableArrayInputStream(
           buffer, VELOX_ARRAY_SIZE(buffer));
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
+      RleVersion::RleVersion_1,
       *scopedPool,
       true,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(24);
   uint64_t nulls[1] = {bits::kNotNull64};
   for (size_t i = 0; i < data.size(); ++i) {
@@ -826,12 +831,13 @@ TEST(RLEv1, testAllNulls) {
   dwio::common::SeekableInputStream* const stream =
       new dwio::common::SeekableArrayInputStream(
           buffer, VELOX_ARRAY_SIZE(buffer));
-  std::unique_ptr<IntDecoder<false>> rle = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
-      *scopedPool,
-      true,
-      INT_BYTE_SIZE);
+  std::unique_ptr<dwio::common::IntDecoder<false>> rle =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(stream),
+          RleVersion::RleVersion_1,
+          *scopedPool,
+          true,
+          dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(16, -1);
   std::vector<uint64_t> allNull(1, bits::kNull64);
   std::vector<uint64_t> noNull(1, bits::kNotNull64);
@@ -1078,12 +1084,12 @@ TEST(RLEv1, skipTest) {
   dwio::common::SeekableInputStream* const stream =
       new dwio::common::SeekableArrayInputStream(
           buffer, VELOX_ARRAY_SIZE(buffer));
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
+      RleVersion::RleVersion_1,
       *scopedPool,
       true,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(1);
   for (size_t i = 0; i < 2048; i += 10) {
     rle->next(data.data(), 1, nullptr);
@@ -2958,12 +2964,12 @@ TEST(RLEv1, seekTest) {
     positions[i].push_back(fileLoc[i]);
     positions[i].push_back(rleLoc[i]);
   }
-  std::unique_ptr<IntDecoder<true>> rle = createRleDecoder<true>(
+  std::unique_ptr<dwio::common::IntDecoder<true>> rle = createRleDecoder<true>(
       std::unique_ptr<dwio::common::SeekableInputStream>(stream),
-      RleVersion_1,
+      RleVersion::RleVersion_1,
       *scopedPool,
       true,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(2048);
   rle->next(data.data(), data.size(), nullptr);
   for (size_t i = 0; i < data.size(); ++i) {
@@ -3012,14 +3018,15 @@ TEST(RLEv1, seekTest) {
 TEST(RLEv1, testLeadingNulls) {
   auto scopedPool = memory::getDefaultScopedMemoryPool();
   const unsigned char buffer[] = {0xfb, 0x01, 0x02, 0x03, 0x04, 0x05};
-  std::unique_ptr<IntDecoder<false>> rle = createRleDecoder<false>(
-      std::unique_ptr<dwio::common::SeekableInputStream>(
-          new dwio::common::SeekableArrayInputStream(
-              buffer, VELOX_ARRAY_SIZE(buffer))),
-      RleVersion_1,
-      *scopedPool,
-      true,
-      INT_BYTE_SIZE);
+  std::unique_ptr<dwio::common::IntDecoder<false>> rle =
+      createRleDecoder<false>(
+          std::unique_ptr<dwio::common::SeekableInputStream>(
+              new dwio::common::SeekableArrayInputStream(
+                  buffer, VELOX_ARRAY_SIZE(buffer))),
+          RleVersion::RleVersion_1,
+          *scopedPool,
+          true,
+          dwio::common::INT_BYTE_SIZE);
   std::vector<int64_t> data(10);
   uint64_t isNull[1] = {bits::kNotNull};
   for (int32_t i = 0; i < 10; i++) {

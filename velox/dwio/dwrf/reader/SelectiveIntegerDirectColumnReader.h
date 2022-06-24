@@ -42,7 +42,8 @@ class SelectiveIntegerDirectColumnReader : public SelectiveIntegerColumnReader {
     auto decoder = createDirectDecoder</*isSigned*/ true>(
         stripe.getStream(data, true), dataVInts, numBytes);
     auto rawDecoder = decoder.release();
-    auto directDecoder = dynamic_cast<DirectDecoder<true>*>(rawDecoder);
+    auto directDecoder =
+        dynamic_cast<dwio::common::DirectDecoder<true>*>(rawDecoder);
     ints.reset(directDecoder);
   }
 
@@ -74,7 +75,7 @@ class SelectiveIntegerDirectColumnReader : public SelectiveIntegerColumnReader {
   void readWithVisitor(RowSet rows, ColumnVisitor visitor);
 
  private:
-  std::unique_ptr<DirectDecoder</*isSigned*/ true>> ints;
+  std::unique_ptr<dwio::common::DirectDecoder</*isSigned*/ true>> ints;
 };
 
 template <typename ColumnVisitor>

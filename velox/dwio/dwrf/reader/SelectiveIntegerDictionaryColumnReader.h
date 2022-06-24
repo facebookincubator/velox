@@ -63,8 +63,8 @@ class SelectiveIntegerDictionaryColumnReader
   void ensureInitialized();
 
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
-  std::unique_ptr<IntDecoder</* isSigned = */ false>> dataReader_;
-  std::unique_ptr<IntDecoder</* isSigned = */ true>> dictReader_;
+  std::unique_ptr<dwio::common::IntDecoder</* isSigned = */ false>> dataReader_;
+  std::unique_ptr<dwio::common::IntDecoder</* isSigned = */ true>> dictReader_;
   std::function<BufferPtr()> dictInit_;
   RleVersion rleVersion_;
   bool initialized_{false};
@@ -75,7 +75,7 @@ void SelectiveIntegerDictionaryColumnReader::readWithVisitor(
     RowSet rows,
     ColumnVisitor visitor) {
   vector_size_t numRows = rows.back() + 1;
-  VELOX_CHECK_EQ(rleVersion_, RleVersion_1);
+  VELOX_CHECK_EQ(rleVersion_, RleVersion::RleVersion_1);
   auto dictVisitor = visitor.toDictionaryColumnVisitor();
   auto reader = reinterpret_cast<RleDecoderV1<false>*>(dataReader_.get());
   if (nullsInReadRange_) {

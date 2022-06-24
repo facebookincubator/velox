@@ -16,17 +16,14 @@
 
 #include "velox/dwio/dwrf/reader/SelectiveByteRleColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
-
 #include "velox/dwio/dwrf/reader/SelectiveFloatingPointColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDirectColumnReader.h"
-#include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
-
-#include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
-#include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
-
 #include "velox/dwio/dwrf/reader/SelectiveRepeatedColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
+#include "velox/dwio/dwrf/reader/SelectiveTimestampColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -379,7 +376,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveColumnReader::build(
           std::move(flatMapContext),
           dataType,
           stripe,
-          INT_BYTE_SIZE,
+          dwio::common::INT_BYTE_SIZE,
           scanSpec);
     case TypeKind::BIGINT:
       return buildIntegerReader(
@@ -387,7 +384,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveColumnReader::build(
           std::move(flatMapContext),
           dataType,
           stripe,
-          LONG_BYTE_SIZE,
+          dwio::common::LONG_BYTE_SIZE,
           scanSpec);
     case TypeKind::SMALLINT:
       return buildIntegerReader(
@@ -395,7 +392,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveColumnReader::build(
           std::move(flatMapContext),
           dataType,
           stripe,
-          SHORT_BYTE_SIZE,
+          dwio::common::SHORT_BYTE_SIZE,
           scanSpec);
     case TypeKind::ARRAY:
       return std::make_unique<SelectiveListColumnReader>(

@@ -41,7 +41,7 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
       rleVersion,
       memoryPool_,
       lenVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   blobStream_ =
       stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
 }
