@@ -407,13 +407,13 @@ TEST_F(MinMaxByAggregationTest, minMaxByPartialNoNullsCase) {
           verifyDuckDbSql);
     }
   } testSettings[] = {
-    // Max by both numeric value and comparison types.
-    {makeRowVector(
-         {makeNullableFlatVector<int64_t>({1, 100, std::nullopt, std::nullopt}),
-          makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8})}),
-     "max_by(c0, c1)",
-     "SELECT struct_pack(x => 1, y => 20)"},
-#if 0
+      // Max by both numeric value and comparison types.
+      {makeRowVector(
+           {makeNullableFlatVector<int64_t>(
+                {1, 100, std::nullopt, std::nullopt}),
+            makeNullableFlatVector<int64_t>({20, 10, std::nullopt, 8})}),
+       "max_by(c0, c1)",
+       "SELECT struct_pack(x => 1, y => 20)"},
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({10, 20, 100, 20}),
             makeNullableFlatVector<int64_t>({10, 10, std::nullopt, 8})}),
@@ -608,9 +608,7 @@ TEST_F(MinMaxByAggregationTest, minMaxByPartialNoNullsCase) {
       {makeRowVector(
            {makeNullableFlatVector<int64_t>({5, std::nullopt, 3, 8})}),
        "min_by(c0, c0)",
-       "SELECT struct_pack(x => 3, y => 3)"}
-#endif
-  };
+       "SELECT struct_pack(x => 3, y => 3)"}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto op = PlanBuilder()
