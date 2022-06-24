@@ -34,11 +34,11 @@ DECLARE_int32(velox_memory_pool_mb);
 namespace facebook::velox::memory {
 
 struct SizeStats {
-  int32_t size;
-  int64_t allocClocks;
-  int64_t freeClocks;
-  int64_t numAlloc;
-  int64_t cumBytes;
+  int32_t size{0};
+  int64_t allocClocks{0};
+  int64_t freeClocks{0};
+  int64_t numAlloc{0};
+  int64_t cumBytes{0};
 
   SizeStats operator-(const SizeStats& other) const {
     SizeStats result;
@@ -100,7 +100,7 @@ struct Stats {
   }
 
   std::array<SizeStats, kNumSizes> sizes;
-  int64_t numAdvise;
+  int64_t numAdvise{0};
 };
 
 class ScopedMappedMemory;

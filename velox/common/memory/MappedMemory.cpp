@@ -499,7 +499,7 @@ std::string Stats::toString() const {
   for (auto i = 0; i < sizes.size(); ++i) {
     totalClocks += sizes[i].clocks();
   }
-  out << fmt::format("Alloc: {} Gclk\n", totalClocks >> 30);
+  out << fmt::format("Alloc: {} Gclk, {}MB advised\n", totalClocks >> 30, numAdvise >> 8);
   std::vector<int32_t> indices(sizes.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::sort(indices.begin(), indices.end(), [&](int32_t left, int32_t right) {
