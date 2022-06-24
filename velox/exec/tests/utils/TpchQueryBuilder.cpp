@@ -80,6 +80,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ1Plan();
     case 2:
       return getQ2Plan();
+    case 3:
+      return getQ3Plan();
     case 6:
       return getQ6Plan();
     case 13:
@@ -100,6 +102,8 @@ static const std::string kSupplier = "supplier";
 static const std::string kPartSupp = "partsupp";
 static const std::string kNation = "nation";
 static const std::string kRegion = "region";
+
+static const std::string kDateConversionSuffix = "::DATE";
 } // namespace
 
 TpchPlan TpchQueryBuilder::getQ1Plan() const {
@@ -415,6 +419,141 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
   return context;
 }
 
+std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ3OrderPlans(
+    std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TpchPlan& context) const {
+  std::vector<std::string> selectedOrdersColumns{
+      "o_orderkey", "o_custkey", "o_orderdate", "o_shippriority"};
+
+  auto selectedOrdersRowType = getRowType(kOrders, selectedOrdersColumns);
+  std::string ordersFilter = "o_orderdate < '1995-03-15'";
+
+  if (!selectedOrdersRowType->findChild("o_orderdate")->isVarchar()) {
+    ordersFilter += kDateConversionSuffix;
+  }
+
+  core::PlanNodeId ordersScanNodeId;
+  auto orders = PlanBuilder(planNodeIdGenerator)
+                    .localPartition(
+                        {"o_custkey"},
+                        {PlanBuilder(planNodeIdGenerator)
+                             .tableScan(
+                                 kOrders,
+                                 getRowType(kOrders, selectedOrdersColumns),
+                                 getFileColumnNames(kOrders),
+                                 {ordersFilter},
+                                 {})
+                             .capturePlanNodeId(ordersScanNodeId)
+                             .planNode()})
+                    .planNode();
+
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  return orders;
+}
+
+PlanBuilder TpchQueryBuilder::getQ3CustomerPlans(
+    std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TpchPlan& context) const {
+  core::PlanNodeId customersScanNodeId;
+  auto customers =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"c_custkey"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(
+                       kCustomer,
+                       getRowType(kCustomer, {"c_custkey", "c_mktsegment"}),
+                       getFileColumnNames(kCustomer),
+                       {"c_mktsegment = 'BUILDING'"},
+                       {})
+                   .capturePlanNodeId(customersScanNodeId)
+                   .planNode()});
+
+  context.dataFiles[customersScanNodeId] = getTableFilePaths(kCustomer);
+  return customers;
+}
+
+std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ3LineItemsPlans(
+    std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TpchPlan& context) const {
+  std::vector<std::string> selectedLineItemsColumns{
+      "l_shipdate", "l_discount", "l_orderkey", "l_extendedprice"};
+
+  auto selectedLineItemsRowType =
+      getRowType(kLineitem, selectedLineItemsColumns);
+
+  std::string lineItemsFilter = "l_shipdate > '1995-03-15'";
+
+  if (!selectedLineItemsRowType->findChild("l_shipdate")->isVarchar()) {
+    lineItemsFilter += kDateConversionSuffix;
+  }
+
+  core::PlanNodeId lineItemsScanNodeId;
+  auto lineItems =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"l_orderkey"},
+              {PlanBuilder(planNodeIdGenerator)
+                   .tableScan(
+                       kLineitem,
+                       getRowType(kLineitem, selectedLineItemsColumns),
+                       getFileColumnNames(kOrders),
+                       {lineItemsFilter},
+                       {})
+                   .capturePlanNodeId(lineItemsScanNodeId)
+                   .planNode()})
+          .planNode();
+
+  context.dataFiles[lineItemsScanNodeId] = getTableFilePaths(kLineitem);
+  return lineItems;
+}
+
+TpchPlan TpchQueryBuilder::getQ3Plan() const {
+  TpchPlan context;
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  auto customers = getQ3CustomerPlans(planNodeIdGenerator, context);
+  auto orders = getQ3OrderPlans(planNodeIdGenerator, context);
+  auto lineItems = getQ3LineItemsPlans(planNodeIdGenerator, context);
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {"o_orderkey", "o_orderdate", "o_shippriority"},
+                      {customers
+                           .hashJoin(
+                               {"c_custkey"},
+                               {"o_custkey"},
+                               orders,
+                               "",
+                               {"o_orderkey", "o_orderdate", "o_shippriority"})
+                           .hashJoin(
+                               {"o_orderkey"},
+                               {"l_orderkey"},
+                               lineItems,
+                               "",
+                               {"o_orderdate",
+                                "o_shippriority",
+                                "o_orderkey",
+                                "l_extendedprice",
+                                "l_discount"})
+                           .project(
+                               {"o_orderkey",
+                                "(l_extendedprice) * (1.0 - l_discount)",
+                                "o_orderdate",
+                                "o_shippriority"})
+                           .partialAggregation(
+                               {"o_orderkey", "o_orderdate", "o_shippriority"},
+                               {"sum(p1) AS revenue"})
+                           .planNode()})
+                  .finalAggregation()
+                  .topN({"revenue desc", "o_orderdate asc"}, 10, false)
+                  .planNode();
+
+  context.plan = std::move(plan);
+  context.dataFileFormat = format_;
+  return context;
+}
+
 TpchPlan TpchQueryBuilder::getQ6Plan() const {
   std::vector<std::string> selectedColumns = {
       "l_shipdate", "l_extendedprice", "l_quantity", "l_discount"};
@@ -600,9 +739,14 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 }
 
 const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {
-    "lineitem",
-    "orders",
-    "customer"};
+    kLineitem,
+    kOrders,
+    kCustomer,
+    kPart,
+    kSupplier,
+    kPartSupp,
+    kNation,
+    kRegion};
 
 const std::unordered_map<std::string, std::vector<std::string>>
     TpchQueryBuilder::kTables_ = {
