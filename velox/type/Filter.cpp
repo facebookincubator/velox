@@ -663,6 +663,27 @@ std::unique_ptr<Filter> MultiRange::clone(
   }
 }
 
+bool MultiRange::testBool(bool value) const {
+  for (const auto& filter : filters_) {
+    if (filter->testBool(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MultiRange::testInt64(int64_t value) const {
+  if (std::isnan(value)) {
+    return nanAllowed_;
+  }
+  for (const auto& filter : filters_) {
+    if (filter->testInt64(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool MultiRange::testDouble(double value) const {
   if (std::isnan(value)) {
     return nanAllowed_;

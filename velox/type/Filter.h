@@ -1425,6 +1425,10 @@ class MultiRange final : public Filter {
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final;
 
+  bool testBool(bool value) const final;
+
+  bool testInt64(int64_t value) const final;
+
   bool testDouble(double value) const final;
 
   bool testFloat(float value) const final;
