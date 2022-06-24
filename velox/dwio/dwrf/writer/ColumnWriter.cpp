@@ -387,7 +387,7 @@ class IntegerColumnWriter : public BaseColumnWriter {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
         data_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(T));
@@ -659,12 +659,12 @@ class TimestampColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         seconds_{createRleEncoder</* isSigned = */ true>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             context.getConfig(Config::USE_VINTS),
             LONG_BYTE_SIZE)},
         nanos_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_NANO_DATA),
             context.getConfig(Config::USE_VINTS),
             LONG_BYTE_SIZE)} {
@@ -767,7 +767,8 @@ uint64_t TimestampColumnWriter::write(
   }
 
   // Seconds is Long, Nanos is int.
-  constexpr uint32_t TimeStampSize = LONG_BYTE_SIZE + INT_BYTE_SIZE;
+  constexpr uint32_t TimeStampSize =
+      LONG_BYTE_SIZE + dwio::common::INT_BYTE_SIZE;
   auto rawSize = count * TimeStampSize + (ranges.size() - count) * NULL_SIZE;
   indexStatsBuilder_->increaseRawSize(rawSize);
   return rawSize;
@@ -981,14 +982,14 @@ class StringColumnWriter : public BaseColumnWriter {
     if (!data_ && !dataDirect_) {
       if (dictEncoding) {
         data_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_DATA),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
         dictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DICTIONARY_DATA));
         dictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -997,7 +998,7 @@ class StringColumnWriter : public BaseColumnWriter {
         strideDictionaryData_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_STRIDE_DICTIONARY));
         strideDictionaryDataLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_STRIDE_DICTIONARY_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1005,7 +1006,7 @@ class StringColumnWriter : public BaseColumnWriter {
         dataDirect_ = std::make_unique<AppendOnlyBufferedStream>(
             newStream(StreamKind::StreamKind_DATA));
         dataDirectLength_ = createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             getConfig(Config::USE_VINTS),
             sizeof(uint32_t));
@@ -1458,10 +1459,10 @@ class BinaryColumnWriter : public BaseColumnWriter {
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         data_{newStream(StreamKind::StreamKind_DATA)},
         lengths_{createRleEncoder</* isSigned */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
-            INT_BYTE_SIZE)} {
+            dwio::common::INT_BYTE_SIZE)} {
     reset();
   }
 
@@ -1700,10 +1701,10 @@ class ListColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
-            INT_BYTE_SIZE)} {
+            dwio::common::INT_BYTE_SIZE)} {
     reset();
   }
 
@@ -1823,10 +1824,10 @@ class MapColumnWriter : public BaseColumnWriter {
       std::function<void(IndexBuilder&)> onRecordPosition)
       : BaseColumnWriter{context, type, sequence, onRecordPosition},
         lengths_{createRleEncoder</* isSigned = */ false>(
-            RleVersion_1,
+            RleVersion::RleVersion_1,
             newStream(StreamKind::StreamKind_LENGTH),
             context.getConfig(Config::USE_VINTS),
-            INT_BYTE_SIZE)} {
+            dwio::common::INT_BYTE_SIZE)} {
     reset();
   }
 

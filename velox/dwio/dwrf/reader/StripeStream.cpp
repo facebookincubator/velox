@@ -94,7 +94,7 @@ static inline void ensureCapacity(
 
 template <typename T>
 BufferPtr readDict(
-    IntDecoder<true>* dictReader,
+    dwio::common::IntDecoder<true>* dictReader,
     int64_t dictionarySize,
     velox::memory::MemoryPool* pool) {
   BufferPtr dictionaryBuffer = AlignedBuffer::allocate<T>(dictionarySize, pool);

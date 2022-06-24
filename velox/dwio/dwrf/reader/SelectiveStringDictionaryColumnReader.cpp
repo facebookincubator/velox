@@ -48,7 +48,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       rleVersion,
       memoryPool_,
       dictVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
 
   const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
@@ -57,7 +57,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
       rleVersion,
       memoryPool_,
       lenVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
 
   blobStream_ = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA), false);
@@ -84,7 +84,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
         rleVersion,
         memoryPool_,
         strideLenVInt,
-        INT_BYTE_SIZE);
+        dwio::common::INT_BYTE_SIZE);
   }
   scanState_.updateRawState();
 }

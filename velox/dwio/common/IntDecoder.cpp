@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/common/IntDecoder.h"
+#include "velox/dwio/common/IntDecoder.h"
 
 #include "velox/common/base/SimdUtil.h"
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
+#include "velox/dwio/common/DirectDecoder.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 template <bool isSigned>
 void IntDecoder<isSigned>::skipLongs(uint64_t numValues) {
@@ -2581,4 +2581,4 @@ void printVarintSwitch(int32_t mask_len, bool sparse) {
 
 #endif
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

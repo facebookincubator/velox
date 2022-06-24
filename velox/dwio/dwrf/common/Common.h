@@ -16,9 +16,6 @@
 
 #pragma once
 
-#include <fmt/format.h>
-#include <string>
-
 #include "folly/Range.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/dwio/common/Common.h"
@@ -26,6 +23,9 @@
 #include "velox/dwio/common/StreamIdentifier.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/common/wrap/orc-proto-wrapper.h"
+
+#include <fmt/format.h>
+#include <string>
 
 namespace facebook::velox::dwrf {
 
@@ -339,5 +339,11 @@ class PostScript {
   uint64_t metadataLength_;
   uint64_t stripeStatisticsLength_;
 };
+
+enum class RleVersion { RleVersion_1, RleVersion_2 };
+
+constexpr int32_t RLE_MINIMUM_REPEAT = 3;
+constexpr int32_t RLE_MAXIMUM_REPEAT = 127 + RLE_MINIMUM_REPEAT;
+constexpr int32_t RLE_MAX_LITERAL_SIZE = 128;
 
 } // namespace facebook::velox::dwrf

@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
+#include "velox/dwio/common/DirectDecoder.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/RLEv1.h"
 #include "velox/dwio/dwrf/common/RLEv2.h"
 
@@ -29,7 +29,7 @@ namespace facebook::velox::dwrf {
  * @param pool memory pool to use for allocation
  */
 template <bool isSigned>
-std::unique_ptr<IntDecoder<isSigned>> createRleDecoder(
+std::unique_ptr<dwio::common::IntDecoder<isSigned>> createRleDecoder(
     std::unique_ptr<dwio::common::SeekableInputStream> input,
     RleVersion version,
     memory::MemoryPool& pool,
@@ -51,11 +51,11 @@ std::unique_ptr<IntDecoder<isSigned>> createRleDecoder(
  * Create a direct decoder
  */
 template <bool isSigned>
-std::unique_ptr<IntDecoder<isSigned>> createDirectDecoder(
+std::unique_ptr<dwio::common::IntDecoder<isSigned>> createDirectDecoder(
     std::unique_ptr<dwio::common::SeekableInputStream> input,
     bool useVInts,
     uint32_t numBytes) {
-  return std::make_unique<DirectDecoder<isSigned>>(
+  return std::make_unique<dwio::common::DirectDecoder<isSigned>>(
       std::move(input), useVInts, numBytes);
 }
 

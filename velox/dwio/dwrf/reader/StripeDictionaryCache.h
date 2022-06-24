@@ -16,12 +16,12 @@
 
 #pragma once
 
-#include <folly/Function.h>
-
 #include "velox/common/base/GTestMacros.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/Common.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
 #include "velox/vector/BaseVector.h"
+
+#include <folly/Function.h>
 
 namespace facebook::velox::dwrf {
 class StripeDictionaryCache {

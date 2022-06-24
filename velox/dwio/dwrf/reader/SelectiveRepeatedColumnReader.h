@@ -54,7 +54,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
         rleVersion,
         memoryPool_,
         lenVints,
-        INT_BYTE_SIZE);
+        dwio::common::INT_BYTE_SIZE);
   }
 
   void makeNestedRowSet(RowSet rows) {
@@ -169,7 +169,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   // read up to the last position corresponding to
   // the last non-null parent.
   vector_size_t childTargetReadOffset_ = 0;
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> length_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> length_;
 };
 
 class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {

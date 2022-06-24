@@ -17,8 +17,9 @@
 #pragma once
 
 #include "velox/common/base/Portability.h"
+#include "velox/dwio/common/DirectDecoder.h"
 #include "velox/dwio/common/TypeUtils.h"
-#include "velox/dwio/dwrf/common/DirectDecoder.h"
+#include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/FloatingPointDecoder.h"
 #include "velox/dwio/dwrf/common/RLEv1.h"
 #include "velox/dwio/dwrf/reader/ColumnVisitors.h"
@@ -52,7 +53,7 @@ inline RleVersion convertRleVersion(proto::ColumnEncoding_Kind kind) {
   switch (static_cast<int64_t>(kind)) {
     case proto::ColumnEncoding_Kind_DIRECT:
     case proto::ColumnEncoding_Kind_DICTIONARY:
-      return RleVersion_1;
+      return RleVersion::RleVersion_1;
     default:
       DWIO_RAISE("Unknown encoding in convertRleVersion");
   }
