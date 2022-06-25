@@ -66,14 +66,14 @@ struct Stats {
   Stats operator-(const Stats& stats) const;
 
   template <typename Op>
-  void recordAlloc(int64_t bytes, Op op) {
+  void recordAlloc(int64_t bytes, int32_t count, Op op) {
     uint64_t clocks{0};
     auto index = sizeIndex(bytes);
     {
       velox::ClockTimer timer(&clocks);
       op();
     }
-    ++sizes[index].numAlloc;
+    sizes[index].numAlloc += count;
     sizes[index].cumBytes += bytes;
     sizes[index].allocClocks += clocks;
   }

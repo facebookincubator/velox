@@ -146,7 +146,7 @@ class MmapAllocator : public MappedMemory {
       ContiguousAllocation& allocation,
       std::function<void(int64_t)> beforeAllocCB = nullptr) override {
     bool result;
-    stats_.recordAlloc(numPages * kPageSize, [&]() {
+    stats_.recordAlloc(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
           numPages, collateral, allocation, beforeAllocCB);
     });

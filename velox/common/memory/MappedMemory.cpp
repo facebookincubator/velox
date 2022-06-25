@@ -135,7 +135,7 @@ class MappedMemoryImpl : public MappedMemory {
       ContiguousAllocation& allocation,
       std::function<void(int64_t)> beforeAllocCB = nullptr) override {
     bool result;
-    stats_.recordAlloc(numPages * kPageSize, [&]() {
+    stats_.recordAlloc(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
           numPages, collateral, allocation, beforeAllocCB);
     });
@@ -211,9 +211,12 @@ bool MappedMemoryImpl::allocate(
       MachinePageCount numPages =
           mix.sizeCounts[i] * sizeClassSizes_[mix.sizeIndices[i]];
       void* ptr;
-      stats_.recordAlloc(numPages * kPageSize, [&]() {
-        ptr = malloc(numPages * kPageSize); // NOLINT
-      });
+      stats_.recordAlloc(
+          sizeClassSizes_[mix.sizeIndices[i]] * kPageSize,
+          mix.sizeCounts[i],
+          [&]() {
+            ptr = malloc(numPages * kPageSize); // NOLINT
+          });
       if (!ptr) {
         // Failed to allocate memory from memory.
         break;
@@ -499,7 +502,8 @@ std::string Stats::toString() const {
   for (auto i = 0; i < sizes.size(); ++i) {
     totalClocks += sizes[i].clocks();
   }
-  out << fmt::format("Alloc: {} Gclk, {}MB advised\n", totalClocks >> 30, numAdvise >> 8);
+  out << fmt::format(
+      "Alloc: {} Gclk, {}MB advised\n", totalClocks >> 30, numAdvise >> 8);
   std::vector<int32_t> indices(sizes.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::sort(indices.begin(), indices.end(), [&](int32_t left, int32_t right) {
