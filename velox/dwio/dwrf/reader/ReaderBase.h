@@ -44,7 +44,7 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
  public:
   FooterStatisticsImpl(
       const ReaderBase& reader,
-      const StatsContext& statsContext);
+      const DwrfStatsContext& statsContext);
 
   virtual ~FooterStatisticsImpl() override = default;
 

@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <velox/type/Filter.h>
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::dwrf {
 

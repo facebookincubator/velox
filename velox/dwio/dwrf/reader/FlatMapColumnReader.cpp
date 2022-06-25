@@ -15,9 +15,11 @@
  */
 
 #include "velox/dwio/dwrf/reader/FlatMapColumnReader.h"
-#include <folly/json.h>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/dwrf/reader/FlatMapHelper.h"
+
+#include <folly/json.h>
 
 namespace facebook::velox::dwrf {
 

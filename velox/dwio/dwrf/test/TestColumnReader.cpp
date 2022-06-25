@@ -18,6 +18,7 @@
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -84,7 +85,7 @@ void makeFieldSpecs(
 
 class SelectiveColumnReaderBuilder {
  public:
-  std::unique_ptr<ColumnReader> build(
+  std::unique_ptr<AbstractColumnReader> build(
       const std::shared_ptr<const Type>& requestedType,
       MockStripeStreams& stripe,
       std::vector<uint64_t> nodes = {},
@@ -119,7 +120,7 @@ bool isNotNull(tm* timeptr) {
   return timeptr != nullptr;
 }
 
-std::unique_ptr<ColumnReader> buildColumnReader(
+std::unique_ptr<AbstractColumnReader> buildColumnReader(
     const std::shared_ptr<const Type>& requestedType,
     MockStripeStreams& stripe,
     std::vector<uint64_t> nodes = {},
@@ -159,7 +160,7 @@ class StringReaderTests
       : expectMemoryReuse_{GetParam().expectMemoryReuse},
         returnFlatVector_{GetParam().returnFlatVector} {}
 
-  std::unique_ptr<ColumnReader> buildReader(
+  std::unique_ptr<AbstractColumnReader> buildReader(
       const std::shared_ptr<const Type>& requestedType,
       MockStripeStreams& stripe,
       std::vector<uint64_t> nodes = {},
@@ -199,7 +200,7 @@ class StringReaderTests
   SelectiveColumnReaderBuilder builder_;
 };
 
-void skip(std::unique_ptr<ColumnReader>& reader, int32_t skipSize = 0) {
+void skip(std::unique_ptr<AbstractColumnReader>& reader, int32_t skipSize = 0) {
   if (skipSize > 0) {
     reader->skip(skipSize);
     // TODO Fix SelectiveColumnReader::skip
@@ -211,7 +212,7 @@ void skip(std::unique_ptr<ColumnReader>& reader, int32_t skipSize = 0) {
 }
 
 void skipAndRead(
-    std::unique_ptr<ColumnReader>& reader,
+    std::unique_ptr<AbstractColumnReader>& reader,
     VectorPtr& batch,
     int32_t readSize = 2,
     int32_t skipSize = 0,
@@ -261,7 +262,7 @@ class TestColumnReader : public testing::TestWithParam<ReaderTestParams> {
  protected:
   TestColumnReader() : expectMemoryReuse_{GetParam().expectMemoryReuse} {}
 
-  std::unique_ptr<ColumnReader> buildReader(
+  std::unique_ptr<AbstractColumnReader> buildReader(
       const std::shared_ptr<const Type>& requestedType,
       std::vector<uint64_t> nodes = {},
       bool returnFlatVector = false,
@@ -4493,7 +4494,7 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
 
 class SchemaMismatchTest : public TestWithParam<bool> {
  protected:
-  std::unique_ptr<ColumnReader> buildReader(
+  std::unique_ptr<AbstractColumnReader> buildReader(
       SelectiveColumnReaderBuilder& builder,
       const std::shared_ptr<const Type>& requestedType,
       MockStripeStreams& stripe,

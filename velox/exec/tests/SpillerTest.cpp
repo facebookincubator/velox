@@ -16,6 +16,7 @@
 
 #include "velox/exec/Spiller.h"
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/exec/tests/utils/RowContainerTestBase.h"
 
 using namespace facebook::velox;

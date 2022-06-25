@@ -22,6 +22,7 @@
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/EncodingContext.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/vector/BaseVector.h"
@@ -31,16 +32,36 @@ namespace facebook::velox::dwrf {
 /**
  * The interface for reading ORC data types.
  */
-class ColumnReader {
- protected:
+class ColumnReader : public AbstractColumnReader {
+ public:
   explicit ColumnReader(
       memory::MemoryPool& memoryPool,
       const std::shared_ptr<const dwio::common::TypeWithId>& type)
-      : notNullDecoder_{},
-        nodeType_{type},
-        memoryPool_{memoryPool},
-        flatMapContext_{FlatMapContext::nonFlatMapContext()} {}
+      : AbstractColumnReader(memoryPool, type),
+        flatMapContext_(FlatMapContext::nonFlatMapContext()) {}
 
+  ColumnReader(
+      std::shared_ptr<const dwio::common::TypeWithId> nodeId,
+      StripeStreams& stripe,
+      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+
+  /**
+   * Skip number of specified rows.
+   * @param numValues the number of values to skip
+   * @return the number of non-null values skipped
+   */
+  virtual uint64_t skip(uint64_t numValues) override;
+
+  /**
+   * Create a reader for the given stripe.
+   */
+  static std::unique_ptr<ColumnReader> build(
+      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      StripeStreams& stripe,
+      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+
+ protected:
   // Reads nulls, if any. Sets '*nulls' to nullptr if void
   // the reader has no nulls and there are no incoming
   //          nulls.Takes 'nulls' from 'result' if '*result' is non -
@@ -59,74 +80,7 @@ class ColumnReader {
       const uint64_t* incomingNulls);
 
   std::unique_ptr<ByteRleDecoder> notNullDecoder_;
-  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
-  memory::MemoryPool& memoryPool_;
   FlatMapContext flatMapContext_;
-
- public:
-  ColumnReader(
-      std::shared_ptr<const dwio::common::TypeWithId> nodeId,
-      StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
-
-  virtual ~ColumnReader() = default;
-
-  /**
-   * Skip number of specified rows.
-   * @param numValues the number of values to skip
-   * @return the number of non-null values skipped
-   */
-  virtual uint64_t skip(uint64_t numValues);
-
-  /**
-   * Read the next group of values into a RowVector.
-   * @param numValues the number of values to read
-   * @param vector to read into
-   */
-  virtual void next(
-      uint64_t numValues,
-      VectorPtr& result,
-      const uint64_t* nulls = nullptr) = 0;
-
-  // Return list of strides/rowgroups that can be skipped (based on statistics).
-  // Stride indices are monotonically increasing.
-  virtual std::vector<uint32_t> filterRowGroups(
-      uint64_t /*rowGroupSize*/,
-      const StatsContext& /* context */) const {
-    static const std::vector<uint32_t> kEmpty;
-    return kEmpty;
-  }
-
-  // Sets the streams of this and child readers to the first row of
-  // the row group at 'index'. This advances readers and touches the
-  // actual data, unlike setRowGroup().
-  virtual void seekToRowGroup(uint32_t /*index*/) {
-    VELOX_NYI();
-  }
-
-  /**
-   * Create a reader for the given stripe.
-   */
-  static std::unique_ptr<ColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
-};
-
-class ColumnReaderFactory {
- public:
-  virtual ~ColumnReaderFactory() = default;
-  virtual std::unique_ptr<ColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext()) {
-    return ColumnReader::build(
-        requestedType, dataType, stripe, std::move(flatMapContext));
-  }
-
-  static ColumnReaderFactory* baseFactory();
 };
 
 namespace detail {

@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveRepeatedColumnReader.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -54,7 +55,7 @@ SelectiveListColumnReader::SelectiveListColumnReader(
 }
 
 uint64_t SelectiveListColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   if (child_) {
     std::array<int64_t, kBufferSize> buffer;
     uint64_t childElements = 0;
@@ -160,7 +161,7 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
 }
 
 uint64_t SelectiveMapColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   if (keyReader_ || elementReader_) {
     std::array<int64_t, kBufferSize> buffer;
     uint64_t childElements = 0;

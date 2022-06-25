@@ -110,7 +110,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> StatisticsBuilder::build()
     const {
   proto::ColumnStatistics stats;
   toProto(stats);
-  StatsContext context{WriterVersion_CURRENT};
+  DwrfStatsContext context{WriterVersion_CURRENT};
   return buildColumnStatisticsFromProto(stats, context);
 }
 

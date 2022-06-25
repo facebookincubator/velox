@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/vector/ConstantVector.h"
 

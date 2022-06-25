@@ -22,7 +22,7 @@ using namespace dwio::common;
 
 std::unique_ptr<ColumnStatistics> buildColumnStatisticsFromProto(
     const proto::ColumnStatistics& s,
-    const StatsContext& statsContext) {
+    const DwrfStatsContext& statsContext) {
   ColumnStatistics colStats(
       s.has_numberofvalues() ? std::optional(s.numberofvalues()) : std::nullopt,
       s.has_hasnull() ? std::optional(s.hasnull()) : std::nullopt,

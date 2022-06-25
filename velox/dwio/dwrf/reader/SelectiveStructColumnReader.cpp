@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/ColumnLoader.h"
 
 namespace facebook::velox::dwrf {
@@ -66,7 +67,7 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
 
 std::vector<uint32_t> SelectiveStructColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
-    const StatsContext& context) const {
+    const dwio::common::StatsContext& context) const {
   auto stridesToSkip =
       SelectiveColumnReader::filterRowGroups(rowGroupSize, context);
   for (const auto& child : children_) {
@@ -89,7 +90,7 @@ std::vector<uint32_t> SelectiveStructColumnReader::filterRowGroups(
 }
 
 uint64_t SelectiveStructColumnReader::skip(uint64_t numValues) {
-  auto numNonNulls = ColumnReader::skip(numValues);
+  auto numNonNulls = SelectiveColumnReader::skip(numValues);
   // 'readOffset_' of struct child readers is aligned with
   // 'readOffset_' of the struct. The child readers may have fewer
   // values since there is no value in children where the struct is

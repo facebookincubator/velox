@@ -19,7 +19,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/ConstantColumnReader.h"
 #include "velox/dwio/dwrf/utils/BitIterator.h"
 
@@ -63,7 +63,7 @@ class StringKeyBuffer;
 template <typename T>
 class KeyNode {
  private:
-  std::unique_ptr<ColumnReader> reader_;
+  std::unique_ptr<AbstractColumnReader> reader_;
   std::unique_ptr<ByteRleDecoder> inMap_;
   dwio::common::DataBuffer<char> inMapData_;
   KeyValue<T> key_;
@@ -76,7 +76,7 @@ class KeyNode {
 
  public:
   KeyNode(
-      std::unique_ptr<ColumnReader> valueReader,
+      std::unique_ptr<AbstractColumnReader> valueReader,
       std::unique_ptr<ByteRleDecoder> inMapDecoder,
       const KeyValue<T>& keyValue,
       uint32_t sequence,

@@ -23,21 +23,21 @@
 namespace facebook::velox::dwrf {
 
 /**
- * StatsContext contains fields required to compute statistics
+ * DwrfStatsContext contains fields required to compute statistics
  */
-struct StatsContext {
+struct DwrfStatsContext : public dwio::common::StatsContext {
   const std::string writerName;
   WriterVersion writerVersion;
 
-  StatsContext(const std::string& name, WriterVersion version)
+  DwrfStatsContext(const std::string& name, WriterVersion version)
       : writerName(name), writerVersion{version} {}
 
-  explicit StatsContext(WriterVersion version)
+  explicit DwrfStatsContext(WriterVersion version)
       : writerName(""), writerVersion{version} {}
 };
 
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromProto(
     const proto::ColumnStatistics& stats,
-    const StatsContext& statsContext);
+    const DwrfStatsContext& statsContext);
 
 } // namespace facebook::velox::dwrf

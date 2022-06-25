@@ -33,7 +33,7 @@ using memory::MemoryPool;
 
 FooterStatisticsImpl::FooterStatisticsImpl(
     const ReaderBase& reader,
-    const StatsContext& statsContext) {
+    const DwrfStatsContext& statsContext) {
   auto& footer = reader.getFooter();
   auto& handler = reader.getDecryptionHandler();
   colStats_.resize(footer.statistics_size());
@@ -220,7 +220,7 @@ std::vector<uint64_t> ReaderBase::getRowsPerStripe() const {
 }
 
 std::unique_ptr<Statistics> ReaderBase::getStatistics() const {
-  StatsContext statsContext(getWriterName(), getWriterVersion());
+  DwrfStatsContext statsContext(getWriterName(), getWriterVersion());
   return std::make_unique<FooterStatisticsImpl>(*this, statsContext);
 }
 
@@ -230,7 +230,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
       index,
       static_cast<uint32_t>(footer_->statistics_size()),
       "column index out of range");
-  StatsContext statsContext(getWriterVersion());
+  DwrfStatsContext statsContext(getWriterVersion());
   if (!handler_->isEncrypted(index)) {
     auto& stats = footer_->statistics(index);
     return buildColumnStatisticsFromProto(stats, statsContext);

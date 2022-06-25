@@ -98,7 +98,9 @@ struct ScanState {
   RawScanState rawState;
 };
 
-class SelectiveColumnReader : public ColumnReader {
+class SelectiveColumnReader : public AbstractColumnReader {
+  friend class ColumnLoader;
+
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
 
@@ -109,30 +111,6 @@ class SelectiveColumnReader : public ColumnReader {
       const TypePtr& type,
       FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
 
-  /**
-   * Read the next group of values into a RowVector.
-   * @param numValues the number of values to read
-   * @param vector to read into
-   */
-  void next(
-      uint64_t /*numValues*/,
-      VectorPtr& /*result*/,
-      const uint64_t* /*incomingNulls*/) override {
-    VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
-  }
-
-  // Creates a reader for the given stripe.
-  static std::unique_ptr<SelectiveColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
-
-  // Called when filters in ScanSpec change, e.g. a new filter is pushed down
-  // from a downstream operator.
-  virtual void resetFilterCaches();
-
   // Seeks to offset and reads the rows in 'rows' and applies
   // filters and value processing as given by 'scanSpec supplied at
   // construction. 'offset' is relative to start of stripe. 'rows' are
@@ -141,6 +119,41 @@ class SelectiveColumnReader : public ColumnReader {
   // between this and the next call to read.
   virtual void
   read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls) = 0;
+
+  /**
+   * Skip number of specified rows.
+   * @param numValues the number of values to skip
+   * @return the number of non-null values skipped
+   */
+  virtual uint64_t skip(uint64_t numValues) override;
+
+  // Advances to 'offset', so that the next item to be read is the
+  // offset-th from the start of stripe.
+  void seekTo(vector_size_t offset, bool readsNullsOnly);
+
+  // TODO: move to DWRF data
+  // Creates a reader for the given stripe.
+  static std::unique_ptr<SelectiveColumnReader> build(
+      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
+      StripeStreams& stripe,
+      common::ScanSpec* scanSpec,
+      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+
+  virtual std::vector<uint32_t> filterRowGroups(
+      uint64_t rowGroupSize,
+      const dwio::common::StatsContext& context) const override;
+
+  // Sets the streams of this and child readers to the first row of
+  // the row group at 'index'. This advances readers and touches the
+  // actual data, unlike setRowGroup().
+  virtual void seekToRowGroup(uint32_t /*index*/) override {
+    VELOX_NYI();
+  }
+
+  // Called when filters in ScanSpec change, e.g. a new filter is pushed down
+  // from a downstream operator.
+  virtual void resetFilterCaches();
 
   // Extracts the values at 'rows' into '*result'. May rewrite or
   // reallocate '*result'. 'rows' must be the same set or a subset of
@@ -157,19 +170,6 @@ class SelectiveColumnReader : public ColumnReader {
     return inputRows_;
   }
 
-  // Advances to 'offset', so that the next item to be read is the
-  // offset-th from the start of stripe.
-  void seekTo(vector_size_t offset, bool readsNullsOnly);
-
-  const TypePtr& type() const {
-    return type_;
-  }
-
-  // The below functions are called from ColumnVisitor to fill the result set.
-  inline void addOutputRow(vector_size_t row) {
-    outputRows_.push_back(row);
-  }
-
   // Returns a pointer to output rows  with at least 'size' elements available.
   vector_size_t* mutableOutputRows(int32_t size) {
     numOutConfirmed_ = outputRows_.size();
@@ -177,35 +177,9 @@ class SelectiveColumnReader : public ColumnReader {
     return outputRows_.data() + numOutConfirmed_;
   }
 
-  template <typename T>
-  T* mutableValues(int32_t size) {
-    DCHECK(values_->capacity() >= (numValues_ + size) * sizeof(T));
-    return reinterpret_cast<T*>(rawValues_) + numValues_;
-  }
-
-  uint64_t* mutableNulls(int32_t size) {
-    DCHECK_GE(resultNulls_->capacity() * 8, numValues_ + size);
-    return rawResultNulls_;
-  }
-
-  void setNumValues(vector_size_t size) {
-    numValues_ = size;
-  }
-
-  void setNumRows(vector_size_t size) {
-    outputRows_.resize(size);
-  }
-
-  void setHasNulls() {
-    anyNulls_ = true;
-  }
-
-  void setAllNull() {
-    allNull_ = true;
-  }
-
-  void incrementNumValues(vector_size_t size) {
-    numValues_ += size;
+  // The below functions are called from ColumnVisitor to fill the result set.
+  inline void addOutputRow(vector_size_t row) {
+    outputRows_.push_back(row);
   }
 
   template <typename T>
@@ -242,8 +216,43 @@ class SelectiveColumnReader : public ColumnReader {
     numValues_ -= count;
   }
 
+  template <typename T>
+  T* mutableValues(int32_t size) {
+    DCHECK(values_->capacity() >= (numValues_ + size) * sizeof(T));
+    return reinterpret_cast<T*>(rawValues_) + numValues_;
+  }
+
+  uint64_t* mutableNulls(int32_t size) {
+    DCHECK_GE(resultNulls_->capacity() * 8, numValues_ + size);
+    return rawResultNulls_;
+  }
+
+  void incrementNumValues(vector_size_t size) {
+    numValues_ += size;
+  }
+
+  void setNumValues(vector_size_t size) {
+    numValues_ = size;
+  }
+
+  void setNumRows(vector_size_t size) {
+    outputRows_.resize(size);
+  }
+
+  void setHasNulls() {
+    anyNulls_ = true;
+  }
+
+  void setAllNull() {
+    allNull_ = true;
+  }
+
   common::ScanSpec* scanSpec() const {
     return scanSpec_;
+  }
+
+  const TypePtr& type() const {
+    return type_;
   }
 
   auto readOffset() const {
@@ -276,16 +285,36 @@ class SelectiveColumnReader : public ColumnReader {
     initTimeClocks_ = 0;
   }
 
-  std::vector<uint32_t> filterRowGroups(
-      uint64_t rowGroupSize,
-      const StatsContext& context) const override;
-
   raw_vector<int32_t>& innerNonNullRows() {
     return innerNonNullRows_;
   }
 
   raw_vector<int32_t>& outerNonNullRows() {
     return outerNonNullRows_;
+  }
+
+  // Used by decoders to set encoding-related data to be kept between calls to
+  // read().
+  ScanState& scanState() {
+    return scanState_;
+  }
+
+ protected:
+  static constexpr int8_t kNoValueSize = -1;
+
+  template <typename T>
+  void ensureValuesCapacity(vector_size_t numRows);
+
+  template <typename T>
+  void filterNulls(RowSet rows, bool isNull, bool extractValues);
+
+  template <typename T>
+  void
+  prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
+
+  // true if 'this' has a fast path.
+  virtual bool hasBulkPath() const {
+    return true;
   }
 
   // Returns true if no filters or deterministic filters/hooks that
@@ -301,33 +330,6 @@ class SelectiveColumnReader : public ColumnReader {
         (!scanSpec_->valueHook() || !nullsInReadRange_ ||
          !scanSpec_->valueHook()->acceptsNulls());
   }
-
-  // true if 'this' has a fast path.
-  virtual bool hasBulkPath() const {
-    return true;
-  }
-
-  // Used by decoders to set encoding-related data to be kept between calls to
-  // read().
-  ScanState& scanState() {
-    return scanState_;
-  }
-
- protected:
-  static constexpr int8_t kNoValueSize = -1;
-  static constexpr uint32_t kRowGroupNotSet = ~0;
-
-  template <typename T>
-  void ensureValuesCapacity(vector_size_t numRows);
-
-  void prepareNulls(RowSet rows, bool hasNulls);
-
-  template <typename T>
-  void filterNulls(RowSet rows, bool isNull, bool extractValues);
-
-  template <typename T>
-  void
-  prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
 
   void setOutputRows(RowSet rows) {
     outputRows_.resize(rows.size());
@@ -374,6 +376,11 @@ class SelectiveColumnReader : public ColumnReader {
       index_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
     }
   }
+
+  std::unique_ptr<ByteRleDecoder> notNullDecoder_;
+  //  const std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+  //  memory::MemoryPool& memoryPool_;
+  FlatMapContext flatMapContext_;
 
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at
@@ -458,6 +465,17 @@ class SelectiveColumnReader : public ColumnReader {
 
   // Encoding-related state to keep between reads, e.g. dictionaries.
   ScanState scanState_;
+
+ private:
+  // TODO: Move to DwrfData
+  void prepareNulls(RowSet rows, bool hasNulls);
+
+  // TODO: Move to DwrfData
+  void readNulls(
+      vector_size_t numValues,
+      const uint64_t* incomingNulls,
+      VectorPtr* result,
+      BufferPtr& nulls);
 };
 
 template <>
@@ -477,30 +495,6 @@ inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   }
   addStringValue(value);
 }
-
-class SelectiveColumnReaderFactory : public ColumnReaderFactory {
- public:
-  explicit SelectiveColumnReaderFactory(
-      std::shared_ptr<common::ScanSpec> scanSpec)
-      : scanSpec_(scanSpec) {}
-  std::unique_ptr<ColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      FlatMapContext flatMapContext) override {
-    auto reader = SelectiveColumnReader::build(
-        requestedType,
-        dataType,
-        stripe,
-        scanSpec_.get(),
-        std::move(flatMapContext));
-    reader->setIsTopLevel();
-    return reader;
-  }
-
- private:
-  std::shared_ptr<common::ScanSpec> const scanSpec_;
-};
 
 } // namespace facebook::velox::dwrf
 

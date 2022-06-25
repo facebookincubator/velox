@@ -30,6 +30,9 @@ namespace facebook::velox::dwrf {
 using dwio::common::TypeWithId;
 using dwio::common::typeutils::CompatChecker;
 
+// Buffer size for reading length stream
+constexpr uint64_t BUFFER_SIZE = 1024;
+
 common::AlwaysTrue& alwaysTrue() {
   static common::AlwaysTrue alwaysTrue;
   return alwaysTrue;
@@ -58,11 +61,19 @@ SelectiveColumnReader::SelectiveColumnReader(
     // TODO: why is data type instead of requested type passed in?
     const TypePtr& type,
     FlatMapContext flatMapContext)
-    : ColumnReader(std::move(requestedType), stripe, std::move(flatMapContext)),
+    : AbstractColumnReader(stripe.getMemoryPool(), requestedType),
+      flatMapContext_{FlatMapContext::nonFlatMapContext()},
       scanSpec_(scanSpec),
       type_{type},
       rowsPerRowGroup_{stripe.rowsPerRowGroup()} {
   EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+  std::unique_ptr<dwio::common::SeekableInputStream> stream =
+      stripe.getStream(encodingKey.forKind(proto::Stream_Kind_PRESENT), false);
+
+  if (stream) {
+    notNullDecoder_ = createBooleanRleDecoder(std::move(stream), encodingKey);
+  }
+
   // We always initialize indexStream_ because indices are needed as
   // soon as there is a single filter that can trigger row group skips
   // anywhere in the reader tree. This is not known at construct time
@@ -72,11 +83,13 @@ SelectiveColumnReader::SelectiveColumnReader(
       encodingKey.forKind(proto::Stream_Kind_ROW_INDEX), false);
 }
 
+// TODO: Move to DwrfData
 std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
     uint64_t rowGroupSize,
-    const StatsContext& context) const {
+    const dwio::common::StatsContext& context) const {
   if ((!index_ && !indexStream_) || !scanSpec_->filter()) {
-    return ColumnReader::filterRowGroups(rowGroupSize, context);
+    static const std::vector<uint32_t> kEmpty;
+    return kEmpty;
   }
 
   ensureRowGroupIndex();
@@ -85,8 +98,8 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
   std::vector<uint32_t> stridesToSkip;
   for (auto i = 0; i < index_->entry_size(); i++) {
     const auto& entry = index_->entry(i);
-    auto columnStats =
-        buildColumnStatisticsFromProto(entry.statistics(), context);
+    auto columnStats = buildColumnStatisticsFromProto(
+        entry.statistics(), static_cast<const DwrfStatsContext&>(context));
     if (!testFilter(filter, columnStats.get(), rowGroupSize, type_)) {
       VLOG(1) << "Drop stride " << i << " on " << scanSpec_->toString();
       stridesToSkip.push_back(i); // Skipping stride based on column stats.
@@ -95,13 +108,48 @@ std::vector<uint32_t> SelectiveColumnReader::filterRowGroups(
   return stridesToSkip;
 }
 
+// TODO: Move to DwrfData
+uint64_t SelectiveColumnReader::skip(uint64_t numValues) {
+  if (notNullDecoder_) {
+    // page through the values that we want to skip
+    // and count how many are non-null
+    std::array<char, BUFFER_SIZE> buffer;
+    constexpr auto bitCount = BUFFER_SIZE * 8;
+    uint64_t remaining = numValues;
+    while (remaining > 0) {
+      uint64_t chunkSize = std::min(remaining, bitCount);
+      notNullDecoder_->next(buffer.data(), chunkSize, nullptr);
+      remaining -= chunkSize;
+      numValues -= bits::countNulls(
+          reinterpret_cast<uint64_t*>(buffer.data()), 0, chunkSize);
+    }
+  }
+  return numValues;
+}
+
+// TODO: Move to DwrfData
 void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
   if (offset == readOffset_) {
     return;
   }
   if (readOffset_ < offset) {
     if (readsNullsOnly) {
-      ColumnReader::skip(offset - readOffset_);
+      auto numValues = offset - readOffset_;
+      if (notNullDecoder_) {
+        // page through the values that we want to skip
+        // and count how many are non-null
+
+        std::array<char, BUFFER_SIZE> buffer;
+        constexpr auto bitCount = BUFFER_SIZE * 8;
+        uint64_t remaining = numValues;
+        while (remaining > 0) {
+          uint64_t chunkSize = std::min(remaining, bitCount);
+          notNullDecoder_->next(buffer.data(), chunkSize, nullptr);
+          remaining -= chunkSize;
+          numValues -= bits::countNulls(
+              reinterpret_cast<uint64_t*>(buffer.data()), 0, chunkSize);
+        }
+      }
     } else {
       skip(offset - readOffset_);
     }
@@ -111,6 +159,40 @@ void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
   }
 }
 
+// TODO: Move to DwrfData
+void SelectiveColumnReader::readNulls(
+    vector_size_t numValues,
+    const uint64_t* incomingNulls,
+    VectorPtr* result,
+    BufferPtr& nulls) {
+  if (!notNullDecoder_ && !incomingNulls) {
+    nulls = nullptr;
+    if (result && *result) {
+      (*result)->resetNulls();
+    }
+    return;
+  }
+  auto numBytes = bits::nbytes(numValues);
+  if (result && *result) {
+    nulls = (*result)->mutableNulls(numValues + (simd::kPadding * 8));
+    detail::resetIfNotWritable(*result, nulls);
+  }
+  if (!nulls || nulls->capacity() < numBytes + simd::kPadding) {
+    nulls =
+        AlignedBuffer::allocate<char>(numBytes + simd::kPadding, &memoryPool_);
+  }
+  nulls->setSize(numBytes);
+  auto* nullsPtr = nulls->asMutable<uint64_t>();
+  if (!notNullDecoder_) {
+    memcpy(nullsPtr, incomingNulls, numBytes);
+    return;
+  }
+  memset(nullsPtr, bits::kNotNullByte, numBytes);
+  notNullDecoder_->next(
+      reinterpret_cast<char*>(nullsPtr), numValues, incomingNulls);
+}
+
+// TODO: Move to DwrfData
 void SelectiveColumnReader::prepareNulls(RowSet rows, bool hasNulls) {
   if (!hasNulls) {
     anyNulls_ = false;
@@ -360,6 +442,7 @@ std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
   }
 }
 
+// TODO: Move to DwrfData
 std::unique_ptr<SelectiveColumnReader> SelectiveColumnReader::build(
     const std::shared_ptr<const TypeWithId>& requestedType,
     const std::shared_ptr<const TypeWithId>& dataType,

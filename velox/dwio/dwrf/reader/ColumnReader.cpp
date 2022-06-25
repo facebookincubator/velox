@@ -137,8 +137,7 @@ ColumnReader::ColumnReader(
     std::shared_ptr<const dwio::common::TypeWithId> nodeType,
     StripeStreams& stripe,
     FlatMapContext flatMapContext)
-    : nodeType_(std::move(nodeType)),
-      memoryPool_(stripe.getMemoryPool()),
+    : AbstractColumnReader(stripe.getMemoryPool(), std::move(nodeType)),
       flatMapContext_(std::move(flatMapContext)) {
   EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
   std::unique_ptr<dwio::common::SeekableInputStream> stream =
@@ -1534,7 +1533,7 @@ void StringDirectColumnReader::next(
 class StructColumnReader : public ColumnReader {
  private:
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
-  std::vector<std::unique_ptr<ColumnReader>> children_;
+  std::vector<std::unique_ptr<AbstractColumnReader>> children_;
 
  public:
   StructColumnReader(
@@ -1668,7 +1667,7 @@ void StructColumnReader::next(
 
 class ListColumnReader : public ColumnReader {
  private:
-  std::unique_ptr<ColumnReader> child;
+  std::unique_ptr<AbstractColumnReader> child;
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> length;
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
@@ -1829,8 +1828,8 @@ void ListColumnReader::next(
 
 class MapColumnReader : public ColumnReader {
  private:
-  std::unique_ptr<ColumnReader> keyReader;
-  std::unique_ptr<ColumnReader> elementReader;
+  std::unique_ptr<AbstractColumnReader> keyReader;
+  std::unique_ptr<AbstractColumnReader> elementReader;
   std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> length;
   const std::shared_ptr<const dwio::common::TypeWithId> requestedType_;
 
@@ -2197,12 +2196,6 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
     default:
       DWIO_RAISE("buildReader unhandled type");
   }
-}
-
-// static
-ColumnReaderFactory* ColumnReaderFactory::baseFactory() {
-  static auto instance = std::make_unique<ColumnReaderFactory>();
-  return instance.get();
 }
 
 } // namespace facebook::velox::dwrf

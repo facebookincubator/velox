@@ -64,7 +64,7 @@ class SelectiveStructColumnReader : public SelectiveColumnReader {
 
   std::vector<uint32_t> filterRowGroups(
       uint64_t rowGroupSize,
-      const StatsContext& context) const override;
+      const dwio::common::StatsContext& context) const override;
 
   void read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls)
       override;

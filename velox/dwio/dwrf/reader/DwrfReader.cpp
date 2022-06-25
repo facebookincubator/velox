@@ -16,6 +16,7 @@
 
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 namespace facebook::velox::dwrf {
@@ -35,7 +36,7 @@ std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
 }
 
 void DwrfRowReader::checkSkipStrides(
-    const StatsContext& context,
+    const DwrfStatsContext& context,
     uint64_t strideSize) {
   if (currentRowInStripe % strideSize != 0) {
     return;
@@ -74,7 +75,7 @@ void DwrfRowReader::checkSkipStrides(
 uint64_t DwrfRowReader::next(uint64_t size, VectorPtr& result) {
   DWIO_ENSURE_GT(size, 0);
   auto& footer = getReader().getFooter();
-  StatsContext context(
+  DwrfStatsContext context(
       getReader().getWriterName(), getReader().getWriterVersion());
 
   for (;;) {

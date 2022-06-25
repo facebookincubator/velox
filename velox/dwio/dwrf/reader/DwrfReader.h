@@ -17,8 +17,10 @@
 #pragma once
 
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReaderShared.h"
+#include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
@@ -29,12 +31,18 @@ class DwrfRowReader : public DwrfRowReaderShared {
   }
 
   void createColumnReaderImpl(StripeStreams& stripeStreams) override {
-    columnReader_ = (columnReaderFactory_ ? columnReaderFactory_.get()
-                                          : ColumnReaderFactory::baseFactory())
-                        ->build(
-                            getColumnSelector().getSchemaWithId(),
-                            getReader().getSchemaWithId(),
-                            stripeStreams);
+    auto scanSpec = options_.getScanSpec().get();
+    auto requestedType = getColumnSelector().getSchemaWithId();
+    auto dataType = getReader().getSchemaWithId();
+    auto flatMapContext = FlatMapContext::nonFlatMapContext();
+
+    if (!scanSpec) {
+      columnReader_ = ColumnReader::build(
+          requestedType, dataType, stripeStreams, flatMapContext);
+    } else {
+      columnReader_ = SelectiveColumnReader::build(
+          requestedType, dataType, stripeStreams, scanSpec, flatMapContext);
+    }
   }
 
   void seekImpl() override {
@@ -62,7 +70,7 @@ class DwrfRowReader : public DwrfRowReaderShared {
     stats.skippedStrides += skippedStrides_;
   }
 
-  ColumnReader* columnReader() {
+  AbstractColumnReader* columnReader() {
     return columnReader_.get();
   }
 
@@ -78,9 +86,9 @@ class DwrfRowReader : public DwrfRowReaderShared {
   }
 
  private:
-  void checkSkipStrides(const StatsContext& context, uint64_t strideSize);
+  void checkSkipStrides(const DwrfStatsContext& context, uint64_t strideSize);
 
-  std::unique_ptr<ColumnReader> columnReader_;
+  std::unique_ptr<AbstractColumnReader> columnReader_;
   std::vector<uint32_t> stridesToSkip_;
   // Record of strides to skip in each visited stripe. Used for diagnostics.
   std::unordered_map<uint32_t, std::vector<uint32_t>> stripeStridesToSkip_;

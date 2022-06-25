@@ -17,6 +17,7 @@
 #include "velox/exec/MergeSource.h"
 
 #include <boost/circular_buffer.hpp>
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/exec/Merge.h"
 
 namespace facebook::velox::exec {

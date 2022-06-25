@@ -59,7 +59,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
 }
 
 uint64_t SelectiveIntegerDictionaryColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   dataReader_->skip(numValues);
   if (inDictionaryReader_) {
     inDictionaryReader_->skip(numValues);

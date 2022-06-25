@@ -22,6 +22,7 @@
 #include "velox/dwio/common/DataSink.h"
 #include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/dwio/dwrf/reader/AbstractColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"

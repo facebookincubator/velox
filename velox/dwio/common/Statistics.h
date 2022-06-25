@@ -523,4 +523,11 @@ struct RuntimeStatistics {
   }
 };
 
+/**
+ * StatsContext contains fields required to compute statistics
+ */
+struct StatsContext {
+  virtual ~StatsContext() = default;
+};
+
 } // namespace facebook::velox::dwio::common
