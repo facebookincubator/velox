@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include <folly/chrono/Hardware.h>
 #include <chrono>
 
