@@ -301,9 +301,7 @@ TEST(StatisticsBuilder, doubleNaN) {
   target.addValues(std::numeric_limits<double>::infinity());
   target.addValues(-std::numeric_limits<double>::infinity());
   stats = as<DoubleColumnStatistics>(target.build());
-  EXPECT_EQ(stats->getMaximum(), std::numeric_limits<double>::infinity());
-  EXPECT_EQ(stats->getMinimum(), -std::numeric_limits<double>::infinity());
-  EXPECT_FALSE(stats->getSum().has_value());
+  EXPECT_EQ(stats, nullptr);
 
   target.reset();
   DoubleStatisticsBuilder builder{options};
@@ -311,9 +309,7 @@ TEST(StatisticsBuilder, doubleNaN) {
   builder.addValues(-std::numeric_limits<double>::infinity());
   target.merge(*builder.build());
   stats = as<DoubleColumnStatistics>(target.build());
-  EXPECT_EQ(stats->getMaximum(), std::numeric_limits<double>::infinity());
-  EXPECT_EQ(stats->getMinimum(), -std::numeric_limits<double>::infinity());
-  EXPECT_FALSE(stats->getSum().has_value());
+  EXPECT_EQ(stats, nullptr);
 }
 
 TEST(StatisticsBuilder, string) {
@@ -448,7 +444,7 @@ TEST(StatisticsBuilder, stringLengthOverflow) {
   target.addValues("foo");
   EXPECT_TRUE(target.getTotalLength().has_value());
   stats = as<StringColumnStatistics>(target.build());
-  EXPECT_FALSE(stats->getTotalLength().has_value());
+  EXPECT_EQ(stats, nullptr);
 
   // merge causing overflow
   target.reset();
@@ -456,7 +452,7 @@ TEST(StatisticsBuilder, stringLengthOverflow) {
   target.merge(*buildColumnStatisticsFromProto(proto, context));
   EXPECT_TRUE(target.getTotalLength().has_value());
   stats = as<StringColumnStatistics>(target.build());
-  EXPECT_FALSE(stats->getTotalLength().has_value());
+  EXPECT_EQ(stats, nullptr);
 }
 
 TEST(StatisticsBuilder, boolean) {
