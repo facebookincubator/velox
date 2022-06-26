@@ -337,6 +337,7 @@ jobs:
           command: |
             mkdir ~/adapter-deps ~/adapter-deps/install
             source /opt/rh/gcc-toolset-9/enable
+            ./scripts/setup-gcs.sh
             set -xu
             DEPENDENCY_DIR=~/adapter-deps PROMPT_ALWAYS_RESPOND=n ./scripts/setup-adapters.sh
       - run:
@@ -357,13 +358,18 @@ jobs:
             cp -a hadoop-2.10.1 /usr/local/
             yum -y install java-1.8.0-openjdk
       - run:
+          name: "Install testbench (GCS dependency)"
+          command: |
+            set -xu
+            ./scripts/install_gcs_testbench.sh default
+      - run:
           name: Build
           command: |
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
             source /opt/rh/gcc-toolset-9/enable
-            make release EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON" AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            make release EXTRA_CMAKE_FLAGS=" -DVELOX_ENABLE_PARQUET=ON -DVELOX_ENABLE_HDFS=ON -DVELOX_ENABLE_S3=ON  -DVELOX_ENABLE_GCS=ON " GCSSDK_ROOT_DIR=~/adapter-deps/gcs_artifacts/ AWSSDK_ROOT_DIR=~/adapter-deps/install NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
           no_output_timeout: 1h
       - store_artifacts:
@@ -382,7 +388,6 @@ jobs:
             export PATH=~/adapter-deps/install/bin:~/adapter-deps/install/hadoop-2.10.1/bin:${PATH}
             cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
-
   format-check:
     executor: check
     steps:
