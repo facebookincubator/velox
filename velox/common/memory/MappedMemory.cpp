@@ -499,11 +499,16 @@ Stats Stats::operator-(const Stats& other) const {
 std::string Stats::toString() const {
   std::stringstream out;
   int64_t totalClocks = 0;
+  int64_t totalBytes = 0;
   for (auto i = 0; i < sizes.size(); ++i) {
     totalClocks += sizes[i].clocks();
+    totalBytes += sizes[i].cumBytes;
   }
   out << fmt::format(
-      "Alloc: {} Gclk, {}MB advised\n", totalClocks >> 30, numAdvise >> 8);
+      "Alloc: {}MB {} Gclk, {}MB advised\n",
+      totalBytes >> 20,
+      totalClocks >> 30,
+      numAdvise >> 8);
   std::vector<int32_t> indices(sizes.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::sort(indices.begin(), indices.end(), [&](int32_t left, int32_t right) {
@@ -516,7 +521,7 @@ std::string Stats::toString() const {
     out << fmt::format(
         "Size {}K: {}MB {} Mclks\n",
         sizes[i].size * 4,
-        sizes[i].numAlloc * sizes[i].size / 256,
+        sizes[i].cumBytes >> 20,
         sizes[i].clocks() >> 20);
   }
   return out.str();

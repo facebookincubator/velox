@@ -25,6 +25,7 @@
 #include <unordered_set>
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MappedMemory.h"
 
 namespace facebook::velox::memory {
@@ -197,7 +198,10 @@ class MmapAllocator : public MappedMemory {
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
   static constexpr int32_t kNoLastLookup = -1;
-
+  // Number of bits in 'mappedPages_' for one bit in
+  // 'mappedFreeLookup_'.
+  static constexpr int32_t kPagesPerLookupBit = 512;
+  
   // Represents a range of virtual addresses used for allocating entries of
   // 'unitSize_' machine pages.
   class SizeClass {
@@ -258,6 +262,12 @@ class MmapAllocator : public MappedMemory {
         MachinePageCount* FOLLY_NULLABLE numUnmapped,
         MappedMemory::Allocation& out);
 
+    int32_t findMappedFreeGroup();
+
+    xsimd::batch<uint64_t> mappedFreeBits(int32_t index);
+    void   allocateFromMappdFree(int32_t numPages, Allocation&allocation);
+
+    
     // Advises away the machine pages of 'this' size class contained in
     // 'allocation'.
     void adviseAway(const Allocation& allocation);
@@ -283,9 +293,17 @@ class MmapAllocator : public MappedMemory {
         MachinePageCount& numUnmapped,
         Allocation& allocation);
 
-    // int32_t findCandidateWord();
-    // void markFree(int32_t page);
-    // void markAllocated(int32_t page);
+    // Returns an index into 'pageAllocated_' wiht free mapped pages. Call only if 'numMappedFreePages_' > 0.
+    int32_t findCandidateWord();
+
+    void markMappedFree(int32_t page) {
+      bits::setBit(mappedFreeLookup_.data(), page / kPagesPerLookupBit);
+    }
+
+    // Clears the mappedFreeLokup_ bit if there are no mapped free
+    // pages left in the range of 'page'.
+    void markAllocated(int32_t page);
+    
 
     // Serializes access to all data members and private methods.
     std::mutex mutex_;

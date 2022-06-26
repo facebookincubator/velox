@@ -440,6 +440,8 @@ class CoalescedLoad {
 // Struct for CacheShard stats. Stats from all shards are added into
 // this struct to provide a snapshot of state.
 struct CacheStats {
+  // Lifetime allocated bytes.
+  int64_t cumSize{};
   // Total size in 'tynyData_'
   int64_t tinySize{};
   // Total size in 'data_'
@@ -578,6 +580,8 @@ class CacheShard {
   uint64_t numWaitExclusive_{};
   // Cumulative count of new entry creation.
   uint64_t numNew_{};
+  // Cumulative allocated bytes.
+  int64_t newBytes_{};
   // Count of entries evicted.
   uint64_t numEvict_{};
   // Count of entries considered for eviction. This divided by

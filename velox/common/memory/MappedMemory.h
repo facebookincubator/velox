@@ -74,7 +74,7 @@ struct Stats {
       op();
     }
     sizes[index].numAlloc += count;
-    sizes[index].cumBytes += bytes;
+    sizes[index].cumBytes += bytes * count;
     sizes[index].allocClocks += clocks;
   }
 
@@ -297,6 +297,14 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
     uint64_t totalSizeClassAllocateBytes;
     // Total in standalone large allocations via allocateContiguous().
     uint64_t totalLargeAllocateBytes;
+
+    AllocateBytesCounters operator -(const AllocateBytesCounters other) const {
+      auto result = *this;
+      result.totalSmallAllocateBytes -= other.totalSmallAllocateBytes;
+      result.totalSizeClassAllocateBytes -= other.totalSizeClassAllocateBytes;
+      result.totalLargeAllocateBytes -= other.totalLargeAllocateBytes;
+      return result;
+    }
   };
 
   MappedMemory() {}
