@@ -290,6 +290,8 @@ void Expr::eval(
   }
 
   if (inputs_.empty()) {
+    // If the function does not have inputs and is not constant folded, then it
+    // must be non-detetministic so we do not run peeling or cse opts.
     evalAll(rows, context, result);
     return;
   }
