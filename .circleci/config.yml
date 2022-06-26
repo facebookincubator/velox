@@ -71,6 +71,7 @@ jobs:
   macos-build:
     macos:
       xcode: "11.7.0"
+      resource_class: large
     steps:
       - checkout
       - run:
@@ -119,6 +120,18 @@ jobs:
           key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
           paths:
             - .ccache/
+      - run:
+          name: "Run Unit Tests"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            cd _build/debug && ctest -j 16 -VV --output-on-failure
+          no_output_timeout: 1h
+      - run:
+          name: "Run Fuzzer Tests"
+          command: |
+            export PATH=~/deps/bin:${PATH}
+            _build/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0
+          no_output_timeout: 5m
 
   linux-build:
     executor: build
