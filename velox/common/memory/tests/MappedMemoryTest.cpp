@@ -650,3 +650,10 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::Values(true, false));
 
 } // namespace facebook::velox::memory
+
+std::vector<int> testn = {10, 20, 30, 40};
+
+int lb(int n) {
+  auto it = std::lower_bound(testn.begin(), testn.end(), n);
+  return it - testn.begin();
+}

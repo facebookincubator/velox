@@ -19,6 +19,11 @@
 
 #include <sys/mman.h>
 
+DEFINE_bool(
+    use_large_pool,
+    true,
+    "Keep separate pool for allocations over max size class");
+
 namespace facebook::velox::memory {
 
 MmapAllocator::MmapAllocator(const MmapAllocatorOptions& options)
@@ -157,9 +162,13 @@ bool MmapAllocator::allocateContiguous(
   }
   int64_t numLargeCollateralPages = allocation.numPages();
   if (numLargeCollateralPages) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
-      LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+    if (FLAGS_use_large_pool) {
+      freeInLargePool(allocation.data(), allocation.size());
+    } else {
+      if (munmap(allocation.data(), allocation.size()) < 0) {
+        LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
+                   << ", " << allocation.size();
+      }
     }
     allocation.reset(nullptr, nullptr, 0);
   }
@@ -229,13 +238,17 @@ bool MmapAllocator::allocateContiguous(
     injectedFailure_ = Failure::kNone;
     data = nullptr;
   } else {
-    data = mmap(
-        nullptr,
-        numPages * kPageSize,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0);
+    if (FLAGS_use_large_pool) {
+      data = allocateFromLargePool(numPages * kPageSize);
+    } else {
+      data = mmap(
+          nullptr,
+          numPages * kPageSize,
+          PROT_READ | PROT_WRITE,
+          MAP_PRIVATE | MAP_ANONYMOUS,
+          -1,
+          0);
+    }
   }
   if (!data) {
     // If the mmap failed, we have unmapped former 'allocation' and
@@ -250,9 +263,13 @@ bool MmapAllocator::allocateContiguous(
 
 void MmapAllocator::freeContiguous(ContiguousAllocation& allocation) {
   if (allocation.data() && allocation.size()) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
-      LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+    if (FLAGS_use_large_pool) {
+      freeInLargePool(allocation.data(), allocation.size());
+    } else {
+      if (munmap(allocation.data(), allocation.size()) < 0) {
+        LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
+                   << ", " << allocation.size();
+      }
     }
     numMapped_ -= allocation.numPages();
     numExternalMapped_ -= allocation.numPages();
@@ -607,7 +624,105 @@ std::string MmapAllocator::toString() const {
     out << sizeClass->toString() << std::endl;
   }
   out << "]" << std::endl;
+  out << "LargePool: " << (largePoolBytes_ >> 20) << "MB"
+      << " free " << (largePoolFreeBytes_ >> 20) << "MB" << std::endl;
   return out.str();
+}
+
+void* MmapAllocator::allocateFromLargePool(uint64_t size) {
+  std::lock_guard<std::mutex> l(largePoolMutex_);
+  largePoolFreeBytes_ -= size;
+  for (auto& pool : largePools_) {
+    void* result = pool->allocate(size);
+    if (result) {
+      return result;
+    }
+  }
+  const uint64_t poolSize = 10L << 30; // 10G
+  void* address = mmap(
+      nullptr,
+      poolSize,
+      PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS,
+      -1,
+      0);
+  VELOX_CHECK(address != nullptr, "mmap failed for new large pool");
+  largePoolBytes_ += poolSize;
+  largePoolFreeBytes_ += poolSize;
+  largePools_.push_back(std::make_unique<LargePool>(address, poolSize));
+  return largePools_.back()->allocate(size);
+}
+
+void MmapAllocator::freeInLargePool(void* address, uint64_t size) {
+  madvise(address, bits::roundUp(size, kPageSize), MADV_DONTNEED);
+  std::lock_guard<std::mutex> l(largePoolMutex_);
+  largePoolFreeBytes_ += size;
+  for (auto& pool : largePools_) {
+    if (pool->contains(address)) {
+      pool->free(reinterpret_cast<uint64_t>(address), size);
+      return;
+    }
+  }
+  VELOX_FAIL("Large pool free outside of large pools");
+}
+
+void* MmapAllocator::LargePool::allocate(uint64_t size) {
+  auto roundedSize = roundSize(size);
+  auto it = freeSet_.begin();
+  while (it != freeSet_.end()) {
+    auto freeSize = it->second;
+    if (freeSize >= roundedSize) {
+      auto address = it->first;
+      freeSet_.erase(it);
+      if (freeSize > roundedSize) {
+        freeSet_[address + roundedSize] = freeSize - roundedSize;
+      }
+      return reinterpret_cast<void*>(address);
+    }
+    ++it;
+  }
+  return nullptr;
+}
+
+uint64_t MmapAllocator::LargePool::roundSize(uint64_t size) {
+  uint64_t next = bits::nextPowerOfTwo(size);
+  uint64_t threeQuarters = next - (next / 4);
+  return next == size ? size : size < threeQuarters ? threeQuarters : next;
+}
+
+void MmapAllocator::LargePool::free(uint64_t address, uint64_t size) {
+  const auto roundedSize = roundSize(size);
+  if (freeSet_.empty()) {
+    freeSet_[address] = roundedSize;
+    return;
+  }
+  auto freedSize = roundedSize;
+  auto it = freeSet_.lower_bound(address);
+  if (it == freeSet_.end()) {
+    // Freeing after last free block.
+    freeSet_[address] = size;
+    return;
+  }
+  VELOX_CHECK(
+      it->first != address && address + roundedSize <= it->first,
+      "Freed blocks overlaps with free list");
+  auto previous = freeSet_.end();
+  if (it != freeSet_.begin()) {
+    previous = it;
+    --previous;
+  }
+  if (address + roundedSize == it->first) {
+    // Freeing below another free block. Merge the trailing free block.
+    freedSize += it->second;
+    freeSet_.erase(it);
+  }
+
+  if (previous != freeSet_.end() &&
+      previous->first + previous->second == address) {
+    previous->second += freedSize;
+    return;
+  }
+  freeSet_[address] = freedSize;
 }
 
 } // namespace facebook::velox::memory

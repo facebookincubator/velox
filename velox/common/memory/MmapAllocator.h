@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_set>
@@ -224,6 +225,28 @@ class MmapAllocator : public MappedMemory {
     uint64_t numAdvisedAway_ = 0;
   };
 
+  class LargePool {
+   public:
+    LargePool(void* address, uint64_t size)
+        : address_(reinterpret_cast<uint64_t>(address)), size_(size) {
+      freeSet_[address_] = size_;
+    }
+
+    void* allocate(uint64_t size);
+    void free(uint64_t address, uint64_t size);
+    bool contains(const void* ptr) {
+      auto address = reinterpret_cast<uint64_t>(ptr);
+      return address >= address_ && address < address_ + size_;
+    }
+
+   private:
+    static uint64_t roundSize(uint64_t size);
+
+    const uint64_t address_;
+    const uint64_t size_;
+    std::map<uint64_t, uint64_t> freeSet_;
+  };
+
   // Ensures that there are at least 'newMappedNeeded' pages that are
   // not backing any existing allocation. If capacity_ - numMapped_ <
   // newMappedNeeded, advises away enough pages backing freed slots in
@@ -242,6 +265,9 @@ class MmapAllocator : public MappedMemory {
   // Finds at least  'target' unallocated pages in different size classes and
   // advises them away. Returns the number of pages advised away.
   MachinePageCount adviseAway(MachinePageCount target);
+
+  void* allocateFromLargePool(uint64_t size);
+  void freeInLargePool(void* address, uint64_t size);
 
   // Serializes moving capacity between size classes
   std::mutex sizeClassBalanceMutex_;
@@ -265,6 +291,13 @@ class MmapAllocator : public MappedMemory {
   MachinePageCount capacity_ = 0;
 
   std::vector<std::unique_ptr<SizeClass>> sizeClasses_;
+
+  // Pools for allocateContiguous.
+  std::mutex largePoolMutex_;
+  std::vector<std::unique_ptr<LargePool>> largePools_;
+
+  uint64_t largePoolBytes_{0};
+  uint64_t largePoolFreeBytes_{0};
 
   // Statistics. Not atomic.
   uint64_t numAllocations_ = 0;

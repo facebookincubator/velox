@@ -29,6 +29,7 @@
 DEFINE_int64(volume_gb, 2048, "Total GB to allocate during test");
 DEFINE_int64(size_cap_gb, 24, "Size cap: total GB resident at one time");
 DEFINE_bool(use_mmap, true, "Use mmap and madvise to manage fragmentation");
+DEFINE_bool(large_sizes, false, "Test 1MB+ allocations only");
 
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
@@ -50,13 +51,17 @@ class FragmentationTest {
  public:
   void SetUp() {
     rng_.seed(1);
-    // 2G between 4K an 100K
-    // 2G exactly 128K
-    addSizes(2L << 30, 128 << 10, 128 << 10);
-    // 2G between 1MB and 8MB
-    addSizes(2L << 30, 1 << 20, 8 << 20);
+    if (!FLAGS_large_sizes) {
+      // 2G between 4K an 100K
+      // 2G exactly 128K
+      addSizes(2L << 30, 128 << 10, 128 << 10);
+      // 2G between 1MB and 8MB
+      addSizes(2L << 30, 1 << 20, 8 << 20);
+      addSizes(2L << 30, 1L << 12, 100 << 12);
+    } else {
+      addSizes(2L << 30, 8 << 20, 20 << 20);
+    }
     // 2G between 100MB and 400MB
-    addSizes(2L << 30, 1L << 12, 100 << 12);
     // 1.9G of 128M, 256M, 512M and 1024M
     addSizes(1, 128 << 20, 128 << 20);
     addSizes(1, 128 << 20, 128 << 20);
