@@ -22,6 +22,8 @@
 #include "velox/core/Context.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/VectorPool.h"
 
 namespace facebook::velox::core {
 
@@ -220,6 +222,27 @@ class ExecCtx : public Context {
     decodedVectorPool_.push_back(std::move(vector));
   }
 
+  VectorPool& vectorPool() {
+    return vectorPool_;
+  }
+
+  // Gets a possibly recycled vector of 'type and 'size'. Allocates from 'pool_'
+  // if no preallocated vector.
+  VectorPtr getVector(const TypePtr& type, vector_size_t size) {
+    return vectorPool_.get(type, size, *pool_);
+  }
+
+  // Moves 'vector' to reusable pool if it is suitable, else leaves it in place.
+  void releaseVector(VectorPtr& vector) {
+    vectorPool_.release(vector);
+  }
+
+  // Moves elements of 'vectors' to reusable pool if suitable, else leaves them
+  // in place.
+  void releaseVectors(std::vector<VectorPtr>& vectors) {
+    vectorPool_.release(vectors);
+  }
+
  private:
   // Pool for all Buffers for this thread
   memory::MemoryPool* FOLLY_NONNULL pool_;
@@ -229,6 +252,8 @@ class ExecCtx : public Context {
   // A pool of preallocated SelectivityVectors for use by expressions
   // and operators.
   std::vector<std::unique_ptr<SelectivityVector>> selectivityVectorPool_;
+
+  VectorPool vectorPool_;
 };
 
 } // namespace facebook::velox::core
