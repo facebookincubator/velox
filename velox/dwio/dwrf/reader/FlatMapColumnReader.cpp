@@ -300,7 +300,7 @@ void FlatMapColumnReader<T>::initKeysVector(
     VectorPtr& vector,
     vector_size_t size) {
   flatmap_helper::initializeFlatVector<T>(vector, memoryPool_, size, false);
-  vector->setSize(size);
+  vector->resize(size);
 }
 
 template <>
@@ -313,7 +313,7 @@ void FlatMapColumnReader<StringView>::initKeysVector(
       size,
       false,
       std::vector<BufferPtr>{stringKeyBuffer_->getBuffer()});
-  vector->setSize(size);
+  vector->resize(size);
 }
 
 template <typename T>
@@ -690,7 +690,7 @@ void FlatMapStructEncodingColumnReader<T>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
+    result->resize(numValues);
     result->setNullCount(nullCount);
   } else {
     result = std::make_shared<RowVector>(

@@ -37,8 +37,7 @@ void reset(VectorPtr& vector, vector_size_t size, bool hasNulls) {
       vector->resetNulls();
     }
   }
-  vector->resize(size);
-  vector->setSize(0);
+  vector->resize(0);
 }
 
 void initializeStringVector(
@@ -344,7 +343,7 @@ vector_size_t copyNulls(
       }
     }
   }
-  target.setSize(targetIndex + count);
+  target.resize(targetIndex + count);
   return nulls;
 }
 
@@ -594,7 +593,7 @@ bool copyNull(
     bits::setNull(
         const_cast<uint64_t*>(target.rawNulls()), targetIndex, srcIsNull);
   }
-  target.setSize(targetIndex + 1);
+  target.resize(targetIndex + 1);
   return srcIsNull;
 }
 
