@@ -15,9 +15,12 @@
  */
 #pragma once
 
-#include "velox/type/Filter.h"
+#include <velox/core/Expressions.h>
+#include <velox/core/ITypedExpr.h>
+#include <velox/type/Filter.h>
+#include <velox/type/Subfield.h>
 
-namespace facebook::velox::common::test {
+namespace facebook::velox::exec {
 
 inline std::unique_ptr<common::BigintRange> lessThan(
     int64_t max,
@@ -255,6 +258,12 @@ inline std::unique_ptr<common::Filter> in(
   return common::createBigintValues(values, nullAllowed);
 }
 
+inline std::unique_ptr<common::Filter> notIn(
+    const std::vector<int64_t>& values,
+    bool nullAllowed = false) {
+  return common::createNegatedBigintValues(values, nullAllowed);
+}
+
 inline std::unique_ptr<common::BytesValues> in(
     const std::vector<std::string>& values,
     bool nullAllowed = false) {
@@ -287,4 +296,7 @@ std::unique_ptr<common::MultiRange> orFilter(
   return std::make_unique<common::MultiRange>(
       std::move(filters), nullAllowed, nanAllowed);
 }
-} // namespace facebook::velox::common::test
+
+std::pair<common::Subfield, std::unique_ptr<common::Filter>> toSubfieldFilter(
+    const core::TypedExprPtr& expr);
+} // namespace facebook::velox::exec

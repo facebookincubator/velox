@@ -16,14 +16,21 @@
 
 #pragma once
 
-#include "velox/dwio/common/Statistics.h"
+#include "velox/dwio/common/Adaptor.h"
 
-namespace facebook::velox::parquet {
+DIAGNOSTIC_PUSH
+DIAGNOSTIC_IGNORE("-Wconversion")
+DIAGNOSTIC_IGNORE("-Wdeprecated")
+DIAGNOSTIC_IGNORE("-Wsign-conversion")
+DIAGNOSTIC_IGNORE("-Wunused-parameter")
 
-class ColumnStatistics : public dwio::common::ColumnStatistics {
- public:
-  ColumnStatistics() {}
-  ~ColumnStatistics() override = default;
-};
+#ifdef __clang__
+DIAGNOSTIC_IGNORE("-Wnested-anon-types")
+DIAGNOSTIC_IGNORE("-Wreserved-id-macro")
+DIAGNOSTIC_IGNORE("-Wshorten-64-to-32")
+DIAGNOSTIC_IGNORE("-Wweak-vtables")
+#endif
 
-} // namespace facebook::velox::parquet
+#include "velox/dwio/dwrf/proto/orc_proto.pb.h"
+
+DIAGNOSTIC_POP

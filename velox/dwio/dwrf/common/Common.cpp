@@ -20,24 +20,6 @@
 
 namespace facebook::velox::dwrf {
 
-std::string compressionKindToString(CompressionKind kind) {
-  switch (static_cast<int32_t>(kind)) {
-    case CompressionKind_NONE:
-      return "none";
-    case CompressionKind_ZLIB:
-      return "zlib";
-    case CompressionKind_SNAPPY:
-      return "snappy";
-    case CompressionKind_LZO:
-      return "lzo";
-    case CompressionKind_ZSTD:
-      return "zstd";
-    case CompressionKind_LZ4:
-      return "lz4";
-  }
-  return folly::to<std::string>("unknown - ", kind);
-}
-
 std::string writerVersionToString(WriterVersion version) {
   switch (static_cast<int32_t>(version)) {
     case ORIGINAL:
@@ -99,5 +81,37 @@ std::string columnEncodingKindToString(ColumnEncodingKind kind) {
 DwrfStreamIdentifier EncodingKey::forKind(const proto::Stream_Kind kind) const {
   return DwrfStreamIdentifier(node, sequence, 0, kind);
 }
+
+namespace {
+using dwio::common::CompressionKind;
+
+CompressionKind orcCompressionToCompressionKind(
+    proto::orc::CompressionKind compression) {
+  switch (compression) {
+    case proto::orc::CompressionKind::NONE:
+      return CompressionKind::CompressionKind_NONE;
+    case proto::orc::CompressionKind::ZLIB:
+      return CompressionKind::CompressionKind_ZLIB;
+    case proto::orc::CompressionKind::SNAPPY:
+      return CompressionKind::CompressionKind_SNAPPY;
+    case proto::orc::CompressionKind::LZO:
+      return CompressionKind::CompressionKind_LZO;
+    case proto::orc::CompressionKind::LZ4:
+      return CompressionKind::CompressionKind_ZSTD;
+    case proto::orc::CompressionKind::ZSTD:
+      return CompressionKind::CompressionKind_LZ4;
+  }
+  return CompressionKind::CompressionKind_NONE;
+}
+} // namespace
+
+PostScript::PostScript(const proto::orc::PostScript& ps)
+    : fileFormat_{dwio::common::FileFormat::ORC},
+      footerLength_{ps.footerlength()},
+      compression_{orcCompressionToCompressionKind(ps.compression())},
+      compressionBlockSize_{ps.compressionblocksize()},
+      writerVersion_{static_cast<WriterVersion>(ps.writerversion())},
+      metadataLength_{ps.metadatalength()},
+      stripeStatisticsLength_{ps.stripestatisticslength()} {}
 
 } // namespace facebook::velox::dwrf

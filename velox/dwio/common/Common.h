@@ -16,22 +16,25 @@
 
 #pragma once
 
-#include "velox/external/duckdb/duckdb.hpp"
+#include <string>
 
-namespace facebook::velox::duckdb {
+namespace facebook::velox::dwio::common {
 
-class InputStreamFileSystem;
-
-// Implements the DuckDB FileHandle API
-class InputStreamFileHandle : public ::duckdb::FileHandle {
- public:
-  InputStreamFileHandle(::duckdb::FileSystem& fileSystem)
-      : FileHandle(fileSystem, "") {}
-
-  ~InputStreamFileHandle() override {}
-
- protected:
-  void Close() override {}
+enum CompressionKind {
+  CompressionKind_NONE = 0,
+  CompressionKind_ZLIB = 1,
+  CompressionKind_SNAPPY = 2,
+  CompressionKind_LZO = 3,
+  CompressionKind_ZSTD = 4,
+  CompressionKind_LZ4 = 5,
+  CompressionKind_MAX = INT64_MAX
 };
 
-} // namespace facebook::velox::duckdb
+/**
+ * Get the name of the CompressionKind.
+ */
+std::string compressionKindToString(CompressionKind kind);
+
+constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+
+} // namespace facebook::velox::dwio::common

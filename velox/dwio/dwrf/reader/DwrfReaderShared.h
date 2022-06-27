@@ -148,7 +148,7 @@ class DwrfReaderShared : public dwio::common::Reader {
 
   virtual ~DwrfReaderShared() = default;
 
-  CompressionKind getCompression() const {
+  dwio::common::CompressionKind getCompression() const {
     return readerBase_->getCompressionKind();
   }
 
@@ -205,7 +205,7 @@ class DwrfReaderShared : public dwio::common::Reader {
     return readerBase_->getSchemaWithId();
   }
 
-  const proto::PostScript& getPostscript() const {
+  const PostScript& getPostscript() const {
     return readerBase_->getPostScript();
   }
 

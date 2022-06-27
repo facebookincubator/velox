@@ -24,8 +24,8 @@
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Type.h"
-#include "velox/type/tests/FilterBuilder.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 using namespace facebook::velox;
@@ -81,12 +81,11 @@ class TableScanTest : public virtual HiveConnectorTestBase {
     return HiveConnectorTestBase::assertQuery(plan, filePaths, duckDbSql);
   }
 
-  std::shared_ptr<facebook::velox::core::PlanNode> tableScanNode() {
+  core::PlanNodePtr tableScanNode() {
     return PlanBuilder().tableScan(rowType_).planNode();
   }
 
-  static std::shared_ptr<facebook::velox::core::PlanNode> tableScanNode(
-      const RowTypePtr& outputType) {
+  static core::PlanNodePtr tableScanNode(const RowTypePtr& outputType) {
     return PlanBuilder().tableScan(outputType).planNode();
   }
 

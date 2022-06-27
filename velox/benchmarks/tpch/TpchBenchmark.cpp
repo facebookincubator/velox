@@ -22,7 +22,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -41,7 +41,7 @@ static bool notEmpty(const char* /*flagName*/, const std::string& value) {
 }
 
 static bool validateDataFormat(const char* flagname, const std::string& value) {
-  if ((value.compare("parquet") == 0) || (value.compare("orc") == 0)) {
+  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
     return true;
   }
   std::cout
