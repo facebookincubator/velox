@@ -748,4 +748,101 @@ RowVectorPtr genTpchRegion(
       pool, regionRowType, BufferPtr(nullptr), vectorSize, std::move(children));
 }
 
+FlatVector<StringView> genTpchPartType(
+    size_t maxRows,
+    size_t offset,
+    size_t scaleFactor,
+    memory::MemoryPool* pool) {
+  // Create schema and allocate vectors.
+  auto regionRowType = getTableSchema(Table::TBL_PART);
+  size_t vectorSize = getVectorSize(
+      getRowCount(Table::TBL_PART, scaleFactor), maxRows, offset);
+  auto children = allocateVectors(regionRowType, vectorSize, pool);
+
+  FlatVector<StringView> typeVector = *(children[4]->asFlatVector<StringView>());
+  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  part_t part;
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    dbgenIt.genPart(i + offset + 1, part);
+
+    typeVector.set(i, part.type);
+  }
+
+  return typeVector;
+}
+
+FlatVector<StringView> genTpchPartName(
+    size_t maxRows,
+    size_t offset,
+    size_t scaleFactor,
+    memory::MemoryPool* pool) {
+  // Create schema and allocate vectors.
+  auto regionRowType = getTableSchema(Table::TBL_PART);
+  size_t vectorSize = getVectorSize(
+      getRowCount(Table::TBL_PART, scaleFactor), maxRows, offset);
+  auto children = allocateVectors(regionRowType, vectorSize, pool);
+
+  FlatVector<StringView> nameVector = *(children[1]->asFlatVector<StringView>());
+  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  part_t part;
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    dbgenIt.genPart(i + offset + 1, part);
+
+    nameVector.set(i, part.name);
+  }
+
+  return nameVector;
+}
+
+FlatVector<StringView> genTpchOrderComment(
+    size_t maxRows,
+    size_t offset,
+    size_t scaleFactor,
+    memory::MemoryPool* pool) {
+  // Create schema and allocate vectors.
+  auto regionRowType = getTableSchema(Table::TBL_ORDERS);
+  size_t vectorSize = getVectorSize(
+      getRowCount(Table::TBL_ORDERS, scaleFactor), maxRows, offset);
+  auto children = allocateVectors(regionRowType, vectorSize, pool);
+
+  FlatVector<StringView> commentVector = *(children[8]->asFlatVector<StringView>());
+  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  order_t order;
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    dbgenIt.genOrder(i + offset + 1, order);
+
+    commentVector.set(i, order.comment);
+  }
+
+  return commentVector;
+}
+
+FlatVector<StringView> genTpchSupplierComment(
+    size_t maxRows,
+    size_t offset,
+    size_t scaleFactor,
+    memory::MemoryPool* pool) {
+  // Create schema and allocate vectors.
+  auto regionRowType = getTableSchema(Table::TBL_SUPPLIER);
+  size_t vectorSize = getVectorSize(
+      getRowCount(Table::TBL_SUPPLIER, scaleFactor), maxRows, offset);
+  auto children = allocateVectors(regionRowType, vectorSize, pool);
+
+  FlatVector<StringView> commentVector =
+      *(children[6]->asFlatVector<StringView>());
+  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  supplier_t supplier;
+
+  for (size_t i = 0; i < vectorSize; ++i) {
+    dbgenIt.genSupplier(i + offset + 1, supplier);
+
+    commentVector.set(i, supplier.comment);
+  }
+
+  return commentVector;
+}
+
 } // namespace facebook::velox::tpch

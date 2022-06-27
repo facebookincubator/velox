@@ -26,6 +26,17 @@ set(velox_benchmark_deps
     ${gflags_LIBRARIES}
     glog::glog)
 
+set(velox_like_benchmark_deps
+        velox_expression
+        velox_parse_parser
+        velox_parse_expression
+        velox_vector_test_lib
+        ${FOLLY}
+        ${FOLLY_BENCHMARK}
+        ${DOUBLE_CONVERSION}
+        ${gflags_LIBRARIES}
+        glog::glog)
+
 add_executable(velox_benchmark_basic_simple_arithmetic SimpleArithmetic.cpp)
 target_link_libraries(velox_benchmark_basic_simple_arithmetic
                       ${velox_benchmark_deps})
@@ -49,3 +60,7 @@ target_link_libraries(velox_benchmark_basic_vector_compare
 add_executable(velox_benchmark_feature_normalization FeatureNormalization.cpp)
 target_link_libraries(velox_benchmark_feature_normalization
                       ${velox_benchmark_deps} velox_functions_prestosql)
+
+add_executable(velox_benchmark_like_expression LikeExpression.cpp)
+target_link_libraries(velox_benchmark_like_expression
+        ${velox_like_benchmark_deps} velox_tpch_gen velox_functions_prestosql)
