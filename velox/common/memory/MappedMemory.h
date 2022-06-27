@@ -78,7 +78,8 @@ struct Stats {
     sizes[index].allocClocks += clocks;
     if (0) {
       auto trace = std::make_unique<process::StackTrace>();
-      LOG(INFO) << "XLARGE: Alloc size " << (1 << index) << ": " << trace->toString();
+      LOG(INFO) << "XLARGE: Alloc size " << (1 << index) << ": "
+                << trace->toString();
     }
   }
 
@@ -302,7 +303,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
     // Total in standalone large allocations via allocateContiguous().
     uint64_t totalLargeAllocateBytes;
 
-    AllocateBytesCounters operator -(const AllocateBytesCounters other) const {
+    AllocateBytesCounters operator-(const AllocateBytesCounters other) const {
       auto result = *this;
       result.totalSmallAllocateBytes -= other.totalSmallAllocateBytes;
       result.totalSizeClassAllocateBytes -= other.totalSizeClassAllocateBytes;

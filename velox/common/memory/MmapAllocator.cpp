@@ -515,7 +515,7 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
       uint16_t mask = simd::allSetBitMask<int64_t>() ^
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
       if (!mask) {
-	VELOX_CHECK(index < group + kWidth || anyFound);
+        VELOX_CHECK(index < group + kWidth || anyFound);
         continue;
       }
       auto firstWord = bits::getAndClearLastSetBit(mask);
@@ -538,7 +538,8 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
           });
 
       if (allUsed) {
-        if (index == group + kWidth || isAllZero(mappedFreeBits(index + kWidth))) {
+        if (index == group + kWidth ||
+            isAllZero(mappedFreeBits(index + kWidth))) {
           bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
         }
       }

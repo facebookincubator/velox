@@ -163,16 +163,17 @@ ReaderBase::ReaderBase(
     }
     if (input_->shouldPrefetchStripes()) {
       cache_ = std::make_unique<StripeMetadataCache>(
-						     *postScript_, *footer_, 
-						     input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER));
+          *postScript_,
+          *footer_,
+          input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER));
       input_->load(LogType::FOOTER);
     } else {
       auto cacheBuffer =
-        std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
+          std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
       input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
-        ->readFully(cacheBuffer->data(), cacheSize);
+          ->readFully(cacheBuffer->data(), cacheSize);
       cache_ = std::make_unique<StripeMetadataCache>(
-						     *postScript_, *footer_, std::move(cacheBuffer));
+          *postScript_, *footer_, std::move(cacheBuffer));
     }
   }
   if (!cache_ && input_->shouldPrefetchStripes()) {

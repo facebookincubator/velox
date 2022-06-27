@@ -2124,7 +2124,7 @@ TEST_F(TableScanTest, footer) {
                   .tableScan(
                       ROW({"userid", "time", "experiment", "condition"},
                           {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
-		      {"userid > 10000"})
+                      {"userid > 10000"})
                   .capturePlanNodeId(scanId)
                   .singleAggregation(
                       {},
@@ -2133,7 +2133,7 @@ TEST_F(TableScanTest, footer) {
                        "max(time)",
                        "count(experiment)",
                        "count(condition)"})
-      .planNode();
+                  .planNode();
 
     AssertQueryBuilder(op)
         .split(scanId, makeHiveConnectorSplit("/home/oerling/testdata"))

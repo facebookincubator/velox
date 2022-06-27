@@ -53,7 +53,8 @@ bool CacheInputStream::Next(const void** buffer, int32_t* size) {
     *size = 0;
     return false;
   }
-  if (window_.has_value() && position_ >= window_.value().offset + window_.value().length) {
+  if (window_.has_value() &&
+      position_ >= window_.value().offset + window_.value().length) {
     *size = 0;
     return false;
   }
@@ -120,7 +121,7 @@ void CacheInputStream::setRemainingBytes(uint64_t remainingBytes) {
   VELOX_CHECK_GE(region_.length, position_ + remainingBytes);
   window_ = Region{static_cast<uint64_t>(position_), remainingBytes};
 }
-  
+
 namespace {
 std::vector<folly::Range<char*>> makeRanges(
     cache::AsyncDataCacheEntry* entry,
