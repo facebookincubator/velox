@@ -26,15 +26,17 @@
 
 namespace facebook::velox::memory {
 constexpr int64_t kMaxMemory = std::numeric_limits<int64_t>::max();
+constexpr std::string_view MEM_CAP_EXCEEDED_ERROR_FORMAT =
+    "Exceeded memory cap of {} when requesting {}";
 
-#define VELOX_MEM_CAP_EXCEEDED(cap)                                 \
+#define VELOX_MEM_CAP_EXCEEDED(errorMessage)                        \
   _VELOX_THROW(                                                     \
       ::facebook::velox::VeloxRuntimeError,                         \
       ::facebook::velox::error_source::kErrorSourceRuntime.c_str(), \
       ::facebook::velox::error_code::kMemCapExceeded.c_str(),       \
       /* isRetriable */ true,                                       \
-      "Exceeded memory cap of {} MB",                               \
-      (cap) / 1024 / 1024);
+      "{}",                                                         \
+      errorMessage);
 
 struct MemoryUsageConfig {
   std::optional<int64_t> maxUserMemory;
@@ -108,6 +110,15 @@ class MemoryUsageTracker
   // not be held by the caller. A GrowCallback must not throw.
   using GrowCallback = std::function<
       bool(UsageType type, int64_t size, MemoryUsageTracker& tracker)>;
+
+  /// This function will be used when a MEM_CAP_EXCEEDED error is thrown during
+  /// a call to increment reservation. It returns a string that will be appended
+  /// to the error's message and should ideally be used to add additional
+  /// details to it. This may be called to add details when the error is thrown
+  /// or when encountered during a recursive call to increment reservation from
+  /// a parent tracker.
+  using MakeMemoryCapExceededMessage =
+      std::function<std::string(MemoryUsageTracker& tracker)>;
 
   // Create default usage tracker. It aggregates both 'user' and 'system' memory
   // from its children and tracks the allocations as 'user' memory. It returns a
@@ -273,6 +284,10 @@ class MemoryUsageTracker
     growCallback_ = func;
   }
 
+  void setMakeMemoryCapExceededMessage(MakeMemoryCapExceededMessage func) {
+    makeMemoryCapExceededMessage_ = func;
+  }
+
   /// Checks if it is likely that the reservation on 'this' can be
   /// incremented by 'increment'. Returns false if this seems
   /// unlikely. Otherwise attempts the reservation increment and returns
@@ -387,6 +402,8 @@ class MemoryUsageTracker
 
   GrowCallback growCallback_{};
 
+  MakeMemoryCapExceededMessage makeMemoryCapExceededMessage_{};
+
   explicit MemoryUsageTracker(
       const std::shared_ptr<MemoryUsageTracker>& parent,
       UsageType type,
@@ -412,7 +429,7 @@ class MemoryUsageTracker
     }
   }
 
-  // Incrementss the reservation of 'type' and checks against
+  // Increments the reservation of 'type' and checks against
   // limits. Calls 'growCallback_' if this is set and limit
   // exceeded. Should be called without holding 'mutex_'. This throws if a limit
   // is exceeded and there is no corresponding GrowCallback or the GrowCallback

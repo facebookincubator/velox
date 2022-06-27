@@ -18,6 +18,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "velox/codegen/Codegen.h"
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/Exchange.h"
@@ -144,7 +145,15 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       pool_(queryCtx_->pool()->addScopedChild("task_root")),
-      bufferManager_(PartitionedOutputBufferManager::getInstance()) {}
+      bufferManager_(PartitionedOutputBufferManager::getInstance()) {
+  auto tracker = pool()->getMemoryUsageTracker();
+  if (tracker) {
+    tracker->setMakeMemoryCapExceededMessage(
+        [&](memory::MemoryUsageTracker& tracker) {
+          return this->getErrorMsgOnMemCapExceeded(tracker);
+        });
+  }
+}
 
 Task::~Task() {
   try {
@@ -1599,5 +1608,90 @@ void Task::TaskCompletionNotifier::notify() {
 
     active_ = false;
   }
+}
+
+/// Example Error Message generated:
+/// Exceeded memory cap of 5.00MB when requesting 2.00MB
+/// Task total: 5.00MB Peak: 5.00MB. Top 3 Operators (by aggregate usage across
+/// all instances): Aggregation(2): 1.77MB (across 1 instance(s)) Peak: 4.00MB,
+/// FilterProject(1): 12.00KB (across 1 instance(s)) Peak: 1.00MB, N/A(4): 0B
+/// (across 1 instance(s)) Peak: 0B.
+/// Failed Operator: Aggregation(2): 1.77MB
+std::string Task::getErrorMsgOnMemCapExceeded(
+    memory::MemoryUsageTracker& tracker) {
+  std::stringstream out;
+  out << "Task total: " << succinctBytes(tracker.getCurrentTotalBytes())
+      << " Peak: " << succinctBytes(tracker.getPeakTotalBytes()) << ".";
+  // Aggregate relevant metrics for each operator across all drivers.
+  struct MemoryUsageStats {
+    int operatorId;
+    std::string operatorType;
+    int64_t cumulativeTotalBytes;
+    int64_t peakTotalBytes;
+    int numInstances;
+  };
+  std::unordered_map<int, MemoryUsageStats> operatorStats;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& driver : drivers_) {
+      if (!driver) {
+        continue;
+      }
+      auto operatorsInCurrDriver = driver->operators();
+      for (auto op : operatorsInCurrDriver) {
+        auto itr = operatorStats.find(op->stats().operatorId);
+        if (itr == operatorStats.end()) {
+          itr = operatorStats
+                    .insert(
+                        {op->stats().operatorId,
+                         {op->stats().operatorId,
+                          op->stats().operatorType,
+                          0,
+                          0,
+                          0}})
+                    .first;
+        }
+        itr->second.cumulativeTotalBytes +=
+            op->pool()->getMemoryUsageTracker()->getCurrentTotalBytes();
+        itr->second.peakTotalBytes = std::max(
+            itr->second.peakTotalBytes,
+            op->pool()->getMemoryUsageTracker()->getPeakTotalBytes());
+        itr->second.numInstances++;
+      }
+    }
+  }
+  std::vector<MemoryUsageStats> operatorStatsArray;
+  operatorStatsArray.reserve(operatorStats.size());
+  for (auto& [operatorId, stats] : operatorStats) {
+    operatorStatsArray.push_back(std::move(stats));
+  }
+  static auto compareByCumulativeTotalBytes =
+      [](const MemoryUsageStats& left, const MemoryUsageStats& right) {
+        return left.cumulativeTotalBytes > right.cumulativeTotalBytes;
+      };
+  // Get the top 3.
+  if (operatorStatsArray.size() > 3) {
+    std::nth_element(
+        operatorStatsArray.begin(),
+        operatorStatsArray.begin() + 2,
+        operatorStatsArray.end(),
+        compareByCumulativeTotalBytes);
+    operatorStatsArray.resize(3);
+  }
+  std::sort(
+      operatorStatsArray.begin(),
+      operatorStatsArray.end(),
+      compareByCumulativeTotalBytes);
+  out << " Top 3 Operators (by aggregate usage across all instances): ";
+  int remainingStatsToAdd = operatorStatsArray.size();
+  for (auto& stats : operatorStatsArray) {
+    out << stats.operatorType << "(" << stats.operatorId
+        << "): " << succinctBytes(stats.cumulativeTotalBytes) << " (across "
+        << stats.numInstances
+        << " instance(s)) Peak: " << succinctBytes(stats.peakTotalBytes);
+    remainingStatsToAdd--;
+    out << ((remainingStatsToAdd > 0) ? ", " : ".");
+  }
+  return out.str();
 }
 } // namespace facebook::velox::exec

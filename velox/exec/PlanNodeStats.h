@@ -103,7 +103,7 @@ struct PlanNodeStats {
 
   std::string toString(bool includeInputStats = false) const;
 
-  bool isMultiOperatorNode() const {
+  bool isMultiOperatorTypeNode() const {
     return operatorStats.size() > 1;
   }
 

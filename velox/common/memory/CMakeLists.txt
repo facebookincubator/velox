@@ -28,7 +28,7 @@ add_library(
   StreamArena.cpp)
 
 target_link_libraries(velox_memory velox_flag_definitions velox_exception
-                      ${FOLLY_WITH_DEPENDENCIES})
+                      velox_common_base ${FOLLY_WITH_DEPENDENCIES})
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(velox_memory gtest)
