@@ -21,6 +21,7 @@
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -2112,5 +2113,31 @@ TEST_F(TableScanTest, errorInLoadLazy) {
     FAIL() << "Excepted exception";
   } catch (VeloxException& ex) {
     EXPECT_TRUE(ex.context().find(filePath->path, 0) != std::string::npos);
+  }
+}
+
+TEST_F(TableScanTest, footer) {
+  for (auto i = 0; i < 10; ++i) {
+    auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+    core::PlanNodeId scanId;
+    auto op = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      ROW({"userid", "time", "experiment", "condition"},
+                          {BIGINT(), BIGINT(), VARCHAR(), VARCHAR()}),
+		      {"userid > 10000"})
+                  .capturePlanNodeId(scanId)
+                  .singleAggregation(
+                      {},
+                      {"sum(1)",
+                       "min(userid)",
+                       "max(time)",
+                       "count(experiment)",
+                       "count(condition)"})
+      .planNode();
+
+    AssertQueryBuilder(op)
+        .split(scanId, makeHiveConnectorSplit("/home/oerling/testdata"))
+
+        .copyResults(pool_.get());
   }
 }

@@ -76,6 +76,10 @@ struct Stats {
     sizes[index].numAlloc += count;
     sizes[index].cumBytes += bytes * count;
     sizes[index].allocClocks += clocks;
+    if (0) {
+      auto trace = std::make_unique<process::StackTrace>();
+      LOG(INFO) << "XLARGE: Alloc size " << (1 << index) << ": " << trace->toString();
+    }
   }
 
   template <typename Op>

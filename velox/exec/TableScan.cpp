@@ -94,6 +94,12 @@ RowVectorPtr TableScan::getOutput() {
           "Split {} Task {}",
           connectorSplit->toString(),
           operatorCtx_->task()->taskId());
+    ExceptionContextSetter exceptionContext(
+        {[](auto* debugString) {
+           return *static_cast<std::string*>(debugString);
+         },
+         &debugString_});
+
       dataSource_->addSplit(connectorSplit);
       ++stats_.numSplits;
       setBatchSize();

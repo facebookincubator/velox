@@ -272,16 +272,6 @@ class MmapAllocator : public MappedMemory {
     // 'allocation'.
     void adviseAway(const Allocation& allocation);
 
-    // Allocates up to 'numPages' of mapped pages from the free/mapped word at
-    // 'wordIndex'. 'candidates' has a bit set for free and mapped pages. The
-    // memory ranges are added to 'allocation'. 'numPages' is decremented by the
-    // count of allocated class pages.
-    void allocateMapped(
-        int32_t wordIndex,
-        uint64_t candidates,
-        ClassPageCount& numPages,
-        MappedMemory::Allocation& allocation);
-
     // Allocates up to 'numPages' of mapped or unmapped pages from the
     // free/mapped word at 'wordIndex'. 'numPages' is decremented by the number
     // of allocated class pages, numUnmapped is incremented by the count of

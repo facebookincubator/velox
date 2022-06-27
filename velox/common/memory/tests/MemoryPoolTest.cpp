@@ -305,6 +305,7 @@ TEST(MemoryPoolTest, SmallMmapMemoryAllocationTest) {
   auto mmapAllocator = std::make_unique<memory::MmapAllocator>(options);
   MappedMemory::setDefaultInstance(mmapAllocator.get());
   testMmapMemoryAllocation(mmapAllocator.get(), 6, 100);
+  MappedMemory::setDefaultInstance(nullptr);
 }
 
 TEST(MemoryPoolTest, BigMmapMemoryAllocationTest) {
@@ -313,6 +314,7 @@ TEST(MemoryPoolTest, BigMmapMemoryAllocationTest) {
   MappedMemory::setDefaultInstance(mmapAllocator.get());
   testMmapMemoryAllocation(
       mmapAllocator.get(), mmapAllocator->sizeClasses().back() + 56, 20);
+  MappedMemory::setDefaultInstance(nullptr);
 }
 
 // Mainly tests how it updates the memory usage in MemoryPool.

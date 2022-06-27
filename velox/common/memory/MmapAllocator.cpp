@@ -318,13 +318,15 @@ MmapAllocator::SizeClass::SizeClass(size_t capacity, MachinePageCount unitSize)
     : capacity_(capacity),
       unitSize_(unitSize),
       byteSize_(capacity_ * unitSize_ * kPageSize),
-      // The lookup bits are in groups of 8 words, each bit
-      // corresponds to 512 bits in 'pageAllocated'
-      mappedFreeLookup_(bits::roundUp(capacity / kPagesPerLookupBit, kPagesPerLookupBit * 512) / 64),
-      pageAllocated_(capacity_ / 64),
-      pageMapped_(capacity_ / 64) {
+      // Min 8 words + 1 bit for every 512 bits in 'pageAllocated_'.
+      mappedFreeLookup_(8 + (capacity / kPagesPerLookupBit / 64)),
+      pageAllocated_(capacity_ / 64 + 8),
+      pageMapped_(capacity_ / 64 + 8) {
   VELOX_CHECK(
       capacity_ % 64 == 0, "Sizeclass must have a multiple of 64 capacity.");
+  pageAllocated_.resize(pageAllocated_.size() - 8);
+  pageMapped_.resize(pageMapped_.size() - 8);
+  VELOX_CHECK_EQ(pageMapped_.capacity(), pageMapped_.size() + 8);
   void* ptr = mmap(
       nullptr,
       capacity_ * unitSize_ * kPageSize,
@@ -429,22 +431,21 @@ bool MmapAllocator::SizeClass::allocateLocked(
     MachinePageCount* FOLLY_NULLABLE numUnmapped,
     MmapAllocator::Allocation& out) {
   size_t numWords = pageAllocated_.size();
-  uint32_t cursor = clockHand_ += 64;
-  if (clockHand_ > numWords) {
-    clockHand_ = clockHand_ % numWords;
-  }
-  cursor = cursor % numWords;
-  int numWordsTried = 0;
   int considerMappedOnly = std::min(numMappedFreePages_, numPages);
   auto numPagesToGo = numPages;
   if (considerMappedOnly) {
     allocateFromMappdFree(considerMappedOnly, out);
+    numMappedFreePages_ -= considerMappedOnly;
     numPagesToGo -= considerMappedOnly;
   }
-    if (!numPagesToGo) {
+  if (!numPagesToGo) {
     return true;
   }
+  VELOX_CHECK(numUnmapped != nullptr);
+  uint32_t cursor = clockHand_;
+  int numWordsTried = 0;
   for (;;) {
+    auto previousCursor = cursor;
     if (++cursor >= numWords) {
       cursor = 0;
     }
@@ -458,11 +459,13 @@ bool MmapAllocator::SizeClass::allocateLocked(
       allocateAny(cursor, numPagesToGo, *numUnmapped, out);
       numAllocatedUnmapped_ += previousToGo - numPagesToGo;
       if (numPagesToGo == 0) {
+        clockHand_ = previousCursor;
         return true;
       }
     }
   }
 }
+
 namespace {
 bool isAllZero(xsimd::batch<uint64_t> bits) {
   return simd::allSetBitMask<uint64_t>() ==
@@ -502,17 +505,21 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
     int32_t numPages,
     Allocation& allocation) {
   constexpr int32_t kWidth = 4;
+  constexpr int32_t kWordsPerGroup = kPagesPerLookupBit / 64;
   int needed = numPages;
   for (;;) {
-    auto group = findMappedFreeGroup();
+    auto group = findMappedFreeGroup() * kWordsPerGroup;
+    bool anyFound = false;
     for (auto index = group; index <= group + kWidth; index += kWidth) {
       auto bits = mappedFreeBits(index);
-      uint16_t mask =
-          0xf ^ simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
+      uint16_t mask = simd::allSetBitMask<int64_t>() ^
+          simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
       if (!mask) {
+	VELOX_CHECK(index < group + kWidth || anyFound);
         continue;
       }
       auto firstWord = bits::getAndClearLastSetBit(mask);
+      anyFound = true;
       auto allUsed = bits::testBits(
           reinterpret_cast<uint64_t*>(&bits),
           firstWord * 64,
@@ -522,16 +529,17 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
             if (!needed) {
               return false;
             }
-            auto page = (index + firstWord) * 64 + bit;
+            auto page = index * 64 + bit;
             bits::setBit(pageAllocated_.data(), page);
-            allocation.append(address_ + page * unitSize_, unitSize_);
+            allocation.append(
+                address_ + page * unitSize_ * kPageSize, unitSize_);
             --needed;
             return true;
           });
 
       if (allUsed) {
-        if (index == group + 1 || isAllZero(mappedFreeBits(index + kWidth))) {
-          bits::setBit(mappedFreeLookup_.data() + group, false);
+        if (index == group + kWidth || isAllZero(mappedFreeBits(index + kWidth))) {
+          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
         }
       }
       if (!needed) {
@@ -541,7 +549,7 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
   }
 }
 
-  MachinePageCount MmapAllocator::SizeClass::adviseAway(
+MachinePageCount MmapAllocator::SizeClass::adviseAway(
     MachinePageCount numPages,
     MmapAllocator* allocator) {
   // Allocate as many mapped free pages as needed and advise them away.
@@ -658,27 +666,6 @@ MachinePageCount MmapAllocator::SizeClass::free(
     }
   }
   return numFreed;
-}
-
-void MmapAllocator::SizeClass::allocateMapped(
-    int32_t wordIndex,
-    uint64_t candidates,
-    ClassPageCount& numPages,
-    MmapAllocator::Allocation& allocation) {
-  int numSet = __builtin_popcountll(candidates);
-  int toAlloc = std::min(numPages, numSet);
-  int allocated = 0;
-  for (int i = 0; i < toAlloc; ++i) {
-    int bit = __builtin_ctzll(candidates);
-    bits::setBit(&pageAllocated_[wordIndex], bit);
-    // Remove the least significant bit that is going to be allocated.
-    candidates &= candidates - 1;
-    allocation.append(
-        address_ + kPageSize * unitSize_ * (bit + wordIndex * 64), unitSize_);
-    ++allocated;
-  }
-  numMappedFreePages_ -= allocated;
-  numPages -= allocated;
 }
 
 void MmapAllocator::SizeClass::allocateAny(
