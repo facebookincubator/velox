@@ -158,7 +158,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   switch (typeCase) {
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
-      const auto& dRef = sField.direct_reference();
+      const auto& dRef = substraitField.direct_reference();
       int32_t colIdx = subParser_->parseReferenceSegment(dRef);
       const auto& inputNames = inputType->names();
       const int64_t inputSize = inputNames.size();
@@ -232,8 +232,32 @@ SubstraitVeloxExprConverter::toExtractExpr(
 }
 
 std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toRowConstructorExpr(
+    const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
+    const std::string& typeName) {
+  std::vector<std::string> structTypeNames;
+  subParser_->getSubFunctionTypes(typeName, structTypeNames);
+  VELOX_CHECK(
+      structTypeNames.size() > 0, "At lease one type name is expected.");
+
+  // Preparation for the conversion from struct types to RowType.
+  std::vector<TypePtr> rowTypes;
+  std::vector<std::string> names;
+  for (int idx = 0; idx < structTypeNames.size(); idx++) {
+    std::string substraitTypeName = structTypeNames[idx];
+    names.emplace_back("col_" + std::to_string(idx));
+    rowTypes.emplace_back(std::move(toVeloxType(substraitTypeName)));
+  }
+
+  return std::make_shared<const core::CallTypedExpr>(
+      ROW(std::move(names), std::move(rowTypes)),
+      std::move(params),
+      "row_constructor");
+}
+
+std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
-    const ::substrait::Expression::ScalarFunction& substraitFunc,
+    const ::substrait::Expression::ScalarFunction& sFunc,
     const RowTypePtr& inputType) {
   std::vector<core::TypedExprPtr> params;
   params.reserve(substraitFunc.arguments().size());
@@ -242,17 +266,19 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   }
   const auto& veloxFunction =
       subParser_->findVeloxFunction(functionMap_, sFunc.function_reference());
-  const auto& veloxType =
-      toVeloxType(subParser_->parseType(sFunc.output_type())->type);
+  std::string typeName = subParser_->parseType(sFunc.output_type())->type;
 
   if (veloxFunction == "extract") {
-    return toExtractExpr(params, veloxType);
+    return toExtractExpr(std::move(params), toVeloxType(typeName));
   }
   if (veloxFunction == "alias") {
-    return toAliasExpr(params);
+    return toAliasExpr(std::move(params));
   }
   if (veloxFunction == "is_not_null") {
-    return toIsNotNullExpr(params, veloxType);
+    return toIsNotNullExpr(std::move(params), toVeloxType(typeName));
+  }
+  if (veloxFunction == "row_constructor") {
+    return toRowConstructorExpr(std::move(params), typeName);
   }
 
   return std::make_shared<const core::CallTypedExpr>(
@@ -282,7 +308,8 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.fp32()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kI64:
-      return std::make_shared<core::ConstantTypedExpr>(variant(sLit.i64()));
+      return std::make_shared<core::ConstantTypedExpr>(
+          variant(substraitLit.i64()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.fp64()));
@@ -291,7 +318,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
           variant(substraitLit.string()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
-          toVeloxType(substraitParser_.parseType(substraitLit.null())->type);
+          toVeloxType(subParser_->parseType(substraitLit.null())->type);
       return std::make_shared<core::ConstantTypedExpr>(
           veloxType, variant::null(veloxType->kind()));
     }
@@ -299,12 +326,12 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       // List is used in 'in' expression. Will wrap a constant
       // vector with an array vector inside to create the constant expression.
       std::vector<variant> variants;
-      variants.reserve(sLit.list().values().size());
+      variants.reserve(substraitLit.list().values().size());
       VELOX_CHECK(
-          sLit.list().values().size() > 0,
+          substraitLit.list().values().size() > 0,
           "List should have at least one item.");
       std::optional<TypePtr> literalType = std::nullopt;
-      for (const auto& literal : sLit.list().values()) {
+      for (const auto& literal : substraitLit.list().values()) {
         auto typedVariant = toTypedVariant(literal);
         if (!literalType.has_value()) {
           literalType = typedVariant->variantType;
@@ -504,19 +531,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       resultType = thenClauseExpr->type();
     }
   }
-
-  if (substraitIfThen.has_else_()) {
-    auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
-    inputs.emplace_back(elseClauseExpr);
-    if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
-      resultType = elseClauseExpr->type();
-    }
-  }
-
-  VELOX_CHECK_NOT_NULL(resultType, "Result type not found");
-
-  return std::make_shared<const core::CallTypedExpr>(
-      resultType, std::move(inputs), "if");
 }
 
 } // namespace facebook::velox::substrait

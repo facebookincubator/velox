@@ -266,7 +266,7 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
       {makeRowVector(type->names(), vectors)});
 
   // Find and deserialize Substrait plan json file.
-  std::string planPath =
+  std::string subPlanPath =
       getDataFilePath("velox/substrait/tests", "data/q6_first_stage.json");
 
   // Read q6_first_stage.json and resume the Substrait plan.

@@ -5,8 +5,8 @@ package substrait;
 
 import "google/protobuf/any.proto";
 import "google/protobuf/empty.proto";
-import "velox/substrait/proto/substrait/extensions/extensions.proto";
-import "velox/substrait/proto/substrait/type.proto";
+import "substrait/extensions/extensions.proto";
+import "substrait/type.proto";
 
 option cc_enable_arenas = true;
 option csharp_namespace = "Substrait.Protobuf";
@@ -131,13 +131,15 @@ message ReadRel {
       message ParquetReadOptions {}
       message ArrowReadOptions {}
       message OrcReadOptions {}
+      message DwrfReadOptions {}
 
       // The format of the files.
       oneof file_format {
         ParquetReadOptions parquet = 9;
         ArrowReadOptions arrow = 10;
         OrcReadOptions orc = 11;
-        google.protobuf.Any extension = 12;
+        DwrfReadOptions dwrf = 12;
+        google.protobuf.Any extension = 13;
       }
     }
   }

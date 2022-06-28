@@ -340,7 +340,7 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::Plan& sPlan) {
   functions::prestosql::registerAllScalarFunctions();
   functions::sparksql::registerFunctions("");
   // Create plan converter and expression converter to help the validation.
-  planConverter_->constructFuncMap(sPlan);
+  planConverter_->constructFunctionMap(sPlan);
   exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(
       pool_, planConverter_->getFunctionMap());
 

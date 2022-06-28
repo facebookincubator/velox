@@ -1,0 +1,32 @@
+{
+    "read": {
+        "common": {
+            "direct": {}
+        },
+        "baseSchema": {
+            "names": [
+                "sum#43"
+            ],
+            "struct": {
+                "types": [
+                    {
+                        "fp64": {
+                            "nullability": "NULLABILITY_NULLABLE"
+                        }
+                    }
+                ]
+            }
+        },
+        "localFiles": {
+            "items": [
+                {
+                    "format": "FILE_FORMAT_UNSPECIFIED",
+                    "partition_index": "0",
+                    "start": "0",
+                    "length": "0",
+                    "uriFile": "iterator:0"
+                }
+            ]
+        }
+    }
+}

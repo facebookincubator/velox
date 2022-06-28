@@ -119,8 +119,6 @@ TypePtr toVeloxType(const std::string& typeName) {
     }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
-    case TypeKind::DATE:
-      return DATE();
     default:
       VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }

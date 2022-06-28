@@ -540,14 +540,15 @@ TEST_P(PlanConversionTest, q6FirstStageTest) {
   std::string veloxPath = getVeloxPath();
   genLineitemORC(veloxConverter);
   // Find and deserialize Substrait plan json file.
-  std::string subPlanPath = veloxPath + "/velox/substrait/tests/q6_first.json";
+  std::string subPlanPath =
+      veloxPath + "/velox/substrait/tests/q6_first_stage.json";
   auto resIter = veloxConverter->getResIter(subPlanPath);
   while (resIter->HasNext()) {
     auto rv = resIter->Next();
     auto size = rv->size();
     ASSERT_EQ(size, 1);
     std::string res = rv->toString(0);
-    ASSERT_EQ(res, "{ [child at 0]: 13613.1921}");
+    ASSERT_EQ(res, "{13613.1921}");
   }
 }
 
@@ -573,7 +574,8 @@ TEST_P(PlanConversionTest, q1FirstStageTest) {
   std::string veloxPath = getVeloxPath();
   genLineitemORC(veloxConverter);
   // Find and deserialize Substrait plan json file.
-  std::string subPlanPath = veloxPath + "/velox/substrait/tests/q1_first.json";
+  std::string subPlanPath =
+      veloxPath + "/velox/substrait/tests/q1_first_stage.json";
   auto resIter = veloxConverter->getResIter(subPlanPath);
   while (resIter->HasNext()) {
     auto rv = resIter->Next();
@@ -581,13 +583,13 @@ TEST_P(PlanConversionTest, q1FirstStageTest) {
     ASSERT_EQ(size, 3);
     ASSERT_EQ(
         rv->toString(0),
-        "{ [child at 0]: N, O, 34, 105963.31, 99911.3719, 101201.05309399999, 34, 3, 105963.31, 3, 0.16999999999999998, 3, 3}");
+        "{N, O, 34, 105963.31, 99911.3719, 101201.05309399999, 34, 3, 105963.31, 3, 0.16999999999999998, 3, 3}");
     ASSERT_EQ(
         rv->toString(1),
-        "{ [child at 1]: A, F, 60, 59390.729999999996, 56278.5879, 59485.994223, 60, 5, 59390.729999999996, 5, 0.24, 5, 5}");
+        "{A, F, 60, 59390.729999999996, 56278.5879, 59485.994223, 60, 5, 59390.729999999996, 5, 0.24, 5, 5}");
     ASSERT_EQ(
         rv->toString(2),
-        "{ [child at 2]: R, F, 23, 94461.56, 87849.2508, 90221.880192, 23, 2, 94461.56, 2, 0.14, 2, 2}");
+        "{R, F, 23, 94461.56, 87849.2508, 90221.880192, 23, 2, 94461.56, 2, 0.14, 2, 2}");
   }
 }
 

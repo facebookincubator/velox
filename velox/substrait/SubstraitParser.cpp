@@ -28,7 +28,7 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
   switch (substraitType.kind_case()) {
     case ::substrait::Type::KindCase::kBool: {
       typeName = "BOOLEAN";
-      nullability = sType.bool_().nullability();
+      nullability = substraitType.bool_().nullability();
       break;
     }
     case ::substrait::Type::KindCase::kI8: {
@@ -115,7 +115,7 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
     }
     case ::substrait::Type::KindCase::kDate: {
       typeName = "DATE";
-      nullability = sType.date().nullability();
+      nullability = substraitType.date().nullability();
       break;
     }
     default:
@@ -217,39 +217,14 @@ std::string SubstraitParser::findSubstraitFuncSpec(
   return map[id];
 }
 
-std::string SubstraitParser::getFunctionName(
-    const std::string& functionSpec) const {
+std::string SubstraitParser::getSubFunctionName(
+    const std::string& subFuncSpec) const {
   // Get the position of ":" in the function name.
-  std::size_t pos = functionSpec.find(":");
+  std::size_t pos = subFuncSpec.find(":");
   if (pos == std::string::npos) {
-    return functionSpec;
+    return subFuncSpec;
   }
-  return functionSpec.substr(0, pos);
-}
-
-void SubstraitParser::getFunctionTypes(
-    const std::string& functionSpec,
-    std::vector<std::string>& types) const {
-  types.clear();
-  // Get the position of ":" in the function name.
-  std::size_t pos = functionSpec.find(":");
-  // Get the parameter types.
-  std::string funcTypes;
-  if (pos == std::string::npos) {
-    return;
-  } else {
-    if (pos == functionSpec.size() - 1) {
-      return;
-    }
-    funcTypes = functionSpec.substr(pos + 1);
-  }
-  // Split the types with delimiter.
-  std::string delimiter = "_";
-  while ((pos = funcTypes.find(delimiter)) != std::string::npos) {
-    types.emplace_back(funcTypes.substr(0, pos));
-    funcTypes.erase(0, pos + delimiter.length());
-  }
-  types.emplace_back(funcTypes);
+  return subFuncSpec.substr(0, pos);
 }
 
 void SubstraitParser::getSubFunctionTypes(
@@ -293,7 +268,7 @@ std::string SubstraitParser::mapToVeloxFunction(
 
   // If not finding the mapping from Substrait function name to Velox function
   // name, the original Substrait function name will be used.
-  return substraitFunction;
+  return subFunc;
 }
 
 } // namespace facebook::velox::substrait

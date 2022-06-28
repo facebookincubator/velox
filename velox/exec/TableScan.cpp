@@ -32,7 +32,8 @@ TableScan::TableScan(
           "TableScan"),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
-      driverCtx_(driverCtx) {
+      driverCtx_(driverCtx),
+      preferredBatchSize_(driverCtx->queryConfig().preferredOutputBatchSize()) {
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
@@ -144,6 +145,11 @@ bool TableScan::isFinished() {
 }
 
 void TableScan::setBatchSize() {
+  if (preferredBatchSize_ != 1024) {
+    // Not the default value.
+    readBatchSize_ = preferredBatchSize_;
+    return;
+  }
   constexpr int64_t kMB = 1 << 20;
   auto estimate = dataSource_->estimatedRowSize();
   if (estimate == connector::DataSource::kUnknownRowSize) {

@@ -201,7 +201,7 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
 
   // Parse measures and get the aggregate expressions.
   // Each measure represents one aggregate expression.
-  std::vector<std::shared_ptr<const core::CallTypedExpr>> aggExprs;
+  std::vector<core::CallTypedExprPtr> aggExprs;
   aggExprs.reserve(sAgg.measures().size());
 
   for (const auto& smea : sAgg.measures()) {
@@ -343,6 +343,25 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
           nextPlanNodeId(),
           exprConverter_->toVeloxExpr(sExpr, inputType),
           childNode);
+}
+bool isPushDownSupportedByFormat(
+    const dwio::common::FileFormat& format,
+    connector::hive::SubfieldFilters& subfieldFilters) {
+  switch (format) {
+    case dwio::common::FileFormat::PARQUET:
+    case dwio::common::FileFormat::ORC:
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::RC:
+    case dwio::common::FileFormat::RC_TEXT:
+    case dwio::common::FileFormat::RC_BINARY:
+    case dwio::common::FileFormat::TEXT:
+    case dwio::common::FileFormat::JSON:
+    case dwio::common::FileFormat::ALPHA:
+    case dwio::common::FileFormat::UNKNOWN:
+    default:
+      break;
+  }
+  return true;
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
@@ -587,7 +606,6 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
       children.emplace_back(
           setVectorFromVariants(outputChildType, batchChild, pool_));
     }
-
     vectors.emplace_back(
         std::make_shared<RowVector>(pool_, type, nullptr, batchSize, children));
   }
@@ -727,100 +745,6 @@ class FilterInfo {
   bool isInitialized_ = false;
 };
 
-connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
-    const std::vector<std::string>& inputNameList,
-    const std::vector<TypePtr>& inputTypeList,
-    const ::substrait::Expression& sFilter) {
-  connector::hive::SubfieldFilters filters;
-  // A map between the column index and the FilterInfo for that column.
-  std::unordered_map<int, std::shared_ptr<FilterInfo>> colInfoMap;
-  for (int idx = 0; idx < inputNameList.size(); idx++) {
-    colInfoMap[idx] = std::make_shared<FilterInfo>();
-  }
-  std::vector<::substrait::Expression_ScalarFunction> scalarFunctions;
-  flattenConditions(sFilter, scalarFunctions);
-  // Construct the FilterInfo for the related column.
-  for (const auto& scalarFunction : scalarFunctions) {
-    auto filterNameSpec = subParser_->findSubstraitFuncSpec(
-        functionMap_, scalarFunction.function_reference());
-    auto filterName = subParser_->getSubFunctionName(filterNameSpec);
-    int32_t colIdx;
-    // TODO: Add different types' support here.
-    double val;
-    for (auto& param : scalarFunction.args()) {
-      auto typeCase = param.rex_type_case();
-      switch (typeCase) {
-        case ::substrait::Expression::RexTypeCase::kSelection: {
-          auto sel = param.selection();
-          // TODO: Only direct reference is considered here.
-          auto dRef = sel.direct_reference();
-          colIdx = subParser_->parseReferenceSegment(dRef);
-          break;
-        }
-        case ::substrait::Expression::RexTypeCase::kLiteral: {
-          auto sLit = param.literal();
-          // TODO: Only double is considered here.
-          val = sLit.fp64();
-          break;
-        }
-        default:
-          VELOX_NYI(
-              "Substrait conversion not supported for arg type '{}'", typeCase);
-      }
-    }
-    if (filterName == "is_not_null") {
-      colInfoMap[colIdx]->forbidsNull();
-    } else if (filterName == "gte") {
-      colInfoMap[colIdx]->setLeft(val, false);
-    } else if (filterName == "gt") {
-      colInfoMap[colIdx]->setLeft(val, true);
-    } else if (filterName == "lte") {
-      colInfoMap[colIdx]->setRight(val, false);
-    } else if (filterName == "lt") {
-      colInfoMap[colIdx]->setRight(val, true);
-    } else {
-      VELOX_NYI(
-          "Substrait conversion not supported for filter name '{}'",
-          filterName);
-    }
-  }
-  // Construct the Filters.
-  for (int idx = 0; idx < inputNameList.size(); idx++) {
-    auto filterInfo = colInfoMap[idx];
-    // Set the left bound to be negative infinity.
-    double leftBound = -1.0 / 0.0;
-    // Set the right bound to be positive infinity.
-    double rightBound = 1.0 / 0.0;
-    bool leftUnbounded = true;
-    bool rightUnbounded = true;
-    bool leftExclusive = false;
-    bool rightExclusive = false;
-    if (filterInfo->isInitialized()) {
-      if (filterInfo->left_) {
-        leftUnbounded = false;
-        leftBound = filterInfo->left_.value();
-        leftExclusive = filterInfo->leftExclusive_;
-      }
-      if (filterInfo->right_) {
-        rightUnbounded = false;
-        rightBound = filterInfo->right_.value();
-        rightExclusive = filterInfo->rightExclusive_;
-      }
-      bool nullAllowed = filterInfo->nullAllowed_;
-      filters[common::Subfield(inputNameList[idx])] =
-          std::make_unique<common::DoubleRange>(
-              leftBound,
-              leftUnbounded,
-              leftExclusive,
-              rightBound,
-              rightUnbounded,
-              rightExclusive,
-              nullAllowed);
-    }
-  }
-  return filters;
-}
-
 void SubstraitVeloxPlanConverter::flattenConditions(
     const ::substrait::Expression& substraitFilter,
     std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions) {
@@ -828,10 +752,10 @@ void SubstraitVeloxPlanConverter::flattenConditions(
   switch (typeCase) {
     case ::substrait::Expression::RexTypeCase::kScalarFunction: {
       auto sFunc = substraitFilter.scalar_function();
-      auto filterNameSpec = substraitParser_->findFunctionSpec(
+      auto filterNameSpec = subParser_->findSubstraitFuncSpec(
           functionMap_, sFunc.function_reference());
       // TODO: Only and relation is supported here.
-      if (substraitParser_->getFunctionName(filterNameSpec) == "and") {
+      if (subParser_->getSubFunctionName(filterNameSpec) == "and") {
         for (const auto& sCondition : sFunc.args()) {
           flattenConditions(sCondition, scalarFunctions);
         }
@@ -1489,7 +1413,6 @@ void SubstraitVeloxPlanConverter::constructFunctionMap(
   exprConverter_ =
       std::make_shared<SubstraitVeloxExprConverter>(pool_, functionMap_);
 }
-
 bool SubstraitVeloxPlanConverter::checkTypeExtension(
     const ::substrait::Plan& substraitPlan) {
   for (const auto& sExtension : substraitPlan.extensions()) {

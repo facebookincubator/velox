@@ -65,18 +65,13 @@ class SubstraitParser {
   /// Currently, the input types in the function specification are not used. But
   /// in the future, they should be used for the validation according the
   /// specifications in Substrait yaml files.
-  const std::string& findFunctionSpec(
+  std::string findSubstraitFuncSpec(
       const std::unordered_map<uint64_t, std::string>& functionMap,
       uint64_t id) const;
 
   /// Extracts the function name for a function from specified compound name.
   /// When the input is a simple name, it will be returned.
-  std::string getFunctionName(const std::string& functionSpec) const;
-
-  /// Extracts argument types for a function from specified compound name.
-  void getFunctionTypes(
-      const std::string& functionSpec,
-      std::vector<std::string>& types) const;
+  std::string getSubFunctionName(const std::string& functionSpec) const;
 
   /// This function is used get the types from the compound name.
   void getSubFunctionTypes(
