@@ -352,7 +352,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   // The machine page counts corresponding to different sizes in order
   // of increasing size.
   const std::vector<MachinePageCount>
-      sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256};
+      sizeClassSizes_{1, 2, 4, 8, 16, 32, 64, 128, 256, 512};
 
  private:
   // Singleton instance.
