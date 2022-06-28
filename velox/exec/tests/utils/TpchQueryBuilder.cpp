@@ -237,11 +237,11 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
               custkeyJoinNode,
               "",
               {"l_orderkey", "o_orderdate", "o_shippriority", "part_revenue"})
-          .localPartition({})
-          .finalAggregation(
+          .partialAggregation(
               {"l_orderkey", "o_orderdate", "o_shippriority"},
-              {"sum(part_revenue) as revenue"},
-              {DOUBLE()})
+              {"sum(part_revenue) as revenue"})
+          .localPartition({})
+          .finalAggregation()
           .project({"l_orderkey", "revenue", "o_orderdate", "o_shippriority"})
           .orderBy({"revenue DESC", "o_orderdate"}, false)
           .limit(0, 10, false)
