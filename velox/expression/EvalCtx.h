@@ -27,19 +27,29 @@ class Expr;
 class ExprSet;
 struct ContextSaver;
 
+// Specifies the items to check in the Expr::eval
+// traversal. kGeneric means that anything can occur. kLazyLoaded
+// means that LazyVectors are loaded and replaced by the
+// corresponding loaded vectors. kFlatNonNull implies
+// kLazyLoaded and that the operands do not contain non-flat
+// encodings or nulls at any level. Shared subexpressions and
+// complex types are allowed in all modes.
+enum class EvalMode : char { kGeneric, kLazyLoaded, kFlatNonNull };
+
 // Context for holding the base row vector, error state and various
-// flags for Expr interpreter.
+// flags for Expr interpreter. The base row is logically unchanged but
+// has lazy vectors replaced with loaded vectors on first use.
 class EvalCtx {
  public:
   EvalCtx(
       core::ExecCtx* FOLLY_NONNULL execCtx,
       ExprSet* FOLLY_NULLABLE exprSet,
-      const RowVector* FOLLY_NULLABLE row);
+      RowVector* FOLLY_NULLABLE row);
 
   /// For testing only.
   explicit EvalCtx(core::ExecCtx* FOLLY_NONNULL execCtx);
 
-  const RowVector* FOLLY_NONNULL row() const {
+  RowVector* FOLLY_NONNULL row() const {
     return row_;
   }
 
@@ -50,9 +60,17 @@ class EvalCtx {
   // Returns the index-th column of the base row. If we have peeled off
   // wrappers like dictionaries, then this provides access only to the
   // peeled off fields.
-  const VectorPtr& getField(int32_t index) const;
+  const VectorPtr& getField(int32_t index);
 
-  void ensureFieldLoaded(int32_t index, const SelectivityVector& rows);
+  BaseVector* FOLLY_NONNULL getRawField(int32_t index) const;
+
+  // Loads field at 'index' if it is lazy or wraps a
+  // LazyVector. Replaces the LazyVector on top or inside wrappers
+  // with the loaded vector. Only loads the values at 'rows'. Returns
+  // the contents of the field after load.
+  const VectorPtr& ensureFieldLoaded(
+      int32_t index,
+      const SelectivityVector& rows);
 
   void setPeeled(int32_t index, const VectorPtr& vector) {
     if (peeledFields_.size() <= index) {
@@ -139,6 +157,10 @@ class EvalCtx {
     return &nullsPruned_;
   }
 
+  EvalMode& mode() {
+    return mode_;
+  }
+
   // Returns true if the set of rows the expressions are evaluated on are
   // complete, e.g. we are currently not under an IF where expressions are
   // evaluated only on a subset of rows which either passed the condition
@@ -194,7 +216,12 @@ class EvalCtx {
       const SelectivityVector& rows,
       VectorPtr& result) const {
     if (result && !isFinalSelection() && *finalSelection() != rows) {
-      BaseVector::ensureWritable(rows, result->type(), result->pool(), &result);
+      BaseVector::ensureWritable(
+          rows,
+          result->type(),
+          result->pool(),
+          &result,
+          &execCtx_->vectorPool());
       result->copy(localResult.get(), rows, nullptr);
     } else {
       result = localResult;
@@ -208,10 +235,41 @@ class EvalCtx {
     moveOrCopyResult(localResult, rows, *result);
   }
 
+  VectorPool& vectorPool() const {
+    return execCtx_->vectorPool();
+  }
+
+  VectorPtr getVector(const TypePtr& type, vector_size_t size) {
+    return execCtx_->getVector(type, size);
+  }
+
+  void releaseVector(VectorPtr& vector) {
+    execCtx_->releaseVector(vector);
+  }
+
+  void releaseVectors(std::vector<VectorPtr>& vectors) {
+    execCtx_->releaseVectors(vectors);
+  }
+
+  // Makes 'result' writable for 'rows'. Allocates or reuses a vector from the
+  // pool of 'execCtx_' if needed.
+  void ensureWritable(
+      const SelectivityVector& rows,
+      const TypePtr& type,
+      VectorPtr& result) {
+    BaseVector::ensureWritable(
+        rows, type, execCtx_->pool(), &result, &execCtx_->vectorPool());
+  }
+
  private:
+  // Replaces the field at 'index' with 'field'. If the field is
+  // peeled, replaces the peeled value and refreshes the field in the
+  // top level row so as to cut out loaded LazyVectors.
+  const VectorPtr& setFieldAfterLoad(int32_t index, const VectorPtr& field);
+
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
-  const RowVector* FOLLY_NULLABLE row_;
+  RowVector* FOLLY_NULLABLE const row_;
 
   // Corresponds 1:1 to children of 'row_'. Set to an inner vector
   // after removing dictionary/sequence wrappers.
@@ -226,6 +284,9 @@ class EvalCtx {
   // behavior.
   bool nullsPruned_{false};
   bool throwOnError_{true};
+
+  // True if all operands processed with ensureFieldLoaded().
+  EvalMode mode_{EvalMode::kGeneric};
 
   // True if the current set of rows will not grow, e.g. not under and IF or OR.
   bool isFinalSelection_{true};

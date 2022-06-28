@@ -124,8 +124,8 @@ class FieldReference : public SpecialForm {
     if (index_ != -1) {
       return index_;
     }
-    auto* rowType = dynamic_cast<const RowType*>(context.row()->type().get());
-    VELOX_CHECK(rowType, "The context has no row");
+    VELOX_DCHECK_EQ(context.row()->typeKind(), TypeKind::ROW);
+    auto* rowType = static_cast<const RowType*>(context.row()->type().get());
     index_ = rowType->getChildIdx(field_);
     return index_;
   }

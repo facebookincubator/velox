@@ -153,7 +153,9 @@ class SimpleArithmeticBenchmark
 
     size_t count = 0;
     for (auto i = 0; i < times * 1'000; i++) {
-      count += evaluate(exprSet, input)->size();
+      auto result = evaluate(exprSet, input);
+      count += result->size();
+      execCtx_.releaseVector(result);
     }
     return count;
   }
