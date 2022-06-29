@@ -19,12 +19,6 @@
 
 namespace facebook::velox::exec::test {
 
-static int64_t toDate(std::string_view stringDate) {
-  Date date;
-  parseTo(stringDate, date);
-  return date.days();
-}
-
 void TpchQueryBuilder::initialize(const std::string& dataPath) {
   for (const auto& [tableName, columns] : kTables_) {
     const fs::path tablePath{dataPath + "/" + tableName};
@@ -82,6 +76,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ2Plan();
     case 3:
       return getQ3Plan();
+    case 4:
+      return getQ4Plan();
     case 6:
       return getQ6Plan();
     case 13:
@@ -94,16 +90,16 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
 }
 
 namespace {
-static const std::string kLineitem = "lineitem";
-static const std::string kOrders = "orders";
-static const std::string kCustomer = "customer";
-static const std::string kPart = "part";
-static const std::string kSupplier = "supplier";
-static const std::string kPartSupp = "partsupp";
-static const std::string kNation = "nation";
-static const std::string kRegion = "region";
+const std::string kLineitem = "lineitem";
+const std::string kOrders = "orders";
+const std::string kCustomer = "customer";
+const std::string kPart = "part";
+const std::string kSupplier = "supplier";
+const std::string kPartSupp = "partsupp";
+const std::string kNation = "nation";
+const std::string kRegion = "region";
 
-static const std::string kDateConversionSuffix = "::DATE";
+const std::string kDateConversionSuffix = "::DATE";
 } // namespace
 
 TpchPlan TpchQueryBuilder::getQ1Plan() const {
@@ -548,6 +544,104 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
                   .finalAggregation()
                   .topN({"revenue desc", "o_orderdate asc"}, 10, false)
                   .planNode();
+
+  context.plan = std::move(plan);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+PlanBuilder TpchQueryBuilder::getQ4OrdersPlan(
+    std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TpchPlan& context) const {
+  std::vector<std::string> ordersSelectedColumns = {
+      "o_orderpriority", "o_orderdate", "o_orderkey"};
+  auto orderSelectedRowType = getRowType(kOrders, ordersSelectedColumns);
+  const auto& ordersFileColumnNames = getFileColumnNames(kOrders);
+
+  std::string orderDateFilter;
+  if (orderSelectedRowType->findChild("o_orderdate")->isVarchar()) {
+    orderDateFilter = "o_orderdate between '1993-07-01' and '1993-10-01'";
+  } else {
+    orderDateFilter =
+        "o_orderdate between '1993-07-01'::DATE and '1993-10-01'::DATE";
+  }
+
+  core::PlanNodeId orderPlanNodeId;
+  auto orders = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(
+                        kOrders,
+                        orderSelectedRowType,
+                        ordersFileColumnNames,
+                        {},
+                        {orderDateFilter})
+                    .capturePlanNodeId(orderPlanNodeId);
+  context.dataFiles[orderPlanNodeId] = getTableFilePaths(kOrders);
+  return orders;
+}
+
+std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ4LineItemsPlan(
+    std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+    TpchPlan& context) const {
+  std::vector<std::string> lineitemSelectedColumns = {
+      "l_orderkey", "l_commitdate", "l_receiptdate"};
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemSelectedColumns);
+  const auto& lineitemFileColumnNames = getFileColumnNames(kLineitem);
+
+  std::string commitDateFilter;
+  if (lineitemSelectedRowType->findChild("l_commitdate")->isVarchar()) {
+    commitDateFilter = "l_commitdate < l_receiptdate";
+  } else {
+    commitDateFilter = "l_commitdate::DATE < l_receiptdate::DATE";
+  }
+
+  core::PlanNodeId lineitemPlanNodeId;
+  auto lineitems = PlanBuilder(planNodeIdGenerator)
+                       .localPartition(
+                           {"l_orderkey"},
+                           {PlanBuilder(planNodeIdGenerator)
+                                .tableScan(
+                                    kLineitem,
+                                    lineitemSelectedRowType,
+                                    lineitemFileColumnNames,
+                                    {},
+                                    {commitDateFilter})
+                                .capturePlanNodeId(lineitemPlanNodeId)
+                                .partialAggregation({"l_orderkey"}, {})
+                                .planNode()})
+                       .finalAggregation({"l_orderkey"}, {}, {BIGINT()})
+                       .planNode();
+
+  context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  return lineitems;
+}
+
+TpchPlan TpchQueryBuilder::getQ4Plan() const {
+  TpchPlan context;
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  auto orders = getQ4OrdersPlan(planNodeIdGenerator, context);
+  auto lineitems = getQ4LineItemsPlan(planNodeIdGenerator, context);
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {"o_orderpriority"},
+              {orders
+                   .hashJoin(
+                       {"o_orderkey"},
+                       {"l_orderkey"},
+                       lineitems,
+                       "",
+                       {"o_orderpriority"})
+                   .partialAggregation(
+                       {"o_orderpriority"}, {"count(1) AS partialCount"})
+                   .planNode()})
+          .finalAggregation(
+              {"o_orderpriority"},
+              {"sum(partialCount) as order_count"},
+              {BIGINT(), VARCHAR()})
+          .orderBy({"o_orderpriority asc"}, true)
+          .planNode();
 
   context.plan = std::move(plan);
   context.dataFileFormat = format_;

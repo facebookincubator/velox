@@ -135,6 +135,11 @@ BENCHMARK(q3) {
   benchmark.run(planContext);
 }
 
+BENCHMARK(q4) {
+  const auto planContext = queryBuilder->getQueryPlan(4);
+  benchmark.run(planContext);
+}
+
 BENCHMARK(q6) {
   const auto planContext = queryBuilder->getQueryPlan(6);
   benchmark.run(planContext);
