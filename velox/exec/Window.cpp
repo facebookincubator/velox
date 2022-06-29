@@ -24,7 +24,7 @@ void initKeyInfo(
     const RowTypePtr& type,
     const std::vector<core::FieldAccessTypedExprPtr>& keys,
     const std::vector<core::SortOrder>& orders,
-    std::vector<std::pair<column_index_t , core::SortOrder>>& keyInfo) {
+    std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo) {
   core::SortOrder defaultPartitionSortOrder(true, true);
 
   keyInfo.reserve(keys.size());
@@ -149,7 +149,7 @@ void Window::addInput(RowVectorPtr input) {
 inline bool Window::compareRowsWithKeys(
     const char* lhs,
     const char* rhs,
-    const std::vector<std::pair<ChannelIndex, core::SortOrder>>& keys) {
+    const std::vector<std::pair<column_index_t, core::SortOrder>>& keys) {
   if (lhs == rhs) {
     return false;
   }

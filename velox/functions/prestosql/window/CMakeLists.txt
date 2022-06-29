@@ -15,8 +15,9 @@ if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
 
-add_library(velox_window OBJECT NthValue.cpp Rank.cpp RowNumber.cpp
-                                WindowFunctionsRegistration.cpp)
+add_library(
+  velox_window OBJECT AggregateWindowFunction.cpp NthValue.cpp Rank.cpp
+                      RowNumber.cpp WindowFunctionsRegistration.cpp)
 
-target_link_libraries(velox_window velox_buffer velox_exec
+target_link_libraries(velox_window velox_aggregates velox_buffer velox_exec
                       ${FOLLY_WITH_DEPENDENCIES})

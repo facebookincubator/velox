@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_windows_test NthValueTest.cpp RankTest.cpp
-                                  RowNumberTest.cpp)
+add_executable(
+  velox_windows_test AggregateWindowFunctionTest.cpp NthValueTest.cpp
+                     RankTest.cpp RowNumberTest.cpp)
 
 add_test(
   NAME velox_windows_test
@@ -22,7 +23,7 @@ add_test(
 
 target_link_libraries(
   velox_windows_test
-  velox_window
+  velox_aggregates
   velox_core
   velox_dwrf_test_utils
   velox_exec
@@ -31,6 +32,7 @@ target_link_libraries(
   velox_functions_prestosql
   velox_functions_lib
   velox_type
+  velox_window
   ${gflags_LIBRARIES}
   gtest
   gtest_main)
