@@ -67,7 +67,7 @@ class MmapAllocator : public MappedMemory {
       MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
-        std::function<void(int64_t)> beforeAllocCB = nullptr) override {
+      std::function<void(int64_t)> beforeAllocCB = nullptr) override {
     bool result;
     stats_.recordAlloc(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
@@ -75,7 +75,7 @@ class MmapAllocator : public MappedMemory {
     });
     return result;
   }
- 
+
   void freeContiguous(ContiguousAllocation& allocation) override {
     stats_.recordFree(
         allocation.size(), [&]() { freeContiguousImpl(allocation); });
@@ -112,7 +112,7 @@ class MmapAllocator : public MappedMemory {
     stats.numAdvise = numAdvisedPages_;
     return stats;
   }
-  
+
  private:
   static constexpr uint64_t kAllSet = 0xffffffffffffffff;
 
@@ -240,14 +240,13 @@ class MmapAllocator : public MappedMemory {
     uint64_t numAdvisedAway_ = 0;
   };
 
-    bool allocateContiguousImpl(
+  bool allocateContiguousImpl(
       MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
       std::function<void(int64_t)> beforeAllocCB = nullptr);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
-
 
   // Ensures that there are at least 'newMappedNeeded' pages that are
   // not backing any existing allocation. If capacity_ - numMapped_ <

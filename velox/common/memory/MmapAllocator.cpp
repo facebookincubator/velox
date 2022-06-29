@@ -66,7 +66,9 @@ bool MmapAllocator::allocate(
   for (int i = 0; i < mix.numSizes; ++i) {
     bool success;
     stats_.recordAlloc(
-		       sizeClassSizes_[mix.sizeIndices[i]] * kPageSize, mix.sizeCounts[i], [&]() {
+        sizeClassSizes_[mix.sizeIndices[i]] * kPageSize,
+        mix.sizeCounts[i],
+        [&]() {
           success = sizeClasses_[mix.sizeIndices[i]]->allocate(
               mix.sizeCounts[i], owner, newMapsNeeded, out);
         });

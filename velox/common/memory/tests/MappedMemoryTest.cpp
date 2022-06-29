@@ -330,7 +330,7 @@ TEST_P(MappedMemoryTest, singleAllocationTest) {
     EXPECT_LT(0, stats.sizes[i].clocks());
     EXPECT_GE(stats.sizes[i].cumBytes, capacity * MappedMemory::kPageSize);
     EXPECT_GE(stats.sizes[i].numAlloc, capacity / size);
-    
+
     if (useMmap_) {
       EXPECT_EQ(instance_->numMapped(), kCapacity);
     }
