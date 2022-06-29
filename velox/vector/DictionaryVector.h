@@ -186,14 +186,6 @@ class DictionaryVector : public SimpleVector<T> {
     BaseVector::clearNulls(begin, end);
   }
 
-  void copy(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override {
-    VELOX_NYI();
-  }
-
   std::string toString(vector_size_t index) const override {
     if (BaseVector::isNullAt(index)) {
       return "null";

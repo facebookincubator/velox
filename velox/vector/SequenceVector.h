@@ -173,14 +173,6 @@ class SequenceVector : public SimpleVector<T> {
     throw std::runtime_error("addNulls not supported");
   }
 
-  void copy(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override {
-    VELOX_NYI();
-  }
-
  private:
   // Prepares for use after construction.
   void setInternalState();

@@ -169,14 +169,6 @@ class FunctionVector : public BaseVector {
     return Iterator(this, rows);
   }
 
-  void copy(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override {
-    VELOX_NYI();
-  }
-
  private:
   std::vector<std::shared_ptr<Callable>> functions_;
   std::vector<SelectivityVector> rowSets_;

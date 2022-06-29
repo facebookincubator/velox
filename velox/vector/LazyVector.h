@@ -281,14 +281,6 @@ class LazyVector : public BaseVector {
       DecodedVector& decoded,
       SelectivityVector& baseRows);
 
-  void copy(
-      const BaseVector* source,
-      vector_size_t targetIndex,
-      vector_size_t sourceIndex,
-      vector_size_t count) override {
-    VELOX_NYI();
-  }
-
  private:
   std::unique_ptr<VectorLoader> loader_;
 
