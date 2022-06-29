@@ -182,6 +182,118 @@ memory::MappedMemory* FOLLY_NONNULL Task::addOperatorMemory(
   return mappedMemory.get();
 }
 
+bool Task::supportsSingleThreadedExecution() const {
+  std::vector<std::unique_ptr<DriverFactory>> driverFactories;
+
+  if (consumerSupplier_) {
+    return false;
+  }
+
+  LocalPlanner::plan(planFragment_, nullptr, &driverFactories, 1);
+
+  for (const auto& factory : driverFactories) {
+    if (!factory->supportsSingleThreadedExecution()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+RowVectorPtr Task::next() {
+  VELOX_CHECK_EQ(
+      core::ExecutionStrategy::kUngrouped,
+      planFragment_.executionStrategy,
+      "Single-threaded execution supports only ungrouped execution");
+
+  if (!splitPlanNodeIds_.empty()) {
+    for (const auto& id : splitPlanNodeIds_) {
+      VELOX_CHECK(
+          splitsStates_[id].noMoreSplits,
+          "Single-threaded execution requires all splits to be added before calling Task::next().");
+    }
+  }
+
+  VELOX_CHECK_EQ(state_, kRunning, "Task has already finished processing.");
+
+  // On first call, create the drivers.
+  if (driverFactories_.empty()) {
+    VELOX_CHECK_NULL(
+        consumerSupplier_,
+        "Single-threaded execution doesn't support delivering results to a callback");
+
+    LocalPlanner::plan(planFragment_, nullptr, &driverFactories_, 1);
+
+    exchangeClients_.resize(driverFactories_.size());
+
+    for (const auto& factory : driverFactories_) {
+      VELOX_CHECK(factory->supportsSingleThreadedExecution());
+      numDriversPerSplitGroup_ += factory->numDrivers;
+      numTotalDrivers_ += factory->numTotalDrivers;
+      taskStats_.pipelineStats.emplace_back(
+          factory->inputDriver, factory->outputDriver);
+    }
+
+    // Create drivers.
+    auto self = shared_from_this();
+    std::vector<std::shared_ptr<Driver>> drivers;
+    drivers.reserve(numDriversPerSplitGroup_);
+    createSplitGroupStateLocked(self, 0);
+    createDriversLocked(self, 0, drivers);
+
+    drivers_ = std::move(drivers);
+  }
+
+  // Run drivers one at a time. If a driver blocks, continue running the other
+  // drivers. Running other drivers is expected to unblock some or all blocked
+  // drivers.
+  const auto numDrivers = drivers_.size();
+
+  std::vector<ContinueFuture> futures;
+  futures.resize(numDrivers);
+
+  for (;;) {
+    int runnableDrivers = 0;
+    int blockedDrivers = 0;
+    for (auto i = 0; i < numDrivers; ++i) {
+      if (drivers_[i] == nullptr) {
+        // This driver has finished processing.
+        continue;
+      }
+
+      if (!futures[i].isReady()) {
+        // This driver is still blocked.
+        ++blockedDrivers;
+        continue;
+      }
+
+      ++runnableDrivers;
+
+      std::shared_ptr<BlockingState> blockingState;
+      auto result = drivers_[i]->next(blockingState);
+      if (result) {
+        return result;
+      }
+
+      if (blockingState) {
+        futures[i] = blockingState->future();
+      }
+
+      if (error()) {
+        std::rethrow_exception(error());
+      }
+    }
+
+    if (runnableDrivers == 0) {
+      VELOX_CHECK_EQ(
+          0,
+          blockedDrivers,
+          "Cannot make progress as all remaining drivers are blocked");
+      return nullptr;
+    }
+  }
+}
+
 void Task::start(
     std::shared_ptr<Task> self,
     uint32_t maxDrivers,
@@ -258,8 +370,7 @@ void Task::start(
   for (auto pipeline = 0; pipeline < numPipelines; ++pipeline) {
     auto& factory = self->driverFactories_[pipeline];
 
-    auto partitionedOutputNode = factory->needsPartitionedOutput();
-    if (partitionedOutputNode) {
+    if (auto partitionedOutputNode = factory->needsPartitionedOutput()) {
       self->numDriversInPartitionedOutput_ = factory->numDrivers;
       VELOX_CHECK(
           !self->hasPartitionedOutput_,
@@ -559,7 +670,7 @@ bool Task::addSplitWithSequence(
     }
   }
   if (promise) {
-    promise->setValue(false);
+    promise->setValue();
   }
   return added;
 }
@@ -574,7 +685,7 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
     }
   }
   if (promise) {
-    promise->setValue(false);
+    promise->setValue();
   }
 }
 
@@ -646,7 +757,7 @@ void Task::noMoreSplitsForGroup(
     }
   }
   for (auto& promise : promises) {
-    promise.setValue(false);
+    promise.setValue();
   }
 }
 
@@ -682,7 +793,7 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   completionNotifier.notify();
 
   for (auto& promise : splitPromises) {
-    promise.setValue(false);
+    promise.setValue();
   }
 }
 
@@ -754,7 +865,7 @@ BlockingReason Task::getSplitOrFutureLocked(
     if (splitsStore.noMoreSplits) {
       return BlockingReason::kNotBlocked;
     }
-    auto [splitPromise, splitFuture] = makeVeloxPromiseContract<bool>(
+    auto [splitPromise, splitFuture] = makeVeloxContinuePromiseContract(
         fmt::format("Task::getSplitOrFuture {}", taskId_));
     future = std::move(splitFuture);
     splitsStore.splitPromises.push_back(std::move(splitPromise));
@@ -1114,7 +1225,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   }
 
   for (auto& promise : splitPromises) {
-    promise.setValue(true);
+    promise.setValue();
   }
 
   for (auto& bridge : oldBridges) {
@@ -1126,10 +1237,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 }
 
 ContinueFuture Task::makeFinishFutureLocked(const char* FOLLY_NONNULL comment) {
-  auto [promise, future] = makeVeloxPromiseContract<bool>(comment);
+  auto [promise, future] = makeVeloxContinuePromiseContract(comment);
 
   if (numThreads_ == 0) {
-    promise.setValue(true);
+    promise.setValue();
     return std::move(future);
   }
   threadFinishPromises_.push_back(std::move(promise));
@@ -1181,9 +1292,9 @@ ContinueFuture Task::stateChangeFuture(uint64_t maxWaitMicros) {
   // If 'this' is running, the future is realized on timeout or when
   // this no longer is running.
   if (not isRunningLocked()) {
-    return ContinueFuture(true);
+    return ContinueFuture();
   }
-  auto [promise, future] = makeVeloxPromiseContract<bool>(
+  auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::stateChangeFuture {}", taskId_));
   stateChangePromises_.emplace_back(std::move(promise));
   if (maxWaitMicros) {
@@ -1352,6 +1463,7 @@ void Task::setError(const std::string& message) {
 }
 
 std::string Task::errorMessage() const {
+  std::lock_guard<std::mutex> l(mutex_);
   if (!exception_) {
     return "";
   }
@@ -1484,7 +1596,7 @@ StopReason Task::shouldStop() {
 
 void Task::finishedLocked() {
   for (auto& promise : threadFinishPromises_) {
-    promise.setValue(true);
+    promise.setValue();
   }
   threadFinishPromises_.clear();
 }
@@ -1523,7 +1635,7 @@ void Task::TaskCompletionNotifier::activate(
 void Task::TaskCompletionNotifier::notify() {
   if (active_) {
     for (auto& promise : promises_) {
-      promise.setValue(true);
+      promise.setValue();
     }
     promises_.clear();
 

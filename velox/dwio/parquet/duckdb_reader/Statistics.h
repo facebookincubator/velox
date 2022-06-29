@@ -18,7 +18,7 @@
 
 #include "velox/dwio/common/Statistics.h"
 
-namespace facebook::velox::parquet {
+namespace facebook::velox::parquet::duckdb_reader {
 
 class ColumnStatistics : public dwio::common::ColumnStatistics {
  public:
@@ -26,4 +26,4 @@ class ColumnStatistics : public dwio::common::ColumnStatistics {
   ~ColumnStatistics() override = default;
 };
 
-} // namespace facebook::velox::parquet
+} // namespace facebook::velox::parquet::duckdb_reader

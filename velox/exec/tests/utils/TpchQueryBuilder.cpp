@@ -78,6 +78,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
   switch (queryId) {
     case 1:
       return getQ1Plan();
+    case 3:
+      return getQ3Plan();
     case 6:
       return getQ6Plan();
     case 13:
@@ -113,11 +115,10 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
     filter = "l_shipdate <= '1998-09-02'::DATE";
   }
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId lineitemPlanNodeId;
 
-  const auto partialAggStage =
-      PlanBuilder(planNodeIdGenerator)
+  auto plan =
+      PlanBuilder()
           .tableScan(kLineitem, selectedRowType, fileColumnNames, {filter})
           .capturePlanNodeId(lineitemPlanNodeId)
           .project(
@@ -138,17 +139,119 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
                "avg(l_extendedprice)",
                "avg(l_discount)",
                "count(0)"})
+          .localPartition({})
+          .finalAggregation()
+          .orderBy({"l_returnflag", "l_linestatus"}, false)
           .planNode();
-
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition({}, {partialAggStage})
-                  .finalAggregation()
-                  .orderBy({"l_returnflag", "l_linestatus"}, false)
-                  .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ3Plan() const {
+  static const std::string kCustomer = "customer";
+  static const std::string kOrders = "orders";
+  static const std::string kLineitem = "lineitem";
+
+  std::vector<std::string> lineitemColumns = {
+      "l_shipdate", "l_orderkey", "l_extendedprice", "l_discount"};
+  std::vector<std::string> ordersColumns = {
+      "o_orderdate", "o_shippriority", "o_custkey", "o_orderkey"};
+  std::vector<std::string> customerColumns = {"c_custkey", "c_mktsegment"};
+
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
+
+  const auto orderDate = "o_orderdate";
+  const auto shipDate = "l_shipdate";
+  std::string orderDateFilter;
+  std::string shipDateFilter;
+  std::string customerFilter;
+
+  // DWRF does not support Date type. Use Varchar instead.
+  if (ordersSelectedRowType->findChild(orderDate)->isVarchar()) {
+    orderDateFilter = "o_orderdate < '1995-03-15'";
+  } else {
+    orderDateFilter = "o_orderdate < '1995-03-15'::DATE";
+  }
+
+  if (lineitemSelectedRowType->findChild(shipDate)->isVarchar()) {
+    shipDateFilter = "l_shipdate > '1995-03-15'";
+  } else {
+    shipDateFilter = "l_shipdate > '1995-03-15'::DATE";
+  }
+
+  customerFilter = "c_mktsegment = 'BUILDING'";
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId lineitemPlanNodeId;
+  core::PlanNodeId ordersPlanNodeId;
+  core::PlanNodeId customerPlanNodeId;
+
+  auto customers = PlanBuilder(planNodeIdGenerator)
+                       .tableScan(
+                           kCustomer,
+                           customerSelectedRowType,
+                           customerFileColumns,
+                           {customerFilter})
+                       .capturePlanNodeId(customerPlanNodeId)
+                       .planNode();
+
+  auto custkeyJoinNode =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kOrders,
+              ordersSelectedRowType,
+              ordersFileColumns,
+              {orderDateFilter})
+          .capturePlanNodeId(ordersPlanNodeId)
+          .hashJoin(
+              {"o_custkey"},
+              {"c_custkey"},
+              customers,
+              "",
+              {"o_orderdate", "o_shippriority", "o_orderkey"})
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem,
+              lineitemSelectedRowType,
+              lineitemFileColumns,
+              {shipDateFilter})
+          .capturePlanNodeId(lineitemPlanNodeId)
+          .project(
+              {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
+               "l_orderkey"})
+          .hashJoin(
+              {"l_orderkey"},
+              {"o_orderkey"},
+              custkeyJoinNode,
+              "",
+              {"l_orderkey", "o_orderdate", "o_shippriority", "part_revenue"})
+          .partialAggregation(
+              {"l_orderkey", "o_orderdate", "o_shippriority"},
+              {"sum(part_revenue) as revenue"})
+          .localPartition({})
+          .finalAggregation()
+          .project({"l_orderkey", "revenue", "o_orderdate", "o_shippriority"})
+          .orderBy({"revenue DESC", "o_orderdate"}, false)
+          .limit(0, 10, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersPlanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[customerPlanNodeId] = getTableFilePaths(kCustomer);
   context.dataFileFormat = format_;
   return context;
 }
@@ -171,23 +274,19 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
         "l_shipdate between '1994-01-01'::DATE and '1994-12-31'::DATE";
   }
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId lineitemPlanNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .tableScan(
-                               kLineitem,
-                               selectedRowType,
-                               fileColumnNames,
-                               {shipDateFilter,
-                                "l_discount between 0.05 and 0.07",
-                                "l_quantity < 24.0"})
-                           .capturePlanNodeId(lineitemPlanNodeId)
-                           .project({"l_extendedprice * l_discount"})
-                           .partialAggregation({}, {"sum(p0)"})
-                           .planNode()})
+  auto plan = PlanBuilder()
+                  .tableScan(
+                      kLineitem,
+                      selectedRowType,
+                      fileColumnNames,
+                      {shipDateFilter,
+                       "l_discount between 0.05 and 0.07",
+                       "l_quantity < 24.0"})
+                  .capturePlanNodeId(lineitemPlanNodeId)
+                  .project({"l_extendedprice * l_discount"})
+                  .partialAggregation({}, {"sum(p0)"})
+                  .localPartition({})
                   .finalAggregation()
                   .planNode();
   TpchPlan context;
@@ -220,32 +319,29 @@ TpchPlan TpchQueryBuilder::getQ13Plan() const {
           .capturePlanNodeId(customerScanNodeId)
           .planNode();
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .tableScan(
-                               kOrders,
-                               ordersSelectedRowType,
-                               ordersFileColumns,
-                               {},
-                               "o_comment not like '%special%requests%'")
-                           .capturePlanNodeId(ordersScanNodeId)
-                           .hashJoin(
-                               {"o_custkey"},
-                               {"c_custkey"},
-                               customers,
-                               "",
-                               {"c_custkey", "o_orderkey"},
-                               core::JoinType::kRight)
-                           .partialAggregation(
-                               {"c_custkey"}, {"count(o_orderkey) as pc_count"})
-                           .planNode()})
-                  .finalAggregation(
-                      {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
-                  .singleAggregation({"c_count"}, {"count(0) as custdist"})
-                  .orderBy({"custdist DESC", "c_count DESC"}, false)
-                  .planNode();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kOrders,
+              ordersSelectedRowType,
+              ordersFileColumns,
+              {},
+              "o_comment not like '%special%requests%'")
+          .capturePlanNodeId(ordersScanNodeId)
+          .hashJoin(
+              {"o_custkey"},
+              {"c_custkey"},
+              customers,
+              "",
+              {"c_custkey", "o_orderkey"},
+              core::JoinType::kRight)
+          .partialAggregation({"c_custkey"}, {"count(o_orderkey) as pc_count"})
+          .localPartition({})
+          .finalAggregation(
+              {"c_custkey"}, {"count(pc_count) as c_count"}, {BIGINT()})
+          .singleAggregation({"c_count"}, {"count(0) as custdist"})
+          .orderBy({"custdist DESC", "c_count DESC"}, false)
+          .planNode();
 
   TpchPlan context;
   context.plan = std::move(plan);
@@ -280,15 +376,11 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 
   auto bigOrders =
       PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {"l_orderkey"},
-              {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(
-                       kLineitem, lineitemSelectedRowType, lineitemFileColumns)
-                   .capturePlanNodeId(lineitemScanNodeId)
-                   .partialAggregation(
-                       {"l_orderkey"}, {"sum(l_quantity) AS partial_sum"})
-                   .planNode()})
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .capturePlanNodeId(lineitemScanNodeId)
+          .partialAggregation(
+              {"l_orderkey"}, {"sum(l_quantity) AS partial_sum"})
+          .localPartition({"l_orderkey"})
           .finalAggregation(
               {"l_orderkey"}, {"sum(partial_sum) AS quantity"}, {DOUBLE()})
           .filter("quantity > 300.0")
@@ -296,40 +388,35 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {},
-              {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
-                   .capturePlanNodeId(ordersScanNodeId)
-                   .hashJoin(
-                       {"o_orderkey"},
-                       {"l_orderkey"},
-                       bigOrders,
-                       "",
-                       {"o_orderkey",
-                        "o_custkey",
-                        "o_orderdate",
-                        "o_totalprice",
-                        "l_orderkey",
-                        "quantity"})
-                   .hashJoin(
-                       {"o_custkey"},
-                       {"c_custkey"},
-                       PlanBuilder(planNodeIdGenerator)
-                           .tableScan(
-                               kCustomer,
-                               customerSelectedRowType,
-                               customerFileColumns)
-                           .capturePlanNodeId(customerScanNodeId)
-                           .planNode(),
-                       "",
-                       {"c_name",
-                        "c_custkey",
-                        "o_orderkey",
-                        "o_orderdate",
-                        "o_totalprice",
-                        "quantity"})
-                   .planNode()})
+          .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
+          .capturePlanNodeId(ordersScanNodeId)
+          .hashJoin(
+              {"o_orderkey"},
+              {"l_orderkey"},
+              bigOrders,
+              "",
+              {"o_orderkey",
+               "o_custkey",
+               "o_orderdate",
+               "o_totalprice",
+               "l_orderkey",
+               "quantity"})
+          .hashJoin(
+              {"o_custkey"},
+              {"c_custkey"},
+              PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      kCustomer, customerSelectedRowType, customerFileColumns)
+                  .capturePlanNodeId(customerScanNodeId)
+                  .planNode(),
+              "",
+              {"c_name",
+               "c_custkey",
+               "o_orderkey",
+               "o_orderdate",
+               "o_totalprice",
+               "quantity"})
+          .localPartition({})
           .orderBy({"o_totalprice DESC", "o_orderdate"}, false)
           .limit(0, 100, false)
           .planNode();

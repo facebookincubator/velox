@@ -38,11 +38,12 @@ class SpecialForm : public Expr {
       std::vector<ExprPtr>&& inputs,
       const std::string& name,
       bool trackCpuUsage)
-      : Expr(std::move(type), std::move(inputs), name, trackCpuUsage) {}
-
-  bool isSpecialForm() const override {
-    return true;
-  }
+      : Expr(
+            std::move(type),
+            std::move(inputs),
+            name,
+            true /* specialForm */,
+            trackCpuUsage) {}
 };
 
 enum class BooleanMix { kAllTrue, kAllFalse, kAllNull, kMixNonNull, kMix };
@@ -301,7 +302,7 @@ class LambdaExpr : public SpecialForm {
   ExprPtr body_;
   // Filled on first use.
   std::shared_ptr<const RowType> typeWithCapture_;
-  std::vector<ChannelIndex> captureChannels_;
+  std::vector<column_index_t> captureChannels_;
 };
 
 class TryExpr : public SpecialForm {

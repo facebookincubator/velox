@@ -16,22 +16,21 @@
 
 #pragma once
 
-#include "velox/external/duckdb/duckdb.hpp"
+#include "velox/dwio/common/Adaptor.h"
 
-namespace facebook::velox::duckdb {
+DIAGNOSTIC_PUSH
+DIAGNOSTIC_IGNORE("-Wconversion")
+DIAGNOSTIC_IGNORE("-Wdeprecated")
+DIAGNOSTIC_IGNORE("-Wsign-conversion")
+DIAGNOSTIC_IGNORE("-Wunused-parameter")
 
-class InputStreamFileSystem;
+#ifdef __clang__
+DIAGNOSTIC_IGNORE("-Wnested-anon-types")
+DIAGNOSTIC_IGNORE("-Wreserved-id-macro")
+DIAGNOSTIC_IGNORE("-Wshorten-64-to-32")
+DIAGNOSTIC_IGNORE("-Wweak-vtables")
+#endif
 
-// Implements the DuckDB FileHandle API
-class InputStreamFileHandle : public ::duckdb::FileHandle {
- public:
-  InputStreamFileHandle(::duckdb::FileSystem& fileSystem)
-      : FileHandle(fileSystem, "") {}
+#include "velox/dwio/dwrf/proto/orc_proto.pb.h"
 
-  ~InputStreamFileHandle() override {}
-
- protected:
-  void Close() override {}
-};
-
-} // namespace facebook::velox::duckdb
+DIAGNOSTIC_POP

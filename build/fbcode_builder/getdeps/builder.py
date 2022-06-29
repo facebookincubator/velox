@@ -817,7 +817,8 @@ if __name__ == "__main__":
             retry = 0
 
         testpilot = path_search(env, "testpilot")
-        tpx = path_search(env, "tpx")
+        # TODO(xavierd): once tpx is really available on Windows, remove this.
+        tpx = path_search(env, "tpx") if sys.platform != "win32" else None
         if (tpx or testpilot) and not no_testpilot:
             buck_test_info = list_tests()
             import os
@@ -877,7 +878,9 @@ if __name__ == "__main__":
                 if test_filter:
                     testpilot_args += ["--", test_filter]
 
-                if schedule_type == "continuous":
+                if schedule_type == "diff":
+                    runs.append(["--collection", "oss-diff", "--purpose", "diff"])
+                elif schedule_type == "continuous":
                     runs.append(
                         [
                             "--tag-new-tests",
@@ -913,7 +916,7 @@ if __name__ == "__main__":
                         ]
                     )
                 else:
-                    runs.append(["--collection", "oss-diff", "--purpose", "diff"])
+                    runs.append([])
 
                 for run in runs:
                     self._run_cmd(

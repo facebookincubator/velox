@@ -13,6 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
+
+#include "velox/common/base/Exceptions.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::common {
@@ -43,6 +50,12 @@ std::string Filter::toString() const {
       break;
     case FilterKind::kBigintValuesUsingBitmask:
       strKind = "BigintValuesUsingBitmask";
+      break;
+    case FilterKind::kNegatedBigintValuesUsingHashTable:
+      strKind = "NegatedBigintValuesUsingHashTable";
+      break;
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+      strKind = "NegatedBigintValuesUsingBitmask";
       break;
     case FilterKind::kDoubleRange:
       strKind = "DoubleRange";
@@ -276,6 +289,82 @@ bool BigintValuesUsingHashTable::testInt64Range(
   return max >= *it;
 }
 
+NegatedBigintValuesUsingBitmask::NegatedBigintValuesUsingBitmask(
+    int64_t min,
+    int64_t max,
+    const std::vector<int64_t>& values,
+    bool nullAllowed)
+    : Filter(true, nullAllowed, FilterKind::kNegatedBigintValuesUsingBitmask),
+      min_(min),
+      max_(max) {
+  VELOX_CHECK(min <= max, "min must be no greater than max");
+
+  nonNegated_ = std::make_unique<BigintValuesUsingBitmask>(
+      min, max, values, !nullAllowed);
+}
+
+bool NegatedBigintValuesUsingBitmask::testInt64Range(
+    int64_t min,
+    int64_t max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  if (min == max) {
+    return testInt64(min);
+  }
+
+  return true;
+}
+
+NegatedBigintValuesUsingHashTable::NegatedBigintValuesUsingHashTable(
+    int64_t min,
+    int64_t max,
+    const std::vector<int64_t>& values,
+    bool nullAllowed)
+    : Filter(
+          true,
+          nullAllowed,
+          FilterKind::kNegatedBigintValuesUsingHashTable) {
+  nonNegated_ = std::make_unique<BigintValuesUsingHashTable>(
+      min, max, values, !nullAllowed);
+}
+
+bool NegatedBigintValuesUsingHashTable::testInt64Range(
+    int64_t min,
+    int64_t max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  if (min == max) {
+    return testInt64(min);
+  }
+
+  if (max > nonNegated_->max() || min < nonNegated_->min()) {
+    return true;
+  }
+
+  auto lo = std::lower_bound(
+      nonNegated_->values().begin(), nonNegated_->values().end(), min);
+  auto hi = std::lower_bound(
+      nonNegated_->values().begin(), nonNegated_->values().end(), max);
+  assert(
+      lo !=
+      nonNegated_->values().end()); // min is already tested to be <= max_.
+  if (min != *lo || max != *hi) {
+    // at least one of the endpoints of the range succeeds
+    return true;
+  }
+  // Check if all values in this range are in values_ by counting the number
+  // of things between min and max
+  // if distance is any less, then we are missing an element => something
+  // in the range is accepted
+  return (std::distance(lo, hi) != max - min);
+}
+
 namespace {
 std::unique_ptr<Filter> nullOrFalse(bool nullAllowed) {
   if (nullAllowed) {
@@ -283,16 +372,26 @@ std::unique_ptr<Filter> nullOrFalse(bool nullAllowed) {
   }
   return std::make_unique<AlwaysFalse>();
 }
-} // namespace
 
-std::unique_ptr<Filter> createBigintValues(
-    const std::vector<int64_t>& values,
-    bool nullAllowed) {
-  if (values.empty()) {
-    return nullOrFalse(nullAllowed);
+std::unique_ptr<Filter> notNullOrTrue(bool nullAllowed) {
+  if (nullAllowed) {
+    return std::make_unique<AlwaysTrue>();
   }
+  return std::make_unique<IsNotNull>();
+}
 
-  if (values.size() == 1) {
+std::unique_ptr<Filter> createBigintValuesFilter(
+    const std::vector<int64_t>& values,
+    bool nullAllowed,
+    bool negated) {
+  if (values.empty()) {
+    if (!negated) {
+      return nullOrFalse(nullAllowed);
+    }
+    return notNullOrTrue(nullAllowed);
+  }
+  // single-value filter aka ==, the != filter is handled below
+  if (values.size() == 1 && !negated) {
     return std::make_unique<BigintRange>(
         values.front(), values.front(), nullAllowed);
   }
@@ -311,17 +410,61 @@ std::unique_ptr<Filter> createBigintValues(
   int64_t range;
   bool overflow = __builtin_sub_overflow(max, min, &range);
   if (LIKELY(!overflow)) {
+    // all accepted/rejected values form one contiguous block
     if (range + 1 == values.size()) {
-      return std::make_unique<BigintRange>(min, max, nullAllowed);
+      if (!negated) {
+        return std::make_unique<BigintRange>(min, max, nullAllowed);
+      }
+      std::vector<std::unique_ptr<BigintRange>> ranges;
+      ranges.reserve(2);
+      // add inclusive ranges for above and below the desired range of values
+      if (min != std::numeric_limits<int64_t>::min()) {
+        ranges.emplace_back(std::make_unique<BigintRange>(
+            std::numeric_limits<int64_t>::min(), min - 1, false));
+      }
+      if (max != std::numeric_limits<int64_t>::max()) {
+        ranges.emplace_back(std::make_unique<BigintRange>(
+            max + 1, std::numeric_limits<int64_t>::max(), false));
+      }
+      // all values are rejected
+      if (ranges.size() == 0) {
+        return nullOrFalse(nullAllowed);
+      }
+      // range above or range below does not exist
+      if (ranges.size() == 1) {
+        return std::move(ranges[0]);
+      }
+      return std::make_unique<BigintMultiRange>(std::move(ranges), nullAllowed);
     }
 
     if (range < 32 * 64 || range < values.size() * 4 * 64) {
+      if (negated) {
+        return std::make_unique<NegatedBigintValuesUsingBitmask>(
+            min, max, values, nullAllowed);
+      }
       return std::make_unique<BigintValuesUsingBitmask>(
           min, max, values, nullAllowed);
     }
   }
+  if (negated) {
+    return std::make_unique<NegatedBigintValuesUsingHashTable>(
+        min, max, values, nullAllowed);
+  }
   return std::make_unique<BigintValuesUsingHashTable>(
       min, max, values, nullAllowed);
+}
+} // namespace
+
+std::unique_ptr<Filter> createBigintValues(
+    const std::vector<int64_t>& values,
+    bool nullAllowed) {
+  return createBigintValuesFilter(values, nullAllowed, false);
+}
+
+std::unique_ptr<Filter> createNegatedBigintValues(
+    const std::vector<int64_t>& values,
+    bool nullAllowed) {
+  return createBigintValuesFilter(values, nullAllowed, true);
 }
 
 BigintMultiRange::BigintMultiRange(
@@ -739,6 +882,79 @@ std::unique_ptr<BigintRange> toBigintRange(std::unique_ptr<Filter> filter) {
   return std::unique_ptr<BigintRange>(
       dynamic_cast<BigintRange*>(filter.release()));
 }
+
+// takes a sorted vector of ranges and a sorted vector of rejected values, and
+// returns a range filter of values accepted by both filters
+std::unique_ptr<Filter> combineRangesAndNegatedValues(
+    const std::vector<std::unique_ptr<BigintRange>>& ranges,
+    std::vector<int64_t>& rejects,
+    bool nullAllowed) {
+  std::vector<std::unique_ptr<BigintRange>> outRanges;
+
+  for (int i = 0; i < ranges.size(); ++i) {
+    auto it =
+        std::lower_bound(rejects.begin(), rejects.end(), ranges[i]->lower());
+    int64_t start = ranges[i]->lower();
+    int64_t end;
+
+    while (it != rejects.end()) {
+      end = *it - 1;
+      if (start >= ranges[i]->lower() && end < ranges[i]->upper()) {
+        if (start <= end) {
+          outRanges.emplace_back(
+              std::make_unique<common::BigintRange>(start, end, false));
+        }
+        start = *it + 1;
+        ++it;
+      } else {
+        break;
+      }
+    }
+    end = ranges[i]->upper();
+    if (start <= end && start >= ranges[i]->lower() &&
+        end <= ranges[i]->upper()) {
+      outRanges.emplace_back(
+          std::make_unique<common::BigintRange>(start, end, false));
+    }
+  }
+
+  return combineBigintRanges(std::move(outRanges), nullAllowed);
+}
+
+std::unique_ptr<Filter> combineNegatedBigintLists(
+    const std::vector<int64_t>& first,
+    const std::vector<int64_t>& second,
+    bool nullAllowed) {
+  std::vector<int64_t> allRejected;
+  allRejected.reserve(first.size() + second.size());
+
+  auto it1 = first.begin();
+  auto it2 = second.begin();
+
+  // merge first and second lists
+  while (it1 != first.end() && it2 != second.end()) {
+    int64_t lo = std::min(*it1, *it2);
+    allRejected.emplace_back(lo);
+    // remove duplicates
+    if (lo == *it1) {
+      ++it1;
+    }
+    if (lo == *it2) {
+      ++it2;
+    }
+  }
+  // fill in remaining values from each list
+  while (it1 != first.end()) {
+    allRejected.emplace_back(*it1);
+    ++it1;
+  }
+  while (it2 != second.end()) {
+    allRejected.emplace_back(*it2);
+    ++it2;
+  }
+  return createNegatedBigintValues(allRejected, nullAllowed);
+}
+
 } // namespace
 
 std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
@@ -780,6 +996,27 @@ std::unique_ptr<Filter> BigintRange::mergeWith(const Filter* other) const {
 
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       return combineBigintRanges(std::move(newRanges), bothNullAllowed);
+    }
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+    case FilterKind::kNegatedBigintValuesUsingHashTable: {
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      if (!other->testInt64Range(lower_, upper_, false)) {
+        return nullOrFalse(bothNullAllowed);
+      }
+      std::vector<int64_t> vals;
+      if (other->kind() == FilterKind::kNegatedBigintValuesUsingBitmask) {
+        auto otherNegated =
+            dynamic_cast<const NegatedBigintValuesUsingBitmask*>(other);
+        vals = otherNegated->values();
+      } else {
+        auto otherNegated =
+            dynamic_cast<const NegatedBigintValuesUsingHashTable*>(other);
+        vals = otherNegated->values();
+      }
+      std::vector<std::unique_ptr<common::BigintRange>> rangeList;
+      rangeList.emplace_back(
+          std::make_unique<common::BigintRange>(lower_, upper_, false));
+      return combineRangesAndNegatedValues(rangeList, vals, bothNullAllowed);
     }
     default:
       VELOX_UNREACHABLE();
@@ -833,6 +1070,10 @@ std::unique_ptr<Filter> BigintValuesUsingHashTable::mergeWith(
 
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       return createBigintValues(valuesToKeep, bothNullAllowed);
+    }
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+    case FilterKind::kNegatedBigintValuesUsingHashTable: {
+      return mergeWith(min_, max_, other);
     }
     default:
       VELOX_UNREACHABLE();
@@ -922,6 +1163,10 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       return createBigintValues(valuesToKeep, bothNullAllowed);
     }
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+    case FilterKind::kNegatedBigintValuesUsingHashTable: {
+      return mergeWith(min_, max_, other);
+    }
     default:
       VELOX_UNREACHABLE();
   }
@@ -940,6 +1185,88 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
     }
   }
   return createBigintValues(valuesToKeep, bothNullAllowed);
+}
+
+std::unique_ptr<Filter> NegatedBigintValuesUsingHashTable::mergeWith(
+    const Filter* other) const {
+  // Rules of NegatedBigintValuesUsingHashTable with IsNull/IsNotNull
+  // 1. Negated...(nullAllowed=true) AND IS NULL => IS NULL
+  // 2. Negated...(nullAllowed=true) AND IS NOT NULL =>
+  // Negated...(nullAllowed=false)
+  // 3. Negated...(nullAllowed=false) AND IS NULL
+  // => ALWAYS FALSE
+  // 4. Negated...(nullAllowed=false) AND IS NOT NULL
+  // =>Negated...(nullAllowed=false)
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return std::make_unique<NegatedBigintValuesUsingHashTable>(*this, false);
+    case FilterKind::kBigintValuesUsingHashTable:
+    case FilterKind::kBigintValuesUsingBitmask:
+    case FilterKind::kBigintRange:
+    case FilterKind::kBigintMultiRange: {
+      return other->mergeWith(this);
+    }
+    case FilterKind::kNegatedBigintValuesUsingHashTable: {
+      auto otherNegated =
+          dynamic_cast<const NegatedBigintValuesUsingHashTable*>(other);
+      VELOX_CHECK_NOT_NULL(otherNegated);
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      return combineNegatedBigintLists(
+          values(), otherNegated->values(), bothNullAllowed);
+    }
+    case FilterKind::kNegatedBigintValuesUsingBitmask: {
+      return other->mergeWith(this);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+std::unique_ptr<Filter> NegatedBigintValuesUsingBitmask::mergeWith(
+    const Filter* other) const {
+  // Rules of NegatedBigintValuesUsingBitmask with IsNull/IsNotNull
+  // 1. Negated...(nullAllowed=true) AND IS NULL => IS NULL
+  // 2. Negated...(nullAllowed=true) AND IS NOT NULL =>
+  // Negated...(nullAllowed=false)
+  // 3. Negated...(nullAllowed=false) AND IS NULL
+  // => ALWAYS FALSE
+  // 4. Negated...(nullAllowed=false) AND IS NOT NULL
+  // =>Negated...(nullAllowed=false)
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return std::make_unique<NegatedBigintValuesUsingBitmask>(*this, false);
+    case FilterKind::kBigintValuesUsingHashTable:
+    case FilterKind::kBigintValuesUsingBitmask:
+    case FilterKind::kBigintRange:
+    case FilterKind::kBigintMultiRange: {
+      return other->mergeWith(this);
+    }
+    case FilterKind::kNegatedBigintValuesUsingHashTable: {
+      auto otherHashTable =
+          dynamic_cast<const NegatedBigintValuesUsingHashTable*>(other);
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      // kEmptyMarker is already in values for a bitmask
+      return combineNegatedBigintLists(
+          values(), otherHashTable->values(), bothNullAllowed);
+    }
+    case FilterKind::kNegatedBigintValuesUsingBitmask: {
+      auto otherBitmask =
+          dynamic_cast<const NegatedBigintValuesUsingBitmask*>(other);
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      return combineNegatedBigintLists(
+          values(), otherBitmask->values(), bothNullAllowed);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
 }
 
 std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
@@ -991,6 +1318,23 @@ std::unique_ptr<Filter> BigintMultiRange::mergeWith(const Filter* other) const {
 
       return std::make_unique<BigintMultiRange>(
           std::move(newRanges), bothNullAllowed);
+    }
+    case FilterKind::kNegatedBigintValuesUsingHashTable:
+    case FilterKind::kNegatedBigintValuesUsingBitmask: {
+      std::vector<std::unique_ptr<BigintRange>> newRanges;
+      std::vector<int64_t> rejects;
+      if (other->kind() == FilterKind::kNegatedBigintValuesUsingBitmask) {
+        auto otherNegated =
+            dynamic_cast<const NegatedBigintValuesUsingBitmask*>(other);
+        rejects = otherNegated->values();
+      } else {
+        auto otherNegated =
+            dynamic_cast<const NegatedBigintValuesUsingHashTable*>(other);
+        rejects = otherNegated->values();
+      }
+
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      return combineRangesAndNegatedValues(ranges_, rejects, bothNullAllowed);
     }
     default:
       VELOX_UNREACHABLE();
