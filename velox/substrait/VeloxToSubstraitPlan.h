@@ -48,6 +48,12 @@ class VeloxToSubstraitPlanConvertor {
       const core::PlanNodePtr& planNode,
       ::substrait::Rel* rel);
 
+  /// Convert Velox PlanNode into Substrait RootRel.
+  void toSubstrait(
+      google::protobuf::Arena& arena,
+      const core::PlanNodePtr& planNode,
+      ::substrait::RelRoot* rootRel);
+
   /// Convert Velox FilterNode into Substrait FilterRel.
   void toSubstrait(
       google::protobuf::Arena& arena,
