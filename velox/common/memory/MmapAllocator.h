@@ -227,8 +227,9 @@ class MmapAllocator : public MappedMemory {
     // class. Erases the corresponding runs from 'allocation'.
     MachinePageCount free(Allocation& allocation);
 
-    // Checks that allocation and map counts match the corresponding bitmaps.
-    ClassPageCount checkConsistency(ClassPageCount& numMapped) const;
+    // Checks that allocation and map counts match the corresponding
+    // bitmaps. Increments 'numErrors' if inconsistent.
+    ClassPageCount checkConsistency(ClassPageCount& numMapped, int32_t& numErrors) const;
 
     // Advises away backing for 'numPages' worth of unallocated mapped class
     // pages. This needs to make an Allocation, for which it needs the
@@ -251,6 +252,8 @@ class MmapAllocator : public MappedMemory {
     std::string toString() const;
 
    private:
+    static constexpr int32_t kSimdTail = 8;
+
     // Same as allocate, except that this must be called inside
     // 'mutex_'. If 'numUnmapped' is nullptr, the allocated pages must
     // all be backed by memory. Otherwise numUnmapped is updated to be

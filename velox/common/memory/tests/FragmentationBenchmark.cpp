@@ -29,6 +29,8 @@
 DEFINE_int64(volume_gb, 2048, "Total GB to allocate during test");
 DEFINE_int64(size_cap_gb, 24, "Size cap: total GB resident at one time");
 DEFINE_bool(use_mmap, true, "Use mmap and madvise to manage fragmentation");
+DEFINE_int32(check_interval, 0, "Number of allocations between checks of "
+	     "MmapAllocator consistency check");
 
 using namespace facebook::velox;
 using namespace facebook::velox::memory;
@@ -97,7 +99,7 @@ class FragmentationTest {
           auto run = block->allocation->runAt(i);
           for (int64_t offset = 0; offset < run.numPages() * 4096;
                offset += 4096) {
-            run.data<char>()[offset] = 1;
+            //run.data<char>()[offset] = 1;
           }
         }
       } else {
@@ -107,7 +109,7 @@ class FragmentationTest {
         }
         for (auto offset = 0; offset < block->contiguous.numPages() * 4096;
              offset += 4096) {
-          block->contiguous.data()[offset] = 1;
+          //block->contiguous.data()[offset] = 1;
         }
       }
     } else {
@@ -121,11 +123,16 @@ class FragmentationTest {
   }
 
   void makeSpace(size_t size) {
+    int32_t freeCounter = 0;
     while (outstanding_ + size > sizeCap_) {
       size_t numBlocks = blocks_.size();
       size_t candidate = folly::Random::rand32(rng_) % (1 + numBlocks / 10);
       outstanding_ -= blocks_[candidate]->size;
+      if (counter_ >= 2903190) {
+	VELOX_CHECK(memory_->checkConsistency(), "Error after {} frees", freeCounter);
+      }
       blocks_.erase(blocks_.begin() + candidate);
+      ++freeCounter;
     }
   }
 
@@ -155,10 +162,19 @@ class FragmentationTest {
     uint64_t allocated = 0;
     while (allocated < total) {
       auto size = sizes_[folly::Random::rand32(rng_) % sizes_.size()];
+      if (counter_ == 2903196) {
+	LOG(INFO) << "Break here";
+      }
       makeSpace(size);
       allocate(size);
       stats_[sizeBucket(size)] += size >> 10;
       allocated += size;
+      if (counter_ == 2903000) {
+	FLAGS_check_interval = 1;
+      }
+      if (FLAGS_check_interval && ++counter_ % FLAGS_check_interval == 0) {
+	VELOX_CHECK(memory_->checkConsistency());
+      }
     }
   }
 
@@ -189,6 +205,7 @@ class FragmentationTest {
   size_t sizeCap_;
   std::map<size_t, size_t> stats_;
   folly::Random::DefaultGenerator rng_;
+  int64_t counter_{0};
 };
 
 int main(int argc, char* argv[]) {
