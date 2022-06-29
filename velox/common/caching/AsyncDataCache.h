@@ -480,20 +480,6 @@ struct CacheStats {
   // lifetime for entries in cache.
   int64_t sumEvictScore{};
 };
-
-class ClockTimer {
- public:
-  explicit ClockTimer(std::atomic<uint64_t>& total)
-      : total_(&total), start_(folly::hardware_timestamp()) {}
-  ~ClockTimer() {
-    *total_ += folly::hardware_timestamp() - start_;
-  }
-
- private:
-  std::atomic<uint64_t>* FOLLY_NONNULL total_;
-  uint64_t start_;
-};
-
 // Collection of cache entries whose key hashes to the same shard of
 // the hash number space.  The cache population is divided into shards
 // to decrease contention on the mutex for the key to entry mapping
@@ -726,6 +712,10 @@ class AsyncDataCache : public memory::MappedMemory {
     return numSkippedSaves_;
   }
 
+  memory::Stats stats() const override {
+    return mappedMemory_->stats();
+  }
+  
  private:
   static constexpr int32_t kNumShards = 4; // Must be power of 2.
   static constexpr int32_t kShardMask = kNumShards - 1;
