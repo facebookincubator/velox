@@ -412,9 +412,7 @@ class BaseVector {
       const BaseVector* source,
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
-      vector_size_t count) {
-    VELOX_NYI();
-  }
+      vector_size_t count) = 0;
 
   // Returns a vector of the type of 'source' where 'indices' contains
   // an index into 'source' for each element of 'source'. The

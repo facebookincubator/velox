@@ -296,6 +296,14 @@ class ConstantVector final : public SimpleVector<T> {
     VELOX_FAIL("addNulls not supported");
   }
 
+  void copy(
+      const BaseVector* source,
+      vector_size_t targetIndex,
+      vector_size_t sourceIndex,
+      vector_size_t count) override {
+    VELOX_NYI();
+  }
+
   void move(vector_size_t /*source*/, vector_size_t target) override {
     VELOX_CHECK_LT(target, BaseVector::length_);
     // nothing to do

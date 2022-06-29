@@ -159,6 +159,14 @@ class BiasVector : public SimpleVector<T> {
     return true;
   }
 
+  void copy(
+      const BaseVector* source,
+      vector_size_t targetIndex,
+      vector_size_t sourceIndex,
+      vector_size_t count) override {
+    VELOX_NYI();
+  }
+
  private:
   template <typename U>
   inline xsimd::batch<T> loadSIMDInternal(size_t byteOffset) const {
