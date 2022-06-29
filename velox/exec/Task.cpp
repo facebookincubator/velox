@@ -672,6 +672,24 @@ bool Task::addSplitWithSequence(
   if (promise) {
     promise->setValue();
   }
+
+  // Store remote task id in the exchangeClient so the remote source will be
+  // closed when the exchangeClient is destroyed.
+  // TODO: after this, addRemoteTaskId() in Exchange::getSplits() can be removed
+  if (split.hasConnectorSplit()) {
+    if (auto remoteSplit = std::dynamic_pointer_cast<RemoteConnectorSplit>(
+            split.connectorSplit)) {
+      for (int pipeline = 0; pipeline < driverFactories_.size(); pipeline++) {
+        auto& factory = driverFactories_[pipeline];
+        for (const auto& planNode : factory->planNodes) {
+          if (planNode->id() == planNodeId && factory->needsExchangeClient()) {
+            exchangeClients_[pipeline]->addRemoteTaskId(remoteSplit->taskId);
+            return added;
+          }
+        }
+      }
+    }
+  }
   return added;
 }
 

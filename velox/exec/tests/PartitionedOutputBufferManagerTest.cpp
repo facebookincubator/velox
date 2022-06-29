@@ -385,3 +385,20 @@ TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
   }
   EXPECT_EQ(0, pool_->getCurrentBytes());
 }
+
+TEST_F(PartitionedOutputBufferManagerTest, enqueueBufferToBeDeleted) {
+  std::vector<std::string> names = {"c0", "c1"};
+  std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
+  auto rowType = ROW(std::move(names), std::move(types));
+  vector_size_t size = 100;
+
+  std::string taskId = "t0";
+  auto task = initializeTask(taskId, rowType, 5, 1);
+
+  enqueue(taskId, 0, rowType, size);
+  deleteResults(taskId, 0);
+  EXPECT_NO_THROW(enqueue(taskId, 0, rowType, size));
+
+  task->requestCancel();
+  bufferManager_->removeTask(taskId);
+}

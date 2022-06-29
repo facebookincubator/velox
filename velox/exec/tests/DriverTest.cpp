@@ -804,6 +804,23 @@ TEST_F(DriverTest, driverCreationThrow) {
       "Can only create 1 'throw driver'.");
 }
 
+// Unlike other ExchangeNode, MergeExchangeNode does not require exchangeClient.
+// Therefore, DriverFactory::needsExchangeClient should return false when
+// planNode is a MergeExchangeNode
+TEST_F(DriverTest, needsExchangeClientReturnFalseForMergeExchangeNode) {
+  std::vector<std::string> names = {"c0", "c1"};
+  std::vector<TypePtr> types = {BIGINT(), VARCHAR()};
+  auto outputType = ROW(std::move(names), std::move(types));
+  auto plan = PlanBuilder()
+                  .mergeExchange(outputType, {"c0"})
+                  .partitionedOutput({}, 1)
+                  .planNode();
+
+  DriverFactory params;
+  params.planNodes.emplace_back(std::move(plan));
+  EXPECT_FALSE(params.needsExchangeClient());
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);
