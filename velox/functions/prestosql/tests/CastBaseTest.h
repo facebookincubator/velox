@@ -49,7 +49,11 @@ class CastBaseTest : public FunctionBaseTest {
             std::vector<std::shared_ptr<const core::ITypedExpr>>{inputField},
             tryCast);
 
-    return evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
+    if constexpr (std::is_same_v<TTo, ComplexType>) {
+      return evaluate(castExpr, input);
+    } else {
+      return evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
+    }
   }
 
   template <typename TTo>
@@ -83,7 +87,12 @@ class CastBaseTest : public FunctionBaseTest {
             std::vector<std::shared_ptr<const core::ITypedExpr>>{callExpr},
             tryCast);
 
-    auto result = evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
+    VectorPtr result;
+    if constexpr (std::is_same_v<TTo, ComplexType>) {
+      result = evaluate(castExpr, input);
+    } else {
+      result = evaluate<SimpleVector<EvalType<TTo>>>(castExpr, input);
+    }
 
     auto indices =
         ::facebook::velox::test::makeIndicesInReverse(expected->size(), pool());
@@ -124,10 +133,23 @@ class CastBaseTest : public FunctionBaseTest {
       const TypePtr& toType,
       std::vector<std::optional<TFrom>> input,
       std::vector<std::optional<TTo>> expected) {
-    auto inputVector = makeNullableFlatVector<TFrom>(input);
+    auto inputVector = makeNullableFlatVector<TFrom>(input, fromType);
     auto expectedVector = makeNullableFlatVector<TTo>(expected, toType);
 
     testCast<TTo>(fromType, toType, inputVector, expectedVector);
+  }
+
+  template <typename TFrom, typename TTo>
+  void testThrow(
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      std::vector<std::optional<TFrom>> input) {
+    EXPECT_THROW(
+        evaluateCast<TTo>(
+            fromType,
+            toType,
+            makeRowVector({makeNullableFlatVector<TFrom>(input, fromType)})),
+        VeloxException);
   }
 };
 

@@ -41,7 +41,7 @@ static bool notEmpty(const char* /*flagName*/, const std::string& value) {
 }
 
 static bool validateDataFormat(const char* flagname, const std::string& value) {
-  if ((value.compare("parquet") == 0) || (value.compare("orc") == 0)) {
+  if ((value.compare("parquet") == 0) || (value.compare("dwrf") == 0)) {
     return true;
   }
   std::cout
@@ -122,6 +122,11 @@ std::shared_ptr<TpchQueryBuilder> queryBuilder;
 
 BENCHMARK(q1) {
   const auto planContext = queryBuilder->getQueryPlan(1);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q3) {
+  const auto planContext = queryBuilder->getQueryPlan(3);
   benchmark.run(planContext);
 }
 

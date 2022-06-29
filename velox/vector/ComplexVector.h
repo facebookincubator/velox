@@ -57,13 +57,15 @@ class RowVector : public BaseVector {
         children_(std::move(children)) {
     // Some columns may not be projected out
     VELOX_CHECK_LE(children_.size(), type->size());
-    const auto* rowType = dynamic_cast<const RowType*>(type.get());
+    [[maybe_unused]] const auto* rowType =
+        dynamic_cast<const RowType*>(type.get());
 
     // Check child vector types.
+    // This can be an expensive operation, so it's only done at debug time.
     for (auto i = 0; i < children_.size(); i++) {
       const auto& child = children_[i];
       if (child) {
-        VELOX_CHECK(
+        VELOX_DCHECK(
             child->type()->kindEquals(type->childAt(i)),
             "Got type {} for field `{}` at position {}, but expected {}.",
             child->type()->toString(),
@@ -105,14 +107,6 @@ class RowVector : public BaseVector {
   const VectorPtr& childAt(column_index_t index) const {
     VELOX_USER_CHECK_LT(index, childrenSize_);
     return children_[index];
-  }
-  const VectorPtr& loadedChildAt(column_index_t index) const {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
-    auto& child = children_[index];
-    if (child->encoding() == VectorEncoding::Simple::LAZY) {
-      child = child->as<LazyVector>()->loadedVectorShared();
-    }
-    return child;
   }
 
   std::vector<VectorPtr>& children() {

@@ -32,8 +32,7 @@ TableScan::TableScan(
           "TableScan"),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
-      driverCtx_(driverCtx),
-      blockingFuture_(false) {
+      driverCtx_(driverCtx) {
   connector_ = connector::getConnector(tableHandle_->connectorId());
 }
 
@@ -45,9 +44,9 @@ RowVectorPtr TableScan::getOutput() {
   for (;;) {
     if (needNewSplit_) {
       exec::Split split;
-      auto reason = driverCtx_->task->getSplitOrFuture(
+      blockingReason_ = driverCtx_->task->getSplitOrFuture(
           driverCtx_->splitGroupId, planNodeId(), split, blockingFuture_);
-      if (reason != BlockingReason::kNotBlocked) {
+      if (blockingReason_ != BlockingReason::kNotBlocked) {
         return nullptr;
       }
 
@@ -112,7 +111,12 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
-    auto data = dataSource_->next(readBatchSize_);
+    auto dataOptional = dataSource_->next(readBatchSize_, blockingFuture_);
+    if (!dataOptional.has_value()) {
+      blockingReason_ = BlockingReason::kWaitForConnector;
+      return nullptr;
+    }
+
     stats().addRuntimeStat(
         "dataSourceWallNanos",
         RuntimeCounter(
@@ -120,6 +124,7 @@ RowVectorPtr TableScan::getOutput() {
             RuntimeCounter::Unit::kNanos));
     stats_.rawInputPositions = dataSource_->getCompletedRows();
     stats_.rawInputBytes = dataSource_->getCompletedBytes();
+    auto data = dataOptional.value();
     if (data) {
       if (data->size() > 0) {
         stats_.inputPositions += data->size();

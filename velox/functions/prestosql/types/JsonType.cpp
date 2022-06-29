@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/types/JsonType.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 
 #include "folly/CPortability.h"
@@ -25,6 +26,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/StringWriter.h"
+#include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/type/Type.h"
 
@@ -423,6 +425,213 @@ void castToJsonFromRow(
   });
 }
 
+// Write object to writer at the current offset.
+template <TypeKind kind>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped(
+    const folly::dynamic& /*object*/,
+    exec::GenericWriter&
+    /*writer*/) {
+  VELOX_NYI(
+      "Casting from JSON to {} is not supported.", TypeTraits<kind>::name);
+}
+
+// Forward declarations.
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ARRAY>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer);
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer);
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::VARCHAR>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  if (object.isBool()) {
+    writer.castTo<Varchar>().append(object.asBool() ? "true" : "false");
+  } else {
+    writer.castTo<Varchar>().append(object.asString());
+  }
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::BOOLEAN>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<bool>() = object.asBool();
+}
+
+template <typename T>
+FOLLY_ALWAYS_INLINE T castJsonToInt(const folly::dynamic& object) {
+  if (object.isDouble()) {
+    constexpr double kIntMaxAsDouble =
+        static_cast<double>(std::numeric_limits<T>::max());
+    constexpr double kIntMinAsDouble =
+        static_cast<double>(std::numeric_limits<T>::min());
+
+    double value = object.asDouble();
+    if (value <= kIntMaxAsDouble && value >= kIntMinAsDouble) {
+      return static_cast<T>(value);
+    } else {
+      throw std::invalid_argument(fmt::format(
+          "value is outside the range of {}: [{}, {}].",
+          CppToType<T>::create()->toString(),
+          kIntMinAsDouble,
+          kIntMaxAsDouble));
+    }
+  } else {
+    return folly::to<T>(object.asInt());
+  }
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::TINYINT>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<int8_t>() = castJsonToInt<int8_t>(object);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::SMALLINT>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<int16_t>() = castJsonToInt<int16_t>(object);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::INTEGER>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<int32_t>() = castJsonToInt<int32_t>(object);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::BIGINT>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<int64_t>() = castJsonToInt<int64_t>(object);
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::REAL>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<float>() = folly::to<float>(object.asDouble());
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::DOUBLE>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  writer.castTo<double>() = folly::to<double>(object.asDouble());
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ARRAY>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  auto& writerTyped = writer.castTo<Array<Any>>();
+
+  for (auto it = object.begin(); it != object.end(); ++it) {
+    if (it->isNull()) {
+      writerTyped.add_null();
+    } else {
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          castFromJsonTyped,
+          writer.type()->childAt(0)->kind(),
+          *it,
+          writerTyped.add_item());
+    }
+  }
+}
+
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  auto& writerTyped = writer.castTo<Map<Any, Any>>();
+
+  for (const auto& pair : object.items()) {
+    VELOX_USER_CHECK(!pair.first.isNull(), "Map keys cannot be NULL.");
+
+    if (pair.second.isNull()) {
+      auto& keyWriter = writerTyped.add_null();
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          castFromJsonTyped,
+          writer.type()->childAt(0)->kind(),
+          pair.first,
+          keyWriter);
+    } else {
+      auto writerPair = writerTyped.add_item();
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          castFromJsonTyped,
+          writer.type()->childAt(0)->kind(),
+          pair.first,
+          std::get<0>(writerPair));
+      VELOX_DYNAMIC_TYPE_DISPATCH(
+          castFromJsonTyped,
+          writer.type()->childAt(1)->kind(),
+          pair.second,
+          std::get<1>(writerPair));
+    }
+  }
+}
+
+template <TypeKind kind>
+void castFromJson(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    BaseVector& result) {
+  // result is guaranteed to be a flat writable vector.
+  auto* flatResult = result.as<typename KindToFlatVector<kind>::type>();
+  exec::VectorWriter<Any> writer;
+  writer.init(*flatResult);
+
+  // input is guaranteed to be in flat or constant encodings when passed in.
+  auto* inputVector = input.as<SimpleVector<StringView>>();
+
+  folly::dynamic object;
+  context.applyToSelectedNoThrow(rows, [&](auto row) {
+    writer.setOffset(row);
+
+    if (inputVector->isNullAt(row)) {
+      writer.commitNull();
+    } else {
+      try {
+        object = folly::parseJson(inputVector->valueAt(row));
+      } catch (const std::exception& e) {
+        VELOX_USER_FAIL("Not a JSON input: {}", inputVector->valueAt(row));
+      }
+
+      if (object.isNull()) {
+        writer.commitNull();
+      } else {
+        try {
+          castFromJsonTyped<kind>(object, writer.current());
+        } catch (const VeloxException& ve) {
+          VELOX_USER_FAIL(
+              "Cannot cast from Json value {} to {}: {}",
+              inputVector->valueAt(row),
+              result.type()->toString(),
+              ve.message());
+        } catch (const std::exception& e) {
+          VELOX_USER_FAIL(
+              "Cannot cast from Json value {} to {}: {}",
+              inputVector->valueAt(row),
+              result.type()->toString(),
+              e.what());
+        }
+        writer.commit(true);
+      }
+    }
+  });
+  writer.finish();
+}
+
 bool isSupportedBasicType(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
@@ -441,7 +650,7 @@ bool isSupportedBasicType(const TypePtr& type) {
 
 } // namespace
 
-bool JsonCastOperator::isSupportedType(const TypePtr& other) const {
+bool JsonCastOperator::isSupportedFromType(const TypePtr& other) const {
   if (isSupportedBasicType(other)) {
     return true;
   }
@@ -452,10 +661,10 @@ bool JsonCastOperator::isSupportedType(const TypePtr& other) const {
     case TypeKind::TIMESTAMP:
       return true;
     case TypeKind::ARRAY:
-      return isSupportedType(other->childAt(0));
+      return isSupportedFromType(other->childAt(0));
     case TypeKind::ROW:
-      for (auto& child : other->as<TypeKind::ROW>().children()) {
-        if (!isSupportedType(child)) {
+      for (const auto& child : other->as<TypeKind::ROW>().children()) {
+        if (!isSupportedFromType(child)) {
           return false;
         }
       }
@@ -463,7 +672,24 @@ bool JsonCastOperator::isSupportedType(const TypePtr& other) const {
     case TypeKind::MAP:
       return (
           isSupportedBasicType(other->childAt(0)) &&
-          isSupportedType(other->childAt(1)));
+          isSupportedFromType(other->childAt(1)));
+    default:
+      return false;
+  }
+}
+
+bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
+  if (isSupportedBasicType(other)) {
+    return true;
+  }
+
+  switch (other->kind()) {
+    case TypeKind::ARRAY:
+      return isSupportedToType(other->childAt(0));
+    case TypeKind::MAP:
+      return (
+          isSupportedBasicType(other->childAt(0)) &&
+          isSupportedToType(other->childAt(1)));
     default:
       return false;
   }
@@ -492,6 +718,19 @@ void JsonCastOperator::castTo(
   // rejected by isSupportedType() in the caller.
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       castToJson, input.typeKind(), input, &context, rows, *flatResult);
+}
+
+/// Converts an input vector from Json type to the type of result vector.
+void JsonCastOperator::castFrom(
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const SelectivityVector& rows,
+    bool /*nullOnFailure*/,
+    BaseVector& result) const {
+  // Casting to unsupported types should have been rejected by isSupportedType()
+  // in the caller.
+  VELOX_DYNAMIC_TYPE_DISPATCH(
+      castFromJson, result.typeKind(), input, context, rows, result);
 }
 
 } // namespace facebook::velox
