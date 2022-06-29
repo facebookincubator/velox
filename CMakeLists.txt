@@ -119,6 +119,11 @@ if(VELOX_ENABLE_HDFS)
 endif()
 
 if(VELOX_ENABLE_PARQUET)
+  find_library(
+    LIBTHRIFT
+    NAMES libthrift.dylib libthrift.so
+    REQUIRED
+  )
   add_definitions(-DVELOX_ENABLE_PARQUET)
 endif()
 
