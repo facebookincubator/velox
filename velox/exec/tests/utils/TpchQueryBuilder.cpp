@@ -82,6 +82,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ3Plan();
     case 6:
       return getQ6Plan();
+    case 10:
+      return getQ10Plan();
     case 13:
       return getQ13Plan();
     case 18:
@@ -296,6 +298,177 @@ TpchPlan TpchQueryBuilder::getQ6Plan() const {
   return context;
 }
 
+TpchPlan TpchQueryBuilder::getQ10Plan() const {
+  static const std::string kCustomer = "customer";
+  static const std::string kNation = "nation";
+  static const std::string kLineitem = "lineitem";
+  static const std::string kOrders = "orders";
+
+  std::vector<std::string> customerColumns = {
+      "c_nationkey",
+      "c_custkey",
+      "c_acctbal",
+      "c_name",
+      "c_address",
+      "c_phone",
+      "c_comment"};
+  std::vector<std::string> nationColumns = {"n_nationkey", "n_name"};
+  std::vector<std::string> lineitemColumns = {
+      "l_orderkey", "l_returnflag", "l_extendedprice", "l_discount"};
+  std::vector<std::string> ordersColumns = {
+      "o_orderdate", "o_orderkey", "o_custkey"};
+
+  auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
+  const auto& customerFileColumns = getFileColumnNames(kCustomer);
+  auto nationSelectedRowType = getRowType(kNation, nationColumns);
+  const auto& nationFileColumns = getFileColumnNames(kNation);
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+
+  std::string lineitemReturnFlagFilter = "l_returnflag = 'R'";
+  const auto orderDate = "o_orderdate";
+  std::string orderDateFilter;
+  // DWRF does not support Date type. Use Varchar instead.
+  if (ordersSelectedRowType->findChild(orderDate)->isVarchar()) {
+    orderDateFilter = "o_orderdate between '1993-10-01' and '1993-12-31'";
+  } else {
+    orderDateFilter =
+        "o_orderdate between '1993-10-01'::DATE and '1993-12-31'::DATE";
+  }
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId customerScanNodeId;
+  core::PlanNodeId nationScanNodeId;
+  core::PlanNodeId lineitemScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+
+  auto nation =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .capturePlanNodeId(nationScanNodeId)
+          .planNode();
+
+  auto lineitem =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem,
+              lineitemSelectedRowType,
+              lineitemFileColumns,
+              {lineitemReturnFlagFilter})
+          .capturePlanNodeId(lineitemScanNodeId)
+          .project(
+              {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
+               "l_orderkey"})
+          .planNode();
+
+  auto orders = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(
+                        kOrders,
+                        ordersSelectedRowType,
+                        ordersFileColumns,
+                        {orderDateFilter})
+                    .capturePlanNodeId(ordersScanNodeId)
+                    .planNode();
+
+  auto partialPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
+          .capturePlanNodeId(customerScanNodeId)
+          .project(
+              {"c_name",
+               "c_acctbal",
+               "c_phone",
+               "c_address",
+               "c_custkey",
+               "c_comment",
+               "c_nationkey"})
+          .hashJoin(
+              {"c_nationkey"},
+              {"n_nationkey"},
+              nation,
+              "",
+              {"c_name",
+               "c_acctbal",
+               "c_phone",
+               "c_address",
+               "c_custkey",
+               "c_comment",
+               "n_name"})
+          .hashJoin(
+              {"c_custkey"},
+              {"o_custkey"},
+              orders,
+              "",
+              {"c_name",
+               "c_acctbal",
+               "c_phone",
+               "c_custkey",
+               "c_address",
+               "c_comment",
+               "o_orderkey",
+               "n_name"})
+          .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      kLineitem,
+                      lineitemSelectedRowType,
+                      lineitemFileColumns,
+                      {lineitemReturnFlagFilter})
+                  .capturePlanNodeId(lineitemScanNodeId)
+                  .project(
+                      {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
+                       "l_orderkey"})
+                  .hashJoin(
+                      {"l_orderkey"},
+                      {"o_orderkey"},
+                      partialPlan,
+                      "",
+                      {"part_revenue",
+                       "c_name",
+                       "c_custkey",
+                       "c_acctbal",
+                       "n_name",
+                       "c_address",
+                       "c_phone",
+                       "c_comment",
+                       "c_address"})
+                  .localPartition({})
+                  .finalAggregation(
+                      {"c_custkey",
+                       "c_name",
+                       "c_acctbal",
+                       "n_name",
+                       "c_address",
+                       "c_phone",
+                       "c_comment"},
+                      {"sum(part_revenue) as revenue"},
+                      {DOUBLE()})
+                  .orderBy({"revenue DESC"}, false)
+                  .project(
+                      {"c_custkey",
+                       "c_name",
+                       "revenue",
+                       "c_acctbal",
+                       "n_name",
+                       "c_address",
+                       "c_phone",
+                       "c_comment"})
+                  .limit(0, 20, false)
+                  .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[customerScanNodeId] = getTableFilePaths(kCustomer);
+  context.dataFiles[nationScanNodeId] = getTableFilePaths(kNation);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFileFormat = format_;
+  return context;
+}
+
 TpchPlan TpchQueryBuilder::getQ13Plan() const {
   static const std::string kOrders = "orders";
   static const std::string kCustomer = "customer";
@@ -433,7 +606,12 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
 const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {
     "lineitem",
     "orders",
-    "customer"};
+    "customer",
+    "nation",
+    "region",
+    "part",
+    "supplier",
+    "partsupp"};
 
 const std::unordered_map<std::string, std::vector<std::string>>
     TpchQueryBuilder::kTables_ = {
@@ -478,6 +656,47 @@ const std::unordered_map<std::string, std::vector<std::string>>
                 "c_phone",
                 "c_acctbal",
                 "c_mktsegment",
-                "c_comment"})};
+                "c_comment"}),
+        std::make_pair(
+            "nation",
+            std::vector<std::string>{
+                "n_nationkey",
+                "n_name",
+                "n_regionkey",
+                "n_comment"}),
+        std::make_pair(
+            "region",
+            std::vector<std::string>{"r_regionkey", "r_name", "r_comment"}),
+        std::make_pair(
+            "part",
+            std::vector<std::string>{
+                "p_partkey",
+                "p_name",
+                "p_mfgr",
+                "p_brand",
+                "p_type",
+                "p_size",
+                "p_container",
+                "p_retailprice",
+                "p_comment"}),
+        std::make_pair(
+            "supplier",
+            std::vector<std::string>{
+                "s_suppkey",
+                "s_name",
+                "s_address",
+                "s_nationkey",
+                "s_phone",
+                "s_acctbal",
+                "s_comment"}),
+        std::make_pair(
+            "partsupp",
+            std::vector<std::string>{
+                "ps_partkey",
+                "ps_suppkey",
+                "ps_availqty",
+                "ps_supplycost",
+                "ps_comment"}),
+};
 
 } // namespace facebook::velox::exec::test

@@ -79,6 +79,7 @@ class TpchQueryBuilder {
   TpchPlan getQ1Plan() const;
   TpchPlan getQ3Plan() const;
   TpchPlan getQ6Plan() const;
+  TpchPlan getQ10Plan() const;
   TpchPlan getQ13Plan() const;
   TpchPlan getQ18Plan() const;
 

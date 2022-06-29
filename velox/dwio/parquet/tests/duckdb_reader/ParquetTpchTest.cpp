@@ -156,7 +156,26 @@ std::unordered_map<std::string, std::string>
             R"(COPY (SELECT c_custkey, c_name, c_address, c_nationkey, c_phone,
         c_acctbal::DOUBLE as c_acctbal, c_mktsegment, c_comment
         FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
-};
+        std::make_pair(
+            "nation",
+            R"(COPY (SELECT n_nationkey, n_name, n_regionkey, n_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+        std::make_pair(
+            "region",
+            R"(COPY (SELECT r_regionkey, r_name, r_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+        std::make_pair(
+            "part",
+            R"(COPY (SELECT p_partkey, p_name, p_mfgr, p_brand, p_type, p_size, p_container, p_retailprice, p_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+        std::make_pair(
+            "supplier",
+            R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+        std::make_pair(
+            "partsupp",
+            R"(COPY (SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, ps_comment
+        FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))")};
 
 TEST_F(ParquetTpchTest, Q1) {
   assertQuery(1, 2, 10);
@@ -169,6 +188,10 @@ TEST_F(ParquetTpchTest, Q3) {
 
 TEST_F(ParquetTpchTest, Q6) {
   assertQuery(6, 2, 10);
+}
+
+TEST_F(ParquetTpchTest, Q10) {
+  assertQuery(10, 5, 40);
 }
 
 TEST_F(ParquetTpchTest, Q13) {
