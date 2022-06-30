@@ -33,8 +33,7 @@ void convertVectorValue(
   using T = typename TypeTraits<sourceKind>::NativeType;
 
   auto childToFlatVec = vectorValue->asFlatVector<T>();
-  bool nullable = vectorValue->mayHaveNulls();
-  substraitField->set_nullable(nullable);
+
   //  Get the batchSize and convert each value in it.
   vector_size_t flatVecSize = childToFlatVec->size();
   for (int64_t i = 0; i < flatVecSize; i++) {
@@ -45,9 +44,7 @@ void convertVectorValue(
           exprConvertor_->toSubstraitNullLiteral(arena, childType));
     } else {
       substraitField->MergeFrom(exprConvertor_->toSubstraitLiteral(
-          arena,
-          static_cast<const variant>(childToFlatVec->valueAt(i)),
-          nullable));
+          arena, static_cast<const variant>(childToFlatVec->valueAt(i))));
     }
   }
 }
@@ -177,8 +174,7 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
-    const velox::variant& variantValue,
-    bool nullable) {
+    const velox::variant& variantValue) {
   ::substrait::Expression_Literal* literalExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
@@ -205,7 +201,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
           mapTypeKindToName(variantValue.kind()));
   }
 
-  literalExpr->set_nullable(nullable);
+  literalExpr->set_nullable(true);
 
   return *literalExpr;
 }
@@ -226,6 +222,8 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       vectorValue,
       litValue,
       substraitField);
+
+  substraitField->set_nullable(true);
   return *substraitField;
 }
 
