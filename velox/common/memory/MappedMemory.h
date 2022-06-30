@@ -47,8 +47,8 @@ struct SizeClassStats {
   int64_t numAllocations{0};
 
   /// Cumulative count of bytes allocated. This is not size * numAllocations for
-  /// large classes where the allocation does not have the exact size of the size
-  /// class.
+  /// large classes where the allocation does not have the exact size of the
+  /// size class.
   int64_t totalBytes{0};
 
   SizeClassStats operator-(const SizeClassStats& other) const {
