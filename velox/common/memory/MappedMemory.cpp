@@ -504,7 +504,7 @@ std::string Stats::toString() const {
   int64_t totalBytes = 0;
   for (auto i = 0; i < sizes.size(); ++i) {
     totalClocks += sizes[i].clocks();
-    totalBytes += sizes[i].cumBytes;
+    totalBytes += sizes[i].totalBytes;
   }
   out << fmt::format(
       "Alloc: {}MB {} Gigaclocks, {}MB advised\n",
@@ -526,7 +526,7 @@ std::string Stats::toString() const {
     out << fmt::format(
         "Size {}K: {}MB {} Megaclocks\n",
         sizes[i].size * 4,
-        sizes[i].cumBytes >> 20,
+        sizes[i].totalBytes >> 20,
         sizes[i].clocks() >> 20);
   }
   return out.str();

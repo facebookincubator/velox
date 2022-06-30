@@ -56,7 +56,7 @@ struct SizeClassStats {
     result.size = size;
     result.allocateClocks = allocateClocks - other.allocateClocks;
     result.allocateClocks = freeClocks - other.freeClocks;
-    result.numAlloc = numAlloc - other.numAlloc;
+    result.numAllocations = numAllocations - other.numAllocations;
     result.totalBytes = totalBytes - other.totalBytes;
     return result;
   }
@@ -88,7 +88,7 @@ struct Stats {
       velox::ClockTimer timer(clocks);
       op();
     }
-    sizes[index].numAlloc += count;
+    sizes[index].numAllocations += count;
     sizes[index].totalBytes += bytes * count;
     sizes[index].allocateClocks += clocks;
   }
