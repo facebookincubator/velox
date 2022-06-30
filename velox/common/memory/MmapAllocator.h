@@ -69,7 +69,7 @@ class MmapAllocator : public MappedMemory {
       ContiguousAllocation& allocation,
       std::function<void(int64_t)> beforeAllocCB = nullptr) override {
     bool result;
-    stats_.recordAlloc(numPages * kPageSize, 1, [&]() {
+    stats_.recordAllocate(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
           numPages, collateral, allocation, beforeAllocCB);
     });
@@ -85,6 +85,9 @@ class MmapAllocator : public MappedMemory {
   // structures. Returns true if OK. May return false if there are
   // concurrent alocations and frees during the consistency check. This
   // is a false positive but not dangerous.
+  //
+  // Checks that the totals of mapped free and mapped and allocated
+  // pages match the data in the bitmaps in the size classes.
   bool checkConsistency() const override;
 
   MachinePageCount capacity() const {
@@ -244,7 +247,7 @@ class MmapAllocator : public MappedMemory {
       MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t)> beforeAllocCB = nullptr);
+      std::function<void(int64_t)> beforeAllocCB);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 

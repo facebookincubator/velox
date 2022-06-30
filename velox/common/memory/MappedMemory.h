@@ -33,29 +33,41 @@ DECLARE_int32(velox_memory_pool_mb);
 
 namespace facebook::velox::memory {
 
-struct SizeStats {
+struct SizeClassStats {
+  // Size of the tracked size class  in pages.
   int32_t size{0};
-  int64_t allocClocks{0};
+
+  // Cumulative CPU clocks spent inside allocation.
+  int64_t allocateClocks{0};
+
+  // Cumulative CPU clocks spent inside free.
   int64_t freeClocks{0};
+
+  // Cumulative count of distinct allocations.
   int64_t numAlloc{0};
+
+  // Cumulative count of bytes allocated. This is not size * numAllocations for large classes where the allocation does not have the exact size of the size class.
   int64_t cumBytes{0};
 
-  SizeStats operator-(const SizeStats& other) const {
-    SizeStats result;
+  SizeClassStats operator-(const SizeClassStats& other) const {
+    SizeClassStats result;
     result.size = size;
-    result.allocClocks = allocClocks - other.allocClocks;
-    result.allocClocks = freeClocks - other.freeClocks;
+    result.allocateClocks = allocateClocks - other.allocateClocks;
+    result.allocateClocks = freeClocks - other.freeClocks;
     result.numAlloc = numAlloc - other.numAlloc;
     result.cumBytes = cumBytes - other.cumBytes;
     return result;
   }
 
   uint64_t clocks() const {
-    return allocClocks + freeClocks;
+    return allocateClocks + freeClocks;
   }
 };
 
 struct Stats {
+  // 20 sizeclasses in powers of 2 are tracked, from 4K to 4G. The
+  // allocation is recorded to the class corresponding to the next
+  // power of 2 or the size if the size is a power of 2.
   static constexpr int32_t kNumSizes = 20;
   Stats() {
     for (auto i = 0; i < sizes.size(); ++i) {
@@ -66,7 +78,7 @@ struct Stats {
   Stats operator-(const Stats& stats) const;
 
   template <typename Op>
-  void recordAlloc(int64_t bytes, int32_t count, Op op) {
+  void recordAllocate(int64_t bytes, int32_t count, Op op) {
     uint64_t clocks{0};
     auto index = sizeIndex(bytes);
     {
@@ -75,12 +87,7 @@ struct Stats {
     }
     sizes[index].numAlloc += count;
     sizes[index].cumBytes += bytes * count;
-    sizes[index].allocClocks += clocks;
-    if (0) {
-      auto trace = std::make_unique<process::StackTrace>();
-      LOG(INFO) << "XLARGE: Alloc size " << (1 << index) << ": "
-                << trace->toString();
-    }
+    sizes[index].allocateClocks += clocks;
   }
 
   template <typename Op>
@@ -96,15 +103,20 @@ struct Stats {
 
   std::string toString() const;
 
-  int32_t sizeIndex(int64_t size) {
+  // Returns the size class index for a given size. Here the accounting is in steps of powers of two. Allocators may have their own size classes or allocate exact sizes.
+  static int32_t sizeIndex(int64_t size) {
+    constexpr int32_t kPageSize = 4096;
     if (!size) {
       return 0;
     }
-    int64_t power = bits::nextPowerOfTwo(size / 4096);
+    int64_t power = bits::nextPowerOfTwo(size / kPageSize);
     return std::min(kNumSizes - 1, 63 - bits::countLeadingZeros(power));
   }
 
-  std::array<SizeStats, kNumSizes> sizes;
+  // Counters for each size class.
+  std::array<SizeClassStats, kNumSizes> sizes;
+
+  // Cumulative count of pages advised away, if the allocator exposes this.
   int64_t numAdvise{0};
 };
 
@@ -295,7 +307,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   };
 
   // Stats on memory allocated by allocateBytes().
-  struct AllocateBytesCounters {
+  struct AllocateBytesStats {
     // Total size of small allocations.
     uint64_t totalSmall;
     // Total size of allocations from some size class.
@@ -303,7 +315,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
     // Total in standalone large allocations via allocateContiguous().
     uint64_t totalLarge;
 
-    AllocateBytesCounters operator-(const AllocateBytesCounters other) const {
+    AllocateBytesStats operator-(const AllocateBytesStats other) const {
       auto result = *this;
       result.totalSmall -= other.totalSmall;
       result.totalInSizeClasses -= other.totalInSizeClasses;
@@ -410,7 +422,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
 
   // Returns static counters for allocateBytes usage.
 
-  static AllocateBytesCounters allocateBytesStats() {
+  static AllocateBytesStats allocateBytesStats() {
     return {
         totalSmallAllocateBytes_,
         totalSizeClassAllocateBytes_,

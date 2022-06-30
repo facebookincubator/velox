@@ -135,7 +135,7 @@ class MappedMemoryImpl : public MappedMemory {
       ContiguousAllocation& allocation,
       std::function<void(int64_t)> beforeAllocCB = nullptr) override {
     bool result;
-    stats_.recordAlloc(numPages * kPageSize, 1, [&]() {
+    stats_.recordAllocate(numPages * kPageSize, 1, [&]() {
       result = allocateContiguousImpl(
           numPages, collateral, allocation, beforeAllocCB);
     });
@@ -166,7 +166,7 @@ class MappedMemoryImpl : public MappedMemory {
       MachinePageCount numPages,
       Allocation* FOLLY_NULLABLE collateral,
       ContiguousAllocation& allocation,
-      std::function<void(int64_t)> beforeAllocCB = nullptr);
+      std::function<void(int64_t)> beforeAllocCB);
 
   void freeContiguousImpl(ContiguousAllocation& allocation);
 
@@ -211,7 +211,7 @@ bool MappedMemoryImpl::allocate(
       MachinePageCount numPages =
           mix.sizeCounts[i] * sizeClassSizes_[mix.sizeIndices[i]];
       void* ptr;
-      stats_.recordAlloc(
+      stats_.recordAllocate(
           sizeClassSizes_[mix.sizeIndices[i]] * kPageSize,
           mix.sizeCounts[i],
           [&]() {
@@ -306,7 +306,7 @@ int64_t MappedMemoryImpl::free(Allocation& allocation) {
         mallocs_.erase(ptr);
       }
       stats_.recordFree(
-          std::min<int64_t>(1 << 20, run.numPages() * kPageSize), [&]() {
+			std::min<int64_t>(sizeClassSizes_.back() * kPageSize, run.numPages() * kPageSize), [&]() {
             ::free(ptr); // NOLINT
           });
     }
@@ -505,21 +505,25 @@ std::string Stats::toString() const {
     totalBytes += sizes[i].cumBytes;
   }
   out << fmt::format(
-      "Alloc: {}MB {} Gclk, {}MB advised\n",
+      "Alloc: {}MB {} Gigaclocks, {}MB advised\n",
       totalBytes >> 20,
       totalClocks >> 30,
       numAdvise >> 8);
+
+  // Sort the size classes by decreasing clocks.
   std::vector<int32_t> indices(sizes.size());
   std::iota(indices.begin(), indices.end(), 0);
   std::sort(indices.begin(), indices.end(), [&](int32_t left, int32_t right) {
     return sizes[left].clocks() > sizes[right].clocks();
   });
   for (auto i : indices) {
+
+    // Do not report size classes with under 1M clocks.
     if (sizes[i].clocks() < 1000000) {
       break;
     }
     out << fmt::format(
-        "Size {}K: {}MB {} Mclks\n",
+        "Size {}K: {}MB {} Megaclocks\n",
         sizes[i].size * 4,
         sizes[i].cumBytes >> 20,
         sizes[i].clocks() >> 20);
