@@ -77,6 +77,7 @@ class TpchQueryBuilder {
 
  private:
   TpchPlan getQ1Plan() const;
+  TpchPlan getQ2Plan() const;
   TpchPlan getQ3Plan() const;
   TpchPlan getQ5Plan() const;
   TpchPlan getQ6Plan() const;
@@ -118,6 +119,7 @@ class TpchQueryBuilder {
   static constexpr const char* kRegion = "region";
   static constexpr const char* kPart = "part";
   static constexpr const char* kSupplier = "supplier";
+  static constexpr const char* kPartsupp = "partsupp";
   std::unique_ptr<memory::ScopedMemoryPool> pool_ =
       memory::getDefaultScopedMemoryPool();
 };
