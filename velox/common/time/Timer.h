@@ -27,7 +27,7 @@ namespace facebook::velox {
 // with the elapsed time in microseconds.
 class MicrosecondTimer {
  public:
-  MicrosecondTimer(uint64_t* timer) : timer_(timer) {
+  MicrosecondTimer(uint64_t* FOLLY_NONNULL timer) : timer_(timer) {
     start_ = std::chrono::steady_clock::now();
   }
 
