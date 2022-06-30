@@ -65,8 +65,7 @@ class VeloxToSubstraitExprConvertor {
   /// Convert Velox variant to Substrait Literal Expression.
   const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
-      const velox::variant& variantValue,
-      bool nullable = true);
+      const velox::variant& variantValue);
 
  private:
   /// Convert Velox Cast Expression to Substrait Cast Expression.

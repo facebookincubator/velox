@@ -55,7 +55,6 @@ namespace {
   exprConvertor_ =
       std::make_shared<VeloxToSubstraitExprConvertor>(functionMap_);
 
-  // TODO add root_rel
   ::substrait::Plan* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
 
@@ -78,8 +77,8 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   ::substrait::Rel* rel = rootRel->mutable_input();
   toSubstrait(arena, planNode, rel);
   // Set RootRel names.
-  for (std::string rootRelName : planNode->outputType()->names()) {
-    rootRel->add_names(rootRelName);
+  for (const auto& name : planNode->outputType()->names()) {
+    rootRel->add_names(name);
   }
 }
 
@@ -146,9 +145,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   ::substrait::ReadRel_VirtualTable* virtualTable =
       readRel->mutable_virtual_table();
 
-  // Flag to show whether the column is nullable or not. Default is nullable.
-  std::vector<bool> nullableList(outputType->size(), true);
-
   // The row number of the input data.
   int64_t numVectors = valuesNode->values().size();
 
@@ -170,13 +166,11 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
       substraitField->MergeFrom(exprConvertor_->toSubstraitExpr(
           arena, std::make_shared<core::ConstantTypedExpr>(child), litValue));
-
-      nullableList[column] = substraitField->nullable();
     }
   }
 
   readRel->mutable_base_schema()->MergeFrom(
-      typeConvertor_->toSubstraitNamedStruct(arena, outputType, nullableList));
+      typeConvertor_->toSubstraitNamedStruct(arena, outputType));
 
   readRel->mutable_common()->mutable_direct();
 }
