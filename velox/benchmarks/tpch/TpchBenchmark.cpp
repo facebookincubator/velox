@@ -87,6 +87,7 @@ DEFINE_bool(include_results, false, "Include results in the output");
 DEFINE_int32(num_drivers, 4, "Number of drivers");
 DEFINE_string(data_format, "parquet", "Data format");
 DEFINE_int32(num_splits_per_file, 10, "Number of splits per file");
+DEFINE_int32(num_runs, 5, "Number of runs for each benchmark");
 
 DEFINE_validator(data_path, &notEmpty);
 DEFINE_validator(data_format, &validateDataFormat);
@@ -191,26 +192,48 @@ int main(int argc, char** argv) {
     folly::runBenchmarks();
   } else {
     const auto queryPlan = queryBuilder->getQueryPlan(FLAGS_run_query_verbose);
-    const auto [cursor, actualResults] = benchmark.run(queryPlan);
-    auto task = cursor->task();
-    ensureTaskCompletion(task.get());
-    if (FLAGS_include_results) {
-      printResults(actualResults);
-      std::cout << std::endl;
+    std::vector<double> executionTimes;
+
+    for (int i = 0; i < FLAGS_num_runs; i++) {
+      const auto [cursor, actualResults] = benchmark.run(queryPlan);
+      auto task = cursor->task();
+      ensureTaskCompletion(task.get());
+      const auto stats = task->taskStats();
+
+      executionTimes.push_back(
+          stats.executionEndTimeMs - stats.executionStartTimeMs);
+      std::cout << fmt::format("Iteration: {}\t", i + 1);
+      std::cout << fmt::format(
+          "Execution time: {}\n", succinctMillis(executionTimes.back()));
+
+      if (i == 0) {
+        std::cout << fmt::format(
+                         "Splits total: {}, finished: {}",
+                         stats.numTotalSplits,
+                         stats.numFinishedSplits)
+                  << std::endl;
+        std::cout << printPlanWithStats(
+                         *queryPlan.plan, stats, FLAGS_include_custom_stats)
+                  << std::endl;
+      }
     }
-    const auto stats = task->taskStats();
-    std::cout << fmt::format(
-                     "Execution time: {}",
-                     succinctMillis(
-                         stats.executionEndTimeMs - stats.executionStartTimeMs))
-              << std::endl;
-    std::cout << fmt::format(
-                     "Splits total: {}, finished: {}",
-                     stats.numTotalSplits,
-                     stats.numFinishedSplits)
-              << std::endl;
-    std::cout << printPlanWithStats(
-                     *queryPlan.plan, stats, FLAGS_include_custom_stats)
-              << std::endl;
+
+    auto minTime =
+        std::min_element(executionTimes.begin(), executionTimes.end());
+    auto maxTime =
+        std::max_element(executionTimes.begin(), executionTimes.end());
+    auto avgTime = std::reduce(executionTimes.begin(), executionTimes.end()) /
+        executionTimes.size();
+    auto numRuns = executionTimes.size();
+    fmt::print("\nMinimum execution time: {}\n", succinctMillis(*minTime));
+    fmt::print("Maximum execution time: {}\n", succinctMillis(*maxTime));
+    fmt::print("Average execution time: {}\n", succinctMillis(avgTime));
+
+    std::sort(executionTimes.begin(), executionTimes.end());
+    auto medianTime = (numRuns % 2)
+        ? (executionTimes[numRuns / 2])
+        : ((executionTimes[numRuns / 2] + executionTimes[(numRuns - 1) / 2]) /
+           2);
+    fmt::print("Median execution time: {}\n", succinctMillis(medianTime));
   }
 }
