@@ -145,7 +145,7 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
       stats_.sizes[sizeIndex].freeClocks += clocks;
       numFreed += pages;
     }
-    }
+  }
   allocation.clear();
   return numFreed;
 }

@@ -306,7 +306,9 @@ int64_t MappedMemoryImpl::free(Allocation& allocation) {
         mallocs_.erase(ptr);
       }
       stats_.recordFree(
-			std::min<int64_t>(sizeClassSizes_.back() * kPageSize, run.numPages() * kPageSize), [&]() {
+          std::min<int64_t>(
+              sizeClassSizes_.back() * kPageSize, run.numPages() * kPageSize),
+          [&]() {
             ::free(ptr); // NOLINT
           });
     }
@@ -517,7 +519,6 @@ std::string Stats::toString() const {
     return sizes[left].clocks() > sizes[right].clocks();
   });
   for (auto i : indices) {
-
     // Do not report size classes with under 1M clocks.
     if (sizes[i].clocks() < 1000000) {
       break;

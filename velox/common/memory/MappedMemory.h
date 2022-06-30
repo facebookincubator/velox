@@ -46,7 +46,9 @@ struct SizeClassStats {
   // Cumulative count of distinct allocations.
   int64_t numAlloc{0};
 
-  // Cumulative count of bytes allocated. This is not size * numAllocations for large classes where the allocation does not have the exact size of the size class.
+  // Cumulative count of bytes allocated. This is not size * numAllocations for
+  // large classes where the allocation does not have the exact size of the size
+  // class.
   int64_t cumBytes{0};
 
   SizeClassStats operator-(const SizeClassStats& other) const {
@@ -103,7 +105,9 @@ struct Stats {
 
   std::string toString() const;
 
-  // Returns the size class index for a given size. Here the accounting is in steps of powers of two. Allocators may have their own size classes or allocate exact sizes.
+  // Returns the size class index for a given size. Here the accounting is in
+  // steps of powers of two. Allocators may have their own size classes or
+  // allocate exact sizes.
   static int32_t sizeIndex(int64_t size) {
     constexpr int32_t kPageSize = 4096;
     if (!size) {
