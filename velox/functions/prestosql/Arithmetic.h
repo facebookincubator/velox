@@ -38,48 +38,17 @@ inline constexpr char digits[36] = {
     'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
     'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'};
 
-template <typename T>
-struct PlusFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(TInput& result, const TInput& a, const TInput& b) {
-    result = plus(a, b);
-  }
-};
+void registerPlus(const std::string& name);
+void registerCheckedPlus(const std::string& name);
 
-template <typename T>
-struct MinusFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(TInput& result, const TInput& a, const TInput& b) {
-    result = minus(a, b);
-  }
-};
+void registerMinus(const std::string& name);
+void registerCheckedMinus(const std::string& name);
 
-template <typename T>
-struct MultiplyFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(TInput& result, const TInput& a, const TInput& b) {
-    result = multiply(a, b);
-  }
-};
+void registerMultiply(const std::string& name);
+void registerCheckedMultiply(const std::string& name);
 
-template <typename T>
-struct DivideFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(TInput& result, const TInput& a, const TInput& b)
-// depend on compiler have correct behaviour for divide by zero
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("float-divide-by-zero")))
-#endif
-#endif
-  {
-    result = a / b;
-  }
-};
+void registerDivide(const std::string& name);
+void registerCheckedDivide(const std::string& name);
 
 template <typename T>
 struct ModulusFunction {
