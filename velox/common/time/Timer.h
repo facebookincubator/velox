@@ -22,7 +22,7 @@
 
 namespace facebook::velox {
 
-// Measures the time between constructin and destruction with
+// Measures the time between construction and destruction with
 // std::chrono::steady_clock and increments a user-supplied counter
 // with the elapsed time in microseconds.
 class MicrosecondTimer {
@@ -43,10 +43,9 @@ class MicrosecondTimer {
   uint64_t* timer_;
 };
 
-// Measures the time between constructin and destruction with
+// Measures the time between construction and destruction with
 // CPU clock counter (rdtsc on X86) and increments a user-supplied counter
 // with the cycle count.
-
 class ClockTimer {
  public:
   explicit ClockTimer(uint64_t& total)

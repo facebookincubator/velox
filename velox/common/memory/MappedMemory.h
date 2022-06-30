@@ -34,22 +34,22 @@ DECLARE_int32(velox_memory_pool_mb);
 namespace facebook::velox::memory {
 
 struct SizeClassStats {
-  // Size of the tracked size class  in pages.
+  //// Size of the tracked size class  in pages.
   int32_t size{0};
 
-  // Cumulative CPU clocks spent inside allocation.
+  /// Cumulative CPU clocks spent inside allocation.
   int64_t allocateClocks{0};
 
-  // Cumulative CPU clocks spent inside free.
+  /// Cumulative CPU clocks spent inside free.
   int64_t freeClocks{0};
 
-  // Cumulative count of distinct allocations.
-  int64_t numAlloc{0};
+  /// Cumulative count of distinct allocations.
+  int64_t numAllocations{0};
 
-  // Cumulative count of bytes allocated. This is not size * numAllocations for
-  // large classes where the allocation does not have the exact size of the size
-  // class.
-  int64_t cumBytes{0};
+  /// Cumulative count of bytes allocated. This is not size * numAllocations for
+  /// large classes where the allocation does not have the exact size of the size
+  /// class.
+  int64_t totalBytes{0};
 
   SizeClassStats operator-(const SizeClassStats& other) const {
     SizeClassStats result;
@@ -57,19 +57,20 @@ struct SizeClassStats {
     result.allocateClocks = allocateClocks - other.allocateClocks;
     result.allocateClocks = freeClocks - other.freeClocks;
     result.numAlloc = numAlloc - other.numAlloc;
-    result.cumBytes = cumBytes - other.cumBytes;
+    result.totalBytes = totalBytes - other.totalBytes;
     return result;
   }
 
+  // Returns the total clocks for this size class.
   uint64_t clocks() const {
     return allocateClocks + freeClocks;
   }
 };
 
 struct Stats {
-  // 20 sizeclasses in powers of 2 are tracked, from 4K to 4G. The
-  // allocation is recorded to the class corresponding to the next
-  // power of 2 or the size if the size is a power of 2.
+  /// 20 size classes in powers of 2 are tracked, from 4K to 4G. The
+  /// allocation is recorded to the class corresponding to the closest
+  /// power of 2 >= the allocation size.
   static constexpr int32_t kNumSizes = 20;
   Stats() {
     for (auto i = 0; i < sizes.size(); ++i) {
@@ -88,7 +89,7 @@ struct Stats {
       op();
     }
     sizes[index].numAlloc += count;
-    sizes[index].cumBytes += bytes * count;
+    sizes[index].totalBytes += bytes * count;
     sizes[index].allocateClocks += clocks;
   }
 
@@ -105,9 +106,9 @@ struct Stats {
 
   std::string toString() const;
 
-  // Returns the size class index for a given size. Here the accounting is in
-  // steps of powers of two. Allocators may have their own size classes or
-  // allocate exact sizes.
+  /// Returns the size class index for a given size. Here the accounting is in
+  /// steps of powers of two. Allocators may have their own size classes or
+  /// allocate exact sizes.
   static int32_t sizeIndex(int64_t size) {
     constexpr int32_t kPageSize = 4096;
     if (!size) {
@@ -117,10 +118,10 @@ struct Stats {
     return std::min(kNumSizes - 1, 63 - bits::countLeadingZeros(power));
   }
 
-  // Counters for each size class.
+  /// Counters for each size class.
   std::array<SizeClassStats, kNumSizes> sizes;
 
-  // Cumulative count of pages advised away, if the allocator exposes this.
+  /// Cumulative count of pages advised away, if the allocator exposes this.
   int64_t numAdvise{0};
 };
 
