@@ -135,6 +135,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ9Plan();
     case 10:
       return getQ10Plan();
+    case 11:
+      return getQ11Plan();
     case 12:
       return getQ12Plan();
     case 13:
@@ -1032,6 +1034,125 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
   context.dataFiles[nationScanNodeId] = getTableFilePaths(kNation);
   context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
   context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ11Plan() const {
+  std::vector<std::string> partsuppColumnsSubQuery = {
+      "ps_availqty", "ps_suppkey", "ps_supplycost"};
+  std::vector<std::string> partsuppColumns = {
+      "ps_partkey", "ps_suppkey", "ps_availqty", "ps_supplycost"};
+  std::vector<std::string> supplierColumns = {"s_suppkey", "s_nationkey"};
+  std::vector<std::string> nationColumns = {"n_nationkey", "n_name"};
+
+  auto partsuppRowTypeSubQuery = getRowType(kPartsupp, partsuppColumnsSubQuery);
+  const auto& partsuppFileColumnsSubQuery = getFileColumnNames(kPartsupp);
+  auto supplierRowTypeSubQuery = getRowType(kSupplier, supplierColumns);
+  const auto& supplierFileColumnsSubQuery = getFileColumnNames(kSupplier);
+  auto nationRowTypeSubQuery = getRowType(kNation, nationColumns);
+  const auto& nationFileColumnsSubQuery = getFileColumnNames(kNation);
+  auto partsuppRowType = getRowType(kPartsupp, partsuppColumns);
+  const auto& partsuppFileColumns = getFileColumnNames(kPartsupp);
+  auto supplierRowType = getRowType(kSupplier, supplierColumns);
+  const auto& supplierFileColumns = getFileColumnNames(kSupplier);
+  auto nationRowType = getRowType(kNation, nationColumns);
+  const auto& nationFileColumns = getFileColumnNames(kNation);
+
+  const std::string nationNameFilter = "n_name = 'GERMANY'";
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId partsuppScanIdSubQuery;
+  core::PlanNodeId supplierScanIdSubQuery;
+  core::PlanNodeId nationScanIdSubQuery;
+  core::PlanNodeId partsuppScanId;
+  core::PlanNodeId supplierScanId;
+  core::PlanNodeId nationScanId;
+
+  auto nationSubQuery = PlanBuilder(planNodeIdGenerator)
+                            .tableScan(
+                                kNation,
+                                nationRowTypeSubQuery,
+                                nationFileColumnsSubQuery,
+                                {nationNameFilter})
+                            .capturePlanNodeId(nationScanIdSubQuery)
+                            .planNode();
+
+  auto supplierJoinNationSubQuery =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kSupplier, supplierRowTypeSubQuery, supplierFileColumnsSubQuery)
+          .capturePlanNodeId(supplierScanIdSubQuery)
+          .hashJoin(
+              {"s_nationkey"},
+              {"n_nationkey"},
+              nationSubQuery,
+              "",
+              {"s_suppkey"})
+          .planNode();
+
+  auto subQueryPlan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kPartsupp, partsuppRowTypeSubQuery, partsuppFileColumnsSubQuery)
+          .capturePlanNodeId(partsuppScanIdSubQuery)
+          .hashJoin(
+              {"ps_suppkey"},
+              {"s_suppkey"},
+              supplierJoinNationSubQuery,
+              "",
+              {"ps_availqty", "ps_suppkey", "ps_supplycost"})
+          .project({"ps_supplycost * ps_availqty AS product_cost_qty"})
+          .partialAggregation({}, {"sum(product_cost_qty) AS sum_cost_qty"})
+          .localPartition({})
+          .finalAggregation()
+          .project({"(sum_cost_qty * 0.0001000000) AS filter_cost_qty"})
+          .planNode();
+
+  auto nation =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kNation, nationRowType, nationFileColumns, {nationNameFilter})
+          .capturePlanNodeId(nationScanId)
+          .planNode();
+
+  auto supplierJoinNation =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kSupplier, supplierRowType, supplierFileColumns)
+          .capturePlanNodeId(supplierScanId)
+          .hashJoin({"s_nationkey"}, {"n_nationkey"}, nation, "", {"s_suppkey"})
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kPartsupp, partsuppRowType, partsuppFileColumns)
+          .capturePlanNodeId(partsuppScanId)
+          .hashJoin(
+              {"ps_suppkey"},
+              {"s_suppkey"},
+              supplierJoinNation,
+              "",
+              {"ps_partkey", "ps_availqty", "ps_supplycost"})
+          .project(
+              {"ps_supplycost * ps_availqty AS product_cost_qty", "ps_partkey"})
+          .partialAggregation(
+              {"ps_partkey"}, {"sum(product_cost_qty) AS value"})
+          .localPartition({"ps_partkey"})
+          .finalAggregation()
+          .crossJoin(subQueryPlan, {"ps_partkey", "value", "filter_cost_qty"})
+          .filter("value > filter_cost_qty")
+          .project({"ps_partkey", "value"})
+          .orderBy({"value DESC"}, false)
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[supplierScanIdSubQuery] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanIdSubQuery] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanIdSubQuery] = getTableFilePaths(kNation);
+  context.dataFiles[supplierScanId] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanId] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanId] = getTableFilePaths(kNation);
   context.dataFileFormat = format_;
   return context;
 }
