@@ -73,7 +73,9 @@ bool MmapAllocator::allocate(
   for (int i = 0; i < mix.numSizes; ++i) {
     bool success;
     stats_.recordAlloc(
-        sizeClassSizes_[i] * kPageSize, mix.sizeCounts[i], [&]() {
+        sizeClassSizes_[mix.sizeIndices[i]] * kPageSize,
+        mix.sizeCounts[i],
+        [&]() {
           success = sizeClasses_[mix.sizeIndices[i]]->allocate(
               mix.sizeCounts[i], owner, newMapsNeeded, out);
         });
@@ -128,7 +130,6 @@ int64_t MmapAllocator::free(Allocation& allocation) {
   numAllocated_.fetch_sub(numFreed);
   return numFreed * kPageSize;
 }
-
 MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
   if (allocation.numRuns() == 0) {
     return 0;
@@ -140,7 +141,7 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
     int32_t pages = 0;
     uint64_t clocks = 0;
     {
-      ClockTimer timer(&clocks);
+      ClockTimer timer(clocks);
       pages = sizeClass->free(allocation);
     }
     if (pages)

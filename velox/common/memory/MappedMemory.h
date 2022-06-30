@@ -70,7 +70,7 @@ struct Stats {
     uint64_t clocks{0};
     auto index = sizeIndex(bytes);
     {
-      velox::ClockTimer timer(&clocks);
+      velox::ClockTimer timer(clocks);
       op();
     }
     sizes[index].numAlloc += count;
@@ -88,7 +88,7 @@ struct Stats {
     uint64_t clocks = 0;
     auto index = sizeIndex(bytes);
     {
-      ClockTimer timer(&clocks);
+      ClockTimer timer(clocks);
       op();
     }
     sizes[index].freeClocks += clocks;
@@ -301,13 +301,13 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
     // Total size of allocations from some size class.
     uint64_t totalSizeClassAllocateBytes;
     // Total in standalone large allocations via allocateContiguous().
-    uint64_t totalLargeAllocateBytes;
+    uint64_t totalLarge;
 
     AllocateBytesCounters operator-(const AllocateBytesCounters other) const {
       auto result = *this;
-      result.totalSmallAllocateBytes -= other.totalSmallAllocateBytes;
-      result.totalSizeClassAllocateBytes -= other.totalSizeClassAllocateBytes;
-      result.totalLargeAllocateBytes -= other.totalLargeAllocateBytes;
+      result.totalSmall -= other.totalSmall;
+      result.totalInSizeClasses -= other.totalInSizeClasses;
+      result.totalLarge -= other.totalLarge;
       return result;
     }
   };

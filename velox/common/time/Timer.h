@@ -17,6 +17,7 @@
 
 #include <folly/CppAttributes.h>
 #include <folly/chrono/Hardware.h>
+#include <atomic>
 #include <chrono>
 
 namespace facebook::velox {
@@ -41,14 +42,23 @@ class MicrosecondTimer {
 
 class ClockTimer {
  public:
-  explicit ClockTimer(uint64_t* FOLLY_NONNULL total)
-      : total_(total), start_(folly::hardware_timestamp()) {}
+  explicit ClockTimer(uint64_t& total)
+      : total_(&total), start_(folly::hardware_timestamp()) {}
+  explicit ClockTimer(std::atomic<uint64_t>& total)
+      : atomicTotal_(&total), start_(folly::hardware_timestamp()) {}
+
   ~ClockTimer() {
-    *total_ += folly::hardware_timestamp() - start_;
+    auto elapsed = folly::hardware_timestamp() - start_;
+    if (total_) {
+      *total_ += elapsed;
+    } else {
+      *atomicTotal_ += elapsed;
+    }
   }
 
  private:
-  uint64_t* FOLLY_NONNULL total_;
+  uint64_t* FOLLY_NULLABLE total_{nullptr};
+  std::atomic<uint64_t>* FOLLY_NULLABLE atomicTotal_{nullptr};
   uint64_t start_;
 };
 
