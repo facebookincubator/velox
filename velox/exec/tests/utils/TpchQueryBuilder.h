@@ -84,7 +84,7 @@ class TpchQueryBuilder {
   TpchPlan getQ13Plan() const;
   TpchPlan getQ18Plan() const;
 
-  std::shared_ptr<core::PlanNode> getQ2MinimumCostSupplierPlan(
+  std::shared_ptr<const core::PlanNode> getQ2MinimumCostSupplierPlan(
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 
@@ -92,11 +92,11 @@ class TpchQueryBuilder {
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 
-  std::shared_ptr<core::PlanNode> getQ4LineItemsPlan(
+  std::shared_ptr<const core::PlanNode> getQ4LineItemsPlan(
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 
-  std::shared_ptr<core::PlanNode> getQ3OrderPlans(
+  std::shared_ptr<const core::PlanNode> getQ3OrderPlans(
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 
@@ -104,7 +104,7 @@ class TpchQueryBuilder {
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 
-  std::shared_ptr<core::PlanNode> getQ3LineItemsPlans(
+  std::shared_ptr<const core::PlanNode> getQ3LineItemsPlans(
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
 

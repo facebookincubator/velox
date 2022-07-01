@@ -161,7 +161,8 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   return context;
 }
 
-std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ2MinimumCostSupplierPlan(
+std::shared_ptr<const core::PlanNode>
+TpchQueryBuilder::getQ2MinimumCostSupplierPlan(
     std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
     TpchPlan& context) const {
   core::PlanNodeId partsuppScanNodeId;
@@ -411,7 +412,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
   return context;
 }
 
-std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ3OrderPlans(
+std::shared_ptr<const core::PlanNode> TpchQueryBuilder::getQ3OrderPlans(
     std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
     TpchPlan& context) const {
   std::vector<std::string> selectedOrdersColumns{
@@ -465,7 +466,7 @@ PlanBuilder TpchQueryBuilder::getQ3CustomerPlans(
   return customers;
 }
 
-std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ3LineItemsPlans(
+std::shared_ptr<const core::PlanNode> TpchQueryBuilder::getQ3LineItemsPlans(
     std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
     TpchPlan& context) const {
   std::vector<std::string> selectedLineItemsColumns{
@@ -575,7 +576,7 @@ PlanBuilder TpchQueryBuilder::getQ4OrdersPlan(
   return orders;
 }
 
-std::shared_ptr<core::PlanNode> TpchQueryBuilder::getQ4LineItemsPlan(
+std::shared_ptr<const core::PlanNode> TpchQueryBuilder::getQ4LineItemsPlan(
     std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
     TpchPlan& context) const {
   std::vector<std::string> lineitemSelectedColumns = {
