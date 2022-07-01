@@ -1,0 +1,61 @@
+********************
+June 2022 Update
+********************
+
+Documentation
+=============
+
+* Add documentation for :ref:`complex types writers<outputs-write>`.
+
+Core Library
+============
+
+* Add support for IntervalDayTime type.
+* Allow cast between Date type and Timestamp type.
+* Add fast path to :func:`zip` when all Arrays are flat and the same size.
+* Add GroupId operator.
+* Support Decimal type signature and type calculation using flex/bison.
+* Add NegatedBigintValuesUsingBitmask and NegatedBigintValuesUsingHashTable for Bigint types.
+* Add support for running tasks on the caller's thread.
+* Add limited ORC reader support.
+* Support conversion of DuckDB Decimals to Velox Decimals and decimal constant null vector.
+* Allow cast from JSON type to scalar types, Array type, and Map type.
+* Allow running join queries on the caller's thread.
+* Add q3 to TPC-H benchmark.
+* Separate the user exception stack from the runtime exception stack trace collection control.
+* Make Dictionary Vectors load only selected rows.
+
+Presto Functions
+================
+
+* Add Presto Date +/- IntervalDayTime functions.
+* Add aggregate function :func:`map_union`.
+* Add :func:`degrees`, :func:`e`, and :func:`sha512` functions.
+
+Connectors
+==========
+
+* Add hdfs read support to hive connector.
+* Add utility to benchmark dataset generation speed for tpch connector.
+* Add totalParts and partNumber to TpchSplit in tpch connector.
+
+Performance and Correctness
+===========================
+
+* Optimize constant aggregation mask.
+* VectorWriter<Varchar> is now up to 2X faster for some string functions.
+* Exclude non-deterministic functions from common sub-expression elimination.
+* Optimize Expr::isSpecialForm.
+* Optimize BaseVector::isConstantEncoding.
+
+Credits
+=======
+
+Adam Simpkins, Aditi Pandit, Amit Dutta, Behnam Robatmili, Chad Austin,
+Connor Devlin, Daniel Ng, Dark Knight, Deepak Majeti, Denis Yaroshevskiy,
+Huameng Jiang, Jake Jung, Jialiang Tan, Jie1 Zhang, Jimmy Lu, Karteek Murthy,
+Katie Mancini, Ke Jia, Kevin Wilfong, Krishna Pai, Laith Sakka, Masha Basmanova,
+Michael Shang, Mindaugas Rukas, Orri Erling, Patrick Stuedi, Paul Saab,
+Pedro Eugenio Rocha Pedreira, Pramod Sathyanarayana, Sahana CB, Sergey Pershin,
+Wei He, Xavier Deguillard, Xiaoxuan Meng, Yating Zhou, Yoav Helfman, Zeyi (Rice) Fan,
+Zhenyuan Zhao, artem.malyshev, benitakbritto, frankobe, usurai, yingsu00, zhaozhenhui
