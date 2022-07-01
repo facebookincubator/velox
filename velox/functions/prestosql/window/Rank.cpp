@@ -26,7 +26,7 @@ class RankFunction : public exec::WindowFunction {
  public:
   explicit RankFunction() : WindowFunction(BIGINT(), nullptr) {}
 
-  void resetPartition(const folly::Range<char**>& /*rows*/) {
+  void resetPartition(const exec::WindowPartition* /*partition*/) {
     rank_ = 1;
     currentPeerGroupStart_ = 0;
     previousPeerCount_ = 0;
@@ -71,7 +71,6 @@ void registerRank(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::RowColumn>& /*argColumns*/,
           const std::vector<TypePtr>& /*argTypes*/,
           const TypePtr& /*resultType*/,
           velox::memory::MemoryPool* /*pool*/)

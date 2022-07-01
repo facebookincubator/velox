@@ -30,11 +30,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
  public:
   explicit AggregateWindowFunction(
       const std::string& name,
-      const std::vector<exec::RowColumn>& argColumns,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool), argColumns_(argColumns) {
+      : WindowFunction(resultType, pool) {
     aggregate_ = exec::Aggregate::create(
         name, core::AggregationNode::Step::kSingle, argTypes, resultType);
 
@@ -55,11 +54,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Constructing the single row in the MemoryPool for now.
     singleGroupRow_ = (char*)(pool_->allocate(singleGroupRowSize_));
     aggregate_->initializeNewGroups(&singleGroupRow_, singleGroup);
-
-    argVectors_.reserve(argTypes.size());
-    for (const auto& argType : argTypes) {
-      argVectors_.emplace_back(BaseVector::create(argType, 0, pool));
-    }
   }
 
   ~AggregateWindowFunction() {
@@ -68,13 +62,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
     pool()->free(singleGroupRow_, singleGroupRowSize_);
   }
 
-  void resetPartition(const folly::Range<char**>& rows) {
-    numPartitionRows_ = rows.size();
-    // Setup the argument vectors for the rows in the partition.
-    for (int i = 0; i < argColumns_.size(); i++) {
-      argVectors_[i]->resize(numPartitionRows_);
-      exec::RowContainer::extractColumn(
-          rows.data(), numPartitionRows_, argColumns_[i], argVectors_[i]);
+  void resetPartition(const exec::WindowPartition* partition) {
+    partition_ = partition;
+
+    auto numArgs = partition_->numArgs();
+    argVectors_.reserve(numArgs);
+    for (int i = 0; i < numArgs; i++) {
+      argVectors_.push_back(partition_->argColumn(i));
     }
   }
 
@@ -97,7 +91,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       aggregate_->clear();
 
       // TODO : Check if we have to offset 1 here for correct accounting.
-      rows_.resize(numPartitionRows_);
+      rows_.resize(partition_->numRows());
       rows_.setValidRange(frameStartsVector[i], frameEndsVector[i], true);
       rows_.updateBounds();
 
@@ -115,13 +109,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // implementation for it.
   std::unique_ptr<exec::Aggregate> aggregate_;
 
-  // This needs to be a copy of the argColumns passed to the function
-  // as we need to retain them across function calls.
-  std::vector<exec::RowColumn> argColumns_;
-  // This is a vector of all the argument values that have to be
-  // obtained from the partition and passed to the aggregate evaluation.
+  // Current WindowPartition used for accessing rows in the apply method.
+  const exec::WindowPartition* partition_;
   std::vector<VectorPtr> argVectors_;
-  vector_size_t numPartitionRows_;
 
   // This is a single aggregate row needed by the aggregate function for its
   // computation.
@@ -147,13 +137,12 @@ void registerAggregateWindowFunction(const std::string& name) {
         name,
         std::move(signatures),
         [name](
-            const std::vector<exec::RowColumn>& argColumns,
             const std::vector<TypePtr>& argTypes,
             const TypePtr& resultType,
             velox::memory::MemoryPool* pool)
             -> std::unique_ptr<exec::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
-              name, argColumns, argTypes, resultType, pool);
+              name, argTypes, resultType, pool);
         });
   }
 }

@@ -55,13 +55,12 @@ std::optional<std::vector<FunctionSignaturePtr>> getWindowFunctionSignatures(
 
 std::unique_ptr<WindowFunction> WindowFunction::create(
     const std::string& name,
-    const std::vector<exec::RowColumn>& argColumns,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     velox::memory::MemoryPool* pool) {
   // Lookup the function in the new registry first.
   if (auto func = getWindowFunctionEntry(name)) {
-    return func.value()->factory(argColumns, argTypes, resultType, pool);
+    return func.value()->factory(argTypes, resultType, pool);
   }
 
   VELOX_USER_FAIL("Window function not registered: {}", name);

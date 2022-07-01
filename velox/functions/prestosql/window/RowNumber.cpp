@@ -27,7 +27,7 @@ class RowNumberFunction : public exec::WindowFunction {
  public:
   explicit RowNumberFunction() : WindowFunction(BIGINT(), nullptr) {}
 
-  void resetPartition(const folly::Range<char**>& /*rows*/) {
+  void resetPartition(const exec::WindowPartition* /*partition*/) {
     rowNumber_ = 1;
   }
 
@@ -60,7 +60,6 @@ void registerRowNumber(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::RowColumn>& /*argColumns*/,
           const std::vector<TypePtr>& /*argTypes*/,
           const TypePtr& /*resultType*/,
           velox::memory::MemoryPool* /*pool*/)

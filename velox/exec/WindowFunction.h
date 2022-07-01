@@ -22,6 +22,14 @@
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
+class WindowPartition {
+ public:
+  virtual VectorPtr argColumn(vector_size_t idx) const = 0;
+
+  virtual vector_size_t numRows() const = 0;
+
+  virtual vector_size_t numArgs() const = 0;
+};
 
 class WindowFunction {
  public:
@@ -38,9 +46,13 @@ class WindowFunction {
     return pool_;
   }
 
-  /// Rows is a list of pointers to individual rows in the partition.
-  /// The rows are sorted as specified by the ORDER BY clause.
-  virtual void resetPartition(const folly::Range<char**>& rows) = 0;
+  /// This function is invoked by the Window operator when it
+  /// starts processing a new partition of rows in the input data.
+  /// The partition is stream of rows with the same values of the
+  /// partition keys and ordered by the sorting keys of the window.
+  /// The WindowPartition object can be used to access the
+  /// underlying rows of the partition.
+  virtual void resetPartition(const WindowPartition* partition) = 0;
 
   /// This function is invoked by the Window Operator to compute
   /// the window function for a batch of rows.
@@ -72,7 +84,6 @@ class WindowFunction {
 
   static std::unique_ptr<WindowFunction> create(
       const std::string& name,
-      const std::vector<RowColumn>& argColumns,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool);
@@ -83,7 +94,6 @@ class WindowFunction {
 };
 
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
-    const std::vector<RowColumn>& argColumns,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
     velox::memory::MemoryPool* pool)>;

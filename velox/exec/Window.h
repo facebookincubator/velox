@@ -55,6 +55,55 @@ class Window : public Operator {
     const std::optional<column_index_t> endChannel;
   };
 
+  // SimpleWindowPartition that builds over the RowContainer used for storing
+  // the input rows in this Window Operator.
+  class SimpleWindowPartition : public WindowPartition {
+   public:
+    SimpleWindowPartition(
+        std::vector<exec::RowColumn>& argColumns,
+        const std::vector<TypePtr>& argTypes,
+        velox::memory::MemoryPool* pool)
+        : argColumns_(argColumns) {
+      argVectors_.reserve(argColumns.size());
+      for (const auto& argType : argTypes) {
+        argVectors_.emplace_back(BaseVector::create(argType, 0, pool));
+      }
+    }
+
+    void resetPartition(const folly::Range<char**>& rows) {
+      numRows_ = rows.size();
+      // Setup the argument vectors for the rows in the partition.
+      for (int i = 0; i < argColumns_.size(); i++) {
+        argVectors_[i]->resize(numRows_);
+        exec::RowContainer::extractColumn(
+            rows.data(), numRows_, argColumns_[i], argVectors_[i]);
+      }
+    }
+
+    VectorPtr argColumn(vector_size_t idx) const override {
+      return argVectors_[idx];
+    }
+
+    vector_size_t numRows() const override {
+      return numRows_;
+    }
+
+    vector_size_t numArgs() const override {
+      return argVectors_.size();
+    }
+
+   private:
+    // This is a copy of the arg RowColumn objects that are used for
+    // accessing the partition row columns
+    std::vector<exec::RowColumn> argColumns_;
+
+    // This is a vector of all the argument column vectors obtained from the
+    // partition rows. These are used by functions for evaluation.
+    std::vector<VectorPtr> argVectors_;
+
+    vector_size_t numRows_;
+  };
+
   void setupPeerAndFrameBuffers();
 
   void computePartitionStartRows();
@@ -117,6 +166,11 @@ class Window : public Operator {
   // ordering can be used to split partitions (with the correct
   // order by) for the processing.
   std::vector<char*> sortedRows_;
+
+  // Vector of window partition objects (one per window function).
+  // These partition objects are accessed by the function to obtain
+  // argument vector values.
+  std::vector<std::unique_ptr<SimpleWindowPartition>> windowPartitions_;
 
   // Number of rows that be fit into an output block.
   vector_size_t numRowsPerOutput_;

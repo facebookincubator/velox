@@ -108,9 +108,11 @@ Window::Window(
       argColumns.push_back(data_->columnAt(fieldArgToChannel(arg).value()));
     }
 
+    windowPartitions_.push_back(
+        std::make_unique<SimpleWindowPartition>(argColumns, argTypes, pool()));
+
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(),
-        argColumns,
         argTypes,
         windowNodeFunction.functionCall->type(),
         operatorCtx_->pool()));
@@ -290,8 +292,9 @@ void Window::callResetPartition(vector_size_t idx) {
   auto partitionSize = partitionStartRows_[idx + 1] - partitionStartRows_[idx];
   auto partition = folly::Range(
       sortedRows_.data() + partitionStartRows_[idx], partitionSize);
-  for (const auto& windowFunction : windowFunctions_) {
-    windowFunction->resetPartition(partition);
+  for (int i = 0; i < windowFunctions_.size(); i++) {
+    windowPartitions_[i]->resetPartition(partition);
+    windowFunctions_[i]->resetPartition(windowPartitions_[i].get());
   }
 }
 

@@ -26,23 +26,12 @@ template <typename T>
 class NthValueFunction : public exec::WindowFunction {
  public:
   explicit NthValueFunction(
-      const std::vector<exec::RowColumn>& argColumns,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool), argColumns_(argColumns) {
-    columnVector_ = BaseVector::create(resultType, 0, pool);
-    offsetsVector_ = BaseVector::create(BIGINT(), 0, pool);
-  }
+      : WindowFunction(resultType, pool) {}
 
-  void resetPartition(const folly::Range<char**>& rows) {
-    columnVector_->resize(rows.size());
-    exec::RowContainer::extractColumn(
-        rows.data(), rows.size(), argColumns_[0], columnVector_);
-
-    offsetsVector_->resize(rows.size());
-    exec::RowContainer::extractColumn(
-        rows.data(), rows.size(), argColumns_[1], offsetsVector_);
-
+  void resetPartition(const exec::WindowPartition* partition) {
+    partition_ = partition;
     partitionOffset_ = 0;
   }
 
@@ -57,14 +46,17 @@ class NthValueFunction : public exec::WindowFunction {
 
     auto rawResultsBuffer = result->as<FlatVector<T>>()->mutableRawValues();
     auto frameStartsVector = frameStarts->as<vector_size_t>();
-    auto offsetsVector = offsetsVector_->as<FlatVector<int64_t>>();
-    auto firstArgVector = columnVector_->as<FlatVector<T>>();
+
+    auto columnVector = partition_->argColumn(0);
+    auto firstArgVector = columnVector->template as<FlatVector<T>>();
+    auto offsetsVector =
+        partition_->argColumn(1)->template as<FlatVector<int64_t>>();
 
     for (int i = 0; i < numRows; i++) {
       auto offset = offsetsVector->valueAt(partitionOffset_ + i);
       auto frameStart = frameStartsVector[partitionOffset_ + i];
 
-      if (columnVector_->isNullAt(frameStart + offset - 1)) {
+      if (columnVector->isNullAt(frameStart + offset - 1)) {
         result->setNull(resultOffset + i, true);
       } else {
         rawResultsBuffer[resultOffset + i] =
@@ -76,29 +68,20 @@ class NthValueFunction : public exec::WindowFunction {
   }
 
  private:
-  // This needs to be a copy of the argColumns passed to the function
-  // as we need to retain them across function calls.
-  std::vector<exec::RowColumn> argColumns_;
+  const exec::WindowPartition* partition_;
 
-  // This is a vector for the column that nth_value needs to extract.
-  // It is bound for all rows in the partition at a time.
-  VectorPtr columnVector_;
-  // This is a vector for the offsets column.
-  // It is bound for all rows in the partition at a time.
-  VectorPtr offsetsVector_;
   // This offset tracks how far along the partition rows have been output.
-  // This is used to index into the columnVector_ and offsetsVector_
+  // This is used to index into the argument vectors from the WindowPartition
   // while outputting all the rows for the partition.
   vector_size_t partitionOffset_;
 };
 
 template <TypeKind kind>
 std::unique_ptr<exec::WindowFunction> createNthValueFunction(
-    const std::vector<exec::RowColumn>& argColumns,
     const TypePtr& resultType,
     velox::memory::MemoryPool* pool) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<NthValueFunction<T>>(argColumns, resultType, pool);
+  return std::make_unique<NthValueFunction<T>>(resultType, pool);
 }
 
 } // namespace
@@ -117,14 +100,13 @@ void registerNthValue(const std::string& name) {
       name,
       std::move(signatures),
       [name](
-          const std::vector<exec::RowColumn>& argColumns,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           velox::memory::MemoryPool* pool)
           -> std::unique_ptr<exec::WindowFunction> {
         auto typeKind = argTypes[0]->kind();
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createNthValueFunction, typeKind, argColumns, resultType, pool);
+            createNthValueFunction, typeKind, resultType, pool);
       });
 }
 } // namespace facebook::velox::window
