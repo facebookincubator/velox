@@ -15,7 +15,6 @@
  */
 
 #include "velox/common/memory/MmapAllocator.h"
-#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
 
 #include <sys/mman.h>
@@ -325,9 +324,14 @@ MmapAllocator::SizeClass::SizeClass(size_t capacity, MachinePageCount unitSize)
       unitSize_(unitSize),
       byteSize_(capacity_ * unitSize_ * kPageSize),
       // Min 8 words + 1 bit for every 512 bits in 'pageAllocated_'.
-      mappedFreeLookup_(8 + (capacity / kPagesPerLookupBit / 64)),
-      pageAllocated_(capacity_ / 64 + 8),
-      pageMapped_(capacity_ / 64 + 8) {
+      mappedFreeLookup_((capacity / kPagesPerLookupBit / 64) + kSimdTail),
+      pageAllocated_(capacity_ / 64 + kSimdTail),
+      pageMapped_(capacity_ / 64 + kSimdTail) {
+  pageAllocated_.resize(pageAllocated_.size() - kSimdTail);
+  pageMapped_.resize(pageMapped_.size() - kSimdTail);
+  VELOX_CHECK_EQ(pageAllocated_.capacity(), pageAllocated_.size() + kSimdTail);
+  VELOX_CHECK_EQ(pageMapped_.capacity(), pageMapped_.size() + kSimdTail);
+
   VELOX_CHECK(
       capacity_ % 64 == 0, "Sizeclass must have a multiple of 64 capacity.");
   pageAllocated_.resize(pageAllocated_.size() - 8);
@@ -353,9 +357,9 @@ MmapAllocator::SizeClass::SizeClass(size_t capacity, MachinePageCount unitSize)
 MmapAllocator::SizeClass::~SizeClass() {
   munmap(address_, byteSize_);
 }
-
 ClassPageCount MmapAllocator::SizeClass::checkConsistency(
-							  ClassPageCount& numMapped, int32_t& numErrors) const {
+    ClassPageCount& numMapped,
+    int32_t& numErrors) const {
   int count = 0;
   int mappedCount = 0;
   int mappedFreeCount = 0;
@@ -370,37 +374,39 @@ ClassPageCount MmapAllocator::SizeClass::checkConsistency(
     if (i % 8 == 0) {
       int32_t mappedFreeInGroup = 0;
       for (auto j = i; j < i + 8; ++j) {
-	mappedFreeInGroup += __builtin_popcountll(pageMapped_[j] & ~pageAllocated_[j]);
+	mappedFreeInGroup +=
+              __builtin_popcountll(pageMapped_[j] & ~pageAllocated_[j]);
       }
-      if (bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-	if (!mappedFreeInGroup) {
-	  LOG(WARNING) << "Extra mapped free bit for group at " << i;
-	  ++numErrors;
-	}
-      } else {
-	if (mappedFreeInGroup) {
-	  ++numErrors;
-	  LOG(WARNING) << "Missing lookup bit for group at " << i;
-	}
-      }
-    }
-    if (numMappedFree) {
-      if (!bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-        ++missingMappedFreeBits;
-      }
-      lastWordWithMappedFree = i;
-    } else {
-      if (i - 7 % 8 == 0 && i - lastWordWithMappedFree > 7) {
         if (bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-          ++extraMappedFreeBits;
+          if (!mappedFreeInGroup) {
+            LOG(WARNING) << "Extra mapped free bit for group at " << i;
+            ++numErrors;
+	  } else {
+          if (mappedFreeInGroup) {
+            ++numErrors;
+            LOG(WARNING) << "Missing lookup bit for group at " << i;
+          }
         }
       }
+      if (numMappedFree) {
+        if (!bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
+          ++missingMappedFreeBits;
+        }
+        lastWordWithMappedFree = i;
+      } else {
+        if (i - 7 % 8 == 0 && i - lastWordWithMappedFree > 7) {
+          if (bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
+            ++extraMappedFreeBits;
+          }
+        }
+      }
+      mappedFreeCount += numMappedFree;
     }
-    mappedFreeCount += numMappedFree;
   }
   if (missingMappedFreeBits) {
     ++numErrors;
-    LOG(WARNING) << "Missing bits in mapped free lookup in size " << unitSize_;
+      LOG(WARNING) << "Missing bits in mapped free lookup in size "
+                   << unitSize_;
   }
   if (extraMappedFreeBits) {
     ++numErrors;
@@ -409,10 +415,10 @@ ClassPageCount MmapAllocator::SizeClass::checkConsistency(
   if (mappedFreeCount != numMappedFreePages_) {
     ++numErrors;
     LOG(WARNING) << "Mismatched count of mapped free pages in size class "
-                 << unitSize_ << ". Actual= " << mappedFreeCount
-                 << " vs recorded= " << numMappedFreePages_
-                 << ". Total mapped=" << mappedCount;
-  }
+                   << unitSize_ << ". Actual= " << mappedFreeCount
+		 << " vs recorded= " << numMappedFreePages_
+		 << ". Total mapped=" << mappedCount;
+    }
   numMapped = mappedCount;
   return count;
 }
@@ -461,7 +467,7 @@ bool MmapAllocator::SizeClass::allocateLocked(
   if (considerMappedOnly) {
     int previousPages = out.numPages();
     allocateFromMappdFree(considerMappedOnly, out);
-    auto numAllocated = (out.numPages()  - previousPages) / unitSize_;
+    auto numAllocated = (out.numPages() - previousPages) / unitSize_;
     if (numAllocated != considerMappedOnly) {
       VELOX_FAIL("Allocated different number of pages");
     }
@@ -518,7 +524,9 @@ int32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
     auto bits = simd::allSetBitMask<int64_t>() ^
         simd::toBitMask(candidates == xsimd::broadcast<uint64_t>(0LL));
     if (!bits) {
-      index = index + kWidth <= mappedFreeLookup_.size() - kWidth ? index + kWidth : 0;
+      index = index + kWidth <= mappedFreeLookup_.size() - kWidth
+          ? index + kWidth
+          : 0;
       continue;
     }
     lastLookupIndex_ = index;
@@ -529,7 +537,7 @@ int32_t MmapAllocator::SizeClass::findMappedFreeGroup() {
   }
   ClassPageCount ignore = 0;
   checkConsistency(ignore, ignore);
-  LOG(ERROR) << "MMAPL: Inconsistent mapped free lookup class " << unitSize_; 
+  LOG(ERROR) << "MMAPL: Inconsistent mapped free lookup class " << unitSize_;
   return -1;
 }
 
@@ -557,11 +565,12 @@ void MmapAllocator::SizeClass::allocateFromMappdFree(
           simd::toBitMask(bits == xsimd::broadcast<uint64_t>(0));
       if (!mask) {
         if (!(index < group + kWidth || anyFound)) {
-	  LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class " << unitSize_;
-	  bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
-	  return;
-	}
-	  continue;
+          LOG(ERROR) << "MMAPL: Lookup bit set but no free mapped pages class "
+                     << unitSize_;
+          bits::setBit(mappedFreeLookup_.data(), group / kWordsPerGroup, false);
+          return;
+        }
+        continue;
       }
       auto firstWord = bits::getAndClearLastSetBit(mask);
       anyFound = true;
@@ -742,7 +751,8 @@ bool MmapAllocator::checkConsistency() const {
   int32_t numErrors = 0;
   for (auto& sizeClass : sizeClasses_) {
     int mapped = 0;
-    count += sizeClass->checkConsistency(mapped, numErrors) * sizeClass->unitSize();
+    count +=
+        sizeClass->checkConsistency(mapped, numErrors) * sizeClass->unitSize();
     mappedCount += mapped * sizeClass->unitSize();
   }
   if (count != numAllocated_ - numExternalMapped_) {
@@ -757,7 +767,8 @@ bool MmapAllocator::checkConsistency() const {
                  << " recorded= " << numMapped_;
   }
   if (numErrors) {
-    LOG(ERROR) << "MmapAllocator::checkConsistency: " << numErrors << " errors";
+    LOG(ERROR) << "MmapAllocator::checkConsistency(): " << numErrors
+               << " errors";
   }
   return numErrors == 0;
 }
