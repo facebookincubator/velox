@@ -17,7 +17,8 @@
 // This file is a drop-in copy of Arrow's C Data Interface, as defined in:
 //   https://arrow.apache.org/docs/format/CDataInterface.html
 
-#pragma once
+#ifndef VELOX_ARROW_C_DATA_INTERFACE
+#define VELOX_ARROW_C_DATA_INTERFACE
 
 #include <stdint.h>
 
@@ -104,4 +105,6 @@ struct ArrowArrayStream {
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
