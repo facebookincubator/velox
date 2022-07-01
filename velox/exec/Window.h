@@ -78,7 +78,8 @@ class Window : public Operator {
   inline bool compareRowsWithKeys(
       const char* lhs,
       const char* rhs,
-      const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
+
+  const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
 
   bool finished_ = false;
   const vector_size_t outputBatchSizeInBytes_;
