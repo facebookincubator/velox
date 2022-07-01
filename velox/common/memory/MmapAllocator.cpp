@@ -137,14 +137,14 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
       ClockTimer timer(clocks);
       pages = sizeClass->free(allocation);
     }
-    if (pages) {
+    if (pages && FLAGS_velox_time_allocations) {
       // Increment the free time only if the allocation contained
       // pages in the class. Note that size class indices in the
       // allocator are not necessarily the same as in the stats.
       auto sizeIndex = Stats::sizeIndex(sizeClassSizes_[i] * kPageSize);
       stats_.sizes[sizeIndex].freeClocks += clocks;
-      numFreed += pages;
     }
+    numFreed += pages;
   }
   allocation.clear();
   return numFreed;

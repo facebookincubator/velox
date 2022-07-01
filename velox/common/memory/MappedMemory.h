@@ -30,6 +30,7 @@
 
 DECLARE_bool(velox_use_malloc);
 DECLARE_int32(velox_memory_pool_mb);
+DECLARE_bool(velox_time_allocations);
 
 namespace facebook::velox::memory {
 
@@ -38,18 +39,31 @@ struct SizeClassStats {
   int32_t size{0};
 
   /// Cumulative CPU clocks spent inside allocation.
-  int64_t allocateClocks{0};
+  std::atomic<uint64_t> allocateClocks{0};
 
   /// Cumulative CPU clocks spent inside free.
-  int64_t freeClocks{0};
+  std::atomic<uint64_t> freeClocks{0};
 
   /// Cumulative count of distinct allocations.
-  int64_t numAllocations{0};
+  std::atomic<int64_t> numAllocations{0};
 
   /// Cumulative count of bytes allocated. This is not size * numAllocations for
   /// large classes where the allocation does not have the exact size of the
   /// size class.
-  int64_t totalBytes{0};
+  std::atomic<int64_t> totalBytes{0};
+
+  SizeClassStats() {}
+  SizeClassStats(const SizeClassStats& other) {
+    *this = other;
+  }
+
+  void operator=(const SizeClassStats& other) {
+    size = other.size;
+    allocateClocks = static_cast<int64_t>(other.allocateClocks);
+    freeClocks = static_cast<int64_t>(other.freeClocks);
+    numAllocations = static_cast<int64_t>(other.numAllocations);
+    totalBytes = static_cast<int64_t>(other.totalBytes);
+  }
 
   SizeClassStats operator-(const SizeClassStats& other) const {
     SizeClassStats result;
@@ -82,26 +96,26 @@ struct Stats {
 
   template <typename Op>
   void recordAllocate(int64_t bytes, int32_t count, Op op) {
-    uint64_t clocks{0};
-    auto index = sizeIndex(bytes);
-    {
-      velox::ClockTimer timer(clocks);
+    if (FLAGS_velox_time_allocations) {
+      auto index = sizeIndex(bytes);
+      velox::ClockTimer timer(sizes[index].allocateClocks);
+      op();
+      sizes[index].numAllocations += count;
+      sizes[index].totalBytes += bytes * count;
+    } else {
       op();
     }
-    sizes[index].numAllocations += count;
-    sizes[index].totalBytes += bytes * count;
-    sizes[index].allocateClocks += clocks;
   }
 
   template <typename Op>
   void recordFree(int64_t bytes, Op op) {
-    uint64_t clocks = 0;
-    auto index = sizeIndex(bytes);
-    {
-      ClockTimer timer(clocks);
+    if (FLAGS_velox_time_allocations) {
+      auto index = sizeIndex(bytes);
+      ClockTimer timer(sizes[index].freeClocks);
+      op();
+    } else {
       op();
     }
-    sizes[index].freeClocks += clocks;
   }
 
   std::string toString() const;

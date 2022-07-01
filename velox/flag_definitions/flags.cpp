@@ -43,6 +43,11 @@ DEFINE_bool(
     true,
     "Use malloc for file cache and large operator allocations");
 
+DEFINE_bool(
+    velox_time_allocations,
+    true,
+    "Record time and volume for large allocation/free");
+
 // Used in common/base/VeloxException.cpp
 
 DEFINE_bool(
