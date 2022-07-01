@@ -360,57 +360,33 @@ MmapAllocator::SizeClass::~SizeClass() {
 ClassPageCount MmapAllocator::SizeClass::checkConsistency(
     ClassPageCount& numMapped,
     int32_t& numErrors) const {
+  constexpr int32_t kWordsPerLookupBit = kPagesPerLookupBit / 64;
   int count = 0;
   int mappedCount = 0;
   int mappedFreeCount = 0;
-  int32_t extraMappedFreeBits = 0;
-  int32_t missingMappedFreeBits = 0;
-  int32_t lastWordWithMappedFree = -1;
   for (int i = 0; i < pageAllocated_.size(); ++i) {
     count += __builtin_popcountll(pageAllocated_[i]);
     mappedCount += __builtin_popcountll(pageMapped_[i]);
     auto numMappedFree =
         __builtin_popcountll(~pageAllocated_[i] & pageMapped_[i]);
-    if (i % 8 == 0) {
+    mappedFreeCount += numMappedFree;
+
+    if (i % kWordsPerLookupBit == 0) {
       int32_t mappedFreeInGroup = 0;
-      for (auto j = i; j < i + 8; ++j) {
-	mappedFreeInGroup +=
-              __builtin_popcountll(pageMapped_[j] & ~pageAllocated_[j]);
+      for (auto j = i; j < i + kWordsPerLookupBit; ++j) {
+        mappedFreeInGroup +=
+            __builtin_popcountll(pageMapped_[j] & ~pageAllocated_[j]);
       }
-        if (bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-          if (!mappedFreeInGroup) {
-            LOG(WARNING) << "Extra mapped free bit for group at " << i;
-            ++numErrors;
-	  } else {
-          if (mappedFreeInGroup) {
-            ++numErrors;
-            LOG(WARNING) << "Missing lookup bit for group at " << i;
-          }
+      if (bits::isBitSet(mappedFreeLookup_.data(), i / kWordsPerLookupBit)) {
+        if (!mappedFreeInGroup) {
+          LOG(WARNING) << "Extra mapped free bit for group at " << i;
+          ++numErrors;
         }
+      } else if (mappedFreeInGroup) {
+        ++numErrors;
+        LOG(WARNING) << "Missing lookup bit for group at " << i;
       }
-      if (numMappedFree) {
-        if (!bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-          ++missingMappedFreeBits;
-        }
-        lastWordWithMappedFree = i;
-      } else {
-        if (i - 7 % 8 == 0 && i - lastWordWithMappedFree > 7) {
-          if (bits::isBitSet(mappedFreeLookup_.data(), i / 8)) {
-            ++extraMappedFreeBits;
-          }
-        }
-      }
-      mappedFreeCount += numMappedFree;
     }
-  }
-  if (missingMappedFreeBits) {
-    ++numErrors;
-      LOG(WARNING) << "Missing bits in mapped free lookup in size "
-                   << unitSize_;
-  }
-  if (extraMappedFreeBits) {
-    ++numErrors;
-    LOG(WARNING) << "Extra bits in mapped free lookup in size " << unitSize_;
   }
   if (mappedFreeCount != numMappedFreePages_) {
     ++numErrors;

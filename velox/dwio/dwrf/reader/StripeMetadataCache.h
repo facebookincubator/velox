@@ -38,12 +38,10 @@ class StripeMetadataCache {
       : mode_{mode}, buffer_{std::move(buffer)}, offsets_{std::move(offsets)} {}
 
   StripeMetadataCache(
-      const proto::PostScript& ps,
+      StripeCacheMode mode,
       const proto::Footer& footer,
       std::unique_ptr<dwio::common::SeekableInputStream> input)
-      : mode_(ps.cachemode()),
-        input_(std::move(input)),
-        offsets_(getOffsets(footer)) {
+      : mode_(mode), input_(std::move(input)), offsets_(getOffsets(footer)) {
     VELOX_CHECK(dynamic_cast<dwio::common::CacheInputStream*>(input_.get()));
   }
 
@@ -58,7 +56,7 @@ class StripeMetadataCache {
     return getIndex(mode, stripeIndex) != INVALID_INDEX;
   }
 
-  std::unique_ptr<dwio::common::SeekableArrayInputStream> get(
+  std::unique_ptr<dwio::common::SeekableInputStream> get(
       StripeCacheMode mode,
       uint64_t stripeIndex) const {
     auto index = getIndex(mode, stripeIndex);

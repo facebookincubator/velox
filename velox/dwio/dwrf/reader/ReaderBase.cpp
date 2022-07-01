@@ -184,13 +184,11 @@ ReaderBase::ReaderBase(
 
   // load stripe index/footer cache
   if (cacheSize > 0) {
-<<<<<<< HEAD
-    if (cacheSize > 1500000) {
-      LOG(INFO) << "MDCALD: " << cacheSize << getExceptionContext().message();
-    }
+    DWIO_ENSURE_EQ(getFileFormat(), FileFormat::DWRF);
+
     if (input_->shouldPrefetchStripes()) {
       cache_ = std::make_unique<StripeMetadataCache>(
-          *postScript_,
+						     postScript_->cacheMode(),
           *footer_,
           input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER));
       input_->load(LogType::FOOTER);
@@ -200,17 +198,8 @@ ReaderBase::ReaderBase(
       input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
           ->readFully(cacheBuffer->data(), cacheSize);
       cache_ = std::make_unique<StripeMetadataCache>(
-          *postScript_, *footer_, std::move(cacheBuffer));
+						     postScript_->cacheMode(), *footer_, std::move(cacheBuffer));
     }
-=======
-    DWIO_ENSURE_EQ(getFileFormat(), FileFormat::DWRF);
-    auto cacheBuffer =
-        std::make_shared<dwio::common::DataBuffer<char>>(pool, cacheSize);
-    input_->read(fileLength_ - tailSize, cacheSize, LogType::FOOTER)
-        ->readFully(cacheBuffer->data(), cacheSize);
-    cache_ = std::make_unique<StripeMetadataCache>(
-        postScript_->cacheMode(), *footer_, std::move(cacheBuffer));
->>>>>>> main
   }
   if (!cache_ && input_->shouldPrefetchStripes()) {
     auto numStripes = getFooter().stripes_size();
