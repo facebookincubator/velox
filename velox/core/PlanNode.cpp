@@ -506,6 +506,50 @@ void OrderByNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(stream, sortingKeys_, sortingOrders_);
 }
 
+namespace {
+RowTypePtr getWindowOutputType(
+    const RowTypePtr& inputType,
+    const std::vector<std::string>& windowColumnNames,
+    const std::vector<WindowNode::Function>& windowFunctions) {
+  VELOX_CHECK_EQ(
+      windowColumnNames.size(),
+      windowFunctions.size(),
+      "Number of window column names must be equal to number of window functions");
+
+  std::vector<std::string> names = inputType->names();
+  std::vector<TypePtr> types = inputType->children();
+
+  for (int32_t i = 0; i < windowColumnNames.size(); i++) {
+    names.push_back(windowColumnNames[i]);
+    types.push_back(windowFunctions[i].functionCall->type());
+  }
+  return ROW(std::move(names), std::move(types));
+}
+} // namespace
+
+WindowNode::WindowNode(
+    PlanNodeId& id,
+    std::vector<FieldAccessTypedExprPtr>& partitionKeys,
+    std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+    std::vector<SortOrder>& sortingOrders,
+    std::vector<std::string>& windowColumnNames,
+    std::vector<Function>& windowFunctions,
+    PlanNodePtr& source)
+    : PlanNode(std::move(id)),
+      partitionKeys_(std::move(partitionKeys)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      windowFunctions_(std::move(windowFunctions)),
+      sources_{std::move(source)},
+      outputType_(getWindowOutputType(
+          sources_[0]->outputType(),
+          windowColumnNames,
+          windowFunctions_)) {}
+
+void WindowNode::addDetails(std::stringstream& /* stream */) const {
+  VELOX_NYI();
+}
+
 void PlanNode::toString(
     std::stringstream& stream,
     bool detailed,
