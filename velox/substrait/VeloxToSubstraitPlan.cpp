@@ -64,22 +64,14 @@ namespace {
   // Do conversion.
   ::substrait::RelRoot* rootRel =
       substraitPlan->add_relations()->mutable_root();
-  toSubstrait(arena, plan, rootRel);
 
-  return *substraitPlan;
-}
-
-void VeloxToSubstraitPlanConvertor::toSubstrait(
-    google::protobuf::Arena& arena,
-    const core::PlanNodePtr& planNode,
-    ::substrait::RelRoot* rootRel) {
-  // Convert the plan.
-  ::substrait::Rel* rel = rootRel->mutable_input();
-  toSubstrait(arena, planNode, rel);
+  toSubstrait(arena, plan, rootRel->mutable_input());
   // Set RootRel names.
-  for (const auto& name : planNode->outputType()->names()) {
+  for (const auto& name : plan->outputType()->names()) {
     rootRel->add_names(name);
   }
+
+  return *substraitPlan;
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(

@@ -201,7 +201,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
           mapTypeKindToName(variantValue.kind()));
   }
 
-  literalExpr->set_nullable(true);
+  literalExpr->set_nullable(variantValue.isNull());
 
   return *literalExpr;
 }
@@ -223,7 +223,6 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
       litValue,
       substraitField);
 
-  substraitField->set_nullable(true);
   return *substraitField;
 }
 
@@ -308,6 +307,7 @@ VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
       VELOX_UNSUPPORTED("Unsupported type '{}'", std::string(type->kindName()));
     }
   }
+  substraitField->set_nullable(true);
   return *substraitField;
 }
 
