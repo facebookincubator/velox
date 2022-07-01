@@ -23,9 +23,10 @@ namespace facebook::velox::functions::sparksql {
 
 void registerArithmeticFunctions(const std::string& prefix) {
   // Operators.
-  registerBinaryNumeric<PlusFunction>({prefix + "add"});
-  registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
-  registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
+  registerPlus(prefix + "add");
+  registerMinus(prefix + "subtract");
+  registerMultiply(prefix + "multiply");
+
   registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
   registerBinaryIntegral<RemainderFunction>({prefix + "remainder"});
   registerUnaryNumeric<UnaryMinusFunction>({prefix + "unaryminus"});

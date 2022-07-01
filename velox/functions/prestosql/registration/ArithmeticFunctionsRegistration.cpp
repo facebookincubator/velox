@@ -24,10 +24,11 @@ namespace facebook::velox::functions {
 
 namespace {
 void registerSimpleFunctions() {
-  registerBinaryFloatingPoint<PlusFunction>({"plus"});
-  registerBinaryFloatingPoint<MinusFunction>({"minus"});
-  registerBinaryFloatingPoint<MultiplyFunction>({"multiply"});
-  registerBinaryFloatingPoint<DivideFunction>({"divide"});
+  registerPlus("plus");
+  registerMinus("minus");
+  registerMultiply("multiply");
+  registerDivide("divide");
+
   registerBinaryFloatingPoint<ModulusFunction>({"mod"});
   registerUnaryNumeric<CeilFunction>({"ceil", "ceiling"});
   registerUnaryNumeric<FloorFunction>({"floor"});
