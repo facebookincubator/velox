@@ -17,6 +17,7 @@
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
+#include "velox/functions/prestosql/Clamp.h"
 #include "velox/functions/prestosql/Rand.h"
 
 namespace facebook::velox::functions {
@@ -44,15 +45,6 @@ void registerSimpleFunctions() {
   registerFunction<PowerFunction, double, double, double>({"power", "pow"});
   registerFunction<PowerFunction, double, int64_t, int64_t>({"power", "pow"});
   registerFunction<ExpFunction, double, double>({"exp"});
-  registerFunction<ClampFunction, int8_t, int8_t, int8_t, int8_t>({"clamp"});
-  registerFunction<ClampFunction, int16_t, int16_t, int16_t, int16_t>(
-      {"clamp"});
-  registerFunction<ClampFunction, int32_t, int32_t, int32_t, int32_t>(
-      {"clamp"});
-  registerFunction<ClampFunction, int64_t, int64_t, int64_t, int64_t>(
-      {"clamp"});
-  registerFunction<ClampFunction, double, double, double, double>({"clamp"});
-  registerFunction<ClampFunction, float, float, float, float>({"clamp"});
   registerFunction<LnFunction, double, double>({"ln"});
   registerFunction<Log2Function, double, double>({"log2"});
   registerFunction<Log10Function, double, double>({"log10"});
@@ -86,6 +78,8 @@ void registerSimpleFunctions() {
   registerFunction<ToBaseFunction, Varchar, int64_t, int64_t>({"to_base"});
   registerFunction<PiFunction, double>({"pi"});
   registerFunction<EulerConstantFunction, double>({"e"});
+
+  registerClamp("clamp");
 }
 
 } // namespace
