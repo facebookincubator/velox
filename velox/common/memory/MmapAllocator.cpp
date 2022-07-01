@@ -72,7 +72,7 @@ bool MmapAllocator::allocate(
   MachinePageCount newMapsNeeded = 0;
   for (int i = 0; i < mix.numSizes; ++i) {
     bool success;
-    stats_.recordAlloc(
+    stats_.recordAllocate(
         sizeClassSizes_[mix.sizeIndices[i]] * kPageSize,
         mix.sizeCounts[i],
         [&]() {
@@ -144,8 +144,13 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
       ClockTimer timer(clocks);
       pages = sizeClass->free(allocation);
     }
-    if (pages)
-      stats_.sizes[i].freeClocks += clocks;
+    if (pages && FLAGS_velox_time_allocations) {
+      // Increment the free time only if the allocation contained
+      // pages in the class. Note that size class indices in the
+      // allocator are not necessarily the same as in the stats.
+      auto sizeIndex = Stats::sizeIndex(sizeClassSizes_[i] * kPageSize);
+      stats_.sizes[sizeIndex].freeClocks += clocks;
+    }
     numFreed += pages;
   }
   allocation.clear();
