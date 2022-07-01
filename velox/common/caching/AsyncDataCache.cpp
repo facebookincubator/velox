@@ -199,6 +199,7 @@ CachePin CacheShard::findOrCreate(
       emptySlots_.pop_back();
       entries_[index] = std::move(newEntry);
     }
+    newBytes_ += size;
     ++numNew_;
     // Inside the shard mutex.
     VELOX_CHECK_EQ(0, entryToInit->size_);
@@ -444,6 +445,7 @@ void CacheShard::updateStats(CacheStats& stats) {
   }
   stats.numHit += numHit_;
   stats.numNew += numNew_;
+  stats.cumSize += newBytes_;
   stats.numEvict += numEvict_;
   stats.numEvictChecks += numEvictChecks_;
   stats.numWaitExclusive += numWaitExclusive_;

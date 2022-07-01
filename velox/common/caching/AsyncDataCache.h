@@ -440,6 +440,8 @@ class CoalescedLoad {
 // Struct for CacheShard stats. Stats from all shards are added into
 // this struct to provide a snapshot of state.
 struct CacheStats {
+  // Lifetime allocated bytes.
+  int64_t cumSize{};
   // Total size in 'tynyData_'
   int64_t tinySize{};
   // Total size in 'data_'
@@ -480,20 +482,6 @@ struct CacheStats {
   // lifetime for entries in cache.
   int64_t sumEvictScore{};
 };
-
-class ClockTimer {
- public:
-  explicit ClockTimer(std::atomic<uint64_t>& total)
-      : total_(&total), start_(folly::hardware_timestamp()) {}
-  ~ClockTimer() {
-    *total_ += folly::hardware_timestamp() - start_;
-  }
-
- private:
-  std::atomic<uint64_t>* FOLLY_NONNULL total_;
-  uint64_t start_;
-};
-
 // Collection of cache entries whose key hashes to the same shard of
 // the hash number space.  The cache population is divided into shards
 // to decrease contention on the mutex for the key to entry mapping
@@ -578,6 +566,8 @@ class CacheShard {
   uint64_t numWaitExclusive_{};
   // Cumulative count of new entry creation.
   uint64_t numNew_{};
+  // Cumulative allocated bytes.
+  int64_t newBytes_{};
   // Count of entries evicted.
   uint64_t numEvict_{};
   // Count of entries considered for eviction. This divided by
@@ -724,6 +714,10 @@ class AsyncDataCache : public memory::MappedMemory {
 
   int32_t& numSkippedSaves() {
     return numSkippedSaves_;
+  }
+
+  memory::Stats stats() const override {
+    return mappedMemory_->stats();
   }
 
  private:
