@@ -339,9 +339,9 @@ ClassPageCount MmapAllocator::SizeClass::checkConsistency(
           ++numErrors;
         }
       } else if (mappedFreeInGroup) {
-          ++numErrors;
-          LOG(WARNING) << "Missing lookup bit for group at " << i;
-        }
+        ++numErrors;
+        LOG(WARNING) << "Missing lookup bit for group at " << i;
+      }
     }
   }
   if (mappedFreeCount != numMappedFreePages_) {
