@@ -213,6 +213,33 @@ struct MonthFunction : public InitSessionTimezone<T>,
 };
 
 template <typename T>
+struct WeekFunction : public InitSessionTimezone<T>,
+                      public TimestampWithTimezoneSupport<T> {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE int64_t getWeek(const std::tm& time) {
+    return (time.tm_yday - time.tm_wday + 7) / 7;
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Timestamp>& timestamp) {
+    result = getWeek(getDateTime(timestamp, this->timeZone_));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& date) {
+    result = getWeek(getDateTime(date));
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
+    auto timestamp = this->toTimestamp(timestampWithTimezone);
+    result = getWeek(getDateTime(timestamp, nullptr));
+  }
+};
+
+template <typename T>
 struct DayFunction : public InitSessionTimezone<T>,
                      public TimestampWithTimezoneSupport<T> {
   VELOX_DEFINE_FUNCTION_TYPES(T);
