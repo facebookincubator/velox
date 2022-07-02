@@ -1449,6 +1449,21 @@ class AssignUniqueIdNode : public PlanNode {
   std::shared_ptr<std::atomic_int64_t> uniqueIdCounter_;
 };
 
+/// PlanNode used for evaluating Sql window functions.
+/// All window functions evaluated in the operator have the same
+/// window spec (partition keys + order columns).
+/// If no partition keys are specified, then all input rows
+/// are considered to be in a single partition.
+/// If no order by columns are specified, then the input rows order
+/// is non-deterministic.
+/// Each window function also has a frame which specifies the sliding
+/// window over which it is computed. The frame
+/// could be RANGE (based on peers which are all rows with the same
+/// ORDER BY value) or ROWS (position based).
+/// The frame bound types are CURRENT_ROW, (expression or UNBOUNDED)
+/// ROWS_PRECEDING and (expression or UNBOUNDED) ROWS_FOLLOWING.
+/// The WindowNode has one passthrough output column for each input
+/// column followed by the results of the window functions.
 class WindowNode : public PlanNode {
  public:
   enum class WindowType { kRange, kRows };
@@ -1475,6 +1490,9 @@ class WindowNode : public PlanNode {
     bool ignoreNulls;
   };
 
+  /// @windowColumnNames parameter specifies the output column
+  /// names for each window function column. So
+  /// windowColumnNames.length() = windowFunctions.length().
   WindowNode(
       PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr>& partitionKeys,
@@ -1488,6 +1506,8 @@ class WindowNode : public PlanNode {
     return sources_;
   }
 
+  /// The outputType is the concatenation of the input columns
+  /// with the output columns of each window function.
   const RowTypePtr& outputType() const override {
     return outputType_;
   }
