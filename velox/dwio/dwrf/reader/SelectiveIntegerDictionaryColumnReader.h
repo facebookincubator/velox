@@ -34,6 +34,7 @@ class SelectiveIntegerDictionaryColumnReader
 
   void seekToRowGroup(uint32_t index) override {
     ensureRowGroupIndex();
+    SelectiveColumnReader::seekToRowGroup(index);
 
     auto positions = toPositions(index_->entry(index));
     dwio::common::PositionProvider positionsProvider(positions);

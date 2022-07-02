@@ -88,6 +88,39 @@ std::vector<uint32_t> SelectiveStructColumnReader::filterRowGroups(
   return stridesToSkip;
 }
 
+void SelectiveStructColumnReader::seekTo(
+    vector_size_t offset,
+    bool readsNullsOnly) {
+  if (offset == readOffset_) {
+    return;
+  }
+  if (readOffset_ < offset) {
+    if (numParentNulls_) {
+      VELOX_CHECK_LE(
+          parentNullsRecordedTo_,
+          offset,
+          "Must not seek to before parentNullsRecordedTo_");
+    }
+    auto distance = offset - readOffset_ - numParentNulls_;
+    auto numNonNulls = ColumnReader::skip(distance);
+    // We inform children how many nulls there were between original position
+    // and destination. The children will seek this many less. The
+    // nulls include the nulls found here as well as the enclosing
+    // level nulls reported to this by parents.
+    for (auto& child : children_) {
+      if (child) {
+        child->addSkippedParentNulls(
+            readOffset_, offset, numParentNulls_ + distance - numNonNulls);
+      }
+    }
+    numParentNulls_ = 0;
+    parentNullsRecordedTo_ = 0;
+    readOffset_ = offset;
+  } else {
+    VELOX_FAIL("Seeking backward on a ColumnReader");
+  }
+}
+
 uint64_t SelectiveStructColumnReader::skip(uint64_t numValues) {
   auto numNonNulls = ColumnReader::skip(numValues);
   // 'readOffset_' of struct child readers is aligned with
@@ -152,6 +185,20 @@ void SelectiveStructColumnReader::read(
   const uint64_t* structNulls =
       nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
   bool hasFilter = false;
+  // a struct reader may have a null/non-null filter
+  if (scanSpec_->filter()) {
+    auto kind = scanSpec_->filter()->kind();
+    VELOX_CHECK(
+        kind == common::FilterKind::kIsNull ||
+        kind == common::FilterKind::kIsNotNull);
+    hasFilter = true;
+    filterNulls<int32_t>(rows, kind == common::FilterKind::kIsNull, false);
+    if (outputRows_.empty()) {
+      recordParentNullsInChildren(offset, rows);
+      return;
+    }
+    activeRows = outputRows_;
+  }
   assert(!children_.empty());
   for (size_t i = 0; i < childSpecs.size(); ++i) {
     auto& childSpec = childSpecs[i];
@@ -161,12 +208,12 @@ void SelectiveStructColumnReader::read(
     auto fieldIndex = childSpec->subscript();
     auto reader = children_.at(fieldIndex).get();
     if (reader->isTopLevel() && childSpec->projectOut() &&
-        !childSpec->filter() && !childSpec->extractValues()) {
+        !childSpec->hasFilter() && !childSpec->extractValues()) {
       // Will make a LazyVector.
       continue;
     }
     advanceFieldReader(reader, offset);
-    if (childSpec->filter()) {
+    if (childSpec->hasFilter()) {
       hasFilter = true;
       {
         SelectivityTimer timer(childSpec->selectivity(), activeRows.size());
@@ -187,11 +234,33 @@ void SelectiveStructColumnReader::read(
       reader->read(offset, activeRows, structNulls);
     }
   }
+  // If this adds nulls, the field readers will miss a value for each null added
+  // here.
+  recordParentNullsInChildren(offset, rows);
+
   if (hasFilter) {
     setOutputRows(activeRows);
   }
   lazyVectorReadOffset_ = offset;
   readOffset_ = offset + rows.back() + 1;
+}
+
+void SelectiveStructColumnReader::recordParentNullsInChildren(
+    vector_size_t offset,
+    RowSet rows) {
+  auto& childSpecs = scanSpec_->children();
+  for (auto i = 0; i < childSpecs.size(); ++i) {
+    auto& childSpec = childSpecs[i];
+    if (childSpec->isConstant()) {
+      continue;
+    }
+    auto fieldIndex = childSpec->subscript();
+    auto reader = children_.at(fieldIndex).get();
+    reader->addParentNulls(
+        offset,
+        nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr,
+        rows);
+  }
 }
 
 namespace {
@@ -265,7 +334,7 @@ void SelectiveStructColumnReader::getValues(RowSet rows, VectorPtr* result) {
       resultRow->childAt(channel) = BaseVector::wrapInConstant(
           rows.size(), 0, childSpec->constantValue());
     } else {
-      if (!childSpec->extractValues() && !childSpec->filter() &&
+      if (!childSpec->extractValues() && !childSpec->hasFilter() &&
           children_[index]->isTopLevel()) {
         // LazyVector result.
         if (!lazyPrepared) {

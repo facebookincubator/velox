@@ -16,7 +16,10 @@
 
 #include "velox/dwio/dwrf/test/E2EFilterTestBase.h"
 
+#include <folly/init/Init.h>
+
 DEFINE_int32(timing_repeats, 0, "Count of repeats for timing filter tests");
+DEFINE_bool(verbose, false, "Print filter test times");
 
 namespace facebook::velox::dwio::dwrf {
 
@@ -321,6 +324,14 @@ void E2EFilterTestBase::testFilterSpecs(
     for (auto i = 0; i < FLAGS_timing_repeats; ++i) {
       readWithFilter(spec, batches_, hitRows, timeWithFilter, false, true);
     }
+    if (FLAGS_verbose) {
+      std::cout << fmt::format(
+          "    {} hits in {} us, {} input rows/s\n",
+          hitRows.size(),
+          timeWithFilter,
+          batches_[0]->size() * batches_.size() * FLAGS_timing_repeats /
+              (timeWithFilter / 1000000.0));
+    }
   }
   // Redo the test with LazyVectors for non-filtered columns.
   timeWithFilter = 0;
@@ -370,6 +381,11 @@ void E2EFilterTestBase::testWithTypes(
   for (int32_t noVInts = 0; noVInts < (tryNoVInts ? 2 : 1); ++noVInts) {
     useVInts_ = !noVInts;
     for (int32_t noNulls = 0; noNulls < (tryNoNulls ? 2 : 1); ++noNulls) {
+      if (FLAGS_verbose) {
+        std::cout << "Running with " << (noNulls ? " no nulls " : "nulls")
+                  << " and " << (noVInts ? " no VInts " : " VInts ")
+                  << std::endl;
+      }
       filterGenerator->reseedRng();
 
       auto newCustomize = customize;
@@ -385,6 +401,10 @@ void E2EFilterTestBase::testWithTypes(
       for (auto i = 0; i < numCombinations; ++i) {
         std::vector<FilterSpec> specs =
             filterGenerator->makeRandomSpecs(filterable, 125);
+        if (FLAGS_verbose) {
+          std::cout << i << ": " << FilterGenerator::specsToString(specs)
+                    << std::endl;
+        }
         testFilterSpecs(specs);
       }
       makeDataset(customize, true);
@@ -421,3 +441,13 @@ void OwnershipChecker::check(const VectorPtr& batch) {
 }
 
 } // namespace facebook::velox::dwio::dwrf
+// Define main so that gflags get processed.
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  folly::init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}
+
+void pv(facebook::velox::BaseVector* v, int from, int to) {
+  std::cout << v->toString(from, to) << std::endl;
+}

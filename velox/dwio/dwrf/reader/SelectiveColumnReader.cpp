@@ -103,10 +103,19 @@ void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
     return;
   }
   if (readOffset_ < offset) {
+    if (numParentNulls_) {
+      VELOX_CHECK_LE(
+          parentNullsRecordedTo_,
+          offset,
+          "Must not seek to before parentNullsRecordedTo_");
+    }
+    auto distance = offset - readOffset_ - numParentNulls_;
+    numParentNulls_ = 0;
+    parentNullsRecordedTo_ = 0;
     if (readsNullsOnly) {
-      ColumnReader::skip(offset - readOffset_);
+      ColumnReader::skip(distance);
     } else {
-      skip(offset - readOffset_);
+      skip(distance);
     }
     readOffset_ = offset;
   } else {
@@ -122,7 +131,7 @@ void SelectiveColumnReader::prepareNulls(RowSet rows, bool hasNulls) {
   auto numRows = rows.size();
   if (useBulkPath()) {
     bool isDense = rows.back() == rows.size() - 1;
-    if (!scanSpec_->filter()) {
+    if (!scanSpec_->hasFilter()) {
       anyNulls_ = nullsInReadRange_ != nullptr;
       returnReaderNulls_ = anyNulls_ && isDense;
       // No need for null flags if fast path
@@ -336,6 +345,33 @@ void SelectiveColumnReader::resetFilterCaches() {
         FilterResult::kUnknown,
         scanState_.filterCache.size());
   }
+}
+
+void SelectiveColumnReader::addParentNulls(
+    int32_t firstRowInNulls,
+    const uint64_t* nulls,
+    RowSet rows) {
+  int32_t firstNullIndex =
+      readOffset_ < firstRowInNulls ? 0 : readOffset_ - firstRowInNulls;
+  numParentNulls_ +=
+      nulls ? bits::countNulls(nulls, firstNullIndex, rows.back() + 1) : 0;
+  parentNullsRecordedTo_ = firstRowInNulls + rows.back() + 1;
+}
+
+void SelectiveColumnReader::addSkippedParentNulls(
+    vector_size_t from,
+    vector_size_t to,
+    int32_t numNulls) {
+  if (from / rowsPerRowGroup_ > parentNullsRecordedTo_ / rowsPerRowGroup_) {
+    // the new nulls are in a different row group than the last.
+    parentNullsRecordedTo_ = from;
+    numParentNulls_ = 0;
+  }
+  if (parentNullsRecordedTo_) {
+    VELOX_CHECK_EQ(parentNullsRecordedTo_, from);
+  }
+  numParentNulls_ += numNulls;
+  parentNullsRecordedTo_ = to;
 }
 
 std::vector<uint64_t> toPositions(const proto::RowIndexEntry& entry) {

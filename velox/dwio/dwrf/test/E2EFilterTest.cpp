@@ -237,3 +237,23 @@ TEST_F(E2EFilterTest, lazyStruct) {
       true,
       false);
 }
+
+TEST_F(E2EFilterTest, filterStruct) {
+  // The data has a struct member with one second level struct
+  // column. Both structs have a column that gets filtered 'nestedxxx'
+  // and one that does not 'dataxxx'.
+  testWithTypes(
+      "long_val:bigint,"
+      "outer_struct: struct<nested1:bigint, "
+      "  data1: string, "
+      "  inner_struct: struct<nested2: bigint, data2: smallint>>",
+      [&]() {},
+      true,
+      {"long_val",
+       "outer_struct.inner_struct",
+       "outer_struct.nested1",
+       "outer_struct.inner_struct.nested2"},
+      40,
+      true,
+      false);
+}
