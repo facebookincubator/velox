@@ -15,6 +15,7 @@
  */
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/Cardinality.h"
+#include "velox/functions/prestosql/Uuid.h"
 
 namespace facebook::velox::functions {
 
@@ -34,6 +35,7 @@ void registerGeneralFunctions() {
   registerFunction<CardinalityFunction, int64_t, Array<Any>>({"cardinality"});
   registerFunction<CardinalityFunction, int64_t, Map<Any, Any>>(
       {"cardinality"});
+  registerFunction<UuidFunction, Varchar>({"uuid"});
 }
 
 } // namespace facebook::velox::functions
