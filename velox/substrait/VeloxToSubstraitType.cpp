@@ -30,7 +30,6 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
       auto substraitBool =
           google::protobuf::Arena::CreateMessage<::substrait::Type_Boolean>(
               &arena);
-
       substraitBool->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       substraitType->set_allocated_bool_(substraitBool);
@@ -145,7 +144,15 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
 
       break;
     }
-    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::UNKNOWN: {
+      auto substraitUserDefined =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_UserDefined>(
+              &arena);
+      substraitUserDefined->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      substraitType->set_allocated_user_defined(substraitUserDefined);
+      break;
+    }
     case velox::TypeKind::FUNCTION:
     case velox::TypeKind::OPAQUE:
     case velox::TypeKind::INVALID:
