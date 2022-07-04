@@ -94,6 +94,16 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, filter) {
   assertPlanConversion(plan, "SELECT * FROM tmp WHERE c2 < 1000");
 }
 
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, null) {
+  RowVectorPtr vectors = makeRowVector(
+      {makeFlatVector<int32_t>({3, 2}),
+       makeFlatVector<int32_t>(2, nullptr, nullEvery(1))});
+  createDuckDbTable({vectors});
+
+  auto plan = PlanBuilder().values({vectors}).project({"NULL"}).planNode();
+  assertPlanConversion(plan, "SELECT NULL FROM tmp ");
+}
+
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {
   RowVectorPtr vectors = makeRowVector(
       {makeFlatVector<int64_t>(

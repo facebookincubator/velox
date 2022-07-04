@@ -41,9 +41,9 @@ void convertVectorValue(
     if (childToFlatVec->isNullAt(i)) {
       // Process the null value.
       substraitField->MergeFrom(
-          exprConvertor_->toSubstraitNullLiteral(arena, childType));
+          exprConvertor_->toSubstraitNullLiteral(arena, childType->kind()));
     } else {
-      substraitField->MergeFrom(exprConvertor_->toSubstraitLiteral(
+      substraitField->MergeFrom(exprConvertor_->toSubstraitNotNullLiteral(
           arena, static_cast<const variant>(childToFlatVec->valueAt(i))));
     }
   }
@@ -178,31 +178,12 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
   ::substrait::Expression_Literal* literalExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
-  switch (variantValue.kind()) {
-    case velox::TypeKind::DOUBLE: {
-      literalExpr->set_fp64(variantValue.value<TypeKind::DOUBLE>());
-      break;
-    }
-    case velox::TypeKind::BIGINT: {
-      literalExpr->set_i64(variantValue.value<TypeKind::BIGINT>());
-      break;
-    }
-    case velox::TypeKind::INTEGER: {
-      literalExpr->set_i32(variantValue.value<TypeKind::INTEGER>());
-      break;
-    }
-    case velox::TypeKind::BOOLEAN: {
-      literalExpr->set_boolean(variantValue.value<TypeKind::BOOLEAN>());
-      break;
-    }
-    default:
-      VELOX_NYI(
-          "Unsupported constant Type '{}' ",
-          mapTypeKindToName(variantValue.kind()));
+
+  if (variantValue.isNull()) {
+    literalExpr->MergeFrom(toSubstraitNullLiteral(arena, variantValue.kind()));
+  } else {
+    literalExpr->MergeFrom(toSubstraitNotNullLiteral(arena, variantValue));
   }
-
-  literalExpr->set_nullable(variantValue.isNull());
-
   return *literalExpr;
 }
 
@@ -227,13 +208,48 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
 }
 
 const ::substrait::Expression_Literal&
+VeloxToSubstraitExprConvertor::toSubstraitNotNullLiteral(
+    google::protobuf::Arena& arena,
+    const velox::variant& variantValue) {
+  ::substrait::Expression_Literal* literalExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
+          &arena);
+  switch (variantValue.kind()) {
+    case velox::TypeKind::DOUBLE: {
+      literalExpr->set_fp64(variantValue.value<TypeKind::DOUBLE>());
+      break;
+    }
+    case velox::TypeKind::BIGINT: {
+      literalExpr->set_i64(variantValue.value<TypeKind::BIGINT>());
+      break;
+    }
+    case velox::TypeKind::INTEGER: {
+      literalExpr->set_i32(variantValue.value<TypeKind::INTEGER>());
+      break;
+    }
+    case velox::TypeKind::BOOLEAN: {
+      literalExpr->set_boolean(variantValue.value<TypeKind::BOOLEAN>());
+      break;
+    }
+    default:
+      VELOX_NYI(
+          "Unsupported constant Type '{}' ",
+          mapTypeKindToName(variantValue.kind()));
+  }
+
+  literalExpr->set_nullable(false);
+
+  return *literalExpr;
+}
+
+const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& type) {
+    const velox::TypeKind& typeKind) {
   ::substrait::Expression_Literal* substraitField =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
-  switch (type->kind()) {
+  switch (typeKind) {
     case velox::TypeKind::BOOLEAN: {
       ::substrait::Type_Boolean* nullValue =
           google::protobuf::Arena::CreateMessage<::substrait::Type_Boolean>(
@@ -303,8 +319,19 @@ VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
       substraitField->mutable_null()->set_allocated_fp64(nullValue);
       break;
     }
+    case velox::TypeKind::UNKNOWN: {
+      ::substrait::Type_UserDefined* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_UserDefined>(
+              &arena);
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+
+      substraitField->mutable_null()->set_allocated_user_defined(nullValue);
+
+      break;
+    }
     default: {
-      VELOX_UNSUPPORTED("Unsupported type '{}'", std::string(type->kindName()));
+      VELOX_UNSUPPORTED("Unsupported type '{}'", mapTypeKindToName(typeKind));
     }
   }
   substraitField->set_nullable(true);
