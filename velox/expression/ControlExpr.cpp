@@ -84,73 +84,85 @@ void FieldReference::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
+  if (result) {
+    context.ensureWritable(rows, type_, result);
+  }
+
+  if (inputs_.empty()) {
+    // Reference to a top level column in the context.
+    auto& child = context.getField(index(context));
+    if (result) {
+      result->copy(child.get(), rows, nullptr);
+      return;
+    }
+
+    if (child->encoding() == VectorEncoding::Simple::CONSTANT) {
+      if (child.unique()) {
+        child->resize(rows.size());
+        result = child;
+      } else {
+        result = BaseVector::wrapInConstant(rows.size(), 0, child);
+      }
+      return;
+    }
+    result = child;
+    return;
+  }
   ExceptionContextSetter exceptionContext(
       {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
 
-  if (result) {
-    BaseVector::ensureWritable(rows, type_, context.pool(), &result);
-  }
-  const RowVector* row;
   DecodedVector decoded;
   VectorPtr input;
-  bool useDecode = false;
-  if (inputs_.empty()) {
-    row = context.row();
-  } else {
-    inputs_[0]->eval(rows, context, input);
+  inputs_[0]->eval(rows, context, input);
 
-    if (auto rowTry = input->as<RowVector>()) {
-      // Make sure output is not copied
-      if (rowTry->isCodegenOutput()) {
-        auto rowType = dynamic_cast<const RowType*>(rowTry->type().get());
-        index_ = rowType->getChildIdx(field_);
-        result = std::move(rowTry->childAt(index_));
-        VELOX_CHECK(result.unique());
-        return;
-      }
+  // Make sure output is not copied for codegen.
+  if (input->encoding() == VectorEncoding::Simple::ROW &&
+      input->asUnchecked<RowVector>()->isCodegenOutput()) {
+    auto rowType = reinterpret_cast<const RowType*>(input->type().get());
+    if (index_ == -1) {
+      index_ = rowType->getChildIdx(field_);
     }
+    result = std::move(input->asUnchecked<RowVector>()->childAt(index_));
+    VELOX_CHECK(result.unique());
+    return;
+  }
 
-    decoded.decode(*input.get(), rows);
-    useDecode = !decoded.isIdentityMapping();
-    const BaseVector* base = decoded.base();
-    VELOX_CHECK(base->encoding() == VectorEncoding::Simple::ROW);
-    row = base->as<const RowVector>();
-  }
+  decoded.decode(*input, rows);
+  auto useDecode = !decoded.isIdentityMapping();
+  const BaseVector* base = decoded.base();
+  VELOX_CHECK_EQ(base->encoding(), VectorEncoding::Simple::ROW);
+  auto row = const_cast<RowVector*>(base->asUnchecked<RowVector>());
   if (index_ == -1) {
-    auto rowType = dynamic_cast<const RowType*>(row->type().get());
-    VELOX_CHECK(rowType);
-    index_ = rowType->getChildIdx(field_);
+    index_ = row->type()->asRow().getChildIdx(field_);
   }
-  // If we refer to a column of the context row, this may have been
-  // peeled due to peeling off encoding, hence access it via
-  // 'context'.  Check if the child is unique before taking the second
-  // reference. Unique constant vectors can be resized in place, non-unique
-  // must be copied to set the size.
-  bool isUniqueChild = inputs_.empty() ? context.getField(index_).unique()
-                                       : row->childAt(index_).unique();
-  VectorPtr child =
-      inputs_.empty() ? context.getField(index_) : row->childAt(index_);
-  if (result.get()) {
+
+  auto& child = row->childAt(index_);
+  if (result) {
     auto indices = useDecode ? decoded.indices() : nullptr;
     result->copy(child.get(), rows, indices);
-  } else {
-    if (child->encoding() == VectorEncoding::Simple::LAZY) {
-      child = BaseVector::loadedVectorShared(child);
-    }
-    // The caller relies on vectors having a meaningful size. If we
-    // have a constant that is not wrapped in anything we set its size
-    // to correspond to rows.size(). This is in place for unique ones
-    // and a copy otherwise.
-    if (!useDecode && child->isConstantEncoding()) {
-      if (isUniqueChild) {
-        child->resize(rows.size());
-      } else {
-        child = BaseVector::wrapInConstant(rows.size(), 0, child);
-      }
-    }
-    result = useDecode ? std::move(decoded.wrap(child, *input.get(), rows))
-                       : std::move(child);
+    return;
   }
+  if (child->encoding() == VectorEncoding::Simple::LAZY) {
+    child = BaseVector::loadedVectorShared(child);
+  }
+  // The caller relies on vectors having a meaningful size. If we
+  // have a constant that is not wrapped in anything we set its size
+  // to correspond to rows.size(). This is in place for unique ones
+  // and a copy otherwise.
+  VectorPtr toReturn;
+  if (!useDecode && child->isConstantEncoding()) {
+    // Unique can be resized in place, otherwise must be copied to set the size.
+    if (child.unique()) {
+      child->resize(rows.size());
+      toReturn = child;
+    } else {
+      toReturn = BaseVector::wrapInConstant(rows.size(), 0, child);
+    }
+  } else {
+    toReturn = child;
+  }
+  result = useDecode ? std::move(decoded.wrap(toReturn, *input.get(), rows))
+                     : std::move(toReturn);
 }
 
 void FieldReference::evalSpecialFormSimplified(
@@ -221,8 +233,7 @@ void SwitchExpr::evalSpecialForm(
 
         if (thenRows.get()->hasSelections()) {
           if (result) {
-            BaseVector::ensureWritable(
-                *thenRows.get(), result->type(), context.pool(), &result);
+            context.ensureWritable(*thenRows.get(), result->type(), result);
           }
 
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
@@ -235,8 +246,7 @@ void SwitchExpr::evalSpecialForm(
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
     if (result) {
-      BaseVector::ensureWritable(
-          *remainingRows.get(), result->type(), context.pool(), &result);
+      context.ensureWritable(*remainingRows.get(), result->type(), result);
     }
 
     if (hasElseClause_) {
@@ -370,7 +380,7 @@ void ConjunctExpr::evalSpecialForm(
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
   VarSetter saveError(context.mutableThrowOnError(), false);
-  BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+  context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {
@@ -578,7 +588,8 @@ BooleanMix getFlatBool(
   const auto size = activeRows.end();
   switch (vector->encoding()) {
     case VectorEncoding::Simple::FLAT: {
-      auto values = vector->asFlatVector<bool>()->rawValues<uint64_t>();
+      auto values =
+          vector->asUnchecked<FlatVector<bool>>()->rawValues<uint64_t>();
       if (!values) {
         return BooleanMix::kAllNull;
       }

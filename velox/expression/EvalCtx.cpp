@@ -27,7 +27,7 @@ ContextSaver::~ContextSaver() {
   }
 }
 
-EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, const RowVector* row)
+EvalCtx::EvalCtx(core::ExecCtx* execCtx, ExprSet* exprSet, RowVector* row)
     : execCtx_(execCtx), exprSet_(exprSet), row_(row) {
   // TODO Change the API to replace raw pointers with non-const references.
   // Sanity check inputs to prevent crashes.
@@ -195,8 +195,8 @@ void EvalCtx::setErrors(
   rows.applyToSelected([&](auto row) { setError(row, exceptionPtr); });
 }
 
-const VectorPtr& EvalCtx::getField(int32_t index) const {
-  const VectorPtr* field;
+const VectorPtr& EvalCtx::getField(int32_t index) {
+  VectorPtr* field;
   if (!peeledFields_.empty()) {
     field = &peeledFields_[index];
   } else {
@@ -204,13 +204,33 @@ const VectorPtr& EvalCtx::getField(int32_t index) const {
   }
   if ((*field)->isLazy() && (*field)->asUnchecked<LazyVector>()->isLoaded()) {
     auto lazy = (*field)->asUnchecked<LazyVector>();
-    return lazy->loadedVectorShared();
+    *field = lazy->loadedVectorShared();
   }
   return *field;
 }
 
-void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
-  auto field = getField(index);
+BaseVector* EvalCtx::getRawField(int32_t index) const {
+  BaseVector* field;
+  if (!peeledFields_.empty()) {
+    field = peeledFields_[index].get();
+  } else {
+    field = row_->childAt(index).get();
+  }
+  if (field->isLazy() && field->asUnchecked<LazyVector>()->isLoaded()) {
+    return field->loadedVector();
+  }
+  return field;
+}
+
+const VectorPtr& EvalCtx::ensureFieldLoaded(
+    int32_t index,
+    const SelectivityVector& rows) {
+  auto& field = const_cast<VectorPtr&>(getField(index));
+  auto encoding = field->encoding();
+  if (encoding == VectorEncoding::Simple::FLAT) {
+    return field;
+  }
+
   if (isLazyNotLoaded(*field)) {
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
 
@@ -227,10 +247,33 @@ void EvalCtx::ensureFieldLoaded(int32_t index, const SelectivityVector& rows) {
         peeledFields_[index] = field;
       }
     }
+    return field;
   } else {
     // This is needed in any case because wrappers must be initialized also if
     // they contain a loaded lazyVector.
-    field->loadedVector();
+    if (encoding == VectorEncoding::Simple::LAZY) {
+      // The top level vector was lazy. Replace with loaded.
+      return setFieldAfterLoad(
+          index, field->asUnchecked<LazyVector>()->loadedVectorShared());
+    } else {
+      // Replaces nested LazyVectors with loaded vectors.
+      field->loadedVector();
+    }
+  }
+  return field;
+}
+
+const VectorPtr& EvalCtx::setFieldAfterLoad(
+    int32_t index,
+    const VectorPtr& field) {
+  if (peeledFields_.size() > index && peeledFields_[index]) {
+    peeledFields_[index] = field;
+    // Make the top ;level vector reference the loaded instead of the lazy.
+    row_->childAt(index)->loadedVector();
+    return peeledFields_[index];
+  } else {
+    row_->childAt(index) = field;
+    return row_->childAt(index);
   }
 }
 

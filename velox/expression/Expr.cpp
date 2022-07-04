@@ -260,15 +260,14 @@ void Expr::eval(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
-  // Make sure to include current expression in the error message in case of an
-  // exception.
-  ExceptionContextSetter exceptionContext(
-      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
-
   if (!rows.hasSelections()) {
     // empty input, return an empty vector of the right type
     result = BaseVector::createNullConstant(type(), 0, context.pool());
     return;
+  }
+
+  if (context.mode() == EvalMode::kFlatNonNull) {
+    return evalFlatNonNull(rows, context, result);
   }
 
   // Check if there are any IFs, ANDs or ORs. These expressions are special
@@ -282,10 +281,31 @@ void Expr::eval(
   // peeling and wrapping in the sub-nodes.
   //
   // TODO: Re-work the logic of deciding when to load which field.
-  if (!hasConditionals_ || distinctFields_.size() == 1) {
+  VarSetter mode(&context.mode(), context.mode());
+  if (context.mode() == EvalMode::kGeneric &&
+      (!hasConditionals_ || distinctFields_.size() == 1)) {
     // Load lazy vectors if any.
+    EvalMode newMode = EvalMode::kFlatNonNull;
+    bool allConstant = true;
     for (const auto& field : distinctFields_) {
-      context.ensureFieldLoaded(field->index(context), rows);
+      auto& vector = context.ensureFieldLoaded(field->index(context), rows);
+      auto encoding = vector->encoding();
+      if (encoding == VectorEncoding::Simple::CONSTANT) {
+        if (newMode == EvalMode::kFlatNonNull && vector->isNullAt(0)) {
+          newMode = EvalMode::kLazyLoaded;
+        }
+      } else {
+        allConstant = false;
+        if (newMode == EvalMode::kFlatNonNull && !vector->isFlatNonNull()) {
+          newMode = EvalMode::kLazyLoaded;
+        }
+      }
+    }
+    context.mode() = allConstant ? EvalMode::kLazyLoaded : newMode;
+
+    if (context.mode() == EvalMode::kFlatNonNull) {
+      evalFlatNonNull(rows, context, result);
+      return;
     }
   }
 
@@ -294,34 +314,40 @@ void Expr::eval(
     return;
   }
 
-  // Check if this expression has been evaluated already. If so, fetch and
-  // return the previously computed result.
-  if (checkGetSharedSubexprValues(rows, context, result)) {
+  // Return or update result of shared subexpr.
+  if (isMultiplyReferenced_) {
+    evalSharedSubexpr(rows, context, result);
     return;
   }
 
+  // Make sure to include current expression in the error message in case of
+  // an exception.
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
   evalEncodings(rows, context, result);
-
-  checkUpdateSharedSubexprValues(rows, context, result);
 }
 
-bool Expr::checkGetSharedSubexprValues(
+void Expr::evalSharedSubexpr(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
   // Common subexpression optimization and peeling off of encodings and lazy
   // vectors do not work well together. There are cases when expression
   // initially is evaluated on rows before peeling and later is evaluated on
-  // rows after peeling. In this case the row numbers in sharedSubexprRows_ are
-  // not comparable to 'rows'.
+  // rows after peeling. In this case the row numbers in sharedSubexprRows_
+  // are not comparable to 'rows'.
   //
   // For now, disable the optimization if any encodings have been peeled off.
-
-  if (!deterministic_ || !isMultiplyReferenced_ || !sharedSubexprValues_ ||
+  if (!deterministic_ ||
       context.wrapEncoding() != VectorEncoding::Simple::FLAT) {
-    return false;
+    evalEncodings(rows, context, result);
+    return;
   }
-
+  if (!sharedSubexprValues_) {
+    evalEncodings(rows, context, result);
+    updateSharedSubexprValues(rows, context, result);
+    return;
+  }
   if (!rows.isSubset(*sharedSubexprRows_)) {
     LocalSelectivityVector missingRowsHolder(context, rows);
     auto missingRows = missingRowsHolder.get();
@@ -340,18 +366,12 @@ bool Expr::checkGetSharedSubexprValues(
     evalEncodings(*missingRows, context, sharedSubexprValues_);
   }
   context.moveOrCopyResult(sharedSubexprValues_, rows, result);
-  return true;
 }
 
-void Expr::checkUpdateSharedSubexprValues(
+void Expr::updateSharedSubexprValues(
     const SelectivityVector& rows,
     EvalCtx& context,
     const VectorPtr& result) {
-  if (!isMultiplyReferenced_ || sharedSubexprValues_ ||
-      context.wrapEncoding() != VectorEncoding::Simple::FLAT) {
-    return;
-  }
-
   if (!sharedSubexprRows_) {
     sharedSubexprRows_ = context.execCtx()->getSelectivityVector(rows.size());
   }
@@ -568,6 +588,13 @@ void Expr::evalEncodings(
     const SelectivityVector& rows,
     EvalCtx& context,
     VectorPtr& result) {
+  if (context.mode() == EvalMode::kFlatNonNull) {
+    // We can come here in kFlatNonNull mode from shared subexprs. If the mode
+    // is on, we skip the peeling and nulls. We do not call evalFlatNonNull
+    // because this would redo the shared subexpr check.
+    evalAll(rows, context, result);
+    return;
+  }
   if (deterministic_ && !distinctFields_.empty()) {
     bool hasNonFlat = false;
     for (const auto& field : distinctFields_) {
@@ -678,7 +705,10 @@ void Expr::evalWithNulls(
     result = BaseVector::createNullConstant(type(), 0, context.pool());
     return;
   }
-
+  if (context.nullsPruned()) {
+    evalAll(rows, context, result);
+    return;
+  }
   if (propagatesNulls_) {
     bool mayHaveNulls = false;
     for (const auto& field : distinctFields_) {
@@ -921,6 +951,7 @@ void Expr::evalAll(
           remainingRows->begin(),
           remainingRows->end());
       if (!remainingRows->hasSelections()) {
+        context.releaseVectors(inputValues_);
         inputValues_.clear();
         setAllNulls(rows, context, result);
         return;
@@ -941,6 +972,7 @@ void Expr::evalAll(
     }
     deselectErrors(context, *nonNulls.get());
     if (!remainingRows->hasSelections()) {
+      context.releaseVectors(inputValues_);
       inputValues_.clear();
       setAllNulls(rows, context, result);
       return;
@@ -953,6 +985,87 @@ void Expr::evalAll(
   }
   if (remainingRows != &rows) {
     addNulls(rows, remainingRows->asRange().bits(), context, result);
+  }
+  context.releaseVectors(inputValues_);
+  inputValues_.clear();
+}
+
+void Expr::evalFlatNonNull(
+    const SelectivityVector& rows,
+    EvalCtx& context,
+    VectorPtr& result) {
+  if (isMultiplyReferenced_ && !inputs_.empty()) {
+    evalSharedSubexpr(rows, context, result);
+    return;
+  }
+  ExceptionContextSetter exceptionContext(
+      {[](auto* expr) { return static_cast<Expr*>(expr)->toString(); }, this});
+
+  if (isSpecialForm()) {
+    evalSpecialForm(rows, context, result);
+    return;
+  }
+  LocalSelectivityVector nonNulls(context);
+  auto* remainingRows = &rows;
+
+  inputValues_.resize(inputs_.size());
+  bool tryPeelArgs = deterministic_;
+  bool anyUnique = false;
+  for (int32_t i = 0; i < inputs_.size(); ++i) {
+    inputs_[i]->evalFlatNonNull(*remainingRows, context, inputValues_[i]);
+    anyUnique = anyUnique || inputValues_[i].unique();
+    tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
+    if (inputValues_[i]->mayHaveNulls()) {
+      if (remainingRows == &rows) {
+        nonNulls.allocate(rows.end());
+        *nonNulls.get() = rows;
+        remainingRows = nonNulls.get();
+        assert(remainingRows); // lint
+      }
+      nonNulls.get()->deselectNulls(
+          inputValues_[i]->flatRawNulls(rows),
+          remainingRows->begin(),
+          remainingRows->end());
+      if (!remainingRows->hasSelections()) {
+        inputValues_.clear();
+        setAllNulls(rows, context, result);
+        return;
+      }
+    }
+    // If any errors occurred evaluating the arguments, it's possible (even
+    // likely) that the values for those arguments were not defined which
+    // could lead to undefined behavior if we try to evaluate the current
+    // function on them.  It's safe to skip evaluating them since the value
+    // for this branch of the expression tree will be NULL for those rows
+    // anyway.
+    if (context.errors()) {
+      if (remainingRows == &rows) {
+        nonNulls.allocate(rows.end());
+        *nonNulls.get() = rows;
+        remainingRows = nonNulls.get();
+      }
+      deselectErrors(context, *nonNulls.get());
+      if (!remainingRows->hasSelections()) {
+        // Even though this is not supposed to produce nulls or check for them,
+        // the error value must be set to null to have an interpretable result
+        // vector.
+        setAllNulls(rows, context, result);
+        context.releaseVectors(inputValues_);
+        inputValues_.clear();
+        return;
+      }
+    }
+  }
+  if (!tryPeelArgs ||
+      !applyFunctionWithPeeling(rows, *remainingRows, context, result)) {
+    applyFunction(*remainingRows, context, result);
+  }
+  if (remainingRows != &rows) {
+    addNulls(rows, remainingRows->asRange().bits(), context, result);
+  }
+
+  if (anyUnique) {
+    context.releaseVectors(inputValues_);
   }
   inputValues_.clear();
 }

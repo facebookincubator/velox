@@ -2677,6 +2677,77 @@ TEST_F(ExprTest, specialFormPropagateNulls) {
 }
 
 namespace {
+// A function that makes nulls for some non-null arguments. Even is
+// 1, odd is 0 and multiple of 5 is null.
+class TestingIsEven : public exec::VectorFunction {
+ public:
+  bool isDefaultNullBehavior() const override {
+    return true;
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    BaseVector::ensureWritable(
+        rows, BIGINT(), context->pool(), result, &context->vectorPool());
+    VELOX_CHECK_EQ((*result)->typeKind(), TypeKind::BIGINT);
+    VELOX_CHECK_EQ(args[0]->typeKind(), TypeKind::BIGINT);
+    exec::LocalDecodedVector holder(*context, *args[0], rows);
+    auto decoded = holder.get();
+    auto typedResult = (*result)->asUnchecked<FlatVector<int64_t>>();
+    rows.applyToSelected([&](int row) {
+      auto value = decoded->valueAt<int64_t>(row);
+      if (value % 5 == 0) {
+        typedResult->setNull(row, true);
+      } else {
+        typedResult->set(row, value % 2 == 0);
+      }
+    });
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("bigint")
+                .argumentType("bigint")
+                .build()};
+  }
+};
+} // namespace
+
+TEST_F(ExprTest, flatNonNullGetsNull) {
+  exec::registerVectorFunction(
+      "test_is_even",
+      TestingIsEven::signatures(),
+      std::make_unique<TestingIsEven>());
+
+  // This test verifies an edge case where a flat non null
+  // null-preserving expression introduces nulls.
+  auto c0 = makeFlatVector<int64_t>(
+      15,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row == 4; });
+
+  auto rowVector = makeRowVector({c0});
+  auto evalResult = evaluate(
+      "test_is_even(c0) + test_is_even(c0 + 1) + test_is_even(c0 + 2)",
+      rowVector);
+  auto isEven = [](int64_t n) -> int64_t { return n % 2 == 0; };
+
+  auto expectedResult = makeFlatVector<int64_t>(
+      15,
+      [&](vector_size_t row) {
+        return isEven(row) + isEven(row + 1) + isEven(row + 2);
+      },
+      [](vector_size_t row) {
+        return row % 5 == 0 || (row + 1) % 5 == 0 || (row + 2) % 5 == 0;
+      });
+  assertEqualVectors(expectedResult, evalResult);
+}
+
+namespace {
 template <typename T>
 struct AlwaysThrowsFunction {
   template <typename TResult, typename TInput>
