@@ -41,6 +41,29 @@ namespace {
   }
 }
 
+// Merge the two RowTypePointer into one.
+std::shared_ptr<facebook::velox::RowType> mergeRowTypes(
+  RowTypePtr leftRowTypePtr, RowTypePtr rightRowTypePtr) {
+
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  // TODO: Swith to RowType::unionWith when it's implemented; 
+  // auto joinInputType = leftRowTypePtr->unionWith(rightRowTypePtr);
+  names.insert(names.end(), leftRowTypePtr->names().begin(), leftRowTypePtr->names().end());
+  names.insert(names.end(), rightRowTypePtr->names().begin(), rightRowTypePtr->names().end());
+  types.insert(types.end(), leftRowTypePtr->children().begin(), leftRowTypePtr->children().end());
+  types.insert(types.end(), rightRowTypePtr->children().begin(), rightRowTypePtr->children().end());
+  
+  // Union two input RowType. 
+  return std::make_shared<RowType>(std::move(names), std::move(types));
+}
+
+// Return true if the join type is supported.
+bool checkForSupportJoinType(const std::shared_ptr<const core::AbstractJoinNode>& nodePtr) {
+  // TODO: Implemented other types of Join.
+  return nodePtr->isInnerJoin();
+}
+
 } // namespace
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -87,26 +110,27 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     ::substrait::Rel* rel) {
   if (auto filterNode =
           std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
-    auto filterRel = rel->mutable_filter();
-    toSubstrait(arena, filterNode, filterRel);
+    toSubstrait(arena, filterNode, rel->mutable_filter());
     return;
   }
   if (auto valuesNode =
           std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
-    ::substrait::ReadRel* readRel = rel->mutable_read();
-    toSubstrait(arena, valuesNode, readRel);
+    toSubstrait(arena, valuesNode, rel->mutable_read());
     return;
   }
   if (auto projectNode =
           std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
-    ::substrait::ProjectRel* projectRel = rel->mutable_project();
-    toSubstrait(arena, projectNode, projectRel);
+    toSubstrait(arena, projectNode, rel->mutable_project());
     return;
   }
   if (auto aggregationNode =
           std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-    ::substrait::AggregateRel* aggregateRel = rel->mutable_aggregate();
-    toSubstrait(arena, aggregationNode, aggregateRel);
+    toSubstrait(arena, aggregationNode, rel->mutable_aggregate());
+    return;
+  }
+  if (auto joinNode =
+          std::dynamic_pointer_cast<const core::AbstractJoinNode>(planNode)) {
+    toSubstrait(arena, joinNode, rel->mutable_join());
     return;
   }
 }
@@ -307,6 +331,59 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
   aggregateRel->mutable_common()->mutable_direct();
 }
 
+void VeloxToSubstraitPlanConvertor::toSubstrait(
+    google::protobuf::Arena& arena,
+    const std::shared_ptr<const core::AbstractJoinNode>& joinNode,
+    ::substrait::JoinRel* joinRel) {
+  std::vector<core::PlanNodePtr> sources = joinNode->sources();
+  // JoinNode has exactly two input nodes.
+  VELOX_USER_CHECK_EQ(
+      2, sources.size(), "Join plan node must have exactly two sources.");
+  // Verify if the join type is supported.
+  if (!checkForSupportJoinType(joinNode)) {
+    VELOX_UNSUPPORTED(
+        "Velox to Substrait translation of this join type not supported yet: {}",
+        joinTypeName(joinNode->joinType()));
+  }
+  // Convert the input node.
+  toSubstrait(arena, sources[0], joinRel->mutable_left());
+  toSubstrait(arena, sources[1], joinRel->mutable_right());
+  // Compose the Velox PlanNode join conditions into one.
+  std::vector<core::TypedExprPtr> joinCondition;
+  int numColumns = joinNode->leftKeys().size();
+  // Compose the join expression
+  for (int i = 0; i < numColumns; i++) {
+    joinCondition.emplace_back(std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(),
+        std::vector<core::TypedExprPtr>{
+            joinNode->leftKeys().at(i), joinNode->rightKeys().at(i)},
+        "eq"));
+  }
+
+  // TODO: Implemented other types of Join.
+  if (joinNode->isInnerJoin()) {
+    // Set the join type.
+    joinRel->set_type(::substrait::JoinRel_JoinType_JOIN_TYPE_INNER);
+    // Integrate the non equi condition.
+    if (joinNode->filter()) {
+      joinCondition.emplace_back(joinNode->filter());
+    }
+    // Generate a single expression.
+    auto joinConditionExpr = joinCondition.size() == 1
+        ? joinCondition.at(0)
+        : std::make_shared<core::CallTypedExpr>(
+              BOOLEAN(), joinCondition, "and");
+    // Set the join expression.
+    joinRel->mutable_expression()->MergeFrom(exprConvertor_->toSubstraitExpr(
+        arena,
+        std::dynamic_pointer_cast<const core::ITypedExpr>(joinConditionExpr),
+        mergeRowTypes(sources[0]->outputType(), sources[1]->outputType())));
+
+    joinRel->mutable_common()->mutable_direct();
+    return;
+  }
+}
+
 void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   // TODO: Fetch all functions from velox's registry.
 
@@ -318,6 +395,8 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   functionMap_["sum"] = 5;
   functionMap_["mod"] = 6;
   functionMap_["eq"] = 7;
+  functionMap_["and"] = 8;
+  functionMap_["neq"] = 9;
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
@@ -378,6 +457,17 @@ void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
   extensionFunction->set_function_anchor(7);
   extensionFunction->set_name("equal:i64_i64");
 
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(8);
+  extensionFunction->set_name("and:bool");
+
+  extensionFunction =
+      substraitPlan->add_extensions()->mutable_extension_function();
+  extensionFunction->set_extension_uri_reference(0);
+  extensionFunction->set_function_anchor(9);
+  extensionFunction->set_name("not_equal:any1_any1");
   return *substraitPlan;
 }
 
