@@ -18,12 +18,11 @@ Core Library
 * Add NegatedBigintValuesUsingBitmask and NegatedBigintValuesUsingHashTable for Bigint types.
 * Add support for running tasks on the caller's thread.
 * Add limited ORC reader support.
-* Support conversion of DuckDB Decimals to Velox Decimals and decimal constant null vector.
+* Support conversion of DuckDB Decimals to Velox Decimals, and Decimal constant null vector.
 * Allow cast from JSON type to scalar types, Array type, and Map type.
 * Allow running join queries on the caller's thread.
 * Add q3 to TPC-H benchmark.
 * Separate the user exception stack from the runtime exception stack trace collection control.
-* Make Dictionary Vectors load only selected rows.
 
 Presto Functions
 ================
@@ -47,6 +46,7 @@ Performance and Correctness
 * Exclude non-deterministic functions from common sub-expression elimination.
 * Optimize Expr::isSpecialForm.
 * Optimize BaseVector::isConstantEncoding.
+* Make Dictionary Vectors load only selected rows.
 
 Credits
 =======
