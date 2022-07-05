@@ -17,6 +17,7 @@ add_subdirectory(types)
 
 add_library(
   velox_functions_prestosql_impl OBJECT
+  Arithmetic.cpp
   ArrayConstructor.cpp
   ArrayContains.cpp
   ArrayDistinct.cpp
@@ -24,6 +25,7 @@ add_library(
   ArrayIntersectExcept.cpp
   ArrayMinMax.cpp
   ArrayPosition.cpp
+  Clamp.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp

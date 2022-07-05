@@ -15,31 +15,8 @@
  */
 #pragma once
 
-#include <functional>
-#include <limits>
-#include "CheckedArithmeticImpl.h"
-#include "velox/common/base/Exceptions.h"
-#include "velox/functions/Macros.h"
+#include <string>
 
 namespace facebook::velox::functions {
-
-template <typename T>
-struct CheckedModulusFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput& a, const TInput& b) {
-    result = checkedModulus(a, b);
-    return true;
-  }
-};
-
-template <typename T>
-struct CheckedNegateFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput& a) {
-    result = checkedNegate(a);
-    return true;
-  }
-};
-
-} // namespace facebook::velox::functions
+void registerClamp(const std::string& name);
+}
