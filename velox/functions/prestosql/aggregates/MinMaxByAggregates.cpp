@@ -17,6 +17,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
+#include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
@@ -25,19 +26,100 @@ namespace facebook::velox::aggregate {
 
 namespace {
 
-// MinMaxByAggregate is the base class for min_by and max_by functions. These
-// functions return the value of X associated with the minimum/maximum value of
-// Y over all input values. Partial aggregation produces a pair of X and min/max
-// Y. Final aggregation takes a pair of X and min/max Y and returns X. T is the
-// type of X and U is the type of Y.
+template <typename T>
+constexpr bool isNumeric() {
+  return std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> ||
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+      std::is_same_v<T, float> || std::is_same_v<T, double>;
+}
+
+template <typename T, typename TAccumulator>
+void extract(
+    TAccumulator* accumulator,
+    const VectorPtr& vector,
+    vector_size_t index,
+    T* rawValues) {
+  if constexpr (isNumeric<T>()) {
+    rawValues[index] = *accumulator;
+  } else {
+    VELOX_DCHECK(accumulator->hasValue());
+    accumulator->read(vector, index);
+  }
+}
+
+template <typename T, typename TAccumulator>
+void store(
+    TAccumulator* accumulator,
+    const DecodedVector& vector,
+    vector_size_t index,
+    HashStringAllocator* allocator) {
+  if constexpr (isNumeric<T>()) {
+    *accumulator = vector.valueAt<T>(index);
+  } else {
+    accumulator->write(vector.base(), vector.index(index), allocator);
+  }
+}
+
+template <typename T, typename TAccumulator>
+bool greaterThan(
+    TAccumulator* accumulator,
+    const DecodedVector& newComparisons,
+    vector_size_t index) {
+  if constexpr (isNumeric<T>()) {
+    return newComparisons.valueAt<T>(index) > *accumulator;
+  } else {
+    return !accumulator->hasValue() ||
+        (accumulator->compare(newComparisons, index) < 0);
+  }
+}
+
+template <typename T, typename TAccumulator>
+bool lessThan(
+    TAccumulator* accumulator,
+    const DecodedVector& newComparisons,
+    vector_size_t index) {
+  if constexpr (isNumeric<T>()) {
+    return newComparisons.valueAt<T>(index) < *accumulator;
+  } else {
+    bool b = accumulator->hasValue();
+    return !accumulator->hasValue() ||
+        (accumulator->compare(newComparisons, index) > 0);
+  }
+}
+
+template <typename T, typename = void>
+struct AccumulatorTypeTraits {};
+
+template <typename T>
+struct AccumulatorTypeTraits<T, std::enable_if_t<isNumeric<T>(), void>> {
+  using AccumulatorType = T;
+};
+
+template <typename T>
+struct AccumulatorTypeTraits<T, std::enable_if_t<!isNumeric<T>(), void>> {
+  using AccumulatorType = SingleValueAccumulator;
+};
+
+// NumericMinMaxByAggregate is the base class for min_by and max_by functions
+// with numeric value and comparison types. These functions return the value of
+// X associated with the minimum/maximum value of Y over all input values.
+// Partial aggregation produces a pair of X and min/max Y. Final aggregation
+// takes a pair of X and min/max Y and returns X. T is the type of X and U is
+// the type of Y.
 template <typename T, typename U>
-class MinMaxByAggregate : public exec::Aggregate {
+class NumericMinMaxByAggregate : public exec::Aggregate {
  public:
-  MinMaxByAggregate(TypePtr resultType, U initialValue)
+  using ValueAccumulatorType =
+      typename AccumulatorTypeTraits<T>::AccumulatorType;
+  using ComparisonAccumulatorType =
+      typename AccumulatorTypeTraits<U>::AccumulatorType;
+
+  NumericMinMaxByAggregate(TypePtr resultType, U initialValue)
       : exec::Aggregate(resultType), initialValue_(initialValue) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(T) + sizeof(U) + sizeof(bool);
+    return sizeof(ValueAccumulatorType) + sizeof(ComparisonAccumulatorType) +
+        sizeof(bool);
   }
 
   void initializeNewGroups(
@@ -46,8 +128,20 @@ class MinMaxByAggregate : public exec::Aggregate {
     exec::Aggregate::setAllNulls(groups, indices);
     for (auto i : indices) {
       auto group = groups[i];
-      comparisonValue(group) = initialValue_;
       valueIsNull(group) = true;
+
+      if (!isNumeric<T>()) {
+        new (group + offset_) SingleValueAccumulator();
+      }
+
+      if constexpr (isNumeric<U>()) {
+        *comparisonValue(group) = initialValue_;
+      } else {
+        new (
+            group + offset_ +
+            (isNumeric<T>() ? sizeof(T) : sizeof(SingleValueAccumulator)))
+            SingleValueAccumulator();
+      }
     }
   }
 
@@ -55,19 +149,24 @@ class MinMaxByAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    auto vector = (*result)->as<FlatVector<T>>();
-    VELOX_CHECK(vector);
-    vector->resize(numGroups);
-    uint64_t* rawNulls = getRawNulls(vector);
+    VELOX_CHECK(result);
+    (*result)->resize(numGroups);
+    uint64_t* rawNulls = getRawNulls(result->get());
 
-    T* rawValues = vector->mutableRawValues();
+    T* rawValues = nullptr;
+    if constexpr (isNumeric<T>()) {
+      auto vector = (*result)->as<FlatVector<T>>();
+      VELOX_CHECK(vector);
+      rawValues = vector->mutableRawValues();
+    }
+
     for (int32_t i = 0; i < numGroups; ++i) {
       char* group = groups[i];
       if (isNull(group) || valueIsNull(group)) {
-        vector->setNull(i, true);
+        (*result)->setNull(i, true);
       } else {
         clearNull(rawNulls, i);
-        rawValues[i] = this->value(group);
+        extract<T, ValueAccumulatorType>(value(group), *result, i, rawValues);
       }
     }
   }
@@ -75,16 +174,26 @@ class MinMaxByAggregate : public exec::Aggregate {
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto rowVector = (*result)->as<RowVector>();
-    auto valueVector = rowVector->childAt(0)->asFlatVector<T>();
-    auto comparisonVector = rowVector->childAt(1)->asFlatVector<U>();
+    auto valueVector = rowVector->childAt(0);
+    auto comparisonVector = rowVector->childAt(1);
 
     rowVector->resize(numGroups);
     valueVector->resize(numGroups);
     comparisonVector->resize(numGroups);
     uint64_t* rawNulls = getRawNulls(rowVector);
 
-    T* rawValues = valueVector->mutableRawValues();
-    U* rawComparisonValues = comparisonVector->mutableRawValues();
+    T* rawValues = nullptr;
+    if constexpr (isNumeric<T>()) {
+      auto flatValueVector = valueVector->as<FlatVector<T>>();
+      VELOX_CHECK(flatValueVector);
+      rawValues = flatValueVector->mutableRawValues();
+    }
+    U* rawComparisonValues = nullptr;
+    if constexpr (isNumeric<U>()) {
+      auto flatComparisonVector = comparisonVector->as<FlatVector<U>>();
+      VELOX_CHECK(flatComparisonVector);
+      rawComparisonValues = flatComparisonVector->mutableRawValues();
+    }
     BufferPtr nulls = valueVector->mutableNulls(rowVector->size());
     uint64_t* nullValues = nulls->asMutable<uint64_t>();
     for (int32_t i = 0; i < numGroups; ++i) {
@@ -94,8 +203,23 @@ class MinMaxByAggregate : public exec::Aggregate {
       } else {
         clearNull(rawNulls, i);
         bits::setNull(nullValues, i, valueIsNull(group));
-        rawValues[i] = value(group);
-        rawComparisonValues[i] = comparisonValue(group);
+        if (!valueIsNull(group)) {
+          extract<T, ValueAccumulatorType>(
+              value(group), valueVector, i, rawValues);
+        }
+        extract<U, ComparisonAccumulatorType>(
+            comparisonValue(group), comparisonVector, i, rawComparisonValues);
+      }
+    }
+  }
+
+  void destroy(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if constexpr (!isNumeric<T>()) {
+        value(group)->destroy(allocator_);
+      }
+      if constexpr (!isNumeric<U>()) {
+        comparisonValue(group)->destroy(allocator_);
       }
     }
   }
@@ -113,27 +237,29 @@ class MinMaxByAggregate : public exec::Aggregate {
     DecodedVector decodedValue(*args[0], rows);
     DecodedVector decodedComparisonValue(*args[1], rows);
 
-    if (decodedValue.isConstantMapping() &&
-        decodedComparisonValue.isConstantMapping()) {
-      if (decodedComparisonValue.isNullAt(0)) {
-        return;
-      }
-      auto value = decodedValue.valueAt<T>(0);
-      auto comparisonValue = decodedComparisonValue.valueAt<U>(0);
-      auto nullValue = decodedValue.isNullAt(0);
-      rows.applyToSelected([&](vector_size_t i) {
-        updateValues(groups[i], value, comparisonValue, nullValue, mayUpdate);
-      });
-    } else if (
-        decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
+    //    if (decodedValue.isConstantMapping() &&
+    //        decodedComparisonValue.isConstantMapping()) {
+    //      if (decodedComparisonValue.isNullAt(0)) {
+    //        return;
+    //      }
+    //      auto value = decodedValue.valueAt<T>(0);
+    //      auto comparisonValue = decodedComparisonValue.valueAt<U>(0);
+    //      auto nullValue = decodedValue.isNullAt(0);
+    //      rows.applyToSelected([&](vector_size_t i) {
+    //        updateValues(groups[i], value, comparisonValue, nullValue,
+    //        mayUpdate);
+    //      });
+    //    } else
+    if (decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedComparisonValue.isNullAt(i)) {
           return;
         }
         updateValues(
             groups[i],
-            decodedValue.valueAt<T>(i),
-            decodedComparisonValue.valueAt<U>(i),
+            decodedValue,
+            decodedComparisonValue,
+            i,
             decodedValue.isNullAt(i),
             mayUpdate);
       });
@@ -141,8 +267,9 @@ class MinMaxByAggregate : public exec::Aggregate {
       rows.applyToSelected([&](vector_size_t i) {
         updateValues(
             groups[i],
-            decodedValue.valueAt<T>(i),
-            decodedComparisonValue.valueAt<U>(i),
+            decodedValue,
+            decodedComparisonValue,
+            i,
             false,
             mayUpdate);
       });
@@ -157,21 +284,24 @@ class MinMaxByAggregate : public exec::Aggregate {
       MayUpdate mayUpdate) {
     DecodedVector decodedPairs(*args[0], rows);
     auto baseRowVector = dynamic_cast<const RowVector*>(decodedPairs.base());
-    auto baseValueVector = baseRowVector->childAt(0)->as<FlatVector<T>>();
-    auto baseComparisonVector = baseRowVector->childAt(1)->as<FlatVector<U>>();
 
-    if (decodedPairs.isConstantMapping()) {
-      if (decodedPairs.isNullAt(0)) {
-        return;
-      }
-      auto decodedIndex = decodedPairs.index(0);
-      auto value = baseValueVector->valueAt(decodedIndex);
-      auto comparisonValue = baseComparisonVector->valueAt(decodedIndex);
-      auto nullValue = baseValueVector->isNullAt(decodedIndex);
-      rows.applyToSelected([&](vector_size_t i) {
-        updateValues(groups[i], value, comparisonValue, nullValue, mayUpdate);
-      });
-    } else if (decodedPairs.mayHaveNulls()) {
+    DecodedVector decodedValue(*baseRowVector->childAt(0), rows);
+    DecodedVector decodedComparison(*baseRowVector->childAt(1), rows);
+
+    //    if (decodedPairs.isConstantMapping()) {
+    //      if (decodedPairs.isNullAt(0)) {
+    //        return;
+    //      }
+    //      auto decodedIndex = decodedPairs.index(0);
+    //      auto value = baseValueVector->valueAt(decodedIndex);
+    //      auto comparisonValue = baseComparisonVector->valueAt(decodedIndex);
+    //      auto nullValue = baseValueVector->isNullAt(decodedIndex);
+    //      rows.applyToSelected([&](vector_size_t i) {
+    //        updateValues(groups[i], value, comparisonValue, nullValue,
+    //        mayUpdate);
+    //      });
+    //    } else
+    if (decodedPairs.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedPairs.isNullAt(i)) {
           return;
@@ -179,9 +309,10 @@ class MinMaxByAggregate : public exec::Aggregate {
         auto decodedIndex = decodedPairs.index(i);
         updateValues(
             groups[i],
-            baseValueVector->valueAt(decodedIndex),
-            baseComparisonVector->valueAt(decodedIndex),
-            baseValueVector->isNullAt(decodedIndex),
+            decodedValue,
+            decodedComparison,
+            decodedIndex,
+            decodedValue.isNullAt(decodedIndex),
             mayUpdate);
       });
     } else {
@@ -189,9 +320,10 @@ class MinMaxByAggregate : public exec::Aggregate {
         auto decodedIndex = decodedPairs.index(i);
         updateValues(
             groups[i],
-            baseValueVector->valueAt(decodedIndex),
-            baseComparisonVector->valueAt(decodedIndex),
-            baseValueVector->isNullAt(decodedIndex),
+            decodedValue,
+            decodedComparison,
+            decodedIndex,
+            decodedValue.isNullAt(decodedIndex),
             mayUpdate);
       });
     }
@@ -214,12 +346,13 @@ class MinMaxByAggregate : public exec::Aggregate {
       if (decodedComparisonValue.isNullAt(0)) {
         return;
       }
-      auto value = decodedValue.valueAt<T>(0);
-      auto comparisonValue = decodedComparisonValue.valueAt<U>(0);
-      auto nullValue = decodedValue.isNullAt(0);
-      rows.applyToSelected([&](vector_size_t /*i*/) {
-        updateValues(group, value, comparisonValue, nullValue, mayUpdate);
-      });
+      updateValues(
+          group,
+          decodedValue,
+          decodedComparisonValue,
+          0,
+          decodedValue.isNullAt(0),
+          mayUpdate);
     } else if (
         decodedValue.mayHaveNulls() || decodedComparisonValue.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
@@ -228,19 +361,16 @@ class MinMaxByAggregate : public exec::Aggregate {
         }
         updateValues(
             group,
-            decodedValue.valueAt<T>(i),
-            decodedComparisonValue.valueAt<U>(i),
+            decodedValue,
+            decodedComparisonValue,
+            i,
             decodedValue.isNullAt(i),
             mayUpdate);
       });
     } else {
       rows.applyToSelected([&](vector_size_t i) {
         updateValues(
-            group,
-            decodedValue.valueAt<T>(i),
-            decodedComparisonValue.valueAt<U>(i),
-            false,
-            mayUpdate);
+            group, decodedValue, decodedComparisonValue, i, false, mayUpdate);
       });
     }
   }
@@ -257,20 +387,22 @@ class MinMaxByAggregate : public exec::Aggregate {
     // Decode struct(Value, ComparisonValue) as individual vectors.
     DecodedVector decodedPairs(*args[0], rows);
     auto baseRowVector = dynamic_cast<const RowVector*>(decodedPairs.base());
-    auto baseValueVector = baseRowVector->childAt(0)->as<FlatVector<T>>();
-    auto baseComparisonVector = baseRowVector->childAt(1)->as<FlatVector<U>>();
+
+    DecodedVector decodedValue(*baseRowVector->childAt(0), rows);
+    DecodedVector decodedComparison(*baseRowVector->childAt(1), rows);
 
     if (decodedPairs.isConstantMapping()) {
       if (decodedPairs.isNullAt(0)) {
         return;
       }
       auto decodedIndex = decodedPairs.index(0);
-      auto value = baseValueVector->valueAt(decodedIndex);
-      auto comparisonValue = baseComparisonVector->valueAt(decodedIndex);
-      auto nullValue = baseValueVector->isNullAt(decodedIndex);
-      rows.applyToSelected([&](vector_size_t /*i*/) {
-        updateValues(group, value, comparisonValue, nullValue, mayUpdate);
-      });
+      updateValues(
+          group,
+          decodedValue,
+          decodedComparison,
+          decodedIndex,
+          decodedComparison.isNullAt(decodedIndex),
+          mayUpdate);
     } else if (decodedPairs.mayHaveNulls()) {
       rows.applyToSelected([&](vector_size_t i) {
         if (decodedPairs.isNullAt(i)) {
@@ -279,9 +411,10 @@ class MinMaxByAggregate : public exec::Aggregate {
         auto decodedIndex = decodedPairs.index(i);
         updateValues(
             group,
-            baseValueVector->valueAt(decodedIndex),
-            baseComparisonVector->valueAt(decodedIndex),
-            baseValueVector->isNullAt(decodedIndex),
+            decodedValue,
+            decodedComparison,
+            decodedIndex,
+            decodedValue.isNullAt(decodedIndex),
             mayUpdate);
       });
     } else {
@@ -289,9 +422,10 @@ class MinMaxByAggregate : public exec::Aggregate {
         auto decodedIndex = decodedPairs.index(i);
         updateValues(
             group,
-            baseValueVector->valueAt(decodedIndex),
-            baseComparisonVector->valueAt(decodedIndex),
-            baseValueVector->isNullAt(decodedIndex),
+            decodedValue,
+            decodedComparison,
+            decodedIndex,
+            decodedValue.isNullAt(decodedIndex),
             mayUpdate);
       });
     }
@@ -301,29 +435,36 @@ class MinMaxByAggregate : public exec::Aggregate {
   template <typename MayUpdate>
   inline void updateValues(
       char* group,
-      T newValue,
-      U newComparisonValue,
-      bool isNull,
+      const DecodedVector& decodedValues,
+      const DecodedVector& decodedComparisons,
+      vector_size_t index,
+      bool isValueNull,
       MayUpdate mayUpdate) {
     clearNull(group);
-    if (mayUpdate(comparisonValue(group), newComparisonValue)) {
-      value(group) = newValue;
-      comparisonValue(group) = newComparisonValue;
-      valueIsNull(group) = isNull;
+    if (mayUpdate(comparisonValue(group), decodedComparisons, index)) {
+      valueIsNull(group) = isValueNull;
+      if (LIKELY(!isValueNull)) {
+        store<T, ValueAccumulatorType>(
+            value(group), decodedValues, index, allocator_);
+      }
+      store<U, ComparisonAccumulatorType>(
+          comparisonValue(group), decodedComparisons, index, allocator_);
     }
   }
 
-  inline T& value(char* group) {
-    return *reinterpret_cast<T*>(group + Aggregate::offset_);
+  inline ValueAccumulatorType* value(char* group) {
+    return reinterpret_cast<ValueAccumulatorType*>(group + Aggregate::offset_);
   }
 
-  inline U& comparisonValue(char* group) {
-    return *reinterpret_cast<U*>(group + Aggregate::offset_ + sizeof(T));
+  inline ComparisonAccumulatorType* comparisonValue(char* group) {
+    return reinterpret_cast<ComparisonAccumulatorType*>(
+        group + Aggregate::offset_ + sizeof(ValueAccumulatorType));
   }
 
   inline bool& valueIsNull(char* group) {
     return *reinterpret_cast<bool*>(
-        group + Aggregate::offset_ + sizeof(T) + sizeof(U));
+        group + Aggregate::offset_ + sizeof(ValueAccumulatorType) +
+        sizeof(ComparisonAccumulatorType));
   }
 
   // Initial value will take the minimum and maximum values of the numerical
@@ -332,19 +473,28 @@ class MinMaxByAggregate : public exec::Aggregate {
 };
 
 template <typename T, typename U>
-class MaxByAggregate : public MinMaxByAggregate<T, U> {
+class NumericMaxByAggregate : public NumericMinMaxByAggregate<T, U> {
  public:
-  explicit MaxByAggregate(TypePtr resultType)
-      : MinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::min()) {}
+  using ComparisonAccumulatorType =
+      typename AccumulatorTypeTraits<U>::AccumulatorType;
+
+  explicit NumericMaxByAggregate(TypePtr resultType)
+      : NumericMinMaxByAggregate<T, U>(
+            resultType,
+            std::numeric_limits<U>::min()) {}
 
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    MinMaxByAggregate<T, U>::addRawInput(
-        groups, rows, args, [](U& currentValue, U newValue) {
-          return newValue > currentValue;
+    NumericMinMaxByAggregate<T, U>::addRawInput(
+        groups,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return greaterThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -353,9 +503,13 @@ class MaxByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    MinMaxByAggregate<T, U>::addIntermediateResults(
-        groups, rows, args, [](U& currentValue, U newValue) {
-          return newValue > currentValue;
+    NumericMinMaxByAggregate<T, U>::addIntermediateResults(
+        groups,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return greaterThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -364,9 +518,13 @@ class MaxByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    MinMaxByAggregate<T, U>::addSingleGroupRawInput(
-        group, rows, args, [](U& currentValue, U newValue) {
-          return newValue > currentValue;
+    NumericMinMaxByAggregate<T, U>::addSingleGroupRawInput(
+        group,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return greaterThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -375,27 +533,40 @@ class MaxByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    MinMaxByAggregate<T, U>::addSingleGroupIntermediateResults(
-        group, rows, args, [](U& currentValue, U newValue) {
-          return newValue > currentValue;
+    NumericMinMaxByAggregate<T, U>::addSingleGroupIntermediateResults(
+        group,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return greaterThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 };
 
 template <typename T, typename U>
-class MinByAggregate : public MinMaxByAggregate<T, U> {
+class NumericMinByAggregate : public NumericMinMaxByAggregate<T, U> {
  public:
-  explicit MinByAggregate(TypePtr resultType)
-      : MinMaxByAggregate<T, U>(resultType, std::numeric_limits<U>::max()) {}
+  using ComparisonAccumulatorType =
+      typename AccumulatorTypeTraits<U>::AccumulatorType;
+
+  explicit NumericMinByAggregate(TypePtr resultType)
+      : NumericMinMaxByAggregate<T, U>(
+            resultType,
+            std::numeric_limits<U>::max()) {}
 
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    MinMaxByAggregate<T, U>::addRawInput(
-        groups, rows, args, [](U& currentValue, U newValue) {
-          return newValue < currentValue;
+    NumericMinMaxByAggregate<T, U>::addRawInput(
+        groups,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return lessThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -404,9 +575,13 @@ class MinByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    MinMaxByAggregate<T, U>::addIntermediateResults(
-        groups, rows, args, [](U& currentValue, U newValue) {
-          return newValue < currentValue;
+    NumericMinMaxByAggregate<T, U>::addIntermediateResults(
+        groups,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return lessThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -415,9 +590,13 @@ class MinByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    MinMaxByAggregate<T, U>::addSingleGroupRawInput(
-        group, rows, args, [](U& currentValue, U newValue) {
-          return newValue < currentValue;
+    NumericMinMaxByAggregate<T, U>::addSingleGroupRawInput(
+        group,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return lessThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 
@@ -426,47 +605,62 @@ class MinByAggregate : public MinMaxByAggregate<T, U> {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    MinMaxByAggregate<T, U>::addSingleGroupIntermediateResults(
-        group, rows, args, [](U& currentValue, U newValue) {
-          return newValue < currentValue;
+    NumericMinMaxByAggregate<T, U>::addSingleGroupIntermediateResults(
+        group,
+        rows,
+        args,
+        [&](auto* accumulator, const auto& newComparisons, auto index) {
+          return lessThan<U, ComparisonAccumulatorType>(
+              accumulator, newComparisons, index);
         });
   }
 };
 
-template <template <typename U, typename V> class T, typename W>
-std::unique_ptr<exec::Aggregate> create(
+template <template <typename U, typename V> class NumericAggregate, typename W>
+std::unique_ptr<exec::Aggregate> createWithNumericValue(
     TypePtr resultType,
-    TypeKind compareType,
+    TypePtr compareType,
     const std::string& errorMessage) {
-  switch (compareType) {
+  switch (compareType->kind()) {
     case TypeKind::TINYINT:
-      return std::make_unique<T<W, int8_t>>(resultType);
+      return std::make_unique<NumericAggregate<W, int8_t>>(resultType);
     case TypeKind::SMALLINT:
-      return std::make_unique<T<W, int16_t>>(resultType);
+      return std::make_unique<NumericAggregate<W, int16_t>>(resultType);
     case TypeKind::INTEGER:
-      return std::make_unique<T<W, int32_t>>(resultType);
+      return std::make_unique<NumericAggregate<W, int32_t>>(resultType);
     case TypeKind::BIGINT:
-      return std::make_unique<T<W, int64_t>>(resultType);
+      return std::make_unique<NumericAggregate<W, int64_t>>(resultType);
     case TypeKind::REAL:
-      return std::make_unique<T<W, float>>(resultType);
+      return std::make_unique<NumericAggregate<W, float>>(resultType);
     case TypeKind::DOUBLE:
-      return std::make_unique<T<W, double>>(resultType);
+      return std::make_unique<NumericAggregate<W, double>>(resultType);
+    case TypeKind::VARCHAR:
+      return std::make_unique<NumericAggregate<W, StringView>>(resultType);
     default:
       VELOX_FAIL("{}", errorMessage);
       return nullptr;
   }
 }
 
-template <template <typename U, typename V> class T>
+template <template <typename U, typename V> class NumericAggregate>
 bool registerMinMaxByAggregate(const std::string& name) {
-  // TODO(spershin): Need to add support for varchar and other types of
-  // variable length. For both arguments. See MinMaxAggregates for
-  // reference.
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   for (const auto& valueType :
-       {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
+       {"tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double",
+        "varchar"}) {
     for (const auto& compareType :
-         {"tinyint", "smallint", "integer", "bigint", "real", "double"}) {
+         {"tinyint",
+          "smallint",
+          "integer",
+          "bigint",
+          "real",
+          "double",
+          "varchar"}) {
       signatures.push_back(exec::AggregateFunctionSignatureBuilder()
                                .returnType(valueType)
                                .intermediateType(fmt::format(
@@ -515,23 +709,26 @@ bool registerMinMaxByAggregate(const std::string& name) {
 
         switch (valueType->kind()) {
           case TypeKind::TINYINT:
-            return create<T, int8_t>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, int8_t>(
+                resultType, compareType, errorMessage);
           case TypeKind::SMALLINT:
-            return create<T, int16_t>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, int16_t>(
+                resultType, compareType, errorMessage);
           case TypeKind::INTEGER:
-            return create<T, int32_t>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, int32_t>(
+                resultType, compareType, errorMessage);
           case TypeKind::BIGINT:
-            return create<T, int64_t>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, int64_t>(
+                resultType, compareType, errorMessage);
           case TypeKind::REAL:
-            return create<T, float>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, float>(
+                resultType, compareType, errorMessage);
           case TypeKind::DOUBLE:
-            return create<T, double>(
-                resultType, compareType->kind(), errorMessage);
+            return createWithNumericValue<NumericAggregate, double>(
+                resultType, compareType, errorMessage);
+          case TypeKind::VARCHAR:
+            return createWithNumericValue<NumericAggregate, StringView>(
+                resultType, compareType, errorMessage);
           default:
             VELOX_FAIL(errorMessage);
         }
@@ -541,9 +738,9 @@ bool registerMinMaxByAggregate(const std::string& name) {
 }
 
 static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerMinMaxByAggregate<MaxByAggregate>(kMaxBy);
+    registerMinMaxByAggregate<NumericMaxByAggregate>(kMaxBy);
 static bool FB_ANONYMOUS_VARIABLE(g_AggregateFunction) =
-    registerMinMaxByAggregate<MinByAggregate>(kMinBy);
+    registerMinMaxByAggregate<NumericMinByAggregate>(kMinBy);
 
 } // namespace
 } // namespace facebook::velox::aggregate
