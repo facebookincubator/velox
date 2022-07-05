@@ -12,20 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(ExternalProject)
+add_library(velox_dwio_parquet_writer Writer.cpp)
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/local/lib64/cmake/arrow")
-
-find_package(Parquet REQUIRED)
-
-add_subdirectory(duckdb_reader)
-
-add_subdirectory(writer)
-
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
-endif()
-
-add_library(velox_dwio_parquet_reader RegisterParquetReader.cpp)
-target_link_libraries(velox_dwio_parquet_reader
-                      velox_dwio_duckdb_parquet_reader gtest xsimd)
+target_link_libraries(velox_dwio_parquet_writer velox_dwio_common
+                      velox_arrow_bridge parquet_shared arrow_shared ${FMT})
