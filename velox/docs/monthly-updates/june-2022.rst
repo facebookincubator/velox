@@ -27,7 +27,7 @@ Core Library
 Presto Functions
 ================
 
-* Add Presto Date +/- IntervalDayTime functions.
+* Extend :func:`plus`, :func:`minus` functions to support Date, IntervalDayTime argument types.
 * Add aggregate function :func:`map_union`.
 * Add :func:`degrees`, :func:`e`, and :func:`sha512` functions.
 
