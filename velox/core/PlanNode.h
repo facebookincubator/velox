@@ -1494,13 +1494,13 @@ class WindowNode : public PlanNode {
   /// names for each window function column. So
   /// windowColumnNames.length() = windowFunctions.length().
   WindowNode(
-      PlanNodeId& id,
-      std::vector<FieldAccessTypedExprPtr>& partitionKeys,
-      std::vector<FieldAccessTypedExprPtr>& sortingKeys,
-      std::vector<SortOrder>& sortingOrders,
-      std::vector<std::string>& windowColumnNames,
-      std::vector<Function>& windowFunctions,
-      PlanNodePtr& source);
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> windowColumnNames,
+      std::vector<Function> windowFunctions,
+      PlanNodePtr source);
 
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
