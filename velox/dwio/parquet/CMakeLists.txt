@@ -16,8 +16,6 @@ include(ExternalProject)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/local/lib64/cmake/arrow")
 
-find_package(Parquet REQUIRED)
-
 add_subdirectory(duckdb_reader)
 
 add_subdirectory(writer)
