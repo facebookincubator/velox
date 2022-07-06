@@ -102,6 +102,31 @@ bool hasConditionals(Expr* expr) {
 }
 } // namespace
 
+Expr::Expr(
+    TypePtr type,
+    std::vector<std::shared_ptr<Expr>>&& inputs,
+    std::shared_ptr<VectorFunction> vectorFunction,
+    std::string name,
+    bool trackCpuUsage)
+    : type_(std::move(type)),
+      inputs_(std::move(inputs)),
+      name_(std::move(name)),
+      vectorFunction_(std::move(vectorFunction)),
+      specialForm_{false},
+      trackCpuUsage_{trackCpuUsage} {
+  constantInputs_.reserve(inputs_.size());
+  inputIsConstant_.reserve(inputs_.size());
+  for (auto& expr : inputs_) {
+    if (auto constantExpr = std::dynamic_pointer_cast<ConstantExpr>(expr)) {
+      constantInputs_.emplace_back(constantExpr->value());
+      inputIsConstant_.push_back(true);
+    } else {
+      constantInputs_.emplace_back(nullptr);
+      inputIsConstant_.push_back(false);
+    }
+  }
+}
+
 // static
 bool Expr::isSameFields(
     const std::vector<FieldReference*>& fields1,
@@ -253,6 +278,39 @@ void Expr::evalSimplifiedImpl(
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.asRange().bits(), context, result);
+  inputValues_.clear();
+}
+
+void Expr::evalFlatNoNulls(
+    const SelectivityVector& rows,
+    EvalCtx& context,
+    VectorPtr& result) {
+  if (isSpecialForm()) {
+    evalSpecialForm(rows, context, result);
+    return;
+  }
+
+  inputValues_.resize(inputs_.size());
+  for (int32_t i = 0; i < inputs_.size(); ++i) {
+    if (constantInputs_[i]) {
+      // No need to re-evaluate constant expression. Simply move constant values
+      // from constantInputs_.
+      inputValues_[i] = std::move(constantInputs_[i]);
+      inputValues_[i]->resize(rows.size());
+    } else {
+      inputs_[i]->evalFlatNoNulls(rows, context, inputValues_[i]);
+    }
+  }
+
+  applyVectorFunction(rows, context, result);
+
+  // Move constant values back to constantInputs_.
+  for (int32_t i = 0; i < inputs_.size(); ++i) {
+    if (inputIsConstant_[i]) {
+      constantInputs_[i] = std::move(inputValues_[i]);
+      VELOX_CHECK_NULL(inputValues_[i]);
+    }
+  }
   inputValues_.clear();
 }
 
@@ -1312,6 +1370,17 @@ void ExprSet::eval(
   }
   for (int32_t i = begin; i < end; ++i) {
     exprs_[i]->eval(rows, *context, (*result)[i]);
+  }
+}
+
+void ExprSet::evalFlatNoNulls(
+    const SelectivityVector& rows,
+    EvalCtx* FOLLY_NONNULL context,
+    std::vector<VectorPtr>* FOLLY_NONNULL result) {
+  result->resize(exprs_.size());
+  clearSharedSubexprs();
+  for (int32_t i = 0; i < exprs_.size(); ++i) {
+    exprs_[i]->evalFlatNoNulls(rows, *context, (*result)[i]);
   }
 }
 

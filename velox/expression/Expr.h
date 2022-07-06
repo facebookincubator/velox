@@ -71,17 +71,16 @@ class Expr {
       std::vector<std::shared_ptr<Expr>>&& inputs,
       std::shared_ptr<VectorFunction> vectorFunction,
       std::string name,
-      bool trackCpuUsage)
-      : type_(std::move(type)),
-        inputs_(std::move(inputs)),
-        name_(std::move(name)),
-        vectorFunction_(std::move(vectorFunction)),
-        specialForm_{false},
-        trackCpuUsage_{trackCpuUsage} {}
+      bool trackCpuUsage);
 
   virtual ~Expr() = default;
 
   void eval(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
+
+  void evalFlatNoNulls(
+      const SelectivityVector& rows,
+      EvalCtx& context,
+      VectorPtr& result);
 
   // Simplified path for expression evaluation (flattens all vectors).
   void evalSimplified(
@@ -314,6 +313,9 @@ class Expr {
   const bool specialForm_;
   const bool trackCpuUsage_;
 
+  std::vector<VectorPtr> constantInputs_;
+  std::vector<bool> inputIsConstant_;
+
   // TODO make the following metadata const, e.g. call computeMetadata in the
   // constructor
 
@@ -390,6 +392,18 @@ class ExprSet {
       int32_t begin,
       int32_t end,
       bool initialize,
+      const SelectivityVector& rows,
+      EvalCtx* FOLLY_NONNULL ctx,
+      std::vector<VectorPtr>* FOLLY_NONNULL result);
+
+  /// Initialize and evaluate all expressions using fast path that assumes that
+  /// (1) all input vectors are flat or constant and have no nulls; (2) all
+  /// expressions and functions in the expression trees generate flat results
+  /// with no nulls for flat or constant inputs without nulls.
+  ///
+  /// TODO Add logic to detect the conditions above automatically and trigger
+  /// the fast path. Then, remove this method.
+  void evalFlatNoNulls(
       const SelectivityVector& rows,
       EvalCtx* FOLLY_NONNULL ctx,
       std::vector<VectorPtr>* FOLLY_NONNULL result);

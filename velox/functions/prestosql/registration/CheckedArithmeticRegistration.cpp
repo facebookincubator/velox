@@ -15,16 +15,18 @@
  */
 
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/CheckedArithmetic.h"
 
 namespace facebook::velox::functions {
 
 void registerCheckedArithmeticFunctions() {
-  registerBinaryIntegral<CheckedPlusFunction>({"plus"});
-  registerBinaryIntegral<CheckedMinusFunction>({"minus"});
-  registerBinaryIntegral<CheckedMultiplyFunction>({"multiply"});
+  registerCheckedPlus("plus");
+  registerCheckedMinus("minus");
+  registerCheckedMultiply("multiply");
+  registerCheckedDivide("divide");
+
   registerBinaryIntegral<CheckedModulusFunction>({"mod"});
-  registerBinaryIntegral<CheckedDivideFunction>({"divide"});
   registerUnaryIntegral<CheckedNegateFunction>({"negate"});
 }
 
