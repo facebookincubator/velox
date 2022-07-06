@@ -3588,6 +3588,15 @@ void DependencyManager::AddOwnership(ClientContext &context, CatalogEntry *owner
 } // namespace duckdb
 
 
+
+
+#ifdef DUCKDB_DEBUG_ALLOCATION
+
+
+
+#include <execinfo.h>
+#endif
+
 namespace duckdb {
 
 AllocatedData::AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size)
@@ -3605,34 +3614,169 @@ void AllocatedData::Reset() {
 	pointer = nullptr;
 }
 
+//===--------------------------------------------------------------------===//
+// Debug Info
+//===--------------------------------------------------------------------===//
+struct AllocatorDebugInfo {
+#ifdef DEBUG
+	AllocatorDebugInfo();
+	~AllocatorDebugInfo();
+
+	static string GetStackTrace(int max_depth = 128);
+
+	void AllocateData(data_ptr_t pointer, idx_t size);
+	void FreeData(data_ptr_t pointer, idx_t size);
+	void ReallocateData(data_ptr_t pointer, data_ptr_t new_pointer, idx_t old_size, idx_t new_size);
+
+private:
+	//! The number of bytes that are outstanding (i.e. that have been allocated - but not freed)
+	//! Used for debug purposes
+	atomic<idx_t> allocation_count;
+#ifdef DUCKDB_DEBUG_ALLOCATION
+	mutex pointer_lock;
+	//! Set of active outstanding pointers together with stack traces
+	unordered_map<data_ptr_t, pair<idx_t, string>> pointers;
+#endif
+#endif
+};
+
+PrivateAllocatorData::PrivateAllocatorData() {
+}
+
+PrivateAllocatorData::~PrivateAllocatorData() {
+}
+
+//===--------------------------------------------------------------------===//
+// Allocator
+//===--------------------------------------------------------------------===//
 Allocator::Allocator()
-    : allocate_function(Allocator::DefaultAllocate), free_function(Allocator::DefaultFree),
-      reallocate_function(Allocator::DefaultReallocate) {
+    : Allocator(Allocator::DefaultAllocate, Allocator::DefaultFree, Allocator::DefaultReallocate, nullptr) {
 }
 
 Allocator::Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
-                     reallocate_function_ptr_t reallocate_function_p, unique_ptr<PrivateAllocatorData> private_data)
+                     reallocate_function_ptr_t reallocate_function_p, unique_ptr<PrivateAllocatorData> private_data_p)
     : allocate_function(allocate_function_p), free_function(free_function_p),
-      reallocate_function(reallocate_function_p), private_data(move(private_data)) {
+      reallocate_function(reallocate_function_p), private_data(move(private_data_p)) {
+	D_ASSERT(allocate_function);
+	D_ASSERT(free_function);
+	D_ASSERT(reallocate_function);
+#ifdef DEBUG
+	if (!private_data) {
+		private_data = make_unique<PrivateAllocatorData>();
+	}
+	private_data->debug_info = make_unique<AllocatorDebugInfo>();
+#endif
+}
+
+Allocator::~Allocator() {
 }
 
 data_ptr_t Allocator::AllocateData(idx_t size) {
-	return allocate_function(private_data.get(), size);
+	auto result = allocate_function(private_data.get(), size);
+#ifdef DEBUG
+	D_ASSERT(private_data);
+	private_data->debug_info->AllocateData(result, size);
+#endif
+	return result;
 }
 
 void Allocator::FreeData(data_ptr_t pointer, idx_t size) {
 	if (!pointer) {
 		return;
 	}
-	return free_function(private_data.get(), pointer, size);
+#ifdef DEBUG
+	D_ASSERT(private_data);
+	private_data->debug_info->FreeData(pointer, size);
+#endif
+	free_function(private_data.get(), pointer, size);
 }
 
-data_ptr_t Allocator::ReallocateData(data_ptr_t pointer, idx_t size) {
+data_ptr_t Allocator::ReallocateData(data_ptr_t pointer, idx_t old_size, idx_t size) {
 	if (!pointer) {
-		return pointer;
+		return nullptr;
 	}
-	return reallocate_function(private_data.get(), pointer, size);
+	auto new_pointer = reallocate_function(private_data.get(), pointer, old_size, size);
+#ifdef DEBUG
+	D_ASSERT(private_data);
+	private_data->debug_info->ReallocateData(pointer, new_pointer, old_size, size);
+#endif
+	return new_pointer;
 }
+
+Allocator &Allocator::DefaultAllocator() {
+	static Allocator DEFAULT_ALLOCATOR;
+	return DEFAULT_ALLOCATOR;
+}
+
+//===--------------------------------------------------------------------===//
+// Debug Info (extended)
+//===--------------------------------------------------------------------===//
+#ifdef DEBUG
+AllocatorDebugInfo::AllocatorDebugInfo() {
+	allocation_count = 0;
+}
+AllocatorDebugInfo::~AllocatorDebugInfo() {
+#ifdef DUCKDB_DEBUG_ALLOCATION
+	if (allocation_count != 0) {
+		printf("Outstanding allocations found for Allocator\n");
+		for (auto &entry : pointers) {
+			printf("Allocation of size %lld at address %p\n", entry.second.first, (void *)entry.first);
+			printf("Stack trace:\n%s\n", entry.second.second.c_str());
+			printf("\n");
+		}
+	}
+#endif
+	//! Verify that there is no outstanding memory still associated with the batched allocator
+	//! Only works for access to the batched allocator through the batched allocator interface
+	//! If this assertion triggers, enable DUCKDB_DEBUG_ALLOCATION for more information about the allocations
+	D_ASSERT(allocation_count == 0);
+}
+
+string AllocatorDebugInfo::GetStackTrace(int max_depth) {
+#ifdef DUCKDB_DEBUG_ALLOCATION
+	string result;
+	auto callstack = unique_ptr<void *[]>(new void *[max_depth]);
+	int frames = backtrace(callstack.get(), max_depth);
+	char **strs = backtrace_symbols(callstack.get(), frames);
+	for (int i = 0; i < frames; i++) {
+		result += strs[i];
+		result += "\n";
+	}
+	free(strs);
+	return result;
+#else
+	throw InternalException("GetStackTrace not supported without DUCKDB_DEBUG_ALLOCATION");
+#endif
+}
+
+void AllocatorDebugInfo::AllocateData(data_ptr_t pointer, idx_t size) {
+	allocation_count += size;
+#ifdef DUCKDB_DEBUG_ALLOCATION
+	lock_guard<mutex> l(pointer_lock);
+	pointers[pointer] = make_pair(size, GetStackTrace());
+#endif
+}
+
+void AllocatorDebugInfo::FreeData(data_ptr_t pointer, idx_t size) {
+	D_ASSERT(allocation_count >= size);
+	allocation_count -= size;
+#ifdef DUCKDB_DEBUG_ALLOCATION
+	lock_guard<mutex> l(pointer_lock);
+	// verify that the pointer exists
+	D_ASSERT(pointers.find(pointer) != pointers.end());
+	// verify that the stored size matches the passed in size
+	D_ASSERT(pointers[pointer].first == size);
+	// erase the pointer
+	pointers.erase(pointer);
+#endif
+}
+
+void AllocatorDebugInfo::ReallocateData(data_ptr_t pointer, data_ptr_t new_pointer, idx_t old_size, idx_t new_size) {
+	FreeData(pointer, old_size);
+	AllocateData(new_pointer, new_size);
+}
+
+#endif
 
 } // namespace duckdb
 
@@ -3767,7 +3911,7 @@ int ResultArrowArrayStreamWrapper::MyStreamGetNext(struct ArrowArrayStream *stre
 		return 0;
 	}
 	unique_ptr<DataChunk> agg_chunk_result = make_unique<DataChunk>();
-	agg_chunk_result->Initialize(chunk_result->GetTypes());
+	agg_chunk_result->Initialize(Allocator::DefaultAllocator(), chunk_result->GetTypes());
 	agg_chunk_result->Append(*chunk_result, true);
 
 	while (agg_chunk_result->size() < my_stream->batch_size) {
@@ -5649,6 +5793,9 @@ FileBuffer::FileBuffer(FileBuffer &source, FileBufferType type_p) : allocator(so
 }
 
 FileBuffer::~FileBuffer() {
+	if (!malloced_buffer) {
+		return;
+	}
 	allocator.FreeData(malloced_buffer, malloced_size);
 }
 
@@ -5657,51 +5804,24 @@ void FileBuffer::SetMallocedSize(uint64_t &bufsiz) {
 	if (type == FileBufferType::MANAGED_BUFFER && bufsiz != Storage::FILE_HEADER_SIZE) {
 		bufsiz += Storage::BLOCK_HEADER_SIZE;
 	}
-	if (type == FileBufferType::BLOCK) {
-		const int sector_size = Storage::SECTOR_SIZE;
-		// round up to the nearest sector_size
-		if (bufsiz % sector_size != 0) {
-			bufsiz += sector_size - (bufsiz % sector_size);
-		}
-		D_ASSERT(bufsiz % sector_size == 0);
-		D_ASSERT(bufsiz >= sector_size);
-		// we add (sector_size - 1) to ensure that we can align the buffer to sector_size
-		malloced_size = bufsiz + (sector_size - 1);
-	} else {
-		malloced_size = bufsiz;
-	}
+	malloced_size = bufsiz;
 }
 
 void FileBuffer::Construct(uint64_t bufsiz) {
 	if (!malloced_buffer) {
 		throw std::bad_alloc();
 	}
-	if (type == FileBufferType::BLOCK) {
-		const int sector_size = Storage::SECTOR_SIZE;
-		// round to multiple of sector_size
-		uint64_t num = (uint64_t)malloced_buffer;
-		uint64_t remainder = num % sector_size;
-		if (remainder != 0) {
-			num = num + sector_size - remainder;
-		}
-		D_ASSERT(num % sector_size == 0);
-		D_ASSERT(num + bufsiz <= ((uint64_t)malloced_buffer + bufsiz + (sector_size - 1)));
-		D_ASSERT(num >= (uint64_t)malloced_buffer);
-		// construct the FileBuffer object
-		internal_buffer = (data_ptr_t)num;
-		internal_size = bufsiz;
-	} else {
-		internal_buffer = malloced_buffer;
-		internal_size = malloced_size;
-	}
+	internal_buffer = malloced_buffer;
+	internal_size = malloced_size;
 	buffer = internal_buffer + Storage::BLOCK_HEADER_SIZE;
 	size = internal_size - Storage::BLOCK_HEADER_SIZE;
 }
 
 void FileBuffer::Resize(uint64_t bufsiz) {
 	D_ASSERT(type == FileBufferType::MANAGED_BUFFER);
+	auto old_size = malloced_size;
 	SetMallocedSize(bufsiz);
-	malloced_buffer = allocator.ReallocateData(malloced_buffer, malloced_size);
+	malloced_buffer = allocator.ReallocateData(malloced_buffer, old_size, malloced_size);
 	Construct(bufsiz);
 }
 
@@ -5829,7 +5949,7 @@ void FileSystem::SetWorkingDirectory(const string &path) {
 idx_t FileSystem::GetAvailableMemory() {
 	ULONGLONG available_memory_kb;
 	if (GetPhysicallyInstalledSystemMemory(&available_memory_kb)) {
-		return MinValue<idx_t>(available_memory_kb * 1024, UINTPTR_MAX);
+		return MinValue<idx_t>(available_memory_kb * 1000, UINTPTR_MAX);
 	}
 	// fallback: try GlobalMemoryStatusEx
 	MEMORYSTATUSEX mem_state;
@@ -7030,7 +7150,11 @@ public:
 
 public:
 	void Close() override {
+		if (!fd) {
+			return;
+		}
 		CloseHandle(fd);
+		fd = nullptr;
 	};
 };
 
@@ -7235,7 +7359,8 @@ static void DeleteDirectoryRecursive(FileSystem &fs, string directory) {
 	});
 	auto unicode_path = WindowsUtil::UTF8ToUnicode(directory.c_str());
 	if (!RemoveDirectoryW(unicode_path.c_str())) {
-		throw IOException("Failed to delete directory");
+		auto error = LocalFileSystem::GetLastErrorAsString();
+		throw IOException("Failed to delete directory \"%s\": %s", directory, error);
 	}
 }
 
@@ -7251,7 +7376,10 @@ void LocalFileSystem::RemoveDirectory(const string &directory) {
 
 void LocalFileSystem::RemoveFile(const string &filename) {
 	auto unicode_path = WindowsUtil::UTF8ToUnicode(filename.c_str());
-	DeleteFileW(unicode_path.c_str());
+	if (!DeleteFileW(unicode_path.c_str())) {
+		auto error = LocalFileSystem::GetLastErrorAsString();
+		throw IOException("Failed to delete file \"%s\": %s", filename, error);
+	}
 }
 
 bool LocalFileSystem::ListFiles(const string &directory, const std::function<void(const string &, bool)> &callback) {
@@ -10386,6 +10514,7 @@ std::vector<Match> RegexFindAll(const std::string &input, const Regex &regex) {
 
 
 
+
 namespace duckdb {
 
 void RowOperations::InitializeStates(RowLayout &layout, Vector &addresses, const SelectionVector &sel, idx_t count) {
@@ -10428,20 +10557,14 @@ void RowOperations::UpdateStates(AggregateObject &aggr, Vector &addresses, DataC
 	                     addresses, count);
 }
 
-void RowOperations::UpdateFilteredStates(AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx) {
-	ExpressionExecutor filter_execution(aggr.filter);
-	SelectionVector true_sel(STANDARD_VECTOR_SIZE);
-	auto count = filter_execution.SelectExpression(payload, true_sel);
+void RowOperations::UpdateFilteredStates(AggregateFilterData &filter_data, AggregateObject &aggr, Vector &addresses,
+                                         DataChunk &payload, idx_t arg_idx) {
+	idx_t count = filter_data.ApplyFilter(payload);
 
-	DataChunk filtered_payload;
-	auto pay_types = payload.GetTypes();
-	filtered_payload.Initialize(pay_types);
-	filtered_payload.Slice(payload, true_sel, count);
-
-	Vector filtered_addresses(addresses, true_sel, count);
+	Vector filtered_addresses(addresses, filter_data.true_sel, count);
 	filtered_addresses.Normalify(count);
 
-	UpdateStates(aggr, filtered_addresses, filtered_payload, arg_idx, filtered_payload.size());
+	UpdateStates(aggr, filtered_addresses, filter_data.filtered_payload, arg_idx, count);
 }
 
 void RowOperations::CombineStates(RowLayout &layout, Vector &sources, Vector &targets, idx_t count) {
@@ -12057,7 +12180,7 @@ void RowOperations::Scatter(DataChunk &columns, VectorData col_data[], const Row
 	auto &types = layout.GetTypes();
 
 	// Compute the entry size of the variable size columns
-	vector<unique_ptr<BufferHandle>> handles;
+	vector<BufferHandle> handles;
 	data_ptr_t data_locations[STANDARD_VECTOR_SIZE];
 	if (!layout.AllConstant()) {
 		idx_t entry_sizes[STANDARD_VECTOR_SIZE];
@@ -12854,8 +12977,8 @@ int MergeSorter::CompareUsingGlobalIndex(SBScanState &l, SBScanState &r, const i
 
 	l.PinRadix(l.block_idx);
 	r.PinRadix(r.block_idx);
-	data_ptr_t l_ptr = l.radix_handle->Ptr() + l.entry_idx * sort_layout.entry_size;
-	data_ptr_t r_ptr = r.radix_handle->Ptr() + r.entry_idx * sort_layout.entry_size;
+	data_ptr_t l_ptr = l.radix_handle.Ptr() + l.entry_idx * sort_layout.entry_size;
+	data_ptr_t r_ptr = r.radix_handle.Ptr() + r.entry_idx * sort_layout.entry_size;
 
 	int comp_res;
 	if (sort_layout.all_constant) {
@@ -13049,7 +13172,7 @@ void MergeSorter::MergeRadix(const idx_t &count, const bool left_smaller[]) {
 
 	RowDataBlock *result_block = &result->radix_sorting_data.back();
 	auto result_handle = buffer_manager.Pin(result_block->block);
-	data_ptr_t result_ptr = result_handle->Ptr() + result_block->count * sort_layout.entry_size;
+	data_ptr_t result_ptr = result_handle.Ptr() + result_block->count * sort_layout.entry_size;
 
 	idx_t copied = 0;
 	while (copied < count) {
@@ -13125,15 +13248,15 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 	// Result rows to write to
 	RowDataBlock *result_data_block = &result_data.data_blocks.back();
 	auto result_data_handle = buffer_manager.Pin(result_data_block->block);
-	data_ptr_t result_data_ptr = result_data_handle->Ptr() + result_data_block->count * row_width;
+	data_ptr_t result_data_ptr = result_data_handle.Ptr() + result_data_block->count * row_width;
 	// Result heap to write to (if needed)
 	RowDataBlock *result_heap_block;
-	unique_ptr<BufferHandle> result_heap_handle;
+	BufferHandle result_heap_handle;
 	data_ptr_t result_heap_ptr;
 	if (!layout.AllConstant() && state.external) {
 		result_heap_block = &result_data.heap_blocks.back();
 		result_heap_handle = buffer_manager.Pin(result_heap_block->block);
-		result_heap_ptr = result_heap_handle->Ptr() + result_heap_block->byte_offset;
+		result_heap_ptr = result_heap_handle.Ptr() + result_heap_block->byte_offset;
 	}
 
 	idx_t copied = 0;
@@ -13237,7 +13360,7 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 					idx_t new_capacity = result_heap_block->byte_offset + copy_bytes;
 					buffer_manager.ReAllocate(result_heap_block->block, new_capacity);
 					result_heap_block->capacity = new_capacity;
-					result_heap_ptr = result_heap_handle->Ptr() + result_heap_block->byte_offset;
+					result_heap_ptr = result_heap_handle.Ptr() + result_heap_block->byte_offset;
 				}
 				D_ASSERT(result_heap_block->byte_offset + copy_bytes <= result_heap_block->capacity);
 				// Now copy the heap data
@@ -13261,11 +13384,11 @@ void MergeSorter::MergeData(SortedData &result_data, SortedData &l_data, SortedD
 			} else if (r_done) {
 				// Right side is exhausted - flush left
 				FlushBlobs(layout, l_count, l_ptr, l.entry_idx, l_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, *result_heap_handle, result_heap_ptr, copied, count);
+				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
 			} else {
 				// Left side is exhausted - flush right
 				FlushBlobs(layout, r_count, r_ptr, r.entry_idx, r_heap_ptr, result_data_block, result_data_ptr,
-				           result_heap_block, *result_heap_handle, result_heap_ptr, copied, count);
+				           result_heap_block, result_heap_handle, result_heap_ptr, copied, count);
 			}
 			D_ASSERT(result_data_block->count == result_heap_block->count);
 		}
@@ -13405,12 +13528,12 @@ static void SortTiedBlobs(BufferManager &buffer_manager, const data_ptr_t datapt
 	// Re-order
 	auto temp_block =
 	    buffer_manager.Allocate(MaxValue((end - start) * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
-	data_ptr_t temp_ptr = temp_block->Ptr();
+	data_ptr_t temp_ptr = temp_block.Ptr();
 	for (idx_t i = 0; i < end - start; i++) {
 		FastMemcpy(temp_ptr, entry_ptrs[i], sort_layout.entry_size);
 		temp_ptr += sort_layout.entry_size;
 	}
-	memcpy(dataptr + start * sort_layout.entry_size, temp_block->Ptr(), (end - start) * sort_layout.entry_size);
+	memcpy(dataptr + start * sort_layout.entry_size, temp_block.Ptr(), (end - start) * sort_layout.entry_size);
 	// Determine if there are still ties (if this is not the last column)
 	if (tie_col < sort_layout.column_count - 1) {
 		data_ptr_t idx_ptr = dataptr + start * sort_layout.entry_size + sort_layout.comparison_size;
@@ -13432,7 +13555,7 @@ static void SortTiedBlobs(BufferManager &buffer_manager, SortedBlock &sb, bool *
 	D_ASSERT(!ties[count - 1]);
 	auto &blob_block = sb.blob_sorting_data->data_blocks.back();
 	auto blob_handle = buffer_manager.Pin(blob_block.block);
-	const data_ptr_t blob_ptr = blob_handle->Ptr();
+	const data_ptr_t blob_ptr = blob_handle.Ptr();
 
 	for (idx_t i = 0; i < count; i++) {
 		if (!ties[i]) {
@@ -13483,8 +13606,8 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 		// Init counts to 0
 		memset(counts, 0, sizeof(counts));
 		// Const some values for convenience
-		const data_ptr_t source_ptr = swap ? temp_block->Ptr() : dataptr;
-		const data_ptr_t target_ptr = swap ? dataptr : temp_block->Ptr();
+		const data_ptr_t source_ptr = swap ? temp_block.Ptr() : dataptr;
+		const data_ptr_t target_ptr = swap ? dataptr : temp_block.Ptr();
 		const idx_t offset = col_offset + sorting_size - r;
 		// Collect counts
 		data_ptr_t offset_ptr = source_ptr + offset;
@@ -13512,7 +13635,7 @@ void RadixSortLSD(BufferManager &buffer_manager, const data_ptr_t &dataptr, cons
 	}
 	// Move data back to original buffer (if it was swapped)
 	if (swap) {
-		memcpy(dataptr, temp_block->Ptr(), count * row_width);
+		memcpy(dataptr, temp_block.Ptr(), count * row_width);
 	}
 }
 
@@ -13611,7 +13734,7 @@ void RadixSort(BufferManager &buffer_manager, const data_ptr_t &dataptr, const i
 	} else {
 		auto temp_block = buffer_manager.Allocate(MaxValue(count * sort_layout.entry_size, (idx_t)Storage::BLOCK_SIZE));
 		auto preallocated_array = unique_ptr<idx_t[]>(new idx_t[sorting_size * SortConstants::MSD_RADIX_LOCATIONS]);
-		RadixSortMSD(dataptr, temp_block->Ptr(), count, col_offset, sort_layout.entry_size, sorting_size, 0,
+		RadixSortMSD(dataptr, temp_block.Ptr(), count, col_offset, sort_layout.entry_size, sorting_size, 0,
 		             preallocated_array.get(), false);
 	}
 }
@@ -13642,7 +13765,7 @@ void LocalSortState::SortInMemory() {
 	auto &block = sb.radix_sorting_data.back();
 	const auto &count = block.count;
 	auto handle = buffer_manager->Pin(block.block);
-	const auto dataptr = handle->Ptr();
+	const auto dataptr = handle.Ptr();
 	// Assign an index to each row
 	data_ptr_t idx_dataptr = dataptr + sort_layout->comparison_size;
 	for (uint32_t i = 0; i < count; i++) {
@@ -13933,11 +14056,11 @@ RowDataBlock LocalSortState::ConcatenateBlocks(RowDataCollection &row_data) {
 	RowDataBlock new_block(*buffer_manager, capacity, entry_size);
 	new_block.count = row_data.count;
 	auto new_block_handle = buffer_manager->Pin(new_block.block);
-	data_ptr_t new_block_ptr = new_block_handle->Ptr();
+	data_ptr_t new_block_ptr = new_block_handle.Ptr();
 	// Copy the data of the blocks into a single block
 	for (auto &block : row_data.blocks) {
 		auto block_handle = buffer_manager->Pin(block.block);
-		memcpy(new_block_ptr, block_handle->Ptr(), block.count * entry_size);
+		memcpy(new_block_ptr, block_handle.Ptr(), block.count * entry_size);
 		new_block_ptr += block.count * entry_size;
 	}
 	row_data.blocks.clear();
@@ -13951,12 +14074,12 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 	auto &unordered_data_block = sd.data_blocks.back();
 	const idx_t &count = unordered_data_block.count;
 	auto unordered_data_handle = buffer_manager->Pin(unordered_data_block.block);
-	const data_ptr_t unordered_data_ptr = unordered_data_handle->Ptr();
+	const data_ptr_t unordered_data_ptr = unordered_data_handle.Ptr();
 	// Create new block that will hold re-ordered row data
 	RowDataBlock ordered_data_block(*buffer_manager, unordered_data_block.capacity, unordered_data_block.entry_size);
 	ordered_data_block.count = count;
 	auto ordered_data_handle = buffer_manager->Pin(ordered_data_block.block);
-	data_ptr_t ordered_data_ptr = ordered_data_handle->Ptr();
+	data_ptr_t ordered_data_ptr = ordered_data_handle.Ptr();
 	// Re-order fixed-size row layout
 	const idx_t row_width = sd.layout.GetRowWidth();
 	const idx_t sorting_entry_size = gstate.sort_layout.entry_size;
@@ -13972,7 +14095,7 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 	// Deal with the heap (if necessary)
 	if (!sd.layout.AllConstant() && reorder_heap) {
 		// Swizzle the column pointers to offsets
-		RowOperations::SwizzleColumns(sd.layout, ordered_data_handle->Ptr(), count);
+		RowOperations::SwizzleColumns(sd.layout, ordered_data_handle.Ptr(), count);
 		// Create a single heap block to store the ordered heap
 		idx_t total_byte_offset = std::accumulate(heap.blocks.begin(), heap.blocks.end(), 0,
 		                                          [](idx_t a, const RowDataBlock &b) { return a + b.byte_offset; });
@@ -13981,9 +14104,9 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 		ordered_heap_block.count = count;
 		ordered_heap_block.byte_offset = total_byte_offset;
 		auto ordered_heap_handle = buffer_manager->Pin(ordered_heap_block.block);
-		data_ptr_t ordered_heap_ptr = ordered_heap_handle->Ptr();
+		data_ptr_t ordered_heap_ptr = ordered_heap_handle.Ptr();
 		// Fill the heap in order
-		ordered_data_ptr = ordered_data_handle->Ptr();
+		ordered_data_ptr = ordered_data_handle.Ptr();
 		const idx_t heap_pointer_offset = sd.layout.GetHeapPointerOffset();
 		for (idx_t i = 0; i < count; i++) {
 			auto heap_row_ptr = Load<data_ptr_t>(ordered_data_ptr + heap_pointer_offset);
@@ -13993,7 +14116,7 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 			ordered_data_ptr += row_width;
 		}
 		// Swizzle the base pointer to the offset of each row in the heap
-		RowOperations::SwizzleHeapPointer(sd.layout, ordered_data_handle->Ptr(), ordered_heap_handle->Ptr(), count);
+		RowOperations::SwizzleHeapPointer(sd.layout, ordered_data_handle.Ptr(), ordered_heap_handle.Ptr(), count);
 		// Move the re-ordered heap to the SortedData, and clear the local heap
 		sd.heap_blocks.push_back(move(ordered_heap_block));
 		heap.pinned_blocks.clear();
@@ -14005,7 +14128,7 @@ void LocalSortState::ReOrder(SortedData &sd, data_ptr_t sorting_ptr, RowDataColl
 void LocalSortState::ReOrder(GlobalSortState &gstate, bool reorder_heap) {
 	auto &sb = *sorted_blocks.back();
 	auto sorting_handle = buffer_manager->Pin(sb.radix_sorting_data.back().block);
-	const data_ptr_t sorting_ptr = sorting_handle->Ptr() + gstate.sort_layout.comparison_size;
+	const data_ptr_t sorting_ptr = sorting_handle.Ptr() + gstate.sort_layout.comparison_size;
 	// Re-order variable size sorting columns
 	if (!gstate.sort_layout.all_constant) {
 		ReOrder(*sb.blob_sorting_data, sorting_ptr, *blob_sorting_heap, gstate, reorder_heap);
@@ -14124,7 +14247,7 @@ void GlobalSortState::CompleteMergeRound(bool keep_radix_data) {
 void GlobalSortState::Print() {
 	PayloadScanner scanner(*this, false);
 	DataChunk chunk;
-	chunk.Initialize(scanner.GetPayloadTypes());
+	chunk.Initialize(Allocator::DefaultAllocator(), scanner.GetPayloadTypes());
 	for (;;) {
 		scanner.Scan(chunk);
 		const auto count = chunk.size();
@@ -14205,7 +14328,7 @@ void SortedData::Unswizzle() {
 		auto &heap_block = heap_blocks[i];
 		auto data_handle_p = buffer_manager.Pin(data_block.block);
 		auto heap_handle_p = buffer_manager.Pin(heap_block.block);
-		RowOperations::UnswizzlePointers(layout, data_handle_p->Ptr(), heap_handle_p->Ptr(), data_block.count);
+		RowOperations::UnswizzlePointers(layout, data_handle_p.Ptr(), heap_handle_p.Ptr(), data_block.count);
 		state.heap_blocks.push_back(move(heap_block));
 		state.pinned_blocks.push_back(move(heap_handle_p));
 	}
@@ -14356,7 +14479,7 @@ void SBScanState::PinRadix(idx_t block_idx_to) {
 	auto &radix_sorting_data = sb->radix_sorting_data;
 	D_ASSERT(block_idx_to < radix_sorting_data.size());
 	auto &block = radix_sorting_data[block_idx_to];
-	if (!radix_handle || radix_handle->handle->BlockId() != block.block->BlockId()) {
+	if (!radix_handle.IsValid() || radix_handle.GetBlockId() != block.block->BlockId()) {
 		radix_handle = buffer_manager.Pin(block.block);
 	}
 }
@@ -14367,26 +14490,26 @@ void SBScanState::PinData(SortedData &sd) {
 	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
 
 	auto &data_block = sd.data_blocks[block_idx];
-	if (!data_handle || data_handle->handle->BlockId() != data_block.block->BlockId()) {
+	if (!data_handle.IsValid() || data_handle.GetBlockId() != data_block.block->BlockId()) {
 		data_handle = buffer_manager.Pin(data_block.block);
 	}
 	if (sd.layout.AllConstant() || !state.external) {
 		return;
 	}
 	auto &heap_block = sd.heap_blocks[block_idx];
-	if (!heap_handle || heap_handle->handle->BlockId() != heap_block.block->BlockId()) {
+	if (!heap_handle.IsValid() || heap_handle.GetBlockId() != heap_block.block->BlockId()) {
 		heap_handle = buffer_manager.Pin(heap_block.block);
 	}
 }
 
 data_ptr_t SBScanState::RadixPtr() const {
-	return radix_handle->Ptr() + entry_idx * sort_layout.entry_size;
+	return radix_handle.Ptr() + entry_idx * sort_layout.entry_size;
 }
 
 data_ptr_t SBScanState::DataPtr(SortedData &sd) const {
-	auto &data_handle = sd.type == SortedDataType::BLOB ? *blob_sorting_data_handle : *payload_data_handle;
+	auto &data_handle = sd.type == SortedDataType::BLOB ? blob_sorting_data_handle : payload_data_handle;
 	D_ASSERT(sd.data_blocks[block_idx].block->Readers() != 0 &&
-	         data_handle.handle->BlockId() == sd.data_blocks[block_idx].block->BlockId());
+	         data_handle.GetBlockId() == sd.data_blocks[block_idx].block->BlockId());
 	return data_handle.Ptr() + entry_idx * sd.layout.GetRowWidth();
 }
 
@@ -14395,10 +14518,10 @@ data_ptr_t SBScanState::HeapPtr(SortedData &sd) const {
 }
 
 data_ptr_t SBScanState::BaseHeapPtr(SortedData &sd) const {
-	auto &heap_handle = sd.type == SortedDataType::BLOB ? *blob_sorting_heap_handle : *payload_heap_handle;
+	auto &heap_handle = sd.type == SortedDataType::BLOB ? blob_sorting_heap_handle : payload_heap_handle;
 	D_ASSERT(!sd.layout.AllConstant() && state.external);
 	D_ASSERT(sd.heap_blocks[block_idx].block->Readers() != 0 &&
-	         heap_handle.handle->BlockId() == sd.heap_blocks[block_idx].block->BlockId());
+	         heap_handle.GetBlockId() == sd.heap_blocks[block_idx].block->BlockId());
 	return heap_handle.Ptr();
 }
 
@@ -14456,7 +14579,7 @@ void PayloadScanner::Scan(DataChunk &chunk) {
 		read_state.PinData(sorted_data);
 		auto &data_block = sorted_data.data_blocks[read_state.block_idx];
 		idx_t next = MinValue(data_block.count - read_state.entry_idx, count - scanned);
-		const data_ptr_t data_ptr = read_state.payload_data_handle->Ptr() + read_state.entry_idx * row_width;
+		const data_ptr_t data_ptr = read_state.payload_data_handle.Ptr() + read_state.entry_idx * row_width;
 		// Set up the next pointers
 		data_ptr_t row_ptr = data_ptr;
 		for (idx_t i = 0; i < next; i++) {
@@ -14465,7 +14588,7 @@ void PayloadScanner::Scan(DataChunk &chunk) {
 		}
 		// Unswizzle the offsets back to pointers (if needed)
 		if (!sorted_data.layout.AllConstant() && global_sort_state.external) {
-			RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle->Ptr(), next);
+			RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle.Ptr(), next);
 		}
 		// Update state indices
 		read_state.entry_idx += next;
@@ -15341,7 +15464,7 @@ unique_ptr<RenderTree> TreeRenderer::CreateTree(const Pipeline &op) {
 
 namespace duckdb {
 
-BatchedChunkCollection::BatchedChunkCollection() {
+BatchedChunkCollection::BatchedChunkCollection(Allocator &allocator) : allocator(allocator) {
 }
 
 void BatchedChunkCollection::Append(DataChunk &input, idx_t batch_index) {
@@ -15349,7 +15472,7 @@ void BatchedChunkCollection::Append(DataChunk &input, idx_t batch_index) {
 	auto entry = data.find(batch_index);
 	ChunkCollection *collection;
 	if (entry == data.end()) {
-		auto new_collection = make_unique<ChunkCollection>();
+		auto new_collection = make_unique<ChunkCollection>(allocator);
 		collection = new_collection.get();
 		data.insert(make_pair(batch_index, move(new_collection)));
 	} else {
@@ -15794,6 +15917,12 @@ std::string NumericHelper::ToString(hugeint_t value) {
 
 namespace duckdb {
 
+ChunkCollection::ChunkCollection(Allocator &allocator) : allocator(allocator), count(0) {
+}
+
+ChunkCollection::ChunkCollection(ClientContext &context) : ChunkCollection(Allocator::Get(context)) {
+}
+
 void ChunkCollection::Verify() {
 #ifdef DEBUG
 	for (auto &chunk : chunks) {
@@ -15895,7 +16024,7 @@ void ChunkCollection::Append(DataChunk &new_chunk) {
 	if (remaining_data > 0) {
 		// create a new chunk and fill it with the remainder
 		auto chunk = make_unique<DataChunk>();
-		chunk->Initialize(types);
+		chunk->Initialize(allocator, types);
 		new_chunk.Copy(*chunk, offset);
 		chunks.push_back(move(chunk));
 	}

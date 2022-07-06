@@ -2165,9 +2165,6 @@ public:
 	void SearchEqualJoinNoFetch(Value &equal_value, idx_t &result_size);
 
 private:
-	DataChunk expression_result;
-
-private:
 	//! Insert a row id into a leaf node
 	bool InsertToLeaf(Leaf &leaf, row_t row_id);
 	//! Insert the leaf value into the tree
@@ -20437,6 +20434,7 @@ using duckdb_re2::LazyRE2;
 namespace duckdb {
 
 struct AggregateObject;
+struct AggregateFilterData;
 class DataChunk;
 class RowLayout;
 class RowDataCollection;
@@ -20457,7 +20455,8 @@ struct RowOperations {
 	//! update - aligned addresses
 	static void UpdateStates(AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx, idx_t count);
 	//! filtered update - aligned addresses
-	static void UpdateFilteredStates(AggregateObject &aggr, Vector &addresses, DataChunk &payload, idx_t arg_idx);
+	static void UpdateFilteredStates(AggregateFilterData &filter_data, AggregateObject &aggr, Vector &addresses,
+	                                 DataChunk &payload, idx_t arg_idx);
 	//! combine - unaligned addresses, updated
 	static void CombineStates(RowLayout &layout, Vector &sources, Vector &targets, idx_t count);
 	//! finalize - unaligned addresses, updated
@@ -20542,17 +20541,27 @@ struct RowOperations {
 
 
 
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/execution/operator/aggregate/aggregate_object.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
 
 
 namespace duckdb {
+
 class BoundAggregateExpression;
 
 struct AggregateObject {
 	AggregateObject(AggregateFunction function, FunctionData *bind_data, idx_t child_count, idx_t payload_size,
-	                bool distinct, PhysicalType return_type, Expression *filter = nullptr)
-	    : function(move(function)), bind_data(bind_data), child_count(child_count), payload_size(payload_size),
-	      distinct(distinct), return_type(return_type), filter(filter) {
-	}
+	                bool distinct, PhysicalType return_type, Expression *filter = nullptr);
+	AggregateObject(BoundAggregateExpression *aggr);
 
 	AggregateFunction function;
 	FunctionData *bind_data;
@@ -20564,6 +20573,33 @@ struct AggregateObject {
 
 	static vector<AggregateObject> CreateAggregateObjects(const vector<BoundAggregateExpression *> &bindings);
 };
+
+struct AggregateFilterData {
+	AggregateFilterData(Allocator &allocator, Expression &filter_expr, const vector<LogicalType> &payload_types);
+
+	idx_t ApplyFilter(DataChunk &payload);
+
+	ExpressionExecutor filter_executor;
+	DataChunk filtered_payload;
+	SelectionVector true_sel;
+};
+
+struct AggregateFilterDataSet {
+	AggregateFilterDataSet();
+
+	vector<unique_ptr<AggregateFilterData>> filter_data;
+
+public:
+	void Initialize(Allocator &allocator, const vector<AggregateObject> &aggregates,
+	                const vector<LogicalType> &payload_types);
+
+	AggregateFilterData &GetFilterData(idx_t aggr_idx);
+};
+
+} // namespace duckdb
+
+
+namespace duckdb {
 
 class RowLayout {
 public:
@@ -20759,13 +20795,13 @@ public:
 	//! The blocks holding the main data
 	vector<RowDataBlock> blocks;
 	//! The blocks that this collection currently has pinned
-	vector<unique_ptr<BufferHandle>> pinned_blocks;
+	vector<BufferHandle> pinned_blocks;
 
 public:
 	idx_t AppendToBlock(RowDataBlock &block, BufferHandle &handle, vector<BlockAppendEntry> &append_entries,
 	                    idx_t remaining, idx_t entry_sizes[]);
-	vector<unique_ptr<BufferHandle>> Build(idx_t added_count, data_ptr_t key_locations[], idx_t entry_sizes[],
-	                                       const SelectionVector *sel = FlatVector::IncrementalSelectionVector());
+	vector<BufferHandle> Build(idx_t added_count, data_ptr_t key_locations[], idx_t entry_sizes[],
+	                           const SelectionVector *sel = FlatVector::IncrementalSelectionVector());
 
 	void Merge(RowDataCollection &other);
 
@@ -21634,6 +21670,7 @@ static inline int FastMemcmp(const void *str1, const void *str2, const size_t si
 
 
 
+
 namespace duckdb {
 
 class BufferManager;
@@ -21739,13 +21776,13 @@ public:
 	idx_t block_idx;
 	idx_t entry_idx;
 
-	unique_ptr<BufferHandle> radix_handle = nullptr;
+	BufferHandle radix_handle;
 
-	unique_ptr<BufferHandle> blob_sorting_data_handle = nullptr;
-	unique_ptr<BufferHandle> blob_sorting_heap_handle = nullptr;
+	BufferHandle blob_sorting_data_handle;
+	BufferHandle blob_sorting_heap_handle;
 
-	unique_ptr<BufferHandle> payload_data_handle = nullptr;
-	unique_ptr<BufferHandle> payload_heap_handle = nullptr;
+	BufferHandle payload_data_handle;
+	BufferHandle payload_heap_handle;
 };
 
 //! Used to scan the data into DataChunks after sorting
@@ -21866,7 +21903,7 @@ public:
 
 	//! Pinned heap data (if sorting in memory)
 	vector<RowDataBlock> heap_blocks;
-	vector<unique_ptr<BufferHandle>> pinned_blocks;
+	vector<BufferHandle> pinned_blocks;
 
 	//! Capacity (number of rows) used to initialize blocks
 	idx_t block_capacity;
@@ -22532,30 +22569,38 @@ public:
 
 
 
+
 namespace duckdb {
 class BufferManager;
 
 class BaseAggregateHashTable {
 public:
-	BaseAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> payload_types);
+	BaseAggregateHashTable(Allocator &allocator, const vector<AggregateObject> &aggregates,
+	                       BufferManager &buffer_manager, vector<LogicalType> payload_types);
 	virtual ~BaseAggregateHashTable() {
 	}
 
 protected:
+	Allocator &allocator;
 	BufferManager &buffer_manager;
 	//! A helper for managing offsets into the data buffers
 	RowLayout layout;
 	//! The types of the payload columns stored in the hashtable
 	vector<LogicalType> payload_types;
+	//! Intermediate structures and data for aggregate filters
+	AggregateFilterDataSet filter_set;
 };
 
 } // namespace duckdb
+
 
 
 namespace duckdb {
 class BlockHandle;
 class BufferHandle;
 class RowDataCollection;
+
+struct FlushMoveState;
 
 //! GroupedAggregateHashTable is a linear probing HT that is used for computing
 //! aggregates
@@ -22598,15 +22643,24 @@ enum HtEntryType { HT_WIDTH_32, HT_WIDTH_64 };
 
 class GroupedAggregateHashTable : public BaseAggregateHashTable {
 public:
-	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
+	//! The hash table load factor, when a resize is triggered
+	constexpr static float LOAD_FACTOR = 1.5;
+	constexpr static uint8_t HASH_WIDTH = sizeof(hash_t);
+
+public:
+	GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager, vector<LogicalType> group_types,
 	                          vector<LogicalType> payload_types, const vector<BoundAggregateExpression *> &aggregates,
 	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64);
-	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
+	GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager, vector<LogicalType> group_types,
 	                          vector<LogicalType> payload_types, vector<AggregateObject> aggregates,
 	                          HtEntryType entry_type = HtEntryType::HT_WIDTH_64);
-	GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types);
+	GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager, vector<LogicalType> group_types);
 	~GroupedAggregateHashTable() override;
 
+	//! The stringheap of the AggregateHashTable
+	unique_ptr<RowDataCollection> string_heap;
+
+public:
 	//! Add the given data to the HT, computing the aggregates grouped by the
 	//! data in the group chunk. When resize = true, aggregates will not be
 	//! computed but instead just assigned.
@@ -22642,13 +22696,6 @@ public:
 
 	void Finalize();
 
-	//! The stringheap of the AggregateHashTable
-	unique_ptr<RowDataCollection> string_heap;
-
-	//! The hash table load factor, when a resize is triggered
-	constexpr static float LOAD_FACTOR = 1.5;
-	constexpr static uint8_t HASH_WIDTH = sizeof(hash_t);
-
 private:
 	HtEntryType entry_type;
 
@@ -22662,11 +22709,11 @@ private:
 	//! The amount of entries stored in the HT currently
 	idx_t entries;
 	//! The data of the HT
-	vector<unique_ptr<BufferHandle>> payload_hds;
+	vector<BufferHandle> payload_hds;
 	vector<data_ptr_t> payload_hds_ptrs;
 
 	//! The hashes of the HT
-	unique_ptr<BufferHandle> hashes_hdl;
+	BufferHandle hashes_hdl;
 	data_ptr_t hashes_hdl_ptr;
 	data_ptr_t hashes_end_ptr; // of hashes
 	idx_t hash_offset;         // Offset into the layout of the hash column
@@ -22698,7 +22745,7 @@ private:
 
 	void Verify();
 
-	void FlushMove(Vector &source_addresses, Vector &source_hashes, idx_t count);
+	void FlushMove(FlushMoveState &state, Vector &source_addresses, Vector &source_hashes, idx_t count);
 	void NewBlock();
 
 	template <class ENTRY>
@@ -22730,7 +22777,7 @@ typedef vector<unique_ptr<GroupedAggregateHashTable>> HashTableList;
 
 class PartitionableHashTable {
 public:
-	PartitionableHashTable(BufferManager &buffer_manager_p, RadixPartitionInfo &partition_info_p,
+	PartitionableHashTable(Allocator &allocator, BufferManager &buffer_manager_p, RadixPartitionInfo &partition_info_p,
 	                       vector<LogicalType> group_types_p, vector<LogicalType> payload_types_p,
 	                       vector<BoundAggregateExpression *> bindings_p);
 
@@ -22744,6 +22791,7 @@ public:
 	void Finalize();
 
 private:
+	Allocator &allocator;
 	BufferManager &buffer_manager;
 	vector<LogicalType> group_types;
 	vector<LogicalType> payload_types;
@@ -22803,7 +22851,7 @@ public:
 	                   vector<unique_ptr<Task>> &tasks) const;
 
 	//! Source interface
-	unique_ptr<GlobalSourceState> GetGlobalSourceState() const;
+	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const;
 	void GetData(ExecutionContext &context, DataChunk &chunk, GlobalSinkState &sink_state,
 	             GlobalSourceState &gstate_p) const;
 
@@ -22961,7 +23009,7 @@ struct BatchedChunkScanState {
 //! Scans over a BatchedChunkCollection are ordered by batch index
 class BatchedChunkCollection {
 public:
-	DUCKDB_API BatchedChunkCollection();
+	DUCKDB_API BatchedChunkCollection(Allocator &allocator);
 
 	//! Appends a datachunk with the given batch index to the batched collection
 	DUCKDB_API void Append(DataChunk &input, idx_t batch_index);
@@ -22979,6 +23027,7 @@ public:
 	DUCKDB_API void Print() const;
 
 private:
+	Allocator &allocator;
 	//! The data of the batched chunk collection - a set of batch_index -> ChunkCollection pointers
 	map<idx_t, unique_ptr<ChunkCollection>> data;
 };
@@ -24713,9 +24762,9 @@ private:
 	//! The stringheap of the JoinHashTable
 	unique_ptr<RowDataCollection> string_heap;
 	//! Pinned handles, these are pinned during finalization only
-	vector<unique_ptr<BufferHandle>> pinned_handles;
+	vector<BufferHandle> pinned_handles;
 	//! The hash map of the HT, created after finalization
-	unique_ptr<BufferHandle> hash_map;
+	BufferHandle hash_map;
 	//! Whether or not NULL values are considered equal in each of the comparisons
 	vector<bool> null_values_are_equal;
 
@@ -24870,7 +24919,7 @@ public:
 	string ParamsToString() const override;
 
 	//! Create a perfect aggregate hash table for this node
-	unique_ptr<PerfectAggregateHashTable> CreateHT(ClientContext &context) const;
+	unique_ptr<PerfectAggregateHashTable> CreateHT(Allocator &allocator, ClientContext &context) const;
 
 	bool IsSink() const override {
 		return true;
@@ -24912,9 +24961,10 @@ namespace duckdb {
 
 class PerfectAggregateHashTable : public BaseAggregateHashTable {
 public:
-	PerfectAggregateHashTable(BufferManager &buffer_manager, const vector<LogicalType> &group_types,
-	                          vector<LogicalType> payload_types_p, vector<AggregateObject> aggregate_objects,
-	                          vector<Value> group_minima, vector<idx_t> required_bits);
+	PerfectAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+	                          const vector<LogicalType> &group_types, vector<LogicalType> payload_types_p,
+	                          vector<AggregateObject> aggregate_objects, vector<Value> group_minima,
+	                          vector<idx_t> required_bits);
 	~PerfectAggregateHashTable() override;
 
 public:
@@ -25065,7 +25115,7 @@ public:
 
 public:
 	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
@@ -25250,7 +25300,7 @@ public:
 	unique_ptr<Expression> expression;
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
@@ -25540,10 +25590,11 @@ public:
 	}
 
 public:
-	static bool ComputeOffset(DataChunk &input, idx_t &limit, idx_t &offset, idx_t current_offset, idx_t &max_element,
-	                          Expression *limit_expression, Expression *offset_expression);
+	static bool ComputeOffset(ExecutionContext &context, DataChunk &input, idx_t &limit, idx_t &offset,
+	                          idx_t current_offset, idx_t &max_element, Expression *limit_expression,
+	                          Expression *offset_expression);
 	static bool HandleOffset(DataChunk &input, idx_t &current_offset, idx_t offset, idx_t limit);
-	static Value GetDelimiter(DataChunk &input, Expression *expr);
+	static Value GetDelimiter(ExecutionContext &context, DataChunk &input, Expression *expr);
 };
 
 } // namespace duckdb
@@ -25576,7 +25627,7 @@ public:
 
 public:
 	// Operator interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
@@ -25934,8 +25985,7 @@ protected:
 //! The reservoir sample class maintains a streaming sample of fixed size "sample_count"
 class ReservoirSample : public BlockingSample {
 public:
-	ReservoirSample(idx_t sample_count, int64_t seed) : BlockingSample(seed), sample_count(sample_count) {
-	}
+	ReservoirSample(Allocator &allocator, idx_t sample_count, int64_t seed);
 
 	//! Add a chunk of data to the sample
 	void AddToReservoir(DataChunk &input) override;
@@ -25963,7 +26013,7 @@ class ReservoirSamplePercentage : public BlockingSample {
 	constexpr static idx_t RESERVOIR_THRESHOLD = 100000;
 
 public:
-	ReservoirSamplePercentage(double percentage, int64_t seed);
+	ReservoirSamplePercentage(Allocator &allocator, double percentage, int64_t seed);
 
 	//! Add a chunk of data to the sample
 	void AddToReservoir(DataChunk &input) override;
@@ -25976,6 +26026,7 @@ private:
 	void Finalize();
 
 private:
+	Allocator &allocator;
 	//! The sample_size to sample
 	double sample_percentage;
 	//! The fixed sample size of the sub-reservoirs
@@ -26054,7 +26105,7 @@ public:
 
 public:
 	// Operator interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -26175,7 +26226,7 @@ public:
 public:
 	bool CanDoPerfectHashJoin();
 
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context);
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context);
 	OperatorResultType ProbePerfectHashTable(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                                         OperatorState &state);
 	bool BuildPerfectHashTable(LogicalType &type);
@@ -26325,7 +26376,7 @@ public:
 
 public:
 	// Operator Interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -26397,7 +26448,7 @@ public:
 
 public:
 	// Operator Interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -26466,7 +26517,7 @@ public:
 
 public:
 	// Operator Interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -26737,7 +26788,7 @@ class PhysicalRangeJoin : public PhysicalComparisonJoin {
 public:
 	class LocalSortedTable {
 	public:
-		LocalSortedTable(const PhysicalRangeJoin &op, const idx_t child);
+		LocalSortedTable(Allocator &allocator, const PhysicalRangeJoin &op, const idx_t child);
 
 		void Sink(DataChunk &input, GlobalSortState &global_sort_state);
 
@@ -26932,7 +26983,7 @@ public:
 	bool lhs_first = true;
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27089,7 +27140,7 @@ public:
 
 public:
 	// Operator Interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27171,7 +27222,7 @@ public:
 
 public:
 	// Operator Interface
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27628,7 +27679,7 @@ public:
 	vector<unique_ptr<Expression>> select_list;
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27664,7 +27715,7 @@ public:
 	                           idx_t estimated_cardinality);
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
@@ -27709,7 +27760,7 @@ public:
 	vector<unique_ptr<Expression>> select_list;
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27718,8 +27769,9 @@ public:
 	}
 
 public:
-	static unique_ptr<OperatorState> GetState(ClientContext &context);
-	static OperatorResultType ExecuteInternal(ClientContext &context, DataChunk &input, DataChunk &chunk,
+	static unique_ptr<OperatorState> GetState(ExecutionContext &context,
+	                                          const vector<unique_ptr<Expression>> &select_list);
+	static OperatorResultType ExecuteInternal(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                                          OperatorState &state, const vector<unique_ptr<Expression>> &select_list,
 	                                          bool include_input = true);
 };
@@ -27805,7 +27857,7 @@ public:
 	vector<vector<unique_ptr<Expression>>> expressions;
 
 public:
-	unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const override;
+	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
 
@@ -27815,7 +27867,8 @@ public:
 
 public:
 	bool IsFoldable() const;
-	void EvaluateExpression(idx_t expression_idx, DataChunk *child_chunk, DataChunk &result) const;
+	void EvaluateExpression(Allocator &allocator, idx_t expression_idx, DataChunk *child_chunk,
+	                        DataChunk &result) const;
 };
 
 } // namespace duckdb
@@ -32589,7 +32642,8 @@ private:
 	                                                                TableFunctionInitInput &input);
 
 	//! Initialize Local State
-	static unique_ptr<LocalTableFunctionState> ArrowScanInitLocal(ClientContext &context, TableFunctionInitInput &input,
+	static unique_ptr<LocalTableFunctionState> ArrowScanInitLocal(ExecutionContext &context,
+	                                                              TableFunctionInitInput &input,
 	                                                              GlobalTableFunctionState *global_state);
 
 	//! Scan Function
@@ -43573,13 +43627,15 @@ private:
 
 
 namespace duckdb {
+class ClientContext;
 class Optimizer;
 
 class InClauseRewriter : public LogicalOperatorVisitor {
 public:
-	explicit InClauseRewriter(Optimizer &optimizer) : optimizer(optimizer) {
+	explicit InClauseRewriter(ClientContext &context, Optimizer &optimizer) : context(context), optimizer(optimizer) {
 	}
 
+	ClientContext &context;
 	Optimizer &optimizer;
 	unique_ptr<LogicalOperator> root;
 
@@ -56927,6 +56983,7 @@ private:
 
 
 
+
 namespace duckdb {
 class BlockHandle;
 class BufferHandle;
@@ -56940,7 +56997,7 @@ public:
 
 	DatabaseInstance &db;
 	shared_ptr<BlockHandle> block;
-	unique_ptr<BufferHandle> handle;
+	BufferHandle handle;
 	idx_t offset;
 	block_id_t next_block;
 
@@ -57080,7 +57137,7 @@ public:
 	DatabaseInstance &db;
 
 	//! Temporary buffer
-	unique_ptr<BufferHandle> handle;
+	BufferHandle handle;
 	//! The block on-disk to which we are writing
 	block_id_t block_id;
 	//! The offset within the current block
@@ -58568,9 +58625,7 @@ struct ColumnCheckpointState {
 	unique_ptr<BaseStatistics> global_stats;
 
 public:
-	virtual unique_ptr<BaseStatistics> GetStatistics() {
-		return global_stats->Copy();
-	}
+	virtual unique_ptr<BaseStatistics> GetStatistics();
 
 	virtual void FlushSegment(unique_ptr<ColumnSegment> segment, idx_t segment_size);
 	virtual void FlushToDisk();
@@ -58822,7 +58877,7 @@ struct StringDictionaryContainer {
 };
 
 struct StringScanState : public SegmentScanState {
-	unique_ptr<BufferHandle> handle;
+	BufferHandle handle;
 };
 
 struct UncompressedStringStorage {
@@ -58863,17 +58918,17 @@ public:
 
 		D_ASSERT(segment.GetBlockOffset() == 0);
 		auto source_data = (string_t *)data.data;
-		auto result_data = (int32_t *)(handle->node->buffer + DICTIONARY_HEADER_SIZE);
+		auto result_data = (int32_t *)(handle.Ptr() + DICTIONARY_HEADER_SIZE);
 		for (idx_t i = 0; i < count; i++) {
 			auto source_idx = data.sel->get_index(offset + i);
 			auto target_idx = segment.count.load();
-			idx_t remaining_space = RemainingSpace(segment, *handle);
+			idx_t remaining_space = RemainingSpace(segment, handle);
 			if (remaining_space < sizeof(int32_t)) {
 				// string index does not fit in the block at all
 				return i;
 			}
 			remaining_space -= sizeof(int32_t);
-			auto dictionary = GetDictionary(segment, *handle);
+			auto dictionary = GetDictionary(segment, handle);
 			if (!data.validity.RowIsValid(source_idx)) {
 				// null value is stored as a copy of the last value, this is done to be able to efficiently do the
 				// string_length calculation
@@ -58883,7 +58938,7 @@ public:
 					result_data[target_idx] = 0;
 				}
 			} else {
-				auto end = handle->node->buffer + dictionary.end;
+				auto end = handle.Ptr() + dictionary.end;
 
 				dictionary.Verify();
 
@@ -58943,7 +58998,7 @@ public:
 						// now write the actual string data into the dictionary
 						memcpy(dict_pos, source_data[source_idx].GetDataUnsafe(), string_length);
 					}
-					D_ASSERT(RemainingSpace(segment, *handle) <= Storage::BLOCK_SIZE);
+					D_ASSERT(RemainingSpace(segment, handle) <= Storage::BLOCK_SIZE);
 					// place the dictionary offset into the set of vectors
 					dictionary.Verify();
 
@@ -58953,7 +59008,7 @@ public:
 					if (DUPLICATE_ELIMINATE) {
 						seen_strings->insert({source_data[source_idx].GetString(), dictionary.size});
 					}
-					SetDictionary(segment, *handle, dictionary);
+					SetDictionary(segment, handle, dictionary);
 				}
 			}
 			segment.count++;

@@ -337,7 +337,7 @@ unique_ptr<LogicalOperator> Connection::ExtractPlan(const string &query) {
 }
 
 void Connection::Append(TableDescription &description, DataChunk &chunk) {
-	ChunkCollection collection;
+	ChunkCollection collection(*context);
 	collection.Append(chunk);
 	Append(description, collection);
 }
@@ -659,7 +659,7 @@ Allocator &Allocator::Get(ClientContext &context) {
 }
 
 Allocator &Allocator::Get(DatabaseInstance &db) {
-	return db.config.allocator;
+	return *db.config.allocator;
 }
 
 void DatabaseInstance::Configure(DBConfig &new_config) {
@@ -692,6 +692,9 @@ void DatabaseInstance::Configure(DBConfig &new_config) {
 	config.load_extensions = new_config.load_extensions;
 	config.force_compression = new_config.force_compression;
 	config.allocator = move(new_config.allocator);
+	if (!config.allocator) {
+		config.allocator = make_unique<Allocator>();
+	}
 	config.checkpoint_wal_size = new_config.checkpoint_wal_size;
 	config.use_direct_io = new_config.use_direct_io;
 	config.temporary_directory = new_config.temporary_directory;
@@ -1187,13 +1190,13 @@ namespace duckdb {
 
 MaterializedQueryResult::MaterializedQueryResult(StatementType statement_type, StatementProperties properties,
                                                  vector<LogicalType> types, vector<string> names,
-                                                 const shared_ptr<ClientContext> &context)
+                                                 const shared_ptr<ClientContext> &context_p)
     : QueryResult(QueryResultType::MATERIALIZED_RESULT, statement_type, properties, move(types), move(names)),
-      context(context) {
+      collection(Allocator::DefaultAllocator()), context(context_p) {
 }
 
 MaterializedQueryResult::MaterializedQueryResult(string error)
-    : QueryResult(QueryResultType::MATERIALIZED_RESULT, move(error)) {
+    : QueryResult(QueryResultType::MATERIALIZED_RESULT, move(error)), collection(Allocator::DefaultAllocator()) {
 }
 
 Value MaterializedQueryResult::GetValue(idx_t column, idx_t index) {
@@ -3230,6 +3233,7 @@ string ReadCSVRelation::ToString(idx_t depth) {
 
 
 
+
 namespace duckdb {
 
 SetOpRelation::SetOpRelation(shared_ptr<Relation> left_p, shared_ptr<Relation> right_p, SetOperationType setop_type_p)
@@ -3244,6 +3248,9 @@ SetOpRelation::SetOpRelation(shared_ptr<Relation> left_p, shared_ptr<Relation> r
 
 unique_ptr<QueryNode> SetOpRelation::GetQueryNode() {
 	auto result = make_unique<SetOperationNode>();
+	if (setop_type == SetOperationType::EXCEPT || setop_type == SetOperationType::INTERSECT) {
+		result->modifiers.push_back(make_unique<DistinctModifier>());
+	}
 	result->left = left->GetQueryNode();
 	result->right = right->GetQueryNode();
 	result->setop_type = setop_type;
@@ -7083,9 +7090,9 @@ unique_ptr<Expression> InClauseRewriter::VisitReplace(BoundOperatorExpression &e
 	// generate a mark join that replaces this IN expression
 	// first generate a ChunkCollection from the set of expressions
 	vector<LogicalType> types = {in_type};
-	auto collection = make_unique<ChunkCollection>();
+	auto collection = make_unique<ChunkCollection>(context);
 	DataChunk chunk;
-	chunk.Initialize(types);
+	chunk.Initialize(context, types);
 	for (idx_t i = 1; i < expr.children.size(); i++) {
 		// resolve this expression to a constant
 		auto value = ExpressionExecutor::EvaluateScalar(*expr.children[i]);
@@ -8381,7 +8388,7 @@ unique_ptr<LogicalOperator> Optimizer::Optimize(unique_ptr<LogicalOperator> plan
 	});
 
 	RunOptimizer(OptimizerType::IN_CLAUSE, [&]() {
-		InClauseRewriter rewriter(*this);
+		InClauseRewriter rewriter(context, *this);
 		plan = rewriter.Rewrite(move(plan));
 	});
 
@@ -13412,9 +13419,9 @@ PipelineExecutor::PipelineExecutor(ClientContext &context_p, Pipeline &pipeline_
 		auto prev_operator = i == 0 ? pipeline.source : pipeline.operators[i - 1];
 		auto current_operator = pipeline.operators[i];
 		auto chunk = make_unique<DataChunk>();
-		chunk->Initialize(prev_operator->GetTypes());
+		chunk->Initialize(Allocator::Get(context.client), prev_operator->GetTypes());
 		intermediate_chunks.push_back(move(chunk));
-		intermediate_states.push_back(current_operator->GetOperatorState(context.client));
+		intermediate_states.push_back(current_operator->GetOperatorState(context));
 		if (can_cache_in_pipeline && current_operator->RequiresCache()) {
 			auto &cache_types = current_operator->GetTypes();
 			bool can_cache = true;
@@ -13428,7 +13435,7 @@ PipelineExecutor::PipelineExecutor(ClientContext &context_p, Pipeline &pipeline_
 				continue;
 			}
 			cached_chunks[i] = make_unique<DataChunk>();
-			cached_chunks[i]->Initialize(current_operator->GetTypes());
+			cached_chunks[i]->Initialize(Allocator::Get(context.client), current_operator->GetTypes());
 		}
 		if (current_operator->IsSink() && current_operator->sink_state->state == SinkFinalizeType::NO_OUTPUT_POSSIBLE) {
 			// one of the operators has already figured out no output is possible
@@ -13576,7 +13583,7 @@ void PipelineExecutor::CacheChunk(DataChunk &current_chunk, idx_t operator_idx) 
 			if (chunk_cache.size() >= (STANDARD_VECTOR_SIZE - CACHE_THRESHOLD)) {
 				// chunk cache full: return it
 				current_chunk.Move(chunk_cache);
-				chunk_cache.Initialize(pipeline.operators[operator_idx]->GetTypes());
+				chunk_cache.Initialize(Allocator::Get(context.client), pipeline.operators[operator_idx]->GetTypes());
 			} else {
 				// chunk cache not full: probe again
 				current_chunk.Reset();
@@ -13737,7 +13744,7 @@ void PipelineExecutor::FetchFromSource(DataChunk &result) {
 
 void PipelineExecutor::InitializeChunk(DataChunk &chunk) {
 	PhysicalOperator *last_op = pipeline.operators.empty() ? pipeline.source : pipeline.operators.back();
-	chunk.Initialize(last_op->GetTypes());
+	chunk.Initialize(Allocator::DefaultAllocator(), last_op->GetTypes());
 }
 
 void PipelineExecutor::StartOperator(PhysicalOperator *op) {
@@ -16842,6 +16849,127 @@ vector<ColumnDefinition> Parser::ParseColumnList(const string &column_list, Pars
 	}
 	auto &info = ((CreateTableInfo &)*create.info);
 	return move(info.columns);
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+namespace duckdb {
+
+string QueryErrorContext::Format(const string &query, const string &error_message, int error_loc) {
+	if (error_loc < 0 || size_t(error_loc) >= query.size()) {
+		// no location in query provided
+		return error_message;
+	}
+	idx_t error_location = idx_t(error_loc);
+	// count the line numbers until the error location
+	// and set the start position as the first character of that line
+	idx_t start_pos = 0;
+	idx_t line_number = 1;
+	for (idx_t i = 0; i < error_location; i++) {
+		if (StringUtil::CharacterIsNewline(query[i])) {
+			line_number++;
+			start_pos = i + 1;
+		}
+	}
+	// now find either the next newline token after the query, or find the end of string
+	// this is the initial end position
+	idx_t end_pos = query.size();
+	for (idx_t i = error_location; i < query.size(); i++) {
+		if (StringUtil::CharacterIsNewline(query[i])) {
+			end_pos = i;
+			break;
+		}
+	}
+	// now start scanning from the start pos
+	// we want to figure out the start and end pos of what we are going to render
+	// we want to render at most 80 characters in total, with the error_location located in the middle
+	const char *buf = query.c_str() + start_pos;
+	idx_t len = end_pos - start_pos;
+	vector<idx_t> render_widths;
+	vector<idx_t> positions;
+	if (Utf8Proc::IsValid(buf, len)) {
+		// for unicode awareness, we traverse the graphemes of the current line and keep track of their render widths
+		// and of their position in the string
+		for (idx_t cpos = 0; cpos < len;) {
+			auto char_render_width = Utf8Proc::RenderWidth(buf, len, cpos);
+			positions.push_back(cpos);
+			render_widths.push_back(char_render_width);
+			cpos = Utf8Proc::NextGraphemeCluster(buf, len, cpos);
+		}
+	} else { // LCOV_EXCL_START
+		// invalid utf-8, we can't do much at this point
+		// we just assume every character is a character, and every character has a render width of 1
+		for (idx_t cpos = 0; cpos < len; cpos++) {
+			positions.push_back(cpos);
+			render_widths.push_back(1);
+		}
+	} // LCOV_EXCL_STOP
+	// now we want to find the (unicode aware) start and end position
+	idx_t epos = 0;
+	// start by finding the error location inside the array
+	for (idx_t i = 0; i < positions.size(); i++) {
+		if (positions[i] >= (error_location - start_pos)) {
+			epos = i;
+			break;
+		}
+	}
+	bool truncate_beginning = false;
+	bool truncate_end = false;
+	idx_t spos = 0;
+	// now we iterate backwards from the error location
+	// we show max 40 render width before the error location
+	idx_t current_render_width = 0;
+	for (idx_t i = epos; i > 0; i--) {
+		current_render_width += render_widths[i];
+		if (current_render_width >= 40) {
+			truncate_beginning = true;
+			start_pos = positions[i];
+			spos = i;
+			break;
+		}
+	}
+	// now do the same, but going forward
+	current_render_width = 0;
+	for (idx_t i = epos; i < positions.size(); i++) {
+		current_render_width += render_widths[i];
+		if (current_render_width >= 40) {
+			truncate_end = true;
+			end_pos = positions[i];
+			break;
+		}
+	}
+	string line_indicator = "LINE " + to_string(line_number) + ": ";
+	string begin_trunc = truncate_beginning ? "..." : "";
+	string end_trunc = truncate_end ? "..." : "";
+
+	// get the render width of the error indicator (i.e. how many spaces we need to insert before the ^)
+	idx_t error_render_width = 0;
+	for (idx_t i = spos; i < epos; i++) {
+		error_render_width += render_widths[i];
+	}
+	error_render_width += line_indicator.size() + begin_trunc.size();
+
+	// now first print the error message plus the current line (or a subset of the line)
+	string result = error_message;
+	result += "\n" + line_indicator + begin_trunc + query.substr(start_pos, end_pos - start_pos) + end_trunc;
+	// print an arrow pointing at the error location
+	result += "\n" + string(error_render_width, ' ') + "^";
+	return result;
+}
+
+string QueryErrorContext::FormatErrorRecursive(const string &msg, vector<ExceptionFormatValue> &values) {
+	string error_message = values.empty() ? msg : ExceptionFormatValue::Format(msg, values);
+	if (!statement || query_location >= statement->query.size()) {
+		// no statement provided or query location out of range
+		return error_message;
+	}
+	return Format(statement->query, error_message, query_location);
 }
 
 } // namespace duckdb

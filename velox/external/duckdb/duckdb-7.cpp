@@ -8,127 +8,6 @@
 
 
 
-
-
-
-
-namespace duckdb {
-
-string QueryErrorContext::Format(const string &query, const string &error_message, int error_loc) {
-	if (error_loc < 0 || size_t(error_loc) >= query.size()) {
-		// no location in query provided
-		return error_message;
-	}
-	idx_t error_location = idx_t(error_loc);
-	// count the line numbers until the error location
-	// and set the start position as the first character of that line
-	idx_t start_pos = 0;
-	idx_t line_number = 1;
-	for (idx_t i = 0; i < error_location; i++) {
-		if (StringUtil::CharacterIsNewline(query[i])) {
-			line_number++;
-			start_pos = i + 1;
-		}
-	}
-	// now find either the next newline token after the query, or find the end of string
-	// this is the initial end position
-	idx_t end_pos = query.size();
-	for (idx_t i = error_location; i < query.size(); i++) {
-		if (StringUtil::CharacterIsNewline(query[i])) {
-			end_pos = i;
-			break;
-		}
-	}
-	// now start scanning from the start pos
-	// we want to figure out the start and end pos of what we are going to render
-	// we want to render at most 80 characters in total, with the error_location located in the middle
-	const char *buf = query.c_str() + start_pos;
-	idx_t len = end_pos - start_pos;
-	vector<idx_t> render_widths;
-	vector<idx_t> positions;
-	if (Utf8Proc::IsValid(buf, len)) {
-		// for unicode awareness, we traverse the graphemes of the current line and keep track of their render widths
-		// and of their position in the string
-		for (idx_t cpos = 0; cpos < len;) {
-			auto char_render_width = Utf8Proc::RenderWidth(buf, len, cpos);
-			positions.push_back(cpos);
-			render_widths.push_back(char_render_width);
-			cpos = Utf8Proc::NextGraphemeCluster(buf, len, cpos);
-		}
-	} else { // LCOV_EXCL_START
-		// invalid utf-8, we can't do much at this point
-		// we just assume every character is a character, and every character has a render width of 1
-		for (idx_t cpos = 0; cpos < len; cpos++) {
-			positions.push_back(cpos);
-			render_widths.push_back(1);
-		}
-	} // LCOV_EXCL_STOP
-	// now we want to find the (unicode aware) start and end position
-	idx_t epos = 0;
-	// start by finding the error location inside the array
-	for (idx_t i = 0; i < positions.size(); i++) {
-		if (positions[i] >= (error_location - start_pos)) {
-			epos = i;
-			break;
-		}
-	}
-	bool truncate_beginning = false;
-	bool truncate_end = false;
-	idx_t spos = 0;
-	// now we iterate backwards from the error location
-	// we show max 40 render width before the error location
-	idx_t current_render_width = 0;
-	for (idx_t i = epos; i > 0; i--) {
-		current_render_width += render_widths[i];
-		if (current_render_width >= 40) {
-			truncate_beginning = true;
-			start_pos = positions[i];
-			spos = i;
-			break;
-		}
-	}
-	// now do the same, but going forward
-	current_render_width = 0;
-	for (idx_t i = epos; i < positions.size(); i++) {
-		current_render_width += render_widths[i];
-		if (current_render_width >= 40) {
-			truncate_end = true;
-			end_pos = positions[i];
-			break;
-		}
-	}
-	string line_indicator = "LINE " + to_string(line_number) + ": ";
-	string begin_trunc = truncate_beginning ? "..." : "";
-	string end_trunc = truncate_end ? "..." : "";
-
-	// get the render width of the error indicator (i.e. how many spaces we need to insert before the ^)
-	idx_t error_render_width = 0;
-	for (idx_t i = spos; i < epos; i++) {
-		error_render_width += render_widths[i];
-	}
-	error_render_width += line_indicator.size() + begin_trunc.size();
-
-	// now first print the error message plus the current line (or a subset of the line)
-	string result = error_message;
-	result += "\n" + line_indicator + begin_trunc + query.substr(start_pos, end_pos - start_pos) + end_trunc;
-	// print an arrow pointing at the error location
-	result += "\n" + string(error_render_width, ' ') + "^";
-	return result;
-}
-
-string QueryErrorContext::FormatErrorRecursive(const string &msg, vector<ExceptionFormatValue> &values) {
-	string error_message = values.empty() ? msg : ExceptionFormatValue::Format(msg, values);
-	if (!statement || query_location >= statement->query.size()) {
-		// no statement provided or query location out of range
-		return error_message;
-	}
-	return Format(statement->query, error_message, query_location);
-}
-
-} // namespace duckdb
-
-
-
 namespace duckdb {
 
 string RecursiveCTENode::ToString() const {
@@ -17159,6 +17038,249 @@ idx_t LogicalSample::EstimateCardinality(ClientContext &context) {
 
 void LogicalSample::ResolveTypes() {
 	types = children[0]->types;
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+vector<ColumnBinding> LogicalUnnest::GetColumnBindings() {
+	auto child_bindings = children[0]->GetColumnBindings();
+	for (idx_t i = 0; i < expressions.size(); i++) {
+		child_bindings.emplace_back(unnest_index, i);
+	}
+	return child_bindings;
+}
+
+void LogicalUnnest::ResolveTypes() {
+	types.insert(types.end(), children[0]->types.begin(), children[0]->types.end());
+	for (auto &expr : expressions) {
+		types.push_back(expr->return_type);
+	}
+}
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+vector<ColumnBinding> LogicalWindow::GetColumnBindings() {
+	auto child_bindings = children[0]->GetColumnBindings();
+	for (idx_t i = 0; i < expressions.size(); i++) {
+		child_bindings.emplace_back(window_index, i);
+	}
+	return child_bindings;
+}
+
+void LogicalWindow::ResolveTypes() {
+	types.insert(types.end(), children[0]->types.begin(), children[0]->types.end());
+	for (auto &expr : expressions) {
+		types.push_back(expr->return_type);
+	}
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+namespace duckdb {
+
+Planner::Planner(ClientContext &context) : binder(Binder::CreateBinder(context)), context(context) {
+}
+
+void Planner::CreatePlan(SQLStatement &statement) {
+	auto &profiler = QueryProfiler::Get(context);
+	auto parameter_count = statement.n_param;
+
+	vector<BoundParameterExpression *> bound_parameters;
+
+	// first bind the tables and columns to the catalog
+	profiler.StartPhase("binder");
+	binder->parameters = &bound_parameters;
+	binder->parameter_types = &parameter_types;
+	auto bound_statement = binder->Bind(statement);
+	profiler.EndPhase();
+
+	this->properties = binder->properties;
+	this->properties.parameter_count = parameter_count;
+	this->names = bound_statement.names;
+	this->types = bound_statement.types;
+	this->plan = move(bound_statement.plan);
+	properties.bound_all_parameters = true;
+
+	// set up a map of parameter number -> value entries
+	for (auto &expr : bound_parameters) {
+		// check if the type of the parameter could be resolved
+		if (expr->return_type.id() == LogicalTypeId::INVALID || expr->return_type.id() == LogicalTypeId::UNKNOWN) {
+			properties.bound_all_parameters = false;
+			continue;
+		}
+		auto value = make_unique<Value>(expr->return_type);
+		expr->value = value.get();
+		// check if the parameter number has been used before
+		auto entry = value_map.find(expr->parameter_nr);
+		if (entry == value_map.end()) {
+			// not used before, create vector
+			value_map[expr->parameter_nr] = vector<unique_ptr<Value>>();
+		} else if (entry->second.back()->type() != value->type()) {
+			// used before, but types are inconsistent
+			throw BinderException(
+			    "Inconsistent types found for parameter with index %llu, current type %s, new type %s",
+			    expr->parameter_nr, entry->second.back()->type().ToString(), value->type().ToString());
+		}
+		value_map[expr->parameter_nr].push_back(move(value));
+	}
+}
+
+shared_ptr<PreparedStatementData> Planner::PrepareSQLStatement(unique_ptr<SQLStatement> statement) {
+	auto copied_statement = statement->Copy();
+	// create a plan of the underlying statement
+	CreatePlan(move(statement));
+	// now create the logical prepare
+	auto prepared_data = make_shared<PreparedStatementData>(copied_statement->type);
+	prepared_data->unbound_statement = move(copied_statement);
+	prepared_data->names = names;
+	prepared_data->types = types;
+	prepared_data->value_map = move(value_map);
+	prepared_data->properties = properties;
+	prepared_data->catalog_version = Transaction::GetTransaction(context).catalog_version;
+	return prepared_data;
+}
+
+void Planner::PlanExecute(unique_ptr<SQLStatement> statement) {
+	auto &stmt = (ExecuteStatement &)*statement;
+	auto parameter_count = stmt.n_param;
+
+	// bind the prepared statement
+	auto &client_data = ClientData::Get(context);
+
+	auto entry = client_data.prepared_statements.find(stmt.name);
+	if (entry == client_data.prepared_statements.end()) {
+		throw BinderException("Prepared statement \"%s\" does not exist", stmt.name);
+	}
+
+	// check if we need to rebind the prepared statement
+	// this happens if the catalog changes, since in this case e.g. tables we relied on may have been deleted
+	auto prepared = entry->second;
+	auto &catalog = Catalog::GetCatalog(context);
+	bool rebound = false;
+
+	// bind any supplied parameters
+	vector<Value> bind_values;
+	for (idx_t i = 0; i < stmt.values.size(); i++) {
+		ConstantBinder cbinder(*binder, context, "EXECUTE statement");
+		auto bound_expr = cbinder.Bind(stmt.values[i]);
+
+		Value value = ExpressionExecutor::EvaluateScalar(*bound_expr);
+		bind_values.push_back(move(value));
+	}
+	bool all_bound = prepared->properties.bound_all_parameters;
+	if (catalog.GetCatalogVersion() != entry->second->catalog_version || !all_bound) {
+		// catalog was modified or statement does not have clear types: rebind the statement before running the execute
+		for (auto &value : bind_values) {
+			parameter_types.push_back(value.type());
+		}
+		prepared = PrepareSQLStatement(entry->second->unbound_statement->Copy());
+		if (all_bound && prepared->types != entry->second->types) {
+			throw BinderException("Rebinding statement \"%s\" after catalog change resulted in change of types",
+			                      stmt.name);
+		}
+		D_ASSERT(prepared->properties.bound_all_parameters);
+		rebound = true;
+	}
+	// copy the properties of the prepared statement into the planner
+	this->properties = prepared->properties;
+	this->properties.parameter_count = parameter_count;
+	this->names = prepared->names;
+	this->types = prepared->types;
+
+	// add casts to the prepared statement parameters as required
+	for (idx_t i = 0; i < bind_values.size(); i++) {
+		if (prepared->value_map.count(i + 1) == 0) {
+			continue;
+		}
+		bind_values[i] = bind_values[i].CastAs(prepared->GetType(i + 1));
+	}
+
+	prepared->Bind(move(bind_values));
+	if (rebound) {
+		auto execute_plan = make_unique<LogicalExecute>(move(prepared));
+		execute_plan->children.push_back(move(plan));
+		this->plan = move(execute_plan);
+		return;
+	}
+
+	this->plan = make_unique<LogicalExecute>(move(prepared));
+}
+
+void Planner::PlanPrepare(unique_ptr<SQLStatement> statement) {
+	auto &stmt = (PrepareStatement &)*statement;
+	auto prepared_data = PrepareSQLStatement(move(stmt.statement));
+
+	auto prepare = make_unique<LogicalPrepare>(stmt.name, move(prepared_data), move(plan));
+	// we can prepare in read-only mode: prepared statements are not written to the catalog
+	properties.read_only = true;
+	// we can always prepare, even if the transaction has been invalidated
+	// this is required because most clients ALWAYS invoke prepared statements
+	properties.requires_valid_transaction = false;
+	properties.allow_stream_result = false;
+	properties.bound_all_parameters = true;
+	properties.parameter_count = 0;
+	properties.return_type = StatementReturnType::NOTHING;
+	this->names = {"Success"};
+	this->types = {LogicalType::BOOLEAN};
+	this->plan = move(prepare);
+}
+
+void Planner::CreatePlan(unique_ptr<SQLStatement> statement) {
+	D_ASSERT(statement);
+	switch (statement->type) {
+	case StatementType::SELECT_STATEMENT:
+	case StatementType::INSERT_STATEMENT:
+	case StatementType::COPY_STATEMENT:
+	case StatementType::DELETE_STATEMENT:
+	case StatementType::UPDATE_STATEMENT:
+	case StatementType::CREATE_STATEMENT:
+	case StatementType::DROP_STATEMENT:
+	case StatementType::ALTER_STATEMENT:
+	case StatementType::TRANSACTION_STATEMENT:
+	case StatementType::EXPLAIN_STATEMENT:
+	case StatementType::VACUUM_STATEMENT:
+	case StatementType::RELATION_STATEMENT:
+	case StatementType::CALL_STATEMENT:
+	case StatementType::EXPORT_STATEMENT:
+	case StatementType::PRAGMA_STATEMENT:
+	case StatementType::SHOW_STATEMENT:
+	case StatementType::SET_STATEMENT:
+	case StatementType::LOAD_STATEMENT:
+	case StatementType::EXTENSION_STATEMENT:
+		CreatePlan(*statement);
+		break;
+	case StatementType::EXECUTE_STATEMENT:
+		PlanExecute(move(statement));
+		break;
+	case StatementType::PREPARE_STATEMENT:
+		PlanPrepare(move(statement));
+		break;
+	default:
+		throw NotImplementedException("Cannot plan statement of type %s!", StatementTypeToString(statement->type));
+	}
 }
 
 } // namespace duckdb

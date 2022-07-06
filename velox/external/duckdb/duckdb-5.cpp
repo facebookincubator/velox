@@ -6378,7 +6378,7 @@ unique_ptr<GlobalTableFunctionState> ArrowTableFunction::ArrowScanInitGlobal(Cli
 	return move(result);
 }
 
-unique_ptr<LocalTableFunctionState> ArrowTableFunction::ArrowScanInitLocal(ClientContext &context,
+unique_ptr<LocalTableFunctionState> ArrowTableFunction::ArrowScanInitLocal(ExecutionContext &context,
                                                                            TableFunctionInitInput &input,
                                                                            GlobalTableFunctionState *global_state_p) {
 	auto &global_state = (ArrowScanGlobalState &)*global_state_p;
@@ -6386,7 +6386,7 @@ unique_ptr<LocalTableFunctionState> ArrowTableFunction::ArrowScanInitLocal(Clien
 	auto result = make_unique<ArrowScanLocalState>(move(current_chunk));
 	result->column_ids = input.column_ids;
 	result->filters = input.filters;
-	if (!ArrowScanParallelStateNext(context, input.bind_data, *result, global_state)) {
+	if (!ArrowScanParallelStateNext(context.client, input.bind_data, *result, global_state)) {
 		return nullptr;
 	}
 	return move(result);
@@ -7574,7 +7574,7 @@ struct GlobalWriteCSVData : public GlobalFunctionData {
 	unique_ptr<FileHandle> handle;
 };
 
-static unique_ptr<LocalFunctionData> WriteCSVInitializeLocal(ClientContext &context, FunctionData &bind_data) {
+static unique_ptr<LocalFunctionData> WriteCSVInitializeLocal(ExecutionContext &context, FunctionData &bind_data) {
 	auto &csv_data = (WriteCSVData &)bind_data;
 	auto local_data = make_unique<LocalReadCSVData>();
 
@@ -7582,7 +7582,7 @@ static unique_ptr<LocalFunctionData> WriteCSVInitializeLocal(ClientContext &cont
 	vector<LogicalType> types;
 	types.resize(csv_data.options.names.size(), LogicalType::VARCHAR);
 
-	local_data->cast_chunk.Initialize(types);
+	local_data->cast_chunk.Initialize(Allocator::Get(context.client), types);
 	return move(local_data);
 }
 
@@ -7610,7 +7610,7 @@ static unique_ptr<GlobalFunctionData> WriteCSVInitializeGlobal(ClientContext &co
 	return move(global_data);
 }
 
-static void WriteCSVSink(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static void WriteCSVSink(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
                          LocalFunctionData &lstate, DataChunk &input) {
 	auto &csv_data = (WriteCSVData &)bind_data;
 	auto &options = csv_data.options;
@@ -7677,7 +7677,7 @@ static void WriteCSVSink(ClientContext &context, FunctionData &bind_data, Global
 //===--------------------------------------------------------------------===//
 // Combine
 //===--------------------------------------------------------------------===//
-static void WriteCSVCombine(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+static void WriteCSVCombine(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
                             LocalFunctionData &lstate) {
 	auto &local_data = (LocalReadCSVData &)lstate;
 	auto &global_state = (GlobalWriteCSVData &)gstate;
@@ -7887,11 +7887,11 @@ static void PragmaDetailedProfilingOutputFunction(ClientContext &context, TableF
 
 	if (!state.initialized) {
 		// create a ChunkCollection
-		auto collection = make_unique<ChunkCollection>();
+		auto collection = make_unique<ChunkCollection>(context);
 
 		// create a chunk
 		DataChunk chunk;
-		chunk.Initialize(data.types);
+		chunk.Initialize(context, data.types);
 
 		// Initialize ids
 		int operator_counter = 1;
@@ -8012,10 +8012,10 @@ static void PragmaLastProfilingOutputFunction(ClientContext &context, TableFunct
 	auto &data = (PragmaLastProfilingOutputData &)*data_p.bind_data;
 	if (!state.initialized) {
 		// create a ChunkCollection
-		auto collection = make_unique<ChunkCollection>();
+		auto collection = make_unique<ChunkCollection>(context);
 
 		DataChunk chunk;
-		chunk.Initialize(data.types);
+		chunk.Initialize(context, data.types);
 		int operator_counter = 1;
 		if (!ClientData::Get(context).query_profiler_history->GetPrevProfilers().empty()) {
 			for (auto op :
@@ -8608,7 +8608,7 @@ static unique_ptr<FunctionData> SummaryFunctionBind(ClientContext &context, Tabl
 	return make_unique<TableFunctionData>();
 }
 
-static OperatorResultType SummaryFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &input,
+static OperatorResultType SummaryFunction(ExecutionContext &context, TableFunctionInput &data_p, DataChunk &input,
                                           DataChunk &output) {
 	output.SetCardinality(input.size());
 
@@ -11805,7 +11805,7 @@ struct TestVectorFlat {
 		vector<Value> result_values = GenerateValues(info, info.type);
 		for (idx_t cur_row = 0; cur_row < result_values.size(); cur_row += STANDARD_VECTOR_SIZE) {
 			auto result = make_unique<DataChunk>();
-			result->Initialize({info.type});
+			result->Initialize(Allocator::DefaultAllocator(), {info.type});
 			auto cardinality = MinValue<idx_t>(STANDARD_VECTOR_SIZE, result_values.size() - cur_row);
 			for (idx_t i = 0; i < cardinality; i++) {
 				result->data[0].SetValue(i, result_values[cur_row + i]);
@@ -11821,7 +11821,7 @@ struct TestVectorConstant {
 		auto values = TestVectorFlat::GenerateValues(info, info.type);
 		for (idx_t cur_row = 0; cur_row < TestVectorFlat::TEST_VECTOR_CARDINALITY; cur_row += STANDARD_VECTOR_SIZE) {
 			auto result = make_unique<DataChunk>();
-			result->Initialize({info.type});
+			result->Initialize(Allocator::DefaultAllocator(), {info.type});
 			auto cardinality = MinValue<idx_t>(STANDARD_VECTOR_SIZE, TestVectorFlat::TEST_VECTOR_CARDINALITY - cur_row);
 			result->data[0].SetValue(0, values[0]);
 			result->data[0].SetVectorType(VectorType::CONSTANT_VECTOR);
@@ -11886,7 +11886,7 @@ struct TestVectorSequence {
 	static void Generate(TestVectorInfo &info) {
 #if STANDARD_VECTOR_SIZE > 2
 		auto result = make_unique<DataChunk>();
-		result->Initialize({info.type});
+		result->Initialize(Allocator::DefaultAllocator(), {info.type});
 
 		GenerateVector(info, info.type, result->data[0]);
 		result->SetCardinality(3);
@@ -12066,7 +12066,7 @@ struct TableScanGlobalState : public GlobalTableFunctionState {
 	}
 };
 
-static unique_ptr<LocalTableFunctionState> TableScanInitLocal(ClientContext &context, TableFunctionInitInput &input,
+static unique_ptr<LocalTableFunctionState> TableScanInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
                                                               GlobalTableFunctionState *gstate) {
 	auto result = make_unique<TableScanLocalState>();
 	auto &bind_data = (TableScanBindData &)*input.bind_data;
@@ -12076,7 +12076,7 @@ static unique_ptr<LocalTableFunctionState> TableScanInitLocal(ClientContext &con
 		col = storage_idx;
 	}
 	result->scan_state.table_filters = input.filters;
-	TableScanParallelStateNext(context, input.bind_data, result.get(), gstate);
+	TableScanParallelStateNext(context.client, input.bind_data, result.get(), gstate);
 	return move(result);
 }
 
@@ -12421,16 +12421,22 @@ public:
 	}
 };
 
-struct UnnestOperatorData : public GlobalTableFunctionState {
-	UnnestOperatorData() {
+struct UnnestGlobalState : public GlobalTableFunctionState {
+	UnnestGlobalState() {
 	}
 
-	unique_ptr<OperatorState> operator_state;
 	vector<unique_ptr<Expression>> select_list;
 
 	idx_t MaxThreads() const override {
 		return GlobalTableFunctionState::MAX_THREADS;
 	}
+};
+
+struct UnnestLocalState : public LocalTableFunctionState {
+	UnnestLocalState() {
+	}
+
+	unique_ptr<OperatorState> operator_state;
 };
 
 static unique_ptr<FunctionData> UnnestBind(ClientContext &context, TableFunctionBindInput &input,
@@ -12443,10 +12449,18 @@ static unique_ptr<FunctionData> UnnestBind(ClientContext &context, TableFunction
 	return make_unique<UnnestBindData>(input.input_table_types[0]);
 }
 
+static unique_ptr<LocalTableFunctionState> UnnestLocalInit(ExecutionContext &context, TableFunctionInitInput &input,
+                                                           GlobalTableFunctionState *global_state) {
+	auto &gstate = (UnnestGlobalState &)*global_state;
+
+	auto result = make_unique<UnnestLocalState>();
+	result->operator_state = PhysicalUnnest::GetState(context, gstate.select_list);
+	return move(result);
+}
+
 static unique_ptr<GlobalTableFunctionState> UnnestInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = (UnnestBindData &)*input.bind_data;
-	auto result = make_unique<UnnestOperatorData>();
-	result->operator_state = PhysicalUnnest::GetState(context);
+	auto result = make_unique<UnnestGlobalState>();
 	auto ref = make_unique<BoundReferenceExpression>(bind_data.input_type, 0);
 	auto bound_unnest = make_unique<BoundUnnestExpression>(ListType::GetChildType(bind_data.input_type));
 	bound_unnest->child = move(ref);
@@ -12454,14 +12468,15 @@ static unique_ptr<GlobalTableFunctionState> UnnestInit(ClientContext &context, T
 	return move(result);
 }
 
-static OperatorResultType UnnestFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &input,
+static OperatorResultType UnnestFunction(ExecutionContext &context, TableFunctionInput &data_p, DataChunk &input,
                                          DataChunk &output) {
-	auto &state = (UnnestOperatorData &)*data_p.global_state;
-	return PhysicalUnnest::ExecuteInternal(context, input, output, *state.operator_state, state.select_list, false);
+	auto &state = (UnnestGlobalState &)*data_p.global_state;
+	auto &lstate = (UnnestLocalState &)*data_p.local_state;
+	return PhysicalUnnest::ExecuteInternal(context, input, output, *lstate.operator_state, state.select_list, false);
 }
 
 void UnnestTableFunction::RegisterFunction(BuiltinFunctions &set) {
-	TableFunction unnest_function("unnest", {LogicalTypeId::TABLE}, nullptr, UnnestBind, UnnestInit);
+	TableFunction unnest_function("unnest", {LogicalTypeId::TABLE}, nullptr, UnnestBind, UnnestInit, UnnestLocalInit);
 	unnest_function.in_out_function = UnnestFunction;
 	set.AddFunction(unnest_function);
 }
@@ -12660,10 +12675,11 @@ void UDFWrapper::RegisterAggrFunction(AggregateFunction aggr_function, ClientCon
 
 namespace duckdb {
 
-BaseAppender::BaseAppender() : column(0) {
+BaseAppender::BaseAppender(Allocator &allocator) : allocator(allocator), collection(allocator), column(0) {
 }
 
-BaseAppender::BaseAppender(vector<LogicalType> types_p) : types(move(types_p)), column(0) {
+BaseAppender::BaseAppender(Allocator &allocator, vector<LogicalType> types_p)
+    : allocator(allocator), types(move(types_p)), collection(allocator), column(0) {
 	InitializeChunk();
 }
 
@@ -12683,7 +12699,7 @@ void BaseAppender::Destructor() {
 }
 
 InternalAppender::InternalAppender(ClientContext &context_p, TableCatalogEntry &table_p)
-    : BaseAppender(table_p.GetTypes()), context(context_p), table(table_p) {
+    : BaseAppender(Allocator::DefaultAllocator(), table_p.GetTypes()), context(context_p), table(table_p) {
 }
 
 InternalAppender::~InternalAppender() {
@@ -12691,7 +12707,7 @@ InternalAppender::~InternalAppender() {
 }
 
 Appender::Appender(Connection &con, const string &schema_name, const string &table_name)
-    : BaseAppender(), context(con.context) {
+    : BaseAppender(Allocator::DefaultAllocator()), context(con.context) {
 	description = con.TableInfo(schema_name, table_name);
 	if (!description) {
 		// table could not be found
@@ -12712,7 +12728,7 @@ Appender::~Appender() {
 
 void BaseAppender::InitializeChunk() {
 	chunk = make_unique<DataChunk>();
-	chunk->Initialize(types);
+	chunk->Initialize(allocator, types);
 }
 
 void BaseAppender::BeginRow() {
@@ -13377,7 +13393,7 @@ duckdb_data_chunk duckdb_create_data_chunk(duckdb_logical_type *ctypes, idx_t co
 	}
 
 	auto result = new duckdb::DataChunk();
-	result->Initialize(types);
+	result->Initialize(duckdb::Allocator::DefaultAllocator(), types);
 	return result;
 }
 
@@ -15023,7 +15039,7 @@ unique_ptr<GlobalTableFunctionState> CTableFunctionInit(ClientContext &context, 
 	return move(result);
 }
 
-unique_ptr<LocalTableFunctionState> CTableFunctionLocalInit(ClientContext &context, TableFunctionInitInput &data_p,
+unique_ptr<LocalTableFunctionState> CTableFunctionLocalInit(ExecutionContext &context, TableFunctionInitInput &data_p,
                                                             GlobalTableFunctionState *gstate) {
 	auto &bind_data = (CTableBindData &)*data_p.bind_data;
 	auto result = make_unique<CTableLocalInitData>();

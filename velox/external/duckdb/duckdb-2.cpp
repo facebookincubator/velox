@@ -26,6 +26,7 @@
 
 
 
+
 namespace duckdb {
 
 DataChunk::DataChunk() : count(0), capacity(STANDARD_VECTOR_SIZE) {
@@ -43,15 +44,19 @@ void DataChunk::InitializeEmpty(const vector<LogicalType> &types) {
 	}
 }
 
-void DataChunk::Initialize(const vector<LogicalType> &types) {
+void DataChunk::Initialize(Allocator &allocator, const vector<LogicalType> &types) {
 	D_ASSERT(data.empty());   // can only be initialized once
 	D_ASSERT(!types.empty()); // empty chunk not allowed
 	capacity = STANDARD_VECTOR_SIZE;
 	for (idx_t i = 0; i < types.size(); i++) {
-		VectorCache cache(types[i]);
+		VectorCache cache(allocator, types[i]);
 		data.emplace_back(cache);
 		vector_caches.push_back(move(cache));
 	}
+}
+
+void DataChunk::Initialize(ClientContext &context, const vector<LogicalType> &types) {
+	Initialize(Allocator::Get(context), types);
 }
 
 void DataChunk::Reset() {
@@ -225,7 +230,7 @@ void DataChunk::Deserialize(Deserializer &source) {
 	for (idx_t i = 0; i < column_count; i++) {
 		types.push_back(LogicalType::Deserialize(source));
 	}
-	Initialize(types);
+	Initialize(Allocator::DefaultAllocator(), types);
 	// now load the column data
 	SetCardinality(rows);
 	for (idx_t i = 0; i < column_count; i++) {
@@ -3047,9 +3052,9 @@ idx_t RowDataCollection::AppendToBlock(RowDataBlock &block, BufferHandle &handle
 	return append_count;
 }
 
-vector<unique_ptr<BufferHandle>> RowDataCollection::Build(idx_t added_count, data_ptr_t key_locations[],
-                                                          idx_t entry_sizes[], const SelectionVector *sel) {
-	vector<unique_ptr<BufferHandle>> handles;
+vector<BufferHandle> RowDataCollection::Build(idx_t added_count, data_ptr_t key_locations[], idx_t entry_sizes[],
+                                              const SelectionVector *sel) {
+	vector<BufferHandle> handles;
 	vector<BlockAppendEntry> append_entries;
 
 	// first allocate space of where to serialize the keys and payload columns
@@ -3065,7 +3070,7 @@ vector<unique_ptr<BufferHandle>> RowDataCollection::Build(idx_t added_count, dat
 				// last block has space: pin the buffer of this block
 				auto handle = buffer_manager.Pin(last_block.block);
 				// now append to the block
-				idx_t append_count = AppendToBlock(last_block, *handle, append_entries, remaining, entry_sizes);
+				idx_t append_count = AppendToBlock(last_block, handle, append_entries, remaining, entry_sizes);
 				remaining -= append_count;
 				handles.push_back(move(handle));
 			}
@@ -3078,7 +3083,7 @@ vector<unique_ptr<BufferHandle>> RowDataCollection::Build(idx_t added_count, dat
 			// offset the entry sizes array if we have added entries already
 			idx_t *offset_entry_sizes = entry_sizes ? entry_sizes + added_count - remaining : nullptr;
 
-			idx_t append_count = AppendToBlock(new_block, *handle, append_entries, remaining, offset_entry_sizes);
+			idx_t append_count = AppendToBlock(new_block, handle, append_entries, remaining, offset_entry_sizes);
 			D_ASSERT(new_block.count > 0);
 			remaining -= append_count;
 
@@ -3149,19 +3154,6 @@ void RowDataCollection::Merge(RowDataCollection &other) {
 
 
 namespace duckdb {
-
-vector<AggregateObject> AggregateObject::CreateAggregateObjects(const vector<BoundAggregateExpression *> &bindings) {
-	vector<AggregateObject> aggregates;
-	for (auto &binding : bindings) {
-		auto payload_size = binding->function.state_size();
-#ifndef DUCKDB_ALLOW_UNDEFINED
-		payload_size = AlignValue(payload_size);
-#endif
-		aggregates.emplace_back(binding->function, binding->bind_info.get(), binding->children.size(), payload_size,
-		                        binding->distinct, binding->return_type.InternalType(), binding->filter.get());
-	}
-	return aggregates;
-}
 
 RowLayout::RowLayout()
     : flag_width(0), data_width(0), aggr_width(0), row_width(0), all_constant(true), heap_pointer_offset(0) {
@@ -3296,9 +3288,15 @@ buffer_ptr<SelectionData> SelectionVector::Slice(const SelectionVector &sel, idx
 
 namespace duckdb {
 
-#define MINIMUM_HEAP_SIZE 4096
+StringHeap::StringHeap() : allocator(Allocator::DefaultAllocator()) {
+}
 
-StringHeap::StringHeap() : tail(nullptr) {
+void StringHeap::Destroy() {
+	allocator.Destroy();
+}
+
+void StringHeap::Move(StringHeap &other) {
+	other.allocator.Move(allocator);
 }
 
 string_t StringHeap::AddString(const char *data, idx_t len) {
@@ -3326,19 +3324,13 @@ string_t StringHeap::AddBlob(const char *data, idx_t len) {
 	return insert_string;
 }
 
+string_t StringHeap::AddBlob(const string_t &data) {
+	return AddBlob(data.GetDataUnsafe(), data.GetSize());
+}
+
 string_t StringHeap::EmptyString(idx_t len) {
 	D_ASSERT(len >= string_t::INLINE_LENGTH);
-	if (!chunk || chunk->current_position + len >= chunk->maximum_size) {
-		// have to make a new entry
-		auto new_chunk = make_unique<StringChunk>(MaxValue<idx_t>(len, MINIMUM_HEAP_SIZE));
-		new_chunk->prev = move(chunk);
-		chunk = move(new_chunk);
-		if (!tail) {
-			tail = chunk.get();
-		}
-	}
-	auto insert_pos = chunk->data.get() + chunk->current_position;
-	chunk->current_position += len;
+	auto insert_pos = (const char *)allocator.Allocate(len);
 	return string_t(insert_pos, len);
 }
 
@@ -7246,7 +7238,7 @@ string_t StringVector::EmptyString(Vector &vector, idx_t len) {
 	return string_buffer.EmptyString(len);
 }
 
-void StringVector::AddHandle(Vector &vector, unique_ptr<BufferHandle> handle) {
+void StringVector::AddHandle(Vector &vector, BufferHandle handle) {
 	D_ASSERT(vector.GetType().InternalType() == PhysicalType::VARCHAR);
 	if (!vector.auxiliary) {
 		vector.auxiliary = make_buffer<VectorStringBuffer>();
@@ -7588,7 +7580,7 @@ void VectorListBuffer::PushBack(const Value &insert) {
 VectorListBuffer::~VectorListBuffer() {
 }
 
-ManagedVectorBuffer::ManagedVectorBuffer(unique_ptr<BufferHandle> handle)
+ManagedVectorBuffer::ManagedVectorBuffer(BufferHandle handle)
     : VectorBuffer(VectorBufferType::MANAGED_BUFFER), handle(move(handle)) {
 }
 
@@ -7599,20 +7591,21 @@ ManagedVectorBuffer::~ManagedVectorBuffer() {
 
 
 
+
 namespace duckdb {
 
 class VectorCacheBuffer : public VectorBuffer {
 public:
-	explicit VectorCacheBuffer(const LogicalType &type_p)
+	explicit VectorCacheBuffer(Allocator &allocator, const LogicalType &type_p)
 	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), type(type_p) {
 		auto internal_type = type.InternalType();
 		switch (internal_type) {
 		case PhysicalType::LIST: {
 			// memory for the list offsets
-			owned_data = unique_ptr<data_t[]>(new data_t[STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type)]);
+			owned_data = allocator.Allocate(STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type));
 			// child data of the list
 			auto &child_type = ListType::GetChildType(type);
-			child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type));
+			child_caches.push_back(make_buffer<VectorCacheBuffer>(allocator, child_type));
 			auto child_vector = make_unique<Vector>(child_type, false, false);
 			auxiliary = make_unique<VectorListBuffer>(move(child_vector));
 			break;
@@ -7620,14 +7613,14 @@ public:
 		case PhysicalType::STRUCT: {
 			auto &child_types = StructType::GetChildTypes(type);
 			for (auto &child_type : child_types) {
-				child_caches.push_back(make_buffer<VectorCacheBuffer>(child_type.second));
+				child_caches.push_back(make_buffer<VectorCacheBuffer>(allocator, child_type.second));
 			}
 			auto struct_buffer = make_unique<VectorStructBuffer>(type);
 			auxiliary = move(struct_buffer);
 			break;
 		}
 		default:
-			owned_data = unique_ptr<data_t[]>(new data_t[STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type)]);
+			owned_data = allocator.Allocate(STANDARD_VECTOR_SIZE * GetTypeIdSize(internal_type));
 			break;
 		}
 	}
@@ -7640,7 +7633,7 @@ public:
 		result.validity.Reset();
 		switch (internal_type) {
 		case PhysicalType::LIST: {
-			result.data = owned_data.get();
+			result.data = owned_data->get();
 			// reinitialize the VectorListBuffer
 			AssignSharedPointer(result.auxiliary, auxiliary);
 			// propagate through child
@@ -7668,7 +7661,7 @@ public:
 		}
 		default:
 			// regular type: no aux data and reset data to cached data
-			result.data = owned_data.get();
+			result.data = owned_data->get();
 			result.auxiliary.reset();
 			break;
 		}
@@ -7682,15 +7675,15 @@ private:
 	//! The type of the vector cache
 	LogicalType type;
 	//! Owned data
-	unique_ptr<data_t[]> owned_data;
+	unique_ptr<AllocatedData> owned_data;
 	//! Child caches (if any). Used for nested types.
 	vector<buffer_ptr<VectorBuffer>> child_caches;
 	//! Aux data for the vector (if any)
 	buffer_ptr<VectorBuffer> auxiliary;
 };
 
-VectorCache::VectorCache(const LogicalType &type_p) {
-	buffer = make_unique<VectorCacheBuffer>(type_p);
+VectorCache::VectorCache(Allocator &allocator, const LogicalType &type_p) {
+	buffer = make_unique<VectorCacheBuffer>(allocator, type_p);
 }
 
 void VectorCache::ResetFromCache(Vector &result) const {
@@ -12908,26 +12901,29 @@ namespace duckdb {
 
 using ValidityBytes = RowLayout::ValidityBytes;
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types,
-                                                     vector<LogicalType> payload_types,
+GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+                                                     vector<LogicalType> group_types, vector<LogicalType> payload_types,
                                                      const vector<BoundAggregateExpression *> &bindings,
                                                      HtEntryType entry_type)
-    : GroupedAggregateHashTable(buffer_manager, move(group_types), move(payload_types),
+    : GroupedAggregateHashTable(allocator, buffer_manager, move(group_types), move(payload_types),
                                 AggregateObject::CreateAggregateObjects(bindings), entry_type) {
 }
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types)
-    : GroupedAggregateHashTable(buffer_manager, move(group_types), {}, vector<AggregateObject>()) {
+GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+                                                     vector<LogicalType> group_types)
+    : GroupedAggregateHashTable(allocator, buffer_manager, move(group_types), {}, vector<AggregateObject>()) {
 }
 
-GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> group_types_p,
+GroupedAggregateHashTable::GroupedAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
+                                                     vector<LogicalType> group_types_p,
                                                      vector<LogicalType> payload_types_p,
                                                      vector<AggregateObject> aggregate_objects_p,
                                                      HtEntryType entry_type)
-    : BaseAggregateHashTable(buffer_manager, move(payload_types_p)), entry_type(entry_type), capacity(0), entries(0),
-      payload_page_offset(0), is_finalized(false), ht_offsets(LogicalTypeId::BIGINT),
-      hash_salts(LogicalTypeId::SMALLINT), group_compare_vector(STANDARD_VECTOR_SIZE),
-      no_match_vector(STANDARD_VECTOR_SIZE), empty_vector(STANDARD_VECTOR_SIZE) {
+    : BaseAggregateHashTable(allocator, aggregate_objects_p, buffer_manager, move(payload_types_p)),
+      entry_type(entry_type), capacity(0), entries(0), payload_page_offset(0), is_finalized(false),
+      ht_offsets(LogicalTypeId::BIGINT), hash_salts(LogicalTypeId::SMALLINT),
+      group_compare_vector(STANDARD_VECTOR_SIZE), no_match_vector(STANDARD_VECTOR_SIZE),
+      empty_vector(STANDARD_VECTOR_SIZE) {
 
 	// Append hash column to the end and initialise the row layout
 	group_types_p.emplace_back(LogicalType::HASH);
@@ -12941,7 +12937,7 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 	D_ASSERT(tuple_size <= Storage::BLOCK_SIZE);
 	tuples_per_block = Storage::BLOCK_SIZE / tuple_size;
 	hashes_hdl = buffer_manager.Allocate(Storage::BLOCK_SIZE);
-	hashes_hdl_ptr = hashes_hdl->Ptr();
+	hashes_hdl_ptr = hashes_hdl.Ptr();
 
 	switch (entry_type) {
 	case HtEntryType::HT_WIDTH_64: {
@@ -12972,7 +12968,8 @@ GroupedAggregateHashTable::GroupedAggregateHashTable(BufferManager &buffer_manag
 			for (idx_t child_idx = 0; child_idx < aggr.child_count; child_idx++) {
 				distinct_group_types.push_back(payload_types[payload_idx + child_idx]);
 			}
-			distinct_hashes[i] = make_unique<GroupedAggregateHashTable>(buffer_manager, distinct_group_types);
+			distinct_hashes[i] =
+			    make_unique<GroupedAggregateHashTable>(allocator, buffer_manager, distinct_group_types);
 		}
 		payload_idx += aggr.child_count;
 	}
@@ -13009,7 +13006,7 @@ void GroupedAggregateHashTable::PayloadApply(FUNC fun) {
 void GroupedAggregateHashTable::NewBlock() {
 	auto pin = buffer_manager.Allocate(Storage::BLOCK_SIZE);
 	payload_hds.push_back(move(pin));
-	payload_hds_ptrs.push_back(payload_hds.back()->Ptr());
+	payload_hds_ptrs.push_back(payload_hds.back().Ptr());
 	payload_page_offset = 0;
 }
 
@@ -13109,7 +13106,7 @@ void GroupedAggregateHashTable::Resize(idx_t size) {
 	auto byte_size = size * sizeof(ENTRY);
 	if (byte_size > (idx_t)Storage::BLOCK_SIZE) {
 		hashes_hdl = buffer_manager.Allocate(byte_size);
-		hashes_hdl_ptr = hashes_hdl->Ptr();
+		hashes_hdl_ptr = hashes_hdl.Ptr();
 	}
 	memset(hashes_hdl_ptr, 0, byte_size);
 	hashes_end_ptr = hashes_hdl_ptr + byte_size;
@@ -13179,7 +13176,7 @@ idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashe
 				probe_types.push_back(payload_types[payload_idx + i]);
 			}
 			DataChunk probe_chunk;
-			probe_chunk.Initialize(probe_types);
+			probe_chunk.Initialize(Allocator::DefaultAllocator(), probe_types);
 			for (idx_t group_idx = 0; group_idx < groups.ColumnCount(); group_idx++) {
 				probe_chunk.data[group_idx].Reference(groups.data[group_idx]);
 			}
@@ -13198,7 +13195,7 @@ idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashe
 				// now fix up the payload and addresses accordingly by creating
 				// a selection vector
 				DataChunk distinct_payload;
-				distinct_payload.Initialize(payload.GetTypes());
+				distinct_payload.Initialize(Allocator::DefaultAllocator(), payload.GetTypes());
 				distinct_payload.Slice(payload, new_groups, new_group_count);
 				distinct_payload.Verify();
 
@@ -13207,14 +13204,16 @@ idx_t GroupedAggregateHashTable::AddChunk(DataChunk &groups, Vector &group_hashe
 
 				if (aggr.filter) {
 					distinct_addresses.Normalify(new_group_count);
-					RowOperations::UpdateFilteredStates(aggr, distinct_addresses, distinct_payload, payload_idx);
+					RowOperations::UpdateFilteredStates(filter_set.GetFilterData(aggr_idx), aggr, distinct_addresses,
+					                                    distinct_payload, payload_idx);
 				} else {
 					RowOperations::UpdateStates(aggr, distinct_addresses, distinct_payload, payload_idx,
 					                            new_group_count);
 				}
 			}
 		} else if (aggr.filter) {
-			RowOperations::UpdateFilteredStates(aggr, addresses, payload, payload_idx);
+			RowOperations::UpdateFilteredStates(filter_set.GetFilterData(aggr_idx), aggr, addresses, payload,
+			                                    payload_idx);
 		} else {
 			RowOperations::UpdateStates(aggr, addresses, payload, payload_idx, payload.size());
 		}
@@ -13411,31 +13410,40 @@ idx_t GroupedAggregateHashTable::FindOrCreateGroups(DataChunk &groups, Vector &a
 	return FindOrCreateGroups(groups, hashes, addresses_out, new_groups_out);
 }
 
-void GroupedAggregateHashTable::FlushMove(Vector &source_addresses, Vector &source_hashes, idx_t count) {
+struct FlushMoveState {
+	FlushMoveState(Allocator &allocator, RowLayout &layout)
+	    : new_groups(STANDARD_VECTOR_SIZE), group_addresses(LogicalType::POINTER),
+	      new_groups_sel(STANDARD_VECTOR_SIZE) {
+		vector<LogicalType> group_types(layout.GetTypes().begin(), layout.GetTypes().end() - 1);
+		groups.Initialize(allocator, group_types);
+	}
+
+	DataChunk groups;
+	SelectionVector new_groups;
+	Vector group_addresses;
+	SelectionVector new_groups_sel;
+};
+
+void GroupedAggregateHashTable::FlushMove(FlushMoveState &state, Vector &source_addresses, Vector &source_hashes,
+                                          idx_t count) {
 	D_ASSERT(source_addresses.GetType() == LogicalType::POINTER);
 	D_ASSERT(source_hashes.GetType() == LogicalType::HASH);
 
-	DataChunk groups;
-	groups.Initialize(vector<LogicalType>(layout.GetTypes().begin(), layout.GetTypes().end() - 1));
-	groups.SetCardinality(count);
-	for (idx_t i = 0; i < groups.ColumnCount(); i++) {
-		auto &column = groups.data[i];
+	state.groups.Reset();
+	state.groups.SetCardinality(count);
+	for (idx_t i = 0; i < state.groups.ColumnCount(); i++) {
+		auto &column = state.groups.data[i];
 		const auto col_offset = layout.GetOffsets()[i];
 		RowOperations::Gather(source_addresses, *FlatVector::IncrementalSelectionVector(), column,
 		                      *FlatVector::IncrementalSelectionVector(), count, col_offset, i);
 	}
 
-	SelectionVector new_groups(STANDARD_VECTOR_SIZE);
-	Vector group_addresses(LogicalType::POINTER);
-	SelectionVector new_groups_sel(STANDARD_VECTOR_SIZE);
+	FindOrCreateGroups(state.groups, source_hashes, state.group_addresses, state.new_groups_sel);
 
-	FindOrCreateGroups(groups, source_hashes, group_addresses, new_groups_sel);
-
-	RowOperations::CombineStates(layout, source_addresses, group_addresses, count);
+	RowOperations::CombineStates(layout, source_addresses, state.group_addresses, count);
 }
 
 void GroupedAggregateHashTable::Combine(GroupedAggregateHashTable &other) {
-
 	D_ASSERT(!is_finalized);
 
 	D_ASSERT(other.layout.GetAggrWidth() == layout.GetAggrWidth());
@@ -13455,6 +13463,7 @@ void GroupedAggregateHashTable::Combine(GroupedAggregateHashTable &other) {
 
 	idx_t group_idx = 0;
 
+	FlushMoveState state(allocator, layout);
 	other.PayloadApply([&](idx_t page_nr, idx_t page_offset, data_ptr_t ptr) {
 		auto hash = Load<hash_t>(ptr + hash_offset);
 
@@ -13462,11 +13471,11 @@ void GroupedAggregateHashTable::Combine(GroupedAggregateHashTable &other) {
 		addresses_ptr[group_idx] = ptr;
 		group_idx++;
 		if (group_idx == STANDARD_VECTOR_SIZE) {
-			FlushMove(addresses, hashes, group_idx);
+			FlushMove(state, addresses, hashes, group_idx);
 			group_idx = 0;
 		}
 	});
-	FlushMove(addresses, hashes, group_idx);
+	FlushMove(state, addresses, hashes, group_idx);
 	string_heap->Merge(*other.string_heap);
 	Verify();
 }
@@ -13488,6 +13497,7 @@ void GroupedAggregateHashTable::Partition(vector<GroupedAggregateHashTable *> &p
 	D_ASSERT(partition_hts.size() > 1);
 	vector<PartitionInfo> partition_info(partition_hts.size());
 
+	FlushMoveState state(allocator, layout);
 	PayloadApply([&](idx_t page_nr, idx_t page_offset, data_ptr_t ptr) {
 		auto hash = Load<hash_t>(ptr + hash_offset);
 
@@ -13501,7 +13511,7 @@ void GroupedAggregateHashTable::Partition(vector<GroupedAggregateHashTable *> &p
 		info.group_count++;
 		if (info.group_count == STANDARD_VECTOR_SIZE) {
 			D_ASSERT(partition_hts[partition]);
-			partition_hts[partition]->FlushMove(info.addresses, info.hashes, info.group_count);
+			partition_hts[partition]->FlushMove(state, info.addresses, info.hashes, info.group_count);
 			info.group_count = 0;
 		}
 	});
@@ -13510,7 +13520,7 @@ void GroupedAggregateHashTable::Partition(vector<GroupedAggregateHashTable *> &p
 	idx_t total_count = 0;
 	for (auto &partition_entry : partition_hts) {
 		auto &info = partition_info[info_idx++];
-		partition_entry->FlushMove(info.addresses, info.hashes, info.group_count);
+		partition_entry->FlushMove(state, info.addresses, info.hashes, info.group_count);
 
 		partition_entry->string_heap->Merge(*string_heap);
 		partition_entry->Verify();
@@ -13565,7 +13575,7 @@ void GroupedAggregateHashTable::Finalize() {
 	}
 
 	// early release hashes, not needed for partition/scan
-	hashes_hdl.reset();
+	hashes_hdl.Destroy();
 	is_finalized = true;
 }
 
@@ -13575,8 +13585,10 @@ void GroupedAggregateHashTable::Finalize() {
 
 namespace duckdb {
 
-BaseAggregateHashTable::BaseAggregateHashTable(BufferManager &buffer_manager, vector<LogicalType> payload_types_p)
-    : buffer_manager(buffer_manager), payload_types(move(payload_types_p)) {
+BaseAggregateHashTable::BaseAggregateHashTable(Allocator &allocator, const vector<AggregateObject> &aggregates,
+                                               BufferManager &buffer_manager, vector<LogicalType> payload_types_p)
+    : allocator(allocator), buffer_manager(buffer_manager), payload_types(move(payload_types_p)) {
+	filter_set.Initialize(allocator, aggregates, payload_types);
 }
 
 } // namespace duckdb
@@ -14797,19 +14809,22 @@ void ExpressionExecutor::Execute(const BoundReferenceExpression &expr, Expressio
 
 namespace duckdb {
 
-ExpressionExecutor::ExpressionExecutor() {
+ExpressionExecutor::ExpressionExecutor(Allocator &allocator) : allocator(allocator) {
 }
 
-ExpressionExecutor::ExpressionExecutor(const Expression *expression) : ExpressionExecutor() {
+ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression *expression)
+    : ExpressionExecutor(allocator) {
 	D_ASSERT(expression);
 	AddExpression(*expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(const Expression &expression) : ExpressionExecutor() {
+ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const Expression &expression)
+    : ExpressionExecutor(allocator) {
 	AddExpression(expression);
 }
 
-ExpressionExecutor::ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs) : ExpressionExecutor() {
+ExpressionExecutor::ExpressionExecutor(Allocator &allocator, const vector<unique_ptr<Expression>> &exprs)
+    : ExpressionExecutor(allocator) {
 	D_ASSERT(exprs.size() > 0);
 	for (auto &expr : exprs) {
 		AddExpression(*expr);
@@ -14824,8 +14839,8 @@ void ExpressionExecutor::AddExpression(const Expression &expr) {
 }
 
 void ExpressionExecutor::Initialize(const Expression &expression, ExpressionExecutorState &state) {
-	state.root_state = InitializeState(expression, state);
 	state.executor = this;
+	state.root_state = InitializeState(expression, state);
 }
 
 void ExpressionExecutor::Execute(DataChunk *input, DataChunk &result) {
@@ -14871,7 +14886,7 @@ Value ExpressionExecutor::EvaluateScalar(const Expression &expr) {
 	D_ASSERT(expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
 	// use an ExpressionExecutor to execute the expression
-	ExpressionExecutor executor(expr);
+	ExpressionExecutor executor(Allocator::DefaultAllocator(), expr);
 
 	Vector result(expr.return_type);
 	executor.ExecuteExpression(result);
@@ -15075,7 +15090,7 @@ void ExpressionState::AddChild(Expression *expr) {
 
 void ExpressionState::Finalize() {
 	if (!types.empty()) {
-		intermediate_chunk.Initialize(types);
+		intermediate_chunk.Initialize(root.executor->allocator, types);
 	}
 }
 ExpressionState::ExpressionState(const Expression &expr, ExpressionExecutorState &root)
@@ -15101,7 +15116,6 @@ ART::ART(const vector<column_t> &column_ids, const vector<unique_ptr<Expression>
          IndexConstraintType constraint_type)
     : Index(IndexType::ART, column_ids, unbound_expressions, constraint_type) {
 	tree = nullptr;
-	expression_result.Initialize(logical_types);
 	is_little_endian = Radix::IsLittleEndian();
 	for (idx_t i = 0; i < types.size(); i++) {
 		switch (types[i]) {
@@ -15343,7 +15357,7 @@ bool ART::Insert(IndexLock &lock, DataChunk &input, Vector &row_ids) {
 
 bool ART::Append(IndexLock &lock, DataChunk &appended_data, Vector &row_identifiers) {
 	DataChunk expression_result;
-	expression_result.Initialize(logical_types);
+	expression_result.Initialize(Allocator::DefaultAllocator(), logical_types);
 
 	// first resolve the expressions for the index
 	ExecuteExpressions(appended_data, expression_result);
@@ -15445,7 +15459,7 @@ bool ART::Insert(unique_ptr<Node> &node, unique_ptr<Key> value, unsigned depth, 
 //===--------------------------------------------------------------------===//
 void ART::Delete(IndexLock &state, DataChunk &input, Vector &row_ids) {
 	DataChunk expression_result;
-	expression_result.Initialize(logical_types);
+	expression_result.Initialize(Allocator::DefaultAllocator(), logical_types);
 
 	// first resolve the expressions
 	ExecuteExpressions(input, expression_result);
@@ -15946,7 +15960,7 @@ void ART::VerifyExistence(DataChunk &chunk, VerifyExistenceType verify_type, str
 	}
 
 	DataChunk expression_result;
-	expression_result.Initialize(logical_types);
+	expression_result.Initialize(Allocator::DefaultAllocator(), logical_types);
 
 	// unique index, check
 	lock_guard<mutex> l(lock);
@@ -16711,7 +16725,7 @@ void JoinHashTable::ApplyBitmask(Vector &hashes, const SelectionVector &sel, idx
 
 	auto hash_data = (hash_t *)hdata.data;
 	auto result_data = FlatVector::GetData<data_ptr_t *>(pointers);
-	auto main_ht = (data_ptr_t *)hash_map->node->buffer;
+	auto main_ht = (data_ptr_t *)hash_map.Ptr();
 	for (idx_t i = 0; i < count; i++) {
 		auto rindex = sel.get_index(i);
 		auto hindex = hdata.sel->get_index(rindex);
@@ -16871,7 +16885,7 @@ void JoinHashTable::InsertHashes(Vector &hashes, idx_t count, data_ptr_t key_loc
 	hashes.Normalify(count);
 
 	D_ASSERT(hashes.GetVectorType() == VectorType::FLAT_VECTOR);
-	auto pointers = (data_ptr_t *)hash_map->node->buffer;
+	auto pointers = (data_ptr_t *)hash_map.Ptr();
 	auto indices = FlatVector::GetData<hash_t>(hashes);
 	for (idx_t i = 0; i < count; i++) {
 		auto index = indices[i];
@@ -16894,7 +16908,7 @@ void JoinHashTable::Finalize() {
 
 	// allocate the HT and initialize it with all-zero entries
 	hash_map = buffer_manager.Allocate(capacity * sizeof(data_ptr_t));
-	memset(hash_map->node->buffer, 0, capacity * sizeof(data_ptr_t));
+	memset(hash_map.Ptr(), 0, capacity * sizeof(data_ptr_t));
 
 	Vector hashes(LogicalType::HASH);
 	auto hash_data = FlatVector::GetData<hash_t>(hashes);
@@ -16905,7 +16919,7 @@ void JoinHashTable::Finalize() {
 	// FIXME: if we cannot keep everything pinned in memory, we could switch to an out-of-memory merge join or so
 	for (auto &block : block_collection->blocks) {
 		auto handle = buffer_manager.Pin(block.block);
-		data_ptr_t dataptr = handle->node->buffer;
+		data_ptr_t dataptr = handle.Ptr();
 		idx_t entry = 0;
 		while (entry < block.count) {
 			// fetch the next vector of entries from the blocks
@@ -17364,7 +17378,7 @@ void JoinHashTable::ScanFullOuter(DataChunk &result, JoinHTScanState &state) {
 		for (; state.block_position < block_collection->blocks.size(); state.block_position++, state.position = 0) {
 			auto &block = block_collection->blocks[state.block_position];
 			auto &handle = pinned_handles[state.block_position];
-			auto baseptr = handle->node->buffer;
+			auto baseptr = handle.Ptr();
 			for (; state.position < block.count; state.position++) {
 				auto tuple_base = baseptr + state.position * entry_size;
 				auto found_match = Load<bool>(tuple_base + tuple_size);
@@ -17409,7 +17423,7 @@ idx_t JoinHashTable::FillWithHTOffsets(data_ptr_t *key_locations, JoinHTScanStat
 	while (state.block_position < block_collection->blocks.size()) {
 		auto &block = block_collection->blocks[state.block_position];
 		auto handle = buffer_manager.Pin(block.block);
-		auto base_ptr = handle->node->buffer;
+		auto base_ptr = handle.Ptr();
 		// go through all the tuples within this block
 		while (state.position < block.count) {
 			auto tuple_base = base_ptr + state.position * entry_size;

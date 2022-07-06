@@ -307,6 +307,80 @@ void NestedLoopJoinMark::Perform(DataChunk &left, ChunkCollection &right, bool f
 
 
 
+namespace duckdb {
+
+AggregateObject::AggregateObject(AggregateFunction function, FunctionData *bind_data, idx_t child_count,
+                                 idx_t payload_size, bool distinct, PhysicalType return_type, Expression *filter)
+    : function(move(function)), bind_data(bind_data), child_count(child_count), payload_size(payload_size),
+      distinct(distinct), return_type(return_type), filter(filter) {
+}
+
+AggregateObject::AggregateObject(BoundAggregateExpression *aggr)
+    : AggregateObject(aggr->function, aggr->bind_info.get(), aggr->children.size(),
+                      AlignValue(aggr->function.state_size()), aggr->distinct, aggr->return_type.InternalType(),
+                      aggr->filter.get()) {
+}
+
+vector<AggregateObject> AggregateObject::CreateAggregateObjects(const vector<BoundAggregateExpression *> &bindings) {
+	vector<AggregateObject> aggregates;
+	aggregates.reserve(aggregates.size());
+	for (auto &binding : bindings) {
+		aggregates.emplace_back(binding);
+	}
+	return aggregates;
+}
+
+AggregateFilterData::AggregateFilterData(Allocator &allocator, Expression &filter_expr,
+                                         const vector<LogicalType> &payload_types)
+    : filter_executor(allocator, &filter_expr), true_sel(STANDARD_VECTOR_SIZE) {
+	if (payload_types.empty()) {
+		return;
+	}
+	filtered_payload.Initialize(allocator, payload_types);
+}
+
+idx_t AggregateFilterData::ApplyFilter(DataChunk &payload) {
+	filtered_payload.Reset();
+
+	auto count = filter_executor.SelectExpression(payload, true_sel);
+	filtered_payload.Slice(payload, true_sel, count);
+	return count;
+}
+
+AggregateFilterDataSet::AggregateFilterDataSet() {
+}
+
+void AggregateFilterDataSet::Initialize(Allocator &allocator, const vector<AggregateObject> &aggregates,
+                                        const vector<LogicalType> &payload_types) {
+	bool has_filters = false;
+	for (auto &aggregate : aggregates) {
+		if (aggregate.filter) {
+			has_filters = true;
+			break;
+		}
+	}
+	if (!has_filters) {
+		// no filters: nothing to do
+		return;
+	}
+	filter_data.resize(aggregates.size());
+	for (idx_t aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
+		auto &aggr = aggregates[aggr_idx];
+		if (aggr.filter) {
+			filter_data[aggr_idx] = make_unique<AggregateFilterData>(allocator, *aggr.filter, payload_types);
+		}
+	}
+}
+
+AggregateFilterData &AggregateFilterDataSet::GetFilterData(idx_t aggr_idx) {
+	D_ASSERT(aggr_idx < filter_data.size());
+	D_ASSERT(filter_data[aggr_idx]);
+	return *filter_data[aggr_idx];
+}
+} // namespace duckdb
+
+
+
 
 
 
@@ -544,9 +618,9 @@ SinkFinalizeType PhysicalHashAggregate::Finalize(Pipeline &pipeline, Event &even
 //===--------------------------------------------------------------------===//
 class PhysicalHashAggregateState : public GlobalSourceState {
 public:
-	explicit PhysicalHashAggregateState(const PhysicalHashAggregate &op) : scan_index(0) {
+	explicit PhysicalHashAggregateState(ClientContext &context, const PhysicalHashAggregate &op) : scan_index(0) {
 		for (auto &rt : op.radix_tables) {
-			radix_states.push_back(rt.GetGlobalSourceState());
+			radix_states.push_back(rt.GetGlobalSourceState(context));
 		}
 	}
 
@@ -556,7 +630,7 @@ public:
 };
 
 unique_ptr<GlobalSourceState> PhysicalHashAggregate::GetGlobalSourceState(ClientContext &context) const {
-	return make_unique<PhysicalHashAggregateState>(*this);
+	return make_unique<PhysicalHashAggregateState>(context, *this);
 }
 
 void PhysicalHashAggregate::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSourceState &gstate_p,
@@ -668,9 +742,10 @@ PhysicalPerfectHashAggregate::PhysicalPerfectHashAggregate(ClientContext &contex
 	}
 }
 
-unique_ptr<PerfectAggregateHashTable> PhysicalPerfectHashAggregate::CreateHT(ClientContext &context) const {
-	return make_unique<PerfectAggregateHashTable>(BufferManager::GetBufferManager(context), group_types, payload_types,
-	                                              aggregate_objects, group_minima, required_bits);
+unique_ptr<PerfectAggregateHashTable> PhysicalPerfectHashAggregate::CreateHT(Allocator &allocator,
+                                                                             ClientContext &context) const {
+	return make_unique<PerfectAggregateHashTable>(allocator, BufferManager::GetBufferManager(context), group_types,
+	                                              payload_types, aggregate_objects, group_minima, required_bits);
 }
 
 //===--------------------------------------------------------------------===//
@@ -679,7 +754,7 @@ unique_ptr<PerfectAggregateHashTable> PhysicalPerfectHashAggregate::CreateHT(Cli
 class PerfectHashAggregateGlobalState : public GlobalSinkState {
 public:
 	PerfectHashAggregateGlobalState(const PhysicalPerfectHashAggregate &op, ClientContext &context)
-	    : ht(op.CreateHT(context)) {
+	    : ht(op.CreateHT(Allocator::Get(context), context)) {
 	}
 
 	//! The lock for updating the global aggregate state
@@ -690,8 +765,8 @@ public:
 
 class PerfectHashAggregateLocalState : public LocalSinkState {
 public:
-	PerfectHashAggregateLocalState(const PhysicalPerfectHashAggregate &op, ClientContext &context)
-	    : ht(op.CreateHT(context)) {
+	PerfectHashAggregateLocalState(const PhysicalPerfectHashAggregate &op, ExecutionContext &context)
+	    : ht(op.CreateHT(Allocator::Get(context.client), context.client)) {
 		group_chunk.InitializeEmpty(op.group_types);
 		if (!op.payload_types.empty()) {
 			aggregate_input_chunk.InitializeEmpty(op.payload_types);
@@ -709,7 +784,7 @@ unique_ptr<GlobalSinkState> PhysicalPerfectHashAggregate::GetGlobalSinkState(Cli
 }
 
 unique_ptr<LocalSinkState> PhysicalPerfectHashAggregate::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<PerfectHashAggregateLocalState>(*this, context.client);
+	return make_unique<PerfectHashAggregateLocalState>(*this, context);
 }
 
 SinkResultType PhysicalPerfectHashAggregate::Sink(ExecutionContext &context, GlobalSinkState &state,
@@ -820,6 +895,7 @@ string PhysicalPerfectHashAggregate::ParamsToString() const {
 
 
 
+
 namespace duckdb {
 
 PhysicalSimpleAggregate::PhysicalSimpleAggregate(vector<LogicalType> types, vector<unique_ptr<Expression>> expressions,
@@ -882,8 +958,11 @@ public:
 
 class SimpleAggregateLocalState : public LocalSinkState {
 public:
-	explicit SimpleAggregateLocalState(const vector<unique_ptr<Expression>> &aggregates) : state(aggregates) {
+	SimpleAggregateLocalState(Allocator &allocator, const vector<unique_ptr<Expression>> &aggregates,
+	                          const vector<LogicalType> &child_types)
+	    : state(aggregates), child_executor(allocator) {
 		vector<LogicalType> payload_types;
+		vector<AggregateObject> aggregate_objects;
 		for (auto &aggregate : aggregates) {
 			D_ASSERT(aggregate->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE);
 			auto &aggr = (BoundAggregateExpression &)*aggregate;
@@ -894,10 +973,12 @@ public:
 					child_executor.AddExpression(*child);
 				}
 			}
+			aggregate_objects.emplace_back(&aggr);
 		}
 		if (!payload_types.empty()) { // for select count(*) from t; there is no payload at all
-			payload_chunk.Initialize(payload_types);
+			payload_chunk.Initialize(allocator, payload_types);
 		}
+		filter_set.Initialize(allocator, aggregate_objects, child_types);
 	}
 	void Reset() {
 		payload_chunk.Reset();
@@ -909,6 +990,8 @@ public:
 	ExpressionExecutor child_executor;
 	//! The payload chunk
 	DataChunk payload_chunk;
+	//! Aggregate filter data set
+	AggregateFilterDataSet filter_set;
 };
 
 unique_ptr<GlobalSinkState> PhysicalSimpleAggregate::GetGlobalSinkState(ClientContext &context) const {
@@ -916,7 +999,7 @@ unique_ptr<GlobalSinkState> PhysicalSimpleAggregate::GetGlobalSinkState(ClientCo
 }
 
 unique_ptr<LocalSinkState> PhysicalSimpleAggregate::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<SimpleAggregateLocalState>(aggregates);
+	return make_unique<SimpleAggregateLocalState>(Allocator::Get(context.client), aggregates, children[0]->GetTypes());
 }
 
 SinkResultType PhysicalSimpleAggregate::Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate,
@@ -928,18 +1011,14 @@ SinkResultType PhysicalSimpleAggregate::Sink(ExecutionContext &context, GlobalSi
 
 	DataChunk &payload_chunk = sink.payload_chunk;
 	for (idx_t aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
-		DataChunk filtered_input;
 		auto &aggregate = (BoundAggregateExpression &)*aggregates[aggr_idx];
 		idx_t payload_cnt = 0;
 		// resolve the filter (if any)
 		if (aggregate.filter) {
-			ExpressionExecutor filter_execution(aggregate.filter.get());
-			SelectionVector true_sel(STANDARD_VECTOR_SIZE);
-			auto count = filter_execution.SelectExpression(input, true_sel);
-			auto input_types = input.GetTypes();
-			filtered_input.Initialize(input_types);
-			filtered_input.Slice(input, true_sel, count);
-			sink.child_executor.SetChunk(filtered_input);
+			auto &filtered_data = sink.filter_set.GetFilterData(aggr_idx);
+			auto count = filtered_data.ApplyFilter(input);
+
+			sink.child_executor.SetChunk(filtered_data.filtered_payload);
 			payload_chunk.SetCardinality(count);
 		} else {
 			sink.child_executor.SetChunk(input);
@@ -1112,7 +1191,7 @@ unique_ptr<GlobalOperatorState> PhysicalStreamingWindow::GetGlobalOperatorState(
 	return make_unique<StreamingWindowGlobalState>();
 }
 
-unique_ptr<OperatorState> PhysicalStreamingWindow::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalStreamingWindow::GetOperatorState(ExecutionContext &context) const {
 	return make_unique<StreamingWindowState>();
 }
 
@@ -1196,9 +1275,9 @@ using counts_t = std::vector<size_t>;
 //	Global sink state
 class WindowGlobalState : public GlobalSinkState {
 public:
-	WindowGlobalState(const PhysicalWindow &op_p, ClientContext &context)
-	    : op(op_p), buffer_manager(BufferManager::GetBufferManager(context)),
-	      mode(DBConfig::GetConfig(context).window_mode) {
+	WindowGlobalState(Allocator &allocator, const PhysicalWindow &op_p, ClientContext &context)
+	    : op(op_p), buffer_manager(BufferManager::GetBufferManager(context)), chunks(allocator),
+	      over_collection(allocator), hash_collection(allocator), mode(DBConfig::GetConfig(context).window_mode) {
 	}
 	const PhysicalWindow &op;
 	BufferManager &buffer_manager;
@@ -1213,8 +1292,9 @@ public:
 //	Per-thread sink state
 class WindowLocalState : public LocalSinkState {
 public:
-	explicit WindowLocalState(const PhysicalWindow &op_p, const unsigned partition_bits = 10)
-	    : op(op_p), partition_count(size_t(1) << partition_bits) {
+	explicit WindowLocalState(Allocator &allocator, const PhysicalWindow &op_p, const unsigned partition_bits = 10)
+	    : op(op_p), chunks(allocator), over_collection(allocator), hash_collection(allocator),
+	      partition_count(size_t(1) << partition_bits) {
 	}
 
 	const PhysicalWindow &op;
@@ -1228,8 +1308,9 @@ public:
 // Per-thread read state
 class WindowOperatorState : public LocalSourceState {
 public:
-	WindowOperatorState(const PhysicalWindow &op, ExecutionContext &context)
-	    : buffer_manager(BufferManager::GetBufferManager(context.client)) {
+	WindowOperatorState(Allocator &allocator, const PhysicalWindow &op, ExecutionContext &context)
+	    : buffer_manager(BufferManager::GetBufferManager(context.client)), chunks(allocator),
+	      window_results(allocator) {
 		auto &gstate = (WindowGlobalState &)*op.sink_state;
 		// initialize thread-local operator state
 		partitions = gstate.counts.size();
@@ -1237,6 +1318,7 @@ public:
 		position = 0;
 	}
 
+	BufferManager &buffer_manager;
 	//! The number of partitions to process (0 if there is no partitioning)
 	size_t partitions;
 	//! The output read position.
@@ -1248,7 +1330,6 @@ public:
 	//! The read cursor
 	idx_t position;
 
-	BufferManager &buffer_manager;
 	unique_ptr<GlobalSortState> global_sort_state;
 };
 
@@ -1458,8 +1539,9 @@ static void MaterializeExpressions(Expression **exprs, idx_t expr_count, ChunkCo
 		return;
 	}
 
+	auto &allocator = input.GetAllocator();
 	vector<LogicalType> types;
-	ExpressionExecutor executor;
+	ExpressionExecutor executor(allocator);
 	for (idx_t expr_idx = 0; expr_idx < expr_count; ++expr_idx) {
 		types.push_back(exprs[expr_idx]->return_type);
 		executor.AddExpression(*exprs[expr_idx]);
@@ -1467,7 +1549,7 @@ static void MaterializeExpressions(Expression **exprs, idx_t expr_count, ChunkCo
 
 	for (idx_t i = 0; i < input.ChunkCount(); i++) {
 		DataChunk chunk;
-		chunk.Initialize(types);
+		chunk.Initialize(allocator, types);
 
 		executor.Execute(input.GetChunk(i), chunk);
 
@@ -1491,6 +1573,7 @@ static void SortCollectionForPartition(WindowOperatorState &state, BoundWindowEx
 	if (input.Count() == 0) {
 		return;
 	}
+	auto &allocator = input.GetAllocator();
 
 	vector<BoundOrderByNode> orders;
 	// we sort by both 1) partition by expression list and 2) order by expressions
@@ -1521,8 +1604,8 @@ static void SortCollectionForPartition(WindowOperatorState &state, BoundWindowEx
 	DataChunk payload_partition;
 	if (hashes) {
 		sel.Initialize(STANDARD_VECTOR_SIZE);
-		over_partition.Initialize(over.Types());
-		payload_partition.Initialize(payload_types);
+		over_partition.Initialize(allocator, over.Types());
+		payload_partition.Initialize(allocator, payload_types);
 	}
 
 	// initialize row layout for sorting
@@ -1603,12 +1686,13 @@ static void ScanSortedPartition(WindowOperatorState &state, ChunkCollection &inp
 
 	auto payload_types = input_types;
 	payload_types.insert(payload_types.end(), over_types.begin(), over_types.end());
+	auto &allocator = input.GetAllocator();
 
 	// scan the sorted row data
 	PayloadScanner scanner(*global_sort_state.sorted_blocks[0]->payload_data, global_sort_state);
 	for (;;) {
 		DataChunk payload_chunk;
-		payload_chunk.Initialize(payload_types);
+		payload_chunk.Initialize(allocator, payload_types);
 		payload_chunk.SetCardinality(0);
 		scanner.Scan(payload_chunk);
 		if (payload_chunk.size() == 0) {
@@ -1625,9 +1709,10 @@ static void ScanSortedPartition(WindowOperatorState &state, ChunkCollection &inp
 	}
 }
 
-static void HashChunk(counts_t &counts, DataChunk &hash_chunk, DataChunk &sort_chunk, const idx_t partition_cols) {
+static void HashChunk(Allocator &allocator, counts_t &counts, DataChunk &hash_chunk, DataChunk &sort_chunk,
+                      const idx_t partition_cols) {
 	const vector<LogicalType> hash_types(1, LogicalType::HASH);
-	hash_chunk.Initialize(hash_types);
+	hash_chunk.Initialize(allocator, hash_types);
 	hash_chunk.SetCardinality(sort_chunk);
 	auto &hash_vector = hash_chunk.data[0];
 
@@ -1650,9 +1735,10 @@ static void HashChunk(counts_t &counts, DataChunk &hash_chunk, DataChunk &sort_c
 	}
 }
 
-static void MaterializeOverForWindow(BoundWindowExpression *wexpr, DataChunk &input_chunk, DataChunk &over_chunk) {
+static void MaterializeOverForWindow(Allocator &allocator, BoundWindowExpression *wexpr, DataChunk &input_chunk,
+                                     DataChunk &over_chunk) {
 	vector<LogicalType> over_types;
-	ExpressionExecutor executor;
+	ExpressionExecutor executor(allocator);
 
 	// we sort by both 1) partition by expression list and 2) order by expressions
 	for (idx_t prt_idx = 0; prt_idx < wexpr->partitions.size(); prt_idx++) {
@@ -1669,7 +1755,7 @@ static void MaterializeOverForWindow(BoundWindowExpression *wexpr, DataChunk &in
 
 	D_ASSERT(!over_types.empty());
 
-	over_chunk.Initialize(over_types);
+	over_chunk.Initialize(allocator, over_types);
 	executor.Execute(input_chunk, over_chunk);
 
 	over_chunk.Verify();
@@ -2050,9 +2136,9 @@ static void ComputeWindowExpression(BoundWindowExpression *wexpr, ChunkCollectio
                                     const ValidityMask &order_mask, WindowAggregationMode mode) {
 
 	// TODO we could evaluate those expressions in parallel
-
+	auto &allocator = input.GetAllocator();
 	// evaluate inner expressions of window functions, could be more complex
-	ChunkCollection payload_collection;
+	ChunkCollection payload_collection(allocator);
 	vector<Expression *> exprs;
 	for (auto &child : wexpr->children) {
 		exprs.push_back(child.get());
@@ -2060,8 +2146,8 @@ static void ComputeWindowExpression(BoundWindowExpression *wexpr, ChunkCollectio
 	// TODO: child may be a scalar, don't need to materialize the whole collection then
 	MaterializeExpressions(exprs.data(), exprs.size(), input, payload_collection);
 
-	ChunkCollection leadlag_offset_collection;
-	ChunkCollection leadlag_default_collection;
+	ChunkCollection leadlag_offset_collection(allocator);
+	ChunkCollection leadlag_default_collection(allocator);
 	if (wexpr->type == ExpressionType::WINDOW_LEAD || wexpr->type == ExpressionType::WINDOW_LAG) {
 		if (wexpr->offset_expr) {
 			MaterializeExpression(wexpr->offset_expr.get(), input, leadlag_offset_collection,
@@ -2080,7 +2166,7 @@ static void ComputeWindowExpression(BoundWindowExpression *wexpr, ChunkCollectio
 		// 	Start with all invalid and set the ones that pass
 		filter_bits.resize(ValidityMask::ValidityMaskSize(input.Count()), 0);
 		filter_mask.Initialize(filter_bits.data());
-		ExpressionExecutor filter_execution(*wexpr->filter_expr);
+		ExpressionExecutor filter_execution(allocator, *wexpr->filter_expr);
 		SelectionVector true_sel(STANDARD_VECTOR_SIZE);
 		idx_t base_idx = 0;
 		for (auto &chunk : input.Chunks()) {
@@ -2093,12 +2179,12 @@ static void ComputeWindowExpression(BoundWindowExpression *wexpr, ChunkCollectio
 	}
 
 	// evaluate boundaries if present. Parser has checked boundary types.
-	ChunkCollection boundary_start_collection;
+	ChunkCollection boundary_start_collection(allocator);
 	if (wexpr->start_expr) {
 		MaterializeExpression(wexpr->start_expr.get(), input, boundary_start_collection, wexpr->start_expr->IsScalar());
 	}
 
-	ChunkCollection boundary_end_collection;
+	ChunkCollection boundary_end_collection(allocator);
 	if (wexpr->end_expr) {
 		MaterializeExpression(wexpr->end_expr.get(), input, boundary_end_collection, wexpr->end_expr->IsScalar());
 	}
@@ -2154,7 +2240,7 @@ static void ComputeWindowExpression(BoundWindowExpression *wexpr, ChunkCollectio
 	// this is the main loop, go through all sorted rows and compute window function result
 	const vector<LogicalType> output_types(1, wexpr->return_type);
 	DataChunk output_chunk;
-	output_chunk.Initialize(output_types);
+	output_chunk.Initialize(allocator, output_types);
 	for (idx_t row_idx = 0; row_idx < input.Count(); row_idx++) {
 		// Grow the chunk if necessary.
 		const auto output_offset = row_idx % STANDARD_VECTOR_SIZE;
@@ -2361,7 +2447,7 @@ static void ComputeWindowExpressions(WindowExpressions &window_exprs, ChunkColle
 
 	//	Compute the functions columnwise
 	for (idx_t expr_idx = 0; expr_idx < window_exprs.size(); ++expr_idx) {
-		ChunkCollection output;
+		ChunkCollection output(input.GetAllocator());
 		ComputeWindowExpression(window_exprs[expr_idx], input, output, over, partition_mask, order_mask, mode);
 		window_results.Fuse(output);
 	}
@@ -2370,7 +2456,8 @@ static void ComputeWindowExpressions(WindowExpressions &window_exprs, ChunkColle
 //===--------------------------------------------------------------------===//
 // Sink
 //===--------------------------------------------------------------------===//
-static void GeneratePartition(WindowOperatorState &state, WindowGlobalState &gstate, const idx_t hash_bin) {
+static void GeneratePartition(Allocator &allocator, WindowOperatorState &state, WindowGlobalState &gstate,
+                              const idx_t hash_bin) {
 	auto &op = (PhysicalWindow &)gstate.op;
 	WindowExpressions window_exprs;
 	for (idx_t expr_idx = 0; expr_idx < op.select_list.size(); ++expr_idx) {
@@ -2397,7 +2484,7 @@ static void GeneratePartition(WindowOperatorState &state, WindowGlobalState &gst
 
 	if (gstate.counts.empty() && hash_bin == 0) {
 		ChunkCollection &input = gstate.chunks;
-		ChunkCollection output;
+		ChunkCollection output(allocator);
 		ChunkCollection &over = gstate.over_collection;
 
 		const auto has_sorting = over_expr->partitions.size() + over_expr->orders.size();
@@ -2420,9 +2507,9 @@ static void GeneratePartition(WindowOperatorState &state, WindowGlobalState &gst
 		                           hash_bin, hash_mask);
 
 		// Scan the sorted data into new Collections
-		ChunkCollection input;
-		ChunkCollection output;
-		ChunkCollection over;
+		ChunkCollection input(allocator);
+		ChunkCollection output(allocator);
+		ChunkCollection over(allocator);
 		ScanSortedPartition(state, input, input_types, over, over_types);
 
 		ComputeWindowExpressions(window_exprs, input, output, over, gstate.mode);
@@ -2466,10 +2553,11 @@ SinkResultType PhysicalWindow::Sink(ExecutionContext &context, GlobalSinkState &
 	const auto over_idx = 0;
 	auto over_expr = reinterpret_cast<BoundWindowExpression *>(select_list[over_idx].get());
 
+	auto &allocator = Allocator::Get(context.client);
 	const auto sort_col_count = over_expr->partitions.size() + over_expr->orders.size();
 	if (sort_col_count > 0) {
 		DataChunk over_chunk;
-		MaterializeOverForWindow(over_expr, input, over_chunk);
+		MaterializeOverForWindow(allocator, over_expr, input, over_chunk);
 
 		if (!over_expr->partitions.empty()) {
 			if (lstate.counts.empty()) {
@@ -2477,7 +2565,7 @@ SinkResultType PhysicalWindow::Sink(ExecutionContext &context, GlobalSinkState &
 			}
 
 			DataChunk hash_chunk;
-			HashChunk(lstate.counts, hash_chunk, over_chunk, over_expr->partitions.size());
+			HashChunk(allocator, lstate.counts, hash_chunk, over_chunk, over_expr->partitions.size());
 			lstate.hash_collection.Append(hash_chunk);
 			D_ASSERT(lstate.chunks.Count() == lstate.hash_collection.Count());
 		}
@@ -2509,11 +2597,11 @@ void PhysicalWindow::Combine(ExecutionContext &context, GlobalSinkState &gstate_
 }
 
 unique_ptr<LocalSinkState> PhysicalWindow::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<WindowLocalState>(*this);
+	return make_unique<WindowLocalState>(Allocator::Get(context.client), *this);
 }
 
 unique_ptr<GlobalSinkState> PhysicalWindow::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<WindowGlobalState>(*this, context);
+	return make_unique<WindowGlobalState>(Allocator::Get(context), *this, context);
 }
 
 //===--------------------------------------------------------------------===//
@@ -2550,7 +2638,7 @@ public:
 
 unique_ptr<LocalSourceState> PhysicalWindow::GetLocalSourceState(ExecutionContext &context,
                                                                  GlobalSourceState &gstate) const {
-	return make_unique<WindowOperatorState>(*this, context);
+	return make_unique<WindowOperatorState>(Allocator::Get(context.client), *this, context);
 }
 
 unique_ptr<GlobalSourceState> PhysicalWindow::GetGlobalSourceState(ClientContext &context) const {
@@ -2571,7 +2659,7 @@ void PhysicalWindow::GetData(ExecutionContext &context, DataChunk &chunk, Global
 					break;
 				}
 			}
-			GeneratePartition(state, gstate, hash_bin);
+			GeneratePartition(Allocator::Get(context.client), state, gstate, hash_bin);
 		}
 		Scan(state, chunk);
 		if (chunk.size() != 0) {
@@ -2619,7 +2707,8 @@ PhysicalFilter::PhysicalFilter(vector<LogicalType> types, vector<unique_ptr<Expr
 
 class FilterState : public OperatorState {
 public:
-	explicit FilterState(Expression &expr) : executor(expr), sel(STANDARD_VECTOR_SIZE) {
+	explicit FilterState(ExecutionContext &context, Expression &expr)
+	    : executor(Allocator::Get(context.client), expr), sel(STANDARD_VECTOR_SIZE) {
 	}
 
 	ExpressionExecutor executor;
@@ -2631,8 +2720,8 @@ public:
 	}
 };
 
-unique_ptr<OperatorState> PhysicalFilter::GetOperatorState(ClientContext &context) const {
-	return make_unique<FilterState>(*expression);
+unique_ptr<OperatorState> PhysicalFilter::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<FilterState>(context, *expression);
 }
 
 OperatorResultType PhysicalFilter::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -2668,6 +2757,9 @@ PhysicalBatchCollector::PhysicalBatchCollector(PreparedStatementData &data) : Ph
 //===--------------------------------------------------------------------===//
 class BatchCollectorGlobalState : public GlobalSinkState {
 public:
+	explicit BatchCollectorGlobalState(Allocator &allocator) : data(allocator) {
+	}
+
 	mutex glock;
 	BatchedChunkCollection data;
 	unique_ptr<MaterializedQueryResult> result;
@@ -2675,6 +2767,9 @@ public:
 
 class BatchCollectorLocalState : public LocalSinkState {
 public:
+	explicit BatchCollectorLocalState(Allocator &allocator) : data(allocator) {
+	}
+
 	BatchedChunkCollection data;
 };
 
@@ -2700,7 +2795,7 @@ SinkFinalizeType PhysicalBatchCollector::Finalize(Pipeline &pipeline, Event &eve
 	auto result =
 	    make_unique<MaterializedQueryResult>(statement_type, properties, types, names, context.shared_from_this());
 	DataChunk output;
-	output.Initialize(types);
+	output.Initialize(BufferAllocator::Get(context), types);
 
 	BatchedChunkScanState state;
 	gstate.data.InitializeScan(state);
@@ -2718,11 +2813,11 @@ SinkFinalizeType PhysicalBatchCollector::Finalize(Pipeline &pipeline, Event &eve
 }
 
 unique_ptr<LocalSinkState> PhysicalBatchCollector::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<BatchCollectorLocalState>();
+	return make_unique<BatchCollectorLocalState>(Allocator::DefaultAllocator());
 }
 
 unique_ptr<GlobalSinkState> PhysicalBatchCollector::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<BatchCollectorGlobalState>();
+	return make_unique<BatchCollectorGlobalState>(Allocator::DefaultAllocator());
 }
 
 unique_ptr<QueryResult> PhysicalBatchCollector::GetResult(GlobalSinkState &state) {
@@ -2834,7 +2929,7 @@ PhysicalLimit::PhysicalLimit(vector<LogicalType> types, idx_t limit, idx_t offse
 //===--------------------------------------------------------------------===//
 class LimitGlobalState : public GlobalSinkState {
 public:
-	explicit LimitGlobalState(const PhysicalLimit &op) {
+	explicit LimitGlobalState(Allocator &allocator, const PhysicalLimit &op) : data(allocator) {
 		limit = 0;
 		offset = 0;
 	}
@@ -2847,7 +2942,7 @@ public:
 
 class LimitLocalState : public LocalSinkState {
 public:
-	explicit LimitLocalState(const PhysicalLimit &op) : current_offset(0) {
+	explicit LimitLocalState(Allocator &allocator, const PhysicalLimit &op) : current_offset(0), data(allocator) {
 		this->limit = op.limit_expression ? DConstants::INVALID_INDEX : op.limit_value;
 		this->offset = op.offset_expression ? DConstants::INVALID_INDEX : op.offset_value;
 	}
@@ -2859,15 +2954,16 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalLimit::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<LimitGlobalState>(*this);
+	return make_unique<LimitGlobalState>(Allocator::Get(context), *this);
 }
 
 unique_ptr<LocalSinkState> PhysicalLimit::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<LimitLocalState>(*this);
+	return make_unique<LimitLocalState>(Allocator::Get(context.client), *this);
 }
 
-bool PhysicalLimit::ComputeOffset(DataChunk &input, idx_t &limit, idx_t &offset, idx_t current_offset,
-                                  idx_t &max_element, Expression *limit_expression, Expression *offset_expression) {
+bool PhysicalLimit::ComputeOffset(ExecutionContext &context, DataChunk &input, idx_t &limit, idx_t &offset,
+                                  idx_t current_offset, idx_t &max_element, Expression *limit_expression,
+                                  Expression *offset_expression) {
 	if (limit != DConstants::INVALID_INDEX && offset != DConstants::INVALID_INDEX) {
 		max_element = limit + offset;
 		if ((limit == 0 || current_offset >= max_element) && !(limit_expression || offset_expression)) {
@@ -2878,7 +2974,7 @@ bool PhysicalLimit::ComputeOffset(DataChunk &input, idx_t &limit, idx_t &offset,
 	// get the next chunk from the child
 	if (limit == DConstants::INVALID_INDEX) {
 		limit = 1ULL << 62ULL;
-		Value val = GetDelimiter(input, limit_expression);
+		Value val = GetDelimiter(context, input, limit_expression);
 		if (!val.IsNull()) {
 			limit = val.GetValue<idx_t>();
 		}
@@ -2888,7 +2984,7 @@ bool PhysicalLimit::ComputeOffset(DataChunk &input, idx_t &limit, idx_t &offset,
 	}
 	if (offset == DConstants::INVALID_INDEX) {
 		offset = 0;
-		Value val = GetDelimiter(input, offset_expression);
+		Value val = GetDelimiter(context, input, offset_expression);
 		if (!val.IsNull()) {
 			offset = val.GetValue<idx_t>();
 		}
@@ -2912,7 +3008,7 @@ SinkResultType PhysicalLimit::Sink(ExecutionContext &context, GlobalSinkState &g
 	auto &offset = state.offset;
 
 	idx_t max_element;
-	if (!ComputeOffset(input, limit, offset, state.current_offset, max_element, limit_expression.get(),
+	if (!ComputeOffset(context, input, limit, offset, state.current_offset, max_element, limit_expression.get(),
 	                   offset_expression.get())) {
 		return SinkResultType::FINISHED;
 	}
@@ -3011,11 +3107,12 @@ bool PhysicalLimit::HandleOffset(DataChunk &input, idx_t &current_offset, idx_t 
 	return true;
 }
 
-Value PhysicalLimit::GetDelimiter(DataChunk &input, Expression *expr) {
+Value PhysicalLimit::GetDelimiter(ExecutionContext &context, DataChunk &input, Expression *expr) {
 	DataChunk limit_chunk;
 	vector<LogicalType> types {expr->return_type};
-	limit_chunk.Initialize(types);
-	ExpressionExecutor limit_executor(expr);
+	auto &allocator = Allocator::Get(context.client);
+	limit_chunk.Initialize(allocator, types);
+	ExpressionExecutor limit_executor(allocator, expr);
 	auto input_size = input.size();
 	input.SetCardinality(1);
 	limit_executor.Execute(input, limit_chunk);
@@ -3040,7 +3137,8 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class LimitPercentGlobalState : public GlobalSinkState {
 public:
-	explicit LimitPercentGlobalState(const PhysicalLimitPercent &op) : current_offset(0) {
+	explicit LimitPercentGlobalState(Allocator &allocator, const PhysicalLimitPercent &op)
+	    : current_offset(0), data(allocator) {
 		if (!op.limit_expression) {
 			this->limit_percent = op.limit_percent;
 			is_limit_percent_delimited = true;
@@ -3066,7 +3164,7 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalLimitPercent::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<LimitPercentGlobalState>(*this);
+	return make_unique<LimitPercentGlobalState>(Allocator::Get(context), *this);
 }
 
 SinkResultType PhysicalLimitPercent::Sink(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate,
@@ -3078,7 +3176,7 @@ SinkResultType PhysicalLimitPercent::Sink(ExecutionContext &context, GlobalSinkS
 
 	// get the next chunk from the child
 	if (!state.is_limit_percent_delimited) {
-		Value val = PhysicalLimit::GetDelimiter(input, limit_expression.get());
+		Value val = PhysicalLimit::GetDelimiter(context, input, limit_expression.get());
 		if (!val.IsNull()) {
 			limit_percent = val.GetValue<double>();
 		}
@@ -3088,7 +3186,7 @@ SinkResultType PhysicalLimitPercent::Sink(ExecutionContext &context, GlobalSinkS
 		state.is_limit_percent_delimited = true;
 	}
 	if (!state.is_offset_delimited) {
-		Value val = PhysicalLimit::GetDelimiter(input, offset_expression.get());
+		Value val = PhysicalLimit::GetDelimiter(context, input, offset_expression.get());
 		if (!val.IsNull()) {
 			offset = val.GetValue<idx_t>();
 		}
@@ -3253,19 +3351,19 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class SampleGlobalSinkState : public GlobalSinkState {
 public:
-	explicit SampleGlobalSinkState(SampleOptions &options) {
+	explicit SampleGlobalSinkState(Allocator &allocator, SampleOptions &options) {
 		if (options.is_percentage) {
 			auto percentage = options.sample_size.GetValue<double>();
 			if (percentage == 0) {
 				return;
 			}
-			sample = make_unique<ReservoirSamplePercentage>(percentage, options.seed);
+			sample = make_unique<ReservoirSamplePercentage>(allocator, percentage, options.seed);
 		} else {
 			auto size = options.sample_size.GetValue<int64_t>();
 			if (size == 0) {
 				return;
 			}
-			sample = make_unique<ReservoirSample>(size, options.seed);
+			sample = make_unique<ReservoirSample>(allocator, size, options.seed);
 		}
 	}
 
@@ -3276,7 +3374,7 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalReservoirSample::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<SampleGlobalSinkState>(*options);
+	return make_unique<SampleGlobalSinkState>(Allocator::Get(context), *options);
 }
 
 SinkResultType PhysicalReservoirSample::Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate,
@@ -3476,7 +3574,7 @@ public:
 	std::atomic<idx_t> current_offset;
 };
 
-unique_ptr<OperatorState> PhysicalStreamingLimit::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalStreamingLimit::GetOperatorState(ExecutionContext &context) const {
 	return make_unique<StreamingLimitOperatorState>(*this);
 }
 
@@ -3492,8 +3590,8 @@ OperatorResultType PhysicalStreamingLimit::Execute(ExecutionContext &context, Da
 	auto &offset = state.offset;
 	idx_t current_offset = gstate.current_offset.fetch_add(input.size());
 	idx_t max_element;
-	if (!PhysicalLimit::ComputeOffset(input, limit, offset, current_offset, max_element, limit_expression.get(),
-	                                  offset_expression.get())) {
+	if (!PhysicalLimit::ComputeOffset(context, input, limit, offset, current_offset, max_element,
+	                                  limit_expression.get(), offset_expression.get())) {
 		return OperatorResultType::FINISHED;
 	}
 	if (PhysicalLimit::HandleOffset(input, current_offset, offset, limit)) {
@@ -3561,7 +3659,7 @@ void PhysicalStreamingSample::BernoulliSample(DataChunk &input, DataChunk &resul
 	}
 }
 
-unique_ptr<OperatorState> PhysicalStreamingSample::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalStreamingSample::GetOperatorState(ExecutionContext &context) const {
 	return make_unique<StreamingSampleOperatorState>(seed);
 }
 
@@ -3771,6 +3869,16 @@ bool PerfectHashJoinExecutor::TemplatedFillSelectionVectorBuild(Vector &source, 
 //===--------------------------------------------------------------------===//
 class PerfectHashJoinState : public OperatorState {
 public:
+	PerfectHashJoinState(Allocator &allocator, const PhysicalHashJoin &join) : probe_executor(allocator) {
+		join_keys.Initialize(allocator, join.condition_types);
+		for (auto &cond : join.conditions) {
+			probe_executor.AddExpression(*cond.left);
+		}
+		build_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
+		probe_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
+		seq_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
+	}
+
 	DataChunk join_keys;
 	ExpressionExecutor probe_executor;
 	SelectionVector build_sel_vec;
@@ -3778,15 +3886,8 @@ public:
 	SelectionVector seq_sel_vec;
 };
 
-unique_ptr<OperatorState> PerfectHashJoinExecutor::GetOperatorState(ClientContext &context) {
-	auto state = make_unique<PerfectHashJoinState>();
-	state->join_keys.Initialize(join.condition_types);
-	for (auto &cond : join.conditions) {
-		state->probe_executor.AddExpression(*cond.left);
-	}
-	state->build_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
-	state->probe_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
-	state->seq_sel_vec.Initialize(STANDARD_VECTOR_SIZE);
+unique_ptr<OperatorState> PerfectHashJoinExecutor::GetOperatorState(ExecutionContext &context) {
+	auto state = make_unique<PerfectHashJoinState>(Allocator::Get(context.client), join);
 	return move(state);
 }
 
@@ -3938,6 +4039,9 @@ public:
 
 class BlockwiseNLJoinGlobalState : public GlobalSinkState {
 public:
+	explicit BlockwiseNLJoinGlobalState(Allocator &allocator) : right_chunks(allocator) {
+	}
+
 	mutex lock;
 	ChunkCollection right_chunks;
 	//! Whether or not a tuple on the RHS has found a match, only used for FULL OUTER joins
@@ -3945,7 +4049,7 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalBlockwiseNLJoin::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<BlockwiseNLJoinGlobalState>();
+	return make_unique<BlockwiseNLJoinGlobalState>(Allocator::Get(context));
 }
 
 unique_ptr<LocalSinkState> PhysicalBlockwiseNLJoin::GetLocalSinkState(ExecutionContext &context) const {
@@ -3981,8 +4085,8 @@ SinkFinalizeType PhysicalBlockwiseNLJoin::Finalize(Pipeline &pipeline, Event &ev
 //===--------------------------------------------------------------------===//
 class BlockwiseNLJoinState : public OperatorState {
 public:
-	explicit BlockwiseNLJoinState(const PhysicalBlockwiseNLJoin &op)
-	    : left_position(0), right_position(0), executor(*op.condition) {
+	explicit BlockwiseNLJoinState(ExecutionContext &context, const PhysicalBlockwiseNLJoin &op)
+	    : left_position(0), right_position(0), executor(Allocator::Get(context.client), *op.condition) {
 		if (IsLeftOuterJoin(op.join_type)) {
 			left_found_match = unique_ptr<bool[]>(new bool[STANDARD_VECTOR_SIZE]);
 			memset(left_found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
@@ -3996,8 +4100,8 @@ public:
 	ExpressionExecutor executor;
 };
 
-unique_ptr<OperatorState> PhysicalBlockwiseNLJoin::GetOperatorState(ClientContext &context) const {
-	return make_unique<BlockwiseNLJoinState>(*this);
+unique_ptr<OperatorState> PhysicalBlockwiseNLJoin::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<BlockwiseNLJoinState>(context, *this);
 }
 
 OperatorResultType PhysicalBlockwiseNLJoin::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -4259,7 +4363,7 @@ PhysicalCrossProduct::PhysicalCrossProduct(vector<LogicalType> types, unique_ptr
 //===--------------------------------------------------------------------===//
 class CrossProductGlobalState : public GlobalSinkState {
 public:
-	CrossProductGlobalState() {
+	explicit CrossProductGlobalState(ClientContext &context) : rhs_materialized(BufferAllocator::Get(context)) {
 	}
 
 	ChunkCollection rhs_materialized;
@@ -4267,7 +4371,7 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalCrossProduct::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<CrossProductGlobalState>();
+	return make_unique<CrossProductGlobalState>(context);
 }
 
 SinkResultType PhysicalCrossProduct::Sink(ExecutionContext &context, GlobalSinkState &state, LocalSinkState &lstate_p,
@@ -4289,7 +4393,7 @@ public:
 	idx_t right_position;
 };
 
-unique_ptr<OperatorState> PhysicalCrossProduct::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalCrossProduct::GetOperatorState(ExecutionContext &context) const {
 	return make_unique<CrossProductOperatorState>();
 }
 
@@ -4385,7 +4489,7 @@ vector<PhysicalOperator *> PhysicalDelimJoin::GetChildren() const {
 //===--------------------------------------------------------------------===//
 class DelimJoinGlobalState : public GlobalSinkState {
 public:
-	explicit DelimJoinGlobalState(const PhysicalDelimJoin *delim_join) {
+	explicit DelimJoinGlobalState(Allocator &allocator, const PhysicalDelimJoin *delim_join) : lhs_data(allocator) {
 		D_ASSERT(delim_join->delim_scans.size() > 0);
 		// set up the delim join chunk to scan in the original join
 		auto &cached_chunk_scan = (PhysicalChunkScan &)*delim_join->join->children[0];
@@ -4403,6 +4507,9 @@ public:
 
 class DelimJoinLocalState : public LocalSinkState {
 public:
+	explicit DelimJoinLocalState(Allocator &allocator) : lhs_data(allocator) {
+	}
+
 	unique_ptr<LocalSinkState> distinct_state;
 	ChunkCollection lhs_data;
 
@@ -4412,7 +4519,7 @@ public:
 };
 
 unique_ptr<GlobalSinkState> PhysicalDelimJoin::GetGlobalSinkState(ClientContext &context) const {
-	auto state = make_unique<DelimJoinGlobalState>(this);
+	auto state = make_unique<DelimJoinGlobalState>(BufferAllocator::Get(context), this);
 	distinct->sink_state = distinct->GetGlobalSinkState(context);
 	if (delim_scans.size() > 1) {
 		PhysicalHashAggregate::SetMultiScan(*distinct->sink_state);
@@ -4421,7 +4528,7 @@ unique_ptr<GlobalSinkState> PhysicalDelimJoin::GetGlobalSinkState(ClientContext 
 }
 
 unique_ptr<LocalSinkState> PhysicalDelimJoin::GetLocalSinkState(ExecutionContext &context) const {
-	auto state = make_unique<DelimJoinLocalState>();
+	auto state = make_unique<DelimJoinLocalState>(Allocator::Get(context.client));
 	state->distinct_state = distinct->GetLocalSinkState(context);
 	return move(state);
 }
@@ -4535,6 +4642,16 @@ PhysicalHashJoin::PhysicalHashJoin(LogicalOperator &op, unique_ptr<PhysicalOpera
 //===--------------------------------------------------------------------===//
 class HashJoinLocalState : public LocalSinkState {
 public:
+	HashJoinLocalState(Allocator &allocator, const PhysicalHashJoin &hj) : build_executor(allocator) {
+		if (!hj.right_projection_map.empty()) {
+			build_chunk.Initialize(allocator, hj.build_types);
+		}
+		for (auto &cond : hj.conditions) {
+			build_executor.AddExpression(*cond.right);
+		}
+		join_keys.Initialize(allocator, hj.condition_types);
+	}
+
 	DataChunk build_chunk;
 	DataChunk join_keys;
 	ExpressionExecutor build_executor;
@@ -4590,11 +4707,12 @@ unique_ptr<GlobalSinkState> PhysicalHashJoin::GetGlobalSinkState(ClientContext &
 			payload_types.push_back(aggr->return_type);
 			info.correlated_aggregates.push_back(move(aggr));
 
+			auto &allocator = Allocator::Get(context);
 			info.correlated_counts = make_unique<GroupedAggregateHashTable>(
-			    BufferManager::GetBufferManager(context), delim_types, payload_types, correlated_aggregates);
+			    allocator, BufferManager::GetBufferManager(context), delim_types, payload_types, correlated_aggregates);
 			info.correlated_types = delim_types;
-			info.group_chunk.Initialize(delim_types);
-			info.result_chunk.Initialize(payload_types);
+			info.group_chunk.Initialize(allocator, delim_types);
+			info.result_chunk.Initialize(allocator, payload_types);
 		}
 	}
 	// for perfect hash join
@@ -4604,14 +4722,8 @@ unique_ptr<GlobalSinkState> PhysicalHashJoin::GetGlobalSinkState(ClientContext &
 }
 
 unique_ptr<LocalSinkState> PhysicalHashJoin::GetLocalSinkState(ExecutionContext &context) const {
-	auto state = make_unique<HashJoinLocalState>();
-	if (!right_projection_map.empty()) {
-		state->build_chunk.Initialize(build_types);
-	}
-	for (auto &cond : conditions) {
-		state->build_executor.AddExpression(*cond.right);
-	}
-	state->join_keys.Initialize(condition_types);
+	auto &allocator = Allocator::Get(context.client);
+	auto state = make_unique<HashJoinLocalState>(allocator, *this);
 	return move(state);
 }
 
@@ -4680,6 +4792,9 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
 //===--------------------------------------------------------------------===//
 class PhysicalHashJoinState : public OperatorState {
 public:
+	explicit PhysicalHashJoinState(Allocator &allocator) : probe_executor(allocator) {
+	}
+
 	DataChunk join_keys;
 	ExpressionExecutor probe_executor;
 	unique_ptr<JoinHashTable::ScanStructure> scan_structure;
@@ -4691,13 +4806,14 @@ public:
 	}
 };
 
-unique_ptr<OperatorState> PhysicalHashJoin::GetOperatorState(ClientContext &context) const {
-	auto state = make_unique<PhysicalHashJoinState>();
+unique_ptr<OperatorState> PhysicalHashJoin::GetOperatorState(ExecutionContext &context) const {
+	auto &allocator = Allocator::Get(context.client);
 	auto &sink = (HashJoinGlobalState &)*sink_state;
+	auto state = make_unique<PhysicalHashJoinState>(allocator);
 	if (sink.perfect_join_executor) {
 		state->perfect_hash_join_state = sink.perfect_join_executor->GetOperatorState(context);
 	} else {
-		state->join_keys.Initialize(condition_types);
+		state->join_keys.Initialize(allocator, condition_types);
 		for (auto &cond : conditions) {
 			state->probe_executor.AddExpression(*cond.left);
 		}
@@ -4847,7 +4963,8 @@ class IEJoinLocalState : public LocalSinkState {
 public:
 	using LocalSortedTable = PhysicalRangeJoin::LocalSortedTable;
 
-	IEJoinLocalState(const PhysicalRangeJoin &op, const idx_t child) : table(op, child) {
+	IEJoinLocalState(Allocator &allocator, const PhysicalRangeJoin &op, const idx_t child)
+	    : table(allocator, op, child) {
 	}
 
 	//! The local sort state
@@ -4907,7 +5024,7 @@ unique_ptr<LocalSinkState> PhysicalIEJoin::GetLocalSinkState(ExecutionContext &c
 		const auto &ie_sink = (IEJoinGlobalState &)*sink_state;
 		sink_child = ie_sink.child;
 	}
-	return make_unique<IEJoinLocalState>(*this, sink_child);
+	return make_unique<IEJoinLocalState>(Allocator::Get(context.client), *this, sink_child);
 }
 
 SinkResultType PhysicalIEJoin::Sink(ExecutionContext &context, GlobalSinkState &gstate_p, LocalSinkState &lstate_p,
@@ -5093,7 +5210,7 @@ struct IEJoinUnion {
 		PayloadScanner scanner(blocks, gstate, false);
 
 		DataChunk payload;
-		payload.Initialize(gstate.payload_layout.GetTypes());
+		payload.Initialize(Allocator::DefaultAllocator(), gstate.payload_layout.GetTypes());
 		for (;;) {
 			scanner.Scan(payload);
 			const auto count = payload.size();
@@ -5160,7 +5277,7 @@ idx_t IEJoinUnion::AppendKey(SortedTable &table, ExpressionExecutor &executor, S
 	auto table_idx = block_idx * gstate.block_capacity;
 
 	DataChunk scanned;
-	scanned.Initialize(scanner.GetPayloadTypes());
+	scanned.Initialize(Allocator::DefaultAllocator(), scanner.GetPayloadTypes());
 
 	// Writing
 	auto types = local_sort_state.sort_layout->logical_types;
@@ -5172,7 +5289,7 @@ idx_t IEJoinUnion::AppendKey(SortedTable &table, ExpressionExecutor &executor, S
 
 	DataChunk keys;
 	DataChunk payload;
-	keys.Initialize(types);
+	keys.Initialize(Allocator::DefaultAllocator(), types);
 
 	idx_t inserted = 0;
 	for (auto rid = base; table_idx < valid;) {
@@ -5220,6 +5337,7 @@ idx_t IEJoinUnion::AppendKey(SortedTable &table, ExpressionExecutor &executor, S
 IEJoinUnion::IEJoinUnion(ClientContext &context, const PhysicalIEJoin &op, SortedTable &t1, const idx_t b1,
                          SortedTable &t2, const idx_t b2)
     : n(0), i(0) {
+	auto &allocator = Allocator::Get(context);
 	// input : query Q with 2 join predicates t1.X op1 t2.X' and t1.Y op2 t2.Y', tables T, T' of sizes m and n resp.
 	// output: a list of tuple pairs (ti , tj)
 	// Note that T/T' are already sorted on X/X' and contain the payload data
@@ -5265,13 +5383,13 @@ IEJoinUnion::IEJoinUnion(ClientContext &context, const PhysicalIEJoin &op, Sorte
 	l1 = make_unique<SortedTable>(context, orders, payload_layout);
 
 	// LHS has positive rids
-	ExpressionExecutor l_executor;
+	ExpressionExecutor l_executor(allocator);
 	l_executor.AddExpression(*order1.expression);
 	l_executor.AddExpression(*order2.expression);
 	AppendKey(t1, l_executor, *l1, 1, 1, b1);
 
 	// RHS has negative rids
-	ExpressionExecutor r_executor;
+	ExpressionExecutor r_executor(allocator);
 	r_executor.AddExpression(*op.rhs_orders[0][0].expression);
 	r_executor.AddExpression(*op.rhs_orders[1][0].expression);
 	AppendKey(t2, r_executor, *l1, -1, -1, b2);
@@ -5298,7 +5416,7 @@ IEJoinUnion::IEJoinUnion(ClientContext &context, const PhysicalIEJoin &op, Sorte
 	ref = make_unique<BoundReferenceExpression>(order2.expression->return_type, 0);
 	orders.emplace_back(BoundOrderByNode(order2.type, order2.null_order, move(ref)));
 
-	ExpressionExecutor executor;
+	ExpressionExecutor executor(allocator);
 	executor.AddExpression(*orders[0].expression);
 
 	l2 = make_unique<SortedTable>(context, orders, payload_layout);
@@ -5508,15 +5626,16 @@ idx_t IEJoinUnion::JoinComplexBlocks(SelectionVector &lsel, SelectionVector &rse
 
 class IEJoinState : public OperatorState {
 public:
-	explicit IEJoinState(const PhysicalIEJoin &op) : local_left(op, 0) {};
+	explicit IEJoinState(Allocator &allocator, const PhysicalIEJoin &op) : local_left(allocator, op, 0) {};
 
 	IEJoinLocalState local_left;
 };
 
 class IEJoinLocalSourceState : public LocalSourceState {
 public:
-	explicit IEJoinLocalSourceState(const PhysicalIEJoin &op)
-	    : op(op), true_sel(STANDARD_VECTOR_SIZE), left_matches(nullptr), right_matches(nullptr) {
+	explicit IEJoinLocalSourceState(Allocator &allocator, const PhysicalIEJoin &op)
+	    : op(op), true_sel(STANDARD_VECTOR_SIZE), left_executor(allocator), right_executor(allocator),
+	      left_matches(nullptr), right_matches(nullptr) {
 
 		if (op.conditions.size() < 3) {
 			return;
@@ -5534,8 +5653,8 @@ public:
 			right_executor.AddExpression(*cond.right);
 		}
 
-		left_keys.Initialize(left_types);
-		right_keys.Initialize(right_types);
+		left_keys.Initialize(allocator, left_types);
+		right_keys.Initialize(allocator, right_types);
 	}
 
 	idx_t SelectOuterRows(bool *matches) {
@@ -5805,7 +5924,7 @@ unique_ptr<GlobalSourceState> PhysicalIEJoin::GetGlobalSourceState(ClientContext
 
 unique_ptr<LocalSourceState> PhysicalIEJoin::GetLocalSourceState(ExecutionContext &context,
                                                                  GlobalSourceState &gstate) const {
-	return make_unique<IEJoinLocalSourceState>(*this);
+	return make_unique<IEJoinLocalSourceState>(Allocator::Get(context.client), *this);
 }
 
 void PhysicalIEJoin::GetData(ExecutionContext &context, DataChunk &result, GlobalSourceState &gstate,
@@ -5928,16 +6047,16 @@ namespace duckdb {
 
 class IndexJoinOperatorState : public OperatorState {
 public:
-	explicit IndexJoinOperatorState(const PhysicalIndexJoin &op) {
+	IndexJoinOperatorState(Allocator &allocator, const PhysicalIndexJoin &op) : probe_executor(allocator) {
 		rhs_rows.resize(STANDARD_VECTOR_SIZE);
 		result_sizes.resize(STANDARD_VECTOR_SIZE);
 
-		join_keys.Initialize(op.condition_types);
+		join_keys.Initialize(allocator, op.condition_types);
 		for (auto &cond : op.conditions) {
 			probe_executor.AddExpression(*cond.left);
 		}
 		if (!op.fetch_types.empty()) {
-			rhs_chunk.Initialize(op.fetch_types);
+			rhs_chunk.Initialize(allocator, op.fetch_types);
 		}
 		rhs_sel.Initialize(STANDARD_VECTOR_SIZE);
 	}
@@ -5997,8 +6116,8 @@ PhysicalIndexJoin::PhysicalIndexJoin(LogicalOperator &op, unique_ptr<PhysicalOpe
 	}
 }
 
-unique_ptr<OperatorState> PhysicalIndexJoin::GetOperatorState(ClientContext &context) const {
-	return make_unique<IndexJoinOperatorState>(*this);
+unique_ptr<OperatorState> PhysicalIndexJoin::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<IndexJoinOperatorState>(Allocator::Get(context.client), *this);
 }
 
 void PhysicalIndexJoin::Output(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -6302,13 +6421,14 @@ void PhysicalJoin::ConstructMarkJoinResult(DataChunk &join_keys, DataChunk &left
 //===--------------------------------------------------------------------===//
 class NestedLoopJoinLocalState : public LocalSinkState {
 public:
-	explicit NestedLoopJoinLocalState(const vector<JoinCondition> &conditions) {
+	explicit NestedLoopJoinLocalState(Allocator &allocator, const vector<JoinCondition> &conditions)
+	    : rhs_executor(allocator) {
 		vector<LogicalType> condition_types;
 		for (auto &cond : conditions) {
 			rhs_executor.AddExpression(*cond.right);
 			condition_types.push_back(cond.right->return_type);
 		}
-		right_condition.Initialize(condition_types);
+		right_condition.Initialize(allocator, condition_types);
 	}
 
 	//! The chunk holding the right condition
@@ -6319,7 +6439,8 @@ public:
 
 class NestedLoopJoinGlobalState : public GlobalSinkState {
 public:
-	NestedLoopJoinGlobalState() : has_null(false) {
+	explicit NestedLoopJoinGlobalState(Allocator &allocator)
+	    : right_data(allocator), right_chunks(allocator), has_null(false) {
 	}
 
 	mutex nj_lock;
@@ -6380,11 +6501,11 @@ SinkFinalizeType PhysicalNestedLoopJoin::Finalize(Pipeline &pipeline, Event &eve
 }
 
 unique_ptr<GlobalSinkState> PhysicalNestedLoopJoin::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<NestedLoopJoinGlobalState>();
+	return make_unique<NestedLoopJoinGlobalState>(Allocator::Get(context));
 }
 
 unique_ptr<LocalSinkState> PhysicalNestedLoopJoin::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<NestedLoopJoinLocalState>(conditions);
+	return make_unique<NestedLoopJoinLocalState>(Allocator::Get(context.client), conditions);
 }
 
 //===--------------------------------------------------------------------===//
@@ -6392,14 +6513,16 @@ unique_ptr<LocalSinkState> PhysicalNestedLoopJoin::GetLocalSinkState(ExecutionCo
 //===--------------------------------------------------------------------===//
 class PhysicalNestedLoopJoinState : public OperatorState {
 public:
-	PhysicalNestedLoopJoinState(const PhysicalNestedLoopJoin &op, const vector<JoinCondition> &conditions)
-	    : fetch_next_left(true), fetch_next_right(false), right_chunk(0), left_tuple(0), right_tuple(0) {
+	PhysicalNestedLoopJoinState(Allocator &allocator, const PhysicalNestedLoopJoin &op,
+	                            const vector<JoinCondition> &conditions)
+	    : fetch_next_left(true), fetch_next_right(false), right_chunk(0), lhs_executor(allocator), left_tuple(0),
+	      right_tuple(0) {
 		vector<LogicalType> condition_types;
 		for (auto &cond : conditions) {
 			lhs_executor.AddExpression(*cond.left);
 			condition_types.push_back(cond.left->return_type);
 		}
-		left_condition.Initialize(condition_types);
+		left_condition.Initialize(allocator, condition_types);
 		if (IsLeftOuterJoin(op.join_type)) {
 			left_found_match = unique_ptr<bool[]>(new bool[STANDARD_VECTOR_SIZE]);
 			memset(left_found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
@@ -6424,8 +6547,8 @@ public:
 	}
 };
 
-unique_ptr<OperatorState> PhysicalNestedLoopJoin::GetOperatorState(ClientContext &context) const {
-	return make_unique<PhysicalNestedLoopJoinState>(*this, conditions);
+unique_ptr<OperatorState> PhysicalNestedLoopJoin::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<PhysicalNestedLoopJoinState>(Allocator::Get(context.client), *this, conditions);
 }
 
 OperatorResultType PhysicalNestedLoopJoin::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -6677,7 +6800,8 @@ PhysicalPiecewiseMergeJoin::PhysicalPiecewiseMergeJoin(LogicalOperator &op, uniq
 //===--------------------------------------------------------------------===//
 class MergeJoinLocalState : public LocalSinkState {
 public:
-	explicit MergeJoinLocalState(const PhysicalRangeJoin &op, const idx_t child) : table(op, child) {
+	explicit MergeJoinLocalState(Allocator &allocator, const PhysicalRangeJoin &op, const idx_t child)
+	    : table(allocator, op, child) {
 	}
 
 	//! The local sort state
@@ -6723,7 +6847,7 @@ unique_ptr<GlobalSinkState> PhysicalPiecewiseMergeJoin::GetGlobalSinkState(Clien
 
 unique_ptr<LocalSinkState> PhysicalPiecewiseMergeJoin::GetLocalSinkState(ExecutionContext &context) const {
 	// We only sink the RHS
-	return make_unique<MergeJoinLocalState>(*this, 1);
+	return make_unique<MergeJoinLocalState>(Allocator::Get(context.client), *this, 1);
 }
 
 SinkResultType PhysicalPiecewiseMergeJoin::Sink(ExecutionContext &context, GlobalSinkState &gstate_p,
@@ -6777,10 +6901,11 @@ class PiecewiseMergeJoinState : public OperatorState {
 public:
 	using LocalSortedTable = PhysicalRangeJoin::LocalSortedTable;
 
-	explicit PiecewiseMergeJoinState(const PhysicalPiecewiseMergeJoin &op, BufferManager &buffer_manager,
-	                                 bool force_external)
-	    : op(op), buffer_manager(buffer_manager), force_external(force_external), left_position(0), first_fetch(true),
-	      finished(true), right_position(0), right_chunk_index(0) {
+	explicit PiecewiseMergeJoinState(Allocator &allocator, const PhysicalPiecewiseMergeJoin &op,
+	                                 BufferManager &buffer_manager, bool force_external)
+	    : allocator(allocator), op(op), buffer_manager(buffer_manager), force_external(force_external),
+	      left_position(0), first_fetch(true), finished(true), right_position(0), right_chunk_index(0),
+	      rhs_executor(allocator) {
 		vector<LogicalType> condition_types;
 		for (auto &order : op.lhs_orders) {
 			condition_types.push_back(order.expression->return_type);
@@ -6790,7 +6915,7 @@ public:
 			memset(lhs_found_match.get(), 0, sizeof(bool) * STANDARD_VECTOR_SIZE);
 		}
 		lhs_layout.Initialize(op.children[0]->types);
-		lhs_payload.Initialize(op.children[0]->types);
+		lhs_payload.Initialize(allocator, op.children[0]->types);
 
 		lhs_order.emplace_back(op.lhs_orders[0].Copy());
 
@@ -6801,9 +6926,10 @@ public:
 			rhs_executor.AddExpression(*order.expression);
 			condition_types.push_back(order.expression->return_type);
 		}
-		rhs_keys.Initialize(condition_types);
+		rhs_keys.Initialize(allocator, condition_types);
 	}
 
+	Allocator &allocator;
 	const PhysicalPiecewiseMergeJoin &op;
 	BufferManager &buffer_manager;
 	bool force_external;
@@ -6836,7 +6962,7 @@ public:
 	void ResolveJoinKeys(DataChunk &input) {
 		// sort by join key
 		lhs_global_state = make_unique<GlobalSortState>(buffer_manager, lhs_order, lhs_layout);
-		lhs_local_table = make_unique<LocalSortedTable>(op, 0);
+		lhs_local_table = make_unique<LocalSortedTable>(allocator, op, 0);
 		lhs_local_table->Sink(input, *lhs_global_state);
 
 		// Set external (can be forced with the PRAGMA)
@@ -6868,10 +6994,11 @@ public:
 	}
 };
 
-unique_ptr<OperatorState> PhysicalPiecewiseMergeJoin::GetOperatorState(ClientContext &context) const {
-	auto &buffer_manager = BufferManager::GetBufferManager(context);
-	auto &config = ClientConfig::GetConfig(context);
-	return make_unique<PiecewiseMergeJoinState>(*this, buffer_manager, config.force_external);
+unique_ptr<OperatorState> PhysicalPiecewiseMergeJoin::GetOperatorState(ExecutionContext &context) const {
+	auto &buffer_manager = BufferManager::GetBufferManager(context.client);
+	auto &config = ClientConfig::GetConfig(context.client);
+	return make_unique<PiecewiseMergeJoinState>(Allocator::Get(context.client), *this, buffer_manager,
+	                                            config.force_external);
 }
 
 static inline idx_t SortedBlockNotNull(const idx_t base, const idx_t count, const idx_t not_null) {
@@ -7315,7 +7442,7 @@ void PhysicalPiecewiseMergeJoin::GetData(ExecutionContext &context, DataChunk &r
 	// ConstructFullOuterJoinResult(sink.table->found_match.get(), sink.right_chunks, chunk,
 	// state.right_outer_position);
 	DataChunk rhs_chunk;
-	rhs_chunk.Initialize(sink.table->global_sort_state.payload_layout.GetTypes());
+	rhs_chunk.Initialize(Allocator::Get(context.client), sink.table->global_sort_state.payload_layout.GetTypes());
 	SelectionVector rsel(STANDARD_VECTOR_SIZE);
 	for (;;) {
 		// Read the next sorted chunk
@@ -7371,8 +7498,9 @@ void PhysicalPiecewiseMergeJoin::GetData(ExecutionContext &context, DataChunk &r
 
 namespace duckdb {
 
-PhysicalRangeJoin::LocalSortedTable::LocalSortedTable(const PhysicalRangeJoin &op, const idx_t child)
-    : op(op), has_null(0), count(0) {
+PhysicalRangeJoin::LocalSortedTable::LocalSortedTable(Allocator &allocator, const PhysicalRangeJoin &op,
+                                                      const idx_t child)
+    : op(op), executor(allocator), has_null(0), count(0) {
 	// Initialize order clause expression executor and key DataChunk
 	vector<LogicalType> types;
 	for (const auto &cond : op.conditions) {
@@ -7381,7 +7509,7 @@ PhysicalRangeJoin::LocalSortedTable::LocalSortedTable(const PhysicalRangeJoin &o
 
 		types.push_back(expr->return_type);
 	}
-	keys.Initialize(types);
+	keys.Initialize(allocator, types);
 }
 
 void PhysicalRangeJoin::LocalSortedTable::Sink(DataChunk &input, GlobalSortState &global_sort_state) {
@@ -7662,7 +7790,7 @@ void PhysicalRangeJoin::SliceSortedPayload(DataChunk &payload, GlobalSortState &
 
 	// Unswizzle the offsets back to pointers (if needed)
 	if (!sorted_data.layout.AllConstant() && state.external) {
-		RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle->Ptr(),
+		RowOperations::UnswizzlePointers(sorted_data.layout, data_ptr, read_state.payload_heap_handle.Ptr(),
 		                                 addr_count);
 	}
 
@@ -7733,7 +7861,15 @@ public:
 
 class OrderLocalState : public LocalSinkState {
 public:
-	OrderLocalState() {
+	OrderLocalState(ExecutionContext &context, const vector<BoundOrderByNode> &orders)
+	    : executor(Allocator::Get(context.client)) {
+		// Initialize order clause expression executor and DataChunk
+		vector<LogicalType> types;
+		for (auto &order : orders) {
+			types.push_back(order.expression->return_type);
+			executor.AddExpression(*order.expression);
+		}
+		sort.Initialize(Allocator::Get(context.client), types);
 	}
 
 public:
@@ -7761,14 +7897,7 @@ unique_ptr<GlobalSinkState> PhysicalOrder::GetGlobalSinkState(ClientContext &con
 }
 
 unique_ptr<LocalSinkState> PhysicalOrder::GetLocalSinkState(ExecutionContext &context) const {
-	auto result = make_unique<OrderLocalState>();
-	// Initialize order clause expression executor and DataChunk
-	vector<LogicalType> types;
-	for (auto &order : orders) {
-		types.push_back(order.expression->return_type);
-		result->executor.AddExpression(*order.expression);
-	}
-	result->sort.Initialize(types);
+	auto result = make_unique<OrderLocalState>(context, orders);
 	return move(result);
 }
 
@@ -7992,8 +8121,13 @@ class TopNHeap {
 public:
 	TopNHeap(ClientContext &context, const vector<LogicalType> &payload_types, const vector<BoundOrderByNode> &orders,
 	         idx_t limit, idx_t offset);
+	TopNHeap(ExecutionContext &context, const vector<LogicalType> &payload_types,
+	         const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset);
+	TopNHeap(BufferManager &buffer_manager, Allocator &allocator, const vector<LogicalType> &payload_types,
+	         const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset);
 
-	ClientContext &context;
+	Allocator &allocator;
+	BufferManager &buffer_manager;
 	const vector<LogicalType> &payload_types;
 	const vector<BoundOrderByNode> &orders;
 	idx_t limit;
@@ -8037,7 +8171,7 @@ TopNSortState::TopNSortState(TopNHeap &heap) : heap(heap), count(0), is_sorted(f
 void TopNSortState::Initialize() {
 	RowLayout layout;
 	layout.Initialize(heap.payload_types);
-	auto &buffer_manager = BufferManager::GetBufferManager(heap.context);
+	auto &buffer_manager = heap.buffer_manager;
 	global_state = make_unique<GlobalSortState>(buffer_manager, heap.orders, layout);
 	local_state = make_unique<LocalSortState>();
 	local_state->Initialize(*global_state, buffer_manager);
@@ -8077,7 +8211,7 @@ void TopNSortState::Finalize() {
 
 	global_state->PrepareMergePhase();
 	while (global_state->sorted_blocks.size() > 1) {
-		MergeSorter merge_sorter(*global_state, BufferManager::GetBufferManager(heap.context));
+		MergeSorter merge_sorter(*global_state, heap.buffer_manager);
 		merge_sorter.PerformInMergeRound();
 		global_state->CompleteMergeRound();
 	}
@@ -8154,11 +8288,12 @@ void TopNSortState::Scan(TopNScanState &state, DataChunk &chunk) {
 //===--------------------------------------------------------------------===//
 // TopNHeap
 //===--------------------------------------------------------------------===//
-TopNHeap::TopNHeap(ClientContext &context_p, const vector<LogicalType> &payload_types_p,
+TopNHeap::TopNHeap(BufferManager &buffer_manager, Allocator &allocator, const vector<LogicalType> &payload_types_p,
                    const vector<BoundOrderByNode> &orders_p, idx_t limit, idx_t offset)
-    : context(context_p), payload_types(payload_types_p), orders(orders_p), limit(limit), offset(offset),
-      sort_state(*this), has_boundary_values(false), final_sel(STANDARD_VECTOR_SIZE), true_sel(STANDARD_VECTOR_SIZE),
-      false_sel(STANDARD_VECTOR_SIZE), new_remaining_sel(STANDARD_VECTOR_SIZE) {
+    : allocator(allocator), buffer_manager(buffer_manager), payload_types(payload_types_p), orders(orders_p),
+      limit(limit), offset(offset), sort_state(*this), executor(allocator), has_boundary_values(false),
+      final_sel(STANDARD_VECTOR_SIZE), true_sel(STANDARD_VECTOR_SIZE), false_sel(STANDARD_VECTOR_SIZE),
+      new_remaining_sel(STANDARD_VECTOR_SIZE) {
 	// initialize the executor and the sort_chunk
 	vector<LogicalType> sort_types;
 	for (auto &order : orders) {
@@ -8166,11 +8301,23 @@ TopNHeap::TopNHeap(ClientContext &context_p, const vector<LogicalType> &payload_
 		sort_types.push_back(expr->return_type);
 		executor.AddExpression(*expr);
 	}
-	payload_chunk.Initialize(payload_types);
-	sort_chunk.Initialize(sort_types);
-	compare_chunk.Initialize(sort_types);
-	boundary_values.Initialize(sort_types);
+	payload_chunk.Initialize(allocator, payload_types);
+	sort_chunk.Initialize(allocator, sort_types);
+	compare_chunk.Initialize(allocator, sort_types);
+	boundary_values.Initialize(allocator, sort_types);
 	sort_state.Initialize();
+}
+
+TopNHeap::TopNHeap(ClientContext &context, const vector<LogicalType> &payload_types,
+                   const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset)
+    : TopNHeap(BufferManager::GetBufferManager(context), BufferAllocator::Get(context), payload_types, orders, limit,
+               offset) {
+}
+
+TopNHeap::TopNHeap(ExecutionContext &context, const vector<LogicalType> &payload_types,
+                   const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset)
+    : TopNHeap(BufferManager::GetBufferManager(context.client), Allocator::Get(context.client), payload_types, orders,
+               limit, offset) {
 }
 
 void TopNHeap::Sink(DataChunk &input) {
@@ -8211,7 +8358,7 @@ void TopNHeap::Reduce() {
 	sort_state.InitializeScan(state, false);
 
 	DataChunk new_chunk;
-	new_chunk.Initialize(payload_types);
+	new_chunk.Initialize(allocator, payload_types);
 
 	DataChunk *current_chunk = &new_chunk;
 	DataChunk *prev_chunk = &payload_chunk;
@@ -8338,7 +8485,7 @@ public:
 
 class TopNLocalState : public LocalSinkState {
 public:
-	TopNLocalState(ClientContext &context, const vector<LogicalType> &payload_types,
+	TopNLocalState(ExecutionContext &context, const vector<LogicalType> &payload_types,
 	               const vector<BoundOrderByNode> &orders, idx_t limit, idx_t offset)
 	    : heap(context, payload_types, orders, limit, offset) {
 	}
@@ -8347,7 +8494,7 @@ public:
 };
 
 unique_ptr<LocalSinkState> PhysicalTopN::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<TopNLocalState>(context.client, types, orders, limit, offset);
+	return make_unique<TopNLocalState>(context, types, orders, limit, offset);
 }
 
 unique_ptr<GlobalSinkState> PhysicalTopN::GetGlobalSinkState(ClientContext &context) const {
@@ -8928,17 +9075,18 @@ TextSearchShiftArray::TextSearchShiftArray(string search_term) : length(search_t
 	}
 }
 
-BufferedCSVReader::BufferedCSVReader(FileSystem &fs_p, FileOpener *opener_p, BufferedCSVReaderOptions options_p,
-                                     const vector<LogicalType> &requested_types)
-    : fs(fs_p), opener(opener_p), options(move(options_p)), buffer_size(0), position(0), start(0) {
+BufferedCSVReader::BufferedCSVReader(FileSystem &fs_p, Allocator &allocator, FileOpener *opener_p,
+                                     BufferedCSVReaderOptions options_p, const vector<LogicalType> &requested_types)
+    : fs(fs_p), allocator(allocator), opener(opener_p), options(move(options_p)), buffer_size(0), position(0),
+      start(0) {
 	file_handle = OpenCSV(options);
 	Initialize(requested_types);
 }
 
 BufferedCSVReader::BufferedCSVReader(ClientContext &context, BufferedCSVReaderOptions options_p,
                                      const vector<LogicalType> &requested_types)
-    : BufferedCSVReader(FileSystem::GetFileSystem(context), FileSystem::GetFileOpener(context), move(options_p),
-                        requested_types) {
+    : BufferedCSVReader(FileSystem::GetFileSystem(context), Allocator::Get(context), FileSystem::GetFileOpener(context),
+                        move(options_p), requested_types) {
 }
 
 BufferedCSVReader::~BufferedCSVReader() {
@@ -9105,7 +9253,7 @@ void BufferedCSVReader::InitParseChunk(idx_t num_cols) {
 
 		// initialize the parse_chunk with a set of VARCHAR types
 		vector<LogicalType> varchar_types(num_cols, LogicalType::VARCHAR);
-		parse_chunk.Initialize(varchar_types);
+		parse_chunk.Initialize(allocator, varchar_types);
 	}
 }
 
@@ -9432,7 +9580,7 @@ void BufferedCSVReader::DetectCandidateTypes(const vector<LogicalType> &type_can
 		// jump to beginning and skip potential header
 		JumpToBeginning(options.skip_rows, true);
 		DataChunk header_row;
-		header_row.Initialize(sql_types);
+		header_row.Initialize(allocator, sql_types);
 		parse_chunk.Copy(header_row);
 
 		if (header_row.size() == 0) {
@@ -9552,7 +9700,7 @@ void BufferedCSVReader::DetectCandidateTypes(const vector<LogicalType> &type_can
 			best_format_candidates = format_candidates;
 			best_header_row.Destroy();
 			auto header_row_types = header_row.GetTypes();
-			best_header_row.Initialize(header_row_types);
+			best_header_row.Initialize(allocator, header_row_types);
 			header_row.Copy(best_header_row);
 		}
 	}
@@ -10549,7 +10697,7 @@ SinkResultType PhysicalCopyToFile::Sink(ExecutionContext &context, GlobalSinkSta
 	auto &l = (CopyToFunctionLocalState &)lstate;
 
 	g.rows_copied += input.size();
-	function.copy_to_sink(context.client, *bind_data, *g.global_state, *l.local_state, input);
+	function.copy_to_sink(context, *bind_data, *g.global_state, *l.local_state, input);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -10558,7 +10706,7 @@ void PhysicalCopyToFile::Combine(ExecutionContext &context, GlobalSinkState &gst
 	auto &l = (CopyToFunctionLocalState &)lstate;
 
 	if (function.copy_to_combine) {
-		function.copy_to_combine(context.client, *bind_data, *g.global_state, *l.local_state);
+		function.copy_to_combine(context, *bind_data, *g.global_state, *l.local_state);
 	}
 }
 
@@ -10576,7 +10724,7 @@ SinkFinalizeType PhysicalCopyToFile::Finalize(Pipeline &pipeline, Event &event, 
 }
 
 unique_ptr<LocalSinkState> PhysicalCopyToFile::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<CopyToFunctionLocalState>(function.copy_to_initialize_local(context.client, *bind_data));
+	return make_unique<CopyToFunctionLocalState>(function.copy_to_initialize_local(context, *bind_data));
 }
 unique_ptr<GlobalSinkState> PhysicalCopyToFile::GetGlobalSinkState(ClientContext &context) const {
 	return make_unique<CopyToFunctionGlobalState>(function.copy_to_initialize_global(context, *bind_data, file_path));
@@ -10626,7 +10774,8 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class DeleteGlobalState : public GlobalSinkState {
 public:
-	DeleteGlobalState() : deleted_count(0), returned_chunk_count(0) {
+	explicit DeleteGlobalState(Allocator &allocator)
+	    : deleted_count(0), return_chunk_collection(allocator), returned_chunk_count(0) {
 	}
 
 	mutex delete_lock;
@@ -10637,8 +10786,8 @@ public:
 
 class DeleteLocalState : public LocalSinkState {
 public:
-	explicit DeleteLocalState(const vector<LogicalType> &table_types) {
-		delete_chunk.Initialize(table_types);
+	DeleteLocalState(Allocator &allocator, const vector<LogicalType> &table_types) {
+		delete_chunk.Initialize(allocator, table_types);
 	}
 	DataChunk delete_chunk;
 };
@@ -10670,11 +10819,11 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, GlobalSinkState &
 }
 
 unique_ptr<GlobalSinkState> PhysicalDelete::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<DeleteGlobalState>();
+	return make_unique<DeleteGlobalState>(Allocator::Get(context));
 }
 
 unique_ptr<LocalSinkState> PhysicalDelete::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<DeleteLocalState>(table.GetTypes());
+	return make_unique<DeleteLocalState>(Allocator::Get(context.client), table.GetTypes());
 }
 
 //===--------------------------------------------------------------------===//
@@ -10943,7 +11092,8 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class InsertGlobalState : public GlobalSinkState {
 public:
-	InsertGlobalState() : insert_count(0), returned_chunk_count(0) {
+	explicit InsertGlobalState(Allocator &allocator)
+	    : insert_count(0), return_chunk_collection(allocator), returned_chunk_count(0) {
 	}
 
 	mutex lock;
@@ -10954,9 +11104,10 @@ public:
 
 class InsertLocalState : public LocalSinkState {
 public:
-	InsertLocalState(const vector<LogicalType> &types, const vector<unique_ptr<Expression>> &bound_defaults)
-	    : default_executor(bound_defaults) {
-		insert_chunk.Initialize(types);
+	InsertLocalState(Allocator &allocator, const vector<LogicalType> &types,
+	                 const vector<unique_ptr<Expression>> &bound_defaults)
+	    : default_executor(allocator, bound_defaults) {
+		insert_chunk.Initialize(allocator, types);
 	}
 
 	DataChunk insert_chunk;
@@ -11020,11 +11171,11 @@ SinkResultType PhysicalInsert::Sink(ExecutionContext &context, GlobalSinkState &
 }
 
 unique_ptr<GlobalSinkState> PhysicalInsert::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<InsertGlobalState>();
+	return make_unique<InsertGlobalState>(Allocator::Get(context));
 }
 
 unique_ptr<LocalSinkState> PhysicalInsert::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<InsertLocalState>(table->GetTypes(), bound_defaults);
+	return make_unique<InsertLocalState>(Allocator::Get(context.client), table->GetTypes(), bound_defaults);
 }
 
 void PhysicalInsert::Combine(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate) const {
@@ -11093,7 +11244,8 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 class UpdateGlobalState : public GlobalSinkState {
 public:
-	UpdateGlobalState() : updated_count(0), returned_chunk_count(0) {
+	explicit UpdateGlobalState(Allocator &allocator)
+	    : updated_count(0), return_chunk_collection(allocator), returned_chunk_count(0) {
 	}
 
 	mutex lock;
@@ -11105,18 +11257,18 @@ public:
 
 class UpdateLocalState : public LocalSinkState {
 public:
-	UpdateLocalState(const vector<unique_ptr<Expression>> &expressions, const vector<LogicalType> &table_types,
-	                 const vector<unique_ptr<Expression>> &bound_defaults)
-	    : default_executor(bound_defaults) {
+	UpdateLocalState(Allocator &allocator, const vector<unique_ptr<Expression>> &expressions,
+	                 const vector<LogicalType> &table_types, const vector<unique_ptr<Expression>> &bound_defaults)
+	    : default_executor(allocator, bound_defaults) {
 		// initialize the update chunk
 		vector<LogicalType> update_types;
 		update_types.reserve(expressions.size());
 		for (auto &expr : expressions) {
 			update_types.push_back(expr->return_type);
 		}
-		update_chunk.Initialize(update_types);
+		update_chunk.Initialize(allocator, update_types);
 		// initialize the mock chunk
-		mock_chunk.Initialize(table_types);
+		mock_chunk.Initialize(allocator, table_types);
 	}
 
 	DataChunk update_chunk;
@@ -11199,11 +11351,11 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, GlobalSinkState &
 }
 
 unique_ptr<GlobalSinkState> PhysicalUpdate::GetGlobalSinkState(ClientContext &context) const {
-	return make_unique<UpdateGlobalState>();
+	return make_unique<UpdateGlobalState>(Allocator::Get(context));
 }
 
 unique_ptr<LocalSinkState> PhysicalUpdate::GetLocalSinkState(ExecutionContext &context) const {
-	return make_unique<UpdateLocalState>(expressions, table.GetTypes(), bound_defaults);
+	return make_unique<UpdateLocalState>(Allocator::Get(context.client), expressions, table.GetTypes(), bound_defaults);
 }
 
 void PhysicalUpdate::Combine(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate) const {
@@ -11262,7 +11414,8 @@ namespace duckdb {
 
 class ProjectionState : public OperatorState {
 public:
-	explicit ProjectionState(const vector<unique_ptr<Expression>> &expressions) : executor(expressions) {
+	explicit ProjectionState(ExecutionContext &context, const vector<unique_ptr<Expression>> &expressions)
+	    : executor(Allocator::Get(context.client), expressions) {
 	}
 
 	ExpressionExecutor executor;
@@ -11286,8 +11439,8 @@ OperatorResultType PhysicalProjection::Execute(ExecutionContext &context, DataCh
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 
-unique_ptr<OperatorState> PhysicalProjection::GetOperatorState(ClientContext &context) const {
-	return make_unique<ProjectionState>(select_list);
+unique_ptr<OperatorState> PhysicalProjection::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<ProjectionState>(context, select_list);
 }
 
 string PhysicalProjection::ParamsToString() const {
@@ -11326,11 +11479,12 @@ PhysicalTableInOutFunction::PhysicalTableInOutFunction(vector<LogicalType> types
       function(move(function_p)), bind_data(move(bind_data_p)), column_ids(move(column_ids_p)) {
 }
 
-unique_ptr<OperatorState> PhysicalTableInOutFunction::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalTableInOutFunction::GetOperatorState(ExecutionContext &context) const {
+	auto &gstate = (TableInOutGlobalState &)*op_state;
 	auto result = make_unique<TableInOutLocalState>();
 	if (function.init_local) {
 		TableFunctionInitInput input(bind_data.get(), column_ids, nullptr);
-		result->local_state = function.init_local(context, input, nullptr);
+		result->local_state = function.init_local(context, input, gstate.global_state.get());
 	}
 	return move(result);
 }
@@ -11349,7 +11503,7 @@ OperatorResultType PhysicalTableInOutFunction::Execute(ExecutionContext &context
 	auto &gstate = (TableInOutGlobalState &)gstate_p;
 	auto &state = (TableInOutLocalState &)state_p;
 	TableFunctionInput data(bind_data.get(), state.local_state.get(), gstate.global_state.get());
-	return function.in_out_function(context.client, data, input, chunk);
+	return function.in_out_function(context, data, input, chunk);
 }
 
 } // namespace duckdb
@@ -11365,7 +11519,19 @@ namespace duckdb {
 
 class UnnestOperatorState : public OperatorState {
 public:
-	UnnestOperatorState() : parent_position(0), list_position(0), list_length(-1), first_fetch(true) {
+	UnnestOperatorState(Allocator &allocator, const vector<unique_ptr<Expression>> &select_list)
+	    : parent_position(0), list_position(0), list_length(-1), first_fetch(true), executor(allocator) {
+		vector<LogicalType> list_data_types;
+		for (auto &exp : select_list) {
+			D_ASSERT(exp->type == ExpressionType::BOUND_UNNEST);
+			auto bue = (BoundUnnestExpression *)exp.get();
+			list_data_types.push_back(bue->child->return_type);
+			executor.AddExpression(*bue->child.get());
+		}
+		list_data.Initialize(allocator, list_data_types);
+
+		list_vector_data.resize(list_data.ColumnCount());
+		list_child_data.resize(list_data.ColumnCount());
 	}
 
 	idx_t parent_position;
@@ -11373,6 +11539,7 @@ public:
 	int64_t list_length;
 	bool first_fetch;
 
+	ExpressionExecutor executor;
 	DataChunk list_data;
 	vector<VectorData> list_vector_data;
 	vector<VectorData> list_child_data;
@@ -11499,15 +11666,16 @@ static void UnnestVector(VectorData &vdata, Vector &source, idx_t list_size, idx
 	}
 }
 
-unique_ptr<OperatorState> PhysicalUnnest::GetOperatorState(ClientContext &context) const {
-	return PhysicalUnnest::GetState(context);
+unique_ptr<OperatorState> PhysicalUnnest::GetOperatorState(ExecutionContext &context) const {
+	return PhysicalUnnest::GetState(context, select_list);
 }
 
-unique_ptr<OperatorState> PhysicalUnnest::GetState(ClientContext &context) {
-	return make_unique<UnnestOperatorState>();
+unique_ptr<OperatorState> PhysicalUnnest::GetState(ExecutionContext &context,
+                                                   const vector<unique_ptr<Expression>> &select_list) {
+	return make_unique<UnnestOperatorState>(Allocator::Get(context.client), select_list);
 }
 
-OperatorResultType PhysicalUnnest::ExecuteInternal(ClientContext &context, DataChunk &input, DataChunk &chunk,
+OperatorResultType PhysicalUnnest::ExecuteInternal(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
                                                    OperatorState &state_p,
                                                    const vector<unique_ptr<Expression>> &select_list,
                                                    bool include_input) {
@@ -11515,26 +11683,17 @@ OperatorResultType PhysicalUnnest::ExecuteInternal(ClientContext &context, DataC
 	do {
 		if (state.first_fetch) {
 			// get the list data to unnest
-			ExpressionExecutor executor;
-			vector<LogicalType> list_data_types;
-			for (auto &exp : select_list) {
-				D_ASSERT(exp->type == ExpressionType::BOUND_UNNEST);
-				auto bue = (BoundUnnestExpression *)exp.get();
-				list_data_types.push_back(bue->child->return_type);
-				executor.AddExpression(*bue->child.get());
-			}
-			state.list_data.Destroy();
-			state.list_data.Initialize(list_data_types);
-			executor.Execute(input, state.list_data);
+			state.list_data.Reset();
+			state.executor.Execute(input, state.list_data);
 
 			// paranoia aplenty
 			state.list_data.Verify();
 			D_ASSERT(input.size() == state.list_data.size());
 			D_ASSERT(state.list_data.ColumnCount() == select_list.size());
+			D_ASSERT(state.list_vector_data.size() == state.list_data.ColumnCount());
+			D_ASSERT(state.list_child_data.size() == state.list_data.ColumnCount());
 
 			// initialize VectorData object so the nullmask can accessed
-			state.list_vector_data.resize(state.list_data.ColumnCount());
-			state.list_child_data.resize(state.list_data.ColumnCount());
 			for (idx_t col_idx = 0; col_idx < state.list_data.ColumnCount(); col_idx++) {
 				auto &list_vector = state.list_data.data[col_idx];
 				list_vector.Orrify(state.list_data.size(), state.list_vector_data[col_idx]);
@@ -11651,7 +11810,7 @@ OperatorResultType PhysicalUnnest::ExecuteInternal(ClientContext &context, DataC
 
 OperatorResultType PhysicalUnnest::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
                                            GlobalOperatorState &gstate, OperatorState &state) const {
-	return ExecuteInternal(context.client, input, chunk, state, select_list);
+	return ExecuteInternal(context, input, chunk, state, select_list);
 }
 
 } // namespace duckdb
@@ -11768,8 +11927,8 @@ namespace duckdb {
 
 class ExpressionScanState : public OperatorState {
 public:
-	explicit ExpressionScanState(const PhysicalExpressionScan &op) : expression_index(0) {
-		temp_chunk.Initialize(op.GetTypes());
+	explicit ExpressionScanState(Allocator &allocator, const PhysicalExpressionScan &op) : expression_index(0) {
+		temp_chunk.Initialize(allocator, op.GetTypes());
 	}
 
 	//! The current position in the scan
@@ -11778,8 +11937,8 @@ public:
 	DataChunk temp_chunk;
 };
 
-unique_ptr<OperatorState> PhysicalExpressionScan::GetOperatorState(ClientContext &context) const {
-	return make_unique<ExpressionScanState>(*this);
+unique_ptr<OperatorState> PhysicalExpressionScan::GetOperatorState(ExecutionContext &context) const {
+	return make_unique<ExpressionScanState>(Allocator::Get(context.client), *this);
 }
 
 OperatorResultType PhysicalExpressionScan::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
@@ -11789,7 +11948,7 @@ OperatorResultType PhysicalExpressionScan::Execute(ExecutionContext &context, Da
 	for (; chunk.size() + input.size() <= STANDARD_VECTOR_SIZE && state.expression_index < expressions.size();
 	     state.expression_index++) {
 		state.temp_chunk.Reset();
-		EvaluateExpression(state.expression_index, &input, state.temp_chunk);
+		EvaluateExpression(Allocator::Get(context.client), state.expression_index, &input, state.temp_chunk);
 		chunk.Append(state.temp_chunk);
 	}
 	if (state.expression_index < expressions.size()) {
@@ -11800,8 +11959,9 @@ OperatorResultType PhysicalExpressionScan::Execute(ExecutionContext &context, Da
 	}
 }
 
-void PhysicalExpressionScan::EvaluateExpression(idx_t expression_idx, DataChunk *child_chunk, DataChunk &result) const {
-	ExpressionExecutor executor(expressions[expression_idx]);
+void PhysicalExpressionScan::EvaluateExpression(Allocator &allocator, idx_t expression_idx, DataChunk *child_chunk,
+                                                DataChunk &result) const {
+	ExpressionExecutor executor(allocator, expressions[expression_idx]);
 	if (child_chunk) {
 		child_chunk->Verify();
 		executor.Execute(*child_chunk, result);
@@ -11870,7 +12030,7 @@ public:
 	                          const PhysicalTableScan &op) {
 		if (op.function.init_local) {
 			TableFunctionInitInput input(op.bind_data.get(), op.column_ids, op.table_filters.get());
-			local_state = op.function.init_local(context.client, input, gstate.global_state.get());
+			local_state = op.function.init_local(context, input, gstate.global_state.get());
 		}
 	}
 
@@ -12417,9 +12577,10 @@ PhysicalRecursiveCTE::~PhysicalRecursiveCTE() {
 class RecursiveCTEState : public GlobalSinkState {
 public:
 	explicit RecursiveCTEState(ClientContext &context, const PhysicalRecursiveCTE &op)
-	    : new_groups(STANDARD_VECTOR_SIZE) {
-		ht = make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(context), op.types,
-		                                            vector<LogicalType>(), vector<BoundAggregateExpression *>());
+	    : intermediate_table(Allocator::Get(context)), new_groups(STANDARD_VECTOR_SIZE) {
+		ht = make_unique<GroupedAggregateHashTable>(Allocator::Get(context), BufferManager::GetBufferManager(context),
+		                                            op.types, vector<LogicalType>(),
+		                                            vector<BoundAggregateExpression *>());
 	}
 
 	unique_ptr<GroupedAggregateHashTable> ht;
@@ -12673,18 +12834,19 @@ RadixPartitionInfo::RadixPartitionInfo(const idx_t n_partitions_upper_bound)
 	D_ASSERT(radix_bits <= 8);
 }
 
-PartitionableHashTable::PartitionableHashTable(BufferManager &buffer_manager_p, RadixPartitionInfo &partition_info_p,
-                                               vector<LogicalType> group_types_p, vector<LogicalType> payload_types_p,
+PartitionableHashTable::PartitionableHashTable(Allocator &allocator, BufferManager &buffer_manager_p,
+                                               RadixPartitionInfo &partition_info_p, vector<LogicalType> group_types_p,
+                                               vector<LogicalType> payload_types_p,
                                                vector<BoundAggregateExpression *> bindings_p)
-    : buffer_manager(buffer_manager_p), group_types(move(group_types_p)), payload_types(move(payload_types_p)),
-      bindings(move(bindings_p)), is_partitioned(false), partition_info(partition_info_p), hashes(LogicalType::HASH),
-      hashes_subset(LogicalType::HASH) {
+    : allocator(allocator), buffer_manager(buffer_manager_p), group_types(move(group_types_p)),
+      payload_types(move(payload_types_p)), bindings(move(bindings_p)), is_partitioned(false),
+      partition_info(partition_info_p), hashes(LogicalType::HASH), hashes_subset(LogicalType::HASH) {
 
 	sel_vectors.resize(partition_info.n_partitions);
 	sel_vector_sizes.resize(partition_info.n_partitions);
-	group_subset.Initialize(group_types);
+	group_subset.Initialize(allocator, group_types);
 	if (!payload_types.empty()) {
-		payload_subset.Initialize(payload_types);
+		payload_subset.Initialize(allocator, payload_types);
 	}
 
 	for (hash_t r = 0; r < partition_info.n_partitions; r++) {
@@ -12699,8 +12861,8 @@ idx_t PartitionableHashTable::ListAddChunk(HashTableList &list, DataChunk &group
 			// early release first part of ht and prevent adding of more data
 			list.back()->Finalize();
 		}
-		list.push_back(make_unique<GroupedAggregateHashTable>(buffer_manager, group_types, payload_types, bindings,
-		                                                      HtEntryType::HT_WIDTH_32));
+		list.push_back(make_unique<GroupedAggregateHashTable>(allocator, buffer_manager, group_types, payload_types,
+		                                                      bindings, HtEntryType::HT_WIDTH_32));
 	}
 	return list.back()->AddChunk(groups, group_hashes, payload);
 }
@@ -12761,7 +12923,7 @@ void PartitionableHashTable::Partition() {
 	for (auto &unpartitioned_ht : unpartitioned_hts) {
 		for (idx_t r = 0; r < partition_info.n_partitions; r++) {
 			radix_partitioned_hts[r].push_back(make_unique<GroupedAggregateHashTable>(
-			    buffer_manager, group_types, payload_types, bindings, HtEntryType::HT_WIDTH_32));
+			    allocator, buffer_manager, group_types, payload_types, bindings, HtEntryType::HT_WIDTH_32));
 			partition_hts[r] = radix_partitioned_hts[r].back().get();
 		}
 		unpartitioned_ht->Partition(partition_hts, partition_info.radix_mask, partition_info.RADIX_SHIFT);
@@ -12809,14 +12971,14 @@ void PartitionableHashTable::Finalize() {
 
 namespace duckdb {
 
-PerfectAggregateHashTable::PerfectAggregateHashTable(BufferManager &buffer_manager,
+PerfectAggregateHashTable::PerfectAggregateHashTable(Allocator &allocator, BufferManager &buffer_manager,
                                                      const vector<LogicalType> &group_types_p,
                                                      vector<LogicalType> payload_types_p,
                                                      vector<AggregateObject> aggregate_objects_p,
                                                      vector<Value> group_minima_p, vector<idx_t> required_bits_p)
-    : BaseAggregateHashTable(buffer_manager, move(payload_types_p)), addresses(LogicalType::POINTER),
-      required_bits(move(required_bits_p)), total_required_bits(0), group_minima(move(group_minima_p)),
-      sel(STANDARD_VECTOR_SIZE) {
+    : BaseAggregateHashTable(allocator, aggregate_objects_p, buffer_manager, move(payload_types_p)),
+      addresses(LogicalType::POINTER), required_bits(move(required_bits_p)), total_required_bits(0),
+      group_minima(move(group_minima_p)), sel(STANDARD_VECTOR_SIZE) {
 	for (auto &group_bits : required_bits) {
 		total_required_bits += group_bits;
 	}
@@ -12924,10 +13086,12 @@ void PerfectAggregateHashTable::AddChunk(DataChunk &groups, DataChunk &payload) 
 	// after finding the group location we update the aggregates
 	idx_t payload_idx = 0;
 	auto &aggregates = layout.GetAggregates();
-	for (auto &aggregate : aggregates) {
+	for (idx_t aggr_idx = 0; aggr_idx < aggregates.size(); aggr_idx++) {
+		auto &aggregate = aggregates[aggr_idx];
 		auto input_count = (idx_t)aggregate.child_count;
 		if (aggregate.filter) {
-			RowOperations::UpdateFilteredStates(aggregate, addresses, payload, payload_idx);
+			RowOperations::UpdateFilteredStates(filter_set.GetFilterData(aggr_idx), aggregate, addresses, payload,
+			                                    payload_idx);
 		} else {
 			RowOperations::UpdateStates(aggregate, addresses, payload, payload_idx, payload.size());
 		}
@@ -13127,7 +13291,7 @@ vector<PhysicalOperator *> PhysicalOperator::GetChildren() const {
 // Operator
 //===--------------------------------------------------------------------===//
 // LCOV_EXCL_START
-unique_ptr<OperatorState> PhysicalOperator::GetOperatorState(ClientContext &context) const {
+unique_ptr<OperatorState> PhysicalOperator::GetOperatorState(ExecutionContext &context) const {
 	return make_unique<OperatorState>();
 }
 
@@ -14183,10 +14347,11 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalExplain &o
 	}
 
 	// create a ChunkCollection from the output
-	auto collection = make_unique<ChunkCollection>();
+	auto &allocator = Allocator::Get(context);
+	auto collection = make_unique<ChunkCollection>(allocator);
 
 	DataChunk chunk;
-	chunk.Initialize(op.types);
+	chunk.Initialize(allocator, op.types);
 	for (idx_t i = 0; i < keys.size(); i++) {
 		chunk.SetValue(0, chunk.size(), Value(keys[i]));
 		chunk.SetValue(1, chunk.size(), Value(values[i]));
@@ -14246,18 +14411,19 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalExpression
 	if (!expr_scan->IsFoldable()) {
 		return move(expr_scan);
 	}
+	auto &allocator = Allocator::Get(context);
 	// simple expression scan (i.e. no subqueries to evaluate and no prepared statement parameters)
 	// we can evaluate all the expressions right now and turn this into a chunk collection scan
 	auto chunk_scan =
 	    make_unique<PhysicalChunkScan>(op.types, PhysicalOperatorType::CHUNK_SCAN, expr_scan->expressions.size());
-	chunk_scan->owned_collection = make_unique<ChunkCollection>();
+	chunk_scan->owned_collection = make_unique<ChunkCollection>(allocator);
 	chunk_scan->collection = chunk_scan->owned_collection.get();
 
 	DataChunk chunk;
-	chunk.Initialize(op.types);
+	chunk.Initialize(allocator, op.types);
 	for (idx_t expression_idx = 0; expression_idx < expr_scan->expressions.size(); expression_idx++) {
 		chunk.Reset();
-		expr_scan->EvaluateExpression(expression_idx, nullptr, chunk);
+		expr_scan->EvaluateExpression(allocator, expression_idx, nullptr, chunk);
 		chunk_scan->owned_collection->Append(chunk);
 	}
 	return move(chunk_scan);
@@ -14581,7 +14747,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalRecursiveC
 	D_ASSERT(op.children.size() == 2);
 
 	// Create the working_table that the PhysicalRecursiveCTE will use for evaluation.
-	auto working_table = std::make_shared<ChunkCollection>();
+	auto working_table = std::make_shared<ChunkCollection>(context);
 
 	// Add the ChunkCollection to the context of this PhysicalPlanGenerator
 	rec_ctes[op.table_index] = working_table;
@@ -14714,9 +14880,9 @@ namespace duckdb {
 
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalShow &op) {
 	DataChunk output;
-	output.Initialize(op.types);
+	output.Initialize(Allocator::Get(context), op.types);
 
-	auto collection = make_unique<ChunkCollection>();
+	auto collection = make_unique<ChunkCollection>(Allocator::Get(context));
 	for (idx_t column_idx = 0; column_idx < op.types_select.size(); column_idx++) {
 		auto type = op.types_select[column_idx];
 		auto &name = op.aliases[column_idx];
@@ -15242,9 +15408,9 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, GlobalSinkState 
 		lock_guard<mutex> glock(gstate.lock);
 		gstate.is_empty = gstate.is_empty && group_chunk.size() == 0;
 		if (gstate.finalized_hts.empty()) {
-			gstate.finalized_hts.push_back(
-			    make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(context.client), group_types,
-			                                           op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64));
+			gstate.finalized_hts.push_back(make_unique<GroupedAggregateHashTable>(
+			    Allocator::Get(context.client), BufferManager::GetBufferManager(context.client), group_types,
+			    op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64));
 		}
 		D_ASSERT(gstate.finalized_hts.size() == 1);
 		D_ASSERT(gstate.finalized_hts[0]);
@@ -15259,9 +15425,9 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, GlobalSinkState 
 	}
 
 	if (!llstate.ht) {
-		llstate.ht =
-		    make_unique<PartitionableHashTable>(BufferManager::GetBufferManager(context.client), gstate.partition_info,
-		                                        group_types, op.payload_types, op.bindings);
+		llstate.ht = make_unique<PartitionableHashTable>(
+		    Allocator::Get(context.client), BufferManager::GetBufferManager(context.client), gstate.partition_info,
+		    group_types, op.payload_types, op.bindings);
 	}
 
 	gstate.total_groups +=
@@ -15329,6 +15495,8 @@ bool RadixPartitionedHashTable::Finalize(ClientContext &context, GlobalSinkState
 		}
 	}
 
+	auto &allocator = Allocator::Get(context);
+	auto &buffer_manager = BufferManager::GetBufferManager(context);
 	if (any_partitioned) {
 		// if one is partitioned, all have to be
 		// this should mostly have already happened in Combine, but if not we do it here
@@ -15340,9 +15508,8 @@ bool RadixPartitionedHashTable::Finalize(ClientContext &context, GlobalSinkState
 		// schedule additional tasks to combine the partial HTs
 		gstate.finalized_hts.resize(gstate.partition_info.n_partitions);
 		for (idx_t r = 0; r < gstate.partition_info.n_partitions; r++) {
-			gstate.finalized_hts[r] =
-			    make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(context), group_types,
-			                                           op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64);
+			gstate.finalized_hts[r] = make_unique<GroupedAggregateHashTable>(
+			    allocator, buffer_manager, group_types, op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64);
 		}
 		gstate.is_partitioned = true;
 		return true;
@@ -15350,9 +15517,8 @@ bool RadixPartitionedHashTable::Finalize(ClientContext &context, GlobalSinkState
 		     // TODO possible optimization, if total count < limit for 32 bit ht, use that one
 		     // create this ht here so finalize needs no lock on gstate
 
-		gstate.finalized_hts.push_back(make_unique<GroupedAggregateHashTable>(BufferManager::GetBufferManager(context),
-		                                                                      group_types, op.payload_types,
-		                                                                      op.bindings, HtEntryType::HT_WIDTH_64));
+		gstate.finalized_hts.push_back(make_unique<GroupedAggregateHashTable>(
+		    allocator, buffer_manager, group_types, op.payload_types, op.bindings, HtEntryType::HT_WIDTH_64));
 		for (auto &pht : gstate.intermediate_hts) {
 			auto unpartitioned = pht->GetUnpartitioned();
 			for (auto &unpartitioned_ht : unpartitioned) {
@@ -15424,13 +15590,13 @@ bool RadixPartitionedHashTable::ForceSingleHT(GlobalSinkState &state) const {
 //===--------------------------------------------------------------------===//
 class RadixHTGlobalSourceState : public GlobalSourceState {
 public:
-	explicit RadixHTGlobalSourceState(const RadixPartitionedHashTable &ht)
+	explicit RadixHTGlobalSourceState(Allocator &allocator, const RadixPartitionedHashTable &ht)
 	    : ht_index(0), ht_scan_position(0), finished(false) {
 		auto scan_chunk_types = ht.group_types;
 		for (auto &aggr_type : ht.op.aggregate_return_types) {
 			scan_chunk_types.push_back(aggr_type);
 		}
-		scan_chunk.Initialize(scan_chunk_types);
+		scan_chunk.Initialize(allocator, scan_chunk_types);
 	}
 
 	//! Materialized GROUP BY expressions & aggregates
@@ -15441,8 +15607,8 @@ public:
 	bool finished;
 };
 
-unique_ptr<GlobalSourceState> RadixPartitionedHashTable::GetGlobalSourceState() const {
-	return make_unique<RadixHTGlobalSourceState>(*this);
+unique_ptr<GlobalSourceState> RadixPartitionedHashTable::GetGlobalSourceState(ClientContext &context) const {
+	return make_unique<RadixHTGlobalSourceState>(Allocator::Get(context), *this);
 }
 
 void RadixPartitionedHashTable::GetData(ExecutionContext &context, DataChunk &chunk, GlobalSinkState &sink_state,
@@ -15531,6 +15697,10 @@ void RadixPartitionedHashTable::GetData(ExecutionContext &context, DataChunk &ch
 
 namespace duckdb {
 
+ReservoirSample::ReservoirSample(Allocator &allocator, idx_t sample_count, int64_t seed)
+    : BlockingSample(seed), sample_count(sample_count), reservoir(allocator) {
+}
+
 void ReservoirSample::AddToReservoir(DataChunk &input) {
 	if (sample_count == 0) {
 		return;
@@ -15613,10 +15783,11 @@ idx_t ReservoirSample::FillReservoir(DataChunk &input) {
 	return input.size();
 }
 
-ReservoirSamplePercentage::ReservoirSamplePercentage(double percentage, int64_t seed)
-    : BlockingSample(seed), sample_percentage(percentage / 100.0), current_count(0), is_finalized(false) {
+ReservoirSamplePercentage::ReservoirSamplePercentage(Allocator &allocator, double percentage, int64_t seed)
+    : BlockingSample(seed), allocator(allocator), sample_percentage(percentage / 100.0), current_count(0),
+      is_finalized(false) {
 	reservoir_sample_size = idx_t(sample_percentage * RESERVOIR_THRESHOLD);
-	current_sample = make_unique<ReservoirSample>(reservoir_sample_size, random.NextRandomInteger());
+	current_sample = make_unique<ReservoirSample>(allocator, reservoir_sample_size, random.NextRandomInteger());
 }
 
 void ReservoirSamplePercentage::AddToReservoir(DataChunk &input) {
@@ -15644,7 +15815,7 @@ void ReservoirSamplePercentage::AddToReservoir(DataChunk &input) {
 		finished_samples.push_back(move(current_sample));
 
 		// allocate a new sample, and potentially add the remainder of the current input to that sample
-		current_sample = make_unique<ReservoirSample>(reservoir_sample_size, random.NextRandomInteger());
+		current_sample = make_unique<ReservoirSample>(allocator, reservoir_sample_size, random.NextRandomInteger());
 		if (append_to_next_sample > 0) {
 			current_sample->AddToReservoir(input);
 		}
@@ -15677,7 +15848,7 @@ void ReservoirSamplePercentage::Finalize() {
 	if (current_count > 0) {
 		// create a new sample
 		auto new_sample_size = idx_t(round(sample_percentage * current_count));
-		auto new_sample = make_unique<ReservoirSample>(new_sample_size, random.NextRandomInteger());
+		auto new_sample = make_unique<ReservoirSample>(allocator, new_sample_size, random.NextRandomInteger());
 		while (true) {
 			auto chunk = current_sample->GetChunk();
 			if (!chunk || chunk->size() == 0) {
@@ -15769,7 +15940,7 @@ WindowSegmentTree::WindowSegmentTree(AggregateFunction &aggregate, FunctionData 
 
 	if (input_ref && input_ref->ColumnCount() > 0) {
 		filter_sel.Initialize(STANDARD_VECTOR_SIZE);
-		inputs.Initialize(input_ref->Types());
+		inputs.Initialize(Allocator::DefaultAllocator(), input_ref->Types());
 		// if we have a frame-by-frame method, share the single state
 		if (aggregate.window && UseWindowAPI()) {
 			AggregateInit();
@@ -16482,213 +16653,6 @@ void ApproxCountDistinctFun::RegisterFunction(BuiltinFunctions &set) {
 	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::TIMESTAMP));
 	approx_count.AddFunction(GetApproxCountDistinctFunction(LogicalType::TIMESTAMP_TZ));
 	set.AddFunction(approx_count);
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-namespace duckdb {
-
-template <class T, class T2>
-struct ArgMinMaxState {
-	T arg;
-	T2 value;
-	bool is_initialized;
-};
-
-template <class T>
-static void ArgMinMaxDestroyValue(T value) {
-}
-
-template <>
-void ArgMinMaxDestroyValue(string_t value) {
-	if (!value.IsInlined()) {
-		delete[] value.GetDataUnsafe();
-	}
-}
-
-template <class T>
-static void ArgMinMaxAssignValue(T &target, T new_value, bool is_initialized) {
-	target = new_value;
-}
-
-template <>
-void ArgMinMaxAssignValue(string_t &target, string_t new_value, bool is_initialized) {
-	if (is_initialized) {
-		ArgMinMaxDestroyValue(target);
-	}
-	if (new_value.IsInlined()) {
-		target = new_value;
-	} else {
-		// non-inlined string, need to allocate space for it
-		auto len = new_value.GetSize();
-		auto ptr = new char[len];
-		memcpy(ptr, new_value.GetDataUnsafe(), len);
-
-		target = string_t(ptr, len);
-	}
-}
-
-template <class COMPARATOR>
-struct ArgMinMaxBase {
-	template <class STATE>
-	static void Destroy(STATE *state) {
-		if (state->is_initialized) {
-			ArgMinMaxDestroyValue(state->arg);
-			ArgMinMaxDestroyValue(state->value);
-		}
-	}
-
-	template <class STATE>
-	static void Initialize(STATE *state) {
-		state->is_initialized = false;
-	}
-
-	template <class A_TYPE, class B_TYPE, class STATE, class OP>
-	static void Operation(STATE *state, AggregateInputData &, A_TYPE *x_data, B_TYPE *y_data, ValidityMask &amask,
-	                      ValidityMask &bmask, idx_t xidx, idx_t yidx) {
-		if (!state->is_initialized) {
-			ArgMinMaxAssignValue<A_TYPE>(state->arg, x_data[xidx], false);
-			ArgMinMaxAssignValue<B_TYPE>(state->value, y_data[yidx], false);
-			state->is_initialized = true;
-		} else {
-			OP::template Execute<A_TYPE, B_TYPE, STATE>(state, x_data[xidx], y_data[yidx]);
-		}
-	}
-
-	template <class A_TYPE, class B_TYPE, class STATE>
-	static void Execute(STATE *state, A_TYPE x_data, B_TYPE y_data) {
-		if (COMPARATOR::Operation(y_data, state->value)) {
-			ArgMinMaxAssignValue<A_TYPE>(state->arg, x_data, true);
-			ArgMinMaxAssignValue<B_TYPE>(state->value, y_data, true);
-		}
-	}
-
-	template <class STATE, class OP>
-	static void Combine(const STATE &source, STATE *target, AggregateInputData &) {
-		if (!source.is_initialized) {
-			return;
-		}
-		if (!target->is_initialized || COMPARATOR::Operation(source.value, target->value)) {
-			ArgMinMaxAssignValue(target->arg, source.arg, target->is_initialized);
-			ArgMinMaxAssignValue(target->value, source.value, target->is_initialized);
-			target->is_initialized = true;
-		}
-	}
-
-	static bool IgnoreNull() {
-		return true;
-	}
-};
-
-template <class COMPARATOR>
-struct StringArgMinMax : public ArgMinMaxBase<COMPARATOR> {
-	template <class T, class STATE>
-	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
-		if (!state->is_initialized) {
-			mask.SetInvalid(idx);
-		} else {
-			target[idx] = StringVector::AddStringOrBlob(result, state->arg);
-		}
-	}
-};
-
-template <class COMPARATOR>
-struct NumericArgMinMax : public ArgMinMaxBase<COMPARATOR> {
-	template <class T, class STATE>
-	static void Finalize(Vector &result, AggregateInputData &, STATE *state, T *target, ValidityMask &mask, idx_t idx) {
-		if (!state->is_initialized) {
-			mask.SetInvalid(idx);
-		} else {
-			target[idx] = state->arg;
-		}
-	}
-};
-
-using NumericArgMinOperation = NumericArgMinMax<LessThan>;
-using NumericArgMaxOperation = NumericArgMinMax<GreaterThan>;
-using StringArgMinOperation = StringArgMinMax<LessThan>;
-using StringArgMaxOperation = StringArgMinMax<GreaterThan>;
-
-template <class OP, class T, class T2>
-AggregateFunction GetArgMinMaxFunctionInternal(const LogicalType &arg_2, const LogicalType &arg) {
-	auto function = AggregateFunction::BinaryAggregate<ArgMinMaxState<T, T2>, T, T2, T, OP>(arg, arg_2, arg);
-	if (arg.InternalType() == PhysicalType::VARCHAR || arg_2.InternalType() == PhysicalType::VARCHAR) {
-		function.destructor = AggregateFunction::StateDestroy<ArgMinMaxState<T, T2>, OP>;
-	}
-	return function;
-}
-template <class OP, class T>
-AggregateFunction GetArgMinMaxFunctionArg2(const LogicalType &arg_2, const LogicalType &arg) {
-	switch (arg_2.InternalType()) {
-	case PhysicalType::INT32:
-		return GetArgMinMaxFunctionInternal<OP, T, int32_t>(arg_2, arg);
-	case PhysicalType::INT64:
-		return GetArgMinMaxFunctionInternal<OP, T, int64_t>(arg_2, arg);
-	case PhysicalType::DOUBLE:
-		return GetArgMinMaxFunctionInternal<OP, T, double>(arg_2, arg);
-	case PhysicalType::VARCHAR:
-		return GetArgMinMaxFunctionInternal<OP, T, string_t>(arg_2, arg);
-	default:
-		throw InternalException("Unimplemented arg_min/arg_max aggregate");
-	}
-}
-
-template <class OP, class T>
-void AddArgMinMaxFunctionArg2(AggregateFunctionSet &fun, const LogicalType &arg) {
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::INTEGER, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::BIGINT, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::DOUBLE, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::VARCHAR, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::DATE, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::TIMESTAMP, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::TIMESTAMP_TZ, arg));
-	fun.AddFunction(GetArgMinMaxFunctionArg2<OP, T>(LogicalType::BLOB, arg));
-}
-
-template <class OP, class STRING_OP>
-static void AddArgMinMaxFunctions(AggregateFunctionSet &fun) {
-	AddArgMinMaxFunctionArg2<OP, int32_t>(fun, LogicalType::INTEGER);
-	AddArgMinMaxFunctionArg2<OP, int64_t>(fun, LogicalType::BIGINT);
-	AddArgMinMaxFunctionArg2<OP, double>(fun, LogicalType::DOUBLE);
-	AddArgMinMaxFunctionArg2<STRING_OP, string_t>(fun, LogicalType::VARCHAR);
-	AddArgMinMaxFunctionArg2<OP, date_t>(fun, LogicalType::DATE);
-	AddArgMinMaxFunctionArg2<OP, timestamp_t>(fun, LogicalType::TIMESTAMP);
-	AddArgMinMaxFunctionArg2<OP, timestamp_t>(fun, LogicalType::TIMESTAMP_TZ);
-	AddArgMinMaxFunctionArg2<STRING_OP, string_t>(fun, LogicalType::BLOB);
-}
-
-void ArgMinFun::RegisterFunction(BuiltinFunctions &set) {
-	AggregateFunctionSet fun("argmin");
-	AddArgMinMaxFunctions<NumericArgMinOperation, StringArgMinOperation>(fun);
-	set.AddFunction(fun);
-
-	//! Add min_by alias
-	fun.name = "min_by";
-	set.AddFunction(fun);
-
-	//! Add arg_min alias
-	fun.name = "arg_min";
-	set.AddFunction(fun);
-}
-
-void ArgMaxFun::RegisterFunction(BuiltinFunctions &set) {
-	AggregateFunctionSet fun("argmax");
-	AddArgMinMaxFunctions<NumericArgMaxOperation, StringArgMaxOperation>(fun);
-	set.AddFunction(fun);
-
-	//! Add max_by alias
-	fun.name = "max_by";
-	set.AddFunction(fun);
-
-	//! Add arg_max alias
-	fun.name = "arg_max";
-	set.AddFunction(fun);
 }
 
 } // namespace duckdb

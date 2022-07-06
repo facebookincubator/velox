@@ -13652,7 +13652,7 @@ ListColumnReader::ListColumnReader(ParquetReader &reader, LogicalType type_p, co
                                    idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p,
                                    unique_ptr<ColumnReader> child_column_reader_p)
     : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
-      child_column_reader(move(child_column_reader_p)), read_cache(ListType::GetChildType(Type())),
+      child_column_reader(move(child_column_reader_p)), read_cache(reader.allocator, ListType::GetChildType(Type())),
       read_vector(read_cache), overflow_child_count(0) {
 
 	child_defines.resize(reader.allocator, STANDARD_VECTOR_SIZE);
@@ -13692,7 +13692,7 @@ CastColumnReader::CastColumnReader(unique_ptr<ColumnReader> child_reader_p, Logi
                    child_reader_p->MaxDefine(), child_reader_p->MaxRepeat()),
       child_reader(move(child_reader_p)) {
 	vector<LogicalType> intermediate_types {child_reader->Type()};
-	intermediate_chunk.Initialize(intermediate_types);
+	intermediate_chunk.Initialize(reader.allocator, intermediate_types);
 }
 
 unique_ptr<BaseStatistics> CastColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
@@ -16151,7 +16151,7 @@ public:
 	}
 
 	static unique_ptr<LocalTableFunctionState>
-	ParquetScanInitLocal(ClientContext &context, TableFunctionInitInput &input, GlobalTableFunctionState *gstate_p) {
+	ParquetScanInitLocal(ExecutionContext &context, TableFunctionInitInput &input, GlobalTableFunctionState *gstate_p) {
 		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
 		auto &gstate = (ParquetReadGlobalState &)*gstate_p;
 
@@ -16160,7 +16160,7 @@ public:
 		result->is_parallel = true;
 		result->batch_index = 0;
 		result->table_filters = input.filters;
-		if (!ParquetParallelStateNext(context, bind_data, *result, gstate)) {
+		if (!ParquetParallelStateNext(context.client, bind_data, *result, gstate)) {
 			return nullptr;
 		}
 		return move(result);
@@ -16269,8 +16269,8 @@ struct ParquetWriteGlobalState : public GlobalFunctionData {
 };
 
 struct ParquetWriteLocalState : public LocalFunctionData {
-	ParquetWriteLocalState() {
-		buffer = make_unique<ChunkCollection>();
+	explicit ParquetWriteLocalState(Allocator &allocator) {
+		buffer = make_unique<ChunkCollection>(allocator);
 	}
 
 	unique_ptr<ChunkCollection> buffer;
@@ -16323,7 +16323,7 @@ unique_ptr<GlobalFunctionData> ParquetWriteInitializeGlobal(ClientContext &conte
 	return move(global_state);
 }
 
-void ParquetWriteSink(ClientContext &context, FunctionData &bind_data_p, GlobalFunctionData &gstate,
+void ParquetWriteSink(ExecutionContext &context, FunctionData &bind_data_p, GlobalFunctionData &gstate,
                       LocalFunctionData &lstate, DataChunk &input) {
 	auto &bind_data = (ParquetWriteBindData &)bind_data_p;
 	auto &global_state = (ParquetWriteGlobalState &)gstate;
@@ -16335,11 +16335,11 @@ void ParquetWriteSink(ClientContext &context, FunctionData &bind_data_p, GlobalF
 		// if the chunk collection exceeds a certain size we flush it to the parquet file
 		global_state.writer->Flush(*local_state.buffer);
 		// and reset the buffer
-		local_state.buffer = make_unique<ChunkCollection>();
+		local_state.buffer = make_unique<ChunkCollection>(Allocator::Get(context.client));
 	}
 }
 
-void ParquetWriteCombine(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+void ParquetWriteCombine(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
                          LocalFunctionData &lstate) {
 	auto &global_state = (ParquetWriteGlobalState &)gstate;
 	auto &local_state = (ParquetWriteLocalState &)lstate;
@@ -16353,8 +16353,8 @@ void ParquetWriteFinalize(ClientContext &context, FunctionData &bind_data, Globa
 	global_state.writer->Finalize();
 }
 
-unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ClientContext &context, FunctionData &bind_data) {
-	return make_unique<ParquetWriteLocalState>();
+unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ExecutionContext &context, FunctionData &bind_data) {
+	return make_unique<ParquetWriteLocalState>(Allocator::Get(context.client));
 }
 
 unique_ptr<TableFunctionRef> ParquetScanReplacement(ClientContext &context, const string &table_name,
@@ -16448,6 +16448,9 @@ public:
 };
 
 struct ParquetMetaDataOperatorData : public GlobalTableFunctionState {
+	explicit ParquetMetaDataOperatorData(Allocator &allocator) : collection(allocator) {
+	}
+
 	idx_t file_index;
 	ChunkCollection collection;
 
@@ -16558,7 +16561,7 @@ void ParquetMetaDataOperatorData::LoadFileMetaData(ClientContext &context, const
 	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
 	idx_t count = 0;
 	DataChunk current_chunk;
-	current_chunk.Initialize(return_types);
+	current_chunk.Initialize(context, return_types);
 	auto meta_data = reader->GetFileMetadata();
 	vector<LogicalType> column_types;
 	vector<idx_t> schema_indexes;
@@ -16764,7 +16767,7 @@ void ParquetMetaDataOperatorData::LoadSchemaData(ClientContext &context, const v
 	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
 	idx_t count = 0;
 	DataChunk current_chunk;
-	current_chunk.Initialize(return_types);
+	current_chunk.Initialize(context, return_types);
 	auto meta_data = reader->GetFileMetadata();
 	for (idx_t col_idx = 0; col_idx < meta_data->schema.size(); col_idx++) {
 		auto &column = meta_data->schema[col_idx];
@@ -16845,7 +16848,7 @@ unique_ptr<GlobalTableFunctionState> ParquetMetaDataInit(ClientContext &context,
 	auto &bind_data = (ParquetMetaDataBindData &)*input.bind_data;
 	D_ASSERT(!bind_data.files.empty());
 
-	auto result = make_unique<ParquetMetaDataOperatorData>();
+	auto result = make_unique<ParquetMetaDataOperatorData>(Allocator::Get(context));
 	if (SCHEMA) {
 		result->LoadSchemaData(context, bind_data.return_types, bind_data.files[0]);
 	} else {
@@ -17347,7 +17350,7 @@ ParquetReader::ParquetReader(Allocator &allocator_p, unique_ptr<FileHandle> file
 ParquetReader::ParquetReader(ClientContext &context_p, string file_name_p, const vector<string> &expected_names,
                              const vector<LogicalType> &expected_types_p, const vector<column_t> &column_ids,
                              ParquetOptions parquet_options_p, const string &initial_filename_p)
-    : allocator(Allocator::Get(context_p)), file_opener(FileSystem::GetFileOpener(context_p)),
+    : allocator(BufferAllocator::Get(context_p)), file_opener(FileSystem::GetFileOpener(context_p)),
       parquet_options(parquet_options_p) {
 	auto &fs = FileSystem::GetFileSystem(context_p);
 	file_name = move(file_name_p);

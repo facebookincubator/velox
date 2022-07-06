@@ -11,8 +11,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #pragma once
 #define DUCKDB_AMALGAMATION 1
 #define DUCKDB_AMALGAMATION_EXTENDED 1
-#define DUCKDB_SOURCE_ID "54d6c7036"
-#define DUCKDB_VERSION "v0.4.1-dev261"
+#define DUCKDB_SOURCE_ID "f523e0555"
+#define DUCKDB_VERSION "v0.4.1-dev314"
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
@@ -3229,6 +3229,167 @@ DUCKDB_API bool Value::IsFinite(timestamp_t input);
 
 
 
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/storage/arena_allocator.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/common/allocator.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+namespace duckdb {
+class Allocator;
+class ClientContext;
+class DatabaseInstance;
+class ExecutionContext;
+class ThreadContext;
+
+struct AllocatorDebugInfo;
+
+struct PrivateAllocatorData {
+	PrivateAllocatorData();
+	virtual ~PrivateAllocatorData();
+
+	unique_ptr<AllocatorDebugInfo> debug_info;
+};
+
+typedef data_ptr_t (*allocate_function_ptr_t)(PrivateAllocatorData *private_data, idx_t size);
+typedef void (*free_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
+typedef data_ptr_t (*reallocate_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t old_size,
+                                                idx_t size);
+
+class AllocatedData {
+public:
+	AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size);
+	~AllocatedData();
+
+	data_ptr_t get() {
+		return pointer;
+	}
+	const_data_ptr_t get() const {
+		return pointer;
+	}
+	idx_t GetSize() const {
+		return allocated_size;
+	}
+	void Reset();
+
+private:
+	Allocator &allocator;
+	data_ptr_t pointer;
+	idx_t allocated_size;
+};
+
+class Allocator {
+public:
+	DUCKDB_API Allocator();
+	DUCKDB_API Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
+	                     reallocate_function_ptr_t reallocate_function_p,
+	                     unique_ptr<PrivateAllocatorData> private_data);
+	DUCKDB_API Allocator &operator=(Allocator &&allocator) noexcept = delete;
+	DUCKDB_API ~Allocator();
+
+	data_ptr_t AllocateData(idx_t size);
+	void FreeData(data_ptr_t pointer, idx_t size);
+	data_ptr_t ReallocateData(data_ptr_t pointer, idx_t old_size, idx_t new_size);
+
+	unique_ptr<AllocatedData> Allocate(idx_t size) {
+		return make_unique<AllocatedData>(*this, AllocateData(size), size);
+	}
+
+	static data_ptr_t DefaultAllocate(PrivateAllocatorData *private_data, idx_t size) {
+		return (data_ptr_t)malloc(size);
+	}
+	static void DefaultFree(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size) {
+		free(pointer);
+	}
+	static data_ptr_t DefaultReallocate(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t old_size,
+	                                    idx_t size) {
+		return (data_ptr_t)realloc(pointer, size);
+	}
+	static Allocator &Get(ClientContext &context);
+	static Allocator &Get(DatabaseInstance &db);
+
+	PrivateAllocatorData *GetPrivateData() {
+		return private_data.get();
+	}
+
+	static Allocator &DefaultAllocator();
+
+private:
+	allocate_function_ptr_t allocate_function;
+	free_function_ptr_t free_function;
+	reallocate_function_ptr_t reallocate_function;
+
+	unique_ptr<PrivateAllocatorData> private_data;
+};
+
+//! The BufferAllocator is a wrapper around the global allocator class that sends any allocations made through the
+//! buffer manager. This makes the buffer manager aware of the memory usage, allowing it to potentially free
+//! other blocks to make space in memory.
+//! Note that there is a cost to doing so (several atomic operations will be performed on allocation/free).
+//! As such this class should be used primarily for larger allocations.
+struct BufferAllocator {
+	static Allocator &Get(ClientContext &context);
+};
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+struct ArenaChunk {
+	ArenaChunk(Allocator &allocator, idx_t size);
+	~ArenaChunk();
+
+	unique_ptr<AllocatedData> data;
+	idx_t current_position;
+	idx_t maximum_size;
+	unique_ptr<ArenaChunk> next;
+	ArenaChunk *prev;
+};
+
+class ArenaAllocator {
+	static constexpr const idx_t ARENA_ALLOCATOR_INITIAL_CAPACITY = 2048;
+
+public:
+	ArenaAllocator(Allocator &allocator, idx_t initial_capacity = ARENA_ALLOCATOR_INITIAL_CAPACITY);
+	~ArenaAllocator();
+
+	data_ptr_t Allocate(idx_t size);
+	void Destroy();
+	void Move(ArenaAllocator &allocator);
+
+	ArenaChunk *GetHead();
+	ArenaChunk *GetTail();
+
+	bool IsEmpty();
+
+private:
+	//! Internal allocator that is used by the arena allocator
+	Allocator &allocator;
+	idx_t current_capacity;
+	unique_ptr<ArenaChunk> head;
+	ArenaChunk *tail;
+};
+
+} // namespace duckdb
+
 
 namespace duckdb {
 //! A string heap is the owner of a set of strings, strings can be inserted into
@@ -3238,17 +3399,8 @@ class StringHeap {
 public:
 	StringHeap();
 
-	void Destroy() {
-		tail = nullptr;
-		chunk = nullptr;
-	}
-
-	void Move(StringHeap &other) {
-		D_ASSERT(!other.chunk);
-		other.tail = tail;
-		other.chunk = move(chunk);
-		tail = nullptr;
-	}
+	void Destroy();
+	void Move(StringHeap &other);
 
 	//! Add a string to the string heap, returns a pointer to the string
 	string_t AddString(const char *data, idx_t len);
@@ -3259,31 +3411,14 @@ public:
 	//! Add a string to the string heap, returns a pointer to the string
 	string_t AddString(const string_t &data);
 	//! Add a blob to the string heap; blobs can be non-valid UTF8
+	string_t AddBlob(const string_t &data);
+	//! Add a blob to the string heap; blobs can be non-valid UTF8
 	string_t AddBlob(const char *data, idx_t len);
 	//! Allocates space for an empty string of size "len" on the heap
 	string_t EmptyString(idx_t len);
 
 private:
-	struct StringChunk {
-		explicit StringChunk(idx_t size) : current_position(0), maximum_size(size) {
-			data = unique_ptr<char[]>(new char[maximum_size]);
-		}
-		~StringChunk() {
-			if (prev) {
-				auto current_prev = move(prev);
-				while (current_prev) {
-					current_prev = move(current_prev->prev);
-				}
-			}
-		}
-
-		unique_ptr<char[]> data;
-		idx_t current_position;
-		idx_t maximum_size;
-		unique_ptr<StringChunk> prev;
-	};
-	StringChunk *tail;
-	unique_ptr<StringChunk> chunk;
+	ArenaAllocator allocator;
 };
 
 } // namespace duckdb
@@ -3404,6 +3539,124 @@ private:
 			char inlined[12];
 		} inlined;
 	} value;
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/storage/buffer/buffer_handle.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// duckdb/storage/storage_info.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+namespace duckdb {
+class Serializer;
+class Deserializer;
+struct FileHandle;
+
+//! The version number of the database storage format
+extern const uint64_t VERSION_NUMBER;
+
+using block_id_t = int64_t;
+
+#define INVALID_BLOCK (-1)
+
+// maximum block id, 2^62
+#define MAXIMUM_BLOCK 4611686018427388000LL
+
+//! The MainHeader is the first header in the storage file. The MainHeader is typically written only once for a database
+//! file.
+struct MainHeader {
+	static constexpr idx_t MAGIC_BYTE_SIZE = 4;
+	static constexpr idx_t MAGIC_BYTE_OFFSET = sizeof(uint64_t);
+	static constexpr idx_t FLAG_COUNT = 4;
+	// the magic bytes in front of the file
+	// should be "DUCK"
+	static const char MAGIC_BYTES[];
+	//! The version of the database
+	uint64_t version_number;
+	//! The set of flags used by the database
+	uint64_t flags[FLAG_COUNT];
+
+	static void CheckMagicBytes(FileHandle &handle);
+
+	void Serialize(Serializer &ser);
+	static MainHeader Deserialize(Deserializer &source);
+};
+
+//! The DatabaseHeader contains information about the current state of the database. Every storage file has two
+//! DatabaseHeaders. On startup, the DatabaseHeader with the highest iteration count is used as the active header. When
+//! a checkpoint is performed, the active DatabaseHeader is switched by increasing the iteration count of the
+//! DatabaseHeader.
+struct DatabaseHeader {
+	//! The iteration count, increases by 1 every time the storage is checkpointed.
+	uint64_t iteration;
+	//! A pointer to the initial meta block
+	block_id_t meta_block;
+	//! A pointer to the block containing the free list
+	block_id_t free_list;
+	//! The number of blocks that is in the file as of this database header. If the file is larger than BLOCK_SIZE *
+	//! block_count any blocks appearing AFTER block_count are implicitly part of the free_list.
+	uint64_t block_count;
+
+	void Serialize(Serializer &ser);
+	static DatabaseHeader Deserialize(Deserializer &source);
+};
+
+} // namespace duckdb
+
+
+namespace duckdb {
+class BlockHandle;
+class FileBuffer;
+
+class BufferHandle {
+public:
+	DUCKDB_API BufferHandle();
+	DUCKDB_API BufferHandle(shared_ptr<BlockHandle> handle, FileBuffer *node);
+	DUCKDB_API ~BufferHandle();
+	// disable copy constructors
+	DUCKDB_API BufferHandle(const BufferHandle &other) = delete;
+	DUCKDB_API BufferHandle &operator=(const BufferHandle &) = delete;
+	//! enable move constructors
+	DUCKDB_API BufferHandle(BufferHandle &&other) noexcept;
+	DUCKDB_API BufferHandle &operator=(BufferHandle &&) noexcept;
+
+public:
+	//! Returns whether or not the BufferHandle is valid.
+	DUCKDB_API bool IsValid() const;
+	//! Returns a pointer to the buffer data. Handle must be valid.
+	DUCKDB_API data_ptr_t Ptr() const;
+	//! Returns a pointer to the buffer data. Handle must be valid.
+	DUCKDB_API data_ptr_t Ptr();
+	//! Gets the block id of the underlying block. Handle must be valid.
+	DUCKDB_API block_id_t GetBlockId() const;
+	//! Gets the underlying file buffer. Handle must be valid.
+	DUCKDB_API FileBuffer &GetFileBuffer();
+	//! Destroys the buffer handle
+	DUCKDB_API void Destroy();
+
+private:
+	//! The block handle
+	shared_ptr<BlockHandle> handle;
+	//! The managed buffer node
+	FileBuffer *node;
 };
 
 } // namespace duckdb
@@ -3602,11 +3855,11 @@ private:
 //! The ManagedVectorBuffer holds a buffer handle
 class ManagedVectorBuffer : public VectorBuffer {
 public:
-	explicit ManagedVectorBuffer(unique_ptr<BufferHandle> handle);
+	explicit ManagedVectorBuffer(BufferHandle handle);
 	~ManagedVectorBuffer() override;
 
 private:
-	unique_ptr<BufferHandle> handle;
+	BufferHandle handle;
 };
 
 } // namespace duckdb
@@ -3938,7 +4191,7 @@ struct StringVector {
 	//! result of an operation
 	DUCKDB_API static string_t EmptyString(Vector &vector, idx_t len);
 	//! Adds a reference to a handle that stores strings of this vector
-	DUCKDB_API static void AddHandle(Vector &vector, unique_ptr<BufferHandle> handle);
+	DUCKDB_API static void AddHandle(Vector &vector, BufferHandle handle);
 	//! Adds a reference to an unspecified vector buffer that stores strings of this vector
 	DUCKDB_API static void AddBuffer(Vector &vector, buffer_ptr<VectorBuffer> buffer);
 	//! Add a reference from this vector to the string heap of the provided vector
@@ -4141,6 +4394,9 @@ private:
 struct ArrowArray;
 
 namespace duckdb {
+class Allocator;
+class ClientContext;
+class ExecutionContext;
 class VectorCache;
 
 //!  A Data Chunk represents a set of vectors.
@@ -4200,7 +4456,8 @@ public:
 	//! This will create one vector of the specified type for each LogicalType in the
 	//! types list. The vector will be referencing vector to the data owned by
 	//! the DataChunk.
-	DUCKDB_API void Initialize(const vector<LogicalType> &types);
+	DUCKDB_API void Initialize(Allocator &allocator, const vector<LogicalType> &types);
+	DUCKDB_API void Initialize(ClientContext &context, const vector<LogicalType> &types);
 	//! Initializes an empty DataChunk with the given types. The vectors will *not* have any data allocated for them.
 	DUCKDB_API void InitializeEmpty(const vector<LogicalType> &types);
 	//! Append the other DataChunk to this one. The column count and types of
@@ -9767,6 +10024,8 @@ private:
 
 
 namespace duckdb {
+class Allocator;
+class ClientContext;
 
 //!  A ChunkCollection represents a set of DataChunks that all have the same
 //!  types
@@ -9778,8 +10037,8 @@ namespace duckdb {
 */
 class ChunkCollection {
 public:
-	ChunkCollection() : count(0) {
-	}
+	ChunkCollection(Allocator &allocator);
+	ChunkCollection(ClientContext &context);
 
 	//! The amount of columns in the ChunkCollection
 	DUCKDB_API vector<LogicalType> &Types() {
@@ -9880,7 +10139,12 @@ public:
 		return result;
 	}
 
+	Allocator &GetAllocator() {
+		return allocator;
+	}
+
 private:
+	Allocator &allocator;
 	//! The total amount of elements in the collection
 	idx_t count;
 	//! The set of data chunks in the collection
@@ -10534,7 +10798,7 @@ public:
 
 public:
 	// Operator interface
-	virtual unique_ptr<OperatorState> GetOperatorState(ClientContext &context) const;
+	virtual unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const;
 	virtual unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const;
 	virtual OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                                   GlobalOperatorState &gstate, OperatorState &state) const;
@@ -10631,6 +10895,7 @@ public:
 
 
 
+
 #include <functional>
 
 namespace duckdb {
@@ -10701,14 +10966,14 @@ typedef unique_ptr<FunctionData> (*table_function_bind_t)(ClientContext &context
                                                           vector<LogicalType> &return_types, vector<string> &names);
 typedef unique_ptr<GlobalTableFunctionState> (*table_function_init_global_t)(ClientContext &context,
                                                                              TableFunctionInitInput &input);
-typedef unique_ptr<LocalTableFunctionState> (*table_function_init_local_t)(ClientContext &context,
+typedef unique_ptr<LocalTableFunctionState> (*table_function_init_local_t)(ExecutionContext &context,
                                                                            TableFunctionInitInput &input,
                                                                            GlobalTableFunctionState *global_state);
 typedef unique_ptr<BaseStatistics> (*table_statistics_t)(ClientContext &context, const FunctionData *bind_data,
                                                          column_t column_index);
 typedef void (*table_function_t)(ClientContext &context, TableFunctionInput &data, DataChunk &output);
 
-typedef OperatorResultType (*table_in_out_function_t)(ClientContext &context, TableFunctionInput &data,
+typedef OperatorResultType (*table_in_out_function_t)(ExecutionContext &context, TableFunctionInput &data,
                                                       DataChunk &input, DataChunk &output);
 typedef idx_t (*table_function_get_batch_index_t)(ClientContext &context, const FunctionData *bind_data,
                                                   LocalTableFunctionState *local_state,
@@ -12305,7 +12570,7 @@ public:
 
 namespace duckdb {
 
-enum class UndoFlags : uint32_t { // far to big but aligned (TM)
+enum class UndoFlags : uint32_t { // far too big but aligned (TM)
 	EMPTY_ENTRY = 0,
 	CATALOG_ENTRY = 1,
 	INSERT_TUPLE = 2,
@@ -12316,22 +12581,10 @@ enum class UndoFlags : uint32_t { // far to big but aligned (TM)
 } // namespace duckdb
 
 
+
 namespace duckdb {
 
 class WriteAheadLog;
-
-struct UndoChunk {
-	explicit UndoChunk(idx_t size);
-	~UndoChunk();
-
-	data_ptr_t WriteEntry(UndoFlags type, uint32_t len);
-
-	unique_ptr<data_t[]> data;
-	idx_t current_position;
-	idx_t maximum_size;
-	unique_ptr<UndoChunk> next;
-	UndoChunk *prev;
-};
 
 //! The undo buffer of a transaction is used to hold previous versions of tuples
 //! that might be required in the future (because of rollbacks or previous
@@ -12339,13 +12592,13 @@ struct UndoChunk {
 class UndoBuffer {
 public:
 	struct IteratorState {
-		UndoChunk *current;
+		ArenaChunk *current;
 		data_ptr_t start;
 		data_ptr_t end;
 	};
 
 public:
-	UndoBuffer();
+	UndoBuffer(const shared_ptr<ClientContext> &context);
 
 	//! Reserve space for an entry of the specified type and length in the undo
 	//! buffer
@@ -12365,8 +12618,7 @@ public:
 	void Rollback() noexcept;
 
 private:
-	unique_ptr<UndoChunk> head;
-	UndoChunk *tail;
+	ArenaAllocator allocator;
 
 private:
 	template <class T>
@@ -12401,102 +12653,6 @@ private:
 
 
 
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/storage/buffer/buffer_handle.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/storage/storage_info.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-namespace duckdb {
-class Serializer;
-class Deserializer;
-struct FileHandle;
-
-//! The version number of the database storage format
-extern const uint64_t VERSION_NUMBER;
-
-using block_id_t = int64_t;
-
-#define INVALID_BLOCK (-1)
-
-// maximum block id, 2^62
-#define MAXIMUM_BLOCK 4611686018427388000LL
-
-//! The MainHeader is the first header in the storage file. The MainHeader is typically written only once for a database
-//! file.
-struct MainHeader {
-	static constexpr idx_t MAGIC_BYTE_SIZE = 4;
-	static constexpr idx_t MAGIC_BYTE_OFFSET = sizeof(uint64_t);
-	static constexpr idx_t FLAG_COUNT = 4;
-	// the magic bytes in front of the file
-	// should be "DUCK"
-	static const char MAGIC_BYTES[];
-	//! The version of the database
-	uint64_t version_number;
-	//! The set of flags used by the database
-	uint64_t flags[FLAG_COUNT];
-
-	static void CheckMagicBytes(FileHandle &handle);
-
-	void Serialize(Serializer &ser);
-	static MainHeader Deserialize(Deserializer &source);
-};
-
-//! The DatabaseHeader contains information about the current state of the database. Every storage file has two
-//! DatabaseHeaders. On startup, the DatabaseHeader with the highest iteration count is used as the active header. When
-//! a checkpoint is performed, the active DatabaseHeader is switched by increasing the iteration count of the
-//! DatabaseHeader.
-struct DatabaseHeader {
-	//! The iteration count, increases by 1 every time the storage is checkpointed.
-	uint64_t iteration;
-	//! A pointer to the initial meta block
-	block_id_t meta_block;
-	//! A pointer to the block containing the free list
-	block_id_t free_list;
-	//! The number of blocks that is in the file as of this database header. If the file is larger than BLOCK_SIZE *
-	//! block_count any blocks appearing AFTER block_count are implicitly part of the free_list.
-	uint64_t block_count;
-
-	void Serialize(Serializer &ser);
-	static DatabaseHeader Deserialize(Deserializer &source);
-};
-
-} // namespace duckdb
-
-
-namespace duckdb {
-class BlockHandle;
-class FileBuffer;
-
-class BufferHandle {
-public:
-	BufferHandle(shared_ptr<BlockHandle> handle, FileBuffer *node);
-	DUCKDB_API ~BufferHandle();
-
-	//! The block handle
-	shared_ptr<BlockHandle> handle;
-	//! The managed buffer node
-	FileBuffer *node;
-	DUCKDB_API data_ptr_t Ptr();
-};
-
-} // namespace duckdb
 
 //===----------------------------------------------------------------------===//
 //                         DuckDB
@@ -14912,7 +15068,7 @@ struct IndexScanState {
 	}
 };
 
-typedef unordered_map<block_id_t, unique_ptr<BufferHandle>> buffer_handle_set_t;
+typedef unordered_map<block_id_t, BufferHandle> buffer_handle_set_t;
 
 struct ColumnScanState {
 	//! The column segment that is currently being scanned
@@ -14944,6 +15100,8 @@ struct ColumnFetchState {
 	buffer_handle_set_t handles;
 	//! Any child states of the fetch
 	vector<unique_ptr<ColumnFetchState>> child_states;
+
+	BufferHandle &GetOrInsertHandle(ColumnSegment &segment);
 };
 
 struct LocalScanState {
@@ -15019,6 +15177,8 @@ public:
 	~LocalTableStorage();
 
 	DataTable &table;
+
+	Allocator &allocator;
 	//! The main chunk collection holding the data
 	ChunkCollection collection;
 	//! The set of unique indexes
@@ -15126,11 +15286,7 @@ struct UpdateInfo;
 class Transaction {
 public:
 	Transaction(weak_ptr<ClientContext> context, transaction_t start_time, transaction_t transaction_id,
-	            timestamp_t start_timestamp, idx_t catalog_version)
-	    : context(move(context)), start_time(start_time), transaction_id(transaction_id), commit_id(0),
-	      highest_active_query(0), active_query(MAXIMUM_QUERY_ID), start_timestamp(start_timestamp),
-	      catalog_version(catalog_version), storage(*this), is_invalidated(false) {
-	}
+	            timestamp_t start_timestamp, idx_t catalog_version);
 
 	weak_ptr<ClientContext> context;
 	//! The start timestamp of this transaction
@@ -18383,96 +18539,6 @@ private:
 
 
 
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// duckdb/common/allocator.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-namespace duckdb {
-class Allocator;
-class ClientContext;
-class DatabaseInstance;
-
-struct PrivateAllocatorData {
-	virtual ~PrivateAllocatorData() {
-	}
-};
-
-typedef data_ptr_t (*allocate_function_ptr_t)(PrivateAllocatorData *private_data, idx_t size);
-typedef void (*free_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
-typedef data_ptr_t (*reallocate_function_ptr_t)(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
-
-class AllocatedData {
-public:
-	AllocatedData(Allocator &allocator, data_ptr_t pointer, idx_t allocated_size);
-	~AllocatedData();
-
-	data_ptr_t get() {
-		return pointer;
-	}
-	const_data_ptr_t get() const {
-		return pointer;
-	}
-	idx_t GetSize() const {
-		return allocated_size;
-	}
-	void Reset();
-
-private:
-	Allocator &allocator;
-	data_ptr_t pointer;
-	idx_t allocated_size;
-};
-
-class Allocator {
-public:
-	DUCKDB_API Allocator();
-	DUCKDB_API Allocator(allocate_function_ptr_t allocate_function_p, free_function_ptr_t free_function_p,
-	                     reallocate_function_ptr_t reallocate_function_p,
-	                     unique_ptr<PrivateAllocatorData> private_data);
-
-	DUCKDB_API Allocator &operator=(Allocator &&allocator) noexcept = default;
-
-	data_ptr_t AllocateData(idx_t size);
-	void FreeData(data_ptr_t pointer, idx_t size);
-	data_ptr_t ReallocateData(data_ptr_t pointer, idx_t size);
-
-	unique_ptr<AllocatedData> Allocate(idx_t size) {
-		return make_unique<AllocatedData>(*this, AllocateData(size), size);
-	}
-
-	static data_ptr_t DefaultAllocate(PrivateAllocatorData *private_data, idx_t size) {
-		return (data_ptr_t)malloc(size);
-	}
-	static void DefaultFree(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size) {
-		free(pointer);
-	}
-	static data_ptr_t DefaultReallocate(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size) {
-		return (data_ptr_t)realloc(pointer, size);
-	}
-	static Allocator &Get(ClientContext &context);
-	static Allocator &Get(DatabaseInstance &db);
-
-	PrivateAllocatorData *GetPrivateData() {
-		return private_data.get();
-	}
-
-private:
-	allocate_function_ptr_t allocate_function;
-	free_function_ptr_t free_function;
-	reallocate_function_ptr_t reallocate_function;
-
-	unique_ptr<PrivateAllocatorData> private_data;
-};
-
-} // namespace duckdb
 
 
 
@@ -18754,7 +18820,7 @@ public:
 	//! Access mode of the database (AUTOMATIC, READ_ONLY or READ_WRITE)
 	AccessMode access_mode = AccessMode::AUTOMATIC;
 	//! The allocator used by the system
-	Allocator allocator;
+	unique_ptr<Allocator> allocator;
 	// Checkpoint when WAL reaches this size (default: 16MB)
 	idx_t checkpoint_wal_size = 1 << 24;
 	//! Whether or not to use Direct IO, bypassing operating system buffers
@@ -19482,6 +19548,7 @@ protected:
 	//! The amount of chunks that will be gathered in the chunk collection before flushing
 	static constexpr const idx_t FLUSH_COUNT = 100;
 
+	Allocator &allocator;
 	//! The append types
 	vector<LogicalType> types;
 	//! The buffered data for the append
@@ -19492,8 +19559,8 @@ protected:
 	idx_t column = 0;
 
 public:
-	DUCKDB_API BaseAppender();
-	DUCKDB_API BaseAppender(vector<LogicalType> types);
+	DUCKDB_API BaseAppender(Allocator &allocator);
+	DUCKDB_API BaseAppender(Allocator &allocator, vector<LogicalType> types);
 	DUCKDB_API virtual ~BaseAppender();
 
 	//! Begins a new row append, after calling this the other AppendX() functions
@@ -19836,12 +19903,12 @@ struct GlobalFunctionData {
 
 typedef unique_ptr<FunctionData> (*copy_to_bind_t)(ClientContext &context, CopyInfo &info, vector<string> &names,
                                                    vector<LogicalType> &sql_types);
-typedef unique_ptr<LocalFunctionData> (*copy_to_initialize_local_t)(ClientContext &context, FunctionData &bind_data);
+typedef unique_ptr<LocalFunctionData> (*copy_to_initialize_local_t)(ExecutionContext &context, FunctionData &bind_data);
 typedef unique_ptr<GlobalFunctionData> (*copy_to_initialize_global_t)(ClientContext &context, FunctionData &bind_data,
                                                                       const string &file_path);
-typedef void (*copy_to_sink_t)(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+typedef void (*copy_to_sink_t)(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
                                LocalFunctionData &lstate, DataChunk &input);
-typedef void (*copy_to_combine_t)(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+typedef void (*copy_to_combine_t)(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
                                   LocalFunctionData &lstate);
 typedef void (*copy_to_finalize_t)(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate);
 
@@ -20533,7 +20600,8 @@ public:
 	void UpdateColumn(Transaction &transaction, DataChunk &updates, Vector &row_ids,
 	                  const vector<column_t> &column_path);
 
-	void MergeStatistics(idx_t column_idx, BaseStatistics &other);
+	void MergeStatistics(idx_t column_idx, const BaseStatistics &other);
+	void MergeIntoStatistics(idx_t column_idx, BaseStatistics &other);
 	unique_ptr<BaseStatistics> GetStatistics(idx_t column_idx);
 
 	void GetStorageInfo(idx_t row_group_index, vector<vector<Value>> &result);
@@ -20744,15 +20812,25 @@ enum class IndexType {
 
 
 namespace duckdb {
+class Allocator;
 class ExecutionContext;
+
 //! ExpressionExecutor is responsible for executing a set of expressions and storing the result in a data chunk
 class ExpressionExecutor {
 public:
-	DUCKDB_API ExpressionExecutor();
-	DUCKDB_API explicit ExpressionExecutor(const Expression *expression);
-	DUCKDB_API explicit ExpressionExecutor(const Expression &expression);
-	DUCKDB_API explicit ExpressionExecutor(const vector<unique_ptr<Expression>> &expressions);
+	DUCKDB_API ExpressionExecutor(Allocator &allocator);
+	DUCKDB_API explicit ExpressionExecutor(Allocator &allocator, const Expression *expression);
+	DUCKDB_API explicit ExpressionExecutor(Allocator &allocator, const Expression &expression);
+	DUCKDB_API explicit ExpressionExecutor(Allocator &allocator, const vector<unique_ptr<Expression>> &expressions);
 
+	Allocator &allocator;
+	//! The expressions of the executor
+	vector<const Expression *> expressions;
+	//! The data chunk of the current physical operator, used to resolve
+	//! column references and determines the output cardinality
+	DataChunk *chunk = nullptr;
+
+public:
 	//! Add an expression to the set of to-be-executed expressions of the executor
 	DUCKDB_API void AddExpression(const Expression &expr);
 
@@ -20793,12 +20871,6 @@ public:
 	}
 
 	DUCKDB_API vector<unique_ptr<ExpressionExecutorState>> &GetStates();
-
-	//! The expressions of the executor
-	vector<const Expression *> expressions;
-	//! The data chunk of the current physical operator, used to resolve
-	//! column references and determines the output cardinality
-	DataChunk *chunk = nullptr;
 
 protected:
 	void Initialize(const Expression &expr, ExpressionExecutorState &state);
@@ -21132,7 +21204,8 @@ public:
 	}
 
 private:
-	static unique_ptr<BufferHandle> Load(shared_ptr<BlockHandle> &handle);
+	static BufferHandle Load(shared_ptr<BlockHandle> &handle, unique_ptr<FileBuffer> buffer = nullptr);
+	unique_ptr<FileBuffer> UnloadAndTakeBlock();
 	void Unload();
 	bool CanUnload();
 
@@ -21178,6 +21251,7 @@ class DatabaseInstance;
 class ManagedBuffer : public FileBuffer {
 public:
 	ManagedBuffer(DatabaseInstance &db, idx_t size, bool can_destroy, block_id_t id);
+	ManagedBuffer(DatabaseInstance &db, FileBuffer &source, bool can_destroy, block_id_t id);
 
 	DatabaseInstance &db;
 	//! Whether or not the managed buffer can be freely destroyed when unpinned.
@@ -21191,6 +21265,7 @@ public:
 };
 
 } // namespace duckdb
+
 
 
 namespace duckdb {
@@ -21222,12 +21297,12 @@ public:
 
 	//! Allocate an in-memory buffer with a single pin.
 	//! The allocated memory is released when the buffer handle is destroyed.
-	DUCKDB_API unique_ptr<BufferHandle> Allocate(idx_t block_size);
+	DUCKDB_API BufferHandle Allocate(idx_t block_size);
 
 	//! Reallocate an in-memory buffer that is pinned.
 	void ReAllocate(shared_ptr<BlockHandle> &handle, idx_t block_size);
 
-	unique_ptr<BufferHandle> Pin(shared_ptr<BlockHandle> &handle);
+	BufferHandle Pin(shared_ptr<BlockHandle> &handle);
 	void Unpin(shared_ptr<BlockHandle> &handle);
 
 	void UnregisterBlock(block_id_t block_id, bool can_destroy);
@@ -21252,10 +21327,14 @@ public:
 
 	void SetTemporaryDirectory(string new_dir);
 
+	DUCKDB_API Allocator &GetBufferAllocator();
+
 private:
 	//! Evict blocks until the currently used memory + extra_memory fit, returns false if this was not possible
 	//! (i.e. not enough blocks could be evicted)
-	bool EvictBlocks(idx_t extra_memory, idx_t memory_limit);
+	//! If the "buffer" argument is specified AND the system can find a buffer to re-use for the given allocation size
+	//! "buffer" will be made to point to the re-usable memory. Note that this is not guaranteed.
+	bool EvictBlocks(idx_t extra_memory, idx_t memory_limit, unique_ptr<FileBuffer> *buffer = nullptr);
 
 	//! Garbage collect eviction queue
 	void PurgeQueue();
@@ -21263,7 +21342,7 @@ private:
 	//! Write a temporary buffer to disk
 	void WriteTemporaryBuffer(ManagedBuffer &buffer);
 	//! Read a temporary buffer from disk
-	unique_ptr<FileBuffer> ReadTemporaryBuffer(block_id_t id);
+	unique_ptr<FileBuffer> ReadTemporaryBuffer(block_id_t id, unique_ptr<FileBuffer> buffer = nullptr);
 	//! Get the path of the temporary buffer
 	string GetTemporaryPath(block_id_t id);
 
@@ -21274,6 +21353,11 @@ private:
 	void AddToEvictionQueue(shared_ptr<BlockHandle> &handle);
 
 	string InMemoryWarning();
+
+	static data_ptr_t BufferAllocatorAllocate(PrivateAllocatorData *private_data, idx_t size);
+	static void BufferAllocatorFree(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t size);
+	static data_ptr_t BufferAllocatorRealloc(PrivateAllocatorData *private_data, data_ptr_t pointer, idx_t old_size,
+	                                         idx_t size);
 
 private:
 	//! The database instance
@@ -21298,6 +21382,8 @@ private:
 	unique_ptr<EvictionQueue> queue;
 	//! The temporary id used for managed buffers
 	atomic<block_id_t> temporary_id;
+	//! Allocator associated with the buffer manager, that passes all allocations through this buffer manager
+	Allocator buffer_allocator;
 };
 } // namespace duckdb
 
@@ -22880,11 +22966,12 @@ public:
 	BufferedCSVReader(ClientContext &context, BufferedCSVReaderOptions options,
 	                  const vector<LogicalType> &requested_types = vector<LogicalType>());
 
-	BufferedCSVReader(FileSystem &fs, FileOpener *opener, BufferedCSVReaderOptions options,
+	BufferedCSVReader(FileSystem &fs, Allocator &allocator, FileOpener *opener, BufferedCSVReaderOptions options,
 	                  const vector<LogicalType> &requested_types = vector<LogicalType>());
 	~BufferedCSVReader();
 
 	FileSystem &fs;
+	Allocator &allocator;
 	FileOpener *opener;
 	BufferedCSVReaderOptions options;
 	vector<LogicalType> sql_types;
@@ -23011,13 +23098,14 @@ private:
 
 
 namespace duckdb {
+class Allocator;
 class Vector;
 
 //! The VectorCache holds cached data that allows for re-use of the same memory by vectors
 class VectorCache {
 public:
 	//! Instantiate a vector cache with the given type
-	explicit VectorCache(const LogicalType &type);
+	explicit VectorCache(Allocator &allocator, const LogicalType &type);
 
 	buffer_ptr<VectorBuffer> buffer;
 
