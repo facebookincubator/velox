@@ -40,7 +40,8 @@ std::optional<std::vector<FunctionSignaturePtr>> getVectorFunctionSignatures(
 std::shared_ptr<VectorFunction> getVectorFunction(
     const std::string& name,
     const std::vector<TypePtr>& inputTypes,
-    const std::vector<VectorPtr>& constantInputs) {
+    const std::vector<VectorPtr>& constantInputs,
+    const TypePtr resultType) {
   auto sanitizedName = sanitizeFunctionName(name);
 
   if (!constantInputs.empty()) {
@@ -57,6 +58,12 @@ std::shared_ptr<VectorFunction> getVectorFunction(
         inputTypes[i],
         constantInputs.size() > i ? constantInputs[i] : nullptr,
     });
+  }
+
+  if (resultType) {
+    // For certain vector functions that involve Decimal types, the return type
+    // is required to resolve the function.
+    inputArgs.push_back({resultType, nullptr});
   }
 
   return vectorFunctionFactories().withRLock(

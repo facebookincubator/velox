@@ -1210,6 +1210,32 @@ class PlusConstantFunction : public exec::VectorFunction {
   const int32_t addition_;
 };
 
+template <typename RES>
+class TestGetVectorFunction : public exec::VectorFunction {
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    VELOX_UNSUPPORTED();
+  }
+};
+
+std::shared_ptr<exec::VectorFunction> createTestGetVectorFunction(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputs) {
+  auto resultType = inputs[1].type;
+  switch (resultType->kind()) {
+    case TypeKind::INTEGER:
+      return std::make_shared<TestGetVectorFunction<int32_t>>();
+    case TypeKind::BIGINT:
+      return std::make_shared<TestGetVectorFunction<int64_t>>();
+    default:
+      VELOX_UNSUPPORTED();
+  }
+  return nullptr;
+}
 } // namespace
 
 TEST_F(ExprTest, dictionaryAndConstantOverLazy) {
@@ -2827,4 +2853,28 @@ TEST_F(ExprTest, lambdaWithRowField) {
   auto evalResult = evaluate("filter(c1, function('lambda1'))", rowVector);
 
   assertEqualVectors(array, evalResult);
+}
+
+TEST_F(ExprTest, getVectorFunction) {
+  exec::registerStatefulVectorFunction(
+      "test_vector_func",
+      PlusConstantFunction::signatures(),
+      createTestGetVectorFunction);
+  auto func = exec::getVectorFunction(
+      "test_vector_func",
+      {CppToType<int32_t>::create()},
+      {},
+      CppToType<int32_t>::create());
+  auto actualInt32 =
+      std::dynamic_pointer_cast<TestGetVectorFunction<int32_t>>(func);
+  ASSERT_TRUE(actualInt32);
+
+  func = exec::getVectorFunction(
+      "test_vector_func",
+      {CppToType<int32_t>::create()},
+      {},
+      CppToType<int64_t>::create());
+  auto actualInt64 =
+      std::dynamic_pointer_cast<TestGetVectorFunction<int64_t>>(func);
+  ASSERT_TRUE(actualInt64);
 }
