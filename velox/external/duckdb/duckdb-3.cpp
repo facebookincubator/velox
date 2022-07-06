@@ -1,4 +1,4 @@
-// See https://raw.githubusercontent.com/cwida/duckdb/master/LICENSE for licensing information
+// See https://raw.githubusercontent.com/duckdb/duckdb/master/LICENSE for licensing information
 
 #include "duckdb.hpp"
 #include "duckdb-internal.hpp"
@@ -10728,6 +10728,7 @@ void PhysicalDelete::GetData(ExecutionContext &context, DataChunk &chunk, Global
 
 
 
+
 #include <algorithm>
 #include <sstream>
 
@@ -10832,6 +10833,7 @@ void PhysicalExport::GetData(ExecutionContext &context, DataChunk &chunk, Global
 	vector<CatalogEntry *> tables;
 	vector<CatalogEntry *> views;
 	vector<CatalogEntry *> indexes;
+	vector<CatalogEntry *> macros;
 
 	auto schema_list = Catalog::GetCatalog(ccontext).schemas->GetEntries<SchemaCatalogEntry>(context.client);
 	for (auto &schema : schema_list) {
@@ -10851,12 +10853,26 @@ void PhysicalExport::GetData(ExecutionContext &context, DataChunk &chunk, Global
 		schema->Scan(context.client, CatalogType::TYPE_ENTRY,
 		             [&](CatalogEntry *entry) { custom_types.push_back(entry); });
 		schema->Scan(context.client, CatalogType::INDEX_ENTRY, [&](CatalogEntry *entry) { indexes.push_back(entry); });
+		schema->Scan(context.client, CatalogType::MACRO_ENTRY, [&](CatalogEntry *entry) {
+			if (!entry->internal && entry->type == CatalogType::MACRO_ENTRY) {
+				macros.push_back(entry);
+			}
+		});
+		schema->Scan(context.client, CatalogType::TABLE_MACRO_ENTRY, [&](CatalogEntry *entry) {
+			if (!entry->internal && entry->type == CatalogType::TABLE_MACRO_ENTRY) {
+				macros.push_back(entry);
+			}
+		});
 	}
 
 	// consider the order of tables because of foreign key constraint
 	for (idx_t i = 0; i < exported_tables.data.size(); i++) {
 		tables.push_back((CatalogEntry *)exported_tables.data[i].entry);
 	}
+
+	// order macro's by timestamp so nested macro's are imported nicely
+	sort(macros.begin(), macros.end(),
+	     [](const CatalogEntry *lhs, const CatalogEntry *rhs) { return lhs->oid < rhs->oid; });
 
 	// write the schema.sql file
 	// export order is SCHEMA -> SEQUENCE -> TABLE -> VIEW -> INDEX
@@ -10868,6 +10884,7 @@ void PhysicalExport::GetData(ExecutionContext &context, DataChunk &chunk, Global
 	WriteCatalogEntries(ss, tables);
 	WriteCatalogEntries(ss, views);
 	WriteCatalogEntries(ss, indexes);
+	WriteCatalogEntries(ss, macros);
 
 	WriteStringStreamToFile(fs, opener, ss, fs.JoinPath(info->file_path, "schema.sql"));
 

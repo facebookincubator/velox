@@ -1,4 +1,4 @@
-// See https://raw.githubusercontent.com/cwida/duckdb/master/LICENSE for licensing information
+// See https://raw.githubusercontent.com/duckdb/duckdb/master/LICENSE for licensing information
 
 #include "duckdb.hpp"
 #include "duckdb-internal.hpp"
@@ -236,6 +236,7 @@ Connection::Connection(DatabaseInstance &database) : context(make_shared<ClientC
 	ConnectionManager::Get(database).AddConnection(*context);
 #ifdef DEBUG
 	EnableProfiling();
+	context->config.emit_profiler_output = false;
 #endif
 }
 
@@ -251,7 +252,7 @@ string Connection::GetProfilingInformation(ProfilerPrintFormat format) {
 	if (format == ProfilerPrintFormat::JSON) {
 		return profiler.ToJSON();
 	} else {
-		return profiler.ToString();
+		return profiler.QueryTreeToString();
 	}
 }
 
@@ -701,6 +702,7 @@ void DatabaseInstance::Configure(DBConfig &new_config) {
 	config.replacement_scans = move(new_config.replacement_scans);
 	config.initialize_default_database = new_config.initialize_default_database;
 	config.disabled_optimizers = move(new_config.disabled_optimizers);
+	config.parser_extensions = move(new_config.parser_extensions);
 }
 
 DBConfig &DBConfig::GetConfig(ClientContext &context) {
@@ -1449,7 +1451,7 @@ bool QueryProfiler::IsDetailedEnabled() const {
 }
 
 ProfilerPrintFormat QueryProfiler::GetPrintFormat() const {
-	return is_explain_analyze ? ProfilerPrintFormat::NONE : ClientConfig::GetConfig(context).profiler_print_format;
+	return ClientConfig::GetConfig(context).profiler_print_format;
 }
 
 string QueryProfiler::GetSaveLocation() const {
@@ -1537,20 +1539,14 @@ void QueryProfiler::EndQuery() {
 		Finalize(*root);
 	}
 	this->running = false;
-	auto automatic_print_format = GetPrintFormat();
-	// print or output the query profiling after termination, if this is enabled
-	if (automatic_print_format != ProfilerPrintFormat::NONE) {
-		// check if this query should be output based on the operator types
-		string query_info;
-		if (automatic_print_format == ProfilerPrintFormat::JSON) {
-			query_info = ToJSON();
-		} else if (automatic_print_format == ProfilerPrintFormat::QUERY_TREE) {
-			query_info = ToString();
-		} else if (automatic_print_format == ProfilerPrintFormat::QUERY_TREE_OPTIMIZER) {
-			query_info = ToString(true);
-		}
+	// print or output the query profiling after termination
+	// EXPLAIN ANALYSE should not be outputted by the profiler
+	if (IsEnabled() && !is_explain_analyze) {
+		string query_info = ToString();
 		auto save_location = GetSaveLocation();
-		if (save_location.empty()) {
+		if (!ClientConfig::GetConfig(context).emit_profiler_output) {
+			// disable output
+		} else if (save_location.empty()) {
 			Printer::Print(query_info);
 			Printer::Print("\n");
 		} else {
@@ -1558,6 +1554,19 @@ void QueryProfiler::EndQuery() {
 		}
 	}
 	this->is_explain_analyze = false;
+}
+string QueryProfiler::ToString() const {
+	const auto format = GetPrintFormat();
+	switch (format) {
+	case ProfilerPrintFormat::QUERY_TREE:
+		return QueryTreeToString();
+	case ProfilerPrintFormat::JSON:
+		return ToJSON();
+	case ProfilerPrintFormat::QUERY_TREE_OPTIMIZER:
+		return QueryTreeToString(true);
+	default:
+		throw InternalException("Unknown ProfilerPrintFormat \"%s\"", format);
+	}
 }
 
 void QueryProfiler::StartPhase(string new_phase) {
@@ -1750,13 +1759,13 @@ static string RenderTiming(double timing) {
 	return timing_s + "s";
 }
 
-string QueryProfiler::ToString(bool print_optimizer_output) const {
+string QueryProfiler::QueryTreeToString(bool print_optimizer_output) const {
 	std::stringstream str;
-	ToStream(str, print_optimizer_output);
+	QueryTreeToStream(str, print_optimizer_output);
 	return str.str();
 }
 
-void QueryProfiler::ToStream(std::ostream &ss, bool print_optimizer_output) const {
+void QueryProfiler::QueryTreeToStream(std::ostream &ss, bool print_optimizer_output) const {
 	if (!IsEnabled()) {
 		ss << "Query profiling is disabled. Call "
 		      "Connection::EnableProfiling() to enable profiling!";
@@ -2007,7 +2016,7 @@ void QueryProfiler::Render(const QueryProfiler::TreeNode &node, std::ostream &ss
 }
 
 void QueryProfiler::Print() {
-	Printer::Print(ToString());
+	Printer::Print(QueryTreeToString());
 }
 
 vector<QueryProfiler::PhaseTimingItem> QueryProfiler::GetOrderedPhaseTimings() const {
@@ -4290,6 +4299,7 @@ void EnableProfilingSetting::SetLocal(ClientContext &context, const Value &input
 		    "Unrecognized print format %s, supported formats: [json, query_tree, query_tree_optimizer]", parameter);
 	}
 	config.enable_profiler = true;
+	config.emit_profiler_output = true;
 }
 
 Value EnableProfilingSetting::GetSetting(ClientContext &context) {
@@ -4298,8 +4308,6 @@ Value EnableProfilingSetting::GetSetting(ClientContext &context) {
 		return Value();
 	}
 	switch (config.profiler_print_format) {
-	case ProfilerPrintFormat::NONE:
-		return Value("none");
 	case ProfilerPrintFormat::JSON:
 		return Value("json");
 	case ProfilerPrintFormat::QUERY_TREE:
@@ -4523,9 +4531,11 @@ void ProfilingModeSetting::SetLocal(ClientContext &context, const Value &input) 
 	if (parameter == "standard") {
 		config.enable_profiler = true;
 		config.enable_detailed_profiling = false;
+		config.emit_profiler_output = true;
 	} else if (parameter == "detailed") {
 		config.enable_profiler = true;
 		config.enable_detailed_profiling = true;
+		config.emit_profiler_output = true;
 	} else {
 		throw ParserException("Unrecognized profiling mode \"%s\", supported formats: [standard, detailed]", parameter);
 	}
@@ -10017,7 +10027,7 @@ unique_ptr<Expression> DatePartSimplificationRule::Apply(LogicalOperator &op, ve
 	if (!function) {
 		throw BinderException(error);
 	}
-	return move(function);
+	return function;
 }
 
 } // namespace duckdb
@@ -16598,12 +16608,14 @@ void ParsedExpressionIterator::EnumerateQueryNodeChildren(
 		EnumerateQueryNodeModifiers(node, callback);
 	}
 
-	for (auto &kv : node.cte_map) {
+	for (auto &kv : node.cte_map.map) {
 		EnumerateQueryNodeChildren(*kv.second->query->node, callback);
 	}
 }
 
 } // namespace duckdb
+
+
 
 
 
@@ -16631,6 +16643,22 @@ void Parser::ParseQuery(const string &query) {
 		parser.Parse(query);
 
 		if (!parser.success) {
+			if (options.extensions) {
+				for (auto &ext : *options.extensions) {
+					D_ASSERT(ext.parse_function);
+					auto result = ext.parse_function(ext.parser_info.get(), query);
+					if (result.type == ParserExtensionResultType::PARSE_SUCCESSFUL) {
+						auto statement = make_unique<ExtensionStatement>(ext, move(result.parse_data));
+						statement->stmt_length = query.size();
+						statement->stmt_location = 0;
+						statements.push_back(move(statement));
+						return;
+					}
+					if (result.type == ParserExtensionResultType::DISPLAY_EXTENSION_ERROR) {
+						throw ParserException(result.error);
+					}
+				}
+			}
 			throw ParserException(QueryErrorContext::Format(query, parser.error_message, parser.error_location - 1));
 		}
 

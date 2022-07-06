@@ -1,4 +1,4 @@
-// See https://raw.githubusercontent.com/cwida/duckdb/master/LICENSE for licensing information
+// See https://raw.githubusercontent.com/duckdb/duckdb/master/LICENSE for licensing information
 
 #include "duckdb.hpp"
 #include "duckdb-internal.hpp"
@@ -206,7 +206,7 @@ SelectNode::SelectNode()
 
 string SelectNode::ToString() const {
 	string result;
-	result = CTEToString();
+	result = cte_map.ToString();
 	result += "SELECT ";
 
 	// search for a distinct modifier
@@ -419,7 +419,7 @@ namespace duckdb {
 
 string SetOperationNode::ToString() const {
 	string result;
-	result = CTEToString();
+	result = cte_map.ToString();
 	result += "(" + left->ToString() + ") ";
 	bool is_distinct = false;
 	for (idx_t modifier_idx = 0; modifier_idx < modifiers.size(); modifier_idx++) {
@@ -502,13 +502,29 @@ unique_ptr<QueryNode> SetOperationNode::Deserialize(FieldReader &reader) {
 
 namespace duckdb {
 
-string QueryNode::CTEToString() const {
-	if (cte_map.empty()) {
+CommonTableExpressionMap::CommonTableExpressionMap() {
+}
+
+CommonTableExpressionMap CommonTableExpressionMap::Copy() const {
+	CommonTableExpressionMap res;
+	for (auto &kv : this->map) {
+		auto kv_info = make_unique<CommonTableExpressionInfo>();
+		for (auto &al : kv.second->aliases) {
+			kv_info->aliases.push_back(al);
+		}
+		kv_info->query = unique_ptr_cast<SQLStatement, SelectStatement>(kv.second->query->Copy());
+		res.map[kv.first] = move(kv_info);
+	}
+	return res;
+}
+
+string CommonTableExpressionMap::ToString() const {
+	if (map.empty()) {
 		return string();
 	}
 	// check if there are any recursive CTEs
 	bool has_recursive = false;
-	for (auto &kv : cte_map) {
+	for (auto &kv : map) {
 		if (kv.second->query->node->type == QueryNodeType::RECURSIVE_CTE_NODE) {
 			has_recursive = true;
 			break;
@@ -519,7 +535,7 @@ string QueryNode::CTEToString() const {
 		result += "RECURSIVE ";
 	}
 	bool first_cte = true;
-	for (auto &kv : cte_map) {
+	for (auto &kv : map) {
 		if (!first_cte) {
 			result += ", ";
 		}
@@ -596,12 +612,12 @@ bool QueryNode::Equals(const QueryNode *other) const {
 		}
 	}
 	// WITH clauses (CTEs)
-	if (cte_map.size() != other->cte_map.size()) {
+	if (cte_map.map.size() != other->cte_map.map.size()) {
 		return false;
 	}
-	for (auto &entry : cte_map) {
-		auto other_entry = other->cte_map.find(entry.first);
-		if (other_entry == other->cte_map.end()) {
+	for (auto &entry : cte_map.map) {
+		auto other_entry = other->cte_map.map.find(entry.first);
+		if (other_entry == other->cte_map.map.end()) {
 			return false;
 		}
 		if (entry.second->aliases != other_entry->second->aliases) {
@@ -618,13 +634,13 @@ void QueryNode::CopyProperties(QueryNode &other) const {
 	for (auto &modifier : modifiers) {
 		other.modifiers.push_back(modifier->Copy());
 	}
-	for (auto &kv : cte_map) {
+	for (auto &kv : cte_map.map) {
 		auto kv_info = make_unique<CommonTableExpressionInfo>();
 		for (auto &al : kv.second->aliases) {
 			kv_info->aliases.push_back(al);
 		}
 		kv_info->query = unique_ptr_cast<SQLStatement, SelectStatement>(kv.second->query->Copy());
-		other.cte_map[kv.first] = move(kv_info);
+		other.cte_map.map[kv.first] = move(kv_info);
 	}
 }
 
@@ -633,9 +649,9 @@ void QueryNode::Serialize(Serializer &main_serializer) const {
 	writer.WriteField<QueryNodeType>(type);
 	writer.WriteSerializableList(modifiers);
 	// cte_map
-	writer.WriteField<uint32_t>((uint32_t)cte_map.size());
+	writer.WriteField<uint32_t>((uint32_t)cte_map.map.size());
 	auto &serializer = writer.GetSerializer();
-	for (auto &cte : cte_map) {
+	for (auto &cte : cte_map.map) {
 		serializer.WriteString(cte.first);
 		serializer.WriteStringVector(cte.second->aliases);
 		cte.second->query->Serialize(serializer);
@@ -652,15 +668,14 @@ unique_ptr<QueryNode> QueryNode::Deserialize(Deserializer &main_source) {
 	// cte_map
 	auto cte_count = reader.ReadRequired<uint32_t>();
 	auto &source = reader.GetSource();
-	unordered_map<string, unique_ptr<CommonTableExpressionInfo>> cte_map;
+	unordered_map<string, unique_ptr<CommonTableExpressionInfo>> new_map;
 	for (idx_t i = 0; i < cte_count; i++) {
 		auto name = source.Read<string>();
 		auto info = make_unique<CommonTableExpressionInfo>();
 		source.ReadStringVector(info->aliases);
 		info->query = SelectStatement::Deserialize(source);
-		cte_map[name] = move(info);
+		new_map[name] = move(info);
 	}
-
 	unique_ptr<QueryNode> result;
 	switch (type) {
 	case QueryNodeType::SELECT_NODE:
@@ -676,7 +691,7 @@ unique_ptr<QueryNode> QueryNode::Deserialize(Deserializer &main_source) {
 		throw SerializationException("Could not deserialize Query Node: unknown type!");
 	}
 	result->modifiers = move(modifiers);
-	result->cte_map = move(cte_map);
+	result->cte_map.map = move(new_map);
 	reader.Finalize();
 	return result;
 }
@@ -976,6 +991,7 @@ unique_ptr<SQLStatement> CreateStatement::Copy() const {
 } // namespace duckdb
 
 
+
 namespace duckdb {
 
 DeleteStatement::DeleteStatement() : SQLStatement(StatementType::DELETE_STATEMENT) {
@@ -988,10 +1004,12 @@ DeleteStatement::DeleteStatement(const DeleteStatement &other) : SQLStatement(ot
 	for (const auto &using_clause : other.using_clauses) {
 		using_clauses.push_back(using_clause->Copy());
 	}
+	cte_map = other.cte_map.Copy();
 }
 
 string DeleteStatement::ToString() const {
 	string result;
+	result = cte_map.ToString();
 	result += "DELETE FROM ";
 	result += table->ToString();
 	if (!using_clauses.empty()) {
@@ -1092,6 +1110,19 @@ unique_ptr<SQLStatement> ExportStatement::Copy() const {
 } // namespace duckdb
 
 
+namespace duckdb {
+
+ExtensionStatement::ExtensionStatement(ParserExtension extension_p, unique_ptr<ParserExtensionParseData> parse_data_p)
+    : SQLStatement(StatementType::EXTENSION_STATEMENT), extension(move(extension_p)), parse_data(move(parse_data_p)) {
+}
+
+unique_ptr<SQLStatement> ExtensionStatement::Copy() const {
+	return make_unique<ExtensionStatement>(extension, parse_data->Copy());
+}
+
+} // namespace duckdb
+
+
 
 
 namespace duckdb {
@@ -1103,11 +1134,13 @@ InsertStatement::InsertStatement(const InsertStatement &other)
     : SQLStatement(other),
       select_statement(unique_ptr_cast<SQLStatement, SelectStatement>(other.select_statement->Copy())),
       columns(other.columns), table(other.table), schema(other.schema) {
+	cte_map = other.cte_map.Copy();
 }
 
 string InsertStatement::ToString() const {
 	string result;
-	result = "INSERT INTO ";
+	result = cte_map.ToString();
+	result += "INSERT INTO ";
 	if (!schema.empty()) {
 		result += KeywordHelper::WriteOptionallyQuoted(schema) + ".";
 	}
@@ -1154,7 +1187,7 @@ ExpressionListRef *InsertStatement::GetValuesList() const {
 	if (node.where_clause || node.qualify || node.having) {
 		return nullptr;
 	}
-	if (!node.cte_map.empty()) {
+	if (!node.cte_map.map.empty()) {
 		return nullptr;
 	}
 	if (!node.groups.grouping_sets.empty()) {
@@ -1315,6 +1348,7 @@ unique_ptr<SQLStatement> TransactionStatement::Copy() const {
 } // namespace duckdb
 
 
+
 namespace duckdb {
 
 UpdateStatement::UpdateStatement() : SQLStatement(StatementType::UPDATE_STATEMENT) {
@@ -1331,11 +1365,13 @@ UpdateStatement::UpdateStatement(const UpdateStatement &other)
 	for (auto &expr : other.expressions) {
 		expressions.emplace_back(expr->Copy());
 	}
+	cte_map = other.cte_map.Copy();
 }
 
 string UpdateStatement::ToString() const {
 	string result;
-	result = "UPDATE ";
+	result = cte_map.ToString();
+	result += "UPDATE ";
 	result += table->ToString();
 	result += " SET ";
 	D_ASSERT(columns.size() == expressions.size());
@@ -3225,12 +3261,14 @@ unique_ptr<ParsedExpression> Transformer::TransformSubquery(duckdb_libpgquery::P
 			    string((reinterpret_cast<duckdb_libpgquery::PGValue *>(root->operName->head->data.ptr_value))->val.str);
 			subquery_expr->comparison_type = OperatorToExpressionType(operator_name);
 		}
-		D_ASSERT(subquery_expr->comparison_type == ExpressionType::COMPARE_EQUAL ||
-		         subquery_expr->comparison_type == ExpressionType::COMPARE_NOTEQUAL ||
-		         subquery_expr->comparison_type == ExpressionType::COMPARE_GREATERTHAN ||
-		         subquery_expr->comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-		         subquery_expr->comparison_type == ExpressionType::COMPARE_LESSTHAN ||
-		         subquery_expr->comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+		if (subquery_expr->comparison_type != ExpressionType::COMPARE_EQUAL &&
+		    subquery_expr->comparison_type != ExpressionType::COMPARE_NOTEQUAL &&
+		    subquery_expr->comparison_type != ExpressionType::COMPARE_GREATERTHAN &&
+		    subquery_expr->comparison_type != ExpressionType::COMPARE_GREATERTHANOREQUALTO &&
+		    subquery_expr->comparison_type != ExpressionType::COMPARE_LESSTHAN &&
+		    subquery_expr->comparison_type != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+			throw ParserException("ANY and ALL operators require one of =,<>,>,<,>=,<= comparisons!");
+		}
 		if (root->subLinkType == duckdb_libpgquery::PG_ALL_SUBLINK) {
 			// ALL sublink is equivalent to NOT(ANY) with inverted comparison
 			// e.g. [= ALL()] is equivalent to [NOT(<> ANY())]
@@ -4100,7 +4138,7 @@ string Transformer::TransformAlias(duckdb_libpgquery::PGAlias *root, vector<stri
 
 namespace duckdb {
 
-void Transformer::TransformCTE(duckdb_libpgquery::PGWithClause *de_with_clause, QueryNode &select) {
+void Transformer::TransformCTE(duckdb_libpgquery::PGWithClause *de_with_clause, CommonTableExpressionMap &cte_map) {
 	// TODO: might need to update in case of future lawsuit
 	D_ASSERT(de_with_clause);
 
@@ -4143,12 +4181,12 @@ void Transformer::TransformCTE(duckdb_libpgquery::PGWithClause *de_with_clause, 
 		D_ASSERT(info->query);
 		auto cte_name = string(cte->ctename);
 
-		auto it = select.cte_map.find(cte_name);
-		if (it != select.cte_map.end()) {
+		auto it = cte_map.map.find(cte_name);
+		if (it != cte_map.map.end()) {
 			// can't have two CTEs with same name
 			throw ParserException("Duplicate CTE name \"%s\"", cte_name);
 		}
-		select.cte_map[cte_name] = move(info);
+		cte_map.map[cte_name] = move(info);
 	}
 }
 
@@ -5486,6 +5524,9 @@ unique_ptr<DeleteStatement> Transformer::TransformDelete(duckdb_libpgquery::PGNo
 	auto stmt = reinterpret_cast<duckdb_libpgquery::PGDeleteStmt *>(node);
 	D_ASSERT(stmt);
 	auto result = make_unique<DeleteStatement>();
+	if (stmt->withClause) {
+		TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), result->cte_map);
+	}
 
 	result->condition = TransformExpression(stmt->whereClause);
 	result->table = TransformRangeVar(stmt->relation);
@@ -5662,8 +5703,14 @@ unique_ptr<InsertStatement> Transformer::TransformInsert(duckdb_libpgquery::PGNo
 	if (stmt->onConflictClause && stmt->onConflictClause->action != duckdb_libpgquery::PG_ONCONFLICT_NONE) {
 		throw ParserException("ON CONFLICT IGNORE/UPDATE clauses are not supported");
 	}
+	if (!stmt->selectStmt) {
+		throw ParserException("DEFAULT VALUES clause is not supported!");
+	}
 
 	auto result = make_unique<InsertStatement>();
+	if (stmt->withClause) {
+		TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), result->cte_map);
+	}
 
 	// first check if there are any columns specified
 	if (stmt->cols) {
@@ -5973,7 +6020,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectNode(duckdb_libpgquery::PGSele
 		node = make_unique<SelectNode>();
 		auto result = (SelectNode *)node.get();
 		if (stmt->withClause) {
-			TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), *node);
+			TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), node->cte_map);
 		}
 		if (stmt->windowClause) {
 			for (auto window_ele = stmt->windowClause->head; window_ele != nullptr; window_ele = window_ele->next) {
@@ -6035,7 +6082,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectNode(duckdb_libpgquery::PGSele
 		node = make_unique<SetOperationNode>();
 		auto result = (SetOperationNode *)node.get();
 		if (stmt->withClause) {
-			TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), *node);
+			TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), node->cte_map);
 		}
 		result->left = TransformSelectNode(stmt->larg);
 		result->right = TransformSelectNode(stmt->rarg);
@@ -6254,6 +6301,9 @@ unique_ptr<UpdateStatement> Transformer::TransformUpdate(duckdb_libpgquery::PGNo
 	D_ASSERT(stmt);
 
 	auto result = make_unique<UpdateStatement>();
+	if (stmt->withClause) {
+		TransformCTE(reinterpret_cast<duckdb_libpgquery::PGWithClause *>(stmt->withClause), result->cte_map);
+	}
 
 	result->table = TransformRangeVar(stmt->relation);
 	if (stmt->fromClause) {
@@ -8021,7 +8071,7 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 		children.push_back(move(child.expr));
 	}
 	unique_ptr<Expression> result =
-	    ScalarFunction::BindScalarFunction(context, *func, move(children), error, function.is_operator);
+	    ScalarFunction::BindScalarFunction(context, *func, move(children), error, function.is_operator, &binder);
 	if (!result) {
 		throw BinderException(binder.FormatError(function, error));
 	}
@@ -11082,6 +11132,9 @@ BoundStatement Binder::Bind(DeleteStatement &stmt) {
 		properties.read_only = false;
 	}
 
+	// Add CTEs as bindable
+	AddCTEMap(stmt.cte_map);
+
 	// plan any tables from the various using clauses
 	if (!stmt.using_clauses.empty()) {
 		unique_ptr<LogicalOperator> child_operator;
@@ -11433,6 +11486,37 @@ BoundStatement Binder::Bind(ExportStatement &stmt) {
 
 
 
+namespace duckdb {
+
+BoundStatement Binder::Bind(ExtensionStatement &stmt) {
+	BoundStatement result;
+
+	// perform the planning of the function
+	D_ASSERT(stmt.extension.plan_function);
+	auto parse_result = stmt.extension.plan_function(stmt.extension.parser_info.get(), context, move(stmt.parse_data));
+
+	properties.read_only = parse_result.read_only;
+	properties.requires_valid_transaction = parse_result.requires_valid_transaction;
+	properties.return_type = parse_result.return_type;
+
+	// create the plan as a scan of the given table function
+	result.plan = BindTableFunction(parse_result.function, move(parse_result.parameters));
+	D_ASSERT(result.plan->type == LogicalOperatorType::LOGICAL_GET);
+	auto &get = (LogicalGet &)*result.plan;
+	result.names = get.names;
+	result.types = get.returned_types;
+	get.column_ids.clear();
+	for (idx_t i = 0; i < get.returned_types.size(); i++) {
+		get.column_ids.push_back(i);
+	}
+	return result;
+}
+
+} // namespace duckdb
+
+
+
+
 
 
 
@@ -11469,6 +11553,9 @@ BoundStatement Binder::Bind(InsertStatement &stmt) {
 	}
 
 	auto insert = make_unique<LogicalInsert>(table);
+
+	// Add CTEs as bindable
+	AddCTEMap(stmt.cte_map);
 
 	idx_t generated_column_count = 0;
 	vector<idx_t> named_column_map;
@@ -12032,6 +12119,9 @@ BoundStatement Binder::Bind(UpdateStatement &stmt) {
 	}
 	auto &table_binding = (BoundBaseTableRef &)*bound_table;
 	auto table = table_binding.table;
+
+	// Add CTEs as bindable
+	AddCTEMap(stmt.cte_map);
 
 	if (stmt.from_table) {
 		BoundCrossProductRef bound_crossproduct;
@@ -12820,9 +12910,60 @@ bool Binder::BindTableFunctionParameters(TableFunctionCatalogEntry &table_functi
 	return true;
 }
 
+unique_ptr<LogicalOperator>
+Binder::BindTableFunctionInternal(TableFunction &table_function, const string &function_name, vector<Value> parameters,
+                                  named_parameter_map_t named_parameters, vector<LogicalType> input_table_types,
+                                  vector<string> input_table_names, const vector<string> &column_name_alias,
+                                  unique_ptr<ExternalDependency> external_dependency) {
+	auto bind_index = GenerateTableIndex();
+	// perform the binding
+	unique_ptr<FunctionData> bind_data;
+	vector<LogicalType> return_types;
+	vector<string> return_names;
+	if (table_function.bind) {
+		TableFunctionBindInput bind_input(parameters, named_parameters, input_table_types, input_table_names,
+		                                  table_function.function_info.get());
+		bind_data = table_function.bind(context, bind_input, return_types, return_names);
+		if (table_function.name == "pandas_scan" || table_function.name == "arrow_scan") {
+			auto arrow_bind = (PyTableFunctionData *)bind_data.get();
+			arrow_bind->external_dependency = move(external_dependency);
+		}
+	}
+	if (return_types.size() != return_names.size()) {
+		throw InternalException(
+		    "Failed to bind \"%s\": Table function return_types and return_names must be of the same size",
+		    table_function.name);
+	}
+	if (return_types.empty()) {
+		throw InternalException("Failed to bind \"%s\": Table function must return at least one column",
+		                        table_function.name);
+	}
+	// overwrite the names with any supplied aliases
+	for (idx_t i = 0; i < column_name_alias.size() && i < return_names.size(); i++) {
+		return_names[i] = column_name_alias[i];
+	}
+	for (idx_t i = 0; i < return_names.size(); i++) {
+		if (return_names[i].empty()) {
+			return_names[i] = "C" + to_string(i);
+		}
+	}
+	auto get = make_unique<LogicalGet>(bind_index, table_function, move(bind_data), return_types, return_names);
+	// now add the table function to the bind context so its columns can be bound
+	bind_context.AddTableFunction(bind_index, function_name, return_names, return_types, *get);
+	return move(get);
+}
+
+unique_ptr<LogicalOperator> Binder::BindTableFunction(TableFunction &function, vector<Value> parameters) {
+	named_parameter_map_t named_parameters;
+	vector<LogicalType> input_table_types;
+	vector<string> input_table_names;
+	vector<string> column_name_aliases;
+	return BindTableFunctionInternal(function, function.name, move(parameters), move(named_parameters),
+	                                 move(input_table_types), move(input_table_names), column_name_aliases, nullptr);
+}
+
 unique_ptr<BoundTableRef> Binder::Bind(TableFunctionRef &ref) {
 	QueryErrorContext error_context(root_statement, ref.query_location);
-	auto bind_index = GenerateTableIndex();
 
 	D_ASSERT(ref.function->type == ExpressionType::FUNCTION);
 	auto fexpr = (FunctionExpression *)ref.function.get();
@@ -12896,42 +13037,9 @@ unique_ptr<BoundTableRef> Binder::Bind(TableFunctionRef &ref) {
 		input_table_types = subquery->subquery->types;
 		input_table_names = subquery->subquery->names;
 	}
-
-	// perform the binding
-	unique_ptr<FunctionData> bind_data;
-	vector<LogicalType> return_types;
-	vector<string> return_names;
-	if (table_function.bind) {
-		TableFunctionBindInput bind_input(parameters, named_parameters, input_table_types, input_table_names,
-		                                  table_function.function_info.get());
-		bind_data = table_function.bind(context, bind_input, return_types, return_names);
-		if (table_function.name == "pandas_scan" || table_function.name == "arrow_scan") {
-			auto arrow_bind = (PyTableFunctionData *)bind_data.get();
-			arrow_bind->external_dependency = move(ref.external_dependency);
-		}
-	}
-	if (return_types.size() != return_names.size()) {
-		throw InternalException(
-		    "Failed to bind \"%s\": Table function return_types and return_names must be of the same size",
-		    table_function.name);
-	}
-	if (return_types.empty()) {
-		throw InternalException("Failed to bind \"%s\": Table function must return at least one column",
-		                        table_function.name);
-	}
-	// overwrite the names with any supplied aliases
-	for (idx_t i = 0; i < ref.column_name_alias.size() && i < return_names.size(); i++) {
-		return_names[i] = ref.column_name_alias[i];
-	}
-	for (idx_t i = 0; i < return_names.size(); i++) {
-		if (return_names[i].empty()) {
-			return_names[i] = "C" + to_string(i);
-		}
-	}
-	auto get = make_unique<LogicalGet>(bind_index, table_function, move(bind_data), return_types, return_names);
-	// now add the table function to the bind context so its columns can be bound
-	bind_context.AddTableFunction(bind_index, ref.alias.empty() ? fexpr->function_name : ref.alias, return_names,
-	                              return_types, *get);
+	auto get = BindTableFunctionInternal(table_function, ref.alias.empty() ? fexpr->function_name : ref.alias,
+	                                     move(parameters), move(named_parameters), move(input_table_types),
+	                                     move(input_table_names), ref.column_name_alias, move(ref.external_dependency));
 	if (subquery) {
 		get->children.push_back(Binder::CreatePlan(*subquery));
 	}
@@ -13294,9 +13402,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundTableFunction &ref) {
 
 
 
+
+
 #include <algorithm>
-
-
 
 namespace duckdb {
 
@@ -13360,17 +13468,23 @@ BoundStatement Binder::Bind(SQLStatement &statement) {
 		return Bind((SetStatement &)statement);
 	case StatementType::LOAD_STATEMENT:
 		return Bind((LoadStatement &)statement);
+	case StatementType::EXTENSION_STATEMENT:
+		return Bind((ExtensionStatement &)statement);
 	default: // LCOV_EXCL_START
 		throw NotImplementedException("Unimplemented statement type \"%s\" for Bind",
 		                              StatementTypeToString(statement.type));
 	} // LCOV_EXCL_STOP
 }
 
-unique_ptr<BoundQueryNode> Binder::BindNode(QueryNode &node) {
-	// first we visit the set of CTEs and add them to the bind context
-	for (auto &cte_it : node.cte_map) {
+void Binder::AddCTEMap(CommonTableExpressionMap &cte_map) {
+	for (auto &cte_it : cte_map.map) {
 		AddCTE(cte_it.first, cte_it.second.get());
 	}
+}
+
+unique_ptr<BoundQueryNode> Binder::BindNode(QueryNode &node) {
+	// first we visit the set of CTEs and add them to the bind context
+	AddCTEMap(node.cte_map);
 	// now we bind the node
 	unique_ptr<BoundQueryNode> result;
 	switch (node.type) {
@@ -13649,6 +13763,22 @@ const unordered_set<string> &Binder::GetTableNames() {
 		return parent->GetTableNames();
 	}
 	return table_names;
+}
+
+void Binder::RemoveParameters(vector<unique_ptr<Expression>> &expressions) {
+	for (auto &expr : expressions) {
+		if (!expr->HasParameter()) {
+			continue;
+		}
+		ExpressionIterator::EnumerateExpression(expr, [&](Expression &child) {
+			for (auto param_it = parameters->begin(); param_it != parameters->end(); param_it++) {
+				if (expr->Equals(*param_it)) {
+					parameters->erase(param_it);
+					break;
+				}
+			}
+		});
+	}
 }
 
 string Binder::FormatError(ParsedExpression &expr_context, const string &message) {
@@ -17029,248 +17159,6 @@ idx_t LogicalSample::EstimateCardinality(ClientContext &context) {
 
 void LogicalSample::ResolveTypes() {
 	types = children[0]->types;
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-vector<ColumnBinding> LogicalUnnest::GetColumnBindings() {
-	auto child_bindings = children[0]->GetColumnBindings();
-	for (idx_t i = 0; i < expressions.size(); i++) {
-		child_bindings.emplace_back(unnest_index, i);
-	}
-	return child_bindings;
-}
-
-void LogicalUnnest::ResolveTypes() {
-	types.insert(types.end(), children[0]->types.begin(), children[0]->types.end());
-	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
-	}
-}
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-vector<ColumnBinding> LogicalWindow::GetColumnBindings() {
-	auto child_bindings = children[0]->GetColumnBindings();
-	for (idx_t i = 0; i < expressions.size(); i++) {
-		child_bindings.emplace_back(window_index, i);
-	}
-	return child_bindings;
-}
-
-void LogicalWindow::ResolveTypes() {
-	types.insert(types.end(), children[0]->types.begin(), children[0]->types.end());
-	for (auto &expr : expressions) {
-		types.push_back(expr->return_type);
-	}
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-namespace duckdb {
-
-Planner::Planner(ClientContext &context) : binder(Binder::CreateBinder(context)), context(context) {
-}
-
-void Planner::CreatePlan(SQLStatement &statement) {
-	auto &profiler = QueryProfiler::Get(context);
-	auto parameter_count = statement.n_param;
-
-	vector<BoundParameterExpression *> bound_parameters;
-
-	// first bind the tables and columns to the catalog
-	profiler.StartPhase("binder");
-	binder->parameters = &bound_parameters;
-	binder->parameter_types = &parameter_types;
-	auto bound_statement = binder->Bind(statement);
-	profiler.EndPhase();
-
-	this->properties = binder->properties;
-	this->properties.parameter_count = parameter_count;
-	this->names = bound_statement.names;
-	this->types = bound_statement.types;
-	this->plan = move(bound_statement.plan);
-	properties.bound_all_parameters = true;
-
-	// set up a map of parameter number -> value entries
-	for (auto &expr : bound_parameters) {
-		// check if the type of the parameter could be resolved
-		if (expr->return_type.id() == LogicalTypeId::INVALID || expr->return_type.id() == LogicalTypeId::UNKNOWN) {
-			properties.bound_all_parameters = false;
-			continue;
-		}
-		auto value = make_unique<Value>(expr->return_type);
-		expr->value = value.get();
-		// check if the parameter number has been used before
-		auto entry = value_map.find(expr->parameter_nr);
-		if (entry == value_map.end()) {
-			// not used before, create vector
-			value_map[expr->parameter_nr] = vector<unique_ptr<Value>>();
-		} else if (entry->second.back()->type() != value->type()) {
-			// used before, but types are inconsistent
-			throw BinderException(
-			    "Inconsistent types found for parameter with index %llu, current type %s, new type %s",
-			    expr->parameter_nr, entry->second.back()->type().ToString(), value->type().ToString());
-		}
-		value_map[expr->parameter_nr].push_back(move(value));
-	}
-}
-
-shared_ptr<PreparedStatementData> Planner::PrepareSQLStatement(unique_ptr<SQLStatement> statement) {
-	auto copied_statement = statement->Copy();
-	// create a plan of the underlying statement
-	CreatePlan(move(statement));
-	// now create the logical prepare
-	auto prepared_data = make_shared<PreparedStatementData>(copied_statement->type);
-	prepared_data->unbound_statement = move(copied_statement);
-	prepared_data->names = names;
-	prepared_data->types = types;
-	prepared_data->value_map = move(value_map);
-	prepared_data->properties = properties;
-	prepared_data->catalog_version = Transaction::GetTransaction(context).catalog_version;
-	return prepared_data;
-}
-
-void Planner::PlanExecute(unique_ptr<SQLStatement> statement) {
-	auto &stmt = (ExecuteStatement &)*statement;
-	auto parameter_count = stmt.n_param;
-
-	// bind the prepared statement
-	auto &client_data = ClientData::Get(context);
-
-	auto entry = client_data.prepared_statements.find(stmt.name);
-	if (entry == client_data.prepared_statements.end()) {
-		throw BinderException("Prepared statement \"%s\" does not exist", stmt.name);
-	}
-
-	// check if we need to rebind the prepared statement
-	// this happens if the catalog changes, since in this case e.g. tables we relied on may have been deleted
-	auto prepared = entry->second;
-	auto &catalog = Catalog::GetCatalog(context);
-	bool rebound = false;
-
-	// bind any supplied parameters
-	vector<Value> bind_values;
-	for (idx_t i = 0; i < stmt.values.size(); i++) {
-		ConstantBinder cbinder(*binder, context, "EXECUTE statement");
-		auto bound_expr = cbinder.Bind(stmt.values[i]);
-
-		Value value = ExpressionExecutor::EvaluateScalar(*bound_expr);
-		bind_values.push_back(move(value));
-	}
-	bool all_bound = prepared->properties.bound_all_parameters;
-	if (catalog.GetCatalogVersion() != entry->second->catalog_version || !all_bound) {
-		// catalog was modified or statement does not have clear types: rebind the statement before running the execute
-		for (auto &value : bind_values) {
-			parameter_types.push_back(value.type());
-		}
-		prepared = PrepareSQLStatement(entry->second->unbound_statement->Copy());
-		if (all_bound && prepared->types != entry->second->types) {
-			throw BinderException("Rebinding statement \"%s\" after catalog change resulted in change of types",
-			                      stmt.name);
-		}
-		D_ASSERT(prepared->properties.bound_all_parameters);
-		rebound = true;
-	}
-	// copy the properties of the prepared statement into the planner
-	this->properties = prepared->properties;
-	this->properties.parameter_count = parameter_count;
-	this->names = prepared->names;
-	this->types = prepared->types;
-
-	// add casts to the prepared statement parameters as required
-	for (idx_t i = 0; i < bind_values.size(); i++) {
-		if (prepared->value_map.count(i + 1) == 0) {
-			continue;
-		}
-		bind_values[i] = bind_values[i].CastAs(prepared->GetType(i + 1));
-	}
-
-	prepared->Bind(move(bind_values));
-	if (rebound) {
-		auto execute_plan = make_unique<LogicalExecute>(move(prepared));
-		execute_plan->children.push_back(move(plan));
-		this->plan = move(execute_plan);
-		return;
-	}
-
-	this->plan = make_unique<LogicalExecute>(move(prepared));
-}
-
-void Planner::PlanPrepare(unique_ptr<SQLStatement> statement) {
-	auto &stmt = (PrepareStatement &)*statement;
-	auto prepared_data = PrepareSQLStatement(move(stmt.statement));
-
-	auto prepare = make_unique<LogicalPrepare>(stmt.name, move(prepared_data), move(plan));
-	// we can prepare in read-only mode: prepared statements are not written to the catalog
-	properties.read_only = true;
-	// we can always prepare, even if the transaction has been invalidated
-	// this is required because most clients ALWAYS invoke prepared statements
-	properties.requires_valid_transaction = false;
-	properties.allow_stream_result = false;
-	properties.bound_all_parameters = true;
-	properties.parameter_count = 0;
-	properties.return_type = StatementReturnType::NOTHING;
-	this->names = {"Success"};
-	this->types = {LogicalType::BOOLEAN};
-	this->plan = move(prepare);
-}
-
-void Planner::CreatePlan(unique_ptr<SQLStatement> statement) {
-	D_ASSERT(statement);
-	switch (statement->type) {
-	case StatementType::SELECT_STATEMENT:
-	case StatementType::INSERT_STATEMENT:
-	case StatementType::COPY_STATEMENT:
-	case StatementType::DELETE_STATEMENT:
-	case StatementType::UPDATE_STATEMENT:
-	case StatementType::CREATE_STATEMENT:
-	case StatementType::DROP_STATEMENT:
-	case StatementType::ALTER_STATEMENT:
-	case StatementType::TRANSACTION_STATEMENT:
-	case StatementType::EXPLAIN_STATEMENT:
-	case StatementType::VACUUM_STATEMENT:
-	case StatementType::RELATION_STATEMENT:
-	case StatementType::CALL_STATEMENT:
-	case StatementType::EXPORT_STATEMENT:
-	case StatementType::PRAGMA_STATEMENT:
-	case StatementType::SHOW_STATEMENT:
-	case StatementType::SET_STATEMENT:
-	case StatementType::LOAD_STATEMENT:
-		CreatePlan(*statement);
-		break;
-	case StatementType::EXECUTE_STATEMENT:
-		PlanExecute(move(statement));
-		break;
-	case StatementType::PREPARE_STATEMENT:
-		PlanPrepare(move(statement));
-		break;
-	default:
-		throw NotImplementedException("Cannot plan statement of type %s!", StatementTypeToString(statement->type));
-	}
 }
 
 } // namespace duckdb

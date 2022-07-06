@@ -1,4 +1,4 @@
-// See https://raw.githubusercontent.com/cwida/duckdb/master/LICENSE for licensing information
+// See https://raw.githubusercontent.com/duckdb/duckdb/master/LICENSE for licensing information
 
 #include "duckdb.hpp"
 #include "duckdb-internal.hpp"
@@ -6488,21 +6488,19 @@ void BaseScalarFunction::CastToFunctionArguments(vector<unique_ptr<Expression>> 
 	}
 }
 
-unique_ptr<BoundFunctionExpression> ScalarFunction::BindScalarFunction(ClientContext &context, const string &schema,
-                                                                       const string &name,
-                                                                       vector<unique_ptr<Expression>> children,
-                                                                       string &error, bool is_operator) {
+unique_ptr<Expression> ScalarFunction::BindScalarFunction(ClientContext &context, const string &schema,
+                                                          const string &name, vector<unique_ptr<Expression>> children,
+                                                          string &error, bool is_operator, Binder *binder) {
 	// bind the function
 	auto function = Catalog::GetCatalog(context).GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, schema, name);
 	D_ASSERT(function && function->type == CatalogType::SCALAR_FUNCTION_ENTRY);
 	return ScalarFunction::BindScalarFunction(context, (ScalarFunctionCatalogEntry &)*function, move(children), error,
-	                                          is_operator);
+	                                          is_operator, binder);
 }
 
-unique_ptr<BoundFunctionExpression> ScalarFunction::BindScalarFunction(ClientContext &context,
-                                                                       ScalarFunctionCatalogEntry &func,
-                                                                       vector<unique_ptr<Expression>> children,
-                                                                       string &error, bool is_operator) {
+unique_ptr<Expression> ScalarFunction::BindScalarFunction(ClientContext &context, ScalarFunctionCatalogEntry &func,
+                                                          vector<unique_ptr<Expression>> children, string &error,
+                                                          bool is_operator, Binder *binder) {
 	// bind the function
 	bool cast_parameters;
 	idx_t best_function = Function::BindFunction(func.name, func.functions, children, error, cast_parameters);
@@ -6512,6 +6510,18 @@ unique_ptr<BoundFunctionExpression> ScalarFunction::BindScalarFunction(ClientCon
 
 	// found a matching function!
 	auto &bound_function = func.functions[best_function];
+
+	if (bound_function.null_handling == FunctionNullHandling::NULL_IN_NULL_OUT) {
+		for (auto &child : children) {
+			if (child->return_type == LogicalTypeId::SQLNULL) {
+				if (binder) {
+					binder->RemoveParameters(children);
+				}
+				return make_unique<BoundConstantExpression>(Value(LogicalType::SQLNULL));
+			}
+		}
+	}
+
 	return ScalarFunction::BindScalarFunction(context, bound_function, move(children), is_operator, cast_parameters);
 }
 
@@ -6634,6 +6644,18 @@ void MacroFunction::CopyProperties(MacroFunction &other) {
 	}
 }
 
+string MacroFunction::ToSQL(const string &schema, const string &name) {
+	vector<string> param_strings;
+	for (auto &param : parameters) {
+		param_strings.push_back(param->ToString());
+	}
+	for (auto &named_param : default_parameters) {
+		param_strings.push_back(StringUtil::Format("%s := %s", named_param.first, named_param.second->ToString()));
+	}
+
+	return StringUtil::Format("CREATE MACRO %s.%s(%s) AS ", schema, name, StringUtil::Join(param_strings, ", "));
+}
+
 } // namespace duckdb
 
 
@@ -6653,8 +6675,8 @@ namespace duckdb {
 
 static void PragmaEnableProfilingStatement(ClientContext &context, const FunctionParameters &parameters) {
 	auto &config = ClientConfig::GetConfig(context);
-	config.profiler_print_format = ProfilerPrintFormat::QUERY_TREE;
 	config.enable_profiler = true;
+	config.emit_profiler_output = true;
 }
 
 void RegisterEnableProfiling(BuiltinFunctions &set) {
@@ -6668,7 +6690,6 @@ void RegisterEnableProfiling(BuiltinFunctions &set) {
 static void PragmaDisableProfiling(ClientContext &context, const FunctionParameters &parameters) {
 	auto &config = ClientConfig::GetConfig(context);
 	config.enable_profiler = false;
-	config.profiler_print_format = ProfilerPrintFormat::NONE;
 }
 
 static void PragmaEnableProgressBar(ClientContext &context, const FunctionParameters &parameters) {
@@ -10457,11 +10478,6 @@ void MakeDateFun::RegisterFunction(BuiltinFunctions &set) {
 
 
 
-
-
-
-
-
 #include <cctype>
 
 namespace duckdb {
@@ -11756,8 +11772,10 @@ static void StrpTimeFunction(DataChunk &args, ExpressionState &state, Vector &re
 void StrpTimeFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet strptime("strptime");
 
-	strptime.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::TIMESTAMP,
-	                                    StrpTimeFunction, false, false, StrpTimeBindFunction));
+	auto fun = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::TIMESTAMP, StrpTimeFunction,
+	                          false, false, StrpTimeBindFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	strptime.AddFunction(fun);
 
 	set.AddFunction(strptime);
 }
@@ -12021,9 +12039,11 @@ void EnumRange::RegisterFunction(BuiltinFunctions &set) {
 }
 
 void EnumRangeBoundary::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("enum_range_boundary", {LogicalType::ANY, LogicalType::ANY},
-	                               LogicalType::LIST(LogicalType::VARCHAR), EnumRangeBoundaryFunction, false,
-	                               BindEnumRangeBoundaryFunction));
+	auto fun = ScalarFunction("enum_range_boundary", {LogicalType::ANY, LogicalType::ANY},
+	                          LogicalType::LIST(LogicalType::VARCHAR), EnumRangeBoundaryFunction, false,
+	                          BindEnumRangeBoundaryFunction);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -12200,8 +12220,10 @@ unique_ptr<FunctionData> CurrentSettingBind(ClientContext &context, ScalarFuncti
 }
 
 void CurrentSettingFun::RegisterFunction(BuiltinFunctions &set) {
-	set.AddFunction(ScalarFunction("current_setting", {LogicalType::VARCHAR}, LogicalType::ANY, CurrentSettingFunction,
-	                               false, CurrentSettingBind));
+	auto fun = ScalarFunction("current_setting", {LogicalType::VARCHAR}, LogicalType::ANY, CurrentSettingFunction,
+	                          false, CurrentSettingBind);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction(fun);
 }
 
 } // namespace duckdb
@@ -12319,22 +12341,24 @@ static void LeastGreatestFunction(DataChunk &args, ExpressionState &state, Vecto
 template <typename T, class OP>
 ScalarFunction GetLeastGreatestFunction(const LogicalType &type) {
 	return ScalarFunction({type}, type, LeastGreatestFunction<T, OP>, true, false, nullptr, nullptr, nullptr, nullptr,
-	                      type);
+	                      type, FunctionNullHandling::SPECIAL_HANDLING);
 }
 
 template <class OP>
 static void RegisterLeastGreatest(BuiltinFunctions &set, const string &fun_name) {
 	ScalarFunctionSet fun_set(fun_name);
 	fun_set.AddFunction(ScalarFunction({LogicalType::BIGINT}, LogicalType::BIGINT, LeastGreatestFunction<int64_t, OP>,
-	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::BIGINT));
+	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::BIGINT,
+	                                   FunctionNullHandling::SPECIAL_HANDLING));
 	fun_set.AddFunction(ScalarFunction({LogicalType::HUGEINT}, LogicalType::HUGEINT,
 	                                   LeastGreatestFunction<hugeint_t, OP>, true, false, nullptr, nullptr, nullptr,
-	                                   nullptr, LogicalType::HUGEINT));
+	                                   nullptr, LogicalType::HUGEINT, FunctionNullHandling::SPECIAL_HANDLING));
 	fun_set.AddFunction(ScalarFunction({LogicalType::DOUBLE}, LogicalType::DOUBLE, LeastGreatestFunction<double, OP>,
-	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::DOUBLE));
+	                                   true, false, nullptr, nullptr, nullptr, nullptr, LogicalType::DOUBLE,
+	                                   FunctionNullHandling::SPECIAL_HANDLING));
 	fun_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                   LeastGreatestFunction<string_t, OP, true>, true, false, nullptr, nullptr,
-	                                   nullptr, nullptr, LogicalType::VARCHAR));
+	                                   nullptr, nullptr, LogicalType::VARCHAR, FunctionNullHandling::SPECIAL_HANDLING));
 
 	fun_set.AddFunction(GetLeastGreatestFunction<timestamp_t, OP>(LogicalType::TIMESTAMP));
 	fun_set.AddFunction(GetLeastGreatestFunction<time_t, OP>(LogicalType::TIME));
@@ -12624,6 +12648,7 @@ static unique_ptr<FunctionData> ArraySliceBind(ClientContext &context, ScalarFun
 		bound_function.arguments[1] = LogicalType::INTEGER;
 		bound_function.arguments[2] = LogicalType::INTEGER;
 		break;
+	case LogicalTypeId::SQLNULL:
 	case LogicalTypeId::UNKNOWN:
 		bound_function.arguments[0] = LogicalTypeId::UNKNOWN;
 		bound_function.return_type = LogicalType::SQLNULL;
@@ -12640,6 +12665,7 @@ void ArraySliceFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun({LogicalType::ANY, LogicalType::BIGINT, LogicalType::BIGINT}, LogicalType::ANY,
 	                   ArraySliceFunction, false, false, ArraySliceBind);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction({"array_slice", "list_slice"}, fun);
 }
 
@@ -12815,17 +12841,7 @@ static unique_ptr<FunctionData> ListContainsOrPositionBind(ClientContext &contex
 
 	const auto &list = arguments[0]->return_type; // change to list
 	const auto &value = arguments[1]->return_type;
-	if (list.id() == LogicalTypeId::SQLNULL && value.id() == LogicalTypeId::SQLNULL) {
-		bound_function.arguments[0] = LogicalType::SQLNULL;
-		bound_function.arguments[1] = LogicalType::SQLNULL;
-		bound_function.return_type = LogicalType::SQLNULL;
-	} else if (list.id() == LogicalTypeId::SQLNULL || value.id() == LogicalTypeId::SQLNULL) {
-		// In case either the list or the value is NULL, return NULL
-		// Similar to behaviour of prestoDB
-		bound_function.arguments[0] = list;
-		bound_function.arguments[1] = value;
-		bound_function.return_type = LogicalTypeId::SQLNULL;
-	} else if (list.id() == LogicalTypeId::UNKNOWN) {
+	if (list.id() == LogicalTypeId::UNKNOWN) {
 		bound_function.return_type = RETURN_TYPE;
 		if (value.id() != LogicalTypeId::UNKNOWN) {
 			// only list is a parameter, cast it to a list of value type
@@ -12977,10 +12993,6 @@ static unique_ptr<FunctionData> ListFlattenBind(ClientContext &context, ScalarFu
 
 	auto &input_type = arguments[0]->return_type;
 	bound_function.arguments[0] = input_type;
-	if (input_type.id() == LogicalTypeId::SQLNULL) {
-		bound_function.return_type = LogicalType(LogicalTypeId::SQLNULL);
-		return make_unique<VariableReturnBindData>(bound_function.return_type);
-	}
 	if (input_type.id() == LogicalTypeId::UNKNOWN) {
 		bound_function.arguments[0] = LogicalType(LogicalTypeId::UNKNOWN);
 		bound_function.return_type = LogicalType(LogicalTypeId::SQLNULL);
@@ -13385,7 +13397,6 @@ static unique_ptr<FunctionData> ListAggregatesBindFunction(ClientContext &contex
 template <bool IS_AGGR = false>
 static unique_ptr<FunctionData> ListAggregatesBind(ClientContext &context, ScalarFunction &bound_function,
                                                    vector<unique_ptr<Expression>> &arguments) {
-
 	if (arguments[0]->return_type.id() == LogicalTypeId::SQLNULL) {
 		bound_function.arguments[0] = LogicalType::SQLNULL;
 		bound_function.return_type = LogicalType::SQLNULL;
@@ -13472,8 +13483,10 @@ static unique_ptr<FunctionData> ListUniqueBind(ClientContext &context, ScalarFun
 }
 
 ScalarFunction ListAggregateFun::GetFunction() {
-	return ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR}, LogicalType::ANY,
-	                      ListAggregateFunction, false, false, ListAggregateBind);
+	auto result = ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::VARCHAR}, LogicalType::ANY,
+	                             ListAggregateFunction, false, false, ListAggregateBind);
+	result.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return result;
 }
 
 ScalarFunction ListDistinctFun::GetFunction() {
@@ -13580,9 +13593,7 @@ static unique_ptr<FunctionData> ListConcatBind(ClientContext &context, ScalarFun
 
 	auto &lhs = arguments[0]->return_type;
 	auto &rhs = arguments[1]->return_type;
-	if (lhs.id() == LogicalTypeId::SQLNULL && rhs.id() == LogicalTypeId::SQLNULL) {
-		bound_function.return_type = LogicalType::SQLNULL;
-	} else if (lhs.id() == LogicalTypeId::SQLNULL || rhs.id() == LogicalTypeId::SQLNULL) {
+	if (lhs.id() == LogicalTypeId::SQLNULL || rhs.id() == LogicalTypeId::SQLNULL) {
 		// we mimic postgres behaviour: list_concat(NULL, my_list) = my_list
 		bound_function.arguments[0] = lhs;
 		bound_function.arguments[1] = rhs;
@@ -13623,9 +13634,11 @@ static unique_ptr<BaseStatistics> ListConcatStats(ClientContext &context, Functi
 
 ScalarFunction ListConcatFun::GetFunction() {
 	// the arguments and return types are actually set in the binder function
-	return ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::LIST(LogicalType::ANY)},
-	                      LogicalType::LIST(LogicalType::ANY), ListConcatFunction, false, false, ListConcatBind,
-	                      nullptr, ListConcatStats);
+	auto fun = ScalarFunction({LogicalType::LIST(LogicalType::ANY), LogicalType::LIST(LogicalType::ANY)},
+	                          LogicalType::LIST(LogicalType::ANY), ListConcatFunction, false, false, ListConcatBind,
+	                          nullptr, ListConcatStats);
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return fun;
 }
 
 void ListConcatFun::RegisterFunction(BuiltinFunctions &set) {
@@ -13833,14 +13846,9 @@ static void ListExtractFunction(DataChunk &args, ExpressionState &state, Vector 
 static unique_ptr<FunctionData> ListExtractBind(ClientContext &context, ScalarFunction &bound_function,
                                                 vector<unique_ptr<Expression>> &arguments) {
 	D_ASSERT(bound_function.arguments.size() == 2);
-	if (arguments[0]->return_type.id() == LogicalTypeId::SQLNULL) {
-		bound_function.arguments[0] = LogicalType::SQLNULL;
-		bound_function.return_type = LogicalType::SQLNULL;
-	} else {
-		D_ASSERT(LogicalTypeId::LIST == arguments[0]->return_type.id());
-		// list extract returns the child type of the list as return type
-		bound_function.return_type = ListType::GetChildType(arguments[0]->return_type);
-	}
+	D_ASSERT(LogicalTypeId::LIST == arguments[0]->return_type.id());
+	// list extract returns the child type of the list as return type
+	bound_function.return_type = ListType::GetChildType(arguments[0]->return_type);
 	return make_unique<VariableReturnBindData>(bound_function.return_type);
 }
 
@@ -14119,13 +14127,6 @@ static void ListSortFunction(DataChunk &args, ExpressionState &state, Vector &re
 static unique_ptr<FunctionData> ListSortBind(ClientContext &context, ScalarFunction &bound_function,
                                              vector<unique_ptr<Expression>> &arguments, OrderType &order,
                                              OrderByNullType &null_order) {
-
-	if (arguments[0]->return_type.id() == LogicalTypeId::SQLNULL) {
-		bound_function.arguments[0] = LogicalType::SQLNULL;
-		bound_function.return_type = LogicalType::SQLNULL;
-		return make_unique<VariableReturnBindData>(bound_function.return_type);
-	}
-
 	bound_function.arguments[0] = arguments[0]->return_type;
 	bound_function.return_type = arguments[0]->return_type;
 	auto child_type = ListType::GetChildType(arguments[0]->return_type);
@@ -14327,6 +14328,7 @@ void ListValueFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun("list_value", {}, LogicalTypeId::LIST, ListValueFunction, false, ListValueBind, nullptr,
 	                   ListValueStats);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 	fun.name = "list_pack";
 	set.AddFunction(fun);
@@ -14647,6 +14649,7 @@ void CardinalityFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun("cardinality", {LogicalType::ANY}, LogicalType::UBIGINT, CardinalityFunction, false,
 	                   CardinalityBind);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 }
 
@@ -14805,6 +14808,7 @@ void MapFun::RegisterFunction(BuiltinFunctions &set) {
 	//! the arguments and return types are actually set in the binder function
 	ScalarFunction fun("map", {}, LogicalTypeId::MAP, MapFunction, false, MapBind);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 }
 
@@ -14881,6 +14885,7 @@ void MapExtractFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun("map_extract", {LogicalType::ANY, LogicalType::ANY}, LogicalType::ANY, MapExtractFunction, false,
 	                   MapExtractBind);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 	fun.name = "element_at";
 	set.AddFunction(fun);

@@ -8,13 +8,12 @@ a new feature, first clone DuckDB git repository:
 
 Then generate the amalgamated .cpp and .hpp files:
 
-    python scripts/amalgamation.py --extended
+    python scripts/amalgamation.py --extended --splits=8
     python scripts/parquet_amalgamation.py
 
 Then copy the generated files to velox/external/duckdb:
 
-    rsync -vrh src/amalgamation/duckdb.* <path/to/velox>/velox/external/duckdb/
-    rsync -vrh src/amalgamation/parquet* <path/to/velox>/velox/external/duckdb/
+    rsync -vrh src/amalgamation/* <path/to/velox>/velox/external/duckdb/
 
 We also maintain a copy of TPC-H dataset generators that need to be updated:
 

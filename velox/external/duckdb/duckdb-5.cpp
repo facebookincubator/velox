@@ -1,4 +1,4 @@
-// See https://raw.githubusercontent.com/cwida/duckdb/master/LICENSE for licensing information
+// See https://raw.githubusercontent.com/duckdb/duckdb/master/LICENSE for licensing information
 
 #include "duckdb.hpp"
 #include "duckdb-internal.hpp"
@@ -2003,7 +2003,6 @@ void CHR::RegisterFunction(BuiltinFunctions &set) {
 
 
 
-
 #include <string.h>
 
 namespace duckdb {
@@ -2244,6 +2243,7 @@ void ConcatFun::RegisterFunction(BuiltinFunctions &set) {
 	// concat_ws(',', '', '') = ","
 	ScalarFunction concat = ScalarFunction("concat", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ConcatFunction);
 	concat.varargs = LogicalType::VARCHAR;
+	concat.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(concat);
 
 	ScalarFunctionSet concat_op("||");
@@ -2251,11 +2251,15 @@ void ConcatFun::RegisterFunction(BuiltinFunctions &set) {
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, ConcatOperator));
 	concat_op.AddFunction(ScalarFunction({LogicalType::BLOB, LogicalType::BLOB}, LogicalType::BLOB, ConcatOperator));
 	concat_op.AddFunction(ListConcatFun::GetFunction());
+	for (auto &fun : concat_op.functions) {
+		fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	}
 	set.AddFunction(concat_op);
 
 	ScalarFunction concat_ws = ScalarFunction("concat_ws", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                          LogicalType::VARCHAR, ConcatWSFunction);
 	concat_ws.varargs = LogicalType::VARCHAR;
+	concat_ws.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(concat_ws);
 }
 
@@ -4258,19 +4262,22 @@ void RegexpFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet regexp_full_match("regexp_full_match");
 	regexp_full_match.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
 	                                             RegexpMatchesFunction<RegexFullMatch>, false, false, RegexpMatchesBind,
-	                                             nullptr, nullptr, RegexInitLocalState));
+	                                             nullptr, nullptr, RegexInitLocalState, LogicalType::INVALID,
+	                                             FunctionNullHandling::SPECIAL_HANDLING));
 	regexp_full_match.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                             LogicalType::BOOLEAN, RegexpMatchesFunction<RegexFullMatch>, false,
-	                                             false, RegexpMatchesBind, nullptr, nullptr, RegexInitLocalState));
+	                                             false, RegexpMatchesBind, nullptr, nullptr, RegexInitLocalState,
+	                                             LogicalType::INVALID, FunctionNullHandling::SPECIAL_HANDLING));
 
 	ScalarFunctionSet regexp_partial_match("regexp_matches");
 	regexp_partial_match.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
 	                                                RegexpMatchesFunction<RegexPartialMatch>, false, false,
-	                                                RegexpMatchesBind, nullptr, nullptr, RegexInitLocalState));
-	regexp_partial_match.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                LogicalType::BOOLEAN, RegexpMatchesFunction<RegexPartialMatch>,
-	                                                false, false, RegexpMatchesBind, nullptr, nullptr,
-	                                                RegexInitLocalState));
+	                                                RegexpMatchesBind, nullptr, nullptr, RegexInitLocalState,
+	                                                LogicalType::INVALID, FunctionNullHandling::SPECIAL_HANDLING));
+	regexp_partial_match.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
+	                   RegexpMatchesFunction<RegexPartialMatch>, false, false, RegexpMatchesBind, nullptr, nullptr,
+	                   RegexInitLocalState, LogicalType::INVALID, FunctionNullHandling::SPECIAL_HANDLING));
 
 	ScalarFunctionSet regexp_replace("regexp_replace");
 	regexp_replace.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
@@ -4283,10 +4290,12 @@ void RegexpFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunctionSet regexp_extract("regexp_extract");
 	regexp_extract.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                          RegexExtractFunction, false, false, RegexExtractBind, nullptr, nullptr,
-	                                          RegexExtractInitLocalState));
+	                                          RegexExtractInitLocalState, LogicalType::INVALID,
+	                                          FunctionNullHandling::SPECIAL_HANDLING));
 	regexp_extract.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::INTEGER},
 	                                          LogicalType::VARCHAR, RegexExtractFunction, false, false,
-	                                          RegexExtractBind, nullptr, nullptr, RegexExtractInitLocalState));
+	                                          RegexExtractBind, nullptr, nullptr, RegexExtractInitLocalState,
+	                                          LogicalType::INVALID, FunctionNullHandling::SPECIAL_HANDLING));
 
 	set.AddFunction(regexp_full_match);
 	set.AddFunction(regexp_partial_match);
@@ -4481,8 +4490,6 @@ void ReverseFun::RegisterFunction(BuiltinFunctions &set) {
 }
 
 } // namespace duckdb
-
-
 
 
 
@@ -4734,12 +4741,15 @@ static void StringSplitRegexFunction(DataChunk &args, ExpressionState &state, Ve
 void StringSplitFun::RegisterFunction(BuiltinFunctions &set) {
 	auto varchar_list_type = LogicalType::LIST(LogicalType::VARCHAR);
 
-	set.AddFunction(
-	    {"string_split", "str_split", "string_to_array", "split"},
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, varchar_list_type, StringSplitFunction));
-	set.AddFunction(
-	    {"string_split_regex", "str_split_regex", "regexp_split_to_array"},
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, varchar_list_type, StringSplitRegexFunction));
+	auto regular_fun =
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, varchar_list_type, StringSplitFunction);
+	regular_fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction({"string_split", "str_split", "string_to_array", "split"}, regular_fun);
+
+	auto regex_fun =
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, varchar_list_type, StringSplitRegexFunction);
+	regex_fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	set.AddFunction({"string_split_regex", "str_split_regex", "regexp_split_to_array"}, regex_fun);
 }
 
 } // namespace duckdb
@@ -5278,12 +5288,6 @@ static void StructExtractFunction(DataChunk &args, ExpressionState &state, Vecto
 static unique_ptr<FunctionData> StructExtractBind(ClientContext &context, ScalarFunction &bound_function,
                                                   vector<unique_ptr<Expression>> &arguments) {
 	D_ASSERT(bound_function.arguments.size() == 2);
-	if (arguments[0]->return_type.id() == LogicalTypeId::SQLNULL ||
-	    arguments[1]->return_type.id() == LogicalTypeId::SQLNULL) {
-		bound_function.return_type = LogicalType::SQLNULL;
-		bound_function.arguments[0] = LogicalType::SQLNULL;
-		return make_unique<StructExtractBindData>("", 0, LogicalType::SQLNULL);
-	}
 	D_ASSERT(LogicalTypeId::STRUCT == arguments[0]->return_type.id());
 	auto &struct_children = StructType::GetChildTypes(arguments[0]->return_type);
 	if (struct_children.empty()) {
@@ -5541,6 +5545,7 @@ void StructPackFun::RegisterFunction(BuiltinFunctions &set) {
 	ScalarFunction fun("struct_pack", {}, LogicalTypeId::STRUCT, StructPackFunction, false, StructPackBind, nullptr,
 	                   StructPackStats);
 	fun.varargs = LogicalType::ANY;
+	fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	set.AddFunction(fun);
 	fun.name = "row";
 	set.AddFunction(fun);
@@ -5839,14 +5844,19 @@ ExportAggregateFunction::Bind(unique_ptr<BoundAggregateExpression> child_aggrega
 }
 
 ScalarFunction ExportAggregateFunction::GetFinalize() {
-	return ScalarFunction("finalize", {LogicalTypeId::AGGREGATE_STATE}, LogicalTypeId::INVALID, AggregateStateFinalize,
-	                      false, BindAggregateState, nullptr, nullptr, InitFinalizeState);
+	auto result =
+	    ScalarFunction("finalize", {LogicalTypeId::AGGREGATE_STATE}, LogicalTypeId::INVALID, AggregateStateFinalize,
+	                   false, BindAggregateState, nullptr, nullptr, InitFinalizeState);
+	result.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return result;
 }
 
 ScalarFunction ExportAggregateFunction::GetCombine() {
-	return ScalarFunction("combine", {LogicalTypeId::AGGREGATE_STATE, LogicalTypeId::ANY},
-	                      LogicalTypeId::AGGREGATE_STATE, AggregateStateCombine, false, BindAggregateState, nullptr,
-	                      nullptr, InitCombineState);
+	auto result =
+	    ScalarFunction("combine", {LogicalTypeId::AGGREGATE_STATE, LogicalTypeId::ANY}, LogicalTypeId::AGGREGATE_STATE,
+	                   AggregateStateCombine, false, BindAggregateState, nullptr, nullptr, InitCombineState);
+	result.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	return result;
 }
 
 } // namespace duckdb
@@ -5966,19 +5976,21 @@ FunctionLocalState::~FunctionLocalState() {
 ScalarFunction::ScalarFunction(string name, vector<LogicalType> arguments, LogicalType return_type,
                                scalar_function_t function, bool has_side_effects, bind_scalar_function_t bind,
                                dependency_function_t dependency, function_statistics_t statistics,
-                               init_local_state_t init_local_state, LogicalType varargs, bool propagate_null_values)
+                               init_local_state_t init_local_state, LogicalType varargs, bool propagate_null_values,
+                               FunctionNullHandling null_handling)
     : BaseScalarFunction(move(name), move(arguments), move(return_type), has_side_effects, move(varargs),
                          propagate_null_values),
       function(move(function)), bind(bind), init_local_state(init_local_state), dependency(dependency),
-      statistics(statistics) {
+      statistics(statistics), null_handling(null_handling) {
 }
 
 ScalarFunction::ScalarFunction(vector<LogicalType> arguments, LogicalType return_type, scalar_function_t function,
                                bool propagate_null_values, bool has_side_effects, bind_scalar_function_t bind,
                                dependency_function_t dependency, function_statistics_t statistics,
-                               init_local_state_t init_local_state, LogicalType varargs)
+                               init_local_state_t init_local_state, LogicalType varargs,
+                               FunctionNullHandling null_handling)
     : ScalarFunction(string(), move(arguments), move(return_type), move(function), has_side_effects, bind, dependency,
-                     statistics, init_local_state, move(varargs), propagate_null_values) {
+                     statistics, init_local_state, move(varargs), propagate_null_values, null_handling) {
 }
 
 bool ScalarFunction::operator==(const ScalarFunction &rhs) const {
@@ -6047,6 +6059,8 @@ void ScalarFunction::NopFunction(DataChunk &input, ExpressionState &state, Vecto
 
 
 
+
+
 namespace duckdb {
 
 ScalarMacroFunction::ScalarMacroFunction(unique_ptr<ParsedExpression> expression)
@@ -6062,6 +6076,26 @@ unique_ptr<MacroFunction> ScalarMacroFunction::Copy() {
 	CopyProperties(*result);
 
 	return move(result);
+}
+
+void RemoveQualificationRecursive(unique_ptr<ParsedExpression> &expr) {
+	if (expr->GetExpressionType() == ExpressionType::COLUMN_REF) {
+		auto &col_ref = (ColumnRefExpression &)*expr;
+		auto &col_names = col_ref.column_names;
+		if (col_names.size() == 2 && col_names[0] == MacroBinding::MACRO_NAME) {
+			col_names.erase(col_names.begin());
+		}
+	} else {
+		ParsedExpressionIterator::EnumerateChildren(
+		    *expr, [](unique_ptr<ParsedExpression> &child) { RemoveQualificationRecursive(child); });
+	}
+}
+
+string ScalarMacroFunction::ToSQL(const string &schema, const string &name) {
+	// In case of nested macro's we need to fix it a bit
+	auto expression_copy = expression->Copy();
+	RemoveQualificationRecursive(expression_copy);
+	return MacroFunction::ToSQL(schema, name) + StringUtil::Format("(%s);", expression_copy->ToString());
 }
 
 } // namespace duckdb
@@ -12544,7 +12578,11 @@ TableFunction::TableFunction(const vector<LogicalType> &arguments, table_functio
                              table_function_init_local_t init_local)
     : TableFunction(string(), arguments, function, bind, init_global, init_local) {
 }
-TableFunction::TableFunction() : SimpleNamedParameterFunction("", {}) {
+TableFunction::TableFunction()
+    : SimpleNamedParameterFunction("", {}), bind(nullptr), init_global(nullptr), init_local(nullptr), function(nullptr),
+      in_out_function(nullptr), statistics(nullptr), dependency(nullptr), cardinality(nullptr),
+      pushdown_complex_filter(nullptr), to_string(nullptr), table_scan_progress(nullptr), get_batch_index(nullptr),
+      projection_pushdown(false), filter_pushdown(false) {
 }
 
 } // namespace duckdb
@@ -12556,6 +12594,7 @@ TableFunction::TableFunction() : SimpleNamedParameterFunction("", {}) {
 //
 //===----------------------------------------------------------------------===//
 //! The SelectStatement of the view
+
 
 
 
@@ -12574,6 +12613,10 @@ unique_ptr<MacroFunction> TableMacroFunction::Copy() {
 	result->query_node = query_node->Copy();
 	this->CopyProperties(*result);
 	return move(result);
+}
+
+string TableMacroFunction::ToSQL(const string &schema, const string &name) {
+	return MacroFunction::ToSQL(schema, name) + StringUtil::Format("TABLE (%s);", query_node->ToString());
 }
 
 } // namespace duckdb
@@ -16423,6 +16466,7 @@ void ClientContext::EnableProfiling() {
 	auto lock = LockContext();
 	auto &config = ClientConfig::GetConfig(*this);
 	config.enable_profiler = true;
+	config.emit_profiler_output = true;
 }
 
 void ClientContext::DisableProfiling() {
@@ -16834,6 +16878,7 @@ ParserOptions ClientContext::GetParserOptions() {
 	ParserOptions options;
 	options.preserve_identifier_case = ClientConfig::GetConfig(*this).preserve_identifier_case;
 	options.max_expression_depth = ClientConfig::GetConfig(*this).max_expression_depth;
+	options.extensions = &DBConfig::GetConfig(*this).parser_extensions;
 	return options;
 }
 
