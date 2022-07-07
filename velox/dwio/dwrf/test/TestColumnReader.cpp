@@ -103,11 +103,11 @@ class SelectiveColumnReaderBuilder {
     scanSpec_ = std::make_unique<common::ScanSpec>("root");
     makeFieldSpecs("", 0, rowType, scanSpec_.get());
 
-    return SelectiveColumnReader::build(
+    SelectiveColumnReaderFactory selectiveColumnReaderFactory(scanSpec_.get());
+    return selectiveColumnReaderFactory.build(
         cs.getSchemaWithId(),
         dataTypeWithId,
         stripe,
-        scanSpec_.get(),
         FlatMapContext::nonFlatMapContext());
   }
 
