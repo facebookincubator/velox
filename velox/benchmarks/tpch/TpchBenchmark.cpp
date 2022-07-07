@@ -58,10 +58,10 @@ void ensureTaskCompletion(exec::Task* task) {
   ASSERT_TRUE(waitForTaskCompletion(task));
 }
 
-void printResults(const std::vector<RowVectorPtr>& actualResults) {
+void printResults(const std::vector<RowVectorPtr>& results) {
   std::cout << "Results:" << std::endl;
   bool printType = true;
-  for (const auto& vector : actualResults) {
+  for (const auto& vector : results) {
     // Print RowType only once.
     if (printType) {
       std::cout << vector->type()->asRow().toString() << std::endl;
