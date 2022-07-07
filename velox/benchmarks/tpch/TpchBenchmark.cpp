@@ -57,6 +57,21 @@ void ensureTaskCompletion(exec::Task* task) {
   // ASSERT_TRUE requires a function with return type void.
   ASSERT_TRUE(waitForTaskCompletion(task));
 }
+
+void printResults(const std::vector<RowVectorPtr>& actualResults) {
+  std::cout << "Results:" << std::endl;
+  bool printType = true;
+  for (const auto& vector : actualResults) {
+    // Print RowType only once.
+    if (printType) {
+      std::cout << vector->type()->asRow().toString() << std::endl;
+      printType = false;
+    }
+    for (size_t i = 0; i < vector->size(); ++i) {
+      std::cout << vector->toString(i) << std::endl;
+    }
+  }
+}
 } // namespace
 
 DEFINE_string(data_path, "", "Root path of TPC-H data");
@@ -170,19 +185,7 @@ int main(int argc, char** argv) {
     auto task = cursor->task();
     ensureTaskCompletion(task.get());
     if (FLAGS_include_results) {
-      std::cout << "Results:" << std::endl;
-      bool printType = false;
-      for (const auto& vector : actualResults) {
-        // Print RowType only once.
-        if (!printType) {
-          std::cout << vector->type()->as<TypeKind::ROW>().toString()
-                    << std::endl;
-          printType = true;
-        }
-        for (size_t i = 0; i < vector->size(); ++i) {
-          std::cout << vector->toString(i) << std::endl;
-        }
-      }
+      printResults(actualResults);
       std::cout << std::endl;
     }
     const auto stats = task->taskStats();
