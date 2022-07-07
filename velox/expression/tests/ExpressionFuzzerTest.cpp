@@ -26,9 +26,9 @@
 
 DEFINE_int64(
     seed,
-    123456,
-    "Initial seed for random number generator "
-    "(use it to reproduce previous results).");
+    0,
+    "Initial seed for random number generator used to reproduce previous "
+    "results (0 means start with random seed).");
 
 DEFINE_string(
     only,
@@ -80,5 +80,6 @@ int main(int argc, char** argv) {
       // TODO: T117753276
       "date_parse",
   };
-  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, FLAGS_seed, skipFunctions);
+  size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
+  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, initialSeed, skipFunctions);
 }
