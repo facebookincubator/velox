@@ -171,12 +171,15 @@ int main(int argc, char** argv) {
     ensureTaskCompletion(task.get());
     if (FLAGS_include_results) {
       std::cout << "Results:" << std::endl;
+      bool printType = false;
       for (const auto& vector : actualResults) {
+        // Print RowType only once.
+        if (!printType) {
+          std::cout << vector->type()->as<TypeKind::ROW>().toString()
+                    << std::endl;
+          printType = true;
+        }
         for (size_t i = 0; i < vector->size(); ++i) {
-          if (i == 0) {
-            std::cout << vector->type()->as<TypeKind::ROW>().toString()
-                      << std::endl;
-          }
           std::cout << vector->toString(i) << std::endl;
         }
       }
