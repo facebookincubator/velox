@@ -329,6 +329,9 @@ individual rows.
     }
   };
 
+If the :func:`initialize` method throws, the exception will be captured and
+reported as output for every single active row.
+
 Registration
 ^^^^^^^^^^^^
 
