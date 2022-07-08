@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
@@ -59,6 +58,7 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::string& duckDbSql) {
     assertQuery(plan, duckDbSql);
+
     // Convert Velox Plan to Substrait Plan.
     google::protobuf::Arena arena;
     auto substraitPlan = veloxConvertor_->toSubstrait(arena, plan);
@@ -81,7 +81,7 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, project) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
   auto plan =
-      PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
+      PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2 "}).planNode();
   assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
 }
 
@@ -90,18 +90,13 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, filter) {
   createDuckDbTable(vectors);
 
   auto plan = PlanBuilder().values(vectors).filter("c2 < 1000").planNode();
-
   assertPlanConversion(plan, "SELECT * FROM tmp WHERE c2 < 1000");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, null) {
-  RowVectorPtr vectors = makeRowVector(
-      {makeFlatVector<int32_t>({3, 2}),
-       makeFlatVector<int32_t>(2, nullptr, nullEvery(1))});
-  createDuckDbTable({vectors});
-
+  auto vectors = makeRowVector(ROW({}, {}), 1);
   auto plan = PlanBuilder().values({vectors}).project({"NULL"}).planNode();
-  assertPlanConversion(plan, "SELECT NULL FROM tmp ");
+  assertPlanConversion(plan, "SELECT NULL ");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, values) {

@@ -416,7 +416,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   std::vector<RowVectorPtr> vectors;
   vectors.reserve(numVectors);
 
-  int64_t batchSize = valueFieldNums / numColumns;
+  int64_t batchSize;
+  // For the empty vectors, eg,vectors = makeRowVector(ROW({}, {}), 1).
+  if (numColumns == 0) {
+    batchSize = 1;
+  } else {
+    batchSize = valueFieldNums / numColumns;
+  }
 
   for (int64_t index = 0; index < numVectors; ++index) {
     std::vector<VectorPtr> children;
@@ -496,22 +502,27 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan,
     memory::MemoryPool* pool) {
-  // Construct the function map based on the Substrait representation.
-  constructFunctionMap(substraitPlan);
+  if (!checkTypeExtension(substraitPlan)) {
+    VELOX_FAIL("Only Support UNKNOWN type in UserDefined type extension");
+  } else {
+    // Construct the function map based on the Substrait representation.
+    constructFunctionMap(substraitPlan);
 
-  // Construct the expression converter.
-  exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
+    // Construct the expression converter.
+    exprConverter_ =
+        std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
 
-  // In fact, only one RelRoot or Rel is expected here.
-  for (const auto& rel : substraitPlan.relations()) {
-    if (rel.has_root()) {
-      return toVeloxPlan(rel.root(), pool);
+    // In fact, only one RelRoot or Rel is expected here.
+    for (const auto& rel : substraitPlan.relations()) {
+      if (rel.has_root()) {
+        return toVeloxPlan(rel.root(), pool);
+      }
+      if (rel.has_rel()) {
+        return toVeloxPlan(rel.rel(), pool);
+      }
     }
-    if (rel.has_rel()) {
-      return toVeloxPlan(rel.rel(), pool);
-    }
+    VELOX_FAIL("RelRoot or Rel is expected in Plan.");
   }
-  VELOX_FAIL("RelRoot or Rel is expected in Plan.");
 }
 
 std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
@@ -700,6 +711,23 @@ void SubstraitVeloxPlanConverter::constructFunctionMap(
     auto name = sFmap.name();
     functionMap_[id] = name;
   }
+}
+
+bool SubstraitVeloxPlanConverter::checkTypeExtension(
+    const ::substrait::Plan& substraitPlan) {
+  for (const auto& sExtension : substraitPlan.extensions()) {
+    if (!sExtension.has_extension_type()) {
+      continue;
+    }
+
+    // Only support UNKNOWN type in UserDefined type extension.
+    if (sExtension.extension_type().name() == "UNKNOWN") {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  return true;
 }
 
 const std::string& SubstraitVeloxPlanConverter::findFunction(

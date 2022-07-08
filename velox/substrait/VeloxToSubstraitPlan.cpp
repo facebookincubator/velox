@@ -61,6 +61,13 @@ namespace {
   // Add Extension Functions.
   substraitPlan->MergeFrom(addExtensionFunc(arena));
 
+  // Add unknown type in extension.
+  auto unknownType = substraitPlan->add_extensions()->mutable_extension_type();
+
+  unknownType->set_extension_uri_reference(0);
+  unknownType->set_type_anchor(0);
+  unknownType->set_name("UNKNOWN");
+
   // Do conversion.
   ::substrait::RelRoot* rootRel =
       substraitPlan->add_relations()->mutable_root();
