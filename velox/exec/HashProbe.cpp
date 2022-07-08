@@ -168,12 +168,12 @@ BlockingReason HashProbe::isBlocked(ContinueFuture* future) {
     if (table_->numDistinct() == 0) {
       // Build side is empty. Inner, right and semi joins return nothing in this
       // case, hence, we can terminate the pipeline early.
-      if (isInnerJoin(joinType_) || isSemiJoin(joinType_) ||
+      if (isInnerJoin(joinType_) || isLeftSemiJoin(joinType_) ||
           isRightJoin(joinType_)) {
         finished_ = true;
       }
     } else if (
-        (isInnerJoin(joinType_) || isSemiJoin(joinType_)) &&
+        (isInnerJoin(joinType_) || isLeftSemiJoin(joinType_)) &&
         table_->hashMode() != BaseHashTable::HashMode::kHash) {
       // Find out whether there are any upstream operators that can accept
       // dynamic filters on all or a subset of the join keys. Create dynamic
@@ -253,15 +253,9 @@ void HashProbe::addInput(RowVectorPtr input) {
         activeRows_.size(),
         [&](vector_size_t row) { lookup_->rows.push_back(row); });
   }
-  if (lookup_->rows.empty()) {
-    if (joinType_ != core::JoinType::kAnti) {
-      input_ = nullptr;
-    }
-    return;
-  }
+
   passingInputRowsInitialized_ = false;
-  if (isLeftJoin(joinType_) || isFullJoin(joinType_) ||
-      (isAntiJoin(joinType_) && filter_)) {
+  if (isLeftJoin(joinType_) || isFullJoin(joinType_) || isAntiJoin(joinType_)) {
     // Make sure to allocate an entry in 'hits' for every input row to allow for
     // including rows without a match in the output. Also, make sure to
     // initialize all 'hits' to nullptr as HashTable::joinProbe will only
@@ -270,7 +264,9 @@ void HashProbe::addInput(RowVectorPtr input) {
     auto& hits = lookup_->hits;
     hits.resize(numInput);
     std::fill(hits.data(), hits.data() + numInput, nullptr);
-    table_->joinProbe(*lookup_);
+    if (!lookup_->rows.empty()) {
+      table_->joinProbe(*lookup_);
+    }
 
     // Update lookup_->rows to include all input rows, not just activeRows_ as
     // we need to include all rows in the output.
@@ -279,6 +275,10 @@ void HashProbe::addInput(RowVectorPtr input) {
     std::iota(rows.begin(), rows.end(), 0);
     results_.reset(*lookup_);
   } else {
+    if (lookup_->rows.empty()) {
+      input_ = nullptr;
+      return;
+    }
     lookup_->hits.resize(lookup_->rows.back() + 1);
     table_->joinProbe(*lookup_);
     results_.reset(*lookup_);
@@ -422,15 +422,15 @@ RowVectorPtr HashProbe::getOutput() {
     return output;
   }
 
-  const bool isSemiOrAntiJoinNoFilter =
-      !filter_ && (core::isSemiJoin(joinType_) || core::isAntiJoin(joinType_));
+  const bool isLeftSemiOrAntiJoinNoFilter = !filter_ &&
+      (core::isLeftSemiJoin(joinType_) || core::isAntiJoin(joinType_));
 
   const bool emptyBuildSide = (table_->numDistinct() == 0);
 
-  // Semi and anti joins are always cardinality reducing, e.g. for a given row
-  // of input they produce zero or 1 row of output. Therefore, if there is
+  // Left semi and anti joins are always cardinality reducing, e.g. for a given
+  // row of input they produce zero or 1 row of output. Therefore, if there is
   // no extra filter we can process each batch of input in one go.
-  auto outputBatchSize = (isSemiOrAntiJoinNoFilter || emptyBuildSide)
+  auto outputBatchSize = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
       ? inputSize
       : outputBatchSize_;
   auto mapping =
@@ -473,7 +473,7 @@ RowVectorPtr HashProbe::getOutput() {
     numOut = evalFilter(numOut);
     if (!numOut) {
       // The filter was false on all rows.
-      if (isSemiOrAntiJoinNoFilter) {
+      if (isLeftSemiOrAntiJoinNoFilter) {
         input_ = nullptr;
         return nullptr;
       }
@@ -487,7 +487,7 @@ RowVectorPtr HashProbe::getOutput() {
 
     fillOutput(numOut);
 
-    if (isSemiOrAntiJoinNoFilter || emptyBuildSide) {
+    if (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide) {
       input_ = nullptr;
     }
     return output_;
@@ -548,7 +548,7 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     if (results_.atEnd()) {
       noMatchDetector_.finish(addMiss);
     }
-  } else if (isSemiJoin(joinType_)) {
+  } else if (isLeftSemiJoin(joinType_)) {
     auto addLastMatch = [&](auto row) {
       outputRows_[numPassed] = nullptr;
       rawMapping[numPassed++] = row;
@@ -556,11 +556,11 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
     for (auto i = 0; i < numRows; ++i) {
       if (!decodedFilterResult_.isNullAt(i) &&
           decodedFilterResult_.valueAt<bool>(i)) {
-        semiJoinTracker_.advance(rawMapping[i], addLastMatch);
+        leftSemiJoinTracker_.advance(rawMapping[i], addLastMatch);
       }
     }
     if (results_.atEnd()) {
-      semiJoinTracker_.finish(addLastMatch);
+      leftSemiJoinTracker_.finish(addLastMatch);
     }
   } else if (isAntiJoin(joinType_)) {
     // Identify probe rows with no matches.
@@ -589,7 +589,7 @@ int32_t HashProbe::evalFilter(int32_t numRows) {
 }
 
 void HashProbe::ensureLoadedIfNotAtEnd(column_index_t channel) {
-  if (core::isSemiJoin(joinType_) || core::isAntiJoin(joinType_) ||
+  if (core::isLeftSemiJoin(joinType_) || core::isAntiJoin(joinType_) ||
       results_.atEnd()) {
     return;
   }
