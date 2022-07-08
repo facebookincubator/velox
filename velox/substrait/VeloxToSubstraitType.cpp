@@ -148,6 +148,7 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
       auto substraitUserDefined =
           google::protobuf::Arena::CreateMessage<::substrait::Type_UserDefined>(
               &arena);
+      substraitUserDefined->set_type_reference(0);
       substraitUserDefined->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       substraitType->set_allocated_user_defined(substraitUserDefined);
@@ -170,21 +171,24 @@ VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
       google::protobuf::Arena::CreateMessage<::substrait::NamedStruct>(&arena);
 
   const auto size = rowType->size();
-  const auto& names = rowType->names();
-  const auto& veloxTypes = rowType->children();
+  if (size != 0) {
+    const auto& names = rowType->names();
+    const auto& veloxTypes = rowType->children();
 
-  auto substraitType = substraitNamedStruct->mutable_struct_();
+    auto substraitType = substraitNamedStruct->mutable_struct_();
 
-  substraitType->set_nullability(
-      ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+    substraitType->set_nullability(
+        ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
 
-  for (int64_t i = 0; i < size; ++i) {
-    const auto& name = names.at(i);
-    const auto& veloxType = veloxTypes.at(i);
-    substraitNamedStruct->add_names(name);
+    for (int64_t i = 0; i < size; ++i) {
+      const auto& name = names.at(i);
+      const auto& veloxType = veloxTypes.at(i);
+      substraitNamedStruct->add_names(name);
 
-    substraitType->add_types()->MergeFrom(toSubstraitType(arena, veloxType));
+      substraitType->add_types()->MergeFrom(toSubstraitType(arena, veloxType));
+    }
   }
+
   return *substraitNamedStruct;
 }
 

@@ -325,7 +325,7 @@ VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
               &arena);
       nullValue->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
-
+      nullValue->set_type_reference(0);
       substraitField->mutable_null()->set_allocated_user_defined(nullValue);
 
       break;
