@@ -1,6 +1,6 @@
-********************
+****************
 June 2022 Update
-********************
+****************
 
 Documentation
 =============
@@ -10,43 +10,49 @@ Documentation
 Core Library
 ============
 
-* Add support for IntervalDayTime type.
-* Allow cast between Date type and Timestamp type.
-* Add fast path to :func:`zip` when all Arrays are flat and the same size.
-* Add GroupId operator.
-* Support Decimal type signature and type calculation using flex/bison.
-* Add NegatedBigintValuesUsingBitmask and NegatedBigintValuesUsingHashTable for Bigint types.
-* Add support for running tasks on the caller's thread.
-* Add limited ORC reader support.
-* Support conversion of DuckDB Decimals to Velox Decimals, and Decimal constant null vector.
+* Add support for INTERVAL DAY TO SECOND Presto type.
+* Allow cast between DATE type and TIMESTAMP type.
 * Allow cast from JSON type to scalar types, Array type, and Map type.
-* Allow running join queries on the caller's thread.
-* Add q3 to TPC-H benchmark.
-* Separate the user exception stack from the runtime exception stack trace collection control.
+* Add :ref:`GroupIdNode<group-id-node>` and GroupId operator to support aggregations over grouping sets.
+* Add support for DECIMAL type signature and type calculation using flex/bison.
+* Add support for conversion of DuckDB DECIMALS to Velox DECIMALS, and DECIMAL constant null vector.
+* Add support for running tasks on the caller's thread.
+* Fix expression evaluation to disable sub-expression optimization for non-deterministic functions.
 
 Presto Functions
 ================
 
-* Extend :func:`plus`, :func:`minus` functions to support Date, IntervalDayTime argument types.
-* Add aggregate function :func:`map_union`.
 * Add :func:`degrees`, :func:`e`, and :func:`sha512` functions.
+* Add aggregate function :func:`map_union`.
+* Add fast path to :func:`zip` when all arrays are flat and the same size.
+* Extend :func:`plus`, :func:`minus` functions to support DATE, INTERVAL DAY TO SECOND argument types.
 
-Connectors
-==========
+Hive Connector
+==============
 
-* Add hdfs read support to hive connector.
-* Add utility to benchmark dataset generation speed for tpch connector.
-* Add totalParts and partNumber to TpchSplit in tpch connector.
+* Add hdfs read support.
+* Add limited ORC reader support.
+* Optimize `NOT IN (<list of integers>)` filters pushed down into DWRF reader.
+
+TPC-H Connector
+==============
+
+* Add `totalParts` and `partNumber` to TpchSplit.
+* Add utility to benchmark dataset generation speed.
 
 Performance and Correctness
 ===========================
 
+* Add q3 to TPC-H benchmark.
 * Optimize constant aggregation mask.
-* VectorWriter<Varchar> is now up to 2X faster for some string functions.
-* Exclude non-deterministic functions from common sub-expression elimination.
-* Optimize Expr::isSpecialForm.
-* Optimize BaseVector::isConstantEncoding.
-* Make Dictionary Vectors load only selected rows.
+* Optimize VectorWriter for a subset of simple functions that return strings.
+* Optimize DictionaryVector wrapping LazyVector to load only necessary rows.
+
+Debugging Experience
+====================
+
+* Separate the user exception stack from the runtime exception stack trace collection control.
+
 
 Credits
 =======
