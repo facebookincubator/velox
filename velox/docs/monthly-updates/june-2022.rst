@@ -11,11 +11,11 @@ Core Library
 ============
 
 * Add support for INTERVAL DAY TO SECOND Presto type.
-* Allow cast between DATE type and TIMESTAMP type.
-* Allow cast from JSON type to SCALAR types, ARRAY type, and MAP type.
+* Allow cast between DATE and TIMESTAMP types.
+* Allow cast from JSON to scalar, ARRAY, and MAP types.
 * Add :ref:`GroupIdNode<group-id-node>` and GroupId operator to support aggregations over grouping sets.
-* Add support for DECIMAL type signature and type calculation using flex/bison.
-* Add support for conversion of DuckDB DECIMALS to Velox DECIMALS, and DECIMAL constant null vector.
+* Add support for function signatures with DECIMAL input and return types using flex and bison to evaluate formulas for calculating the return precision and scale based on input precisions and scales.
+* Add support for conversion of DuckDB DECIMALS to Velox DECIMALS.
 * Add support for running tasks on the caller's thread.
 * Fix expression evaluation to disable sub-expression optimization for non-deterministic functions.
 
@@ -24,18 +24,18 @@ Presto Functions
 
 * Add :func:`degrees`, :func:`e`, and :func:`sha512` functions.
 * Add aggregate function :func:`map_union`.
-* Add fast path to :func:`zip` when all arrays are flat and the same size.
+* Optimize :func:`zip` for the case when all arrays are flat and the same size.
 * Extend :func:`plus`, :func:`minus` functions to support DATE, INTERVAL DAY TO SECOND argument types.
 
 Hive Connector
 ==============
 
-* Add hdfs read support.
-* Add limited ORC reader support.
+* Add support for reading files from HDFS.
+* Add limited ORC support.
 * Optimize `NOT IN (<list of integers>)` filters pushed down into DWRF reader.
 
 TPC-H Connector
-==============
+===============
 
 * Add `totalParts` and `partNumber` to TpchSplit.
 
@@ -52,7 +52,6 @@ Debugging Experience
 ====================
 
 * Separate the user exception stack from the runtime exception stack trace collection control.
-
 
 Credits
 =======
