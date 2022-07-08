@@ -48,6 +48,23 @@ class CacheInputStream : public SeekableInputStream {
   std::string getName() const override;
   size_t positionSize() override;
 
+  std::unique_ptr<CacheInputStream> clone() {
+    return std::make_unique<CacheInputStream>(
+        bufferedInput_,
+        ioStats_,
+        region_,
+        input_,
+        fileNum_,
+        tracker_,
+        trackingId_,
+        groupId_,
+        loadQuantum_);
+  }
+
+  // Sets the stream to end 'remainingBytes' bytes after the current position.
+  // 'remainingBytes' must be <= 'region_.length - position_'.
+  void setRemainingBytes(uint64_t remainingBytes);
+
  private:
   // Ensures that the current position is covered by 'pin_'.
   void loadPosition();
@@ -91,6 +108,10 @@ class CacheInputStream : public SeekableInputStream {
   uint32_t runSize_ = 0;
   // Position relative to 'region_.offset'.
   uint64_t position_ = 0;
+
+  // A restricted view over 'region'. offset is relative to 'region_'. A cloned
+  // CacheInputStream can cover a subrange of the range of the original.
+  std::optional<Region> window_;
 };
 
 } // namespace facebook::velox::dwio::common
