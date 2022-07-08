@@ -69,6 +69,8 @@ class TableScan : public SourceOperator {
   std::unordered_map<column_index_t, std::shared_ptr<common::Filter>>
       pendingDynamicFilters_;
   int32_t readBatchSize_{kDefaultBatchSize};
+  // A preferred batch size from configuration.
+  uint32_t preferredBatchSize_;
 
   // String shown in ExceptionContext inside DataSource and LazyVector loading.
   std::string debugString_;
