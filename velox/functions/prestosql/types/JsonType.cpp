@@ -447,6 +447,11 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
     exec::GenericWriter& writer);
 
 template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer);
+
+template <>
 FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::VARCHAR>(
     const folly::dynamic& object,
     exec::GenericWriter& writer) {
@@ -580,6 +585,53 @@ FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::MAP>(
   }
 }
 
+template <>
+FOLLY_ALWAYS_INLINE void castFromJsonTyped<TypeKind::ROW>(
+    const folly::dynamic& object,
+    exec::GenericWriter& writer) {
+  auto& writerTyped = writer.castTo<DynamicRow>();
+
+  if (object.isArray()) {
+    VELOX_USER_CHECK_EQ(
+        writer.type()->size(),
+        object.size(),
+        "Cannot cast a JSON array of size {} to ROW with {} fields.",
+        object.size(),
+        writer.type()->size());
+
+    column_index_t i = 0;
+    for (auto it = object.begin(); it != object.end(); ++it) {
+      if (it->isNull()) {
+        writerTyped.set_null_at(i);
+      } else {
+        VELOX_DYNAMIC_TYPE_DISPATCH(
+            castFromJsonTyped,
+            writer.type()->childAt(i)->kind(),
+            *it,
+            writerTyped.get_writer_at(i));
+      }
+      ++i;
+    }
+  } else {
+    auto rowType = writer.type()->asRow();
+    column_index_t fieldCount = rowType.size();
+    auto notFound = object.items().end();
+
+    for (column_index_t i = 0; i < fieldCount; ++i) {
+      auto it = object.find(rowType.nameOf(i));
+      if (it == notFound || it->second.isNull()) {
+        writerTyped.set_null_at(i);
+      } else {
+        VELOX_DYNAMIC_TYPE_DISPATCH(
+            castFromJsonTyped,
+            rowType.childAt(i)->kind(),
+            it->second,
+            writerTyped.get_writer_at(i));
+      }
+    }
+  }
+}
+
 template <TypeKind kind>
 void castFromJson(
     const BaseVector& input,
@@ -686,6 +738,13 @@ bool JsonCastOperator::isSupportedToType(const TypePtr& other) const {
   switch (other->kind()) {
     case TypeKind::ARRAY:
       return isSupportedToType(other->childAt(0));
+    case TypeKind::ROW:
+      for (const auto& child : other->as<TypeKind::ROW>().children()) {
+        if (!isSupportedToType(child)) {
+          return false;
+        }
+      }
+      return true;
     case TypeKind::MAP:
       return (
           isSupportedBasicType(other->childAt(0)) &&

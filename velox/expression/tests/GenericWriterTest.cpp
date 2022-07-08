@@ -171,10 +171,152 @@ TEST_F(GenericWriterTest, map) {
   test::assertEqualVectors(data, result);
 }
 
-TEST_F(GenericWriterTest, nested) {
+TEST_F(GenericWriterTest, row) {
   VectorPtr result;
   BaseVector::ensureWritable(
-      SelectivityVector(3), MAP(BIGINT(), ARRAY(BIGINT())), pool(), &result);
+      SelectivityVector(4),
+      ROW({VARCHAR(), BIGINT(), DOUBLE()}),
+      pool(),
+      &result);
+
+  VectorWriter<Any> writer;
+  writer.init(*result);
+
+  for (int i = 0; i < 3; ++i) {
+    writer.setOffset(i);
+    auto& current = writer.current().castTo<Row<Any, Any, Any>>();
+
+    auto& childCurrent = current.get_writer_at<0>().castTo<Varchar>();
+    childCurrent.copy_from(std::to_string(i * 2));
+    current.get_writer_at<1>().castTo<int64_t>() = i * 2 + 1;
+    current.set_null_at<2>();
+
+    writer.commit(true);
+  }
+
+  // Use tryCastTo at the last iteration.
+  writer.setOffset(3);
+  auto* last = writer.current().tryCastTo<Row<Any, Any, Any>>();
+  auto& childLast = last->get_writer_at<0>().castTo<Varchar>();
+  childLast.copy_from(std::to_string(3 * 2));
+  last->get_writer_at<1>().castTo<int64_t>() = 3 * 2 + 1;
+  last->set_null_at<2>();
+  writer.commit(true);
+
+  writer.finish();
+
+  ASSERT_EQ(result->as<RowVector>()->childAt(0)->size(), 4);
+  ASSERT_EQ(result->as<RowVector>()->childAt(1)->size(), 4);
+  ASSERT_EQ(result->as<RowVector>()->childAt(2)->size(), 4);
+
+  auto child1 =
+      makeNullableFlatVector<StringView>({"0"_sv, "2"_sv, "4"_sv, "6"_sv});
+  auto child2 = makeNullableFlatVector<int64_t>({1, 3, 5, 7});
+  auto child3 = makeNullableFlatVector<double>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto data = makeRowVector({child1, child2, child3});
+
+  test::assertEqualVectors(data, result);
+
+  // Casting to Row of unmatched number of children with the underlying vector
+  // should fail.
+  writer.setOffset(0);
+  auto& current = writer.current();
+  ASSERT_THROW(current.castTo<Row<Any>>(), VeloxUserError);
+
+  // Casting to DynamicRow after casting to Row<Any, ...> is not allowed.
+  ASSERT_THROW(current.castTo<DynamicRow>(), VeloxUserError);
+
+  ASSERT_NO_THROW(current.tryCastTo<DynamicRow>());
+  ASSERT_TRUE(current.tryCastTo<DynamicRow>() == nullptr);
+}
+
+TEST_F(GenericWriterTest, dynamicRow) {
+  VectorPtr result;
+  BaseVector::ensureWritable(
+      SelectivityVector(6), ROW({BIGINT(), DOUBLE()}), pool(), &result);
+
+  VectorWriter<Any> writer;
+  writer.init(*result);
+
+  writer.setOffset(0);
+  writer.commitNull();
+
+  for (int i = 1; i < 4; ++i) {
+    writer.setOffset(i);
+    auto& current = writer.current().castTo<DynamicRow>();
+
+    if (i % 2 == 0) {
+      current.get_writer_at(0).castTo<int64_t>() = i * 2;
+      current.set_null_at(1);
+    } else {
+      current.set_null_at(0);
+      current.get_writer_at(1).castTo<double>() = i * 2 + 1.1;
+    }
+    writer.commit(true);
+  }
+
+  // Use tryCastTo at the last iteration.
+  writer.setOffset(4);
+  auto* last = writer.current().tryCastTo<DynamicRow>();
+  last->get_writer_at(0).castTo<int64_t>() = 4 * 2;
+  last->set_null_at(1);
+  writer.commit(true);
+
+  // Test commitNull after casting.
+  writer.setOffset(5);
+  writer.commitNull();
+
+  writer.finish();
+
+  ASSERT_EQ(result->as<RowVector>()->childAt(0)->size(), 6);
+  ASSERT_EQ(result->as<RowVector>()->childAt(1)->size(), 6);
+
+  auto child1 = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, 4, std::nullopt, 8, std::nullopt});
+  auto child2 = makeNullableFlatVector<double>(
+      {std::nullopt, 3.1, std::nullopt, 7.1, std::nullopt, std::nullopt});
+  auto data = makeRowVector(
+      {child1, child2}, [](vector_size_t row) { return row == 0 || row == 5; });
+
+  test::assertEqualVectors(data, result);
+
+  // Casting to Row<Any, ...> after casting to DynamicRow is not allowed.
+  writer.setOffset(0);
+  auto& current = writer.current();
+  ASSERT_THROW((current.castTo<Row<Any, Any>>()), VeloxUserError);
+
+  ASSERT_NO_THROW((current.tryCastTo<Row<Any, Any>>()));
+  ASSERT_TRUE((current.tryCastTo<Row<Any, Any>>()) == nullptr);
+
+  // Accessing child writer at an index greater than or equal to the number of
+  // children should fail.
+  auto& typedCurrent = current.castTo<DynamicRow>();
+  ASSERT_THROW(typedCurrent.get_writer_at(2), VeloxUserError);
+  ASSERT_THROW(typedCurrent.set_null_at(2), VeloxUserError);
+
+  // Casting to DynamicRow when the underlying vector is not a RowVector should
+  // fail.
+  VectorPtr array;
+  BaseVector::ensureWritable(
+      SelectivityVector(4), ARRAY(BIGINT()), pool(), &array);
+
+  VectorWriter<Any> writer2;
+  writer2.init(*array);
+
+  writer2.setOffset(0);
+  auto& current2 = writer2.current();
+  ASSERT_THROW(current2.castTo<DynamicRow>(), VeloxUserError);
+}
+
+TEST_F(GenericWriterTest, nested) {
+  // Test with map of array.
+  VectorPtr result;
+  BaseVector::ensureWritable(
+      SelectivityVector(3),
+      MAP(BIGINT(), ROW({ARRAY(BIGINT()), TINYINT(), ROW({SMALLINT()})})),
+      pool(),
+      &result);
 
   VectorWriter<Any> writer;
   writer.init(*result);
@@ -187,10 +329,17 @@ TEST_F(GenericWriterTest, nested) {
     auto pair = current.add_item();
     std::get<0>(pair).castTo<int64_t>() = i * 3;
 
-    auto& array = std::get<1>(pair).castTo<Array<Any>>();
+    auto& row = std::get<1>(pair).castTo<DynamicRow>();
+
+    auto& array = row.get_writer_at(0).castTo<Array<Any>>();
     array.add_item().castTo<int64_t>() = i * 3 + 1;
     *array.add_item().tryCastTo<int64_t>() = i * 3 + 2;
     array.add_null();
+
+    row.get_writer_at(1).castTo<int8_t>() = i + 1;
+
+    auto& innerRow = row.get_writer_at(2).castTo<Row<Any>>();
+    innerRow.get_writer_at<0>().castTo<int16_t>() = i + 2;
 
     writer.commit(true);
   }
@@ -201,6 +350,8 @@ TEST_F(GenericWriterTest, nested) {
   ASSERT_EQ(
       result->as<MapVector>()
           ->mapValues()
+          ->as<RowVector>()
+          ->childAt(0)
           ->as<ArrayVector>()
           ->elements()
           ->size(),
@@ -208,6 +359,11 @@ TEST_F(GenericWriterTest, nested) {
 
   auto arrayVector = makeNullableArrayVector<int64_t>(
       {{1, 2, std::nullopt}, {4, 5, std::nullopt}, {7, 8, std::nullopt}});
+  auto tinyintVector = makeNullableFlatVector<int8_t>({1, 2, 3});
+  auto smallintVector = makeNullableFlatVector<int16_t>({2, 3, 4});
+
+  auto valueVector = makeRowVector(
+      {arrayVector, tinyintVector, makeRowVector({smallintVector})});
   auto keyVector = makeNullableFlatVector<int64_t>({0, 3, 6});
 
   auto offsets = AlignedBuffer::allocate<vector_size_t>(3, pool());
@@ -222,13 +378,13 @@ TEST_F(GenericWriterTest, nested) {
 
   auto mapVector = std::make_shared<MapVector>(
       pool(),
-      MAP(BIGINT(), ARRAY(BIGINT())),
+      MAP(BIGINT(), ROW({ARRAY(BIGINT()), TINYINT(), ROW({SMALLINT()})})),
       nullptr,
       3,
       offsets,
       sizes,
       keyVector,
-      arrayVector,
+      valueVector,
       0);
 
   test::assertEqualVectors(mapVector, result);
