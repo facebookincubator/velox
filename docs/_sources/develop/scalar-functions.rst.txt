@@ -329,6 +329,10 @@ individual rows.
     }
   };
 
+If the :func:`initialize` method throws, the exception will be captured and
+reported as output for every single active row. If there are no active rows,
+the exception will not be raised.
+
 Registration
 ^^^^^^^^^^^^
 
@@ -620,6 +624,7 @@ Note that in the range-loop, the range expression is assigned to a universal ref
      auto itt = *it;
      for(const auto& e : *itt){..}
 
+.. _outputs-write:
 Outputs (Writer Types)
 **********************
 
