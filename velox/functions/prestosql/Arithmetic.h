@@ -165,16 +165,6 @@ struct MinFunction {
 };
 
 template <typename T>
-struct ClampFunction {
-  template <typename TInput>
-  FOLLY_ALWAYS_INLINE void
-  call(TInput& result, const TInput& v, const TInput& lo, const TInput& hi) {
-    VELOX_USER_CHECK_LE(lo, hi, "Lo > hi in clamp.");
-    result = std::clamp(v, lo, hi);
-  }
-};
-
-template <typename T>
 struct LnFunction {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = std::log(a);

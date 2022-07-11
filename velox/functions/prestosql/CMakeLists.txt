@@ -23,6 +23,7 @@ add_library(
   ArrayDuplicates.cpp
   ArrayIntersectExcept.cpp
   ArrayPosition.cpp
+  Clamp.cpp
   ElementAt.cpp
   FilterFunctions.cpp
   FromUnixTime.cpp
