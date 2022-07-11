@@ -161,6 +161,9 @@ std::unordered_map<std::string, std::string> ParquetTpchTest::duckDbParquetWrite
         R"(COPY (SELECT * FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
     std::make_pair(
         "supplier",
+        R"(COPY (SELECT * FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))"),
+    std::make_pair(
+        "partsupp",
         R"(COPY (SELECT * FROM {}) TO '{}' (FORMAT 'parquet', ROW_GROUP_SIZE {}))")};
 
 TEST_F(ParquetTpchTest, Q1) {
@@ -198,6 +201,11 @@ TEST_F(ParquetTpchTest, Q13) {
 
 TEST_F(ParquetTpchTest, Q14) {
   assertQuery(14);
+}
+
+TEST_F(ParquetTpchTest, Q16) {
+  std::vector<uint32_t> sortingKeys{0, 1, 2, 3};
+  assertQuery(16, std::move(sortingKeys));
 }
 
 TEST_F(ParquetTpchTest, Q18) {
