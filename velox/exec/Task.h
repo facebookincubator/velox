@@ -568,6 +568,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   int getOutputPipelineId() const;
 
+  // Callback function added to the MemoryUsageTracker to return a descriptive
+  // message to be added to the error when a MEM_CAP_EXCEEDED error is
+  // encountered.
+  std::string getErrorMsgOnMemCapExceeded(memory::MemoryUsageTracker& tracker);
+
   // RAII helper class to satisfy 'stateChangePromises_' and notify listeners
   // that task is complete outside of the mutex. Inactive on creation. Must be
   // activated explicitly by calling 'activate'.
@@ -632,6 +637,9 @@ class Task : public std::enable_shared_from_this<Task> {
   mutable std::mutex mutex_;
 
   ConsumerSupplier consumerSupplier_;
+
+  // The function that is executed when the task encounters its first error,
+  // that is, serError() is called for the first time.
   std::function<void(std::exception_ptr)> onError_;
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;

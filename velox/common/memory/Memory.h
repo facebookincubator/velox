@@ -32,6 +32,7 @@
 #include "folly/SharedMutex.h"
 #include "folly/experimental/FunctionScheduler.h"
 #include "velox/common/base/GTestMacros.h"
+#include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
@@ -649,7 +650,11 @@ void* FOLLY_NULLABLE MemoryPoolImpl<Allocator, ALIGNMENT>::reallocate(
       ALIGNER<ALIGNMENT>{}, p, alignedSize, alignedNewSize);
   if (UNLIKELY(!newP)) {
     free(p, alignedSize);
-    VELOX_MEM_CAP_EXCEEDED(cap_);
+    auto errorMessage = fmt::format(
+        MEM_CAP_EXCEEDED_ERROR_FORMAT,
+        succinctBytes(cap_),
+        succinctBytes(difference));
+    VELOX_MEM_CAP_EXCEEDED(errorMessage);
   }
 
   return newP;
@@ -814,7 +819,11 @@ void MemoryPoolImpl<Allocator, ALIGNMENT>::reserve(int64_t size) {
     if (manualCap) {
       VELOX_MEM_MANUAL_CAP();
     }
-    VELOX_MEM_CAP_EXCEEDED(cap_);
+    auto errorMessage = fmt::format(
+        MEM_CAP_EXCEEDED_ERROR_FORMAT,
+        succinctBytes(cap_),
+        succinctBytes(size));
+    VELOX_MEM_CAP_EXCEEDED(errorMessage);
   }
 }
 
