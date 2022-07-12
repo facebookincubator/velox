@@ -1,0 +1,470 @@
+{
+    "extensions": [
+        {
+            "extensionFunction": {
+                "functionAnchor": 4,
+                "name": "lte:fp64_fp64"
+            }
+        },
+        {
+            "extensionFunction": {
+                "functionAnchor": 6,
+                "name": "sum:opt_fp64"
+            }
+        },
+        {
+            "extensionFunction": {
+                "functionAnchor": 3,
+                "name": "lt:fp64_fp64"
+            }
+        },
+        {
+            "extensionFunction": {
+                "name": "is_not_null:fp64"
+            }
+        },
+        {
+            "extensionFunction": {
+                "functionAnchor": 1,
+                "name": "and:bool_bool"
+            }
+        },
+        {
+            "extensionFunction": {
+                "functionAnchor": 2,
+                "name": "gte:fp64_fp64"
+            }
+        },
+        {
+            "extensionFunction": {
+                "functionAnchor": 5,
+                "name": "multiply:opt_fp64_fp64"
+            }
+        }
+    ],
+    "relations": [
+        {
+            "root": {
+                "input": {
+                    "aggregate": {
+                        "common": {
+                            "direct": {}
+                        },
+                        "input": {
+                            "project": {
+                                "common": {
+                                    "direct": {}
+                                },
+                                "input": {
+                                    "project": {
+                                        "common": {
+                                            "direct": {}
+                                        },
+                                        "input": {
+                                            "read": {
+                                                "common": {
+                                                    "direct": {}
+                                                },
+                                                "baseSchema": {
+                                                    "names": [
+                                                        "l_quantity",
+                                                        "l_extendedprice",
+                                                        "l_discount",
+                                                        "l_shipdate"
+                                                    ],
+                                                    "struct": {
+                                                        "types": [
+                                                            {
+                                                                "fp64": {
+                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                }
+                                                            },
+                                                            {
+                                                                "fp64": {
+                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                }
+                                                            },
+                                                            {
+                                                                "fp64": {
+                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                }
+                                                            },
+                                                            {
+                                                                "fp64": {
+                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                }
+                                                            }
+                                                        ]
+                                                    }
+                                                },
+                                                "filter": {
+                                                    "scalarFunction": {
+                                                        "functionReference": 1,
+                                                        "args": [
+                                                            {
+                                                                "scalarFunction": {
+                                                                    "functionReference": 1,
+                                                                    "args": [
+                                                                        {
+                                                                            "scalarFunction": {
+                                                                                "functionReference": 1,
+                                                                                "args": [
+                                                                                    {
+                                                                                        "scalarFunction": {
+                                                                                            "functionReference": 1,
+                                                                                            "args": [
+                                                                                                {
+                                                                                                    "scalarFunction": {
+                                                                                                        "functionReference": 1,
+                                                                                                        "args": [
+                                                                                                            {
+                                                                                                                "scalarFunction": {
+                                                                                                                    "functionReference": 1,
+                                                                                                                    "args": [
+                                                                                                                        {
+                                                                                                                            "scalarFunction": {
+                                                                                                                                "functionReference": 1,
+                                                                                                                                "args": [
+                                                                                                                                    {
+                                                                                                                                        "scalarFunction": {
+                                                                                                                                            "args": [
+                                                                                                                                                {
+                                                                                                                                                    "selection": {
+                                                                                                                                                        "directReference": {
+                                                                                                                                                            "structField": {
+                                                                                                                                                                "field": 3
+                                                                                                                                                            }
+                                                                                                                                                        }
+                                                                                                                                                    }
+                                                                                                                                                }
+                                                                                                                                            ],
+                                                                                                                                            "outputType": {
+                                                                                                                                                "bool": {
+                                                                                                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    },
+                                                                                                                                    {
+                                                                                                                                        "scalarFunction": {
+                                                                                                                                            "args": [
+                                                                                                                                                {
+                                                                                                                                                    "selection": {
+                                                                                                                                                        "directReference": {
+                                                                                                                                                            "structField": {
+                                                                                                                                                                "field": 2
+                                                                                                                                                            }
+                                                                                                                                                        }
+                                                                                                                                                    }
+                                                                                                                                                }
+                                                                                                                                            ],
+                                                                                                                                            "outputType": {
+                                                                                                                                                "bool": {
+                                                                                                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                ],
+                                                                                                                                "outputType": {
+                                                                                                                                    "bool": {
+                                                                                                                                        "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        {
+                                                                                                                            "scalarFunction": {
+                                                                                                                                "args": [
+                                                                                                                                    {
+                                                                                                                                        "selection": {
+                                                                                                                                            "directReference": {
+                                                                                                                                                "structField": {}
+                                                                                                                                            }
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                ],
+                                                                                                                                "outputType": {
+                                                                                                                                    "bool": {
+                                                                                                                                        "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                    ],
+                                                                                                                    "outputType": {
+                                                                                                                        "bool": {
+                                                                                                                            "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            },
+                                                                                                            {
+                                                                                                                "scalarFunction": {
+                                                                                                                    "functionReference": 2,
+                                                                                                                    "args": [
+                                                                                                                        {
+                                                                                                                            "selection": {
+                                                                                                                                "directReference": {
+                                                                                                                                    "structField": {
+                                                                                                                                        "field": 3
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        },
+                                                                                                                        {
+                                                                                                                            "literal": {
+                                                                                                                                "fp64": 8766
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                    ],
+                                                                                                                    "outputType": {
+                                                                                                                        "bool": {
+                                                                                                                            "nullability": "NULLABILITY_NULLABLE"
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        ],
+                                                                                                        "outputType": {
+                                                                                                            "bool": {
+                                                                                                                "nullability": "NULLABILITY_NULLABLE"
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                },
+                                                                                                {
+                                                                                                    "scalarFunction": {
+                                                                                                        "functionReference": 3,
+                                                                                                        "args": [
+                                                                                                            {
+                                                                                                                "selection": {
+                                                                                                                    "directReference": {
+                                                                                                                        "structField": {
+                                                                                                                            "field": 3
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            },
+                                                                                                            {
+                                                                                                                "literal": {
+                                                                                                                    "fp64": 9131
+                                                                                                                }
+                                                                                                            }
+                                                                                                        ],
+                                                                                                        "outputType": {
+                                                                                                            "bool": {
+                                                                                                                "nullability": "NULLABILITY_NULLABLE"
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            ],
+                                                                                            "outputType": {
+                                                                                                "bool": {
+                                                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                    {
+                                                                                        "scalarFunction": {
+                                                                                            "functionReference": 2,
+                                                                                            "args": [
+                                                                                                {
+                                                                                                    "selection": {
+                                                                                                        "directReference": {
+                                                                                                            "structField": {
+                                                                                                                "field": 2
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                },
+                                                                                                {
+                                                                                                    "literal": {
+                                                                                                        "fp64": 0.05
+                                                                                                    }
+                                                                                                }
+                                                                                            ],
+                                                                                            "outputType": {
+                                                                                                "bool": {
+                                                                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                ],
+                                                                                "outputType": {
+                                                                                    "bool": {
+                                                                                        "nullability": "NULLABILITY_NULLABLE"
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        },
+                                                                        {
+                                                                            "scalarFunction": {
+                                                                                "functionReference": 4,
+                                                                                "args": [
+                                                                                    {
+                                                                                        "selection": {
+                                                                                            "directReference": {
+                                                                                                "structField": {
+                                                                                                    "field": 2
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                    {
+                                                                                        "literal": {
+                                                                                            "fp64": 0.07
+                                                                                        }
+                                                                                    }
+                                                                                ],
+                                                                                "outputType": {
+                                                                                    "bool": {
+                                                                                        "nullability": "NULLABILITY_NULLABLE"
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    ],
+                                                                    "outputType": {
+                                                                        "bool": {
+                                                                            "nullability": "NULLABILITY_NULLABLE"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            },
+                                                            {
+                                                                "scalarFunction": {
+                                                                    "functionReference": 3,
+                                                                    "args": [
+                                                                        {
+                                                                            "selection": {
+                                                                                "directReference": {
+                                                                                    "structField": {}
+                                                                                }
+                                                                            }
+                                                                        },
+                                                                        {
+                                                                            "literal": {
+                                                                                "fp64": 24
+                                                                            }
+                                                                        }
+                                                                    ],
+                                                                    "outputType": {
+                                                                        "bool": {
+                                                                            "nullability": "NULLABILITY_NULLABLE"
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        ],
+                                                        "outputType": {
+                                                            "bool": {
+                                                                "nullability": "NULLABILITY_NULLABLE"
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                "localFiles": {
+                                                    "items": [
+                                                        {
+                                                            "format": "FILE_FORMAT_UNSPECIFIED",
+                                                            "partition_index": "0",
+                                                            "start": "0",
+                                                            "length": "3719",
+                                                            "uri_file": "/mock_lineitem.orc"
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                        "expressions": [
+                                            {
+                                                "selection": {
+                                                    "directReference": {
+                                                        "structField": {
+                                                            "field": 1
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            {
+                                                "selection": {
+                                                    "directReference": {
+                                                        "structField": {
+                                                            "field": 2
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                },
+                                "expressions": [
+                                    {
+                                        "scalarFunction": {
+                                            "functionReference": 5,
+                                            "args": [
+                                                {
+                                                    "selection": {
+                                                        "directReference": {
+                                                            "structField": {}
+                                                        }
+                                                    }
+                                                },
+                                                {
+                                                    "selection": {
+                                                        "directReference": {
+                                                            "structField": {
+                                                                "field": 1
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ],
+                                            "outputType": {
+                                                "fp64": {
+                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                }
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "groupings": [
+                            {}
+                        ],
+                        "measures": [
+                            {
+                                "measure": {
+                                    "functionReference": 6,
+                                    "args": [
+                                        {
+                                            "selection": {
+                                                "directReference": {
+                                                    "structField": {}
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "phase": "AGGREGATION_PHASE_INITIAL_TO_INTERMEDIATE",
+                                    "outputType": {
+                                        "fp64": {
+                                            "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "names": [
+                    "sum#141"
+                ]
+            }
+        }
+    ]
+}

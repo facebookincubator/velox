@@ -129,7 +129,7 @@ TEST_F(FunctionTest, constructFunctionMap) {
   ASSERT_EQ(function, "sum:opt_fp64");
 
   function = planConverter_->findFunction(7);
-  ASSERT_EQ(function, "avg:opt_fp64");
+  ASSERT_EQ(function, "count:opt_fp64");
 
   function = planConverter_->findFunction(8);
   ASSERT_EQ(function, "count:opt_i32");
