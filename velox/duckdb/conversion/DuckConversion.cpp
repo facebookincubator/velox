@@ -137,8 +137,16 @@ variant duckValueToVariant(const Value& val) {
       return variant(val.GetValue<float>());
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
-    case LogicalTypeId::DECIMAL:
-      return variant(val.GetValue<double>());
+    case LogicalTypeId::DECIMAL: {
+      if (val.type().InternalType() == ::duckdb::PhysicalType::INT128) {
+        auto unscaledValue = val.GetValue<::duckdb::hugeint_t>();
+        return variant(
+            LongDecimal(buildInt128(unscaledValue.lower, unscaledValue.upper)));
+      } else if (val.type().InternalType() == ::duckdb::PhysicalType::INT64) {
+        return variant(ShortDecimal(val.GetValue<int64_t>()));
+      }
+      VELOX_UNSUPPORTED();
+    }
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
     case LogicalTypeId::BLOB:
