@@ -338,6 +338,9 @@ std::string DateTimeFormatter::format(
 
 std::shared_ptr<DateTimeFormatter> buildMysqlDateTimeFormatter(
     const std::string_view& format) {
+  if (format.empty()) {
+    VELOX_USER_FAIL("Both printing and parsing not supported");
+  }
   // For %r we should reserve 1 extra space because it has 3 literals ':' ':'
   // and ' '
   DateTimeFormatterBuilder builder(
