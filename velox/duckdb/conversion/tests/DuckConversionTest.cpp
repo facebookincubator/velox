@@ -63,6 +63,15 @@ TEST(DuckConversionTest, duckValueToVariant) {
     EXPECT_NO_THROW(duckValueToVariant(Value::FLOAT(i)));
   }
 
+  // Decimals.
+  for (int64_t i : {111, 200, 300}) {
+    EXPECT_EQ(
+        variant(LongDecimal(buildInt128(0, i))),
+        duckValueToVariant(Value::DECIMAL(::duckdb::hugeint_t(i), 20, 2)));
+    EXPECT_EQ(
+        variant(ShortDecimal(i)), duckValueToVariant(Value::DECIMAL(i, 10, 2)));
+  }
+
   // Strings.
   std::vector<std::string> vec = {"", "asdf", "aS$!#^*HFD"};
   for (const auto& i : vec) {

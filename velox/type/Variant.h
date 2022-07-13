@@ -39,6 +39,21 @@ struct VariantConverter;
 
 class variant;
 
+struct DecimalVariantValue {
+  uint8_t precision;
+  uint8_t scale;
+  int128_t unscaledValue;
+
+  // 123456789
+  std::string toString() const {
+    if (precision <= 18) {
+      return formatDecimal(
+          scale, (int64_t)unscaledValue);
+    }
+    return formatDecimal(scale, unscaledValue);
+  }
+};
+
 template <TypeKind KIND>
 struct VariantEquality;
 

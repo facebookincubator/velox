@@ -17,6 +17,7 @@
 #include "velox/type/Variant.h"
 #include "common/encode/Base64.h"
 #include "folly/json.h"
+#include "velox/type/DecimalUtils.h"
 
 namespace facebook::velox {
 
@@ -310,8 +311,14 @@ std::string variant::toJson() const {
       // debugging only. Variant::serialize should actually serialize the data.
       return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
     }
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
+    case TypeKind::SHORT_DECIMAL: {
+      return formatAsDecimal(
+          0, value<TypeKind::SHORT_DECIMAL>().unscaledValue());
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return formatAsDecimal(
+          0, value<TypeKind::LONG_DECIMAL>().unscaledValue());
+    }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
     case TypeKind::INVALID:
