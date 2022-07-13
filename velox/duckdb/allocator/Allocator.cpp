@@ -14,43 +14,41 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include "velox/common/memory/Memory.h"
-#include "velox/external/duckdb/duckdb.hpp"
+#include "velox/duckdb/allocator/Allocator.h"
 
 namespace facebook::velox::duckdb {
 
-struct PrivateVeloxAllocatorData : public ::duckdb::PrivateAllocatorData {
-  explicit PrivateVeloxAllocatorData(memory::MemoryPool& pool_) : pool(pool_) {}
-
-  ~PrivateVeloxAllocatorData() override {}
-
-  memory::MemoryPool& pool;
-};
-
 ::duckdb::data_ptr_t veloxPoolAllocate(
     ::duckdb::PrivateAllocatorData* privateData,
-    ::duckdb::idx_t size);
+    ::duckdb::idx_t size) {
+  auto veloxPrivateData = dynamic_cast<PrivateVeloxAllocatorData*>(privateData);
+  VELOX_CHECK(veloxPrivateData);
+  return static_cast<::duckdb::data_ptr_t>(
+      veloxPrivateData->pool.allocate(size));
+}
 
 void veloxPoolFree(
     ::duckdb::PrivateAllocatorData* privateData,
     ::duckdb::data_ptr_t pointer,
-    ::duckdb::idx_t size);
+    ::duckdb::idx_t size) {
+  auto veloxPrivateData = dynamic_cast<PrivateVeloxAllocatorData*>(privateData);
+  VELOX_CHECK(veloxPrivateData);
+  veloxPrivateData->pool.free(pointer, size);
+}
 
 ::duckdb::data_ptr_t veloxPoolReallocate(
     ::duckdb::PrivateAllocatorData* privateData,
     ::duckdb::data_ptr_t pointer,
-    ::duckdb::idx_t size);
-
-class VeloxPoolAllocator : public ::duckdb::Allocator {
- public:
-  explicit VeloxPoolAllocator(memory::MemoryPool& pool)
-      : ::duckdb::Allocator(
-            veloxPoolAllocate,
-            veloxPoolFree,
-            veloxPoolReallocate,
-            std::make_unique<PrivateVeloxAllocatorData>(pool)) {}
-};
+    ::duckdb::idx_t old_size,
+    ::duckdb::idx_t size) {
+  auto veloxPrivateData = dynamic_cast<PrivateVeloxAllocatorData*>(privateData);
+  VELOX_CHECK(veloxPrivateData);
+  // We don't have an old size to pass to reallocate. Here we pass
+  // 0 because it's not used by allocator. Alternatively, we would
+  // have to track sizes of all allocated segments in the private
+  // data.
+  return static_cast<::duckdb::data_ptr_t>(
+      veloxPrivateData->pool.reallocate(pointer, 0, size));
+}
 
 } // namespace facebook::velox::duckdb

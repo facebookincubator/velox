@@ -65,6 +65,9 @@ class DBGenIterator {
 
   // unique_lock instead of lock_guard so it's movable.
   std::unique_lock<std::mutex> lockGuard_;
+
+  // DBGenContext instance for this iterator
+  DBGenContext ctx;
 };
 
 } // namespace facebook::velox::tpch

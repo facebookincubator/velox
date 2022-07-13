@@ -19,7 +19,7 @@
 #include "velox/common/base/Macros.h"
 #include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/ReaderFactory.h"
-#include "velox/dwio/parquet/duckdb_reader/duckdb/Allocator.h"
+#include "velox/duckdb/allocator/Allocator.h"
 #include "velox/dwio/parquet/duckdb_reader/duckdb/InputStreamFileSystem.h"
 VELOX_SUPPRESS_DEPRECATION_WARNING
 #include "velox/external/duckdb/parquet-amalgamation.hpp"

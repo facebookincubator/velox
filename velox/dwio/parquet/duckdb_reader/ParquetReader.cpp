@@ -259,7 +259,8 @@ ParquetRowReader::ParquetRowReader(
 
 uint64_t ParquetRowReader::next(uint64_t /*size*/, velox::VectorPtr& result) {
   ::duckdb::DataChunk output;
-  output.Initialize(duckdbRowType_);
+  duckdb::VeloxPoolAllocator alloc(pool_);
+  output.Initialize(alloc, duckdbRowType_);
 
   reader_->Scan(state_, output);
 

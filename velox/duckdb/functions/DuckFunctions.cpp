@@ -19,6 +19,7 @@
 #include "velox/external/duckdb/duckdb.hpp"
 #include "velox/functions/Registerer.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/duckdb/allocator/Allocator.h"
 
 namespace facebook::velox::duckdb {
 using ::duckdb::BoundConstantExpression;
@@ -388,8 +389,8 @@ VectorPtr createVeloxVector(
 namespace {
 
 struct DuckDBFunctionData {
-  DuckDBFunctionData()
-      : expr(Value::INTEGER(42)), state(expr, executor_state) {}
+  DuckDBFunctionData(memory::MemoryPool* pool)
+      : expr(Value::INTEGER(42)), state(expr, executor_state), alloc(*pool) {}
 
   //! The currently bound function
   size_t functionIndex;
@@ -402,6 +403,7 @@ struct DuckDBFunctionData {
   BoundConstantExpression expr;
   ExpressionExecutorState executor_state{"N/A"};
   ExpressionState state;
+  facebook::velox::duckdb::VeloxPoolAllocator alloc;
 };
 
 class DuckDBFunction : public exec::VectorFunction {
@@ -425,7 +427,7 @@ class DuckDBFunction : public exec::VectorFunction {
     for (auto& arg : args) {
       inputTypes.push_back(fromVeloxType(arg->typeKind()));
     }
-    auto state = initializeState(move(inputTypes));
+    auto state = initializeState(move(inputTypes), context->pool());
     assert(state->functionIndex < set_.size());
     auto& function = set_[state->functionIndex];
     idx_t nrow = rows.size();
@@ -573,9 +575,10 @@ class DuckDBFunction : public exec::VectorFunction {
 
  private:
   std::unique_ptr<DuckDBFunctionData> initializeState(
-      std::vector<LogicalType> inputTypes) const {
+      std::vector<LogicalType> inputTypes,
+      memory::MemoryPool* pool) const {
     assert(set_.size() > 0);
-    auto result = std::make_unique<DuckDBFunctionData>();
+    auto result = std::make_unique<DuckDBFunctionData>(pool);
     result->inputTypes = move(inputTypes);
     std::string error;
     bool castParameters;
@@ -602,8 +605,8 @@ class DuckDBFunction : public exec::VectorFunction {
     // initialize the base chunks
     result->input = std::make_unique<DataChunk>();
     result->castChunk = std::make_unique<DataChunk>();
-    result->input->Initialize(expectedTypes);
-    result->castChunk->Initialize(result->inputTypes);
+    result->input->Initialize(result->alloc, expectedTypes);
+    result->castChunk->Initialize(result->alloc, result->inputTypes);
     return result;
   }
 };

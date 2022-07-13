@@ -3,7 +3,7 @@ used in tests as a reference in-memory database to check results of Velox
 evaluation for correctness. If you need to update it to pick up a bug fix or
 a new feature, first clone DuckDB git repository:
 
-    git clone https://github.com/cwida/duckdb.git
+    git clone https://github.com/duckdb/duckdb.git
     cd duckdb/
 
 Then generate the amalgamated .cpp and .hpp files:

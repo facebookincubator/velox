@@ -7,8947 +7,6 @@
 #include "parquet-amalgamation.hpp"
 
 
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// parquet_timestamp.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-#include "duckdb.hpp"
-
-namespace duckdb {
-
-struct Int96 {
-	uint32_t value[3];
-};
-
-int64_t ImpalaTimestampToNanoseconds(const Int96 &impala_timestamp);
-timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts);
-Int96 TimestampToImpalaTimestamp(timestamp_t &ts);
-timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts);
-timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts);
-date_t ParquetIntToDate(const int32_t &raw_date);
-dtime_t ParquetIntToTime(const int64_t &raw_time);
-
-} // namespace duckdb
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
-// See the end of this file for a list
-
-
-
-#include <string>
-#include <cassert>
-#include <cstring>
-
-namespace duckdb {
-
-enum class UnicodeType { INVALID, ASCII, UNICODE };
-enum class UnicodeInvalidReason { BYTE_MISMATCH, NULL_BYTE };
-
-class Utf8Proc {
-public:
-	//! Distinguishes ASCII, Valid UTF8 and Invalid UTF8 strings
-	static UnicodeType Analyze(const char *s, size_t len, UnicodeInvalidReason *invalid_reason = nullptr, size_t *invalid_pos = nullptr);
-	//! Performs UTF NFC normalization of string, return value needs to be free'd
-	static char* Normalize(const char* s, size_t len);
-	//! Returns whether or not the UTF8 string is valid
-	static bool IsValid(const char *s, size_t len);
-	//! Returns the position (in bytes) of the next grapheme cluster
-	static size_t NextGraphemeCluster(const char *s, size_t len, size_t pos);
-	//! Returns the position (in bytes) of the previous grapheme cluster
-	static size_t PreviousGraphemeCluster(const char *s, size_t len, size_t pos);
-
-	//! Transform a codepoint to utf8 and writes it to "c", sets "sz" to the size of the codepoint
-	static bool CodepointToUtf8(int cp, int &sz, char *c);
-	//! Returns the codepoint length in bytes when encoded in UTF8
-	static int CodepointLength(int cp);
-	//! Transform a UTF8 string to a codepoint; returns the codepoint and writes the length of the codepoint (in UTF8) to sz
-	static int32_t UTF8ToCodepoint(const char *c, int &sz);
-	static size_t RenderWidth(const char *s, size_t len, size_t pos);
-
-};
-
-}
-
-
-// LICENSE_CHANGE_END
-
-
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// boolean_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// templated__column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-namespace duckdb {
-
-template <class VALUE_TYPE>
-struct TemplatedParquetValueConversion {
-	static VALUE_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		D_ASSERT(offset < dict.len / sizeof(VALUE_TYPE));
-		return ((VALUE_TYPE *)dict.ptr)[offset];
-	}
-
-	static VALUE_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		return plain_data.read<VALUE_TYPE>();
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		plain_data.inc(sizeof(VALUE_TYPE));
-	}
-};
-
-template <class VALUE_TYPE, class VALUE_CONVERSION>
-class TemplatedColumnReader : public ColumnReader {
-public:
-	TemplatedColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
-	                      idx_t max_define_p, idx_t max_repeat_p)
-	    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p) {};
-
-	shared_ptr<ByteBuffer> dict;
-
-public:
-	void Dictionary(shared_ptr<ByteBuffer> data, idx_t num_entries) override {
-		dict = move(data);
-	}
-
-	void Offsets(uint32_t *offsets, uint8_t *defines, uint64_t num_values, parquet_filter_t &filter,
-	             idx_t result_offset, Vector &result) override {
-		auto result_ptr = FlatVector::GetData<VALUE_TYPE>(result);
-		auto &result_mask = FlatVector::Validity(result);
-
-		idx_t offset_idx = 0;
-		for (idx_t row_idx = 0; row_idx < num_values; row_idx++) {
-			if (HasDefines() && defines[row_idx + result_offset] != max_define) {
-				result_mask.SetInvalid(row_idx + result_offset);
-				continue;
-			}
-			if (filter[row_idx + result_offset]) {
-				VALUE_TYPE val = VALUE_CONVERSION::DictRead(*dict, offsets[offset_idx++], *this);
-				result_ptr[row_idx + result_offset] = val;
-			} else {
-				offset_idx++;
-			}
-		}
-	}
-
-	void Plain(shared_ptr<ByteBuffer> plain_data, uint8_t *defines, uint64_t num_values, parquet_filter_t &filter,
-	           idx_t result_offset, Vector &result) override {
-		auto result_ptr = FlatVector::GetData<VALUE_TYPE>(result);
-		auto &result_mask = FlatVector::Validity(result);
-		for (idx_t row_idx = 0; row_idx < num_values; row_idx++) {
-			if (HasDefines() && defines[row_idx + result_offset] != max_define) {
-				result_mask.SetInvalid(row_idx + result_offset);
-				continue;
-			}
-			if (filter[row_idx + result_offset]) {
-				VALUE_TYPE val = VALUE_CONVERSION::PlainRead(*plain_data, *this);
-				result_ptr[row_idx + result_offset] = val;
-			} else { // there is still some data there that we have to skip over
-				VALUE_CONVERSION::PlainSkip(*plain_data, *this);
-			}
-		}
-	}
-};
-
-template <class PARQUET_PHYSICAL_TYPE, class DUCKDB_PHYSICAL_TYPE,
-          DUCKDB_PHYSICAL_TYPE (*FUNC)(const PARQUET_PHYSICAL_TYPE &input)>
-struct CallbackParquetValueConversion {
-	static DUCKDB_PHYSICAL_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		return TemplatedParquetValueConversion<DUCKDB_PHYSICAL_TYPE>::DictRead(dict, offset, reader);
-	}
-
-	static DUCKDB_PHYSICAL_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		return FUNC(plain_data.read<PARQUET_PHYSICAL_TYPE>());
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		plain_data.inc(sizeof(PARQUET_PHYSICAL_TYPE));
-	}
-};
-
-} // namespace duckdb
-
-
-namespace duckdb {
-
-struct BooleanParquetValueConversion;
-
-class BooleanColumnReader : public TemplatedColumnReader<bool, BooleanParquetValueConversion> {
-public:
-	BooleanColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
-	                    idx_t max_define_p, idx_t max_repeat_p)
-	    : TemplatedColumnReader<bool, BooleanParquetValueConversion>(reader, move(type_p), schema_p, schema_idx_p,
-	                                                                 max_define_p, max_repeat_p),
-	      byte_pos(0) {};
-
-	uint8_t byte_pos;
-
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
-		byte_pos = 0;
-		TemplatedColumnReader<bool, BooleanParquetValueConversion>::InitializeRead(columns, protocol_p);
-	}
-};
-
-struct BooleanParquetValueConversion {
-	static bool DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		throw std::runtime_error("Dicts for booleans make no sense");
-	}
-
-	static bool PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		plain_data.available(1);
-		auto &byte_pos = ((BooleanColumnReader &)reader).byte_pos;
-		bool ret = (*plain_data.ptr >> byte_pos) & 1;
-		byte_pos++;
-		if (byte_pos == 8) {
-			byte_pos = 0;
-			plain_data.inc(1);
-		}
-		return ret;
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		PlainRead(plain_data, reader);
-	}
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// cast_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-namespace duckdb {
-
-//! A column reader that represents a cast over a child reader
-class CastColumnReader : public ColumnReader {
-public:
-	CastColumnReader(unique_ptr<ColumnReader> child_reader, LogicalType target_type);
-
-	unique_ptr<ColumnReader> child_reader;
-	DataChunk intermediate_chunk;
-
-public:
-	unique_ptr<BaseStatistics> Stats(const std::vector<ColumnChunk> &columns) override;
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
-
-	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-	           Vector &result) override;
-
-	void Skip(idx_t num_values) override;
-	idx_t GroupRowsAvailable() override;
-
-	uint64_t TotalCompressedSize() override {
-		return child_reader->TotalCompressedSize();
-	}
-
-	idx_t FileOffset() const override {
-		return child_reader->FileOffset();
-	}
-
-	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
-		child_reader->RegisterPrefetch(transport, allow_merge);
-	}
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// callback_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-
-namespace duckdb {
-
-template <class PARQUET_PHYSICAL_TYPE, class DUCKDB_PHYSICAL_TYPE,
-          DUCKDB_PHYSICAL_TYPE (*FUNC)(const PARQUET_PHYSICAL_TYPE &input)>
-class CallbackColumnReader
-    : public TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
-                                   CallbackParquetValueConversion<PARQUET_PHYSICAL_TYPE, DUCKDB_PHYSICAL_TYPE, FUNC>> {
-
-public:
-	CallbackColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
-	                     idx_t max_define_p, idx_t max_repeat_p)
-	    : TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
-	                            CallbackParquetValueConversion<PARQUET_PHYSICAL_TYPE, DUCKDB_PHYSICAL_TYPE, FUNC>>(
-	          reader, move(type_p), schema_p, file_idx_p, max_define_p, max_repeat_p) {
-	}
-
-protected:
-	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) {
-		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(DUCKDB_PHYSICAL_TYPE));
-		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)this->dict->ptr;
-		for (idx_t i = 0; i < num_entries; i++) {
-			dict_ptr[i] = FUNC(dictionary_data->read<PARQUET_PHYSICAL_TYPE>());
-		}
-	}
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// parquet_decimal_utils.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-namespace duckdb {
-
-class ParquetDecimalUtils {
-public:
-	template <class PHYSICAL_TYPE>
-	static PHYSICAL_TYPE ReadDecimalValue(const_data_ptr_t pointer, idx_t size) {
-		D_ASSERT(size <= sizeof(PHYSICAL_TYPE));
-		PHYSICAL_TYPE res = 0;
-
-		auto res_ptr = (uint8_t *)&res;
-		bool positive = (*pointer & 0x80) == 0;
-
-		// numbers are stored as two's complement so some muckery is required
-		for (idx_t i = 0; i < size; i++) {
-			auto byte = *(pointer + (size - i - 1));
-			res_ptr[i] = positive ? byte : byte ^ 0xFF;
-		}
-		if (!positive) {
-			res += 1;
-			return -res;
-		}
-		return res;
-	}
-
-	static unique_ptr<ColumnReader> CreateReader(ParquetReader &reader, const LogicalType &type_p,
-	                                             const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
-	                                             idx_t max_repeat);
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// list_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-namespace duckdb {
-
-class ListColumnReader : public ColumnReader {
-public:
-	ListColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
-	                 idx_t max_define_p, idx_t max_repeat_p, unique_ptr<ColumnReader> child_column_reader_p);
-
-	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-	           Vector &result_out) override;
-
-	void ApplyPendingSkips(idx_t num_values) override;
-
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
-		child_column_reader->InitializeRead(columns, protocol_p);
-	}
-
-	idx_t GroupRowsAvailable() override {
-		return child_column_reader->GroupRowsAvailable() + overflow_child_count;
-	}
-
-	uint64_t TotalCompressedSize() override {
-		return child_column_reader->TotalCompressedSize();
-	}
-
-	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
-		child_column_reader->RegisterPrefetch(transport, allow_merge);
-	}
-
-private:
-	unique_ptr<ColumnReader> child_column_reader;
-	ResizeableBuffer child_defines;
-	ResizeableBuffer child_repeats;
-	uint8_t *child_defines_ptr;
-	uint8_t *child_repeats_ptr;
-
-	VectorCache read_cache;
-	Vector read_vector;
-
-	parquet_filter_t child_filter;
-
-	idx_t overflow_child_count;
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// string_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-namespace duckdb {
-
-struct StringParquetValueConversion {
-	static string_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader);
-
-	static string_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader);
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader);
-};
-
-class StringColumnReader : public TemplatedColumnReader<string_t, StringParquetValueConversion> {
-public:
-	StringColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
-	                   idx_t max_define_p, idx_t max_repeat_p);
-
-	unique_ptr<string_t[]> dict_strings;
-	idx_t fixed_width_string_length;
-
-public:
-	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) override;
-
-	uint32_t VerifyString(const char *str_data, uint32_t str_len);
-
-protected:
-	void DictReference(Vector &result) override;
-	void PlainReference(shared_ptr<ByteBuffer> plain_data, Vector &result) override;
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// struct_column_reader.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-namespace duckdb {
-
-class StructColumnReader : public ColumnReader {
-public:
-	StructColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
-	                   idx_t max_define_p, idx_t max_repeat_p, vector<unique_ptr<ColumnReader>> child_readers_p);
-
-	vector<unique_ptr<ColumnReader>> child_readers;
-
-public:
-	ColumnReader *GetChildReader(idx_t child_idx);
-
-	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
-
-	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-	           Vector &result) override;
-
-	void Skip(idx_t num_values) override;
-	idx_t GroupRowsAvailable() override;
-	uint64_t TotalCompressedSize() override;
-	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override;
-};
-
-} // namespace duckdb
-
-
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2005 and onwards Google Inc.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// A light-weight compression algorithm.  It is designed for speed of
-// compression and decompression, rather than for the utmost in space
-// savings.
-//
-// For getting better compression ratios when you are compressing data
-// with long repeated sequences or compressing data that is similar to
-// other data, while still compressing fast, you might look at first
-// using BMDiff and then compressing the output of BMDiff with
-// Snappy.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_H__
-#define THIRD_PARTY_SNAPPY_SNAPPY_H__
-
-#include <cstddef>
-#include <string>
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Various type stubs for the open-source version of Snappy.
-//
-// This file cannot include config.h, as it is included from snappy.h,
-// which is a public header. Instead, snappy-stubs-public.h is generated by
-// from snappy-stubs-public.h.in at configure time.
-
-#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-
-#include <cstddef>
-#include <cstdint>
-#include <string>
-
-#ifndef _WIN32  // HAVE_SYS_UIO_H
-#include <sys/uio.h>
-#endif  // HAVE_SYS_UIO_H
-
-#define SNAPPY_MAJOR 1
-#define SNAPPY_MINOR 1
-#define SNAPPY_PATCHLEVEL 7
-#define SNAPPY_VERSION \
-    ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
-
-namespace duckdb_snappy {
-
-using int8 = std::int8_t;
-using uint8 = std::uint8_t;
-using int16 = std::int16_t;
-using uint16 = std::uint16_t;
-using int32 = std::int32_t;
-using uint32 = std::uint32_t;
-using int64 = std::int64_t;
-using uint64 = std::uint64_t;
-
-using string = std::string;
-
-#ifdef _WIN32  // !HAVE_SYS_UIO_H
-// Windows does not have an iovec type, yet the concept is universally useful.
-// It is simple to define it ourselves, so we put it inside our own namespace.
-struct iovec {
-  void* iov_base;
-  size_t iov_len;
-};
-#endif  // !HAVE_SYS_UIO_H
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
-
-
-// LICENSE_CHANGE_END
-
-
-namespace duckdb_snappy {
-  class Source;
-  class Sink;
-
-  // ------------------------------------------------------------------------
-  // Generic compression/decompression routines.
-  // ------------------------------------------------------------------------
-
-  // Compress the bytes read from "*source" and append to "*sink". Return the
-  // number of bytes written.
-  size_t Compress(Source* source, Sink* sink);
-
-  // Find the uncompressed length of the given stream, as given by the header.
-  // Note that the true length could deviate from this; the stream could e.g.
-  // be truncated.
-  //
-  // Also note that this leaves "*source" in a state that is unsuitable for
-  // further operations, such as RawUncompress(). You will need to rewind
-  // or recreate the source yourself before attempting any further calls.
-  bool GetUncompressedLength(Source* source, uint32* result);
-
-  // ------------------------------------------------------------------------
-  // Higher-level string based routines (should be sufficient for most users)
-  // ------------------------------------------------------------------------
-
-  // Sets "*output" to the compressed version of "input[0,input_length-1]".
-  // Original contents of *output are lost.
-  //
-  // REQUIRES: "input[]" is not an alias of "*output".
-  size_t Compress(const char* input, size_t input_length, string* output);
-
-  // Decompresses "compressed[0,compressed_length-1]" to "*uncompressed".
-  // Original contents of "*uncompressed" are lost.
-  //
-  // REQUIRES: "compressed[]" is not an alias of "*uncompressed".
-  //
-  // returns false if the message is corrupted and could not be decompressed
-  bool Uncompress(const char* compressed, size_t compressed_length,
-                  string* uncompressed);
-
-  // Decompresses "compressed" to "*uncompressed".
-  //
-  // returns false if the message is corrupted and could not be decompressed
-  bool Uncompress(Source* compressed, Sink* uncompressed);
-
-  // This routine uncompresses as much of the "compressed" as possible
-  // into sink.  It returns the number of valid bytes added to sink
-  // (extra invalid bytes may have been added due to errors; the caller
-  // should ignore those). The emitted data typically has length
-  // GetUncompressedLength(), but may be shorter if an error is
-  // encountered.
-  size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed);
-
-  // ------------------------------------------------------------------------
-  // Lower-level character array based routines.  May be useful for
-  // efficiency reasons in certain circumstances.
-  // ------------------------------------------------------------------------
-
-  // REQUIRES: "compressed" must point to an area of memory that is at
-  // least "MaxCompressedLength(input_length)" bytes in length.
-  //
-  // Takes the data stored in "input[0..input_length]" and stores
-  // it in the array pointed to by "compressed".
-  //
-  // "*compressed_length" is set to the length of the compressed output.
-  //
-  // Example:
-  //    char* output = new char[snappy::MaxCompressedLength(input_length)];
-  //    size_t output_length;
-  //    RawCompress(input, input_length, output, &output_length);
-  //    ... Process(output, output_length) ...
-  //    delete [] output;
-  void RawCompress(const char* input,
-                   size_t input_length,
-                   char* compressed,
-                   size_t* compressed_length);
-
-  // Given data in "compressed[0..compressed_length-1]" generated by
-  // calling the Snappy::Compress routine, this routine
-  // stores the uncompressed data to
-  //    uncompressed[0..GetUncompressedLength(compressed)-1]
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompress(const char* compressed, size_t compressed_length,
-                     char* uncompressed);
-
-  // Given data from the byte source 'compressed' generated by calling
-  // the Snappy::Compress routine, this routine stores the uncompressed
-  // data to
-  //    uncompressed[0..GetUncompressedLength(compressed,compressed_length)-1]
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompress(Source* compressed, char* uncompressed);
-
-  // Given data in "compressed[0..compressed_length-1]" generated by
-  // calling the Snappy::Compress routine, this routine
-  // stores the uncompressed data to the iovec "iov". The number of physical
-  // buffers in "iov" is given by iov_cnt and their cumulative size
-  // must be at least GetUncompressedLength(compressed). The individual buffers
-  // in "iov" must not overlap with each other.
-  //
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
-                            const struct iovec* iov, size_t iov_cnt);
-
-  // Given data from the byte source 'compressed' generated by calling
-  // the Snappy::Compress routine, this routine stores the uncompressed
-  // data to the iovec "iov". The number of physical
-  // buffers in "iov" is given by iov_cnt and their cumulative size
-  // must be at least GetUncompressedLength(compressed). The individual buffers
-  // in "iov" must not overlap with each other.
-  //
-  // returns false if the message is corrupted and could not be decrypted
-  bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
-                            size_t iov_cnt);
-
-  // Returns the maximal size of the compressed representation of
-  // input data that is "source_bytes" bytes in length;
-  size_t MaxCompressedLength(size_t source_bytes);
-
-  // REQUIRES: "compressed[]" was produced by RawCompress() or Compress()
-  // Returns true and stores the length of the uncompressed data in
-  // *result normally.  Returns false on parsing error.
-  // This operation takes O(1) time.
-  bool GetUncompressedLength(const char* compressed, size_t compressed_length,
-                             size_t* result);
-
-  // Returns true iff the contents of "compressed[]" can be uncompressed
-  // successfully.  Does not return the uncompressed data.  Takes
-  // time proportional to compressed_length, but is usually at least
-  // a factor of four faster than actual decompression.
-  bool IsValidCompressedBuffer(const char* compressed,
-                               size_t compressed_length);
-
-  // Returns true iff the contents of "compressed" can be uncompressed
-  // successfully.  Does not return the uncompressed data.  Takes
-  // time proportional to *compressed length, but is usually at least
-  // a factor of four faster than actual decompression.
-  // On success, consumes all of *compressed.  On failure, consumes an
-  // unspecified prefix of *compressed.
-  bool IsValidCompressed(Source* compressed);
-
-}  // end namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_H__
-
-
-// LICENSE_CHANGE_END
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #5
-// See the end of this file for a list
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// miniz_wrapper.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #5
-// See the end of this file for a list
-
-/* miniz.c 2.0.8 - public domain deflate/inflate, zlib-subset, ZIP reading/writing/appending, PNG writing
-   See "unlicense" statement at the end of this file.
-   Rich Geldreich <richgel99@gmail.com>, last updated Oct. 13, 2013
-   Implements RFC 1950: http://www.ietf.org/rfc/rfc1950.txt and RFC 1951: http://www.ietf.org/rfc/rfc1951.txt
-
-   Most API's defined in miniz.c are optional. For example, to disable the archive related functions just define
-   MINIZ_NO_ARCHIVE_APIS, or to get rid of all stdio usage define MINIZ_NO_STDIO (see the list below for more macros).
-
-   * Low-level Deflate/Inflate implementation notes:
-
-     Compression: Use the "tdefl" API's. The compressor supports raw, static, and dynamic blocks, lazy or
-     greedy parsing, match length filtering, RLE-only, and Huffman-only streams. It performs and compresses
-     approximately as well as zlib.
-
-     Decompression: Use the "tinfl" API's. The entire decompressor is implemented as a single function
-     coroutine: see tinfl_decompress(). It supports decompression into a 32KB (or larger power of 2) wrapping buffer, or into a memory
-     block large enough to hold the entire file.
-
-     The low-level tdefl/tinfl API's do not make any use of dynamic memory allocation.
-
-   * zlib-style API notes:
-
-     miniz.c implements a fairly large subset of zlib. There's enough functionality present for it to be a drop-in
-     zlib replacement in many apps:
-        The z_stream struct, optional memory allocation callbacks
-        deflateInit/deflateInit2/deflate/deflateReset/deflateEnd/deflateBound
-        inflateInit/inflateInit2/inflate/inflateEnd
-        compress, compress2, compressBound, uncompress
-        CRC-32, Adler-32 - Using modern, minimal code size, CPU cache friendly routines.
-        Supports raw deflate streams or standard zlib streams with adler-32 checking.
-
-     Limitations:
-      The callback API's are not implemented yet. No support for gzip headers or zlib static dictionaries.
-      I've tried to closely emulate zlib's various flavors of stream flushing and return status codes, but
-      there are no guarantees that miniz.c pulls this off perfectly.
-
-   * PNG writing: See the tdefl_write_image_to_png_file_in_memory() function, originally written by
-     Alex Evans. Supports 1-4 bytes/pixel images.
-
-   * ZIP archive API notes:
-
-     The ZIP archive API's where designed with simplicity and efficiency in mind, with just enough abstraction to
-     get the job done with minimal fuss. There are simple API's to retrieve file information, read files from
-     existing archives, create new archives, append new files to existing archives, or clone archive data from
-     one archive to another. It supports archives located in memory or the heap, on disk (using stdio.h),
-     or you can specify custom file read/write callbacks.
-
-     - Archive reading: Just call this function to read a single file from a disk archive:
-
-      void *mz_zip_extract_archive_file_to_heap(const char *pZip_filename, const char *pArchive_name,
-        size_t *pSize, mz_uint zip_flags);
-
-     For more complex cases, use the "mz_zip_reader" functions. Upon opening an archive, the entire central
-     directory is located and read as-is into memory, and subsequent file access only occurs when reading individual files.
-
-     - Archives file scanning: The simple way is to use this function to scan a loaded archive for a specific file:
-
-     int mz_zip_reader_locate_file(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags);
-
-     The locate operation can optionally check file comments too, which (as one example) can be used to identify
-     multiple versions of the same file in an archive. This function uses a simple linear search through the central
-     directory, so it's not very fast.
-
-     Alternately, you can iterate through all the files in an archive (using mz_zip_reader_get_num_files()) and
-     retrieve detailed info on each file by calling mz_zip_reader_file_stat().
-
-     - Archive creation: Use the "mz_zip_writer" functions. The ZIP writer immediately writes compressed file data
-     to disk and builds an exact image of the central directory in memory. The central directory image is written
-     all at once at the end of the archive file when the archive is finalized.
-
-     The archive writer can optionally align each file's local header and file data to any power of 2 alignment,
-     which can be useful when the archive will be read from optical media. Also, the writer supports placing
-     arbitrary data blobs at the very beginning of ZIP archives. Archives written using either feature are still
-     readable by any ZIP tool.
-
-     - Archive appending: The simple way to add a single file to an archive is to call this function:
-
-      mz_bool mz_zip_add_mem_to_archive_file_in_place(const char *pZip_filename, const char *pArchive_name,
-        const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
-
-     The archive will be created if it doesn't already exist, otherwise it'll be appended to.
-     Note the appending is done in-place and is not an atomic operation, so if something goes wrong
-     during the operation it's possible the archive could be left without a central directory (although the local
-     file headers and file data will be fine, so the archive will be recoverable).
-
-     For more complex archive modification scenarios:
-     1. The safest way is to use a mz_zip_reader to read the existing archive, cloning only those bits you want to
-     preserve into a new archive using using the mz_zip_writer_add_from_zip_reader() function (which compiles the
-     compressed file data as-is). When you're done, delete the old archive and rename the newly written archive, and
-     you're done. This is safe but requires a bunch of temporary disk space or heap memory.
-
-     2. Or, you can convert an mz_zip_reader in-place to an mz_zip_writer using mz_zip_writer_init_from_reader(),
-     append new files as needed, then finalize the archive which will write an updated central directory to the
-     original archive. (This is basically what mz_zip_add_mem_to_archive_file_in_place() does.) There's a
-     possibility that the archive's central directory could be lost with this method if anything goes wrong, though.
-
-     - ZIP archive support limitations:
-     No zip64 or spanning support. Extraction functions can only handle unencrypted, stored or deflated files.
-     Requires streams capable of seeking.
-
-   * This is a header file library, like stb_image.c. To get only a header file, either cut and paste the
-     below header, or create miniz.h, #define MINIZ_HEADER_FILE_ONLY, and then include miniz.c from it.
-
-   * Important: For best perf. be sure to customize the below macros for your target platform:
-     #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 1
-     #define MINIZ_LITTLE_ENDIAN 1
-     #define MINIZ_HAS_64BIT_REGISTERS 1
-
-   * On platforms using glibc, Be sure to "#define _LARGEFILE64_SOURCE 1" before including miniz.c to ensure miniz
-     uses the 64-bit variants: fopen64(), stat64(), etc. Otherwise you won't be able to process large files
-     (i.e. 32-bit stat() fails for me on files > 0x7FFFFFFF bytes).
-*/
-
-
-
-
-
-/* Defines to completely disable specific portions of miniz.c:
-   If all macros here are defined the only functionality remaining will be CRC-32, adler-32, tinfl, and tdefl. */
-
-/* Define MINIZ_NO_STDIO to disable all usage and any functions which rely on stdio for file I/O. */
-#define MINIZ_NO_STDIO
-
-/* If MINIZ_NO_TIME is specified then the ZIP archive functions will not be able to get the current time, or */
-/* get/set file times, and the C run-time funcs that get/set times won't be called. */
-/* The current downside is the times written to your archives will be from 1979. */
-#define MINIZ_NO_TIME
-
-/* Define MINIZ_NO_ARCHIVE_APIS to disable all ZIP archive API's. */
-/* #define MINIZ_NO_ARCHIVE_APIS */
-
-/* Define MINIZ_NO_ARCHIVE_WRITING_APIS to disable all writing related ZIP archive API's. */
-/* #define MINIZ_NO_ARCHIVE_WRITING_APIS */
-
-/* Define MINIZ_NO_ZLIB_APIS to remove all ZLIB-style compression/decompression API's. */
-/*#define MINIZ_NO_ZLIB_APIS */
-
-/* Define MINIZ_NO_ZLIB_COMPATIBLE_NAME to disable zlib names, to prevent conflicts against stock zlib. */
-#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
-
-/* Define MINIZ_NO_MALLOC to disable all calls to malloc, free, and realloc.
-   Note if MINIZ_NO_MALLOC is defined then the user must always provide custom user alloc/free/realloc
-   callbacks to the zlib and archive API's, and a few stand-alone helper API's which don't provide custom user
-   functions (such as tdefl_compress_mem_to_heap() and tinfl_decompress_mem_to_heap()) won't work. */
-/*#define MINIZ_NO_MALLOC */
-
-#if defined(__TINYC__) && (defined(__linux) || defined(__linux__))
-/* TODO: Work around "error: include file 'sys\utime.h' when compiling with tcc on Linux */
-#define MINIZ_NO_TIME
-#endif
-
-#include <stddef.h>
-
-
-
-#if !defined(MINIZ_NO_TIME) && !defined(MINIZ_NO_ARCHIVE_APIS)
-#include <time.h>
-#endif
-
-#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__i386) || defined(__i486__) || defined(__i486) || defined(i386) || defined(__ia64__) || defined(__x86_64__)
-/* MINIZ_X86_OR_X64_CPU is only used to help set the below macros. */
-#define MINIZ_X86_OR_X64_CPU 1
-#else
-#define MINIZ_X86_OR_X64_CPU 0
-#endif
-
-#if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || MINIZ_X86_OR_X64_CPU
-/* Set MINIZ_LITTLE_ENDIAN to 1 if the processor is little endian. */
-#define MINIZ_LITTLE_ENDIAN 1
-#else
-#define MINIZ_LITTLE_ENDIAN 0
-#endif
-
-#if MINIZ_X86_OR_X64_CPU
-/* Set MINIZ_USE_UNALIGNED_LOADS_AND_STORES to 1 on CPU's that permit efficient integer loads and stores from unaligned addresses. */
-#define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0 // always 0 because alignment
-#else
-#define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0
-#endif
-
-#if defined(_M_X64) || defined(_WIN64) || defined(__MINGW64__) || defined(_LP64) || defined(__LP64__) || defined(__ia64__) || defined(__x86_64__)
-/* Set MINIZ_HAS_64BIT_REGISTERS to 1 if operations on 64-bit integers are reasonably fast (and don't involve compiler generated calls to helper functions). */
-#define MINIZ_HAS_64BIT_REGISTERS 1
-#else
-#define MINIZ_HAS_64BIT_REGISTERS 0
-#endif
-
-namespace duckdb_miniz {
-
-/* ------------------- zlib-style API Definitions. */
-
-/* For more compatibility with zlib, miniz.c uses unsigned long for some parameters/struct members. Beware: mz_ulong can be either 32 or 64-bits! */
-typedef unsigned long mz_ulong;
-
-/* mz_free() internally uses the MZ_FREE() macro (which by default calls free() unless you've modified the MZ_MALLOC macro) to release a block allocated from the heap. */
-void mz_free(void *p);
-
-#define MZ_ADLER32_INIT (1)
-/* mz_adler32() returns the initial adler-32 value to use when called with ptr==NULL. */
-mz_ulong mz_adler32(mz_ulong adler, const unsigned char *ptr, size_t buf_len);
-
-#define MZ_CRC32_INIT (0)
-/* mz_crc32() returns the initial CRC-32 value to use when called with ptr==NULL. */
-mz_ulong mz_crc32(mz_ulong crc, const unsigned char *ptr, size_t buf_len);
-
-/* Compression strategies. */
-enum { MZ_DEFAULT_STRATEGY = 0, MZ_FILTERED = 1, MZ_HUFFMAN_ONLY = 2, MZ_RLE = 3, MZ_FIXED = 4 };
-
-/* Method */
-#define MZ_DEFLATED 8
-
-/* Heap allocation callbacks.
-Note that mz_alloc_func parameter types purpsosely differ from zlib's: items/size is size_t, not unsigned long. */
-typedef void *(*mz_alloc_func)(void *opaque, size_t items, size_t size);
-typedef void (*mz_free_func)(void *opaque, void *address);
-typedef void *(*mz_realloc_func)(void *opaque, void *address, size_t items, size_t size);
-
-/* Compression levels: 0-9 are the standard zlib-style levels, 10 is best possible compression (not zlib compatible, and may be very slow), MZ_DEFAULT_COMPRESSION=MZ_DEFAULT_LEVEL. */
-enum {
-	MZ_NO_COMPRESSION = 0,
-	MZ_BEST_SPEED = 1,
-	MZ_BEST_COMPRESSION = 9,
-	MZ_UBER_COMPRESSION = 10,
-	MZ_DEFAULT_LEVEL = 6,
-	MZ_DEFAULT_COMPRESSION = -1
-};
-
-#define MZ_VERSION "10.0.3"
-#define MZ_VERNUM 0xA030
-#define MZ_VER_MAJOR 10
-#define MZ_VER_MINOR 0
-#define MZ_VER_REVISION 3
-#define MZ_VER_SUBREVISION 0
-
-#ifndef MINIZ_NO_ZLIB_APIS
-
-/* Flush values. For typical usage you only need MZ_NO_FLUSH and MZ_FINISH. The other values are for advanced use (refer to the zlib docs). */
-enum { MZ_NO_FLUSH = 0, MZ_PARTIAL_FLUSH = 1, MZ_SYNC_FLUSH = 2, MZ_FULL_FLUSH = 3, MZ_FINISH = 4, MZ_BLOCK = 5 };
-
-/* Return status codes. MZ_PARAM_ERROR is non-standard. */
-enum {
-	MZ_OK = 0,
-	MZ_STREAM_END = 1,
-	MZ_NEED_DICT = 2,
-	MZ_ERRNO = -1,
-	MZ_STREAM_ERROR = -2,
-	MZ_DATA_ERROR = -3,
-	MZ_MEM_ERROR = -4,
-	MZ_BUF_ERROR = -5,
-	MZ_VERSION_ERROR = -6,
-	MZ_PARAM_ERROR = -10000
-};
-
-/* Window bits */
-#define MZ_DEFAULT_WINDOW_BITS 15
-
-struct mz_internal_state;
-
-/* Compression/decompression stream struct. */
-typedef struct mz_stream_s {
-	const unsigned char *next_in; /* pointer to next byte to read */
-	unsigned int avail_in;        /* number of bytes available at next_in */
-	mz_ulong total_in;            /* total number of bytes consumed so far */
-
-	unsigned char *next_out; /* pointer to next byte to write */
-	unsigned int avail_out;  /* number of bytes that can be written to next_out */
-	mz_ulong total_out;      /* total number of bytes produced so far */
-
-	char *msg;                       /* error msg (unused) */
-	struct mz_internal_state *state; /* internal state, allocated by zalloc/zfree */
-
-	mz_alloc_func zalloc; /* optional heap allocation function (defaults to malloc) */
-	mz_free_func zfree;   /* optional heap free function (defaults to free) */
-	void *opaque;         /* heap alloc function user pointer */
-
-	int data_type;     /* data_type (unused) */
-	mz_ulong adler;    /* adler32 of the source or uncompressed data */
-	mz_ulong reserved; /* not used */
-} mz_stream;
-
-typedef mz_stream *mz_streamp;
-
-/* Returns the version string of miniz.c. */
-const char *mz_version(void);
-
-/* mz_deflateInit() initializes a compressor with default options: */
-/* Parameters: */
-/*  pStream must point to an initialized mz_stream struct. */
-/*  level must be between [MZ_NO_COMPRESSION, MZ_BEST_COMPRESSION]. */
-/*  level 1 enables a specially optimized compression function that's been optimized purely for performance, not ratio.
- */
-/*  (This special func. is currently only enabled when MINIZ_USE_UNALIGNED_LOADS_AND_STORES and MINIZ_LITTLE_ENDIAN are defined.) */
-/* Return values: */
-/*  MZ_OK on success. */
-/*  MZ_STREAM_ERROR if the stream is bogus. */
-/*  MZ_PARAM_ERROR if the input parameters are bogus. */
-/*  MZ_MEM_ERROR on out of memory. */
-int mz_deflateInit(mz_streamp pStream, int level);
-
-/* mz_deflateInit2() is like mz_deflate(), except with more control: */
-/* Additional parameters: */
-/*   method must be MZ_DEFLATED */
-/*   window_bits must be MZ_DEFAULT_WINDOW_BITS (to wrap the deflate stream with zlib header/adler-32 footer) or -MZ_DEFAULT_WINDOW_BITS (raw deflate/no header or footer) */
-/*   mem_level must be between [1, 9] (it's checked but ignored by miniz.c) */
-int mz_deflateInit2(mz_streamp pStream, int level, int method, int window_bits, int mem_level, int strategy);
-
-/* Quickly resets a compressor without having to reallocate anything. Same as calling mz_deflateEnd() followed by mz_deflateInit()/mz_deflateInit2(). */
-int mz_deflateReset(mz_streamp pStream);
-
-/* mz_deflate() compresses the input to output, consuming as much of the input and producing as much output as possible.
- */
-/* Parameters: */
-/*   pStream is the stream to read from and write to. You must initialize/update the next_in, avail_in, next_out, and avail_out members. */
-/*   flush may be MZ_NO_FLUSH, MZ_PARTIAL_FLUSH/MZ_SYNC_FLUSH, MZ_FULL_FLUSH, or MZ_FINISH. */
-/* Return values: */
-/*   MZ_OK on success (when flushing, or if more input is needed but not available, and/or there's more output to be written but the output buffer is full). */
-/*   MZ_STREAM_END if all input has been consumed and all output bytes have been written. Don't call mz_deflate() on the stream anymore. */
-/*   MZ_STREAM_ERROR if the stream is bogus. */
-/*   MZ_PARAM_ERROR if one of the parameters is invalid. */
-/*   MZ_BUF_ERROR if no forward progress is possible because the input and/or output buffers are empty. (Fill up the input buffer or free up some output space and try again.) */
-int mz_deflate(mz_streamp pStream, int flush);
-
-/* mz_deflateEnd() deinitializes a compressor: */
-/* Return values: */
-/*  MZ_OK on success. */
-/*  MZ_STREAM_ERROR if the stream is bogus. */
-int mz_deflateEnd(mz_streamp pStream);
-
-/* mz_deflateBound() returns a (very) conservative upper bound on the amount of data that could be generated by deflate(), assuming flush is set to only MZ_NO_FLUSH or MZ_FINISH. */
-mz_ulong mz_deflateBound(mz_streamp pStream, mz_ulong source_len);
-
-/* Single-call compression functions mz_compress() and mz_compress2(): */
-/* Returns MZ_OK on success, or one of the error codes from mz_deflate() on failure. */
-int mz_compress(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len);
-int mz_compress2(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len,
-                 int level);
-
-/* mz_compressBound() returns a (very) conservative upper bound on the amount of data that could be generated by calling mz_compress(). */
-mz_ulong mz_compressBound(mz_ulong source_len);
-
-/* Initializes a decompressor. */
-int mz_inflateInit(mz_streamp pStream);
-
-/* mz_inflateInit2() is like mz_inflateInit() with an additional option that controls the window size and whether or not the stream has been wrapped with a zlib header/footer: */
-/* window_bits must be MZ_DEFAULT_WINDOW_BITS (to parse zlib header/footer) or -MZ_DEFAULT_WINDOW_BITS (raw deflate). */
-int mz_inflateInit2(mz_streamp pStream, int window_bits);
-
-/* Decompresses the input stream to the output, consuming only as much of the input as needed, and writing as much to the output as possible. */
-/* Parameters: */
-/*   pStream is the stream to read from and write to. You must initialize/update the next_in, avail_in, next_out, and avail_out members. */
-/*   flush may be MZ_NO_FLUSH, MZ_SYNC_FLUSH, or MZ_FINISH. */
-/*   On the first call, if flush is MZ_FINISH it's assumed the input and output buffers are both sized large enough to decompress the entire stream in a single call (this is slightly faster). */
-/*   MZ_FINISH implies that there are no more source bytes available beside what's already in the input buffer, and that the output buffer is large enough to hold the rest of the decompressed data. */
-/* Return values: */
-/*   MZ_OK on success. Either more input is needed but not available, and/or there's more output to be written but the output buffer is full. */
-/*   MZ_STREAM_END if all needed input has been consumed and all output bytes have been written. For zlib streams, the adler-32 of the decompressed data has also been verified. */
-/*   MZ_STREAM_ERROR if the stream is bogus. */
-/*   MZ_DATA_ERROR if the deflate stream is invalid. */
-/*   MZ_PARAM_ERROR if one of the parameters is invalid. */
-/*   MZ_BUF_ERROR if no forward progress is possible because the input buffer is empty but the inflater needs more input to continue, or if the output buffer is not large enough. Call mz_inflate() again */
-/*   with more input data, or with more room in the output buffer (except when using single call decompression, described above). */
-int mz_inflate(mz_streamp pStream, int flush);
-
-/* Deinitializes a decompressor. */
-int mz_inflateEnd(mz_streamp pStream);
-
-/* Single-call decompression. */
-/* Returns MZ_OK on success, or one of the error codes from mz_inflate() on failure. */
-int mz_uncompress(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len);
-
-/* Returns a string description of the specified error code, or NULL if the error code is invalid. */
-const char *mz_error(int err);
-
-/* Redefine zlib-compatible names to miniz equivalents, so miniz.c can be used as a drop-in replacement for the subset of zlib that miniz.c supports. */
-/* Define MINIZ_NO_ZLIB_COMPATIBLE_NAMES to disable zlib-compatibility if you use zlib in the same project. */
-#ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES
-typedef unsigned char Byte;
-typedef unsigned int uInt;
-typedef mz_ulong uLong;
-typedef Byte Bytef;
-typedef uInt uIntf;
-typedef char charf;
-typedef int intf;
-typedef void *voidpf;
-typedef uLong uLongf;
-typedef void *voidp;
-typedef void *const voidpc;
-#define Z_NULL 0
-#define Z_NO_FLUSH MZ_NO_FLUSH
-#define Z_PARTIAL_FLUSH MZ_PARTIAL_FLUSH
-#define Z_SYNC_FLUSH MZ_SYNC_FLUSH
-#define Z_FULL_FLUSH MZ_FULL_FLUSH
-#define Z_FINISH MZ_FINISH
-#define Z_BLOCK MZ_BLOCK
-#define Z_OK MZ_OK
-#define Z_STREAM_END MZ_STREAM_END
-#define Z_NEED_DICT MZ_NEED_DICT
-#define Z_ERRNO MZ_ERRNO
-#define Z_STREAM_ERROR MZ_STREAM_ERROR
-#define Z_DATA_ERROR MZ_DATA_ERROR
-#define Z_MEM_ERROR MZ_MEM_ERROR
-#define Z_BUF_ERROR MZ_BUF_ERROR
-#define Z_VERSION_ERROR MZ_VERSION_ERROR
-#define Z_PARAM_ERROR MZ_PARAM_ERROR
-#define Z_NO_COMPRESSION MZ_NO_COMPRESSION
-#define Z_BEST_SPEED MZ_BEST_SPEED
-#define Z_BEST_COMPRESSION MZ_BEST_COMPRESSION
-#define Z_DEFAULT_COMPRESSION MZ_DEFAULT_COMPRESSION
-#define Z_DEFAULT_STRATEGY MZ_DEFAULT_STRATEGY
-#define Z_FILTERED MZ_FILTERED
-#define Z_HUFFMAN_ONLY MZ_HUFFMAN_ONLY
-#define Z_RLE MZ_RLE
-#define Z_FIXED MZ_FIXED
-#define Z_DEFLATED MZ_DEFLATED
-#define Z_DEFAULT_WINDOW_BITS MZ_DEFAULT_WINDOW_BITS
-#define alloc_func mz_alloc_func
-#define free_func mz_free_func
-#define internal_state mz_internal_state
-#define z_stream mz_stream
-#define deflateInit mz_deflateInit
-#define deflateInit2 mz_deflateInit2
-#define deflateReset mz_deflateReset
-#define deflate mz_deflate
-#define deflateEnd mz_deflateEnd
-#define deflateBound mz_deflateBound
-#define compress mz_compress
-#define compress2 mz_compress2
-#define compressBound mz_compressBound
-#define inflateInit mz_inflateInit
-#define inflateInit2 mz_inflateInit2
-#define inflate mz_inflate
-#define inflateEnd mz_inflateEnd
-#define uncompress mz_uncompress
-#define crc32 mz_crc32
-#define adler32 mz_adler32
-#define MAX_WBITS 15
-#define MAX_MEM_LEVEL 9
-#define zError mz_error
-#define ZLIB_VERSION MZ_VERSION
-#define ZLIB_VERNUM MZ_VERNUM
-#define ZLIB_VER_MAJOR MZ_VER_MAJOR
-#define ZLIB_VER_MINOR MZ_VER_MINOR
-#define ZLIB_VER_REVISION MZ_VER_REVISION
-#define ZLIB_VER_SUBREVISION MZ_VER_SUBREVISION
-#define zlibVersion mz_version
-#define zlib_version mz_version()
-#endif /* #ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES */
-
-#endif /* MINIZ_NO_ZLIB_APIS */
-
-}
-
-
-#include <assert.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-namespace duckdb_miniz {
-
-/* ------------------- Types and macros */
-typedef unsigned char mz_uint8;
-typedef signed short mz_int16;
-typedef unsigned short mz_uint16;
-typedef unsigned int mz_uint32;
-typedef unsigned int mz_uint;
-typedef int64_t mz_int64;
-typedef uint64_t mz_uint64;
-typedef int mz_bool;
-
-#define MZ_FALSE (0)
-#define MZ_TRUE (1)
-
-/* Works around MSVC's spammy "warning C4127: conditional expression is constant" message. */
-#ifdef _MSC_VER
-#define MZ_MACRO_END while (0, 0)
-#else
-#define MZ_MACRO_END while (0)
-#endif
-
-#ifdef MINIZ_NO_STDIO
-#define MZ_FILE void *
-#else
-#include <stdio.h>
-#define MZ_FILE FILE
-#endif /* #ifdef MINIZ_NO_STDIO */
-
-#ifdef MINIZ_NO_TIME
-typedef struct mz_dummy_time_t_tag
-{
-    int m_dummy;
-} mz_dummy_time_t;
-#define MZ_TIME_T mz_dummy_time_t
-#else
-#define MZ_TIME_T time_t
-#endif
-
-#define MZ_ASSERT(x) assert(x)
-
-#ifdef MINIZ_NO_MALLOC
-#define MZ_MALLOC(x) NULL
-#define MZ_FREE(x) (void)x, ((void)0)
-#define MZ_REALLOC(p, x) NULL
-#else
-#define MZ_MALLOC(x) malloc(x)
-#define MZ_FREE(x) free(x)
-#define MZ_REALLOC(p, x) realloc(p, x)
-#endif
-
-#define MZ_MAX(a, b) (((a) > (b)) ? (a) : (b))
-#define MZ_MIN(a, b) (((a) < (b)) ? (a) : (b))
-#define MZ_CLEAR_OBJ(obj) memset(&(obj), 0, sizeof(obj))
-
-#if MINIZ_USE_UNALIGNED_LOADS_AND_STORES && MINIZ_LITTLE_ENDIAN
-#define MZ_READ_LE16(p) *((const mz_uint16 *)(p))
-#define MZ_READ_LE32(p) *((const mz_uint32 *)(p))
-#else
-#define MZ_READ_LE16(p) ((mz_uint32)(((const mz_uint8 *)(p))[0]) | ((mz_uint32)(((const mz_uint8 *)(p))[1]) << 8U))
-#define MZ_READ_LE32(p) ((mz_uint32)(((const mz_uint8 *)(p))[0]) | ((mz_uint32)(((const mz_uint8 *)(p))[1]) << 8U) | ((mz_uint32)(((const mz_uint8 *)(p))[2]) << 16U) | ((mz_uint32)(((const mz_uint8 *)(p))[3]) << 24U))
-#endif
-
-#define MZ_READ_LE64(p) (((mz_uint64)MZ_READ_LE32(p)) | (((mz_uint64)MZ_READ_LE32((const mz_uint8 *)(p) + sizeof(mz_uint32))) << 32U))
-
-#ifdef _MSC_VER
-#define MZ_FORCEINLINE __forceinline
-#elif defined(__GNUC__)
-#define MZ_FORCEINLINE __inline__ __attribute__((__always_inline__))
-#else
-#define MZ_FORCEINLINE inline
-#endif
-
-extern void *miniz_def_alloc_func(void *opaque, size_t items, size_t size);
-extern void miniz_def_free_func(void *opaque, void *address);
-extern void *miniz_def_realloc_func(void *opaque, void *address, size_t items, size_t size);
-
-#define MZ_UINT16_MAX (0xFFFFU)
-#define MZ_UINT32_MAX (0xFFFFFFFFU)
-
-
-
-
-
-/* ------------------- Low-level Compression API Definitions */
-
-/* Set TDEFL_LESS_MEMORY to 1 to use less memory (compression will be slightly slower, and raw/dynamic blocks will be output more frequently). */
-#define TDEFL_LESS_MEMORY 0
-
-/* tdefl_init() compression flags logically OR'd together (low 12 bits contain the max. number of probes per dictionary search): */
-/* TDEFL_DEFAULT_MAX_PROBES: The compressor defaults to 128 dictionary probes per dictionary search. 0=Huffman only, 1=Huffman+LZ (fastest/crap compression), 4095=Huffman+LZ (slowest/best compression). */
-enum
-{
-    TDEFL_HUFFMAN_ONLY = 0,
-    TDEFL_DEFAULT_MAX_PROBES = 128,
-    TDEFL_MAX_PROBES_MASK = 0xFFF
-};
-
-/* TDEFL_WRITE_ZLIB_HEADER: If set, the compressor outputs a zlib header before the deflate data, and the Adler-32 of the source data at the end. Otherwise, you'll get raw deflate data. */
-/* TDEFL_COMPUTE_ADLER32: Always compute the adler-32 of the input data (even when not writing zlib headers). */
-/* TDEFL_GREEDY_PARSING_FLAG: Set to use faster greedy parsing, instead of more efficient lazy parsing. */
-/* TDEFL_NONDETERMINISTIC_PARSING_FLAG: Enable to decrease the compressor's initialization time to the minimum, but the output may vary from run to run given the same input (depending on the contents of memory). */
-/* TDEFL_RLE_MATCHES: Only look for RLE matches (matches with a distance of 1) */
-/* TDEFL_FILTER_MATCHES: Discards matches <= 5 chars if enabled. */
-/* TDEFL_FORCE_ALL_STATIC_BLOCKS: Disable usage of optimized Huffman tables. */
-/* TDEFL_FORCE_ALL_RAW_BLOCKS: Only use raw (uncompressed) deflate blocks. */
-/* The low 12 bits are reserved to control the max # of hash probes per dictionary lookup (see TDEFL_MAX_PROBES_MASK). */
-enum
-{
-    TDEFL_WRITE_ZLIB_HEADER = 0x01000,
-    TDEFL_COMPUTE_ADLER32 = 0x02000,
-    TDEFL_GREEDY_PARSING_FLAG = 0x04000,
-    TDEFL_NONDETERMINISTIC_PARSING_FLAG = 0x08000,
-    TDEFL_RLE_MATCHES = 0x10000,
-    TDEFL_FILTER_MATCHES = 0x20000,
-    TDEFL_FORCE_ALL_STATIC_BLOCKS = 0x40000,
-    TDEFL_FORCE_ALL_RAW_BLOCKS = 0x80000
-};
-
-/* High level compression functions: */
-/* tdefl_compress_mem_to_heap() compresses a block in memory to a heap block allocated via malloc(). */
-/* On entry: */
-/*  pSrc_buf, src_buf_len: Pointer and size of source block to compress. */
-/*  flags: The max match finder probes (default is 128) logically OR'd against the above flags. Higher probes are slower but improve compression. */
-/* On return: */
-/*  Function returns a pointer to the compressed data, or NULL on failure. */
-/*  *pOut_len will be set to the compressed data's size, which could be larger than src_buf_len on uncompressible data. */
-/*  The caller must free() the returned block when it's no longer needed. */
-void *tdefl_compress_mem_to_heap(const void *pSrc_buf, size_t src_buf_len, size_t *pOut_len, int flags);
-
-/* tdefl_compress_mem_to_mem() compresses a block in memory to another block in memory. */
-/* Returns 0 on failure. */
-size_t tdefl_compress_mem_to_mem(void *pOut_buf, size_t out_buf_len, const void *pSrc_buf, size_t src_buf_len, int flags);
-
-/* Compresses an image to a compressed PNG file in memory. */
-/* On entry: */
-/*  pImage, w, h, and num_chans describe the image to compress. num_chans may be 1, 2, 3, or 4. */
-/*  The image pitch in bytes per scanline will be w*num_chans. The leftmost pixel on the top scanline is stored first in memory. */
-/*  level may range from [0,10], use MZ_NO_COMPRESSION, MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc. or a decent default is MZ_DEFAULT_LEVEL */
-/*  If flip is true, the image will be flipped on the Y axis (useful for OpenGL apps). */
-/* On return: */
-/*  Function returns a pointer to the compressed data, or NULL on failure. */
-/*  *pLen_out will be set to the size of the PNG image file. */
-/*  The caller must mz_free() the returned heap block (which will typically be larger than *pLen_out) when it's no longer needed. */
-void *tdefl_write_image_to_png_file_in_memory_ex(const void *pImage, int w, int h, int num_chans, size_t *pLen_out, mz_uint level, mz_bool flip);
-void *tdefl_write_image_to_png_file_in_memory(const void *pImage, int w, int h, int num_chans, size_t *pLen_out);
-
-/* Output stream interface. The compressor uses this interface to write compressed data. It'll typically be called TDEFL_OUT_BUF_SIZE at a time. */
-typedef mz_bool (*tdefl_put_buf_func_ptr)(const void *pBuf, int len, void *pUser);
-
-/* tdefl_compress_mem_to_output() compresses a block to an output stream. The above helpers use this function internally. */
-mz_bool tdefl_compress_mem_to_output(const void *pBuf, size_t buf_len, tdefl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
-
-enum
-{
-    TDEFL_MAX_HUFF_TABLES = 3,
-    TDEFL_MAX_HUFF_SYMBOLS_0 = 288,
-    TDEFL_MAX_HUFF_SYMBOLS_1 = 32,
-    TDEFL_MAX_HUFF_SYMBOLS_2 = 19,
-    TDEFL_LZ_DICT_SIZE = 32768,
-    TDEFL_LZ_DICT_SIZE_MASK = TDEFL_LZ_DICT_SIZE - 1,
-    TDEFL_MIN_MATCH_LEN = 3,
-    TDEFL_MAX_MATCH_LEN = 258
-};
-
-/* TDEFL_OUT_BUF_SIZE MUST be large enough to hold a single entire compressed output block (using static/fixed Huffman codes). */
-#if TDEFL_LESS_MEMORY
-enum
-{
-    TDEFL_LZ_CODE_BUF_SIZE = 24 * 1024,
-    TDEFL_OUT_BUF_SIZE = (TDEFL_LZ_CODE_BUF_SIZE * 13) / 10,
-    TDEFL_MAX_HUFF_SYMBOLS = 288,
-    TDEFL_LZ_HASH_BITS = 12,
-    TDEFL_LEVEL1_HASH_SIZE_MASK = 4095,
-    TDEFL_LZ_HASH_SHIFT = (TDEFL_LZ_HASH_BITS + 2) / 3,
-    TDEFL_LZ_HASH_SIZE = 1 << TDEFL_LZ_HASH_BITS
-};
-#else
-enum
-{
-    TDEFL_LZ_CODE_BUF_SIZE = 64 * 1024,
-    TDEFL_OUT_BUF_SIZE = (TDEFL_LZ_CODE_BUF_SIZE * 13) / 10,
-    TDEFL_MAX_HUFF_SYMBOLS = 288,
-    TDEFL_LZ_HASH_BITS = 15,
-    TDEFL_LEVEL1_HASH_SIZE_MASK = 4095,
-    TDEFL_LZ_HASH_SHIFT = (TDEFL_LZ_HASH_BITS + 2) / 3,
-    TDEFL_LZ_HASH_SIZE = 1 << TDEFL_LZ_HASH_BITS
-};
-#endif
-
-/* The low-level tdefl functions below may be used directly if the above helper functions aren't flexible enough. The low-level functions don't make any heap allocations, unlike the above helper functions. */
-typedef enum {
-    TDEFL_STATUS_BAD_PARAM = -2,
-    TDEFL_STATUS_PUT_BUF_FAILED = -1,
-    TDEFL_STATUS_OKAY = 0,
-    TDEFL_STATUS_DONE = 1
-} tdefl_status;
-
-/* Must map to MZ_NO_FLUSH, MZ_SYNC_FLUSH, etc. enums */
-typedef enum {
-    TDEFL_NO_FLUSH = 0,
-    TDEFL_SYNC_FLUSH = 2,
-    TDEFL_FULL_FLUSH = 3,
-    TDEFL_FINISH = 4
-} tdefl_flush;
-
-/* tdefl's compression state structure. */
-typedef struct
-{
-    tdefl_put_buf_func_ptr m_pPut_buf_func;
-    void *m_pPut_buf_user;
-    mz_uint m_flags, m_max_probes[2];
-    int m_greedy_parsing;
-    mz_uint m_adler32, m_lookahead_pos, m_lookahead_size, m_dict_size;
-    mz_uint8 *m_pLZ_code_buf, *m_pLZ_flags, *m_pOutput_buf, *m_pOutput_buf_end;
-    mz_uint m_num_flags_left, m_total_lz_bytes, m_lz_code_buf_dict_pos, m_bits_in, m_bit_buffer;
-    mz_uint m_saved_match_dist, m_saved_match_len, m_saved_lit, m_output_flush_ofs, m_output_flush_remaining, m_finished, m_block_index, m_wants_to_finish;
-    tdefl_status m_prev_return_status;
-    const void *m_pIn_buf;
-    void *m_pOut_buf;
-    size_t *m_pIn_buf_size, *m_pOut_buf_size;
-    tdefl_flush m_flush;
-    const mz_uint8 *m_pSrc;
-    size_t m_src_buf_left, m_out_buf_ofs;
-    mz_uint8 m_dict[TDEFL_LZ_DICT_SIZE + TDEFL_MAX_MATCH_LEN - 1];
-    mz_uint16 m_huff_count[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
-    mz_uint16 m_huff_codes[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
-    mz_uint8 m_huff_code_sizes[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
-    mz_uint8 m_lz_code_buf[TDEFL_LZ_CODE_BUF_SIZE];
-    mz_uint16 m_next[TDEFL_LZ_DICT_SIZE];
-    mz_uint16 m_hash[TDEFL_LZ_HASH_SIZE];
-    mz_uint8 m_output_buf[TDEFL_OUT_BUF_SIZE];
-} tdefl_compressor;
-
-/* Initializes the compressor. */
-/* There is no corresponding deinit() function because the tdefl API's do not dynamically allocate memory. */
-/* pBut_buf_func: If NULL, output data will be supplied to the specified callback. In this case, the user should call the tdefl_compress_buffer() API for compression. */
-/* If pBut_buf_func is NULL the user should always call the tdefl_compress() API. */
-/* flags: See the above enums (TDEFL_HUFFMAN_ONLY, TDEFL_WRITE_ZLIB_HEADER, etc.) */
-tdefl_status tdefl_init(tdefl_compressor *d, tdefl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
-
-/* Compresses a block of data, consuming as much of the specified input buffer as possible, and writing as much compressed data to the specified output buffer as possible. */
-tdefl_status tdefl_compress(tdefl_compressor *d, const void *pIn_buf, size_t *pIn_buf_size, void *pOut_buf, size_t *pOut_buf_size, tdefl_flush flush);
-
-/* tdefl_compress_buffer() is only usable when the tdefl_init() is called with a non-NULL tdefl_put_buf_func_ptr. */
-/* tdefl_compress_buffer() always consumes the entire input buffer. */
-tdefl_status tdefl_compress_buffer(tdefl_compressor *d, const void *pIn_buf, size_t in_buf_size, tdefl_flush flush);
-
-tdefl_status tdefl_get_prev_return_status(tdefl_compressor *d);
-mz_uint32 tdefl_get_adler32(tdefl_compressor *d);
-
-/* Create tdefl_compress() flags given zlib-style compression parameters. */
-/* level may range from [0,10] (where 10 is absolute max compression, but may be much slower on some files) */
-/* window_bits may be -15 (raw deflate) or 15 (zlib) */
-/* strategy may be either MZ_DEFAULT_STRATEGY, MZ_FILTERED, MZ_HUFFMAN_ONLY, MZ_RLE, or MZ_FIXED */
-mz_uint tdefl_create_comp_flags_from_zip_params(int level, int window_bits, int strategy);
-
-/* Allocate the tdefl_compressor structure in C so that */
-/* non-C language bindings to tdefl_ API don't need to worry about */
-/* structure size and allocation mechanism. */
-tdefl_compressor *tdefl_compressor_alloc();
-void tdefl_compressor_free(tdefl_compressor *pComp);
-
-
-
-
-/* ------------------- Low-level Decompression API Definitions */
-
-
-/* Decompression flags used by tinfl_decompress(). */
-/* TINFL_FLAG_PARSE_ZLIB_HEADER: If set, the input has a valid zlib header and ends with an adler32 checksum (it's a valid zlib stream). Otherwise, the input is a raw deflate stream. */
-/* TINFL_FLAG_HAS_MORE_INPUT: If set, there are more input bytes available beyond the end of the supplied input buffer. If clear, the input buffer contains all remaining input. */
-/* TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF: If set, the output buffer is large enough to hold the entire decompressed stream. If clear, the output buffer is at least the size of the dictionary (typically 32KB). */
-/* TINFL_FLAG_COMPUTE_ADLER32: Force adler-32 checksum computation of the decompressed bytes. */
-enum
-{
-    TINFL_FLAG_PARSE_ZLIB_HEADER = 1,
-    TINFL_FLAG_HAS_MORE_INPUT = 2,
-    TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF = 4,
-    TINFL_FLAG_COMPUTE_ADLER32 = 8
-};
-
-/* High level decompression functions: */
-/* tinfl_decompress_mem_to_heap() decompresses a block in memory to a heap block allocated via malloc(). */
-/* On entry: */
-/*  pSrc_buf, src_buf_len: Pointer and size of the Deflate or zlib source data to decompress. */
-/* On return: */
-/*  Function returns a pointer to the decompressed data, or NULL on failure. */
-/*  *pOut_len will be set to the decompressed data's size, which could be larger than src_buf_len on uncompressible data. */
-/*  The caller must call mz_free() on the returned block when it's no longer needed. */
-void *tinfl_decompress_mem_to_heap(const void *pSrc_buf, size_t src_buf_len, size_t *pOut_len, int flags);
-
-/* tinfl_decompress_mem_to_mem() decompresses a block in memory to another block in memory. */
-/* Returns TINFL_DECOMPRESS_MEM_TO_MEM_FAILED on failure, or the number of bytes written on success. */
-#define TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ((size_t)(-1))
-size_t tinfl_decompress_mem_to_mem(void *pOut_buf, size_t out_buf_len, const void *pSrc_buf, size_t src_buf_len, int flags);
-
-/* tinfl_decompress_mem_to_callback() decompresses a block in memory to an internal 32KB buffer, and a user provided callback function will be called to flush the buffer. */
-/* Returns 1 on success or 0 on failure. */
-typedef int (*tinfl_put_buf_func_ptr)(const void *pBuf, int len, void *pUser);
-int tinfl_decompress_mem_to_callback(const void *pIn_buf, size_t *pIn_buf_size, tinfl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
-
-struct tinfl_decompressor_tag;
-typedef struct tinfl_decompressor_tag tinfl_decompressor;
-
-/* Allocate the tinfl_decompressor structure in C so that */
-/* non-C language bindings to tinfl_ API don't need to worry about */
-/* structure size and allocation mechanism. */
-
-tinfl_decompressor *tinfl_decompressor_alloc();
-void tinfl_decompressor_free(tinfl_decompressor *pDecomp);
-
-/* Max size of LZ dictionary. */
-#define TINFL_LZ_DICT_SIZE 32768
-
-/* Return status. */
-typedef enum {
-    /* This flags indicates the inflator needs 1 or more input bytes to make forward progress, but the caller is indicating that no more are available. The compressed data */
-    /* is probably corrupted. If you call the inflator again with more bytes it'll try to continue processing the input but this is a BAD sign (either the data is corrupted or you called it incorrectly). */
-    /* If you call it again with no input you'll just get TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS again. */
-    TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS = -4,
-
-    /* This flag indicates that one or more of the input parameters was obviously bogus. (You can try calling it again, but if you get this error the calling code is wrong.) */
-    TINFL_STATUS_BAD_PARAM = -3,
-
-    /* This flags indicate the inflator is finished but the adler32 check of the uncompressed data didn't match. If you call it again it'll return TINFL_STATUS_DONE. */
-    TINFL_STATUS_ADLER32_MISMATCH = -2,
-
-    /* This flags indicate the inflator has somehow failed (bad code, corrupted input, etc.). If you call it again without resetting via tinfl_init() it it'll just keep on returning the same status failure code. */
-    TINFL_STATUS_FAILED = -1,
-
-    /* Any status code less than TINFL_STATUS_DONE must indicate a failure. */
-
-    /* This flag indicates the inflator has returned every byte of uncompressed data that it can, has consumed every byte that it needed, has successfully reached the end of the deflate stream, and */
-    /* if zlib headers and adler32 checking enabled that it has successfully checked the uncompressed data's adler32. If you call it again you'll just get TINFL_STATUS_DONE over and over again. */
-    TINFL_STATUS_DONE = 0,
-
-    /* This flag indicates the inflator MUST have more input data (even 1 byte) before it can make any more forward progress, or you need to clear the TINFL_FLAG_HAS_MORE_INPUT */
-    /* flag on the next call if you don't have any more source data. If the source data was somehow corrupted it's also possible (but unlikely) for the inflator to keep on demanding input to */
-    /* proceed, so be sure to properly set the TINFL_FLAG_HAS_MORE_INPUT flag. */
-    TINFL_STATUS_NEEDS_MORE_INPUT = 1,
-
-    /* This flag indicates the inflator definitely has 1 or more bytes of uncompressed data available, but it cannot write this data into the output buffer. */
-    /* Note if the source compressed data was corrupted it's possible for the inflator to return a lot of uncompressed data to the caller. I've been assuming you know how much uncompressed data to expect */
-    /* (either exact or worst case) and will stop calling the inflator and fail after receiving too much. In pure streaming scenarios where you have no idea how many bytes to expect this may not be possible */
-    /* so I may need to add some code to address this. */
-    TINFL_STATUS_HAS_MORE_OUTPUT = 2
-} tinfl_status;
-
-/* Initializes the decompressor to its initial state. */
-#define tinfl_init(r)     \
-    do                    \
-    {                     \
-        (r)->m_state = 0; \
-    }                     \
-    MZ_MACRO_END
-#define tinfl_get_adler32(r) (r)->m_check_adler32
-
-/* Main low-level decompressor coroutine function. This is the only function actually needed for decompression. All the other functions are just high-level helpers for improved usability. */
-/* This is a universal API, i.e. it can be used as a building block to build any desired higher level decompression API. In the limit case, it can be called once per every byte input or output. */
-tinfl_status tinfl_decompress(tinfl_decompressor *r, const mz_uint8 *pIn_buf_next, size_t *pIn_buf_size, mz_uint8 *pOut_buf_start, mz_uint8 *pOut_buf_next, size_t *pOut_buf_size, const mz_uint32 decomp_flags);
-
-/* Internal/private bits follow. */
-enum
-{
-    TINFL_MAX_HUFF_TABLES = 3,
-    TINFL_MAX_HUFF_SYMBOLS_0 = 288,
-    TINFL_MAX_HUFF_SYMBOLS_1 = 32,
-    TINFL_MAX_HUFF_SYMBOLS_2 = 19,
-    TINFL_FAST_LOOKUP_BITS = 10,
-    TINFL_FAST_LOOKUP_SIZE = 1 << TINFL_FAST_LOOKUP_BITS
-};
-
-typedef struct
-{
-    mz_uint8 m_code_size[TINFL_MAX_HUFF_SYMBOLS_0];
-    mz_int16 m_look_up[TINFL_FAST_LOOKUP_SIZE], m_tree[TINFL_MAX_HUFF_SYMBOLS_0 * 2];
-} tinfl_huff_table;
-
-#if MINIZ_HAS_64BIT_REGISTERS
-#define TINFL_USE_64BIT_BITBUF 1
-#else
-#define TINFL_USE_64BIT_BITBUF 0
-#endif
-
-#if TINFL_USE_64BIT_BITBUF
-typedef mz_uint64 tinfl_bit_buf_t;
-#define TINFL_BITBUF_SIZE (64)
-#else
-typedef mz_uint32 tinfl_bit_buf_t;
-#define TINFL_BITBUF_SIZE (32)
-#endif
-
-struct tinfl_decompressor_tag
-{
-    mz_uint32 m_state, m_num_bits, m_zhdr0, m_zhdr1, m_z_adler32, m_final, m_type, m_check_adler32, m_dist, m_counter, m_num_extra, m_table_sizes[TINFL_MAX_HUFF_TABLES];
-    tinfl_bit_buf_t m_bit_buf;
-    size_t m_dist_from_out_buf_start;
-    tinfl_huff_table m_tables[TINFL_MAX_HUFF_TABLES];
-    mz_uint8 m_raw_header[4], m_len_codes[TINFL_MAX_HUFF_SYMBOLS_0 + TINFL_MAX_HUFF_SYMBOLS_1 + 137];
-};
-
-
-
-
-
-
-/* ------------------- ZIP archive reading/writing */
-
-#ifndef MINIZ_NO_ARCHIVE_APIS
-
-
-enum
-{
-    /* Note: These enums can be reduced as needed to save memory or stack space - they are pretty conservative. */
-    MZ_ZIP_MAX_IO_BUF_SIZE = 64 * 1024,
-    MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE = 512,
-    MZ_ZIP_MAX_ARCHIVE_FILE_COMMENT_SIZE = 512
-};
-
-typedef struct
-{
-    /* Central directory file index. */
-    mz_uint32 m_file_index;
-
-    /* Byte offset of this entry in the archive's central directory. Note we currently only support up to UINT_MAX or less bytes in the central dir. */
-    mz_uint64 m_central_dir_ofs;
-
-    /* These fields are copied directly from the zip's central dir. */
-    mz_uint16 m_version_made_by;
-    mz_uint16 m_version_needed;
-    mz_uint16 m_bit_flag;
-    mz_uint16 m_method;
-
-#ifndef MINIZ_NO_TIME
-    MZ_TIME_T m_time;
-#endif
-
-    /* CRC-32 of uncompressed data. */
-    mz_uint32 m_crc32;
-
-    /* File's compressed size. */
-    mz_uint64 m_comp_size;
-
-    /* File's uncompressed size. Note, I've seen some old archives where directory entries had 512 bytes for their uncompressed sizes, but when you try to unpack them you actually get 0 bytes. */
-    mz_uint64 m_uncomp_size;
-
-    /* Zip internal and external file attributes. */
-    mz_uint16 m_internal_attr;
-    mz_uint32 m_external_attr;
-
-    /* Entry's local header file offset in bytes. */
-    mz_uint64 m_local_header_ofs;
-
-    /* Size of comment in bytes. */
-    mz_uint32 m_comment_size;
-
-    /* MZ_TRUE if the entry appears to be a directory. */
-    mz_bool m_is_directory;
-
-    /* MZ_TRUE if the entry uses encryption/strong encryption (which miniz_zip doesn't support) */
-    mz_bool m_is_encrypted;
-
-    /* MZ_TRUE if the file is not encrypted, a patch file, and if it uses a compression method we support. */
-    mz_bool m_is_supported;
-
-    /* Filename. If string ends in '/' it's a subdirectory entry. */
-    /* Guaranteed to be zero terminated, may be truncated to fit. */
-    char m_filename[MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE];
-
-    /* Comment field. */
-    /* Guaranteed to be zero terminated, may be truncated to fit. */
-    char m_comment[MZ_ZIP_MAX_ARCHIVE_FILE_COMMENT_SIZE];
-
-} mz_zip_archive_file_stat;
-
-typedef size_t (*mz_file_read_func)(void *pOpaque, mz_uint64 file_ofs, void *pBuf, size_t n);
-typedef size_t (*mz_file_write_func)(void *pOpaque, mz_uint64 file_ofs, const void *pBuf, size_t n);
-typedef mz_bool (*mz_file_needs_keepalive)(void *pOpaque);
-
-struct mz_zip_internal_state_tag;
-typedef struct mz_zip_internal_state_tag mz_zip_internal_state;
-
-typedef enum {
-    MZ_ZIP_MODE_INVALID = 0,
-    MZ_ZIP_MODE_READING = 1,
-    MZ_ZIP_MODE_WRITING = 2,
-    MZ_ZIP_MODE_WRITING_HAS_BEEN_FINALIZED = 3
-} mz_zip_mode;
-
-typedef enum {
-    MZ_ZIP_FLAG_CASE_SENSITIVE = 0x0100,
-    MZ_ZIP_FLAG_IGNORE_PATH = 0x0200,
-    MZ_ZIP_FLAG_COMPRESSED_DATA = 0x0400,
-    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY = 0x0800,
-    MZ_ZIP_FLAG_VALIDATE_LOCATE_FILE_FLAG = 0x1000, /* if enabled, mz_zip_reader_locate_file() will be called on each file as its validated to ensure the func finds the file in the central dir (intended for testing) */
-    MZ_ZIP_FLAG_VALIDATE_HEADERS_ONLY = 0x2000,     /* validate the local headers, but don't decompress the entire file and check the crc32 */
-    MZ_ZIP_FLAG_WRITE_ZIP64 = 0x4000,               /* always use the zip64 file format, instead of the original zip file format with automatic switch to zip64. Use as flags parameter with mz_zip_writer_init*_v2 */
-    MZ_ZIP_FLAG_WRITE_ALLOW_READING = 0x8000,
-    MZ_ZIP_FLAG_ASCII_FILENAME = 0x10000
-} mz_zip_flags;
-
-typedef enum {
-    MZ_ZIP_TYPE_INVALID = 0,
-    MZ_ZIP_TYPE_USER,
-    MZ_ZIP_TYPE_MEMORY,
-    MZ_ZIP_TYPE_HEAP,
-    MZ_ZIP_TYPE_FILE,
-    MZ_ZIP_TYPE_CFILE,
-    MZ_ZIP_TOTAL_TYPES
-} mz_zip_type;
-
-/* miniz error codes. Be sure to update mz_zip_get_error_string() if you add or modify this enum. */
-typedef enum {
-    MZ_ZIP_NO_ERROR = 0,
-    MZ_ZIP_UNDEFINED_ERROR,
-    MZ_ZIP_TOO_MANY_FILES,
-    MZ_ZIP_FILE_TOO_LARGE,
-    MZ_ZIP_UNSUPPORTED_METHOD,
-    MZ_ZIP_UNSUPPORTED_ENCRYPTION,
-    MZ_ZIP_UNSUPPORTED_FEATURE,
-    MZ_ZIP_FAILED_FINDING_CENTRAL_DIR,
-    MZ_ZIP_NOT_AN_ARCHIVE,
-    MZ_ZIP_INVALID_HEADER_OR_CORRUPTED,
-    MZ_ZIP_UNSUPPORTED_MULTIDISK,
-    MZ_ZIP_DECOMPRESSION_FAILED,
-    MZ_ZIP_COMPRESSION_FAILED,
-    MZ_ZIP_UNEXPECTED_DECOMPRESSED_SIZE,
-    MZ_ZIP_CRC_CHECK_FAILED,
-    MZ_ZIP_UNSUPPORTED_CDIR_SIZE,
-    MZ_ZIP_ALLOC_FAILED,
-    MZ_ZIP_FILE_OPEN_FAILED,
-    MZ_ZIP_FILE_CREATE_FAILED,
-    MZ_ZIP_FILE_WRITE_FAILED,
-    MZ_ZIP_FILE_READ_FAILED,
-    MZ_ZIP_FILE_CLOSE_FAILED,
-    MZ_ZIP_FILE_SEEK_FAILED,
-    MZ_ZIP_FILE_STAT_FAILED,
-    MZ_ZIP_INVALID_PARAMETER,
-    MZ_ZIP_INVALID_FILENAME,
-    MZ_ZIP_BUF_TOO_SMALL,
-    MZ_ZIP_INTERNAL_ERROR,
-    MZ_ZIP_FILE_NOT_FOUND,
-    MZ_ZIP_ARCHIVE_TOO_LARGE,
-    MZ_ZIP_VALIDATION_FAILED,
-    MZ_ZIP_WRITE_CALLBACK_FAILED,
-    MZ_ZIP_TOTAL_ERRORS
-} mz_zip_error;
-
-typedef struct
-{
-    mz_uint64 m_archive_size;
-    mz_uint64 m_central_directory_file_ofs;
-
-    /* We only support up to UINT32_MAX files in zip64 mode. */
-    mz_uint32 m_total_files;
-    mz_zip_mode m_zip_mode;
-    mz_zip_type m_zip_type;
-    mz_zip_error m_last_error;
-
-    mz_uint64 m_file_offset_alignment;
-
-    mz_alloc_func m_pAlloc;
-    mz_free_func m_pFree;
-    mz_realloc_func m_pRealloc;
-    void *m_pAlloc_opaque;
-
-    mz_file_read_func m_pRead;
-    mz_file_write_func m_pWrite;
-    mz_file_needs_keepalive m_pNeeds_keepalive;
-    void *m_pIO_opaque;
-
-    mz_zip_internal_state *m_pState;
-
-} mz_zip_archive;
-
-typedef struct
-{
-    mz_zip_archive *pZip;
-    mz_uint flags;
-
-    int status;
-#ifndef MINIZ_DISABLE_ZIP_READER_CRC32_CHECKS
-    mz_uint file_crc32;
-#endif
-    mz_uint64 read_buf_size, read_buf_ofs, read_buf_avail, comp_remaining, out_buf_ofs, cur_file_ofs;
-    mz_zip_archive_file_stat file_stat;
-    void *pRead_buf;
-    void *pWrite_buf;
-
-    size_t out_blk_remain;
-
-    tinfl_decompressor inflator;
-
-} mz_zip_reader_extract_iter_state;
-
-/* -------- ZIP reading */
-
-/* Inits a ZIP archive reader. */
-/* These functions read and validate the archive's central directory. */
-mz_bool mz_zip_reader_init(mz_zip_archive *pZip, mz_uint64 size, mz_uint flags);
-
-mz_bool mz_zip_reader_init_mem(mz_zip_archive *pZip, const void *pMem, size_t size, mz_uint flags);
-
-#ifndef MINIZ_NO_STDIO
-/* Read a archive from a disk file. */
-/* file_start_ofs is the file offset where the archive actually begins, or 0. */
-/* actual_archive_size is the true total size of the archive, which may be smaller than the file's actual size on disk. If zero the entire file is treated as the archive. */
-mz_bool mz_zip_reader_init_file(mz_zip_archive *pZip, const char *pFilename, mz_uint32 flags);
-mz_bool mz_zip_reader_init_file_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint flags, mz_uint64 file_start_ofs, mz_uint64 archive_size);
-
-/* Read an archive from an already opened FILE, beginning at the current file position. */
-/* The archive is assumed to be archive_size bytes long. If archive_size is < 0, then the entire rest of the file is assumed to contain the archive. */
-/* The FILE will NOT be closed when mz_zip_reader_end() is called. */
-mz_bool mz_zip_reader_init_cfile(mz_zip_archive *pZip, MZ_FILE *pFile, mz_uint64 archive_size, mz_uint flags);
-#endif
-
-/* Ends archive reading, freeing all allocations, and closing the input archive file if mz_zip_reader_init_file() was used. */
-mz_bool mz_zip_reader_end(mz_zip_archive *pZip);
-
-/* -------- ZIP reading or writing */
-
-/* Clears a mz_zip_archive struct to all zeros. */
-/* Important: This must be done before passing the struct to any mz_zip functions. */
-void mz_zip_zero_struct(mz_zip_archive *pZip);
-
-mz_zip_mode mz_zip_get_mode(mz_zip_archive *pZip);
-mz_zip_type mz_zip_get_type(mz_zip_archive *pZip);
-
-/* Returns the total number of files in the archive. */
-mz_uint mz_zip_reader_get_num_files(mz_zip_archive *pZip);
-
-mz_uint64 mz_zip_get_archive_size(mz_zip_archive *pZip);
-mz_uint64 mz_zip_get_archive_file_start_offset(mz_zip_archive *pZip);
-MZ_FILE *mz_zip_get_cfile(mz_zip_archive *pZip);
-
-/* Reads n bytes of raw archive data, starting at file offset file_ofs, to pBuf. */
-size_t mz_zip_read_archive_data(mz_zip_archive *pZip, mz_uint64 file_ofs, void *pBuf, size_t n);
-
-/* All mz_zip funcs set the m_last_error field in the mz_zip_archive struct. These functions retrieve/manipulate this field. */
-/* Note that the m_last_error functionality is not thread safe. */
-mz_zip_error mz_zip_set_last_error(mz_zip_archive *pZip, mz_zip_error err_num);
-mz_zip_error mz_zip_peek_last_error(mz_zip_archive *pZip);
-mz_zip_error mz_zip_clear_last_error(mz_zip_archive *pZip);
-mz_zip_error mz_zip_get_last_error(mz_zip_archive *pZip);
-const char *mz_zip_get_error_string(mz_zip_error mz_err);
-
-/* MZ_TRUE if the archive file entry is a directory entry. */
-mz_bool mz_zip_reader_is_file_a_directory(mz_zip_archive *pZip, mz_uint file_index);
-
-/* MZ_TRUE if the file is encrypted/strong encrypted. */
-mz_bool mz_zip_reader_is_file_encrypted(mz_zip_archive *pZip, mz_uint file_index);
-
-/* MZ_TRUE if the compression method is supported, and the file is not encrypted, and the file is not a compressed patch file. */
-mz_bool mz_zip_reader_is_file_supported(mz_zip_archive *pZip, mz_uint file_index);
-
-/* Retrieves the filename of an archive file entry. */
-/* Returns the number of bytes written to pFilename, or if filename_buf_size is 0 this function returns the number of bytes needed to fully store the filename. */
-mz_uint mz_zip_reader_get_filename(mz_zip_archive *pZip, mz_uint file_index, char *pFilename, mz_uint filename_buf_size);
-
-/* Attempts to locates a file in the archive's central directory. */
-/* Valid flags: MZ_ZIP_FLAG_CASE_SENSITIVE, MZ_ZIP_FLAG_IGNORE_PATH */
-/* Returns -1 if the file cannot be found. */
-int mz_zip_reader_locate_file(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags);
-int mz_zip_reader_locate_file_v2(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags, mz_uint32 *file_index);
-
-/* Returns detailed information about an archive file entry. */
-mz_bool mz_zip_reader_file_stat(mz_zip_archive *pZip, mz_uint file_index, mz_zip_archive_file_stat *pStat);
-
-/* MZ_TRUE if the file is in zip64 format. */
-/* A file is considered zip64 if it contained a zip64 end of central directory marker, or if it contained any zip64 extended file information fields in the central directory. */
-mz_bool mz_zip_is_zip64(mz_zip_archive *pZip);
-
-/* Returns the total central directory size in bytes. */
-/* The current max supported size is <= MZ_UINT32_MAX. */
-size_t mz_zip_get_central_dir_size(mz_zip_archive *pZip);
-
-/* Extracts a archive file to a memory buffer using no memory allocation. */
-/* There must be at least enough room on the stack to store the inflator's state (~34KB or so). */
-mz_bool mz_zip_reader_extract_to_mem_no_alloc(mz_zip_archive *pZip, mz_uint file_index, void *pBuf, size_t buf_size, mz_uint flags, void *pUser_read_buf, size_t user_read_buf_size);
-mz_bool mz_zip_reader_extract_file_to_mem_no_alloc(mz_zip_archive *pZip, const char *pFilename, void *pBuf, size_t buf_size, mz_uint flags, void *pUser_read_buf, size_t user_read_buf_size);
-
-/* Extracts a archive file to a memory buffer. */
-mz_bool mz_zip_reader_extract_to_mem(mz_zip_archive *pZip, mz_uint file_index, void *pBuf, size_t buf_size, mz_uint flags);
-mz_bool mz_zip_reader_extract_file_to_mem(mz_zip_archive *pZip, const char *pFilename, void *pBuf, size_t buf_size, mz_uint flags);
-
-/* Extracts a archive file to a dynamically allocated heap buffer. */
-/* The memory will be allocated via the mz_zip_archive's alloc/realloc functions. */
-/* Returns NULL and sets the last error on failure. */
-void *mz_zip_reader_extract_to_heap(mz_zip_archive *pZip, mz_uint file_index, size_t *pSize, mz_uint flags);
-void *mz_zip_reader_extract_file_to_heap(mz_zip_archive *pZip, const char *pFilename, size_t *pSize, mz_uint flags);
-
-/* Extracts a archive file using a callback function to output the file's data. */
-mz_bool mz_zip_reader_extract_to_callback(mz_zip_archive *pZip, mz_uint file_index, mz_file_write_func pCallback, void *pOpaque, mz_uint flags);
-mz_bool mz_zip_reader_extract_file_to_callback(mz_zip_archive *pZip, const char *pFilename, mz_file_write_func pCallback, void *pOpaque, mz_uint flags);
-
-/* Extract a file iteratively */
-mz_zip_reader_extract_iter_state* mz_zip_reader_extract_iter_new(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
-mz_zip_reader_extract_iter_state* mz_zip_reader_extract_file_iter_new(mz_zip_archive *pZip, const char *pFilename, mz_uint flags);
-size_t mz_zip_reader_extract_iter_read(mz_zip_reader_extract_iter_state* pState, void* pvBuf, size_t buf_size);
-mz_bool mz_zip_reader_extract_iter_free(mz_zip_reader_extract_iter_state* pState);
-
-#ifndef MINIZ_NO_STDIO
-/* Extracts a archive file to a disk file and sets its last accessed and modified times. */
-/* This function only extracts files, not archive directory records. */
-mz_bool mz_zip_reader_extract_to_file(mz_zip_archive *pZip, mz_uint file_index, const char *pDst_filename, mz_uint flags);
-mz_bool mz_zip_reader_extract_file_to_file(mz_zip_archive *pZip, const char *pArchive_filename, const char *pDst_filename, mz_uint flags);
-
-/* Extracts a archive file starting at the current position in the destination FILE stream. */
-mz_bool mz_zip_reader_extract_to_cfile(mz_zip_archive *pZip, mz_uint file_index, MZ_FILE *File, mz_uint flags);
-mz_bool mz_zip_reader_extract_file_to_cfile(mz_zip_archive *pZip, const char *pArchive_filename, MZ_FILE *pFile, mz_uint flags);
-#endif
-
-#if 0
-/* TODO */
-	typedef void *mz_zip_streaming_extract_state_ptr;
-	mz_zip_streaming_extract_state_ptr mz_zip_streaming_extract_begin(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
-	uint64_t mz_zip_streaming_extract_get_size(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
-	uint64_t mz_zip_streaming_extract_get_cur_ofs(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
-	mz_bool mz_zip_streaming_extract_seek(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState, uint64_t new_ofs);
-	size_t mz_zip_streaming_extract_read(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState, void *pBuf, size_t buf_size);
-	mz_bool mz_zip_streaming_extract_end(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
-#endif
-
-/* This function compares the archive's local headers, the optional local zip64 extended information block, and the optional descriptor following the compressed data vs. the data in the central directory. */
-/* It also validates that each file can be successfully uncompressed unless the MZ_ZIP_FLAG_VALIDATE_HEADERS_ONLY is specified. */
-mz_bool mz_zip_validate_file(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
-
-/* Validates an entire archive by calling mz_zip_validate_file() on each file. */
-mz_bool mz_zip_validate_archive(mz_zip_archive *pZip, mz_uint flags);
-
-/* Misc utils/helpers, valid for ZIP reading or writing */
-mz_bool mz_zip_validate_mem_archive(const void *pMem, size_t size, mz_uint flags, mz_zip_error *pErr);
-mz_bool mz_zip_validate_file_archive(const char *pFilename, mz_uint flags, mz_zip_error *pErr);
-
-/* Universal end function - calls either mz_zip_reader_end() or mz_zip_writer_end(). */
-mz_bool mz_zip_end(mz_zip_archive *pZip);
-
-/* -------- ZIP writing */
-
-#ifndef MINIZ_NO_ARCHIVE_WRITING_APIS
-
-/* Inits a ZIP archive writer. */
-/*Set pZip->m_pWrite (and pZip->m_pIO_opaque) before calling mz_zip_writer_init or mz_zip_writer_init_v2*/
-/*The output is streamable, i.e. file_ofs in mz_file_write_func always increases only by n*/
-mz_bool mz_zip_writer_init(mz_zip_archive *pZip, mz_uint64 existing_size);
-mz_bool mz_zip_writer_init_v2(mz_zip_archive *pZip, mz_uint64 existing_size, mz_uint flags);
-
-mz_bool mz_zip_writer_init_heap(mz_zip_archive *pZip, size_t size_to_reserve_at_beginning, size_t initial_allocation_size);
-mz_bool mz_zip_writer_init_heap_v2(mz_zip_archive *pZip, size_t size_to_reserve_at_beginning, size_t initial_allocation_size, mz_uint flags);
-
-#ifndef MINIZ_NO_STDIO
-mz_bool mz_zip_writer_init_file(mz_zip_archive *pZip, const char *pFilename, mz_uint64 size_to_reserve_at_beginning);
-mz_bool mz_zip_writer_init_file_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint64 size_to_reserve_at_beginning, mz_uint flags);
-mz_bool mz_zip_writer_init_cfile(mz_zip_archive *pZip, MZ_FILE *pFile, mz_uint flags);
-#endif
-
-/* Converts a ZIP archive reader object into a writer object, to allow efficient in-place file appends to occur on an existing archive. */
-/* For archives opened using mz_zip_reader_init_file, pFilename must be the archive's filename so it can be reopened for writing. If the file can't be reopened, mz_zip_reader_end() will be called. */
-/* For archives opened using mz_zip_reader_init_mem, the memory block must be growable using the realloc callback (which defaults to realloc unless you've overridden it). */
-/* Finally, for archives opened using mz_zip_reader_init, the mz_zip_archive's user provided m_pWrite function cannot be NULL. */
-/* Note: In-place archive modification is not recommended unless you know what you're doing, because if execution stops or something goes wrong before */
-/* the archive is finalized the file's central directory will be hosed. */
-mz_bool mz_zip_writer_init_from_reader(mz_zip_archive *pZip, const char *pFilename);
-mz_bool mz_zip_writer_init_from_reader_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint flags);
-
-/* Adds the contents of a memory buffer to an archive. These functions record the current local time into the archive. */
-/* To add a directory entry, call this method with an archive name ending in a forwardslash with an empty buffer. */
-/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
-mz_bool mz_zip_writer_add_mem(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, mz_uint level_and_flags);
-
-/* Like mz_zip_writer_add_mem(), except you can specify a file comment field, and optionally supply the function with already compressed data. */
-/* uncomp_size/uncomp_crc32 are only used if the MZ_ZIP_FLAG_COMPRESSED_DATA flag is specified. */
-mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags,
-                                 mz_uint64 uncomp_size, mz_uint32 uncomp_crc32);
-
-mz_bool mz_zip_writer_add_mem_ex_v2(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags,
-                                    mz_uint64 uncomp_size, mz_uint32 uncomp_crc32, MZ_TIME_T *last_modified, const char *user_extra_data_local, mz_uint user_extra_data_local_len,
-                                    const char *user_extra_data_central, mz_uint user_extra_data_central_len);
-
-#ifndef MINIZ_NO_STDIO
-/* Adds the contents of a disk file to an archive. This function also records the disk file's modified time into the archive. */
-/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
-mz_bool mz_zip_writer_add_file(mz_zip_archive *pZip, const char *pArchive_name, const char *pSrc_filename, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
-
-/* Like mz_zip_writer_add_file(), except the file data is read from the specified FILE stream. */
-mz_bool mz_zip_writer_add_cfile(mz_zip_archive *pZip, const char *pArchive_name, MZ_FILE *pSrc_file, mz_uint64 size_to_add,
-                                const MZ_TIME_T *pFile_time, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags, const char *user_extra_data_local, mz_uint user_extra_data_local_len,
-                                const char *user_extra_data_central, mz_uint user_extra_data_central_len);
-#endif
-
-/* Adds a file to an archive by fully cloning the data from another archive. */
-/* This function fully clones the source file's compressed data (no recompression), along with its full filename, extra data (it may add or modify the zip64 local header extra data field), and the optional descriptor following the compressed data. */
-mz_bool mz_zip_writer_add_from_zip_reader(mz_zip_archive *pZip, mz_zip_archive *pSource_zip, mz_uint src_file_index);
-
-/* Finalizes the archive by writing the central directory records followed by the end of central directory record. */
-/* After an archive is finalized, the only valid call on the mz_zip_archive struct is mz_zip_writer_end(). */
-/* An archive must be manually finalized by calling this function for it to be valid. */
-mz_bool mz_zip_writer_finalize_archive(mz_zip_archive *pZip);
-
-/* Finalizes a heap archive, returning a poiner to the heap block and its size. */
-/* The heap block will be allocated using the mz_zip_archive's alloc/realloc callbacks. */
-mz_bool mz_zip_writer_finalize_heap_archive(mz_zip_archive *pZip, void **ppBuf, size_t *pSize);
-
-/* Ends archive writing, freeing all allocations, and closing the output file if mz_zip_writer_init_file() was used. */
-/* Note for the archive to be valid, it *must* have been finalized before ending (this function will not do it for you). */
-mz_bool mz_zip_writer_end(mz_zip_archive *pZip);
-
-/* -------- Misc. high-level helper functions: */
-
-/* mz_zip_add_mem_to_archive_file_in_place() efficiently (but not atomically) appends a memory blob to a ZIP archive. */
-/* Note this is NOT a fully safe operation. If it crashes or dies in some way your archive can be left in a screwed up state (without a central directory). */
-/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
-/* TODO: Perhaps add an option to leave the existing central dir in place in case the add dies? We could then truncate the file (so the old central dir would be at the end) if something goes wrong. */
-mz_bool mz_zip_add_mem_to_archive_file_in_place(const char *pZip_filename, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
-mz_bool mz_zip_add_mem_to_archive_file_in_place_v2(const char *pZip_filename, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags, mz_zip_error *pErr);
-
-/* Reads a single file from an archive into a heap block. */
-/* If pComment is not NULL, only the file with the specified comment will be extracted. */
-/* Returns NULL on failure. */
-void *mz_zip_extract_archive_file_to_heap(const char *pZip_filename, const char *pArchive_name, size_t *pSize, mz_uint flags);
-void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const char *pArchive_name, const char *pComment, size_t *pSize, mz_uint flags, mz_zip_error *pErr);
-
-#endif /* #ifndef MINIZ_NO_ARCHIVE_WRITING_APIS */
-
-
-
-#endif /* MINIZ_NO_ARCHIVE_APIS */
-
-} // namespace duckdb_miniz
-
-
-// LICENSE_CHANGE_END
-
-#include <string>
-#include <stdexcept>
-
-namespace duckdb {
-
-enum class MiniZStreamType {
-	MINIZ_TYPE_NONE,
-	MINIZ_TYPE_INFLATE,
-	MINIZ_TYPE_DEFLATE
-};
-
-struct MiniZStream {
-	static constexpr uint8_t GZIP_HEADER_MINSIZE = 10;
-	static constexpr uint8_t GZIP_FOOTER_SIZE = 8;
-	static constexpr uint8_t GZIP_COMPRESSION_DEFLATE = 0x08;
-	static constexpr unsigned char GZIP_FLAG_UNSUPPORTED = 0x1 | 0x2 | 0x4 | 0x10 | 0x20;
-
-public:
-	MiniZStream() : type(MiniZStreamType::MINIZ_TYPE_NONE) {
-		memset(&stream, 0, sizeof(duckdb_miniz::mz_stream));
-	}
-	~MiniZStream() {
-		switch(type) {
-		case MiniZStreamType::MINIZ_TYPE_INFLATE:
-			duckdb_miniz::mz_inflateEnd(&stream);
-			break;
-		case MiniZStreamType::MINIZ_TYPE_DEFLATE:
-			duckdb_miniz::mz_deflateEnd(&stream);
-			break;
-		default:
-			break;
-		}
-	}
-	void FormatException(std::string error_msg) {
-		throw std::runtime_error(error_msg);
-	}
-	void FormatException(const char *error_msg, int mz_ret) {
-		auto err = duckdb_miniz::mz_error(mz_ret);
-		FormatException(error_msg + std::string(": ") + (err ? err : "Unknown error code"));
-	}
-	void Decompress(const char *compressed_data, size_t compressed_size, char *out_data, size_t out_size) {
-		auto mz_ret = mz_inflateInit2(&stream, -MZ_DEFAULT_WINDOW_BITS);
-		if (mz_ret != duckdb_miniz::MZ_OK) {
-			FormatException("Failed to initialize miniz", mz_ret);
-		}
-		type = MiniZStreamType::MINIZ_TYPE_INFLATE;
-
-		if (compressed_size < GZIP_HEADER_MINSIZE) {
-			FormatException("Failed to decompress GZIP block: compressed size is less than gzip header size");
-		}
-		auto gzip_hdr = (const unsigned char *)compressed_data;
-		if (gzip_hdr[0] != 0x1F || gzip_hdr[1] != 0x8B || gzip_hdr[2] != GZIP_COMPRESSION_DEFLATE ||
-		    gzip_hdr[3] & GZIP_FLAG_UNSUPPORTED) {
-			FormatException("Input is invalid/unsupported GZIP stream");
-		}
-
-		stream.next_in = (const unsigned char *)compressed_data + GZIP_HEADER_MINSIZE;
-		stream.avail_in = compressed_size - GZIP_HEADER_MINSIZE;
-		stream.next_out = (unsigned char *)out_data;
-		stream.avail_out = out_size;
-
-		mz_ret = mz_inflate(&stream, duckdb_miniz::MZ_FINISH);
-		if (mz_ret != duckdb_miniz::MZ_OK && mz_ret != duckdb_miniz::MZ_STREAM_END) {
-			FormatException("Failed to decompress GZIP block", mz_ret);
-		}
-	}
-	size_t MaxCompressedLength(size_t input_size) {
-		return duckdb_miniz::mz_compressBound(input_size) + GZIP_HEADER_MINSIZE + GZIP_FOOTER_SIZE;
-	}
-	static void InitializeGZIPHeader(unsigned char *gzip_header) {
-		memset(gzip_header, 0, GZIP_HEADER_MINSIZE);
-		gzip_header[0] = 0x1F;
-		gzip_header[1] = 0x8B;
-		gzip_header[2] = GZIP_COMPRESSION_DEFLATE;
-		gzip_header[3] = 0;
-		gzip_header[4] = 0;
-		gzip_header[5] = 0;
-		gzip_header[6] = 0;
-		gzip_header[7] = 0;
-		gzip_header[8] = 0;
-		gzip_header[9] = 0xFF;
-	}
-
-	static void InitializeGZIPFooter(unsigned char *gzip_footer, duckdb_miniz::mz_ulong crc, idx_t uncompressed_size) {
-		gzip_footer[0] = crc & 0xFF;
-		gzip_footer[1] = (crc >> 8) & 0xFF;
-		gzip_footer[2] = (crc >> 16) & 0xFF;
-		gzip_footer[3] = (crc >> 24) & 0xFF;
-		gzip_footer[4] = uncompressed_size & 0xFF;
-		gzip_footer[5] = (uncompressed_size >> 8) & 0xFF;
-		gzip_footer[6] = (uncompressed_size >> 16) & 0xFF;
-		gzip_footer[7] = (uncompressed_size >> 24) & 0xFF;
-	}
-
-	void Compress(const char *uncompressed_data, size_t uncompressed_size, char *out_data, size_t *out_size) {
-		auto mz_ret = mz_deflateInit2(&stream, duckdb_miniz::MZ_DEFAULT_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 1, 0);
-		if (mz_ret != duckdb_miniz::MZ_OK) {
-			FormatException("Failed to initialize miniz", mz_ret);
-		}
-		type = MiniZStreamType::MINIZ_TYPE_DEFLATE;
-
-		auto gzip_header = (unsigned char*) out_data;
-		InitializeGZIPHeader(gzip_header);
-
-		auto gzip_body = gzip_header + GZIP_HEADER_MINSIZE;
-
-		stream.next_in = (const unsigned char*) uncompressed_data;
-		stream.avail_in = uncompressed_size;
-		stream.next_out = gzip_body;
-		stream.avail_out = *out_size - GZIP_HEADER_MINSIZE;
-
-		mz_ret = mz_deflate(&stream, duckdb_miniz::MZ_FINISH);
-		if (mz_ret != duckdb_miniz::MZ_OK && mz_ret != duckdb_miniz::MZ_STREAM_END) {
-			FormatException("Failed to compress GZIP block", mz_ret);
-		}
-		auto gzip_footer = gzip_body + stream.total_out;
-		auto crc = duckdb_miniz::mz_crc32(MZ_CRC32_INIT, (const unsigned char*) uncompressed_data, uncompressed_size);
-		InitializeGZIPFooter(gzip_footer, crc, uncompressed_size);
-
-		*out_size = stream.total_out + GZIP_HEADER_MINSIZE + GZIP_FOOTER_SIZE;
-	}
-
-private:
-	duckdb_miniz::mz_stream stream;
-	MiniZStreamType type;
-};
-
-}
-
-
-// LICENSE_CHANGE_END
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
-// See the end of this file for a list
-
-/*
- * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under both the BSD-style license (found in the
- * LICENSE file in the root directory of this source tree) and the GPLv2 (found
- * in the COPYING file in the root directory of this source tree).
- * You may select, at your option, one of the above-listed licenses.
- */
-#ifndef ZSTD_H_235446
-#define ZSTD_H_235446
-
-/* ======   Dependency   ======*/
-#include <limits.h>   /* INT_MAX */
-#include <stddef.h>   /* size_t */
-
-
-/* =====   ZSTDLIB_API : control library symbols visibility   ===== */
-#ifndef ZSTDLIB_VISIBILITY
-#  if defined(__GNUC__) && (__GNUC__ >= 4)
-#    define ZSTDLIB_VISIBILITY __attribute__ ((visibility ("default")))
-#  else
-#    define ZSTDLIB_VISIBILITY
-#  endif
-#endif
-#if defined(ZSTD_DLL_EXPORT) && (ZSTD_DLL_EXPORT==1)
-#  define ZSTDLIB_API __declspec(dllexport) ZSTDLIB_VISIBILITY
-#elif defined(ZSTD_DLL_IMPORT) && (ZSTD_DLL_IMPORT==1)
-#  define ZSTDLIB_API __declspec(dllimport) ZSTDLIB_VISIBILITY /* It isn't required but allows to generate better code, saving a function pointer load from the IAT and an indirect jump.*/
-#else
-#  define ZSTDLIB_API ZSTDLIB_VISIBILITY
-#endif
-
-namespace duckdb_zstd {
-
-/*******************************************************************************
-  Introduction
-
-  zstd, short for Zstandard, is a fast lossless compression algorithm, targeting
-  real-time compression scenarios at zlib-level and better compression ratios.
-  The zstd compression library provides in-memory compression and decompression
-  functions.
-
-  The library supports regular compression levels from 1 up to ZSTD_maxCLevel(),
-  which is currently 22. Levels >= 20, labeled `--ultra`, should be used with
-  caution, as they require more memory. The library also offers negative
-  compression levels, which extend the range of speed vs. ratio preferences.
-  The lower the level, the faster the speed (at the cost of compression).
-
-  Compression can be done in:
-    - a single step (described as Simple API)
-    - a single step, reusing a context (described as Explicit context)
-    - unbounded multiple steps (described as Streaming compression)
-
-  The compression ratio achievable on small data can be highly improved using
-  a dictionary. Dictionary compression can be performed in:
-    - a single step (described as Simple dictionary API)
-    - a single step, reusing a dictionary (described as Bulk-processing
-      dictionary API)
-
-  Advanced experimental functions can be accessed using
-  `#define ZSTD_STATIC_LINKING_ONLY` before including zstd.h.
-
-  Advanced experimental APIs should never be used with a dynamically-linked
-  library. They are not "stable"; their definitions or signatures may change in
-  the future. Only static linking is allowed.
-*******************************************************************************/
-
-/*------   Version   ------*/
-#define ZSTD_VERSION_MAJOR    1
-#define ZSTD_VERSION_MINOR    4
-#define ZSTD_VERSION_RELEASE  5
-
-#define ZSTD_VERSION_NUMBER  (ZSTD_VERSION_MAJOR *100*100 + ZSTD_VERSION_MINOR *100 + ZSTD_VERSION_RELEASE)
-ZSTDLIB_API unsigned ZSTD_versionNumber(void);   /**< to check runtime library version */
-
-#define ZSTD_LIB_VERSION ZSTD_VERSION_MAJOR.ZSTD_VERSION_MINOR.ZSTD_VERSION_RELEASE
-#define ZSTD_QUOTE(str) #str
-#define ZSTD_EXPAND_AND_QUOTE(str) ZSTD_QUOTE(str)
-#define ZSTD_VERSION_STRING ZSTD_EXPAND_AND_QUOTE(ZSTD_LIB_VERSION)
-ZSTDLIB_API const char* ZSTD_versionString(void);   /* requires v1.3.0+ */
-
-/* *************************************
- *  Default constant
- ***************************************/
-#ifndef ZSTD_CLEVEL_DEFAULT
-#  define ZSTD_CLEVEL_DEFAULT 3
-#endif
-
-/* *************************************
- *  Constants
- ***************************************/
-
-/* All magic numbers are supposed read/written to/from files/memory using little-endian convention */
-#define ZSTD_MAGICNUMBER            0xFD2FB528    /* valid since v0.8.0 */
-#define ZSTD_MAGIC_DICTIONARY       0xEC30A437    /* valid since v0.7.0 */
-#define ZSTD_MAGIC_SKIPPABLE_START  0x184D2A50    /* all 16 values, from 0x184D2A50 to 0x184D2A5F, signal the beginning of a skippable frame */
-#define ZSTD_MAGIC_SKIPPABLE_MASK   0xFFFFFFF0
-
-#define ZSTD_BLOCKSIZELOG_MAX  17
-#define ZSTD_BLOCKSIZE_MAX     (1<<ZSTD_BLOCKSIZELOG_MAX)
-
-
-
-/***************************************
-*  Simple API
-***************************************/
-/*! ZSTD_compress() :
- *  Compresses `src` content as a single zstd compressed frame into already allocated `dst`.
- *  Hint : compression runs faster if `dstCapacity` >=  `ZSTD_compressBound(srcSize)`.
- *  @return : compressed size written into `dst` (<= `dstCapacity),
- *            or an error code if it fails (which can be tested using ZSTD_isError()). */
-ZSTDLIB_API size_t ZSTD_compress( void* dst, size_t dstCapacity,
-                            const void* src, size_t srcSize,
-                                  int compressionLevel);
-
-/*! ZSTD_decompress() :
- *  `compressedSize` : must be the _exact_ size of some number of compressed and/or skippable frames.
- *  `dstCapacity` is an upper bound of originalSize to regenerate.
- *  If user cannot imply a maximum upper bound, it's better to use streaming mode to decompress data.
- *  @return : the number of bytes decompressed into `dst` (<= `dstCapacity`),
- *            or an errorCode if it fails (which can be tested using ZSTD_isError()). */
-ZSTDLIB_API size_t ZSTD_decompress( void* dst, size_t dstCapacity,
-                              const void* src, size_t compressedSize);
-
-/*! ZSTD_getFrameContentSize() : requires v1.3.0+
- *  `src` should point to the start of a ZSTD encoded frame.
- *  `srcSize` must be at least as large as the frame header.
- *            hint : any size >= `ZSTD_frameHeaderSize_max` is large enough.
- *  @return : - decompressed size of `src` frame content, if known
- *            - ZSTD_CONTENTSIZE_UNKNOWN if the size cannot be determined
- *            - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small)
- *   note 1 : a 0 return value means the frame is valid but "empty".
- *   note 2 : decompressed size is an optional field, it may not be present, typically in streaming mode.
- *            When `return==ZSTD_CONTENTSIZE_UNKNOWN`, data to decompress could be any size.
- *            In which case, it's necessary to use streaming mode to decompress data.
- *            Optionally, application can rely on some implicit limit,
- *            as ZSTD_decompress() only needs an upper bound of decompressed size.
- *            (For example, data could be necessarily cut into blocks <= 16 KB).
- *   note 3 : decompressed size is always present when compression is completed using single-pass functions,
- *            such as ZSTD_compress(), ZSTD_compressCCtx() ZSTD_compress_usingDict() or ZSTD_compress_usingCDict().
- *   note 4 : decompressed size can be very large (64-bits value),
- *            potentially larger than what local system can handle as a single memory segment.
- *            In which case, it's necessary to use streaming mode to decompress data.
- *   note 5 : If source is untrusted, decompressed size could be wrong or intentionally modified.
- *            Always ensure return value fits within application's authorized limits.
- *            Each application can set its own limits.
- *   note 6 : This function replaces ZSTD_getDecompressedSize() */
-#define ZSTD_CONTENTSIZE_UNKNOWN (0ULL - 1)
-#define ZSTD_CONTENTSIZE_ERROR   (0ULL - 2)
-ZSTDLIB_API unsigned long long ZSTD_getFrameContentSize(const void *src, size_t srcSize);
-
-/*! ZSTD_getDecompressedSize() :
- *  NOTE: This function is now obsolete, in favor of ZSTD_getFrameContentSize().
- *  Both functions work the same way, but ZSTD_getDecompressedSize() blends
- *  "empty", "unknown" and "error" results to the same return value (0),
- *  while ZSTD_getFrameContentSize() gives them separate return values.
- * @return : decompressed size of `src` frame content _if known and not empty_, 0 otherwise. */
-ZSTDLIB_API unsigned long long ZSTD_getDecompressedSize(const void* src, size_t srcSize);
-
-/*! ZSTD_findFrameCompressedSize() :
- * `src` should point to the start of a ZSTD frame or skippable frame.
- * `srcSize` must be >= first frame size
- * @return : the compressed size of the first frame starting at `src`,
- *           suitable to pass as `srcSize` to `ZSTD_decompress` or similar,
- *        or an error code if input is invalid */
-ZSTDLIB_API size_t ZSTD_findFrameCompressedSize(const void* src, size_t srcSize);
-
-
-/*======  Helper functions  ======*/
-#define ZSTD_COMPRESSBOUND(srcSize)   ((srcSize) + ((srcSize)>>8) + (((srcSize) < (128<<10)) ? (((128<<10) - (srcSize)) >> 11) /* margin, from 64 to 0 */ : 0))  /* this formula ensures that bound(A) + bound(B) <= bound(A+B) as long as A and B >= 128 KB */
-ZSTDLIB_API size_t      ZSTD_compressBound(size_t srcSize); /*!< maximum compressed size in worst case single-pass scenario */
-ZSTDLIB_API unsigned    ZSTD_isError(size_t code);          /*!< tells if a `size_t` function result is an error code */
-ZSTDLIB_API const char* ZSTD_getErrorName(size_t code);     /*!< provides readable string from an error code */
-ZSTDLIB_API int         ZSTD_minCLevel(void);               /*!< minimum negative compression level allowed */
-ZSTDLIB_API int         ZSTD_maxCLevel(void);               /*!< maximum compression level available */
-
-
-/***************************************
-*  Explicit context
-***************************************/
-/*= Compression context
- *  When compressing many times,
- *  it is recommended to allocate a context just once,
- *  and re-use it for each successive compression operation.
- *  This will make workload friendlier for system's memory.
- *  Note : re-using context is just a speed / resource optimization.
- *         It doesn't change the compression ratio, which remains identical.
- *  Note 2 : In multi-threaded environments,
- *         use one different context per thread for parallel execution.
- */
-typedef struct ZSTD_CCtx_s ZSTD_CCtx;
-ZSTDLIB_API ZSTD_CCtx* ZSTD_createCCtx(void);
-ZSTDLIB_API size_t     ZSTD_freeCCtx(ZSTD_CCtx* cctx);
-
-/*! ZSTD_compressCCtx() :
- *  Same as ZSTD_compress(), using an explicit ZSTD_CCtx.
- *  Important : in order to behave similarly to `ZSTD_compress()`,
- *  this function compresses at requested compression level,
- *  __ignoring any other parameter__ .
- *  If any advanced parameter was set using the advanced API,
- *  they will all be reset. Only `compressionLevel` remains.
- */
-ZSTDLIB_API size_t ZSTD_compressCCtx(ZSTD_CCtx* cctx,
-                                     void* dst, size_t dstCapacity,
-                               const void* src, size_t srcSize,
-                                     int compressionLevel);
-
-/*= Decompression context
- *  When decompressing many times,
- *  it is recommended to allocate a context only once,
- *  and re-use it for each successive compression operation.
- *  This will make workload friendlier for system's memory.
- *  Use one context per thread for parallel execution. */
-typedef struct ZSTD_DCtx_s ZSTD_DCtx;
-ZSTDLIB_API ZSTD_DCtx* ZSTD_createDCtx(void);
-ZSTDLIB_API size_t     ZSTD_freeDCtx(ZSTD_DCtx* dctx);
-
-/*! ZSTD_decompressDCtx() :
- *  Same as ZSTD_decompress(),
- *  requires an allocated ZSTD_DCtx.
- *  Compatible with sticky parameters.
- */
-ZSTDLIB_API size_t ZSTD_decompressDCtx(ZSTD_DCtx* dctx,
-                                       void* dst, size_t dstCapacity,
-                                 const void* src, size_t srcSize);
-
-
-/***************************************
-*  Advanced compression API
-***************************************/
-
-/* API design :
- *   Parameters are pushed one by one into an existing context,
- *   using ZSTD_CCtx_set*() functions.
- *   Pushed parameters are sticky : they are valid for next compressed frame, and any subsequent frame.
- *   "sticky" parameters are applicable to `ZSTD_compress2()` and `ZSTD_compressStream*()` !
- *   __They do not apply to "simple" one-shot variants such as ZSTD_compressCCtx()__ .
- *
- *   It's possible to reset all parameters to "default" using ZSTD_CCtx_reset().
- *
- *   This API supercedes all other "advanced" API entry points in the experimental section.
- *   In the future, we expect to remove from experimental API entry points which are redundant with this API.
- */
-
-
-/* Compression strategies, listed from fastest to strongest */
-typedef enum { ZSTD_fast=1,
-               ZSTD_dfast=2,
-               ZSTD_greedy=3,
-               ZSTD_lazy=4,
-               ZSTD_lazy2=5,
-               ZSTD_btlazy2=6,
-               ZSTD_btopt=7,
-               ZSTD_btultra=8,
-               ZSTD_btultra2=9
-               /* note : new strategies _might_ be added in the future.
-                         Only the order (from fast to strong) is guaranteed */
-} ZSTD_strategy;
-
-
-typedef enum {
-
-    /* compression parameters
-     * Note: When compressing with a ZSTD_CDict these parameters are superseded
-     * by the parameters used to construct the ZSTD_CDict.
-     * See ZSTD_CCtx_refCDict() for more info (superseded-by-cdict). */
-    ZSTD_c_compressionLevel=100, /* Set compression parameters according to pre-defined cLevel table.
-                              * Note that exact compression parameters are dynamically determined,
-                              * depending on both compression level and srcSize (when known).
-                              * Default level is ZSTD_CLEVEL_DEFAULT==3.
-                              * Special: value 0 means default, which is controlled by ZSTD_CLEVEL_DEFAULT.
-                              * Note 1 : it's possible to pass a negative compression level.
-                              * Note 2 : setting a level does not automatically set all other compression parameters
-                              *   to default. Setting this will however eventually dynamically impact the compression
-                              *   parameters which have not been manually set. The manually set
-                              *   ones will 'stick'. */
-    /* Advanced compression parameters :
-     * It's possible to pin down compression parameters to some specific values.
-     * In which case, these values are no longer dynamically selected by the compressor */
-    ZSTD_c_windowLog=101,    /* Maximum allowed back-reference distance, expressed as power of 2.
-                              * This will set a memory budget for streaming decompression,
-                              * with larger values requiring more memory
-                              * and typically compressing more.
-                              * Must be clamped between ZSTD_WINDOWLOG_MIN and ZSTD_WINDOWLOG_MAX.
-                              * Special: value 0 means "use default windowLog".
-                              * Note: Using a windowLog greater than ZSTD_WINDOWLOG_LIMIT_DEFAULT
-                              *       requires explicitly allowing such size at streaming decompression stage. */
-    ZSTD_c_hashLog=102,      /* Size of the initial probe table, as a power of 2.
-                              * Resulting memory usage is (1 << (hashLog+2)).
-                              * Must be clamped between ZSTD_HASHLOG_MIN and ZSTD_HASHLOG_MAX.
-                              * Larger tables improve compression ratio of strategies <= dFast,
-                              * and improve speed of strategies > dFast.
-                              * Special: value 0 means "use default hashLog". */
-    ZSTD_c_chainLog=103,     /* Size of the multi-probe search table, as a power of 2.
-                              * Resulting memory usage is (1 << (chainLog+2)).
-                              * Must be clamped between ZSTD_CHAINLOG_MIN and ZSTD_CHAINLOG_MAX.
-                              * Larger tables result in better and slower compression.
-                              * This parameter is useless for "fast" strategy.
-                              * It's still useful when using "dfast" strategy,
-                              * in which case it defines a secondary probe table.
-                              * Special: value 0 means "use default chainLog". */
-    ZSTD_c_searchLog=104,    /* Number of search attempts, as a power of 2.
-                              * More attempts result in better and slower compression.
-                              * This parameter is useless for "fast" and "dFast" strategies.
-                              * Special: value 0 means "use default searchLog". */
-    ZSTD_c_minMatch=105,     /* Minimum size of searched matches.
-                              * Note that Zstandard can still find matches of smaller size,
-                              * it just tweaks its search algorithm to look for this size and larger.
-                              * Larger values increase compression and decompression speed, but decrease ratio.
-                              * Must be clamped between ZSTD_MINMATCH_MIN and ZSTD_MINMATCH_MAX.
-                              * Note that currently, for all strategies < btopt, effective minimum is 4.
-                              *                    , for all strategies > fast, effective maximum is 6.
-                              * Special: value 0 means "use default minMatchLength". */
-    ZSTD_c_targetLength=106, /* Impact of this field depends on strategy.
-                              * For strategies btopt, btultra & btultra2:
-                              *     Length of Match considered "good enough" to stop search.
-                              *     Larger values make compression stronger, and slower.
-                              * For strategy fast:
-                              *     Distance between match sampling.
-                              *     Larger values make compression faster, and weaker.
-                              * Special: value 0 means "use default targetLength". */
-    ZSTD_c_strategy=107,     /* See ZSTD_strategy enum definition.
-                              * The higher the value of selected strategy, the more complex it is,
-                              * resulting in stronger and slower compression.
-                              * Special: value 0 means "use default strategy". */
-
-    /* LDM mode parameters */
-    ZSTD_c_enableLongDistanceMatching=160, /* Enable long distance matching.
-                                     * This parameter is designed to improve compression ratio
-                                     * for large inputs, by finding large matches at long distance.
-                                     * It increases memory usage and window size.
-                                     * Note: enabling this parameter increases default ZSTD_c_windowLog to 128 MB
-                                     * except when expressly set to a different value. */
-    ZSTD_c_ldmHashLog=161,   /* Size of the table for long distance matching, as a power of 2.
-                              * Larger values increase memory usage and compression ratio,
-                              * but decrease compression speed.
-                              * Must be clamped between ZSTD_HASHLOG_MIN and ZSTD_HASHLOG_MAX
-                              * default: windowlog - 7.
-                              * Special: value 0 means "automatically determine hashlog". */
-    ZSTD_c_ldmMinMatch=162,  /* Minimum match size for long distance matcher.
-                              * Larger/too small values usually decrease compression ratio.
-                              * Must be clamped between ZSTD_LDM_MINMATCH_MIN and ZSTD_LDM_MINMATCH_MAX.
-                              * Special: value 0 means "use default value" (default: 64). */
-    ZSTD_c_ldmBucketSizeLog=163, /* Log size of each bucket in the LDM hash table for collision resolution.
-                              * Larger values improve collision resolution but decrease compression speed.
-                              * The maximum value is ZSTD_LDM_BUCKETSIZELOG_MAX.
-                              * Special: value 0 means "use default value" (default: 3). */
-    ZSTD_c_ldmHashRateLog=164, /* Frequency of inserting/looking up entries into the LDM hash table.
-                              * Must be clamped between 0 and (ZSTD_WINDOWLOG_MAX - ZSTD_HASHLOG_MIN).
-                              * Default is MAX(0, (windowLog - ldmHashLog)), optimizing hash table usage.
-                              * Larger values improve compression speed.
-                              * Deviating far from default value will likely result in a compression ratio decrease.
-                              * Special: value 0 means "automatically determine hashRateLog". */
-
-    /* frame parameters */
-    ZSTD_c_contentSizeFlag=200, /* Content size will be written into frame header _whenever known_ (default:1)
-                              * Content size must be known at the beginning of compression.
-                              * This is automatically the case when using ZSTD_compress2(),
-                              * For streaming scenarios, content size must be provided with ZSTD_CCtx_setPledgedSrcSize() */
-    ZSTD_c_checksumFlag=201, /* A 32-bits checksum of content is written at end of frame (default:0) */
-    ZSTD_c_dictIDFlag=202,   /* When applicable, dictionary's ID is written into frame header (default:1) */
-
-    /* multi-threading parameters */
-    /* These parameters are only useful if multi-threading is enabled (compiled with build macro ZSTD_MULTITHREAD).
-     * They return an error otherwise. */
-    ZSTD_c_nbWorkers=400,    /* Select how many threads will be spawned to compress in parallel.
-                              * When nbWorkers >= 1, triggers asynchronous mode when used with ZSTD_compressStream*() :
-                              * ZSTD_compressStream*() consumes input and flush output if possible, but immediately gives back control to caller,
-                              * while compression work is performed in parallel, within worker threads.
-                              * (note : a strong exception to this rule is when first invocation of ZSTD_compressStream2() sets ZSTD_e_end :
-                              *  in which case, ZSTD_compressStream2() delegates to ZSTD_compress2(), which is always a blocking call).
-                              * More workers improve speed, but also increase memory usage.
-                              * Default value is `0`, aka "single-threaded mode" : no worker is spawned, compression is performed inside Caller's thread, all invocations are blocking */
-    ZSTD_c_jobSize=401,      /* Size of a compression job. This value is enforced only when nbWorkers >= 1.
-                              * Each compression job is completed in parallel, so this value can indirectly impact the nb of active threads.
-                              * 0 means default, which is dynamically determined based on compression parameters.
-                              * Job size must be a minimum of overlap size, or 1 MB, whichever is largest.
-                              * The minimum size is automatically and transparently enforced. */
-    ZSTD_c_overlapLog=402,   /* Control the overlap size, as a fraction of window size.
-                              * The overlap size is an amount of data reloaded from previous job at the beginning of a new job.
-                              * It helps preserve compression ratio, while each job is compressed in parallel.
-                              * This value is enforced only when nbWorkers >= 1.
-                              * Larger values increase compression ratio, but decrease speed.
-                              * Possible values range from 0 to 9 :
-                              * - 0 means "default" : value will be determined by the library, depending on strategy
-                              * - 1 means "no overlap"
-                              * - 9 means "full overlap", using a full window size.
-                              * Each intermediate rank increases/decreases load size by a factor 2 :
-                              * 9: full window;  8: w/2;  7: w/4;  6: w/8;  5:w/16;  4: w/32;  3:w/64;  2:w/128;  1:no overlap;  0:default
-                              * default value varies between 6 and 9, depending on strategy */
-
-    /* note : additional experimental parameters are also available
-     * within the experimental section of the API.
-     * At the time of this writing, they include :
-     * ZSTD_c_rsyncable
-     * ZSTD_c_format
-     * ZSTD_c_forceMaxWindow
-     * ZSTD_c_forceAttachDict
-     * ZSTD_c_literalCompressionMode
-     * ZSTD_c_targetCBlockSize
-     * ZSTD_c_srcSizeHint
-     * Because they are not stable, it's necessary to define ZSTD_STATIC_LINKING_ONLY to access them.
-     * note : never ever use experimentalParam? names directly;
-     *        also, the enums values themselves are unstable and can still change.
-     */
-     ZSTD_c_experimentalParam1=500,
-     ZSTD_c_experimentalParam2=10,
-     ZSTD_c_experimentalParam3=1000,
-     ZSTD_c_experimentalParam4=1001,
-     ZSTD_c_experimentalParam5=1002,
-     ZSTD_c_experimentalParam6=1003,
-     ZSTD_c_experimentalParam7=1004
-} ZSTD_cParameter;
-
-typedef struct {
-    size_t error;
-    int lowerBound;
-    int upperBound;
-} ZSTD_bounds;
-
-/*! ZSTD_cParam_getBounds() :
- *  All parameters must belong to an interval with lower and upper bounds,
- *  otherwise they will either trigger an error or be automatically clamped.
- * @return : a structure, ZSTD_bounds, which contains
- *         - an error status field, which must be tested using ZSTD_isError()
- *         - lower and upper bounds, both inclusive
- */
-ZSTDLIB_API ZSTD_bounds ZSTD_cParam_getBounds(ZSTD_cParameter cParam);
-
-/*! ZSTD_CCtx_setParameter() :
- *  Set one compression parameter, selected by enum ZSTD_cParameter.
- *  All parameters have valid bounds. Bounds can be queried using ZSTD_cParam_getBounds().
- *  Providing a value beyond bound will either clamp it, or trigger an error (depending on parameter).
- *  Setting a parameter is generally only possible during frame initialization (before starting compression).
- *  Exception : when using multi-threading mode (nbWorkers >= 1),
- *              the following parameters can be updated _during_ compression (within same frame):
- *              => compressionLevel, hashLog, chainLog, searchLog, minMatch, targetLength and strategy.
- *              new parameters will be active for next job only (after a flush()).
- * @return : an error code (which can be tested using ZSTD_isError()).
- */
-ZSTDLIB_API size_t ZSTD_CCtx_setParameter(ZSTD_CCtx* cctx, ZSTD_cParameter param, int value);
-
-/*! ZSTD_CCtx_setPledgedSrcSize() :
- *  Total input data size to be compressed as a single frame.
- *  Value will be written in frame header, unless if explicitly forbidden using ZSTD_c_contentSizeFlag.
- *  This value will also be controlled at end of frame, and trigger an error if not respected.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Note 1 : pledgedSrcSize==0 actually means zero, aka an empty frame.
- *           In order to mean "unknown content size", pass constant ZSTD_CONTENTSIZE_UNKNOWN.
- *           ZSTD_CONTENTSIZE_UNKNOWN is default value for any new frame.
- *  Note 2 : pledgedSrcSize is only valid once, for the next frame.
- *           It's discarded at the end of the frame, and replaced by ZSTD_CONTENTSIZE_UNKNOWN.
- *  Note 3 : Whenever all input data is provided and consumed in a single round,
- *           for example with ZSTD_compress2(),
- *           or invoking immediately ZSTD_compressStream2(,,,ZSTD_e_end),
- *           this value is automatically overridden by srcSize instead.
- */
-ZSTDLIB_API size_t ZSTD_CCtx_setPledgedSrcSize(ZSTD_CCtx* cctx, unsigned long long pledgedSrcSize);
-
-typedef enum {
-    ZSTD_reset_session_only = 1,
-    ZSTD_reset_parameters = 2,
-    ZSTD_reset_session_and_parameters = 3
-} ZSTD_ResetDirective;
-
-/*! ZSTD_CCtx_reset() :
- *  There are 2 different things that can be reset, independently or jointly :
- *  - The session : will stop compressing current frame, and make CCtx ready to start a new one.
- *                  Useful after an error, or to interrupt any ongoing compression.
- *                  Any internal data not yet flushed is cancelled.
- *                  Compression parameters and dictionary remain unchanged.
- *                  They will be used to compress next frame.
- *                  Resetting session never fails.
- *  - The parameters : changes all parameters back to "default".
- *                  This removes any reference to any dictionary too.
- *                  Parameters can only be changed between 2 sessions (i.e. no compression is currently ongoing)
- *                  otherwise the reset fails, and function returns an error value (which can be tested using ZSTD_isError())
- *  - Both : similar to resetting the session, followed by resetting parameters.
- */
-ZSTDLIB_API size_t ZSTD_CCtx_reset(ZSTD_CCtx* cctx, ZSTD_ResetDirective reset);
-
-/*! ZSTD_compress2() :
- *  Behave the same as ZSTD_compressCCtx(), but compression parameters are set using the advanced API.
- *  ZSTD_compress2() always starts a new frame.
- *  Should cctx hold data from a previously unfinished frame, everything about it is forgotten.
- *  - Compression parameters are pushed into CCtx before starting compression, using ZSTD_CCtx_set*()
- *  - The function is always blocking, returns when compression is completed.
- *  Hint : compression runs faster if `dstCapacity` >=  `ZSTD_compressBound(srcSize)`.
- * @return : compressed size written into `dst` (<= `dstCapacity),
- *           or an error code if it fails (which can be tested using ZSTD_isError()).
- */
-ZSTDLIB_API size_t ZSTD_compress2( ZSTD_CCtx* cctx,
-                                   void* dst, size_t dstCapacity,
-                             const void* src, size_t srcSize);
-
-
-/***************************************
-*  Advanced decompression API
-***************************************/
-
-/* The advanced API pushes parameters one by one into an existing DCtx context.
- * Parameters are sticky, and remain valid for all following frames
- * using the same DCtx context.
- * It's possible to reset parameters to default values using ZSTD_DCtx_reset().
- * Note : This API is compatible with existing ZSTD_decompressDCtx() and ZSTD_decompressStream().
- *        Therefore, no new decompression function is necessary.
- */
-
-typedef enum {
-
-    ZSTD_d_windowLogMax=100, /* Select a size limit (in power of 2) beyond which
-                              * the streaming API will refuse to allocate memory buffer
-                              * in order to protect the host from unreasonable memory requirements.
-                              * This parameter is only useful in streaming mode, since no internal buffer is allocated in single-pass mode.
-                              * By default, a decompression context accepts window sizes <= (1 << ZSTD_WINDOWLOG_LIMIT_DEFAULT).
-                              * Special: value 0 means "use default maximum windowLog". */
-
-    /* note : additional experimental parameters are also available
-     * within the experimental section of the API.
-     * At the time of this writing, they include :
-     * ZSTD_d_format
-     * ZSTD_d_stableOutBuffer
-     * Because they are not stable, it's necessary to define ZSTD_STATIC_LINKING_ONLY to access them.
-     * note : never ever use experimentalParam? names directly
-     */
-     ZSTD_d_experimentalParam1=1000,
-     ZSTD_d_experimentalParam2=1001
-
-} ZSTD_dParameter;
-
-/*! ZSTD_dParam_getBounds() :
- *  All parameters must belong to an interval with lower and upper bounds,
- *  otherwise they will either trigger an error or be automatically clamped.
- * @return : a structure, ZSTD_bounds, which contains
- *         - an error status field, which must be tested using ZSTD_isError()
- *         - both lower and upper bounds, inclusive
- */
-ZSTDLIB_API ZSTD_bounds ZSTD_dParam_getBounds(ZSTD_dParameter dParam);
-
-/*! ZSTD_DCtx_setParameter() :
- *  Set one compression parameter, selected by enum ZSTD_dParameter.
- *  All parameters have valid bounds. Bounds can be queried using ZSTD_dParam_getBounds().
- *  Providing a value beyond bound will either clamp it, or trigger an error (depending on parameter).
- *  Setting a parameter is only possible during frame initialization (before starting decompression).
- * @return : 0, or an error code (which can be tested using ZSTD_isError()).
- */
-ZSTDLIB_API size_t ZSTD_DCtx_setParameter(ZSTD_DCtx* dctx, ZSTD_dParameter param, int value);
-
-/*! ZSTD_DCtx_reset() :
- *  Return a DCtx to clean state.
- *  Session and parameters can be reset jointly or separately.
- *  Parameters can only be reset when no active frame is being decompressed.
- * @return : 0, or an error code, which can be tested with ZSTD_isError()
- */
-ZSTDLIB_API size_t ZSTD_DCtx_reset(ZSTD_DCtx* dctx, ZSTD_ResetDirective reset);
-
-
-/****************************
-*  Streaming
-****************************/
-
-typedef struct ZSTD_inBuffer_s {
-  const void* src;    /**< start of input buffer */
-  size_t size;        /**< size of input buffer */
-  size_t pos;         /**< position where reading stopped. Will be updated. Necessarily 0 <= pos <= size */
-} ZSTD_inBuffer;
-
-typedef struct ZSTD_outBuffer_s {
-  void*  dst;         /**< start of output buffer */
-  size_t size;        /**< size of output buffer */
-  size_t pos;         /**< position where writing stopped. Will be updated. Necessarily 0 <= pos <= size */
-} ZSTD_outBuffer;
-
-
-
-/*-***********************************************************************
-*  Streaming compression - HowTo
-*
-*  A ZSTD_CStream object is required to track streaming operation.
-*  Use ZSTD_createCStream() and ZSTD_freeCStream() to create/release resources.
-*  ZSTD_CStream objects can be reused multiple times on consecutive compression operations.
-*  It is recommended to re-use ZSTD_CStream since it will play nicer with system's memory, by re-using already allocated memory.
-*
-*  For parallel execution, use one separate ZSTD_CStream per thread.
-*
-*  note : since v1.3.0, ZSTD_CStream and ZSTD_CCtx are the same thing.
-*
-*  Parameters are sticky : when starting a new compression on the same context,
-*  it will re-use the same sticky parameters as previous compression session.
-*  When in doubt, it's recommended to fully initialize the context before usage.
-*  Use ZSTD_CCtx_reset() to reset the context and ZSTD_CCtx_setParameter(),
-*  ZSTD_CCtx_setPledgedSrcSize(), or ZSTD_CCtx_loadDictionary() and friends to
-*  set more specific parameters, the pledged source size, or load a dictionary.
-*
-*  Use ZSTD_compressStream2() with ZSTD_e_continue as many times as necessary to
-*  consume input stream. The function will automatically update both `pos`
-*  fields within `input` and `output`.
-*  Note that the function may not consume the entire input, for example, because
-*  the output buffer is already full, in which case `input.pos < input.size`.
-*  The caller must check if input has been entirely consumed.
-*  If not, the caller must make some room to receive more compressed data,
-*  and then present again remaining input data.
-*  note: ZSTD_e_continue is guaranteed to make some forward progress when called,
-*        but doesn't guarantee maximal forward progress. This is especially relevant
-*        when compressing with multiple threads. The call won't block if it can
-*        consume some input, but if it can't it will wait for some, but not all,
-*        output to be flushed.
-* @return : provides a minimum amount of data remaining to be flushed from internal buffers
-*           or an error code, which can be tested using ZSTD_isError().
-*
-*  At any moment, it's possible to flush whatever data might remain stuck within internal buffer,
-*  using ZSTD_compressStream2() with ZSTD_e_flush. `output->pos` will be updated.
-*  Note that, if `output->size` is too small, a single invocation with ZSTD_e_flush might not be enough (return code > 0).
-*  In which case, make some room to receive more compressed data, and call again ZSTD_compressStream2() with ZSTD_e_flush.
-*  You must continue calling ZSTD_compressStream2() with ZSTD_e_flush until it returns 0, at which point you can change the
-*  operation.
-*  note: ZSTD_e_flush will flush as much output as possible, meaning when compressing with multiple threads, it will
-*        block until the flush is complete or the output buffer is full.
-*  @return : 0 if internal buffers are entirely flushed,
-*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
-*            or an error code, which can be tested using ZSTD_isError().
-*
-*  Calling ZSTD_compressStream2() with ZSTD_e_end instructs to finish a frame.
-*  It will perform a flush and write frame epilogue.
-*  The epilogue is required for decoders to consider a frame completed.
-*  flush operation is the same, and follows same rules as calling ZSTD_compressStream2() with ZSTD_e_flush.
-*  You must continue calling ZSTD_compressStream2() with ZSTD_e_end until it returns 0, at which point you are free to
-*  start a new frame.
-*  note: ZSTD_e_end will flush as much output as possible, meaning when compressing with multiple threads, it will
-*        block until the flush is complete or the output buffer is full.
-*  @return : 0 if frame fully completed and fully flushed,
-*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
-*            or an error code, which can be tested using ZSTD_isError().
-*
-* *******************************************************************/
-
-typedef ZSTD_CCtx ZSTD_CStream;  /**< CCtx and CStream are now effectively same object (>= v1.3.0) */
-                                 /* Continue to distinguish them for compatibility with older versions <= v1.2.0 */
-/*===== ZSTD_CStream management functions =====*/
-ZSTDLIB_API ZSTD_CStream* ZSTD_createCStream(void);
-ZSTDLIB_API size_t ZSTD_freeCStream(ZSTD_CStream* zcs);
-
-/*===== Streaming compression functions =====*/
-typedef enum {
-    ZSTD_e_continue=0, /* collect more data, encoder decides when to output compressed result, for optimal compression ratio */
-    ZSTD_e_flush=1,    /* flush any data provided so far,
-                        * it creates (at least) one new block, that can be decoded immediately on reception;
-                        * frame will continue: any future data can still reference previously compressed data, improving compression.
-                        * note : multithreaded compression will block to flush as much output as possible. */
-    ZSTD_e_end=2       /* flush any remaining data _and_ close current frame.
-                        * note that frame is only closed after compressed data is fully flushed (return value == 0).
-                        * After that point, any additional data starts a new frame.
-                        * note : each frame is independent (does not reference any content from previous frame).
-                        : note : multithreaded compression will block to flush as much output as possible. */
-} ZSTD_EndDirective;
-
-/*! ZSTD_compressStream2() :
- *  Behaves about the same as ZSTD_compressStream, with additional control on end directive.
- *  - Compression parameters are pushed into CCtx before starting compression, using ZSTD_CCtx_set*()
- *  - Compression parameters cannot be changed once compression is started (save a list of exceptions in multi-threading mode)
- *  - output->pos must be <= dstCapacity, input->pos must be <= srcSize
- *  - output->pos and input->pos will be updated. They are guaranteed to remain below their respective limit.
- *  - When nbWorkers==0 (default), function is blocking : it completes its job before returning to caller.
- *  - When nbWorkers>=1, function is non-blocking : it just acquires a copy of input, and distributes jobs to internal worker threads, flush whatever is available,
- *                                                  and then immediately returns, just indicating that there is some data remaining to be flushed.
- *                                                  The function nonetheless guarantees forward progress : it will return only after it reads or write at least 1+ byte.
- *  - Exception : if the first call requests a ZSTD_e_end directive and provides enough dstCapacity, the function delegates to ZSTD_compress2() which is always blocking.
- *  - @return provides a minimum amount of data remaining to be flushed from internal buffers
- *            or an error code, which can be tested using ZSTD_isError().
- *            if @return != 0, flush is not fully completed, there is still some data left within internal buffers.
- *            This is useful for ZSTD_e_flush, since in this case more flushes are necessary to empty all buffers.
- *            For ZSTD_e_end, @return == 0 when internal buffers are fully flushed and frame is completed.
- *  - after a ZSTD_e_end directive, if internal buffer is not fully flushed (@return != 0),
- *            only ZSTD_e_end or ZSTD_e_flush operations are allowed.
- *            Before starting a new compression job, or changing compression parameters,
- *            it is required to fully flush internal buffers.
- */
-ZSTDLIB_API size_t ZSTD_compressStream2( ZSTD_CCtx* cctx,
-                                         ZSTD_outBuffer* output,
-                                         ZSTD_inBuffer* input,
-                                         ZSTD_EndDirective endOp);
-
-
-/* These buffer sizes are softly recommended.
- * They are not required : ZSTD_compressStream*() happily accepts any buffer size, for both input and output.
- * Respecting the recommended size just makes it a bit easier for ZSTD_compressStream*(),
- * reducing the amount of memory shuffling and buffering, resulting in minor performance savings.
- *
- * However, note that these recommendations are from the perspective of a C caller program.
- * If the streaming interface is invoked from some other language,
- * especially managed ones such as Java or Go, through a foreign function interface such as jni or cgo,
- * a major performance rule is to reduce crossing such interface to an absolute minimum.
- * It's not rare that performance ends being spent more into the interface, rather than compression itself.
- * In which cases, prefer using large buffers, as large as practical,
- * for both input and output, to reduce the nb of roundtrips.
- */
-ZSTDLIB_API size_t ZSTD_CStreamInSize(void);    /**< recommended size for input buffer */
-ZSTDLIB_API size_t ZSTD_CStreamOutSize(void);   /**< recommended size for output buffer. Guarantee to successfully flush at least one complete compressed block. */
-
-
-/* *****************************************************************************
- * This following is a legacy streaming API.
- * It can be replaced by ZSTD_CCtx_reset() and ZSTD_compressStream2().
- * It is redundant, but remains fully supported.
- * Advanced parameters and dictionary compression can only be used through the
- * new API.
- ******************************************************************************/
-
-/*!
- * Equivalent to:
- *
- *     ZSTD_CCtx_reset(zcs, ZSTD_reset_session_only);
- *     ZSTD_CCtx_refCDict(zcs, NULL); // clear the dictionary (if any)
- *     ZSTD_CCtx_setParameter(zcs, ZSTD_c_compressionLevel, compressionLevel);
- */
-ZSTDLIB_API size_t ZSTD_initCStream(ZSTD_CStream* zcs, int compressionLevel);
-/*!
- * Alternative for ZSTD_compressStream2(zcs, output, input, ZSTD_e_continue).
- * NOTE: The return value is different. ZSTD_compressStream() returns a hint for
- * the next read size (if non-zero and not an error). ZSTD_compressStream2()
- * returns the minimum nb of bytes left to flush (if non-zero and not an error).
- */
-ZSTDLIB_API size_t ZSTD_compressStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output, ZSTD_inBuffer* input);
-/*! Equivalent to ZSTD_compressStream2(zcs, output, &emptyInput, ZSTD_e_flush). */
-ZSTDLIB_API size_t ZSTD_flushStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output);
-/*! Equivalent to ZSTD_compressStream2(zcs, output, &emptyInput, ZSTD_e_end). */
-ZSTDLIB_API size_t ZSTD_endStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output);
-
-
-/*-***************************************************************************
-*  Streaming decompression - HowTo
-*
-*  A ZSTD_DStream object is required to track streaming operations.
-*  Use ZSTD_createDStream() and ZSTD_freeDStream() to create/release resources.
-*  ZSTD_DStream objects can be re-used multiple times.
-*
-*  Use ZSTD_initDStream() to start a new decompression operation.
-* @return : recommended first input size
-*  Alternatively, use advanced API to set specific properties.
-*
-*  Use ZSTD_decompressStream() repetitively to consume your input.
-*  The function will update both `pos` fields.
-*  If `input.pos < input.size`, some input has not been consumed.
-*  It's up to the caller to present again remaining data.
-*  The function tries to flush all data decoded immediately, respecting output buffer size.
-*  If `output.pos < output.size`, decoder has flushed everything it could.
-*  But if `output.pos == output.size`, there might be some data left within internal buffers.,
-*  In which case, call ZSTD_decompressStream() again to flush whatever remains in the buffer.
-*  Note : with no additional input provided, amount of data flushed is necessarily <= ZSTD_BLOCKSIZE_MAX.
-* @return : 0 when a frame is completely decoded and fully flushed,
-*        or an error code, which can be tested using ZSTD_isError(),
-*        or any other value > 0, which means there is still some decoding or flushing to do to complete current frame :
-*                                the return value is a suggested next input size (just a hint for better latency)
-*                                that will never request more than the remaining frame size.
-* *******************************************************************************/
-
-typedef ZSTD_DCtx ZSTD_DStream;  /**< DCtx and DStream are now effectively same object (>= v1.3.0) */
-                                 /* For compatibility with versions <= v1.2.0, prefer differentiating them. */
-/*===== ZSTD_DStream management functions =====*/
-ZSTDLIB_API ZSTD_DStream* ZSTD_createDStream(void);
-ZSTDLIB_API size_t ZSTD_freeDStream(ZSTD_DStream* zds);
-
-/*===== Streaming decompression functions =====*/
-
-/* This function is redundant with the advanced API and equivalent to:
- *
- *     ZSTD_DCtx_reset(zds, ZSTD_reset_session_only);
- *     ZSTD_DCtx_refDDict(zds, NULL);
- */
-ZSTDLIB_API size_t ZSTD_initDStream(ZSTD_DStream* zds);
-
-ZSTDLIB_API size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input);
-
-ZSTDLIB_API size_t ZSTD_DStreamInSize(void);    /*!< recommended size for input buffer */
-ZSTDLIB_API size_t ZSTD_DStreamOutSize(void);   /*!< recommended size for output buffer. Guarantee to successfully flush at least one complete block in all circumstances. */
-
-
-/**************************
-*  Simple dictionary API
-***************************/
-/*! ZSTD_compress_usingDict() :
- *  Compression at an explicit compression level using a Dictionary.
- *  A dictionary can be any arbitrary data segment (also called a prefix),
- *  or a buffer with specified information (see dict/zdict.h).
- *  Note : This function loads the dictionary, resulting in significant startup delay.
- *         It's intended for a dictionary used only once.
- *  Note 2 : When `dict == NULL || dictSize < 8` no dictionary is used. */
-ZSTDLIB_API size_t ZSTD_compress_usingDict(ZSTD_CCtx* ctx,
-                                           void* dst, size_t dstCapacity,
-                                     const void* src, size_t srcSize,
-                                     const void* dict,size_t dictSize,
-                                           int compressionLevel);
-
-/*! ZSTD_decompress_usingDict() :
- *  Decompression using a known Dictionary.
- *  Dictionary must be identical to the one used during compression.
- *  Note : This function loads the dictionary, resulting in significant startup delay.
- *         It's intended for a dictionary used only once.
- *  Note : When `dict == NULL || dictSize < 8` no dictionary is used. */
-ZSTDLIB_API size_t ZSTD_decompress_usingDict(ZSTD_DCtx* dctx,
-                                             void* dst, size_t dstCapacity,
-                                       const void* src, size_t srcSize,
-                                       const void* dict,size_t dictSize);
-
-
-/***********************************
- *  Bulk processing dictionary API
- **********************************/
-typedef struct ZSTD_CDict_s ZSTD_CDict;
-
-/*! ZSTD_createCDict() :
- *  When compressing multiple messages or blocks using the same dictionary,
- *  it's recommended to digest the dictionary only once, since it's a costly operation.
- *  ZSTD_createCDict() will create a state from digesting a dictionary.
- *  The resulting state can be used for future compression operations with very limited startup cost.
- *  ZSTD_CDict can be created once and shared by multiple threads concurrently, since its usage is read-only.
- * @dictBuffer can be released after ZSTD_CDict creation, because its content is copied within CDict.
- *  Note 1 : Consider experimental function `ZSTD_createCDict_byReference()` if you prefer to not duplicate @dictBuffer content.
- *  Note 2 : A ZSTD_CDict can be created from an empty @dictBuffer,
- *      in which case the only thing that it transports is the @compressionLevel.
- *      This can be useful in a pipeline featuring ZSTD_compress_usingCDict() exclusively,
- *      expecting a ZSTD_CDict parameter with any data, including those without a known dictionary. */
-ZSTDLIB_API ZSTD_CDict* ZSTD_createCDict(const void* dictBuffer, size_t dictSize,
-                                         int compressionLevel);
-
-/*! ZSTD_freeCDict() :
- *  Function frees memory allocated by ZSTD_createCDict(). */
-ZSTDLIB_API size_t      ZSTD_freeCDict(ZSTD_CDict* CDict);
-
-/*! ZSTD_compress_usingCDict() :
- *  Compression using a digested Dictionary.
- *  Recommended when same dictionary is used multiple times.
- *  Note : compression level is _decided at dictionary creation time_,
- *     and frame parameters are hardcoded (dictID=yes, contentSize=yes, checksum=no) */
-ZSTDLIB_API size_t ZSTD_compress_usingCDict(ZSTD_CCtx* cctx,
-                                            void* dst, size_t dstCapacity,
-                                      const void* src, size_t srcSize,
-                                      const ZSTD_CDict* cdict);
-
-
-typedef struct ZSTD_DDict_s ZSTD_DDict;
-
-/*! ZSTD_createDDict() :
- *  Create a digested dictionary, ready to start decompression operation without startup delay.
- *  dictBuffer can be released after DDict creation, as its content is copied inside DDict. */
-ZSTDLIB_API ZSTD_DDict* ZSTD_createDDict(const void* dictBuffer, size_t dictSize);
-
-/*! ZSTD_freeDDict() :
- *  Function frees memory allocated with ZSTD_createDDict() */
-ZSTDLIB_API size_t      ZSTD_freeDDict(ZSTD_DDict* ddict);
-
-/*! ZSTD_decompress_usingDDict() :
- *  Decompression using a digested Dictionary.
- *  Recommended when same dictionary is used multiple times. */
-ZSTDLIB_API size_t ZSTD_decompress_usingDDict(ZSTD_DCtx* dctx,
-                                              void* dst, size_t dstCapacity,
-                                        const void* src, size_t srcSize,
-                                        const ZSTD_DDict* ddict);
-
-
-/********************************
- *  Dictionary helper functions
- *******************************/
-
-/*! ZSTD_getDictID_fromDict() :
- *  Provides the dictID stored within dictionary.
- *  if @return == 0, the dictionary is not conformant with Zstandard specification.
- *  It can still be loaded, but as a content-only dictionary. */
-ZSTDLIB_API unsigned ZSTD_getDictID_fromDict(const void* dict, size_t dictSize);
-
-/*! ZSTD_getDictID_fromDDict() :
- *  Provides the dictID of the dictionary loaded into `ddict`.
- *  If @return == 0, the dictionary is not conformant to Zstandard specification, or empty.
- *  Non-conformant dictionaries can still be loaded, but as content-only dictionaries. */
-ZSTDLIB_API unsigned ZSTD_getDictID_fromDDict(const ZSTD_DDict* ddict);
-
-/*! ZSTD_getDictID_fromFrame() :
- *  Provides the dictID required to decompressed the frame stored within `src`.
- *  If @return == 0, the dictID could not be decoded.
- *  This could for one of the following reasons :
- *  - The frame does not require a dictionary to be decoded (most common case).
- *  - The frame was built with dictID intentionally removed. Whatever dictionary is necessary is a hidden information.
- *    Note : this use case also happens when using a non-conformant dictionary.
- *  - `srcSize` is too small, and as a result, the frame header could not be decoded (only possible if `srcSize < ZSTD_FRAMEHEADERSIZE_MAX`).
- *  - This is not a Zstandard frame.
- *  When identifying the exact failure cause, it's possible to use ZSTD_getFrameHeader(), which will provide a more precise error code. */
-ZSTDLIB_API unsigned ZSTD_getDictID_fromFrame(const void* src, size_t srcSize);
-
-
-/*******************************************************************************
- * Advanced dictionary and prefix API
- *
- * This API allows dictionaries to be used with ZSTD_compress2(),
- * ZSTD_compressStream2(), and ZSTD_decompress(). Dictionaries are sticky, and
- * only reset with the context is reset with ZSTD_reset_parameters or
- * ZSTD_reset_session_and_parameters. Prefixes are single-use.
- ******************************************************************************/
-
-
-/*! ZSTD_CCtx_loadDictionary() :
- *  Create an internal CDict from `dict` buffer.
- *  Decompression will have to use same dictionary.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Special: Loading a NULL (or 0-size) dictionary invalidates previous dictionary,
- *           meaning "return to no-dictionary mode".
- *  Note 1 : Dictionary is sticky, it will be used for all future compressed frames.
- *           To return to "no-dictionary" situation, load a NULL dictionary (or reset parameters).
- *  Note 2 : Loading a dictionary involves building tables.
- *           It's also a CPU consuming operation, with non-negligible impact on latency.
- *           Tables are dependent on compression parameters, and for this reason,
- *           compression parameters can no longer be changed after loading a dictionary.
- *  Note 3 :`dict` content will be copied internally.
- *           Use experimental ZSTD_CCtx_loadDictionary_byReference() to reference content instead.
- *           In such a case, dictionary buffer must outlive its users.
- *  Note 4 : Use ZSTD_CCtx_loadDictionary_advanced()
- *           to precisely select how dictionary content must be interpreted. */
-ZSTDLIB_API size_t ZSTD_CCtx_loadDictionary(ZSTD_CCtx* cctx, const void* dict, size_t dictSize);
-
-/*! ZSTD_CCtx_refCDict() :
- *  Reference a prepared dictionary, to be used for all next compressed frames.
- *  Note that compression parameters are enforced from within CDict,
- *  and supersede any compression parameter previously set within CCtx.
- *  The parameters ignored are labled as "superseded-by-cdict" in the ZSTD_cParameter enum docs.
- *  The ignored parameters will be used again if the CCtx is returned to no-dictionary mode.
- *  The dictionary will remain valid for future compressed frames using same CCtx.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Special : Referencing a NULL CDict means "return to no-dictionary mode".
- *  Note 1 : Currently, only one dictionary can be managed.
- *           Referencing a new dictionary effectively "discards" any previous one.
- *  Note 2 : CDict is just referenced, its lifetime must outlive its usage within CCtx. */
-ZSTDLIB_API size_t ZSTD_CCtx_refCDict(ZSTD_CCtx* cctx, const ZSTD_CDict* cdict);
-
-/*! ZSTD_CCtx_refPrefix() :
- *  Reference a prefix (single-usage dictionary) for next compressed frame.
- *  A prefix is **only used once**. Tables are discarded at end of frame (ZSTD_e_end).
- *  Decompression will need same prefix to properly regenerate data.
- *  Compressing with a prefix is similar in outcome as performing a diff and compressing it,
- *  but performs much faster, especially during decompression (compression speed is tunable with compression level).
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Special: Adding any prefix (including NULL) invalidates any previous prefix or dictionary
- *  Note 1 : Prefix buffer is referenced. It **must** outlive compression.
- *           Its content must remain unmodified during compression.
- *  Note 2 : If the intention is to diff some large src data blob with some prior version of itself,
- *           ensure that the window size is large enough to contain the entire source.
- *           See ZSTD_c_windowLog.
- *  Note 3 : Referencing a prefix involves building tables, which are dependent on compression parameters.
- *           It's a CPU consuming operation, with non-negligible impact on latency.
- *           If there is a need to use the same prefix multiple times, consider loadDictionary instead.
- *  Note 4 : By default, the prefix is interpreted as raw content (ZSTD_dct_rawContent).
- *           Use experimental ZSTD_CCtx_refPrefix_advanced() to alter dictionary interpretation. */
-ZSTDLIB_API size_t ZSTD_CCtx_refPrefix(ZSTD_CCtx* cctx,
-                                 const void* prefix, size_t prefixSize);
-
-/*! ZSTD_DCtx_loadDictionary() :
- *  Create an internal DDict from dict buffer,
- *  to be used to decompress next frames.
- *  The dictionary remains valid for all future frames, until explicitly invalidated.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Special : Adding a NULL (or 0-size) dictionary invalidates any previous dictionary,
- *            meaning "return to no-dictionary mode".
- *  Note 1 : Loading a dictionary involves building tables,
- *           which has a non-negligible impact on CPU usage and latency.
- *           It's recommended to "load once, use many times", to amortize the cost
- *  Note 2 :`dict` content will be copied internally, so `dict` can be released after loading.
- *           Use ZSTD_DCtx_loadDictionary_byReference() to reference dictionary content instead.
- *  Note 3 : Use ZSTD_DCtx_loadDictionary_advanced() to take control of
- *           how dictionary content is loaded and interpreted.
- */
-ZSTDLIB_API size_t ZSTD_DCtx_loadDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize);
-
-/*! ZSTD_DCtx_refDDict() :
- *  Reference a prepared dictionary, to be used to decompress next frames.
- *  The dictionary remains active for decompression of future frames using same DCtx.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Note 1 : Currently, only one dictionary can be managed.
- *           Referencing a new dictionary effectively "discards" any previous one.
- *  Special: referencing a NULL DDict means "return to no-dictionary mode".
- *  Note 2 : DDict is just referenced, its lifetime must outlive its usage from DCtx.
- */
-ZSTDLIB_API size_t ZSTD_DCtx_refDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict);
-
-/*! ZSTD_DCtx_refPrefix() :
- *  Reference a prefix (single-usage dictionary) to decompress next frame.
- *  This is the reverse operation of ZSTD_CCtx_refPrefix(),
- *  and must use the same prefix as the one used during compression.
- *  Prefix is **only used once**. Reference is discarded at end of frame.
- *  End of frame is reached when ZSTD_decompressStream() returns 0.
- * @result : 0, or an error code (which can be tested with ZSTD_isError()).
- *  Note 1 : Adding any prefix (including NULL) invalidates any previously set prefix or dictionary
- *  Note 2 : Prefix buffer is referenced. It **must** outlive decompression.
- *           Prefix buffer must remain unmodified up to the end of frame,
- *           reached when ZSTD_decompressStream() returns 0.
- *  Note 3 : By default, the prefix is treated as raw content (ZSTD_dct_rawContent).
- *           Use ZSTD_CCtx_refPrefix_advanced() to alter dictMode (Experimental section)
- *  Note 4 : Referencing a raw content prefix has almost no cpu nor memory cost.
- *           A full dictionary is more costly, as it requires building tables.
- */
-ZSTDLIB_API size_t ZSTD_DCtx_refPrefix(ZSTD_DCtx* dctx,
-                                 const void* prefix, size_t prefixSize);
-
-/* ===   Memory management   === */
-
-/*! ZSTD_sizeof_*() :
- *  These functions give the _current_ memory usage of selected object.
- *  Note that object memory usage can evolve (increase or decrease) over time. */
-ZSTDLIB_API size_t ZSTD_sizeof_CCtx(const ZSTD_CCtx* cctx);
-ZSTDLIB_API size_t ZSTD_sizeof_DCtx(const ZSTD_DCtx* dctx);
-ZSTDLIB_API size_t ZSTD_sizeof_CStream(const ZSTD_CStream* zcs);
-ZSTDLIB_API size_t ZSTD_sizeof_DStream(const ZSTD_DStream* zds);
-ZSTDLIB_API size_t ZSTD_sizeof_CDict(const ZSTD_CDict* cdict);
-ZSTDLIB_API size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict);
-
-}
-#endif  /* ZSTD_H_235446 */
-
-
-// LICENSE_CHANGE_END
-
-#include <iostream>
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/types/blob.hpp"
-#include "duckdb/common/types/chunk_collection.hpp"
-#endif
-
-namespace duckdb {
-
-using duckdb_parquet::format::CompressionCodec;
-using duckdb_parquet::format::ConvertedType;
-using duckdb_parquet::format::Encoding;
-using duckdb_parquet::format::PageType;
-using duckdb_parquet::format::Type;
-
-const uint32_t ParquetDecodeUtils::BITPACK_MASKS[] = {
-    0,       1,       3,        7,        15,       31,        63,        127,       255,        511,       1023,
-    2047,    4095,    8191,     16383,    32767,    65535,     131071,    262143,    524287,     1048575,   2097151,
-    4194303, 8388607, 16777215, 33554431, 67108863, 134217727, 268435455, 536870911, 1073741823, 2147483647};
-
-const uint8_t ParquetDecodeUtils::BITPACK_DLEN = 8;
-
-ColumnReader::ColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
-                           idx_t max_define_p, idx_t max_repeat_p)
-    : schema(schema_p), file_idx(file_idx_p), max_define(max_define_p), max_repeat(max_repeat_p), reader(reader),
-      type(move(type_p)), page_rows_available(0) {
-
-	// dummies for Skip()
-	none_filter.none();
-	dummy_define.resize(reader.allocator, STANDARD_VECTOR_SIZE);
-	dummy_repeat.resize(reader.allocator, STANDARD_VECTOR_SIZE);
-}
-
-ColumnReader::~ColumnReader() {
-}
-
-ParquetReader &ColumnReader::Reader() {
-	return reader;
-}
-
-const LogicalType &ColumnReader::Type() const {
-	return type;
-}
-
-const SchemaElement &ColumnReader::Schema() const {
-	return schema;
-}
-
-idx_t ColumnReader::FileIdx() const {
-	return file_idx;
-}
-
-idx_t ColumnReader::MaxDefine() const {
-	return max_define;
-}
-
-idx_t ColumnReader::MaxRepeat() const {
-	return max_repeat;
-}
-
-void ColumnReader::RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) {
-	if (chunk) {
-		uint64_t size = chunk->meta_data.total_compressed_size;
-		transport.RegisterPrefetch(FileOffset(), size, allow_merge);
-	}
-}
-
-uint64_t ColumnReader::TotalCompressedSize() {
-	if (!chunk) {
-		return 0;
-	}
-
-	return chunk->meta_data.total_compressed_size;
-}
-
-// Note: It's not trivial to determine where all Column data is stored. Chunk->file_offset
-// apparently is not the first page of the data. Therefore we determine the address of the first page by taking the
-// minimum of all page offsets.
-idx_t ColumnReader::FileOffset() const {
-	if (!chunk) {
-		throw std::runtime_error("FileOffset called on ColumnReader with no chunk");
-	}
-	auto min_offset = NumericLimits<idx_t>::Maximum();
-	if (chunk->meta_data.__isset.dictionary_page_offset) {
-		min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.dictionary_page_offset);
-	}
-	if (chunk->meta_data.__isset.index_page_offset) {
-		min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.index_page_offset);
-	}
-	min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.data_page_offset);
-
-	return min_offset;
-}
-
-idx_t ColumnReader::GroupRowsAvailable() {
-	return group_rows_available;
-}
-
-unique_ptr<BaseStatistics> ColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
-	if (Type().id() == LogicalTypeId::LIST || Type().id() == LogicalTypeId::STRUCT ||
-	    Type().id() == LogicalTypeId::MAP) {
-		return nullptr;
-	}
-	return ParquetStatisticsUtils::TransformColumnStatistics(Schema(), Type(), columns[file_idx]);
-}
-
-void ColumnReader::Plain(shared_ptr<ByteBuffer> plain_data, uint8_t *defines, idx_t num_values, // NOLINT
-                         parquet_filter_t &filter, idx_t result_offset, Vector &result) {
-	throw NotImplementedException("Plain");
-}
-
-void ColumnReader::Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
-	throw NotImplementedException("Dictionary");
-}
-
-void ColumnReader::Offsets(uint32_t *offsets, uint8_t *defines, idx_t num_values, parquet_filter_t &filter,
-                           idx_t result_offset, Vector &result) {
-	throw NotImplementedException("Offsets");
-}
-
-void ColumnReader::DictReference(Vector &result) {
-}
-void ColumnReader::PlainReference(shared_ptr<ByteBuffer>, Vector &result) { // NOLINT
-}
-
-void ColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
-	D_ASSERT(file_idx < columns.size());
-	chunk = &columns[file_idx];
-	protocol = &protocol_p;
-	D_ASSERT(chunk);
-	D_ASSERT(chunk->__isset.meta_data);
-
-	if (chunk->__isset.file_path) {
-		throw std::runtime_error("Only inlined data files are supported (no references)");
-	}
-
-	// ugh. sometimes there is an extra offset for the dict. sometimes it's wrong.
-	chunk_read_offset = chunk->meta_data.data_page_offset;
-	if (chunk->meta_data.__isset.dictionary_page_offset && chunk->meta_data.dictionary_page_offset >= 4) {
-		// this assumes the data pages follow the dict pages directly.
-		chunk_read_offset = chunk->meta_data.dictionary_page_offset;
-	}
-	group_rows_available = chunk->meta_data.num_values;
-}
-
-void ColumnReader::PrepareRead(parquet_filter_t &filter) {
-	dict_decoder.reset();
-	defined_decoder.reset();
-	block.reset();
-
-	PageHeader page_hdr;
-	page_hdr.read(protocol);
-
-	switch (page_hdr.type) {
-	case PageType::DATA_PAGE_V2:
-		PreparePageV2(page_hdr);
-		PrepareDataPage(page_hdr);
-		break;
-	case PageType::DATA_PAGE:
-		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
-		PrepareDataPage(page_hdr);
-		break;
-	case PageType::DICTIONARY_PAGE:
-		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
-		Dictionary(move(block), page_hdr.dictionary_page_header.num_values);
-		break;
-	default:
-		break; // ignore INDEX page type and any other custom extensions
-	}
-}
-
-void ColumnReader::PreparePageV2(PageHeader &page_hdr) {
-	// FIXME this is copied from the other prepare, merge the decomp part
-
-	D_ASSERT(page_hdr.type == PageType::DATA_PAGE_V2);
-
-	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
-
-	block = make_shared<ResizeableBuffer>(reader.allocator, page_hdr.uncompressed_page_size + 1);
-	// copy repeats & defines as-is because FOR SOME REASON they are uncompressed
-	auto uncompressed_bytes = page_hdr.data_page_header_v2.repetition_levels_byte_length +
-	                          page_hdr.data_page_header_v2.definition_levels_byte_length;
-	auto possibly_compressed_bytes = page_hdr.compressed_page_size - uncompressed_bytes;
-	trans.read((uint8_t *)block->ptr, uncompressed_bytes);
-
-	switch (chunk->meta_data.codec) {
-	case CompressionCodec::UNCOMPRESSED:
-		trans.read(((uint8_t *)block->ptr) + uncompressed_bytes, possibly_compressed_bytes);
-		break;
-
-	case CompressionCodec::SNAPPY: {
-		// TODO move allocation outta here
-		ResizeableBuffer compressed_bytes_buffer(reader.allocator, possibly_compressed_bytes);
-		trans.read((uint8_t *)compressed_bytes_buffer.ptr, possibly_compressed_bytes);
-
-		auto res = duckdb_snappy::RawUncompress((const char *)compressed_bytes_buffer.ptr, possibly_compressed_bytes,
-		                                        ((char *)block->ptr) + uncompressed_bytes);
-		if (!res) {
-			throw std::runtime_error("Decompression failure");
-		}
-		break;
-	}
-
-	default: {
-		std::stringstream codec_name;
-		codec_name << chunk->meta_data.codec;
-		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
-		                         "\". Supported options are uncompressed, gzip or snappy");
-		break;
-	}
-	}
-}
-
-void ColumnReader::PreparePage(idx_t compressed_page_size, idx_t uncompressed_page_size) {
-	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
-
-	block = make_shared<ResizeableBuffer>(reader.allocator, compressed_page_size + 1);
-	trans.read((uint8_t *)block->ptr, compressed_page_size);
-
-	// TODO this allocation should probably be avoided
-	shared_ptr<ResizeableBuffer> unpacked_block;
-	if (chunk->meta_data.codec != CompressionCodec::UNCOMPRESSED) {
-		unpacked_block = make_shared<ResizeableBuffer>(reader.allocator, uncompressed_page_size + 1);
-	}
-
-	switch (chunk->meta_data.codec) {
-	case CompressionCodec::UNCOMPRESSED:
-		break;
-	case CompressionCodec::GZIP: {
-		MiniZStream s;
-
-		s.Decompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr,
-		             uncompressed_page_size);
-		block = move(unpacked_block);
-
-		break;
-	}
-	case CompressionCodec::SNAPPY: {
-		auto res =
-		    duckdb_snappy::RawUncompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr);
-		if (!res) {
-			throw std::runtime_error("Decompression failure");
-		}
-		block = move(unpacked_block);
-		break;
-	}
-	case CompressionCodec::ZSTD: {
-		auto res = duckdb_zstd::ZSTD_decompress((char *)unpacked_block->ptr, uncompressed_page_size,
-		                                        (const char *)block->ptr, compressed_page_size);
-		if (duckdb_zstd::ZSTD_isError(res) || res != (size_t)uncompressed_page_size) {
-			throw std::runtime_error("ZSTD Decompression failure");
-		}
-		block = move(unpacked_block);
-		break;
-	}
-
-	default: {
-		std::stringstream codec_name;
-		codec_name << chunk->meta_data.codec;
-		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
-		                         "\". Supported options are uncompressed, gzip or snappy");
-		break;
-	}
-	}
-}
-
-void ColumnReader::PrepareDataPage(PageHeader &page_hdr) {
-	if (page_hdr.type == PageType::DATA_PAGE && !page_hdr.__isset.data_page_header) {
-		throw std::runtime_error("Missing data page header from data page");
-	}
-	if (page_hdr.type == PageType::DATA_PAGE_V2 && !page_hdr.__isset.data_page_header_v2) {
-		throw std::runtime_error("Missing data page header from data page v2");
-	}
-
-	page_rows_available = page_hdr.type == PageType::DATA_PAGE ? page_hdr.data_page_header.num_values
-	                                                           : page_hdr.data_page_header_v2.num_values;
-	auto page_encoding = page_hdr.type == PageType::DATA_PAGE ? page_hdr.data_page_header.encoding
-	                                                          : page_hdr.data_page_header_v2.encoding;
-
-	if (HasRepeats()) {
-		uint32_t rep_length = page_hdr.type == PageType::DATA_PAGE
-		                          ? block->read<uint32_t>()
-		                          : page_hdr.data_page_header_v2.repetition_levels_byte_length;
-		block->available(rep_length);
-		repeated_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, rep_length,
-		                                             RleBpDecoder::ComputeBitWidth(max_repeat));
-		block->inc(rep_length);
-	}
-
-	if (HasDefines()) {
-		uint32_t def_length = page_hdr.type == PageType::DATA_PAGE
-		                          ? block->read<uint32_t>()
-		                          : page_hdr.data_page_header_v2.definition_levels_byte_length;
-		block->available(def_length);
-		defined_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, def_length,
-		                                            RleBpDecoder::ComputeBitWidth(max_define));
-		block->inc(def_length);
-	}
-
-	switch (page_encoding) {
-	case Encoding::RLE_DICTIONARY:
-	case Encoding::PLAIN_DICTIONARY: {
-		// where is it otherwise??
-		auto dict_width = block->read<uint8_t>();
-		// TODO somehow dict_width can be 0 ?
-		dict_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, block->len, dict_width);
-		block->inc(block->len);
-		break;
-	}
-	case Encoding::DELTA_BINARY_PACKED: {
-		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)block->ptr, block->len);
-		block->inc(block->len);
-		break;
-	}
-		/*
-	case Encoding::DELTA_BYTE_ARRAY: {
-		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)block->ptr, block->len);
-		auto prefix_buffer = make_shared<ResizeableBuffer>();
-		prefix_buffer->resize(reader.allocator, sizeof(uint32_t) * page_hdr.data_page_header_v2.num_rows);
-
-		auto suffix_buffer = make_shared<ResizeableBuffer>();
-		suffix_buffer->resize(reader.allocator, sizeof(uint32_t) * page_hdr.data_page_header_v2.num_rows);
-
-		dbp_decoder->GetBatch<uint32_t>(prefix_buffer->ptr, page_hdr.data_page_header_v2.num_rows);
-		auto buffer_after_prefixes = dbp_decoder->BufferPtr();
-
-		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)buffer_after_prefixes.ptr, buffer_after_prefixes.len);
-		dbp_decoder->GetBatch<uint32_t>(suffix_buffer->ptr, page_hdr.data_page_header_v2.num_rows);
-
-		auto string_buffer = dbp_decoder->BufferPtr();
-
-		for (idx_t i = 0 ; i < page_hdr.data_page_header_v2.num_rows; i++) {
-		    auto suffix_length = (uint32_t*) suffix_buffer->ptr;
-		    string str( suffix_length[i] + 1, '\0');
-		    string_buffer.copy_to((char*) str.data(), suffix_length[i]);
-		    printf("%s\n", str.c_str());
-		}
-		throw std::runtime_error("eek");
-
-
-		// This is also known as incremental encoding or front compression: for each element in a sequence of strings,
-		// store the prefix length of the previous entry plus the suffix. This is stored as a sequence of delta-encoded
-		// prefix lengths (DELTA_BINARY_PACKED), followed by the suffixes encoded as delta length byte arrays
-		// (DELTA_LENGTH_BYTE_ARRAY). DELTA_LENGTH_BYTE_ARRAY: The encoded data would be DeltaEncoding(5, 5, 6, 6)
-		// "HelloWorldFoobarABCDEF"
-
-		// TODO actually do something here
-		break;
-	}
-		 */
-	case Encoding::PLAIN:
-		// nothing to do here, will be read directly below
-		break;
-
-	default:
-		throw std::runtime_error("Unsupported page encoding");
-	}
-}
-
-idx_t ColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-                         Vector &result) {
-	// we need to reset the location because multiple column readers share the same protocol
-	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
-	trans.SetLocation(chunk_read_offset);
-
-	// Perform any skips that were not applied yet.
-	if (pending_skips > 0) {
-		ApplyPendingSkips(pending_skips);
-	}
-
-	idx_t result_offset = 0;
-	auto to_read = num_values;
-
-	while (to_read > 0) {
-		while (page_rows_available == 0) {
-			PrepareRead(filter);
-		}
-
-		D_ASSERT(block);
-		auto read_now = MinValue<idx_t>(to_read, page_rows_available);
-
-		D_ASSERT(read_now <= STANDARD_VECTOR_SIZE);
-
-		if (HasRepeats()) {
-			D_ASSERT(repeated_decoder);
-			repeated_decoder->GetBatch<uint8_t>((char *)repeat_out + result_offset, read_now);
-		}
-
-		if (HasDefines()) {
-			D_ASSERT(defined_decoder);
-			defined_decoder->GetBatch<uint8_t>((char *)define_out + result_offset, read_now);
-		}
-
-		idx_t null_count = 0;
-
-		if ((dict_decoder || dbp_decoder) && HasDefines()) {
-			// we need the null count because the dictionary offsets have no entries for nulls
-			for (idx_t i = 0; i < read_now; i++) {
-				if (define_out[i + result_offset] != max_define) {
-					null_count++;
-				}
-			}
-		}
-
-		if (dict_decoder) {
-			offset_buffer.resize(reader.allocator, sizeof(uint32_t) * (read_now - null_count));
-			dict_decoder->GetBatch<uint32_t>(offset_buffer.ptr, read_now - null_count);
-			DictReference(result);
-			Offsets((uint32_t *)offset_buffer.ptr, define_out, read_now, filter, result_offset, result);
-		} else if (dbp_decoder) {
-			// TODO keep this in the state
-			auto read_buf = make_shared<ResizeableBuffer>();
-
-			switch (type.id()) {
-			case LogicalTypeId::INTEGER:
-				read_buf->resize(reader.allocator, sizeof(int32_t) * (read_now - null_count));
-				dbp_decoder->GetBatch<int32_t>(read_buf->ptr, read_now - null_count);
-
-				break;
-			case LogicalTypeId::BIGINT:
-				read_buf->resize(reader.allocator, sizeof(int64_t) * (read_now - null_count));
-				dbp_decoder->GetBatch<int64_t>(read_buf->ptr, read_now - null_count);
-				break;
-
-			default:
-				throw std::runtime_error("DELTA_BINARY_PACKED should only be INT32 or INT64");
-			}
-			// Plain() will put NULLs in the right place
-			Plain(read_buf, define_out, read_now, filter, result_offset, result);
-		} else {
-			PlainReference(block, result);
-			Plain(block, define_out, read_now, filter, result_offset, result);
-		}
-
-		result_offset += read_now;
-		page_rows_available -= read_now;
-		to_read -= read_now;
-	}
-	group_rows_available -= num_values;
-	chunk_read_offset = trans.GetLocation();
-
-	return num_values;
-}
-
-void ColumnReader::Skip(idx_t num_values) {
-	pending_skips += num_values;
-}
-
-void ColumnReader::ApplyPendingSkips(idx_t num_values) {
-	pending_skips -= num_values;
-
-	dummy_define.zero();
-	dummy_repeat.zero();
-
-	// TODO this can be optimized, for example we dont actually have to bitunpack offsets
-	Vector dummy_result(type, nullptr);
-
-	idx_t remaining = num_values;
-	idx_t read = 0;
-
-	while (remaining) {
-		idx_t to_read = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE);
-		read += Read(to_read, none_filter, (uint8_t *)dummy_define.ptr, (uint8_t *)dummy_repeat.ptr, dummy_result);
-		remaining -= to_read;
-	}
-
-	if (read != num_values) {
-		throw std::runtime_error("Row count mismatch when skipping rows");
-	}
-}
-
-//===--------------------------------------------------------------------===//
-// String Column Reader
-//===--------------------------------------------------------------------===//
-StringColumnReader::StringColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
-                                       idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p)
-    : TemplatedColumnReader<string_t, StringParquetValueConversion>(reader, move(type_p), schema_p, schema_idx_p,
-                                                                    max_define_p, max_repeat_p) {
-	fixed_width_string_length = 0;
-	if (schema_p.type == Type::FIXED_LEN_BYTE_ARRAY) {
-		D_ASSERT(schema_p.__isset.type_length);
-		fixed_width_string_length = schema_p.type_length;
-	}
-}
-
-uint32_t StringColumnReader::VerifyString(const char *str_data, uint32_t str_len) {
-	if (Type() != LogicalTypeId::VARCHAR) {
-		return str_len;
-	}
-	// verify if a string is actually UTF8, and if there are no null bytes in the middle of the string
-	// technically Parquet should guarantee this, but reality is often disappointing
-	UnicodeInvalidReason reason;
-	size_t pos;
-	auto utf_type = Utf8Proc::Analyze(str_data, str_len, &reason, &pos);
-	if (utf_type == UnicodeType::INVALID) {
-		if (reason == UnicodeInvalidReason::NULL_BYTE) {
-			// for null bytes we just truncate the string
-			return pos;
-		}
-		throw InvalidInputException("Invalid string encoding found in Parquet file: value \"" +
-		                            Blob::ToString(string_t(str_data, str_len)) + "\" is not valid UTF8!");
-	}
-	return str_len;
-}
-
-void StringColumnReader::Dictionary(shared_ptr<ByteBuffer> data, idx_t num_entries) {
-	dict = move(data);
-	dict_strings = unique_ptr<string_t[]>(new string_t[num_entries]);
-	for (idx_t dict_idx = 0; dict_idx < num_entries; dict_idx++) {
-		uint32_t str_len;
-		if (fixed_width_string_length == 0) {
-			// variable length string: read from dictionary
-			str_len = dict->read<uint32_t>();
-		} else {
-			// fixed length string
-			str_len = fixed_width_string_length;
-		}
-		dict->available(str_len);
-
-		auto actual_str_len = VerifyString(dict->ptr, str_len);
-		dict_strings[dict_idx] = string_t(dict->ptr, actual_str_len);
-		dict->inc(str_len);
-	}
-}
-
-class ParquetStringVectorBuffer : public VectorBuffer {
-public:
-	explicit ParquetStringVectorBuffer(shared_ptr<ByteBuffer> buffer_p)
-	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), buffer(move(buffer_p)) {
-	}
-
-private:
-	shared_ptr<ByteBuffer> buffer;
-};
-
-void StringColumnReader::DictReference(Vector &result) {
-	StringVector::AddBuffer(result, make_buffer<ParquetStringVectorBuffer>(dict));
-}
-void StringColumnReader::PlainReference(shared_ptr<ByteBuffer> plain_data, Vector &result) {
-	StringVector::AddBuffer(result, make_buffer<ParquetStringVectorBuffer>(move(plain_data)));
-}
-
-string_t StringParquetValueConversion::DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-	auto &dict_strings = ((StringColumnReader &)reader).dict_strings;
-	return dict_strings[offset];
-}
-
-string_t StringParquetValueConversion::PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-	auto &scr = ((StringColumnReader &)reader);
-	uint32_t str_len = scr.fixed_width_string_length == 0 ? plain_data.read<uint32_t>() : scr.fixed_width_string_length;
-	plain_data.available(str_len);
-	auto actual_str_len = ((StringColumnReader &)reader).VerifyString(plain_data.ptr, str_len);
-	auto ret_str = string_t(plain_data.ptr, actual_str_len);
-	plain_data.inc(str_len);
-	return ret_str;
-}
-
-void StringParquetValueConversion::PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-	auto &scr = ((StringColumnReader &)reader);
-	uint32_t str_len = scr.fixed_width_string_length == 0 ? plain_data.read<uint32_t>() : scr.fixed_width_string_length;
-	plain_data.inc(str_len);
-}
-
-//===--------------------------------------------------------------------===//
-// List Column Reader
-//===--------------------------------------------------------------------===//
-idx_t ListColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-                             Vector &result_out) {
-	idx_t result_offset = 0;
-	auto result_ptr = FlatVector::GetData<list_entry_t>(result_out);
-	auto &result_mask = FlatVector::Validity(result_out);
-
-	if (pending_skips > 0) {
-		ApplyPendingSkips(pending_skips);
-	}
-
-	D_ASSERT(ListVector::GetListSize(result_out) == 0);
-	// if an individual list is longer than STANDARD_VECTOR_SIZE we actually have to loop the child read to fill it
-	bool finished = false;
-	while (!finished) {
-		idx_t child_actual_num_values = 0;
-
-		// check if we have any overflow from a previous read
-		if (overflow_child_count == 0) {
-			// we don't: read elements from the child reader
-			child_defines.zero();
-			child_repeats.zero();
-			// we don't know in advance how many values to read because of the beautiful repetition/definition setup
-			// we just read (up to) a vector from the child column, and see if we have read enough
-			// if we have not read enough, we read another vector
-			// if we have read enough, we leave any unhandled elements in the overflow vector for a subsequent read
-			auto child_req_num_values =
-			    MinValue<idx_t>(STANDARD_VECTOR_SIZE, child_column_reader->GroupRowsAvailable());
-			read_vector.ResetFromCache(read_cache);
-			child_actual_num_values = child_column_reader->Read(child_req_num_values, child_filter, child_defines_ptr,
-			                                                    child_repeats_ptr, read_vector);
-		} else {
-			// we do: use the overflow values
-			child_actual_num_values = overflow_child_count;
-			overflow_child_count = 0;
-		}
-
-		if (child_actual_num_values == 0) {
-			// no more elements available: we are done
-			break;
-		}
-		read_vector.Verify(child_actual_num_values);
-		idx_t current_chunk_offset = ListVector::GetListSize(result_out);
-
-		// hard-won piece of code this, modify at your own risk
-		// the intuition is that we have to only collapse values into lists that are repeated *on this level*
-		// the rest is pretty much handed up as-is as a single-valued list or NULL
-		idx_t child_idx;
-		for (child_idx = 0; child_idx < child_actual_num_values; child_idx++) {
-			if (child_repeats_ptr[child_idx] == max_repeat) {
-				// value repeats on this level, append
-				D_ASSERT(result_offset > 0);
-				result_ptr[result_offset - 1].length++;
-				continue;
-			}
-
-			if (result_offset >= num_values) {
-				// we ran out of output space
-				finished = true;
-				break;
-			}
-			if (child_defines_ptr[child_idx] >= max_define) {
-				// value has been defined down the stack, hence its NOT NULL
-				result_ptr[result_offset].offset = child_idx + current_chunk_offset;
-				result_ptr[result_offset].length = 1;
-			} else if (child_defines_ptr[child_idx] == max_define - 1) {
-				// empty list
-				result_ptr[result_offset].offset = child_idx + current_chunk_offset;
-				result_ptr[result_offset].length = 0;
-			} else {
-				// value is NULL somewhere up the stack
-				result_mask.SetInvalid(result_offset);
-				result_ptr[result_offset].offset = 0;
-				result_ptr[result_offset].length = 0;
-			}
-
-			repeat_out[result_offset] = child_repeats_ptr[child_idx];
-			define_out[result_offset] = child_defines_ptr[child_idx];
-
-			result_offset++;
-		}
-		// actually append the required elements to the child list
-		ListVector::Append(result_out, read_vector, child_idx);
-
-		// we have read more values from the child reader than we can fit into the result for this read
-		// we have to pass everything from child_idx to child_actual_num_values into the next call
-		if (child_idx < child_actual_num_values && result_offset == num_values) {
-			read_vector.Slice(read_vector, child_idx);
-			overflow_child_count = child_actual_num_values - child_idx;
-			read_vector.Verify(overflow_child_count);
-
-			// move values in the child repeats and defines *backward* by child_idx
-			for (idx_t repdef_idx = 0; repdef_idx < overflow_child_count; repdef_idx++) {
-				child_defines_ptr[repdef_idx] = child_defines_ptr[child_idx + repdef_idx];
-				child_repeats_ptr[repdef_idx] = child_repeats_ptr[child_idx + repdef_idx];
-			}
-		}
-	}
-	result_out.Verify(result_offset);
-	return result_offset;
-}
-
-ListColumnReader::ListColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
-                                   idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p,
-                                   unique_ptr<ColumnReader> child_column_reader_p)
-    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
-      child_column_reader(move(child_column_reader_p)), read_cache(ListType::GetChildType(Type())),
-      read_vector(read_cache), overflow_child_count(0) {
-
-	child_defines.resize(reader.allocator, STANDARD_VECTOR_SIZE);
-	child_repeats.resize(reader.allocator, STANDARD_VECTOR_SIZE);
-	child_defines_ptr = (uint8_t *)child_defines.ptr;
-	child_repeats_ptr = (uint8_t *)child_repeats.ptr;
-
-	child_filter.set();
-}
-
-// ListColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-//                             Vector &result_out)
-void ListColumnReader::ApplyPendingSkips(idx_t num_values) {
-	pending_skips -= num_values;
-
-	parquet_filter_t filter;
-	auto define_out = unique_ptr<uint8_t[]>(new uint8_t[num_values]);
-	auto repeat_out = unique_ptr<uint8_t[]>(new uint8_t[num_values]);
-	Vector result_out(Type());
-	Read(num_values, filter, define_out.get(), repeat_out.get(), result_out);
-}
-//===--------------------------------------------------------------------===//
-// Cast Column Reader
-//===--------------------------------------------------------------------===//
-CastColumnReader::CastColumnReader(unique_ptr<ColumnReader> child_reader_p, LogicalType target_type_p)
-    : ColumnReader(child_reader_p->Reader(), move(target_type_p), child_reader_p->Schema(), child_reader_p->FileIdx(),
-                   child_reader_p->MaxDefine(), child_reader_p->MaxRepeat()),
-      child_reader(move(child_reader_p)) {
-	vector<LogicalType> intermediate_types {child_reader->Type()};
-	intermediate_chunk.Initialize(intermediate_types);
-}
-
-unique_ptr<BaseStatistics> CastColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
-	// casting stats is not supported (yet)
-	return nullptr;
-}
-
-void CastColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
-	child_reader->InitializeRead(columns, protocol_p);
-}
-
-idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-                             Vector &result) {
-	intermediate_chunk.Reset();
-	auto &intermediate_vector = intermediate_chunk.data[0];
-
-	auto amount = child_reader->Read(num_values, filter, define_out, repeat_out, intermediate_vector);
-	if (!filter.all()) {
-		// work-around for filters: set all values that are filtered to NULL to prevent the cast from failing on
-		// uninitialized data
-		intermediate_vector.Normalify(amount);
-		auto &validity = FlatVector::Validity(intermediate_vector);
-		for (idx_t i = 0; i < amount; i++) {
-			if (!filter[i]) {
-				validity.SetInvalid(i);
-			}
-		}
-	}
-	VectorOperations::Cast(intermediate_vector, result, amount);
-	return amount;
-}
-
-void CastColumnReader::Skip(idx_t num_values) {
-	child_reader->Skip(num_values);
-}
-
-idx_t CastColumnReader::GroupRowsAvailable() {
-	return child_reader->GroupRowsAvailable();
-}
-
-//===--------------------------------------------------------------------===//
-// Struct Column Reader
-//===--------------------------------------------------------------------===//
-StructColumnReader::StructColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
-                                       idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p,
-                                       vector<unique_ptr<ColumnReader>> child_readers_p)
-    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
-      child_readers(move(child_readers_p)) {
-	D_ASSERT(type.InternalType() == PhysicalType::STRUCT);
-}
-
-ColumnReader *StructColumnReader::GetChildReader(idx_t child_idx) {
-	return child_readers[child_idx].get();
-}
-
-void StructColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
-	for (auto &child : child_readers) {
-		child->InitializeRead(columns, protocol_p);
-	}
-}
-
-idx_t StructColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
-                               Vector &result) {
-	auto &struct_entries = StructVector::GetEntries(result);
-	D_ASSERT(StructType::GetChildTypes(Type()).size() == struct_entries.size());
-
-	if (pending_skips > 0) {
-		ApplyPendingSkips(pending_skips);
-	}
-
-	idx_t read_count = num_values;
-	for (idx_t i = 0; i < struct_entries.size(); i++) {
-		auto child_num_values = child_readers[i]->Read(num_values, filter, define_out, repeat_out, *struct_entries[i]);
-		if (i == 0) {
-			read_count = child_num_values;
-		} else if (read_count != child_num_values) {
-			throw std::runtime_error("Struct child row count mismatch");
-		}
-	}
-	// set the validity mask for this level
-	auto &validity = FlatVector::Validity(result);
-	for (idx_t i = 0; i < read_count; i++) {
-		if (define_out[i] < max_define) {
-			validity.SetInvalid(i);
-		}
-	}
-
-	return read_count;
-}
-
-void StructColumnReader::Skip(idx_t num_values) {
-	for (auto &child_reader : child_readers) {
-		child_reader->Skip(num_values);
-	}
-}
-
-void StructColumnReader::RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) {
-	for (auto &child : child_readers) {
-		child->RegisterPrefetch(transport, allow_merge);
-	}
-}
-
-uint64_t StructColumnReader::TotalCompressedSize() {
-	uint64_t size = 0;
-	for (auto &child : child_readers) {
-		size += child->TotalCompressedSize();
-	}
-	return size;
-}
-
-static bool TypeHasExactRowCount(const LogicalType &type) {
-	switch (type.id()) {
-	case LogicalTypeId::LIST:
-	case LogicalTypeId::MAP:
-		return false;
-	case LogicalTypeId::STRUCT:
-		for (auto &kv : StructType::GetChildTypes(type)) {
-			if (TypeHasExactRowCount(kv.second.id())) {
-				return true;
-			}
-		}
-		return false;
-	default:
-		return true;
-	}
-}
-
-idx_t StructColumnReader::GroupRowsAvailable() {
-	for (idx_t i = 0; i < child_readers.size(); i++) {
-		if (TypeHasExactRowCount(child_readers[i]->Type())) {
-			return child_readers[i]->GroupRowsAvailable();
-		}
-	}
-	return child_readers[0]->GroupRowsAvailable();
-}
-
-//===--------------------------------------------------------------------===//
-// Decimal Column Reader
-//===--------------------------------------------------------------------===//
-template <class DUCKDB_PHYSICAL_TYPE, bool FIXED_LENGTH>
-struct DecimalParquetValueConversion {
-	static DUCKDB_PHYSICAL_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)dict.ptr;
-		return dict_ptr[offset];
-	}
-
-	static DUCKDB_PHYSICAL_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		idx_t byte_len;
-		if (FIXED_LENGTH) {
-			byte_len = (idx_t)reader.Schema().type_length; /* sure, type length needs to be a signed int */
-		} else {
-			byte_len = plain_data.read<uint32_t>();
-		}
-		plain_data.available(byte_len);
-		auto res =
-		    ParquetDecimalUtils::ReadDecimalValue<DUCKDB_PHYSICAL_TYPE>((const_data_ptr_t)plain_data.ptr, byte_len);
-
-		plain_data.inc(byte_len);
-		return res;
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		uint32_t decimal_len = FIXED_LENGTH ? reader.Schema().type_length : plain_data.read<uint32_t>();
-		plain_data.inc(decimal_len);
-	}
-};
-
-template <class DUCKDB_PHYSICAL_TYPE, bool FIXED_LENGTH>
-class DecimalColumnReader
-    : public TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
-                                   DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>> {
-
-public:
-	DecimalColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, // NOLINT
-	                    idx_t file_idx_p, idx_t max_define_p, idx_t max_repeat_p)
-	    : TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
-	                            DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>>(
-	          reader, move(type_p), schema_p, file_idx_p, max_define_p, max_repeat_p) {};
-
-protected:
-	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
-		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(DUCKDB_PHYSICAL_TYPE));
-		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)this->dict->ptr;
-		for (idx_t i = 0; i < num_entries; i++) {
-			dict_ptr[i] =
-			    DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>::PlainRead(*dictionary_data, *this);
-		}
-	}
-};
-
-template <bool FIXED_LENGTH>
-static unique_ptr<ColumnReader> CreateDecimalReaderInternal(ParquetReader &reader, const LogicalType &type_p,
-                                                            const SchemaElement &schema_p, idx_t file_idx_p,
-                                                            idx_t max_define, idx_t max_repeat) {
-	switch (type_p.InternalType()) {
-	case PhysicalType::INT16:
-		return make_unique<DecimalColumnReader<int16_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
-		                                                               max_repeat);
-	case PhysicalType::INT32:
-		return make_unique<DecimalColumnReader<int32_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
-		                                                               max_repeat);
-	case PhysicalType::INT64:
-		return make_unique<DecimalColumnReader<int64_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
-		                                                               max_repeat);
-	case PhysicalType::INT128:
-		return make_unique<DecimalColumnReader<hugeint_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p,
-		                                                                 max_define, max_repeat);
-	default:
-		throw InternalException("Unrecognized type for Decimal");
-	}
-}
-
-unique_ptr<ColumnReader> ParquetDecimalUtils::CreateReader(ParquetReader &reader, const LogicalType &type_p,
-                                                           const SchemaElement &schema_p, idx_t file_idx_p,
-                                                           idx_t max_define, idx_t max_repeat) {
-	if (schema_p.__isset.type_length) {
-		return CreateDecimalReaderInternal<true>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	} else {
-		return CreateDecimalReaderInternal<false>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	}
-}
-
-//===--------------------------------------------------------------------===//
-// UUID Column Reader
-//===--------------------------------------------------------------------===//
-struct UUIDValueConversion {
-	static hugeint_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		auto dict_ptr = (hugeint_t *)dict.ptr;
-		return dict_ptr[offset];
-	}
-
-	static hugeint_t ReadParquetUUID(const_data_ptr_t input) {
-		hugeint_t result;
-		result.lower = 0;
-		uint64_t unsigned_upper = 0;
-		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
-			unsigned_upper <<= 8;
-			unsigned_upper += input[i];
-		}
-		for (idx_t i = sizeof(uint64_t); i < sizeof(hugeint_t); i++) {
-			result.lower <<= 8;
-			result.lower += input[i];
-		}
-		result.upper = unsigned_upper;
-		result.upper ^= (int64_t(1) << 63);
-		return result;
-	}
-
-	static hugeint_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		idx_t byte_len = sizeof(hugeint_t);
-		plain_data.available(byte_len);
-		auto res = ReadParquetUUID((const_data_ptr_t)plain_data.ptr);
-
-		plain_data.inc(byte_len);
-		return res;
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		plain_data.inc(sizeof(hugeint_t));
-	}
-};
-
-class UUIDColumnReader : public TemplatedColumnReader<hugeint_t, UUIDValueConversion> {
-
-public:
-	UUIDColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
-	                 idx_t max_define_p, idx_t max_repeat_p)
-	    : TemplatedColumnReader<hugeint_t, UUIDValueConversion>(reader, move(type_p), schema_p, file_idx_p,
-	                                                            max_define_p, max_repeat_p) {};
-
-protected:
-	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
-		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(hugeint_t));
-		auto dict_ptr = (hugeint_t *)this->dict->ptr;
-		for (idx_t i = 0; i < num_entries; i++) {
-			dict_ptr[i] = UUIDValueConversion::PlainRead(*dictionary_data, *this);
-		}
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Interval Column Reader
-//===--------------------------------------------------------------------===//
-struct IntervalValueConversion {
-	static constexpr const idx_t PARQUET_INTERVAL_SIZE = 12;
-
-	static interval_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
-		auto dict_ptr = (interval_t *)dict.ptr;
-		return dict_ptr[offset];
-	}
-
-	static interval_t ReadParquetInterval(const_data_ptr_t input) {
-		interval_t result;
-		result.months = Load<uint32_t>(input);
-		result.days = Load<uint32_t>(input + sizeof(uint32_t));
-		result.micros = int64_t(Load<uint32_t>(input + sizeof(uint32_t) * 2)) * 1000;
-		return result;
-	}
-
-	static interval_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
-		idx_t byte_len = PARQUET_INTERVAL_SIZE;
-		plain_data.available(byte_len);
-		auto res = ReadParquetInterval((const_data_ptr_t)plain_data.ptr);
-
-		plain_data.inc(byte_len);
-		return res;
-	}
-
-	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
-		plain_data.inc(PARQUET_INTERVAL_SIZE);
-	}
-};
-
-class IntervalColumnReader : public TemplatedColumnReader<interval_t, IntervalValueConversion> {
-
-public:
-	IntervalColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
-	                     idx_t max_define_p, idx_t max_repeat_p)
-	    : TemplatedColumnReader<interval_t, IntervalValueConversion>(reader, move(type_p), schema_p, file_idx_p,
-	                                                                 max_define_p, max_repeat_p) {};
-
-protected:
-	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) override { // NOLINT
-		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(interval_t));
-		auto dict_ptr = (interval_t *)this->dict->ptr;
-		for (idx_t i = 0; i < num_entries; i++) {
-			dict_ptr[i] = IntervalValueConversion::PlainRead(*dictionary_data, *this);
-		}
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Create Column Reader
-//===--------------------------------------------------------------------===//
-template <class T>
-unique_ptr<ColumnReader> CreateDecimalReader(ParquetReader &reader, const LogicalType &type_p,
-                                             const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
-                                             idx_t max_repeat) {
-	switch (type_p.InternalType()) {
-	case PhysicalType::INT16:
-		return make_unique<TemplatedColumnReader<int16_t, TemplatedParquetValueConversion<T>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case PhysicalType::INT32:
-		return make_unique<TemplatedColumnReader<int32_t, TemplatedParquetValueConversion<T>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case PhysicalType::INT64:
-		return make_unique<TemplatedColumnReader<int64_t, TemplatedParquetValueConversion<T>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	default:
-		throw NotImplementedException("Unimplemented internal type for CreateDecimalReader");
-	}
-}
-
-unique_ptr<ColumnReader> ColumnReader::CreateReader(ParquetReader &reader, const LogicalType &type_p,
-                                                    const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
-                                                    idx_t max_repeat) {
-	switch (type_p.id()) {
-	case LogicalTypeId::BOOLEAN:
-		return make_unique<BooleanColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::UTINYINT:
-		return make_unique<TemplatedColumnReader<uint8_t, TemplatedParquetValueConversion<uint32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::USMALLINT:
-		return make_unique<TemplatedColumnReader<uint16_t, TemplatedParquetValueConversion<uint32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::UINTEGER:
-		return make_unique<TemplatedColumnReader<uint32_t, TemplatedParquetValueConversion<uint32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::UBIGINT:
-		return make_unique<TemplatedColumnReader<uint64_t, TemplatedParquetValueConversion<uint64_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::TINYINT:
-		return make_unique<TemplatedColumnReader<int8_t, TemplatedParquetValueConversion<int32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::SMALLINT:
-		return make_unique<TemplatedColumnReader<int16_t, TemplatedParquetValueConversion<int32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::INTEGER:
-		return make_unique<TemplatedColumnReader<int32_t, TemplatedParquetValueConversion<int32_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::BIGINT:
-		return make_unique<TemplatedColumnReader<int64_t, TemplatedParquetValueConversion<int64_t>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::FLOAT:
-		return make_unique<TemplatedColumnReader<float, TemplatedParquetValueConversion<float>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::DOUBLE:
-		return make_unique<TemplatedColumnReader<double, TemplatedParquetValueConversion<double>>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::TIMESTAMP:
-		switch (schema_p.type) {
-		case Type::INT96:
-			return make_unique<CallbackColumnReader<Int96, timestamp_t, ImpalaTimestampToTimestamp>>(
-			    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-		case Type::INT64:
-			switch (schema_p.converted_type) {
-			case ConvertedType::TIMESTAMP_MICROS:
-				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMicrosToTimestamp>>(
-				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-			case ConvertedType::TIMESTAMP_MILLIS:
-				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMsToTimestamp>>(
-				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-			default:
-				break;
-			}
-		default:
-			break;
-		}
-		break;
-	case LogicalTypeId::DATE:
-		return make_unique<CallbackColumnReader<int32_t, date_t, ParquetIntToDate>>(reader, type_p, schema_p,
-		                                                                            file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::TIME:
-		return make_unique<CallbackColumnReader<int64_t, dtime_t, ParquetIntToTime>>(
-		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::VARCHAR:
-		return make_unique<StringColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::DECIMAL:
-		// we have to figure out what kind of int we need
-		switch (schema_p.type) {
-		case Type::INT32:
-			return CreateDecimalReader<int32_t>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-		case Type::INT64:
-			return CreateDecimalReader<int64_t>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-		case Type::BYTE_ARRAY:
-		case Type::FIXED_LEN_BYTE_ARRAY:
-			return ParquetDecimalUtils::CreateReader(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-		default:
-			throw NotImplementedException("Unrecognized Parquet type for Decimal");
-		}
-		break;
-	case LogicalTypeId::UUID:
-		return make_unique<UUIDColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	case LogicalTypeId::INTERVAL:
-		return make_unique<IntervalColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
-	default:
-		break;
-	}
-	throw NotImplementedException(type_p.ToString());
-}
-
-} // namespace duckdb
-
-
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// parquet_rle_bp_encoder.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-
-
-namespace duckdb {
-
-class RleBpEncoder {
-public:
-	RleBpEncoder(uint32_t bit_width);
-
-public:
-	//! NOTE: Prepare is only required if a byte count is required BEFORE writing
-	//! This is the case with e.g. writing repetition/definition levels
-	//! If GetByteCount() is not required, prepare can be safely skipped
-	void BeginPrepare(uint32_t first_value);
-	void PrepareValue(uint32_t value);
-	void FinishPrepare();
-
-	void BeginWrite(Serializer &writer, uint32_t first_value);
-	void WriteValue(Serializer &writer, uint32_t value);
-	void FinishWrite(Serializer &writer);
-
-	idx_t GetByteCount();
-
-private:
-	//! meta information
-	uint32_t byte_width;
-	//! RLE run information
-	idx_t byte_count;
-	idx_t run_count;
-	idx_t current_run_count;
-	uint32_t last_value;
-
-private:
-	void FinishRun();
-	void WriteRun(Serializer &writer);
-};
-
-} // namespace duckdb
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/common.hpp"
-#include "duckdb/common/exception.hpp"
-#include "duckdb/common/mutex.hpp"
-#include "duckdb/common/serializer/buffered_file_writer.hpp"
-#include "duckdb/common/types/chunk_collection.hpp"
-#include "duckdb/common/types/date.hpp"
-#include "duckdb/common/types/hugeint.hpp"
-#include "duckdb/common/types/time.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#include "duckdb/common/serializer/buffered_serializer.hpp"
-#include "duckdb/common/operator/comparison_operators.hpp"
-#endif
-
-
-
-
-
-namespace duckdb {
-
-using namespace duckdb_parquet; // NOLINT
-using namespace duckdb_miniz;   // NOLINT
-
-using duckdb_parquet::format::CompressionCodec;
-using duckdb_parquet::format::ConvertedType;
-using duckdb_parquet::format::Encoding;
-using duckdb_parquet::format::FieldRepetitionType;
-using duckdb_parquet::format::FileMetaData;
-using duckdb_parquet::format::PageHeader;
-using duckdb_parquet::format::PageType;
-using ParquetRowGroup = duckdb_parquet::format::RowGroup;
-using duckdb_parquet::format::Type;
-
-#define PARQUET_DEFINE_VALID 65535
-
-static void VarintEncode(uint32_t val, Serializer &ser) {
-	do {
-		uint8_t byte = val & 127;
-		val >>= 7;
-		if (val != 0) {
-			byte |= 128;
-		}
-		ser.Write<uint8_t>(byte);
-	} while (val != 0);
-}
-
-static uint8_t GetVarintSize(uint32_t val) {
-	uint8_t res = 0;
-	do {
-		val >>= 7;
-		res++;
-	} while (val != 0);
-	return res;
-}
-
-//===--------------------------------------------------------------------===//
-// ColumnWriterStatistics
-//===--------------------------------------------------------------------===//
-ColumnWriterStatistics::~ColumnWriterStatistics() {
-}
-
-string ColumnWriterStatistics::GetMin() {
-	return string();
-}
-
-string ColumnWriterStatistics::GetMax() {
-	return string();
-}
-
-string ColumnWriterStatistics::GetMinValue() {
-	return string();
-}
-
-string ColumnWriterStatistics::GetMaxValue() {
-	return string();
-}
-
-//===--------------------------------------------------------------------===//
-// RleBpEncoder
-//===--------------------------------------------------------------------===//
-RleBpEncoder::RleBpEncoder(uint32_t bit_width)
-    : byte_width((bit_width + 7) / 8), byte_count(idx_t(-1)), run_count(idx_t(-1)) {
-}
-
-// we always RLE everything (for now)
-void RleBpEncoder::BeginPrepare(uint32_t first_value) {
-	byte_count = 0;
-	run_count = 1;
-	current_run_count = 1;
-	last_value = first_value;
-}
-
-void RleBpEncoder::FinishRun() {
-	// last value, or value has changed
-	// write out the current run
-	byte_count += GetVarintSize(current_run_count << 1) + byte_width;
-	current_run_count = 1;
-	run_count++;
-}
-
-void RleBpEncoder::PrepareValue(uint32_t value) {
-	if (value != last_value) {
-		FinishRun();
-		last_value = value;
-	} else {
-		current_run_count++;
-	}
-}
-
-void RleBpEncoder::FinishPrepare() {
-	FinishRun();
-}
-
-idx_t RleBpEncoder::GetByteCount() {
-	D_ASSERT(byte_count != idx_t(-1));
-	return byte_count;
-}
-
-void RleBpEncoder::BeginWrite(Serializer &writer, uint32_t first_value) {
-	// start the RLE runs
-	last_value = first_value;
-	current_run_count = 1;
-}
-
-void RleBpEncoder::WriteRun(Serializer &writer) {
-	// write the header of the run
-	VarintEncode(current_run_count << 1, writer);
-	// now write the value
-	switch (byte_width) {
-	case 1:
-		writer.Write<uint8_t>(last_value);
-		break;
-	case 2:
-		writer.Write<uint16_t>(last_value);
-		break;
-	case 3:
-		writer.Write<uint8_t>(last_value & 0xFF);
-		writer.Write<uint8_t>((last_value >> 8) & 0xFF);
-		writer.Write<uint8_t>((last_value >> 16) & 0xFF);
-		break;
-	case 4:
-		writer.Write<uint32_t>(last_value);
-		break;
-	default:
-		throw InternalException("unsupported byte width for RLE encoding");
-	}
-	current_run_count = 1;
-}
-
-void RleBpEncoder::WriteValue(Serializer &writer, uint32_t value) {
-	if (value != last_value) {
-		WriteRun(writer);
-		last_value = value;
-	} else {
-		current_run_count++;
-	}
-}
-
-void RleBpEncoder::FinishWrite(Serializer &writer) {
-	WriteRun(writer);
-}
-
-//===--------------------------------------------------------------------===//
-// ColumnWriter
-//===--------------------------------------------------------------------===//
-ColumnWriter::ColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-                           idx_t max_define, bool can_have_nulls)
-    : writer(writer), schema_idx(schema_idx), schema_path(move(schema_path_p)), max_repeat(max_repeat),
-      max_define(max_define), can_have_nulls(can_have_nulls), null_count(0) {
-}
-ColumnWriter::~ColumnWriter() {
-}
-
-ColumnWriterState::~ColumnWriterState() {
-}
-
-void ColumnWriter::CompressPage(BufferedSerializer &temp_writer, size_t &compressed_size, data_ptr_t &compressed_data,
-                                unique_ptr<data_t[]> &compressed_buf) {
-	switch (writer.codec) {
-	case CompressionCodec::UNCOMPRESSED:
-		compressed_size = temp_writer.blob.size;
-		compressed_data = temp_writer.blob.data.get();
-		break;
-	case CompressionCodec::SNAPPY: {
-		compressed_size = duckdb_snappy::MaxCompressedLength(temp_writer.blob.size);
-		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
-		duckdb_snappy::RawCompress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size,
-		                           (char *)compressed_buf.get(), &compressed_size);
-		compressed_data = compressed_buf.get();
-		D_ASSERT(compressed_size <= duckdb_snappy::MaxCompressedLength(temp_writer.blob.size));
-		break;
-	}
-	case CompressionCodec::GZIP: {
-		MiniZStream s;
-		compressed_size = s.MaxCompressedLength(temp_writer.blob.size);
-		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
-		s.Compress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size, (char *)compressed_buf.get(),
-		           &compressed_size);
-		compressed_data = compressed_buf.get();
-		break;
-	}
-	case CompressionCodec::ZSTD: {
-		compressed_size = duckdb_zstd::ZSTD_compressBound(temp_writer.blob.size);
-		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
-		compressed_size = duckdb_zstd::ZSTD_compress((void *)compressed_buf.get(), compressed_size,
-		                                             (const void *)temp_writer.blob.data.get(), temp_writer.blob.size,
-		                                             ZSTD_CLEVEL_DEFAULT);
-		compressed_data = compressed_buf.get();
-		break;
-	}
-	default:
-		throw InternalException("Unsupported codec for Parquet Writer");
-	}
-
-	if (compressed_size > idx_t(NumericLimits<int32_t>::Maximum())) {
-		throw InternalException("Parquet writer: %d compressed page size out of range for type integer",
-		                        temp_writer.blob.size);
-	}
-}
-
-class ColumnWriterPageState {
-public:
-	virtual ~ColumnWriterPageState() {
-	}
-};
-
-struct PageInformation {
-	idx_t offset = 0;
-	idx_t row_count = 0;
-	idx_t empty_count = 0;
-	idx_t estimated_page_size = 0;
-};
-
-struct PageWriteInformation {
-	PageHeader page_header;
-	unique_ptr<BufferedSerializer> temp_writer;
-	unique_ptr<ColumnWriterPageState> page_state;
-	idx_t write_page_idx = 0;
-	idx_t write_count = 0;
-	idx_t max_write_count = 0;
-	size_t compressed_size;
-	data_ptr_t compressed_data;
-	unique_ptr<data_t[]> compressed_buf;
-};
-
-class StandardColumnWriterState : public ColumnWriterState {
-public:
-	StandardColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
-	    : row_group(row_group), col_idx(col_idx) {
-		page_info.emplace_back();
-	}
-	~StandardColumnWriterState() override = default;
-
-	duckdb_parquet::format::RowGroup &row_group;
-	idx_t col_idx;
-	vector<PageInformation> page_info;
-	vector<PageWriteInformation> write_info;
-	unique_ptr<ColumnWriterStatistics> stats_state;
-	idx_t current_page = 0;
-};
-
-unique_ptr<ColumnWriterState> ColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
-	auto result = make_unique<StandardColumnWriterState>(row_group, row_group.columns.size());
-
-	duckdb_parquet::format::ColumnChunk column_chunk;
-	column_chunk.__isset.meta_data = true;
-	column_chunk.meta_data.codec = writer.codec;
-	column_chunk.meta_data.path_in_schema = schema_path;
-	column_chunk.meta_data.num_values = 0;
-	column_chunk.meta_data.type = writer.file_meta_data.schema[schema_idx].type;
-	row_group.columns.push_back(move(column_chunk));
-
-	return move(result);
-}
-
-void ColumnWriter::HandleRepeatLevels(ColumnWriterState &state, ColumnWriterState *parent, idx_t count,
-                                      idx_t max_repeat) {
-	if (!parent) {
-		// no repeat levels without a parent node
-		return;
-	}
-	while (state.repetition_levels.size() < parent->repetition_levels.size()) {
-		state.repetition_levels.push_back(parent->repetition_levels[state.repetition_levels.size()]);
-	}
-}
-
-void ColumnWriter::HandleDefineLevels(ColumnWriterState &state, ColumnWriterState *parent, ValidityMask &validity,
-                                      idx_t count, uint16_t define_value, uint16_t null_value) {
-	if (parent) {
-		// parent node: inherit definition level from the parent
-		idx_t vector_index = 0;
-		while (state.definition_levels.size() < parent->definition_levels.size()) {
-			idx_t current_index = state.definition_levels.size();
-			if (parent->definition_levels[current_index] != PARQUET_DEFINE_VALID) {
-				state.definition_levels.push_back(parent->definition_levels[current_index]);
-			} else if (validity.RowIsValid(vector_index)) {
-				state.definition_levels.push_back(define_value);
-			} else {
-				if (!can_have_nulls) {
-					throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
-				}
-				null_count++;
-				state.definition_levels.push_back(null_value);
-			}
-			if (parent->is_empty.empty() || !parent->is_empty[current_index]) {
-				vector_index++;
-			}
-		}
-	} else {
-		// no parent: set definition levels only from this validity mask
-		for (idx_t i = 0; i < count; i++) {
-			if (validity.RowIsValid(i)) {
-				state.definition_levels.push_back(define_value);
-			} else {
-				if (!can_have_nulls) {
-					throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
-				}
-				null_count++;
-				state.definition_levels.push_back(null_value);
-			}
-		}
-	}
-}
-
-void ColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
-	auto &state = (StandardColumnWriterState &)state_p;
-	auto &col_chunk = state.row_group.columns[state.col_idx];
-
-	idx_t start = 0;
-	idx_t vcount = parent ? parent->definition_levels.size() - state.definition_levels.size() : count;
-	idx_t parent_index = state.definition_levels.size();
-	auto &validity = FlatVector::Validity(vector);
-	HandleRepeatLevels(state_p, parent, count, max_repeat);
-	HandleDefineLevels(state_p, parent, validity, count, max_define, max_define - 1);
-
-	idx_t vector_index = 0;
-	for (idx_t i = start; i < vcount; i++) {
-		auto &page_info = state.page_info.back();
-		page_info.row_count++;
-		col_chunk.meta_data.num_values++;
-		if (parent && !parent->is_empty.empty() && parent->is_empty[parent_index + i]) {
-			page_info.empty_count++;
-			continue;
-		}
-		if (validity.RowIsValid(vector_index)) {
-			page_info.estimated_page_size += GetRowSize(vector, vector_index);
-			if (page_info.estimated_page_size >= MAX_UNCOMPRESSED_PAGE_SIZE) {
-				PageInformation new_info;
-				new_info.offset = page_info.offset + page_info.row_count;
-				state.page_info.push_back(new_info);
-			}
-		}
-		vector_index++;
-	}
-}
-
-unique_ptr<ColumnWriterPageState> ColumnWriter::InitializePageState() {
-	return nullptr;
-}
-
-void ColumnWriter::FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state) {
-}
-
-duckdb_parquet::format::Encoding::type ColumnWriter::GetEncoding() {
-	return Encoding::PLAIN;
-}
-
-void ColumnWriter::BeginWrite(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
-
-	// set up the page write info
-	state.stats_state = InitializeStatsState();
-	for (idx_t page_idx = 0; page_idx < state.page_info.size(); page_idx++) {
-		auto &page_info = state.page_info[page_idx];
-		if (page_info.row_count == 0) {
-			D_ASSERT(page_idx + 1 == state.page_info.size());
-			state.page_info.erase(state.page_info.begin() + page_idx);
-			break;
-		}
-		PageWriteInformation write_info;
-		// set up the header
-		auto &hdr = write_info.page_header;
-		hdr.compressed_page_size = 0;
-		hdr.uncompressed_page_size = 0;
-		hdr.type = PageType::DATA_PAGE;
-		hdr.__isset.data_page_header = true;
-
-		hdr.data_page_header.num_values = page_info.row_count;
-		hdr.data_page_header.encoding = GetEncoding();
-		hdr.data_page_header.definition_level_encoding = Encoding::RLE;
-		hdr.data_page_header.repetition_level_encoding = Encoding::RLE;
-
-		write_info.temp_writer = make_unique<BufferedSerializer>();
-		write_info.write_count = page_info.empty_count;
-		write_info.max_write_count = page_info.row_count;
-		write_info.page_state = InitializePageState();
-
-		write_info.compressed_size = 0;
-		write_info.compressed_data = nullptr;
-
-		state.write_info.push_back(move(write_info));
-	}
-
-	// start writing the first page
-	NextPage(state_p);
-}
-
-void ColumnWriter::WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t offset,
-                               idx_t count) {
-	if (levels.empty() || count == 0) {
-		return;
-	}
-
-	// write the levels using the RLE-BP encoding
-	auto bit_width = RleBpDecoder::ComputeBitWidth((max_value));
-	RleBpEncoder rle_encoder(bit_width);
-
-	rle_encoder.BeginPrepare(levels[offset]);
-	for (idx_t i = offset + 1; i < offset + count; i++) {
-		rle_encoder.PrepareValue(levels[i]);
-	}
-	rle_encoder.FinishPrepare();
-
-	// start off by writing the byte count as a uint32_t
-	temp_writer.Write<uint32_t>(rle_encoder.GetByteCount());
-	rle_encoder.BeginWrite(temp_writer, levels[offset]);
-	for (idx_t i = offset + 1; i < offset + count; i++) {
-		rle_encoder.WriteValue(temp_writer, levels[i]);
-	}
-	rle_encoder.FinishWrite(temp_writer);
-}
-
-void ColumnWriter::NextPage(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
-
-	if (state.current_page > 0) {
-		// need to flush the current page
-		FlushPage(state_p);
-	}
-	if (state.current_page >= state.write_info.size()) {
-		state.current_page = state.write_info.size() + 1;
-		return;
-	}
-	auto &page_info = state.page_info[state.current_page];
-	auto &write_info = state.write_info[state.current_page];
-	state.current_page++;
-
-	auto &temp_writer = *write_info.temp_writer;
-
-	// write the repetition levels
-	WriteLevels(temp_writer, state.repetition_levels, max_repeat, page_info.offset, page_info.row_count);
-
-	// write the definition levels
-	WriteLevels(temp_writer, state.definition_levels, max_define, page_info.offset, page_info.row_count);
-}
-
-void ColumnWriter::FlushPage(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
-	D_ASSERT(state.current_page > 0);
-	if (state.current_page > state.write_info.size()) {
-		return;
-	}
-
-	// compress the page info
-	auto &write_info = state.write_info[state.current_page - 1];
-	auto &temp_writer = *write_info.temp_writer;
-	auto &hdr = write_info.page_header;
-
-	FlushPageState(temp_writer, write_info.page_state.get());
-
-	// now that we have finished writing the data we know the uncompressed size
-	if (temp_writer.blob.size > idx_t(NumericLimits<int32_t>::Maximum())) {
-		throw InternalException("Parquet writer: %d uncompressed page size out of range for type integer",
-		                        temp_writer.blob.size);
-	}
-	hdr.uncompressed_page_size = temp_writer.blob.size;
-
-	// compress the data
-	CompressPage(temp_writer, write_info.compressed_size, write_info.compressed_data, write_info.compressed_buf);
-	hdr.compressed_page_size = write_info.compressed_size;
-	D_ASSERT(hdr.uncompressed_page_size > 0);
-	D_ASSERT(hdr.compressed_page_size > 0);
-
-	if (write_info.compressed_buf) {
-		// if the data has been compressed, we no longer need the compressed data
-		D_ASSERT(write_info.compressed_buf.get() == write_info.compressed_data);
-		write_info.temp_writer.reset();
-	}
-}
-
-unique_ptr<ColumnWriterStatistics> ColumnWriter::InitializeStatsState() {
-	return make_unique<ColumnWriterStatistics>();
-}
-
-void ColumnWriter::WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats,
-                               ColumnWriterPageState *page_state, Vector &input_column, idx_t chunk_start,
-                               idx_t chunk_end) {
-	throw InternalException("WriteVector unsupported for struct/list column writers");
-}
-
-idx_t ColumnWriter::GetRowSize(Vector &vector, idx_t index) {
-	throw InternalException("GetRowSize unsupported for struct/list column writers");
-}
-
-void ColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
-	auto &state = (StandardColumnWriterState &)state_p;
-
-	idx_t remaining = count;
-	idx_t offset = 0;
-	while (remaining > 0) {
-		auto &write_info = state.write_info[state.current_page - 1];
-		if (!write_info.temp_writer) {
-			throw InternalException("Writes are not correctly aligned!?");
-		}
-		auto &temp_writer = *write_info.temp_writer;
-		idx_t write_count = MinValue<idx_t>(remaining, write_info.max_write_count - write_info.write_count);
-		D_ASSERT(write_count > 0);
-
-		WriteVector(temp_writer, state.stats_state.get(), write_info.page_state.get(), vector, offset,
-		            offset + write_count);
-
-		write_info.write_count += write_count;
-		if (write_info.write_count == write_info.max_write_count) {
-			NextPage(state_p);
-		}
-		offset += write_count;
-		remaining -= write_count;
-	}
-}
-
-void ColumnWriter::SetParquetStatistics(StandardColumnWriterState &state,
-                                        duckdb_parquet::format::ColumnChunk &column_chunk) {
-	if (max_repeat == 0) {
-		column_chunk.meta_data.statistics.null_count = null_count;
-		column_chunk.meta_data.statistics.__isset.null_count = true;
-		column_chunk.meta_data.__isset.statistics = true;
-	}
-	// set min/max/min_value/max_value
-	// this code is not going to win any beauty contests, but well
-	auto min = state.stats_state->GetMin();
-	if (!min.empty()) {
-		column_chunk.meta_data.statistics.min = move(min);
-		column_chunk.meta_data.statistics.__isset.min = true;
-		column_chunk.meta_data.__isset.statistics = true;
-	}
-	auto max = state.stats_state->GetMax();
-	if (!max.empty()) {
-		column_chunk.meta_data.statistics.max = move(max);
-		column_chunk.meta_data.statistics.__isset.max = true;
-		column_chunk.meta_data.__isset.statistics = true;
-	}
-	auto min_value = state.stats_state->GetMinValue();
-	if (!min_value.empty()) {
-		column_chunk.meta_data.statistics.min_value = move(min_value);
-		column_chunk.meta_data.statistics.__isset.min_value = true;
-		column_chunk.meta_data.__isset.statistics = true;
-	}
-	auto max_value = state.stats_state->GetMaxValue();
-	if (!max_value.empty()) {
-		column_chunk.meta_data.statistics.max_value = move(max_value);
-		column_chunk.meta_data.statistics.__isset.max_value = true;
-		column_chunk.meta_data.__isset.statistics = true;
-	}
-}
-
-void ColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
-	auto &state = (StandardColumnWriterState &)state_p;
-	auto &column_chunk = state.row_group.columns[state.col_idx];
-
-	// flush the last page (if any remains)
-	FlushPage(state);
-	// flush the dictionary
-	FlushDictionary(state, state.stats_state.get());
-
-	// record the start position of the pages for this column
-	column_chunk.meta_data.data_page_offset = writer.writer->GetTotalWritten();
-	SetParquetStatistics(state, column_chunk);
-
-	// write the individual pages to disk
-	for (auto &write_info : state.write_info) {
-		D_ASSERT(write_info.page_header.uncompressed_page_size > 0);
-		write_info.page_header.write(writer.protocol.get());
-		writer.writer->WriteData(write_info.compressed_data, write_info.compressed_size);
-	}
-	column_chunk.meta_data.total_compressed_size =
-	    writer.writer->GetTotalWritten() - column_chunk.meta_data.data_page_offset;
-}
-
-void ColumnWriter::WriteDictionary(ColumnWriterState &state_p, unique_ptr<BufferedSerializer> temp_writer,
-                                   idx_t row_count) {
-	auto &state = (StandardColumnWriterState &)state_p;
-	D_ASSERT(temp_writer);
-	D_ASSERT(temp_writer->blob.size > 0);
-
-	// write the dictionary page header
-	PageWriteInformation write_info;
-	// set up the header
-	auto &hdr = write_info.page_header;
-	hdr.uncompressed_page_size = temp_writer->blob.size;
-	hdr.type = PageType::DICTIONARY_PAGE;
-	hdr.__isset.dictionary_page_header = true;
-
-	hdr.dictionary_page_header.encoding = Encoding::PLAIN;
-	hdr.dictionary_page_header.is_sorted = false;
-	hdr.dictionary_page_header.num_values = row_count;
-
-	write_info.temp_writer = move(temp_writer);
-	write_info.write_count = 0;
-	write_info.max_write_count = 0;
-
-	// compress the contents of the dictionary page
-	CompressPage(*write_info.temp_writer, write_info.compressed_size, write_info.compressed_data,
-	             write_info.compressed_buf);
-	hdr.compressed_page_size = write_info.compressed_size;
-
-	// insert the dictionary page as the first page to write for this column
-	state.write_info.insert(state.write_info.begin(), move(write_info));
-}
-
-void ColumnWriter::FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats) {
-	// nop: standard pages do not have a dictionary
-}
-
-//===--------------------------------------------------------------------===//
-// Standard Column Writer
-//===--------------------------------------------------------------------===//
-template <class SRC, class T, class OP>
-class NumericStatisticsState : public ColumnWriterStatistics {
-public:
-	NumericStatisticsState() : min(NumericLimits<T>::Maximum()), max(NumericLimits<T>::Minimum()) {
-	}
-
-	T min;
-	T max;
-
-public:
-	bool HasStats() {
-		return min <= max;
-	}
-
-	string GetMin() override {
-		return NumericLimits<SRC>::IsSigned() ? GetMinValue() : string();
-	}
-	string GetMax() override {
-		return NumericLimits<SRC>::IsSigned() ? GetMaxValue() : string();
-	}
-	string GetMinValue() override {
-		return HasStats() ? string((char *)&min, sizeof(T)) : string();
-	}
-	string GetMaxValue() override {
-		return HasStats() ? string((char *)&max, sizeof(T)) : string();
-	}
-};
-
-struct BaseParquetOperator {
-	template <class SRC, class TGT>
-	static unique_ptr<ColumnWriterStatistics> InitializeStats() {
-		return make_unique<NumericStatisticsState<SRC, TGT, BaseParquetOperator>>();
-	}
-
-	template <class SRC, class TGT>
-	static void HandleStats(ColumnWriterStatistics *stats, SRC source_value, TGT target_value) {
-		auto &numeric_stats = (NumericStatisticsState<SRC, TGT, BaseParquetOperator> &)*stats;
-		if (LessThan::Operation(target_value, numeric_stats.min)) {
-			numeric_stats.min = target_value;
-		}
-		if (GreaterThan::Operation(target_value, numeric_stats.max)) {
-			numeric_stats.max = target_value;
-		}
-	}
-};
-
-struct ParquetCastOperator : public BaseParquetOperator {
-	template <class SRC, class TGT>
-	static TGT Operation(SRC input) {
-		return TGT(input);
-	}
-};
-
-struct ParquetTimestampNSOperator : public BaseParquetOperator {
-	template <class SRC, class TGT>
-	static TGT Operation(SRC input) {
-		return Timestamp::FromEpochNanoSeconds(input).value;
-	}
-};
-
-struct ParquetTimestampSOperator : public BaseParquetOperator {
-	template <class SRC, class TGT>
-	static TGT Operation(SRC input) {
-		return Timestamp::FromEpochSeconds(input).value;
-	}
-};
-
-struct ParquetHugeintOperator {
-	template <class SRC, class TGT>
-	static TGT Operation(SRC input) {
-		return Hugeint::Cast<double>(input);
-	}
-
-	template <class SRC, class TGT>
-	static unique_ptr<ColumnWriterStatistics> InitializeStats() {
-		return make_unique<ColumnWriterStatistics>();
-	}
-
-	template <class SRC, class TGT>
-	static void HandleStats(ColumnWriterStatistics *stats, SRC source_value, TGT target_value) {
-	}
-};
-
-template <class SRC, class TGT, class OP = ParquetCastOperator>
-static void TemplatedWritePlain(Vector &col, ColumnWriterStatistics *stats, idx_t chunk_start, idx_t chunk_end,
-                                ValidityMask &mask, Serializer &ser) {
-	auto *ptr = FlatVector::GetData<SRC>(col);
-	for (idx_t r = chunk_start; r < chunk_end; r++) {
-		if (mask.RowIsValid(r)) {
-			TGT target_value = OP::template Operation<SRC, TGT>(ptr[r]);
-			OP::template HandleStats<SRC, TGT>(stats, ptr[r], target_value);
-			ser.Write<TGT>(target_value);
-		}
-	}
-}
-
-template <class SRC, class TGT, class OP = ParquetCastOperator>
-class StandardColumnWriter : public ColumnWriter {
-public:
-	StandardColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, // NOLINT
-	                     idx_t max_repeat, idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~StandardColumnWriter() override = default;
-
-public:
-	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
-		return OP::template InitializeStats<SRC, TGT>();
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats, ColumnWriterPageState *page_state,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &mask = FlatVector::Validity(input_column);
-		TemplatedWritePlain<SRC, TGT, OP>(input_column, stats, chunk_start, chunk_end, mask, temp_writer);
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return sizeof(TGT);
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Boolean Column Writer
-//===--------------------------------------------------------------------===//
-class BooleanStatisticsState : public ColumnWriterStatistics {
-public:
-	BooleanStatisticsState() : min(true), max(false) {
-	}
-
-	bool min;
-	bool max;
-
-public:
-	bool HasStats() {
-		return !(min && !max);
-	}
-
-	string GetMin() override {
-		return GetMinValue();
-	}
-	string GetMax() override {
-		return GetMaxValue();
-	}
-	string GetMinValue() override {
-		return HasStats() ? string((char *)&min, sizeof(bool)) : string();
-	}
-	string GetMaxValue() override {
-		return HasStats() ? string((char *)&max, sizeof(bool)) : string();
-	}
-};
-
-class BooleanWriterPageState : public ColumnWriterPageState {
-public:
-	uint8_t byte = 0;
-	uint8_t byte_pos = 0;
-};
-
-class BooleanColumnWriter : public ColumnWriter {
-public:
-	BooleanColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                    idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~BooleanColumnWriter() override = default;
-
-public:
-	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
-		return make_unique<BooleanStatisticsState>();
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *state_p,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &stats = (BooleanStatisticsState &)*stats_p;
-		auto &state = (BooleanWriterPageState &)*state_p;
-		auto &mask = FlatVector::Validity(input_column);
-
-		auto *ptr = FlatVector::GetData<bool>(input_column);
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				// only encode if non-null
-				if (ptr[r]) {
-					stats.max = true;
-					state.byte |= 1 << state.byte_pos;
-				} else {
-					stats.min = false;
-				}
-				state.byte_pos++;
-
-				if (state.byte_pos == 8) {
-					temp_writer.Write<uint8_t>(state.byte);
-					state.byte = 0;
-					state.byte_pos = 0;
-				}
-			}
-		}
-	}
-
-	unique_ptr<ColumnWriterPageState> InitializePageState() override {
-		return make_unique<BooleanWriterPageState>();
-	}
-
-	void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state_p) override {
-		auto &state = (BooleanWriterPageState &)*state_p;
-		if (state.byte_pos > 0) {
-			temp_writer.Write<uint8_t>(state.byte);
-			state.byte = 0;
-			state.byte_pos = 0;
-		}
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return sizeof(bool);
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Decimal Column Writer
-//===--------------------------------------------------------------------===//
-static void WriteParquetDecimal(hugeint_t input, data_ptr_t result) {
-	bool positive = input >= 0;
-	// numbers are stored as two's complement so some muckery is required
-	if (!positive) {
-		input = NumericLimits<hugeint_t>::Maximum() + input + 1;
-	}
-	uint64_t high_bytes = uint64_t(input.upper);
-	uint64_t low_bytes = input.lower;
-
-	for (idx_t i = 0; i < sizeof(uint64_t); i++) {
-		auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
-		result[i] = (high_bytes >> shift_count) & 0xFF;
-	}
-	for (idx_t i = 0; i < sizeof(uint64_t); i++) {
-		auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
-		result[sizeof(uint64_t) + i] = (low_bytes >> shift_count) & 0xFF;
-	}
-	if (!positive) {
-		result[0] |= 0x80;
-	}
-}
-
-class FixedDecimalStatistics : public ColumnWriterStatistics {
-public:
-	FixedDecimalStatistics() : min(NumericLimits<hugeint_t>::Maximum()), max(NumericLimits<hugeint_t>::Minimum()) {
-	}
-
-	hugeint_t min;
-	hugeint_t max;
-
-public:
-	string GetStats(hugeint_t &input) {
-		data_t buffer[16];
-		WriteParquetDecimal(input, buffer);
-		return string((char *)buffer, 16);
-	}
-
-	bool HasStats() {
-		return min <= max;
-	}
-
-	void Update(hugeint_t &val) {
-		if (LessThan::Operation(val, min)) {
-			min = val;
-		}
-		if (GreaterThan::Operation(val, max)) {
-			max = val;
-		}
-	}
-
-	string GetMin() override {
-		return GetMinValue();
-	}
-	string GetMax() override {
-		return GetMaxValue();
-	}
-	string GetMinValue() override {
-		return HasStats() ? GetStats(min) : string();
-	}
-	string GetMaxValue() override {
-		return HasStats() ? GetStats(max) : string();
-	}
-};
-
-class FixedDecimalColumnWriter : public ColumnWriter {
-public:
-	FixedDecimalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                         idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~FixedDecimalColumnWriter() override = default;
-
-public:
-	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
-		return make_unique<FixedDecimalStatistics>();
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &mask = FlatVector::Validity(input_column);
-		auto *ptr = FlatVector::GetData<hugeint_t>(input_column);
-		auto &stats = (FixedDecimalStatistics &)*stats_p;
-
-		data_t temp_buffer[16];
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				stats.Update(ptr[r]);
-				WriteParquetDecimal(ptr[r], temp_buffer);
-				temp_writer.WriteData(temp_buffer, 16);
-			}
-		}
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return sizeof(hugeint_t);
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// UUID Column Writer
-//===--------------------------------------------------------------------===//
-class UUIDColumnWriter : public ColumnWriter {
-	static constexpr const idx_t PARQUET_UUID_SIZE = 16;
-
-public:
-	UUIDColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                 idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~UUIDColumnWriter() override = default;
-
-public:
-	static void WriteParquetUUID(hugeint_t input, data_ptr_t result) {
-		uint64_t high_bytes = input.upper ^ (int64_t(1) << 63);
-		uint64_t low_bytes = input.lower;
-
-		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
-			auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
-			result[i] = (high_bytes >> shift_count) & 0xFF;
-		}
-		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
-			auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
-			result[sizeof(uint64_t) + i] = (low_bytes >> shift_count) & 0xFF;
-		}
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &mask = FlatVector::Validity(input_column);
-		auto *ptr = FlatVector::GetData<hugeint_t>(input_column);
-
-		data_t temp_buffer[PARQUET_UUID_SIZE];
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				WriteParquetUUID(ptr[r], temp_buffer);
-				temp_writer.WriteData(temp_buffer, PARQUET_UUID_SIZE);
-			}
-		}
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return PARQUET_UUID_SIZE;
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Interval Column Writer
-//===--------------------------------------------------------------------===//
-class IntervalColumnWriter : public ColumnWriter {
-	static constexpr const idx_t PARQUET_INTERVAL_SIZE = 12;
-
-public:
-	IntervalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                     idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~IntervalColumnWriter() override = default;
-
-public:
-	static void WriteParquetInterval(interval_t input, data_ptr_t result) {
-		if (input.days < 0 || input.months < 0 || input.micros < 0) {
-			throw IOException("Parquet files do not support negative intervals");
-		}
-		Store<uint32_t>(input.months, result);
-		Store<uint32_t>(input.days, result + sizeof(uint32_t));
-		Store<uint32_t>(input.micros / 1000, result + sizeof(uint32_t) * 2);
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &mask = FlatVector::Validity(input_column);
-		auto *ptr = FlatVector::GetData<interval_t>(input_column);
-
-		data_t temp_buffer[PARQUET_INTERVAL_SIZE];
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				WriteParquetInterval(ptr[r], temp_buffer);
-				temp_writer.WriteData(temp_buffer, PARQUET_INTERVAL_SIZE);
-			}
-		}
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return PARQUET_INTERVAL_SIZE;
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// String Column Writer
-//===--------------------------------------------------------------------===//
-class StringStatisticsState : public ColumnWriterStatistics {
-	static constexpr const idx_t MAX_STRING_STATISTICS_SIZE = 10000;
-
-public:
-	StringStatisticsState() : has_stats(false), values_too_big(false), min(), max() {
-	}
-
-	bool has_stats;
-	bool values_too_big;
-	string min;
-	string max;
-
-public:
-	bool HasStats() {
-		return has_stats;
-	}
-
-	void Update(const string_t &val) {
-		if (values_too_big) {
-			return;
-		}
-		auto str_len = val.GetSize();
-		if (str_len > MAX_STRING_STATISTICS_SIZE) {
-			// we avoid gathering stats when individual string values are too large
-			// this is because the statistics are copied into the Parquet file meta data in uncompressed format
-			// ideally we avoid placing several mega or giga-byte long strings there
-			// we put a threshold of 10KB, if we see strings that exceed this threshold we avoid gathering stats
-			values_too_big = true;
-			min = string();
-			max = string();
-			return;
-		}
-		if (!has_stats || LessThan::Operation(val, string_t(min))) {
-			min = val.GetString();
-		}
-		if (!has_stats || GreaterThan::Operation(val, string_t(max))) {
-			max = val.GetString();
-		}
-		has_stats = true;
-	}
-
-	string GetMin() override {
-		return GetMinValue();
-	}
-	string GetMax() override {
-		return GetMaxValue();
-	}
-	string GetMinValue() override {
-		return HasStats() ? min : string();
-	}
-	string GetMaxValue() override {
-		return HasStats() ? max : string();
-	}
-};
-
-class StringColumnWriter : public ColumnWriter {
-public:
-	StringColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                   idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
-	}
-	~StringColumnWriter() override = default;
-
-public:
-	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
-		return make_unique<StringStatisticsState>();
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &mask = FlatVector::Validity(input_column);
-		auto &stats = (StringStatisticsState &)*stats_p;
-
-		auto *ptr = FlatVector::GetData<string_t>(input_column);
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				stats.Update(ptr[r]);
-				temp_writer.Write<uint32_t>(ptr[r].GetSize());
-				temp_writer.WriteData((const_data_ptr_t)ptr[r].GetDataUnsafe(), ptr[r].GetSize());
-			}
-		}
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		auto strings = FlatVector::GetData<string_t>(vector);
-		return strings[index].GetSize();
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Enum Column Writer
-//===--------------------------------------------------------------------===//
-class EnumWriterPageState : public ColumnWriterPageState {
-public:
-	explicit EnumWriterPageState(uint32_t bit_width) : encoder(bit_width), written_value(false) {
-	}
-
-	RleBpEncoder encoder;
-	bool written_value;
-};
-
-class EnumColumnWriter : public ColumnWriter {
-public:
-	EnumColumnWriter(ParquetWriter &writer, LogicalType enum_type_p, idx_t schema_idx, vector<string> schema_path_p,
-	                 idx_t max_repeat, idx_t max_define, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
-	      enum_type(move(enum_type_p)) {
-		bit_width = RleBpDecoder::ComputeBitWidth(EnumType::GetSize(enum_type));
-	}
-	~EnumColumnWriter() override = default;
-
-	LogicalType enum_type;
-	uint32_t bit_width;
-
-public:
-	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
-		return make_unique<StringStatisticsState>();
-	}
-
-	template <class T>
-	void WriteEnumInternal(Serializer &temp_writer, Vector &input_column, idx_t chunk_start, idx_t chunk_end,
-	                       EnumWriterPageState &page_state) {
-		auto &mask = FlatVector::Validity(input_column);
-		auto *ptr = FlatVector::GetData<T>(input_column);
-		for (idx_t r = chunk_start; r < chunk_end; r++) {
-			if (mask.RowIsValid(r)) {
-				if (!page_state.written_value) {
-					// first value
-					// write the bit-width as a one-byte entry
-					temp_writer.Write<uint8_t>(bit_width);
-					// now begin writing the actual value
-					page_state.encoder.BeginWrite(temp_writer, ptr[r]);
-					page_state.written_value = true;
-				} else {
-					page_state.encoder.WriteValue(temp_writer, ptr[r]);
-				}
-			}
-		}
-	}
-
-	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state_p,
-	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
-		auto &page_state = (EnumWriterPageState &)*page_state_p;
-		switch (enum_type.InternalType()) {
-		case PhysicalType::UINT8:
-			WriteEnumInternal<uint8_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
-			break;
-		case PhysicalType::UINT16:
-			WriteEnumInternal<uint16_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
-			break;
-		case PhysicalType::UINT32:
-			WriteEnumInternal<uint32_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
-			break;
-		default:
-			throw InternalException("Unsupported internal enum type");
-		}
-	}
-
-	unique_ptr<ColumnWriterPageState> InitializePageState() override {
-		return make_unique<EnumWriterPageState>(bit_width);
-	}
-
-	void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state_p) override {
-		auto &page_state = (EnumWriterPageState &)*state_p;
-		if (!page_state.written_value) {
-			// all values are null
-			// just write the bit width
-			temp_writer.Write<uint8_t>(bit_width);
-			return;
-		}
-		page_state.encoder.FinishWrite(temp_writer);
-	}
-
-	duckdb_parquet::format::Encoding::type GetEncoding() override {
-		return Encoding::RLE_DICTIONARY;
-	}
-
-	void FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats_p) override {
-		auto &stats = (StringStatisticsState &)*stats_p;
-		// write the enum values to a dictionary page
-		auto &enum_values = EnumType::GetValuesInsertOrder(enum_type);
-		auto enum_count = EnumType::GetSize(enum_type);
-		auto string_values = FlatVector::GetData<string_t>(enum_values);
-		// first write the contents of the dictionary page to a temporary buffer
-		auto temp_writer = make_unique<BufferedSerializer>();
-		for (idx_t r = 0; r < enum_count; r++) {
-			D_ASSERT(!FlatVector::IsNull(enum_values, r));
-			// update the statistics
-			stats.Update(string_values[r]);
-			// write this string value to the dictionary
-			temp_writer->Write<uint32_t>(string_values[r].GetSize());
-			temp_writer->WriteData((const_data_ptr_t)string_values[r].GetDataUnsafe(), string_values[r].GetSize());
-		}
-		// flush the dictionary page and add it to the to-be-written pages
-		WriteDictionary(state, move(temp_writer), enum_count);
-	}
-
-	idx_t GetRowSize(Vector &vector, idx_t index) override {
-		return (bit_width + 7) / 8;
-	}
-};
-
-//===--------------------------------------------------------------------===//
-// Struct Column Writer
-//===--------------------------------------------------------------------===//
-class StructColumnWriter : public ColumnWriter {
-public:
-	StructColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                   idx_t max_define, vector<unique_ptr<ColumnWriter>> child_writers_p, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
-	      child_writers(move(child_writers_p)) {
-	}
-	~StructColumnWriter() override = default;
-
-	vector<unique_ptr<ColumnWriter>> child_writers;
-
-public:
-	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
-	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
-
-	void BeginWrite(ColumnWriterState &state) override;
-	void Write(ColumnWriterState &state, Vector &vector, idx_t count) override;
-	void FinalizeWrite(ColumnWriterState &state) override;
-};
-
-class StructColumnWriterState : public ColumnWriterState {
-public:
-	StructColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
-	    : row_group(row_group), col_idx(col_idx) {
-	}
-	~StructColumnWriterState() override = default;
-
-	duckdb_parquet::format::RowGroup &row_group;
-	idx_t col_idx;
-	vector<unique_ptr<ColumnWriterState>> child_states;
-};
-
-unique_ptr<ColumnWriterState> StructColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
-	auto result = make_unique<StructColumnWriterState>(row_group, row_group.columns.size());
-
-	result->child_states.reserve(child_writers.size());
-	for (auto &child_writer : child_writers) {
-		result->child_states.push_back(child_writer->InitializeWriteState(row_group));
-	}
-	return move(result);
-}
-
-void StructColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
-	auto &state = (StructColumnWriterState &)state_p;
-
-	auto &validity = FlatVector::Validity(vector);
-	if (parent) {
-		// propagate empty entries from the parent
-		while (state.is_empty.size() < parent->is_empty.size()) {
-			state.is_empty.push_back(parent->is_empty[state.is_empty.size()]);
-		}
-	}
-	HandleRepeatLevels(state_p, parent, count, max_repeat);
-	HandleDefineLevels(state_p, parent, validity, count, PARQUET_DEFINE_VALID, max_define - 1);
-	auto &child_vectors = StructVector::GetEntries(vector);
-	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
-		child_writers[child_idx]->Prepare(*state.child_states[child_idx], &state_p, *child_vectors[child_idx], count);
-	}
-}
-
-void StructColumnWriter::BeginWrite(ColumnWriterState &state_p) {
-	auto &state = (StructColumnWriterState &)state_p;
-	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
-		child_writers[child_idx]->BeginWrite(*state.child_states[child_idx]);
-	}
-}
-
-void StructColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
-	auto &state = (StructColumnWriterState &)state_p;
-	auto &child_vectors = StructVector::GetEntries(vector);
-	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
-		child_writers[child_idx]->Write(*state.child_states[child_idx], *child_vectors[child_idx], count);
-	}
-}
-
-void StructColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
-	auto &state = (StructColumnWriterState &)state_p;
-	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
-		// we add the null count of the struct to the null count of the children
-		child_writers[child_idx]->null_count += null_count;
-		child_writers[child_idx]->FinalizeWrite(*state.child_states[child_idx]);
-	}
-}
-
-//===--------------------------------------------------------------------===//
-// List Column Writer
-//===--------------------------------------------------------------------===//
-class ListColumnWriter : public ColumnWriter {
-public:
-	ListColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
-	                 idx_t max_define, unique_ptr<ColumnWriter> child_writer_p, bool can_have_nulls)
-	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
-	      child_writer(move(child_writer_p)) {
-	}
-	~ListColumnWriter() override = default;
-
-	unique_ptr<ColumnWriter> child_writer;
-
-public:
-	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
-	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
-
-	void BeginWrite(ColumnWriterState &state) override;
-	void Write(ColumnWriterState &state, Vector &vector, idx_t count) override;
-	void FinalizeWrite(ColumnWriterState &state) override;
-};
-
-class ListColumnWriterState : public ColumnWriterState {
-public:
-	ListColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
-	    : row_group(row_group), col_idx(col_idx) {
-	}
-	~ListColumnWriterState() override = default;
-
-	duckdb_parquet::format::RowGroup &row_group;
-	idx_t col_idx;
-	unique_ptr<ColumnWriterState> child_state;
-	idx_t parent_index = 0;
-};
-
-unique_ptr<ColumnWriterState> ListColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
-	auto result = make_unique<ListColumnWriterState>(row_group, row_group.columns.size());
-	result->child_state = child_writer->InitializeWriteState(row_group);
-	return move(result);
-}
-
-void ListColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
-	auto &state = (ListColumnWriterState &)state_p;
-
-	auto list_data = FlatVector::GetData<list_entry_t>(vector);
-	auto &validity = FlatVector::Validity(vector);
-
-	// write definition levels and repeats
-	idx_t start = 0;
-	idx_t vcount = parent ? parent->definition_levels.size() - state.parent_index : count;
-	idx_t vector_index = 0;
-	for (idx_t i = start; i < vcount; i++) {
-		idx_t parent_index = state.parent_index + i;
-		if (parent && !parent->is_empty.empty() && parent->is_empty[parent_index]) {
-			state.definition_levels.push_back(parent->definition_levels[parent_index]);
-			state.repetition_levels.push_back(parent->repetition_levels[parent_index]);
-			state.is_empty.push_back(true);
-			continue;
-		}
-		auto first_repeat_level =
-		    parent && !parent->repetition_levels.empty() ? parent->repetition_levels[parent_index] : max_repeat;
-		if (parent && parent->definition_levels[parent_index] != PARQUET_DEFINE_VALID) {
-			state.definition_levels.push_back(parent->definition_levels[parent_index]);
-			state.repetition_levels.push_back(first_repeat_level);
-			state.is_empty.push_back(true);
-		} else if (validity.RowIsValid(vector_index)) {
-			// push the repetition levels
-			if (list_data[vector_index].length == 0) {
-				state.definition_levels.push_back(max_define);
-				state.is_empty.push_back(true);
-			} else {
-				state.definition_levels.push_back(PARQUET_DEFINE_VALID);
-				state.is_empty.push_back(false);
-			}
-			state.repetition_levels.push_back(first_repeat_level);
-			for (idx_t k = 1; k < list_data[vector_index].length; k++) {
-				state.repetition_levels.push_back(max_repeat + 1);
-				state.definition_levels.push_back(PARQUET_DEFINE_VALID);
-				state.is_empty.push_back(false);
-			}
-		} else {
-			if (!can_have_nulls) {
-				throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
-			}
-			state.definition_levels.push_back(max_define - 1);
-			state.repetition_levels.push_back(first_repeat_level);
-			state.is_empty.push_back(true);
-		}
-		vector_index++;
-	}
-	state.parent_index += vcount;
-
-	auto &list_child = ListVector::GetEntry(vector);
-	auto list_count = ListVector::GetListSize(vector);
-	child_writer->Prepare(*state.child_state, &state_p, list_child, list_count);
-}
-
-void ListColumnWriter::BeginWrite(ColumnWriterState &state_p) {
-	auto &state = (ListColumnWriterState &)state_p;
-	child_writer->BeginWrite(*state.child_state);
-}
-
-void ListColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
-	auto &state = (ListColumnWriterState &)state_p;
-
-	auto &list_child = ListVector::GetEntry(vector);
-	auto list_count = ListVector::GetListSize(vector);
-	child_writer->Write(*state.child_state, list_child, list_count);
-}
-
-void ListColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
-	auto &state = (ListColumnWriterState &)state_p;
-	child_writer->FinalizeWrite(*state.child_state);
-}
-
-//===--------------------------------------------------------------------===//
-// Create Column Writer
-//===--------------------------------------------------------------------===//
-unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(vector<duckdb_parquet::format::SchemaElement> &schemas,
-                                                             ParquetWriter &writer, const LogicalType &type,
-                                                             const string &name, vector<string> schema_path,
-                                                             idx_t max_repeat, idx_t max_define, bool can_have_nulls) {
-	auto null_type = can_have_nulls ? FieldRepetitionType::OPTIONAL : FieldRepetitionType::REQUIRED;
-	if (!can_have_nulls) {
-		max_define--;
-	}
-	idx_t schema_idx = schemas.size();
-	if (type.id() == LogicalTypeId::STRUCT) {
-		auto &child_types = StructType::GetChildTypes(type);
-		// set up the schema element for this struct
-		duckdb_parquet::format::SchemaElement schema_element;
-		schema_element.repetition_type = null_type;
-		schema_element.num_children = child_types.size();
-		schema_element.__isset.num_children = true;
-		schema_element.__isset.type = false;
-		schema_element.__isset.repetition_type = true;
-		schema_element.name = name;
-		schemas.push_back(move(schema_element));
-		schema_path.push_back(name);
-
-		// construct the child types recursively
-		vector<unique_ptr<ColumnWriter>> child_writers;
-		child_writers.reserve(child_types.size());
-		for (auto &child_type : child_types) {
-			child_writers.push_back(CreateWriterRecursive(schemas, writer, child_type.second, child_type.first,
-			                                              schema_path, max_repeat, max_define + 1));
-		}
-		return make_unique<StructColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                       move(child_writers), can_have_nulls);
-	}
-	if (type.id() == LogicalTypeId::LIST) {
-		auto &child_type = ListType::GetChildType(type);
-		// set up the two schema elements for the list
-		// for some reason we only set the converted type in the OPTIONAL element
-		// first an OPTIONAL element
-		duckdb_parquet::format::SchemaElement optional_element;
-		optional_element.repetition_type = null_type;
-		optional_element.num_children = 1;
-		optional_element.converted_type = ConvertedType::LIST;
-		optional_element.__isset.num_children = true;
-		optional_element.__isset.type = false;
-		optional_element.__isset.repetition_type = true;
-		optional_element.__isset.converted_type = true;
-		optional_element.name = name;
-		schemas.push_back(move(optional_element));
-		schema_path.push_back(name);
-
-		// then a REPEATED element
-		duckdb_parquet::format::SchemaElement repeated_element;
-		repeated_element.repetition_type = FieldRepetitionType::REPEATED;
-		repeated_element.num_children = 1;
-		repeated_element.__isset.num_children = true;
-		repeated_element.__isset.type = false;
-		repeated_element.__isset.repetition_type = true;
-		repeated_element.name = "list";
-		schemas.push_back(move(repeated_element));
-		schema_path.emplace_back("list");
-
-		auto child_writer =
-		    CreateWriterRecursive(schemas, writer, child_type, "element", schema_path, max_repeat + 1, max_define + 2);
-		return make_unique<ListColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                     move(child_writer), can_have_nulls);
-	}
-	if (type.id() == LogicalTypeId::MAP) {
-		// map type
-		// maps are stored as follows:
-		// <map-repetition> group <name> (MAP) {
-		// 	repeated group key_value {
-		// 		required <key-type> key;
-		// 		<value-repetition> <value-type> value;
-		// 	}
-		// }
-		// top map element
-		duckdb_parquet::format::SchemaElement top_element;
-		top_element.repetition_type = null_type;
-		top_element.num_children = 1;
-		top_element.converted_type = ConvertedType::MAP;
-		top_element.__isset.repetition_type = true;
-		top_element.__isset.num_children = true;
-		top_element.__isset.converted_type = true;
-		top_element.__isset.type = false;
-		top_element.name = name;
-		schemas.push_back(move(top_element));
-		schema_path.push_back(name);
-
-		// key_value element
-		duckdb_parquet::format::SchemaElement kv_element;
-		kv_element.repetition_type = FieldRepetitionType::REPEATED;
-		kv_element.num_children = 2;
-		kv_element.__isset.repetition_type = true;
-		kv_element.__isset.num_children = true;
-		kv_element.__isset.type = false;
-		kv_element.name = "key_value";
-		schemas.push_back(move(kv_element));
-		schema_path.emplace_back("key_value");
-
-		// construct the child types recursively
-		vector<LogicalType> kv_types {MapType::KeyType(type), MapType::ValueType(type)};
-		vector<string> kv_names {"key", "value"};
-		vector<unique_ptr<ColumnWriter>> child_writers;
-		child_writers.reserve(2);
-		for (idx_t i = 0; i < 2; i++) {
-			// key needs to be marked as REQUIRED
-			bool is_key = i == 0;
-			auto child_writer = CreateWriterRecursive(schemas, writer, kv_types[i], kv_names[i], schema_path,
-			                                          max_repeat + 1, max_define + 2, !is_key);
-			auto list_writer = make_unique<ListColumnWriter>(writer, schema_idx, schema_path, max_repeat, max_define,
-			                                                 move(child_writer), can_have_nulls);
-			child_writers.push_back(move(list_writer));
-		}
-		return make_unique<StructColumnWriter>(writer, schema_idx, schema_path, max_repeat, max_define,
-		                                       move(child_writers), can_have_nulls);
-	}
-	duckdb_parquet::format::SchemaElement schema_element;
-	schema_element.type = ParquetWriter::DuckDBTypeToParquetType(type);
-	schema_element.repetition_type = null_type;
-	schema_element.num_children = 0;
-	schema_element.__isset.num_children = true;
-	schema_element.__isset.type = true;
-	schema_element.__isset.repetition_type = true;
-	schema_element.name = name;
-	ParquetWriter::SetSchemaProperties(type, schema_element);
-	schemas.push_back(move(schema_element));
-	schema_path.push_back(name);
-
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN:
-		return make_unique<BooleanColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                        can_have_nulls);
-	case LogicalTypeId::TINYINT:
-		return make_unique<StandardColumnWriter<int8_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                          max_define, can_have_nulls);
-	case LogicalTypeId::SMALLINT:
-		return make_unique<StandardColumnWriter<int16_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                           max_define, can_have_nulls);
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::DATE:
-		return make_unique<StandardColumnWriter<int32_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                           max_define, can_have_nulls);
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_MS:
-		return make_unique<StandardColumnWriter<int64_t, int64_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                           max_define, can_have_nulls);
-	case LogicalTypeId::HUGEINT:
-		return make_unique<StandardColumnWriter<hugeint_t, double, ParquetHugeintOperator>>(
-		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
-	case LogicalTypeId::TIMESTAMP_NS:
-		return make_unique<StandardColumnWriter<int64_t, int64_t, ParquetTimestampNSOperator>>(
-		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return make_unique<StandardColumnWriter<int64_t, int64_t, ParquetTimestampSOperator>>(
-		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
-	case LogicalTypeId::UTINYINT:
-		return make_unique<StandardColumnWriter<uint8_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                           max_define, can_have_nulls);
-	case LogicalTypeId::USMALLINT:
-		return make_unique<StandardColumnWriter<uint16_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                            max_define, can_have_nulls);
-	case LogicalTypeId::UINTEGER:
-		return make_unique<StandardColumnWriter<uint32_t, uint32_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                             max_define, can_have_nulls);
-	case LogicalTypeId::UBIGINT:
-		return make_unique<StandardColumnWriter<uint64_t, uint64_t>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                             max_define, can_have_nulls);
-	case LogicalTypeId::FLOAT:
-		return make_unique<StandardColumnWriter<float, float>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                       max_define, can_have_nulls);
-	case LogicalTypeId::DOUBLE:
-		return make_unique<StandardColumnWriter<double, double>>(writer, schema_idx, move(schema_path), max_repeat,
-		                                                         max_define, can_have_nulls);
-	case LogicalTypeId::DECIMAL:
-		switch (type.InternalType()) {
-		case PhysicalType::INT16:
-			return make_unique<StandardColumnWriter<int16_t, int32_t>>(writer, schema_idx, move(schema_path),
-			                                                           max_repeat, max_define, can_have_nulls);
-		case PhysicalType::INT32:
-			return make_unique<StandardColumnWriter<int32_t, int32_t>>(writer, schema_idx, move(schema_path),
-			                                                           max_repeat, max_define, can_have_nulls);
-		case PhysicalType::INT64:
-			return make_unique<StandardColumnWriter<int64_t, int64_t>>(writer, schema_idx, move(schema_path),
-			                                                           max_repeat, max_define, can_have_nulls);
-		default:
-			return make_unique<FixedDecimalColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-			                                             can_have_nulls);
-		}
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		return make_unique<StringColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                       can_have_nulls);
-	case LogicalTypeId::UUID:
-		return make_unique<UUIDColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                     can_have_nulls);
-	case LogicalTypeId::INTERVAL:
-		return make_unique<IntervalColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
-		                                         can_have_nulls);
-	case LogicalTypeId::ENUM:
-		return make_unique<EnumColumnWriter>(writer, type, schema_idx, move(schema_path), max_repeat, max_define,
-		                                     can_have_nulls);
-	default:
-		throw InternalException("Unsupported type \"%s\" in Parquet writer", type.ToString());
-	}
-}
-
-} // namespace duckdb
-#define DUCKDB_EXTENSION_MAIN
-
-#include <string>
-#include <vector>
-#include <fstream>
-#include <iostream>
-
-
-
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// parquet_metadata.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-
-
-namespace duckdb {
-
-class ParquetMetaDataFunction : public TableFunction {
-public:
-	ParquetMetaDataFunction();
-};
-
-class ParquetSchemaFunction : public TableFunction {
-public:
-	ParquetSchemaFunction();
-};
-
-} // namespace duckdb
-
-//===----------------------------------------------------------------------===//
-//                         DuckDB
-//
-// zstd_file_system.hpp
-//
-//
-//===----------------------------------------------------------------------===//
-
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/compressed_file_system.hpp"
-#endif
-
-namespace duckdb {
-
-class ZStdFileSystem : public CompressedFileSystem {
-public:
-	unique_ptr<FileHandle> OpenCompressedFile(unique_ptr<FileHandle> handle, bool write) override;
-
-	std::string GetName() const override {
-		return "ZStdFileSystem";
-	}
-
-	unique_ptr<StreamWrapper> CreateStream() override;
-	idx_t InBufferSize() override;
-	idx_t OutBufferSize() override;
-};
-
-} // namespace duckdb
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/file_system.hpp"
-#include "duckdb/common/types/chunk_collection.hpp"
-#include "duckdb/function/copy_function.hpp"
-#include "duckdb/function/table_function.hpp"
-#include "duckdb/common/file_system.hpp"
-#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-
-#include "duckdb/common/enums/file_compression_type.hpp"
-#include "duckdb/main/config.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
-#include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/tableref/table_function_ref.hpp"
-
-#include "duckdb/storage/statistics/base_statistics.hpp"
-
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/catalog/catalog.hpp"
-#endif
-
-namespace duckdb {
-
-struct ParquetReadBindData : public TableFunctionData {
-	shared_ptr<ParquetReader> initial_reader;
-	vector<string> files;
-	vector<column_t> column_ids;
-	atomic<idx_t> chunk_count;
-	atomic<idx_t> cur_file;
-	vector<string> names;
-	vector<LogicalType> types;
-};
-
-struct ParquetReadLocalState : public LocalTableFunctionState {
-	shared_ptr<ParquetReader> reader;
-	ParquetReaderScanState scan_state;
-	bool is_parallel;
-	idx_t batch_index;
-	idx_t file_index;
-	vector<column_t> column_ids;
-	TableFilterSet *table_filters;
-};
-
-struct ParquetReadGlobalState : public GlobalTableFunctionState {
-	mutex lock;
-	shared_ptr<ParquetReader> current_reader;
-	idx_t batch_index;
-	idx_t file_index;
-	idx_t row_group_index;
-	idx_t max_threads;
-
-	idx_t MaxThreads() const override {
-		return max_threads;
-	}
-};
-
-class ParquetScanFunction {
-public:
-	static TableFunctionSet GetFunctionSet() {
-		TableFunctionSet set("parquet_scan");
-		TableFunction table_function({LogicalType::VARCHAR}, ParquetScanImplementation, ParquetScanBind,
-		                             ParquetScanInitGlobal, ParquetScanInitLocal);
-		table_function.statistics = ParquetScanStats;
-		table_function.cardinality = ParquetCardinality;
-		table_function.table_scan_progress = ParquetProgress;
-		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
-		table_function.get_batch_index = ParquetScanGetBatchIndex;
-		table_function.projection_pushdown = true;
-		table_function.filter_pushdown = true;
-		set.AddFunction(table_function);
-		table_function.arguments = {LogicalType::LIST(LogicalType::VARCHAR)};
-		table_function.bind = ParquetScanBindList;
-		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
-		set.AddFunction(table_function);
-		return set;
-	}
-
-	static unique_ptr<FunctionData> ParquetReadBind(ClientContext &context, CopyInfo &info,
-	                                                vector<string> &expected_names,
-	                                                vector<LogicalType> &expected_types) {
-		D_ASSERT(expected_names.size() == expected_types.size());
-		for (auto &option : info.options) {
-			auto loption = StringUtil::Lower(option.first);
-			if (loption == "compression" || loption == "codec") {
-				// CODEC option has no effect on parquet read: we determine codec from the file
-				continue;
-			} else {
-				throw NotImplementedException("Unsupported option for COPY FROM parquet: %s", option.first);
-			}
-		}
-		auto result = make_unique<ParquetReadBindData>();
-
-		FileSystem &fs = FileSystem::GetFileSystem(context);
-		result->files = fs.Glob(info.file_path, context);
-		if (result->files.empty()) {
-			throw IOException("No files found that match the pattern \"%s\"", info.file_path);
-		}
-		ParquetOptions parquet_options(context);
-		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], expected_types, parquet_options);
-		result->names = result->initial_reader->names;
-		result->types = result->initial_reader->return_types;
-		return move(result);
-	}
-
-	static unique_ptr<BaseStatistics> ParquetScanStats(ClientContext &context, const FunctionData *bind_data_p,
-	                                                   column_t column_index) {
-		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
-
-		if (column_index == COLUMN_IDENTIFIER_ROW_ID) {
-			return nullptr;
-		}
-
-		// we do not want to parse the Parquet metadata for the sole purpose of getting column statistics
-
-		// We already parsed the metadata for the first file in a glob because we need some type info.
-		auto overall_stats = ParquetReader::ReadStatistics(
-		    *bind_data.initial_reader, bind_data.initial_reader->return_types[column_index], column_index,
-		    bind_data.initial_reader->metadata->metadata.get());
-
-		if (!overall_stats) {
-			return nullptr;
-		}
-
-		// if there is only one file in the glob (quite common case), we are done
-		auto &config = DBConfig::GetConfig(context);
-		if (bind_data.files.size() < 2) {
-			return overall_stats;
-		} else if (config.object_cache_enable) {
-			auto &cache = ObjectCache::GetObjectCache(context);
-			// for more than one file, we could be lucky and metadata for *every* file is in the object cache (if
-			// enabled at all)
-			FileSystem &fs = FileSystem::GetFileSystem(context);
-			for (idx_t file_idx = 1; file_idx < bind_data.files.size(); file_idx++) {
-				auto &file_name = bind_data.files[file_idx];
-				auto metadata = cache.Get<ParquetFileMetadataCache>(file_name);
-				if (!metadata) {
-					// missing metadata entry in cache, no usable stats
-					return nullptr;
-				}
-				auto handle = fs.OpenFile(file_name, FileFlags::FILE_FLAGS_READ, FileSystem::DEFAULT_LOCK,
-				                          FileSystem::DEFAULT_COMPRESSION, FileSystem::GetFileOpener(context));
-				// we need to check if the metadata cache entries are current
-				if (fs.GetLastModifiedTime(*handle) >= metadata->read_time) {
-					// missing or invalid metadata entry in cache, no usable stats overall
-					return nullptr;
-				}
-				// get and merge stats for file
-				auto file_stats = ParquetReader::ReadStatistics(*bind_data.initial_reader,
-				                                                bind_data.initial_reader->return_types[column_index],
-				                                                column_index, metadata->metadata.get());
-				if (!file_stats) {
-					return nullptr;
-				}
-				overall_stats->Merge(*file_stats);
-			}
-			// success!
-			return overall_stats;
-		}
-		// we have more than one file and no object cache so no statistics overall
-		return nullptr;
-	}
-
-	static unique_ptr<FunctionData> ParquetScanBindInternal(ClientContext &context, vector<string> files,
-	                                                        vector<LogicalType> &return_types, vector<string> &names,
-	                                                        ParquetOptions parquet_options) {
-		auto result = make_unique<ParquetReadBindData>();
-		result->files = move(files);
-
-		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], parquet_options);
-		return_types = result->types = result->initial_reader->return_types;
-		names = result->names = result->initial_reader->names;
-		return move(result);
-	}
-
-	static vector<string> ParquetGlob(FileSystem &fs, const string &glob, ClientContext &context) {
-		auto files = fs.Glob(glob, FileSystem::GetFileOpener(context));
-		if (files.empty()) {
-			throw IOException("No files found that match the pattern \"%s\"", glob);
-		}
-		return files;
-	}
-
-	static unique_ptr<FunctionData> ParquetScanBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                vector<LogicalType> &return_types, vector<string> &names) {
-		auto &config = DBConfig::GetConfig(context);
-		if (!config.enable_external_access) {
-			throw PermissionException("Scanning Parquet files is disabled through configuration");
-		}
-		auto file_name = input.inputs[0].GetValue<string>();
-		ParquetOptions parquet_options(context);
-		for (auto &kv : input.named_parameters) {
-			if (kv.first == "binary_as_string") {
-				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
-			}
-		}
-		FileSystem &fs = FileSystem::GetFileSystem(context);
-		auto files = ParquetGlob(fs, file_name, context);
-		return ParquetScanBindInternal(context, move(files), return_types, names, parquet_options);
-	}
-
-	static unique_ptr<FunctionData> ParquetScanBindList(ClientContext &context, TableFunctionBindInput &input,
-	                                                    vector<LogicalType> &return_types, vector<string> &names) {
-		auto &config = DBConfig::GetConfig(context);
-		if (!config.enable_external_access) {
-			throw PermissionException("Scanning Parquet files is disabled through configuration");
-		}
-		FileSystem &fs = FileSystem::GetFileSystem(context);
-		vector<string> files;
-		for (auto &val : ListValue::GetChildren(input.inputs[0])) {
-			auto glob_files = ParquetGlob(fs, val.ToString(), context);
-			files.insert(files.end(), glob_files.begin(), glob_files.end());
-		}
-		if (files.empty()) {
-			throw IOException("Parquet reader needs at least one file to read");
-		}
-		ParquetOptions parquet_options(context);
-		for (auto &kv : input.named_parameters) {
-			if (kv.first == "binary_as_string") {
-				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
-			}
-		}
-		return ParquetScanBindInternal(context, move(files), return_types, names, parquet_options);
-	}
-
-	static double ParquetProgress(ClientContext &context, const FunctionData *bind_data_p,
-	                              const GlobalTableFunctionState *global_state) {
-		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
-		if (bind_data.initial_reader->NumRows() == 0) {
-			return (100.0 * (bind_data.cur_file + 1)) / bind_data.files.size();
-		}
-		auto percentage = (bind_data.chunk_count * STANDARD_VECTOR_SIZE * 100.0 / bind_data.initial_reader->NumRows()) /
-		                  bind_data.files.size();
-		percentage += 100.0 * bind_data.cur_file / bind_data.files.size();
-		return percentage;
-	}
-
-	static unique_ptr<LocalTableFunctionState>
-	ParquetScanInitLocal(ClientContext &context, TableFunctionInitInput &input, GlobalTableFunctionState *gstate_p) {
-		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
-		auto &gstate = (ParquetReadGlobalState &)*gstate_p;
-
-		auto result = make_unique<ParquetReadLocalState>();
-		result->column_ids = input.column_ids;
-		result->is_parallel = true;
-		result->batch_index = 0;
-		result->table_filters = input.filters;
-		if (!ParquetParallelStateNext(context, bind_data, *result, gstate)) {
-			return nullptr;
-		}
-		return move(result);
-	}
-
-	static unique_ptr<GlobalTableFunctionState> ParquetScanInitGlobal(ClientContext &context,
-	                                                                  TableFunctionInitInput &input) {
-		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
-		auto result = make_unique<ParquetReadGlobalState>();
-		result->current_reader = bind_data.initial_reader;
-		result->row_group_index = 0;
-		result->file_index = 0;
-		result->batch_index = 0;
-		result->max_threads = ParquetScanMaxThreads(context, input.bind_data);
-		return move(result);
-	}
-
-	static idx_t ParquetScanGetBatchIndex(ClientContext &context, const FunctionData *bind_data_p,
-	                                      LocalTableFunctionState *local_state,
-	                                      GlobalTableFunctionState *global_state) {
-		auto &data = (ParquetReadLocalState &)*local_state;
-		return data.batch_index;
-	}
-
-	static void ParquetScanImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-		if (!data_p.local_state) {
-			return;
-		}
-		auto &data = (ParquetReadLocalState &)*data_p.local_state;
-		auto &gstate = (ParquetReadGlobalState &)*data_p.global_state;
-		auto &bind_data = (ParquetReadBindData &)*data_p.bind_data;
-
-		do {
-			data.reader->Scan(data.scan_state, output);
-			bind_data.chunk_count++;
-			if (output.size() > 0) {
-				return;
-			}
-			if (!ParquetParallelStateNext(context, bind_data, data, gstate)) {
-				return;
-			}
-		} while (true);
-	}
-
-	static unique_ptr<NodeStatistics> ParquetCardinality(ClientContext &context, const FunctionData *bind_data) {
-		auto &data = (ParquetReadBindData &)*bind_data;
-		return make_unique<NodeStatistics>(data.initial_reader->NumRows() * data.files.size());
-	}
-
-	static idx_t ParquetScanMaxThreads(ClientContext &context, const FunctionData *bind_data) {
-		auto &data = (ParquetReadBindData &)*bind_data;
-		return data.initial_reader->NumRowGroups() * data.files.size();
-	}
-
-	static bool ParquetParallelStateNext(ClientContext &context, const ParquetReadBindData &bind_data,
-	                                     ParquetReadLocalState &scan_data, ParquetReadGlobalState &parallel_state) {
-
-		lock_guard<mutex> parallel_lock(parallel_state.lock);
-		if (parallel_state.row_group_index < parallel_state.current_reader->NumRowGroups()) {
-			// groups remain in the current parquet file: read the next group
-			scan_data.reader = parallel_state.current_reader;
-			vector<idx_t> group_indexes {parallel_state.row_group_index};
-			scan_data.reader->InitializeScan(scan_data.scan_state, scan_data.column_ids, group_indexes,
-			                                 scan_data.table_filters);
-			scan_data.batch_index = parallel_state.batch_index++;
-			scan_data.file_index = parallel_state.file_index;
-			parallel_state.row_group_index++;
-			return true;
-		} else {
-			// no groups remain in the current parquet file: check if there are more files to read
-			while (parallel_state.file_index + 1 < bind_data.files.size()) {
-				// read the next file
-				string file = bind_data.files[++parallel_state.file_index];
-				parallel_state.current_reader =
-				    make_shared<ParquetReader>(context, file, bind_data.names, bind_data.types, scan_data.column_ids,
-				                               parallel_state.current_reader->parquet_options, bind_data.files[0]);
-				if (parallel_state.current_reader->NumRowGroups() == 0) {
-					// empty parquet file, move to next file
-					continue;
-				}
-				// set up the scan state to read the first group
-				scan_data.reader = parallel_state.current_reader;
-				vector<idx_t> group_indexes {0};
-				scan_data.reader->InitializeScan(scan_data.scan_state, scan_data.column_ids, group_indexes,
-				                                 scan_data.table_filters);
-				scan_data.batch_index = parallel_state.batch_index++;
-				scan_data.file_index = parallel_state.file_index;
-				parallel_state.row_group_index = 1;
-				return true;
-			}
-		}
-		return false;
-	}
-};
-
-struct ParquetWriteBindData : public TableFunctionData {
-	vector<LogicalType> sql_types;
-	string file_name;
-	vector<string> column_names;
-	duckdb_parquet::format::CompressionCodec::type codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
-	idx_t row_group_size = 100000;
-};
-
-struct ParquetWriteGlobalState : public GlobalFunctionData {
-	unique_ptr<ParquetWriter> writer;
-};
-
-struct ParquetWriteLocalState : public LocalFunctionData {
-	ParquetWriteLocalState() {
-		buffer = make_unique<ChunkCollection>();
-	}
-
-	unique_ptr<ChunkCollection> buffer;
-};
-
-unique_ptr<FunctionData> ParquetWriteBind(ClientContext &context, CopyInfo &info, vector<string> &names,
-                                          vector<LogicalType> &sql_types) {
-	auto bind_data = make_unique<ParquetWriteBindData>();
-	for (auto &option : info.options) {
-		auto loption = StringUtil::Lower(option.first);
-		if (loption == "row_group_size" || loption == "chunk_size") {
-			bind_data->row_group_size = option.second[0].GetValue<uint64_t>();
-		} else if (loption == "compression" || loption == "codec") {
-			if (!option.second.empty()) {
-				auto roption = StringUtil::Lower(option.second[0].ToString());
-				if (roption == "uncompressed") {
-					bind_data->codec = duckdb_parquet::format::CompressionCodec::UNCOMPRESSED;
-					continue;
-				} else if (roption == "snappy") {
-					bind_data->codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
-					continue;
-				} else if (roption == "gzip") {
-					bind_data->codec = duckdb_parquet::format::CompressionCodec::GZIP;
-					continue;
-				} else if (roption == "zstd") {
-					bind_data->codec = duckdb_parquet::format::CompressionCodec::ZSTD;
-					continue;
-				}
-			}
-			throw ParserException("Expected %s argument to be either [uncompressed, snappy, gzip or zstd]", loption);
-		} else {
-			throw NotImplementedException("Unrecognized option for PARQUET: %s", option.first.c_str());
-		}
-	}
-	bind_data->sql_types = sql_types;
-	bind_data->column_names = names;
-	bind_data->file_name = info.file_path;
-	return move(bind_data);
-}
-
-unique_ptr<GlobalFunctionData> ParquetWriteInitializeGlobal(ClientContext &context, FunctionData &bind_data,
-                                                            const string &file_path) {
-	auto global_state = make_unique<ParquetWriteGlobalState>();
-	auto &parquet_bind = (ParquetWriteBindData &)bind_data;
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	global_state->writer =
-	    make_unique<ParquetWriter>(fs, file_path, FileSystem::GetFileOpener(context), parquet_bind.sql_types,
-	                               parquet_bind.column_names, parquet_bind.codec);
-	return move(global_state);
-}
-
-void ParquetWriteSink(ClientContext &context, FunctionData &bind_data_p, GlobalFunctionData &gstate,
-                      LocalFunctionData &lstate, DataChunk &input) {
-	auto &bind_data = (ParquetWriteBindData &)bind_data_p;
-	auto &global_state = (ParquetWriteGlobalState &)gstate;
-	auto &local_state = (ParquetWriteLocalState &)lstate;
-
-	// append data to the local (buffered) chunk collection
-	local_state.buffer->Append(input);
-	if (local_state.buffer->Count() > bind_data.row_group_size) {
-		// if the chunk collection exceeds a certain size we flush it to the parquet file
-		global_state.writer->Flush(*local_state.buffer);
-		// and reset the buffer
-		local_state.buffer = make_unique<ChunkCollection>();
-	}
-}
-
-void ParquetWriteCombine(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
-                         LocalFunctionData &lstate) {
-	auto &global_state = (ParquetWriteGlobalState &)gstate;
-	auto &local_state = (ParquetWriteLocalState &)lstate;
-	// flush any data left in the local state to the file
-	global_state.writer->Flush(*local_state.buffer);
-}
-
-void ParquetWriteFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate) {
-	auto &global_state = (ParquetWriteGlobalState &)gstate;
-	// finalize: write any additional metadata to the file here
-	global_state.writer->Finalize();
-}
-
-unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ClientContext &context, FunctionData &bind_data) {
-	return make_unique<ParquetWriteLocalState>();
-}
-
-unique_ptr<TableFunctionRef> ParquetScanReplacement(ClientContext &context, const string &table_name,
-                                                    ReplacementScanData *data) {
-	if (!StringUtil::EndsWith(StringUtil::Lower(table_name), ".parquet")) {
-		return nullptr;
-	}
-	auto table_function = make_unique<TableFunctionRef>();
-	vector<unique_ptr<ParsedExpression>> children;
-	children.push_back(make_unique<ConstantExpression>(Value(table_name)));
-	table_function->function = make_unique<FunctionExpression>("parquet_scan", move(children));
-	return table_function;
-}
-
-void ParquetExtension::Load(DuckDB &db) {
-	auto &fs = db.GetFileSystem();
-	fs.RegisterSubSystem(FileCompressionType::ZSTD, make_unique<ZStdFileSystem>());
-
-	auto scan_fun = ParquetScanFunction::GetFunctionSet();
-	CreateTableFunctionInfo cinfo(scan_fun);
-	cinfo.name = "read_parquet";
-	CreateTableFunctionInfo pq_scan = cinfo;
-	pq_scan.name = "parquet_scan";
-
-	ParquetMetaDataFunction meta_fun;
-	CreateTableFunctionInfo meta_cinfo(meta_fun);
-
-	ParquetSchemaFunction schema_fun;
-	CreateTableFunctionInfo schema_cinfo(schema_fun);
-
-	CopyFunction function("parquet");
-	function.copy_to_bind = ParquetWriteBind;
-	function.copy_to_initialize_global = ParquetWriteInitializeGlobal;
-	function.copy_to_initialize_local = ParquetWriteInitializeLocal;
-	function.copy_to_sink = ParquetWriteSink;
-	function.copy_to_combine = ParquetWriteCombine;
-	function.copy_to_finalize = ParquetWriteFinalize;
-	function.copy_from_bind = ParquetScanFunction::ParquetReadBind;
-	function.copy_from_function = scan_fun.functions[0];
-
-	function.extension = "parquet";
-	CreateCopyFunctionInfo info(function);
-
-	Connection con(db);
-	con.BeginTransaction();
-	auto &context = *con.context;
-	auto &catalog = Catalog::GetCatalog(context);
-	catalog.CreateCopyFunction(context, &info);
-	catalog.CreateTableFunction(context, &cinfo);
-	catalog.CreateTableFunction(context, &pq_scan);
-	catalog.CreateTableFunction(context, &meta_cinfo);
-	catalog.CreateTableFunction(context, &schema_cinfo);
-	con.Commit();
-
-	auto &config = DBConfig::GetConfig(*db.instance);
-	config.replacement_scans.emplace_back(ParquetScanReplacement);
-	config.AddExtensionOption("binary_as_string", "In Parquet files, interpret binary data as a string.",
-	                          LogicalType::BOOLEAN);
-}
-
-std::string ParquetExtension::Name() {
-	return "parquet";
-}
-
-} // namespace duckdb
-
-#ifndef DUCKDB_EXTENSION_MAIN
-#error DUCKDB_EXTENSION_MAIN not defined
-#endif
-
-
-
-#include <sstream>
-
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/types/blob.hpp"
-#include "duckdb/main/config.hpp"
-#endif
-
-namespace duckdb {
-
-struct ParquetMetaDataBindData : public TableFunctionData {
-	vector<LogicalType> return_types;
-	vector<string> files;
-
-public:
-	bool Equals(const FunctionData &other_p) const override {
-		auto &other = (const ParquetMetaDataBindData &)other_p;
-		return other.return_types == return_types && files == other.files;
-	}
-};
-
-struct ParquetMetaDataOperatorData : public GlobalTableFunctionState {
-	idx_t file_index;
-	ChunkCollection collection;
-
-	static void BindMetaData(vector<LogicalType> &return_types, vector<string> &names);
-	static void BindSchema(vector<LogicalType> &return_types, vector<string> &names);
-
-	void LoadFileMetaData(ClientContext &context, const vector<LogicalType> &return_types, const string &file_path);
-	void LoadSchemaData(ClientContext &context, const vector<LogicalType> &return_types, const string &file_path);
-};
-
-template <class T>
-string ConvertParquetElementToString(T &&entry) {
-	std::stringstream ss;
-	ss << entry;
-	return ss.str();
-}
-
-template <class T>
-string PrintParquetElementToString(T &&entry) {
-	std::stringstream ss;
-	entry.printTo(ss);
-	return ss.str();
-}
-
-void ParquetMetaDataOperatorData::BindMetaData(vector<LogicalType> &return_types, vector<string> &names) {
-	names.emplace_back("file_name");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("row_group_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("row_group_num_rows");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("row_group_num_columns");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("row_group_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("column_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("file_offset");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("num_values");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("path_in_schema");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("type");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("stats_min");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("stats_max");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("stats_null_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("stats_distinct_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("stats_min_value");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("stats_max_value");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("compression");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("encodings");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("index_page_offset");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("dictionary_page_offset");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("data_page_offset");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("total_compressed_size");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("total_uncompressed_size");
-	return_types.emplace_back(LogicalType::BIGINT);
-}
-
-Value ConvertParquetStats(const LogicalType &type, const duckdb_parquet::format::SchemaElement &schema_ele,
-                          bool stats_is_set, const std::string &stats) {
-	if (!stats_is_set) {
-		return Value(LogicalType::VARCHAR);
-	}
-	return ParquetStatisticsUtils::ConvertValue(type, schema_ele, stats).CastAs(LogicalType::VARCHAR);
-}
-
-void ParquetMetaDataOperatorData::LoadFileMetaData(ClientContext &context, const vector<LogicalType> &return_types,
-                                                   const string &file_path) {
-	collection.Reset();
-	ParquetOptions parquet_options(context);
-	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
-	idx_t count = 0;
-	DataChunk current_chunk;
-	current_chunk.Initialize(return_types);
-	auto meta_data = reader->GetFileMetadata();
-	vector<LogicalType> column_types;
-	vector<idx_t> schema_indexes;
-	for (idx_t schema_idx = 0; schema_idx < meta_data->schema.size(); schema_idx++) {
-		auto &schema_element = meta_data->schema[schema_idx];
-		if (schema_element.num_children > 0) {
-			continue;
-		}
-		column_types.push_back(ParquetReader::DeriveLogicalType(schema_element, false));
-		schema_indexes.push_back(schema_idx);
-	}
-
-	for (idx_t row_group_idx = 0; row_group_idx < meta_data->row_groups.size(); row_group_idx++) {
-		auto &row_group = meta_data->row_groups[row_group_idx];
-
-		if (row_group.columns.size() > column_types.size()) {
-			throw InternalException("Too many column in row group: corrupt file?");
-		}
-		for (idx_t col_idx = 0; col_idx < row_group.columns.size(); col_idx++) {
-			auto &column = row_group.columns[col_idx];
-			auto &col_meta = column.meta_data;
-			auto &stats = col_meta.statistics;
-			auto &schema_element = meta_data->schema[schema_indexes[col_idx]];
-			auto &column_type = column_types[col_idx];
-
-			// file_name, LogicalType::VARCHAR
-			current_chunk.SetValue(0, count, file_path);
-
-			// row_group_id, LogicalType::BIGINT
-			current_chunk.SetValue(1, count, Value::BIGINT(row_group_idx));
-
-			// row_group_num_rows, LogicalType::BIGINT
-			current_chunk.SetValue(2, count, Value::BIGINT(row_group.num_rows));
-
-			// row_group_num_columns, LogicalType::BIGINT
-			current_chunk.SetValue(3, count, Value::BIGINT(row_group.columns.size()));
-
-			// row_group_bytes, LogicalType::BIGINT
-			current_chunk.SetValue(4, count, Value::BIGINT(row_group.total_byte_size));
-
-			// column_id, LogicalType::BIGINT
-			current_chunk.SetValue(5, count, Value::BIGINT(col_idx));
-
-			// file_offset, LogicalType::BIGINT
-			current_chunk.SetValue(6, count, Value::BIGINT(column.file_offset));
-
-			// num_values, LogicalType::BIGINT
-			current_chunk.SetValue(7, count, Value::BIGINT(col_meta.num_values));
-
-			// path_in_schema, LogicalType::VARCHAR
-			current_chunk.SetValue(8, count, StringUtil::Join(col_meta.path_in_schema, ", "));
-
-			// type, LogicalType::VARCHAR
-			current_chunk.SetValue(9, count, ConvertParquetElementToString(col_meta.type));
-
-			// stats_min, LogicalType::VARCHAR
-			current_chunk.SetValue(10, count,
-			                       ConvertParquetStats(column_type, schema_element, stats.__isset.min, stats.min));
-
-			// stats_max, LogicalType::VARCHAR
-			current_chunk.SetValue(11, count,
-			                       ConvertParquetStats(column_type, schema_element, stats.__isset.max, stats.max));
-
-			// stats_null_count, LogicalType::BIGINT
-			current_chunk.SetValue(
-			    12, count, stats.__isset.null_count ? Value::BIGINT(stats.null_count) : Value(LogicalType::BIGINT));
-
-			// stats_distinct_count, LogicalType::BIGINT
-			current_chunk.SetValue(13, count,
-			                       stats.__isset.distinct_count ? Value::BIGINT(stats.distinct_count)
-			                                                    : Value(LogicalType::BIGINT));
-
-			// stats_min_value, LogicalType::VARCHAR
-			current_chunk.SetValue(
-			    14, count, ConvertParquetStats(column_type, schema_element, stats.__isset.min_value, stats.min_value));
-
-			// stats_max_value, LogicalType::VARCHAR
-			current_chunk.SetValue(
-			    15, count, ConvertParquetStats(column_type, schema_element, stats.__isset.max_value, stats.max_value));
-
-			// compression, LogicalType::VARCHAR
-			current_chunk.SetValue(16, count, ConvertParquetElementToString(col_meta.codec));
-
-			// encodings, LogicalType::VARCHAR
-			vector<string> encoding_string;
-			for (auto &encoding : col_meta.encodings) {
-				encoding_string.push_back(ConvertParquetElementToString(encoding));
-			}
-			current_chunk.SetValue(17, count, Value(StringUtil::Join(encoding_string, ", ")));
-
-			// index_page_offset, LogicalType::BIGINT
-			current_chunk.SetValue(18, count, Value::BIGINT(col_meta.index_page_offset));
-
-			// dictionary_page_offset, LogicalType::BIGINT
-			current_chunk.SetValue(19, count, Value::BIGINT(col_meta.dictionary_page_offset));
-
-			// data_page_offset, LogicalType::BIGINT
-			current_chunk.SetValue(20, count, Value::BIGINT(col_meta.data_page_offset));
-
-			// total_compressed_size, LogicalType::BIGINT
-			current_chunk.SetValue(21, count, Value::BIGINT(col_meta.total_compressed_size));
-
-			// total_uncompressed_size, LogicalType::BIGINT
-			current_chunk.SetValue(22, count, Value::BIGINT(col_meta.total_uncompressed_size));
-
-			count++;
-			if (count >= STANDARD_VECTOR_SIZE) {
-				current_chunk.SetCardinality(count);
-				collection.Append(current_chunk);
-
-				count = 0;
-				current_chunk.Reset();
-			}
-		}
-	}
-	current_chunk.SetCardinality(count);
-	collection.Append(current_chunk);
-}
-
-void ParquetMetaDataOperatorData::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
-	names.emplace_back("file_name");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("name");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("type");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("type_length");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("repetition_type");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("num_children");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("converted_type");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("scale");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("precision");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("field_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-
-	names.emplace_back("logical_type");
-	return_types.emplace_back(LogicalType::VARCHAR);
-}
-
-Value ParquetLogicalTypeToString(const duckdb_parquet::format::LogicalType &type) {
-
-	if (type.__isset.STRING) {
-		return Value(PrintParquetElementToString(type.STRING));
-	}
-	if (type.__isset.MAP) {
-		return Value(PrintParquetElementToString(type.MAP));
-	}
-	if (type.__isset.LIST) {
-		return Value(PrintParquetElementToString(type.LIST));
-	}
-	if (type.__isset.ENUM) {
-		return Value(PrintParquetElementToString(type.ENUM));
-	}
-	if (type.__isset.DECIMAL) {
-		return Value(PrintParquetElementToString(type.DECIMAL));
-	}
-	if (type.__isset.DATE) {
-		return Value(PrintParquetElementToString(type.DATE));
-	}
-	if (type.__isset.TIME) {
-		return Value(PrintParquetElementToString(type.TIME));
-	}
-	if (type.__isset.TIMESTAMP) {
-		return Value(PrintParquetElementToString(type.TIMESTAMP));
-	}
-	if (type.__isset.INTEGER) {
-		return Value(PrintParquetElementToString(type.INTEGER));
-	}
-	if (type.__isset.UNKNOWN) {
-		return Value(PrintParquetElementToString(type.UNKNOWN));
-	}
-	if (type.__isset.JSON) {
-		return Value(PrintParquetElementToString(type.JSON));
-	}
-	if (type.__isset.BSON) {
-		return Value(PrintParquetElementToString(type.BSON));
-	}
-	if (type.__isset.UUID) {
-		return Value(PrintParquetElementToString(type.UUID));
-	}
-	return Value();
-}
-
-void ParquetMetaDataOperatorData::LoadSchemaData(ClientContext &context, const vector<LogicalType> &return_types,
-                                                 const string &file_path) {
-	collection.Reset();
-	ParquetOptions parquet_options(context);
-	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
-	idx_t count = 0;
-	DataChunk current_chunk;
-	current_chunk.Initialize(return_types);
-	auto meta_data = reader->GetFileMetadata();
-	for (idx_t col_idx = 0; col_idx < meta_data->schema.size(); col_idx++) {
-		auto &column = meta_data->schema[col_idx];
-
-		// file_name, LogicalType::VARCHAR
-		current_chunk.SetValue(0, count, file_path);
-
-		// name, LogicalType::VARCHAR
-		current_chunk.SetValue(1, count, column.name);
-
-		// type, LogicalType::VARCHAR
-		current_chunk.SetValue(2, count, ConvertParquetElementToString(column.type));
-
-		// type_length, LogicalType::VARCHAR
-		current_chunk.SetValue(3, count, Value::INTEGER(column.type_length));
-
-		// repetition_type, LogicalType::VARCHAR
-		current_chunk.SetValue(4, count, ConvertParquetElementToString(column.repetition_type));
-
-		// num_children, LogicalType::BIGINT
-		current_chunk.SetValue(5, count, Value::BIGINT(column.num_children));
-
-		// converted_type, LogicalType::VARCHAR
-		current_chunk.SetValue(6, count, ConvertParquetElementToString(column.converted_type));
-
-		// scale, LogicalType::BIGINT
-		current_chunk.SetValue(7, count, Value::BIGINT(column.scale));
-
-		// precision, LogicalType::BIGINT
-		current_chunk.SetValue(8, count, Value::BIGINT(column.precision));
-
-		// field_id, LogicalType::BIGINT
-		current_chunk.SetValue(9, count, Value::BIGINT(column.field_id));
-
-		// logical_type, LogicalType::VARCHAR
-		current_chunk.SetValue(10, count, ParquetLogicalTypeToString(column.logicalType));
-
-		count++;
-		if (count >= STANDARD_VECTOR_SIZE) {
-			current_chunk.SetCardinality(count);
-			collection.Append(current_chunk);
-
-			count = 0;
-			current_chunk.Reset();
-		}
-	}
-	current_chunk.SetCardinality(count);
-	collection.Append(current_chunk);
-}
-
-template <bool SCHEMA>
-unique_ptr<FunctionData> ParquetMetaDataBind(ClientContext &context, TableFunctionBindInput &input,
-                                             vector<LogicalType> &return_types, vector<string> &names) {
-	auto &config = DBConfig::GetConfig(context);
-	if (!config.enable_external_access) {
-		throw PermissionException("Scanning Parquet files is disabled through configuration");
-	}
-	if (SCHEMA) {
-		ParquetMetaDataOperatorData::BindSchema(return_types, names);
-	} else {
-		ParquetMetaDataOperatorData::BindMetaData(return_types, names);
-	}
-
-	auto file_name = input.inputs[0].GetValue<string>();
-	auto result = make_unique<ParquetMetaDataBindData>();
-
-	FileSystem &fs = FileSystem::GetFileSystem(context);
-	result->return_types = return_types;
-	result->files = fs.Glob(file_name, context);
-	if (result->files.empty()) {
-		throw IOException("No files found that match the pattern \"%s\"", file_name);
-	}
-	return move(result);
-}
-
-template <bool SCHEMA>
-unique_ptr<GlobalTableFunctionState> ParquetMetaDataInit(ClientContext &context, TableFunctionInitInput &input) {
-	auto &bind_data = (ParquetMetaDataBindData &)*input.bind_data;
-	D_ASSERT(!bind_data.files.empty());
-
-	auto result = make_unique<ParquetMetaDataOperatorData>();
-	if (SCHEMA) {
-		result->LoadSchemaData(context, bind_data.return_types, bind_data.files[0]);
-	} else {
-		result->LoadFileMetaData(context, bind_data.return_types, bind_data.files[0]);
-	}
-	result->file_index = 0;
-	return move(result);
-}
-
-template <bool SCHEMA>
-void ParquetMetaDataImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &data = (ParquetMetaDataOperatorData &)*data_p.global_state;
-	auto &bind_data = (ParquetMetaDataBindData &)*data_p.bind_data;
-	while (true) {
-		auto chunk = data.collection.Fetch();
-		if (!chunk) {
-			if (data.file_index + 1 < bind_data.files.size()) {
-				// load the metadata for the next file
-				data.file_index++;
-				if (SCHEMA) {
-					data.LoadSchemaData(context, bind_data.return_types, bind_data.files[data.file_index]);
-				} else {
-					data.LoadFileMetaData(context, bind_data.return_types, bind_data.files[data.file_index]);
-				}
-				continue;
-			} else {
-				// no files remaining: done
-				return;
-			}
-		}
-		output.Move(*chunk);
-		if (output.size() != 0) {
-			return;
-		}
-	}
-}
-
-ParquetMetaDataFunction::ParquetMetaDataFunction()
-    : TableFunction("parquet_metadata", {LogicalType::VARCHAR}, ParquetMetaDataImplementation<false>,
-                    ParquetMetaDataBind<false>, ParquetMetaDataInit<false>) {
-}
-
-ParquetSchemaFunction::ParquetSchemaFunction()
-    : TableFunction("parquet_schema", {LogicalType::VARCHAR}, ParquetMetaDataImplementation<true>,
-                    ParquetMetaDataBind<true>, ParquetMetaDataInit<true>) {
-}
-
-} // namespace duckdb
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/planner/table_filter.hpp"
-#include "duckdb/planner/filter/constant_filter.hpp"
-#include "duckdb/planner/filter/null_filter.hpp"
-#include "duckdb/planner/filter/conjunction_filter.hpp"
-#include "duckdb/common/file_system.hpp"
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/common/types/date.hpp"
-#include "duckdb/common/pair.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
-
-#include "duckdb/storage/object_cache.hpp"
-#endif
-
-#include <sstream>
-#include <cassert>
-#include <chrono>
-#include <cstring>
-
-namespace duckdb {
-
-using duckdb_parquet::format::ColumnChunk;
-using duckdb_parquet::format::ConvertedType;
-using duckdb_parquet::format::FieldRepetitionType;
-using duckdb_parquet::format::FileMetaData;
-using ParquetRowGroup = duckdb_parquet::format::RowGroup;
-using duckdb_parquet::format::SchemaElement;
-using duckdb_parquet::format::Statistics;
-using duckdb_parquet::format::Type;
-
-static unique_ptr<duckdb_apache::thrift::protocol::TProtocol>
-CreateThriftProtocol(Allocator &allocator, FileHandle &file_handle, FileOpener &opener, bool prefetch_mode) {
-	auto transport = make_shared<ThriftFileTransport>(allocator, file_handle, opener, prefetch_mode);
-	return make_unique<duckdb_apache::thrift::protocol::TCompactProtocolT<ThriftFileTransport>>(move(transport));
-}
-
-static shared_ptr<ParquetFileMetadataCache> LoadMetadata(Allocator &allocator, FileHandle &file_handle,
-                                                         FileOpener &opener) {
-	auto current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-
-	auto proto = CreateThriftProtocol(allocator, file_handle, opener, false);
-	auto &transport = ((ThriftFileTransport &)*proto->getTransport());
-	auto file_size = transport.GetSize();
-	if (file_size < 12) {
-		throw InvalidInputException("File '%s' too small to be a Parquet file", file_handle.path);
-	}
-
-	ResizeableBuffer buf;
-	buf.resize(allocator, 8);
-	buf.zero();
-
-	transport.SetLocation(file_size - 8);
-	transport.read((uint8_t *)buf.ptr, 8);
-
-	if (strncmp(buf.ptr + 4, "PAR1", 4) != 0) {
-		throw InvalidInputException("No magic bytes found at end of file '%s'", file_handle.path);
-	}
-	// read four-byte footer length from just before the end magic bytes
-	auto footer_len = *(uint32_t *)buf.ptr;
-	if (footer_len <= 0 || file_size < 12 + footer_len) {
-		throw InvalidInputException("Footer length error in file '%s'", file_handle.path);
-	}
-	auto metadata_pos = file_size - (footer_len + 8);
-	transport.SetLocation(metadata_pos);
-	transport.Prefetch(metadata_pos, footer_len);
-
-	auto metadata = make_unique<FileMetaData>();
-	metadata->read(proto.get());
-	return make_shared<ParquetFileMetadataCache>(move(metadata), current_time);
-}
-
-LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele, bool binary_as_string) {
-	// inner node
-	D_ASSERT(s_ele.__isset.type && s_ele.num_children == 0);
-	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && !s_ele.__isset.type_length) {
-		throw IOException("FIXED_LEN_BYTE_ARRAY requires length to be set");
-	}
-	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && s_ele.__isset.logicalType && s_ele.logicalType.__isset.UUID) {
-		return LogicalType::UUID;
-	}
-	if (s_ele.__isset.converted_type) {
-		switch (s_ele.converted_type) {
-		case ConvertedType::INT_8:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::TINYINT;
-			} else {
-				throw IOException("INT8 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::INT_16:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::SMALLINT;
-			} else {
-				throw IOException("INT16 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::INT_32:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::INTEGER;
-			} else {
-				throw IOException("INT32 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::INT_64:
-			if (s_ele.type == Type::INT64) {
-				return LogicalType::BIGINT;
-			} else {
-				throw IOException("INT64 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::UINT_8:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::UTINYINT;
-			} else {
-				throw IOException("UINT8 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::UINT_16:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::USMALLINT;
-			} else {
-				throw IOException("UINT16 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::UINT_32:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::UINTEGER;
-			} else {
-				throw IOException("UINT32 converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::UINT_64:
-			if (s_ele.type == Type::INT64) {
-				return LogicalType::UBIGINT;
-			} else {
-				throw IOException("UINT64 converted type can only be set for value of Type::INT64");
-			}
-		case ConvertedType::DATE:
-			if (s_ele.type == Type::INT32) {
-				return LogicalType::DATE;
-			} else {
-				throw IOException("DATE converted type can only be set for value of Type::INT32");
-			}
-		case ConvertedType::TIMESTAMP_MICROS:
-		case ConvertedType::TIMESTAMP_MILLIS:
-			if (s_ele.type == Type::INT64) {
-				return LogicalType::TIMESTAMP;
-			} else {
-				throw IOException("TIMESTAMP converted type can only be set for value of Type::INT64");
-			}
-		case ConvertedType::DECIMAL:
-			if (!s_ele.__isset.precision || !s_ele.__isset.scale) {
-				throw IOException("DECIMAL requires a length and scale specifier!");
-			}
-			switch (s_ele.type) {
-			case Type::BYTE_ARRAY:
-			case Type::FIXED_LEN_BYTE_ARRAY:
-			case Type::INT32:
-			case Type::INT64:
-				return LogicalType::DECIMAL(s_ele.precision, s_ele.scale);
-			default:
-				throw IOException(
-				    "DECIMAL converted type can only be set for value of Type::(FIXED_LEN_)BYTE_ARRAY/INT32/INT64");
-			}
-		case ConvertedType::UTF8:
-		case ConvertedType::ENUM:
-			switch (s_ele.type) {
-			case Type::BYTE_ARRAY:
-			case Type::FIXED_LEN_BYTE_ARRAY:
-				return LogicalType::VARCHAR;
-			default:
-				throw IOException("UTF8 converted type can only be set for Type::(FIXED_LEN_)BYTE_ARRAY");
-			}
-		case ConvertedType::TIME_MILLIS:
-		case ConvertedType::TIME_MICROS:
-			if (s_ele.type == Type::INT64) {
-				return LogicalType::TIME;
-			} else {
-				throw IOException("TIME_MICROS converted type can only be set for value of Type::INT64");
-			}
-		case ConvertedType::INTERVAL:
-			return LogicalType::INTERVAL;
-		case ConvertedType::MAP:
-		case ConvertedType::MAP_KEY_VALUE:
-		case ConvertedType::LIST:
-		case ConvertedType::JSON:
-		case ConvertedType::BSON:
-		default:
-			throw IOException("Unsupported converted type");
-		}
-	} else {
-		// no converted type set
-		// use default type for each physical type
-		switch (s_ele.type) {
-		case Type::BOOLEAN:
-			return LogicalType::BOOLEAN;
-		case Type::INT32:
-			return LogicalType::INTEGER;
-		case Type::INT64:
-			return LogicalType::BIGINT;
-		case Type::INT96: // always a timestamp it would seem
-			return LogicalType::TIMESTAMP;
-		case Type::FLOAT:
-			return LogicalType::FLOAT;
-		case Type::DOUBLE:
-			return LogicalType::DOUBLE;
-		case Type::BYTE_ARRAY:
-		case Type::FIXED_LEN_BYTE_ARRAY:
-			if (binary_as_string) {
-				return LogicalType::VARCHAR;
-			}
-			return LogicalType::BLOB;
-		default:
-			return LogicalType::INVALID;
-		}
-	}
-}
-
-LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele) {
-	return DeriveLogicalType(s_ele, parquet_options.binary_as_string);
-}
-
-unique_ptr<ColumnReader> ParquetReader::CreateReaderRecursive(const FileMetaData *file_meta_data, idx_t depth,
-                                                              idx_t max_define, idx_t max_repeat,
-                                                              idx_t &next_schema_idx, idx_t &next_file_idx) {
-	D_ASSERT(file_meta_data);
-	D_ASSERT(next_schema_idx < file_meta_data->schema.size());
-	auto &s_ele = file_meta_data->schema[next_schema_idx];
-	auto this_idx = next_schema_idx;
-
-	if (s_ele.__isset.repetition_type) {
-		if (s_ele.repetition_type != FieldRepetitionType::REQUIRED) {
-			max_define++;
-		}
-		if (s_ele.repetition_type == FieldRepetitionType::REPEATED) {
-			max_repeat++;
-		}
-	}
-
-	if (!s_ele.__isset.type) { // inner node
-		if (s_ele.num_children == 0) {
-			throw std::runtime_error("Node has no children but should");
-		}
-		child_list_t<LogicalType> child_types;
-		vector<unique_ptr<ColumnReader>> child_readers;
-
-		idx_t c_idx = 0;
-		while (c_idx < (idx_t)s_ele.num_children) {
-			next_schema_idx++;
-
-			auto &child_ele = file_meta_data->schema[next_schema_idx];
-
-			auto child_reader = CreateReaderRecursive(file_meta_data, depth + 1, max_define, max_repeat,
-			                                          next_schema_idx, next_file_idx);
-			child_types.push_back(make_pair(child_ele.name, child_reader->Type()));
-			child_readers.push_back(move(child_reader));
-
-			c_idx++;
-		}
-		D_ASSERT(!child_types.empty());
-		unique_ptr<ColumnReader> result;
-		LogicalType result_type;
-
-		bool is_repeated = s_ele.repetition_type == FieldRepetitionType::REPEATED;
-		bool is_list = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::LIST;
-		bool is_map = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::MAP;
-		bool is_map_kv = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::MAP_KEY_VALUE;
-		if (!is_map_kv && this_idx > 0) {
-			// check if the parent node of this is a map
-			auto &p_ele = file_meta_data->schema[this_idx - 1];
-			bool parent_is_map = p_ele.__isset.converted_type && p_ele.converted_type == ConvertedType::MAP;
-			bool parent_has_children = p_ele.__isset.num_children && p_ele.num_children == 1;
-			is_map_kv = parent_is_map && parent_has_children;
-		}
-
-		if (is_map_kv) {
-			if (child_types.size() != 2) {
-				throw IOException("MAP_KEY_VALUE requires two children");
-			}
-			if (!is_repeated) {
-				throw IOException("MAP_KEY_VALUE needs to be repeated");
-			}
-			result_type = LogicalType::MAP(move(child_types[0].second), move(child_types[1].second));
-			for (auto &child_reader : child_readers) {
-				auto child_type = LogicalType::LIST(child_reader->Type());
-				child_reader = make_unique<ListColumnReader>(*this, move(child_type), s_ele, this_idx, max_define,
-				                                             max_repeat, move(child_reader));
-			}
-			result = make_unique<StructColumnReader>(*this, result_type, s_ele, this_idx, max_define - 1,
-			                                         max_repeat - 1, move(child_readers));
-			return result;
-		}
-		if (child_types.size() > 1 || (!is_list && !is_map && !is_repeated)) {
-			result_type = LogicalType::STRUCT(move(child_types));
-			result = make_unique<StructColumnReader>(*this, result_type, s_ele, this_idx, max_define, max_repeat,
-			                                         move(child_readers));
-		} else {
-			// if we have a struct with only a single type, pull up
-			result_type = child_types[0].second;
-			result = move(child_readers[0]);
-		}
-		if (is_repeated) {
-			result_type = LogicalType::LIST(result_type);
-			return make_unique<ListColumnReader>(*this, result_type, s_ele, this_idx, max_define, max_repeat,
-			                                     move(result));
-		}
-		return result;
-	} else { // leaf node
-		if (s_ele.repetition_type == FieldRepetitionType::REPEATED) {
-			const auto derived_type = DeriveLogicalType(s_ele);
-			auto list_type = LogicalType::LIST(derived_type);
-
-			auto element_reader =
-			    ColumnReader::CreateReader(*this, derived_type, s_ele, next_file_idx++, max_define, max_repeat);
-
-			return make_unique<ListColumnReader>(*this, list_type, s_ele, this_idx, max_define, max_repeat,
-			                                     move(element_reader));
-		}
-
-		// TODO check return value of derive type or should we only do this on read()
-		return ColumnReader::CreateReader(*this, DeriveLogicalType(s_ele), s_ele, next_file_idx++, max_define,
-		                                  max_repeat);
-	}
-}
-
-// TODO we don't need readers for columns we are not going to read ay
-unique_ptr<ColumnReader> ParquetReader::CreateReader(const duckdb_parquet::format::FileMetaData *file_meta_data) {
-	idx_t next_schema_idx = 0;
-	idx_t next_file_idx = 0;
-
-	auto ret = CreateReaderRecursive(file_meta_data, 0, 0, 0, next_schema_idx, next_file_idx);
-	D_ASSERT(next_schema_idx == file_meta_data->schema.size() - 1);
-	D_ASSERT(file_meta_data->row_groups.empty() || next_file_idx == file_meta_data->row_groups[0].columns.size());
-
-	// add casts if required
-	for (auto &entry : cast_map) {
-		auto column_idx = entry.first;
-		auto &expected_type = entry.second;
-
-		auto &root_struct_reader = (StructColumnReader &)*ret;
-		auto child_reader = move(root_struct_reader.child_readers[column_idx]);
-		auto cast_reader = make_unique<CastColumnReader>(move(child_reader), expected_type);
-		root_struct_reader.child_readers[column_idx] = move(cast_reader);
-	}
-	return ret;
-}
-
-void ParquetReader::InitializeSchema(const vector<string> &expected_names, const vector<LogicalType> &expected_types,
-                                     const vector<column_t> &column_ids, const string &initial_filename_p) {
-	D_ASSERT(expected_names.size() == expected_types.size() || (expected_names.empty() && column_ids.empty()));
-	auto file_meta_data = GetFileMetadata();
-
-	if (file_meta_data->__isset.encryption_algorithm) {
-		throw FormatException("Encrypted Parquet files are not supported");
-	}
-	// check if we like this schema
-	if (file_meta_data->schema.size() < 2) {
-		throw FormatException("Need at least one non-root column in the file");
-	}
-
-	bool has_expected_names = !expected_names.empty();
-	bool has_expected_types = !expected_types.empty();
-	auto root_reader = CreateReader(file_meta_data);
-
-	auto &root_type = root_reader->Type();
-	auto &child_types = StructType::GetChildTypes(root_type);
-	D_ASSERT(root_type.id() == LogicalTypeId::STRUCT);
-	for (auto &type_pair : child_types) {
-		names.push_back(type_pair.first);
-		return_types.push_back(type_pair.second);
-	}
-	D_ASSERT(!names.empty());
-	D_ASSERT(!return_types.empty());
-	if (!has_expected_types) {
-		return;
-	}
-	if (!has_expected_names && has_expected_types) {
-		// we ONLY have expected types, but no expected names
-		// in this case we need all types to match in-order
-		if (return_types.size() != expected_types.size()) {
-			throw FormatException("column count mismatch: expected %d columns but found %d", expected_types.size(),
-			                      return_types.size());
-		}
-		for (idx_t col_idx = 0; col_idx < return_types.size(); col_idx++) {
-			if (return_types[col_idx] == expected_types[col_idx]) {
-				continue;
-			}
-			// type mismatch: have to add a cast
-			cast_map[col_idx] = expected_types[col_idx];
-		}
-		return;
-	}
-	D_ASSERT(column_ids.size() > 0);
-	// we have expected types: create a map of name -> column index
-	unordered_map<string, idx_t> name_map;
-	for (idx_t col_idx = 0; col_idx < names.size(); col_idx++) {
-		name_map[names[col_idx]] = col_idx;
-	}
-	// now for each of the expected names, look it up in the name map and fill the column_id_map
-	D_ASSERT(column_id_map.empty());
-	for (idx_t i = 0; i < column_ids.size(); i++) {
-		if (column_ids[i] == COLUMN_IDENTIFIER_ROW_ID) {
-			continue;
-		}
-		auto &expected_name = expected_names[column_ids[i]];
-		auto &expected_type = expected_types[column_ids[i]];
-		auto entry = name_map.find(expected_name);
-		if (entry == name_map.end()) {
-			throw FormatException("schema mismatch in Parquet glob: column \"%s\" was read from the original file "
-			                      "\"%s\", but could not be found in file \"%s\"",
-			                      expected_name, initial_filename_p, file_name);
-		}
-		auto column_idx = entry->second;
-		column_id_map.push_back(column_idx);
-		if (expected_type != return_types[column_idx]) {
-			// type mismatch: have to add a cast
-			cast_map[column_idx] = expected_type;
-		}
-	}
-}
-
-ParquetOptions::ParquetOptions(ClientContext &context) {
-	Value binary_as_string_val;
-	if (context.TryGetCurrentSetting("binary_as_string", binary_as_string_val)) {
-		binary_as_string = binary_as_string_val.GetValue<bool>();
-	}
-}
-
-ParquetReader::ParquetReader(Allocator &allocator_p, unique_ptr<FileHandle> file_handle_p,
-                             const vector<LogicalType> &expected_types_p, const string &initial_filename_p)
-    : allocator(allocator_p) {
-	file_name = file_handle_p->path;
-	file_handle = move(file_handle_p);
-	metadata = LoadMetadata(allocator, *file_handle, *file_opener);
-	vector<string> expected_names;
-	vector<column_t> expected_column_ids;
-	InitializeSchema(expected_names, expected_types_p, expected_column_ids, initial_filename_p);
-}
-
-ParquetReader::ParquetReader(ClientContext &context_p, string file_name_p, const vector<string> &expected_names,
-                             const vector<LogicalType> &expected_types_p, const vector<column_t> &column_ids,
-                             ParquetOptions parquet_options_p, const string &initial_filename_p)
-    : allocator(Allocator::Get(context_p)), file_opener(FileSystem::GetFileOpener(context_p)),
-      parquet_options(parquet_options_p) {
-	auto &fs = FileSystem::GetFileSystem(context_p);
-	file_name = move(file_name_p);
-	file_handle = fs.OpenFile(file_name, FileFlags::FILE_FLAGS_READ, FileSystem::DEFAULT_LOCK,
-	                          FileSystem::DEFAULT_COMPRESSION, file_opener);
-	if (!file_handle->CanSeek()) {
-		throw NotImplementedException(
-		    "Reading parquet files from a FIFO stream is not supported and cannot be efficiently supported since "
-		    "metadata is located at the end of the file. Write the stream to disk first and read from there instead.");
-	}
-	// If object cached is disabled
-	// or if this file has cached metadata
-	// or if the cached version already expired
-	auto last_modify_time = fs.GetLastModifiedTime(*file_handle);
-	if (!ObjectCache::ObjectCacheEnabled(context_p)) {
-		metadata = LoadMetadata(allocator, *file_handle, *file_opener);
-	} else {
-		metadata = ObjectCache::GetObjectCache(context_p).Get<ParquetFileMetadataCache>(file_name);
-		if (!metadata || (last_modify_time + 10 >= metadata->read_time)) {
-			metadata = LoadMetadata(allocator, *file_handle, *file_opener);
-			ObjectCache::GetObjectCache(context_p).Put(file_name, metadata);
-		}
-	}
-	InitializeSchema(expected_names, expected_types_p, column_ids, initial_filename_p);
-}
-
-ParquetReader::~ParquetReader() {
-}
-
-const FileMetaData *ParquetReader::GetFileMetadata() {
-	D_ASSERT(metadata);
-	D_ASSERT(metadata->metadata);
-	return metadata->metadata.get();
-}
-
-// TODO also somewhat ugly, perhaps this can be moved to the column reader too
-unique_ptr<BaseStatistics> ParquetReader::ReadStatistics(ParquetReader &reader, LogicalType &type,
-                                                         column_t file_col_idx, const FileMetaData *file_meta_data) {
-	unique_ptr<BaseStatistics> column_stats;
-	auto root_reader = reader.CreateReader(file_meta_data);
-	auto column_reader = ((StructColumnReader *)root_reader.get())->GetChildReader(file_col_idx);
-
-	for (auto &row_group : file_meta_data->row_groups) {
-		auto chunk_stats = column_reader->Stats(row_group.columns);
-		if (!chunk_stats) {
-			return nullptr;
-		}
-		if (!column_stats) {
-			column_stats = move(chunk_stats);
-		} else {
-			column_stats->Merge(*chunk_stats);
-		}
-	}
-	return column_stats;
-}
-
-const ParquetRowGroup &ParquetReader::GetGroup(ParquetReaderScanState &state) {
-	auto file_meta_data = GetFileMetadata();
-	D_ASSERT(state.current_group >= 0 && (idx_t)state.current_group < state.group_idx_list.size());
-	D_ASSERT(state.group_idx_list[state.current_group] >= 0 &&
-	         state.group_idx_list[state.current_group] < file_meta_data->row_groups.size());
-	return file_meta_data->row_groups[state.group_idx_list[state.current_group]];
-}
-
-uint64_t ParquetReader::GetGroupCompressedSize(ParquetReaderScanState &state) {
-	auto &group = GetGroup(state);
-	auto total_compressed_size = group.total_compressed_size;
-
-	idx_t calc_compressed_size = 0;
-
-	// If the global total_compressed_size is not set, we can still calculate it
-	if (group.total_compressed_size == 0) {
-		for (auto &column_chunk : group.columns) {
-			calc_compressed_size += column_chunk.meta_data.total_compressed_size;
-		}
-	}
-
-	if (total_compressed_size != 0 && calc_compressed_size != 0 &&
-	    (idx_t)total_compressed_size != calc_compressed_size) {
-		throw std::runtime_error("mismatch between calculated compressed size and reported compressed size");
-	}
-
-	return total_compressed_size ? total_compressed_size : calc_compressed_size;
-}
-
-uint64_t ParquetReader::GetGroupSpan(ParquetReaderScanState &state) {
-	auto &group = GetGroup(state);
-	idx_t min_offset = NumericLimits<idx_t>::Maximum();
-	idx_t max_offset = NumericLimits<idx_t>::Minimum();
-
-	for (auto &column_chunk : group.columns) {
-
-		// Set the min offset
-		idx_t current_min_offset = NumericLimits<idx_t>::Maximum();
-		if (column_chunk.meta_data.__isset.dictionary_page_offset) {
-			current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.dictionary_page_offset);
-		}
-		if (column_chunk.meta_data.__isset.index_page_offset) {
-			current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.index_page_offset);
-		}
-		current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.data_page_offset);
-		min_offset = MinValue<idx_t>(current_min_offset, min_offset);
-		max_offset = MaxValue<idx_t>(max_offset, column_chunk.meta_data.total_compressed_size + current_min_offset);
-	}
-
-	return max_offset - min_offset;
-}
-
-idx_t ParquetReader::GetGroupOffset(ParquetReaderScanState &state) {
-	auto &group = GetGroup(state);
-	idx_t min_offset = NumericLimits<idx_t>::Maximum();
-
-	for (auto &column_chunk : group.columns) {
-		if (column_chunk.meta_data.__isset.dictionary_page_offset) {
-			min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.dictionary_page_offset);
-		}
-		if (column_chunk.meta_data.__isset.index_page_offset) {
-			min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.index_page_offset);
-		}
-		min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.data_page_offset);
-	}
-
-	return min_offset;
-}
-
-void ParquetReader::PrepareRowGroupBuffer(ParquetReaderScanState &state, idx_t out_col_idx) {
-	auto &group = GetGroup(state);
-
-	auto column_reader = ((StructColumnReader *)state.root_reader.get())->GetChildReader(state.column_ids[out_col_idx]);
-
-	// TODO move this to columnreader too
-	if (state.filters) {
-		auto stats = column_reader->Stats(group.columns);
-		// filters contain output chunk index, not file col idx!
-		auto filter_entry = state.filters->filters.find(out_col_idx);
-		if (stats && filter_entry != state.filters->filters.end()) {
-			bool skip_chunk = false;
-			auto &filter = *filter_entry->second;
-			auto prune_result = filter.CheckStatistics(*stats);
-			if (prune_result == FilterPropagateResult::FILTER_ALWAYS_FALSE) {
-				skip_chunk = true;
-			}
-			if (skip_chunk) {
-				// this effectively will skip this chunk
-				state.group_offset = group.num_rows;
-				return;
-			}
-		}
-	}
-
-	state.root_reader->InitializeRead(group.columns, *state.thrift_file_proto);
-}
-
-idx_t ParquetReader::NumRows() {
-	return GetFileMetadata()->num_rows;
-}
-
-idx_t ParquetReader::NumRowGroups() {
-	return GetFileMetadata()->row_groups.size();
-}
-
-void ParquetReader::InitializeScan(ParquetReaderScanState &state, vector<column_t> column_ids,
-                                   vector<idx_t> groups_to_read, TableFilterSet *filters) {
-	state.current_group = -1;
-	state.finished = false;
-	state.column_ids = column_id_map.empty() ? move(column_ids) : column_id_map;
-	state.group_offset = 0;
-	state.group_idx_list = move(groups_to_read);
-	state.filters = filters;
-	state.sel.Initialize(STANDARD_VECTOR_SIZE);
-
-	if (!state.file_handle || state.file_handle->path != file_handle->path) {
-		auto flags = FileFlags::FILE_FLAGS_READ;
-
-		if (!file_handle->OnDiskFile() && file_handle->CanSeek()) {
-			state.prefetch_mode = true;
-			flags |= FileFlags::FILE_FLAGS_DIRECT_IO;
-		} else {
-			state.prefetch_mode = false;
-		}
-
-		state.file_handle = file_handle->file_system.OpenFile(file_handle->path, flags, FileSystem::DEFAULT_LOCK,
-		                                                      FileSystem::DEFAULT_COMPRESSION, file_opener);
-	}
-
-	state.thrift_file_proto = CreateThriftProtocol(allocator, *state.file_handle, *file_opener, state.prefetch_mode);
-	state.root_reader = CreateReader(GetFileMetadata());
-
-	state.define_buf.resize(allocator, STANDARD_VECTOR_SIZE);
-	state.repeat_buf.resize(allocator, STANDARD_VECTOR_SIZE);
-}
-
-void FilterIsNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
-	auto &mask = FlatVector::Validity(v);
-	if (mask.AllValid()) {
-		filter_mask.reset();
-	} else {
-		for (idx_t i = 0; i < count; i++) {
-			filter_mask[i] = filter_mask[i] && !mask.RowIsValid(i);
-		}
-	}
-}
-
-void FilterIsNotNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
-	auto &mask = FlatVector::Validity(v);
-	if (!mask.AllValid()) {
-		for (idx_t i = 0; i < count; i++) {
-			filter_mask[i] = filter_mask[i] && mask.RowIsValid(i);
-		}
-	}
-}
-
-template <class T, class OP>
-void TemplatedFilterOperation(Vector &v, T constant, parquet_filter_t &filter_mask, idx_t count) {
-	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR); // we just created the damn thing it better be
-
-	auto v_ptr = FlatVector::GetData<T>(v);
-	auto &mask = FlatVector::Validity(v);
-
-	if (!mask.AllValid()) {
-		for (idx_t i = 0; i < count; i++) {
-			if (mask.RowIsValid(i)) {
-				filter_mask[i] = filter_mask[i] && OP::Operation(v_ptr[i], constant);
-			}
-		}
-	} else {
-		for (idx_t i = 0; i < count; i++) {
-			filter_mask[i] = filter_mask[i] && OP::Operation(v_ptr[i], constant);
-		}
-	}
-}
-
-template <class T, class OP>
-void TemplatedFilterOperation(Vector &v, const Value &constant, parquet_filter_t &filter_mask, idx_t count) {
-	TemplatedFilterOperation<T, OP>(v, constant.template GetValueUnsafe<T>(), filter_mask, count);
-}
-
-template <class OP>
-static void FilterOperationSwitch(Vector &v, Value &constant, parquet_filter_t &filter_mask, idx_t count) {
-	if (filter_mask.none() || count == 0) {
-		return;
-	}
-	switch (v.GetType().InternalType()) {
-	case PhysicalType::BOOL:
-		TemplatedFilterOperation<bool, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::UINT8:
-		TemplatedFilterOperation<uint8_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::UINT16:
-		TemplatedFilterOperation<uint16_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::UINT32:
-		TemplatedFilterOperation<uint32_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::UINT64:
-		TemplatedFilterOperation<uint64_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::INT8:
-		TemplatedFilterOperation<int8_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::INT16:
-		TemplatedFilterOperation<int16_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::INT32:
-		TemplatedFilterOperation<int32_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::INT64:
-		TemplatedFilterOperation<int64_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::INT128:
-		TemplatedFilterOperation<hugeint_t, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::FLOAT:
-		TemplatedFilterOperation<float, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::DOUBLE:
-		TemplatedFilterOperation<double, OP>(v, constant, filter_mask, count);
-		break;
-	case PhysicalType::VARCHAR:
-		TemplatedFilterOperation<string_t, OP>(v, constant, filter_mask, count);
-		break;
-	default:
-		throw NotImplementedException("Unsupported type for filter %s", v.ToString());
-	}
-}
-
-static void ApplyFilter(Vector &v, TableFilter &filter, parquet_filter_t &filter_mask, idx_t count) {
-	switch (filter.filter_type) {
-	case TableFilterType::CONJUNCTION_AND: {
-		auto &conjunction = (ConjunctionAndFilter &)filter;
-		for (auto &child_filter : conjunction.child_filters) {
-			ApplyFilter(v, *child_filter, filter_mask, count);
-		}
-		break;
-	}
-	case TableFilterType::CONJUNCTION_OR: {
-		auto &conjunction = (ConjunctionOrFilter &)filter;
-		parquet_filter_t or_mask;
-		for (auto &child_filter : conjunction.child_filters) {
-			parquet_filter_t child_mask = filter_mask;
-			ApplyFilter(v, *child_filter, child_mask, count);
-			or_mask |= child_mask;
-		}
-		filter_mask &= or_mask;
-		break;
-	}
-	case TableFilterType::CONSTANT_COMPARISON: {
-		auto &constant_filter = (ConstantFilter &)filter;
-		switch (constant_filter.comparison_type) {
-		case ExpressionType::COMPARE_EQUAL:
-			FilterOperationSwitch<Equals>(v, constant_filter.constant, filter_mask, count);
-			break;
-		case ExpressionType::COMPARE_LESSTHAN:
-			FilterOperationSwitch<LessThan>(v, constant_filter.constant, filter_mask, count);
-			break;
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			FilterOperationSwitch<LessThanEquals>(v, constant_filter.constant, filter_mask, count);
-			break;
-		case ExpressionType::COMPARE_GREATERTHAN:
-			FilterOperationSwitch<GreaterThan>(v, constant_filter.constant, filter_mask, count);
-			break;
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			FilterOperationSwitch<GreaterThanEquals>(v, constant_filter.constant, filter_mask, count);
-			break;
-		default:
-			D_ASSERT(0);
-		}
-		break;
-	}
-	case TableFilterType::IS_NOT_NULL:
-		FilterIsNotNull(v, filter_mask, count);
-		break;
-	case TableFilterType::IS_NULL:
-		FilterIsNull(v, filter_mask, count);
-		break;
-	default:
-		D_ASSERT(0);
-		break;
-	}
-}
-
-void ParquetReader::Scan(ParquetReaderScanState &state, DataChunk &result) {
-	while (ScanInternal(state, result)) {
-		if (result.size() > 0) {
-			break;
-		}
-		result.Reset();
-	}
-}
-
-bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &result) {
-	if (state.finished) {
-		return false;
-	}
-
-	// see if we have to switch to the next row group in the parquet file
-	if (state.current_group < 0 || (int64_t)state.group_offset >= GetGroup(state).num_rows) {
-		state.current_group++;
-		state.group_offset = 0;
-
-		auto &trans = (ThriftFileTransport &)*state.thrift_file_proto->getTransport();
-		trans.ClearPrefetch();
-		state.current_group_prefetched = false;
-
-		if ((idx_t)state.current_group == state.group_idx_list.size()) {
-			state.finished = true;
-			return false;
-		}
-
-		uint64_t to_scan_compressed_bytes = 0;
-		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
-			// this is a special case where we are not interested in the actual contents of the file
-			if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
-				continue;
-			}
-
-			PrepareRowGroupBuffer(state, out_col_idx);
-
-			auto file_col_idx = state.column_ids[out_col_idx];
-
-			auto root_reader = ((StructColumnReader *)state.root_reader.get());
-			to_scan_compressed_bytes += root_reader->GetChildReader(file_col_idx)->TotalCompressedSize();
-		}
-
-		auto &group = GetGroup(state);
-		if (state.prefetch_mode && state.group_offset != (idx_t)group.num_rows) {
-
-			uint64_t total_row_group_span = GetGroupSpan(state);
-
-			double scan_percentage = (double)(to_scan_compressed_bytes) / total_row_group_span;
-
-			if (to_scan_compressed_bytes > total_row_group_span) {
-				throw std::runtime_error(
-				    "Malformed parquet file: sum of total compressed bytes of columns seems incorrect");
-			}
-
-			if (!state.filters && scan_percentage > ParquetReaderPrefetchConfig::WHOLE_GROUP_PREFETCH_MINIMUM_SCAN) {
-				// Prefetch the whole row group
-				if (!state.current_group_prefetched) {
-					auto total_compressed_size = GetGroupCompressedSize(state);
-					if (total_compressed_size > 0) {
-						trans.Prefetch(GetGroupOffset(state), total_row_group_span);
-					}
-					state.current_group_prefetched = true;
-				}
-			} else {
-				// lazy fetching is when all tuples in a column can be skipped. With lazy fetching the buffer is only
-				// fetched on the first read to that buffer.
-				bool lazy_fetch = state.filters;
-
-				// Prefetch column-wise
-				for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
-
-					if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
-						continue;
-					}
-
-					auto file_col_idx = state.column_ids[out_col_idx];
-					auto root_reader = ((StructColumnReader *)state.root_reader.get());
-
-					bool has_filter =
-					    state.filters && state.filters->filters.find(out_col_idx) != state.filters->filters.end();
-					root_reader->GetChildReader(file_col_idx)->RegisterPrefetch(trans, !(lazy_fetch && !has_filter));
-				}
-
-				trans.FinalizeRegistration();
-
-				if (!lazy_fetch) {
-					trans.PrefetchRegistered();
-				}
-			}
-		}
-		return true;
-	}
-
-	auto this_output_chunk_rows = MinValue<idx_t>(STANDARD_VECTOR_SIZE, GetGroup(state).num_rows - state.group_offset);
-	result.SetCardinality(this_output_chunk_rows);
-
-	if (this_output_chunk_rows == 0) {
-		state.finished = true;
-		return false; // end of last group, we are done
-	}
-
-	// we evaluate simple table filters directly in this scan so we can skip decoding column data that's never going to
-	// be relevant
-	parquet_filter_t filter_mask;
-	filter_mask.set();
-
-	// mask out unused part of bitset
-	for (idx_t i = this_output_chunk_rows; i < STANDARD_VECTOR_SIZE; i++) {
-		filter_mask.set(i, false);
-	}
-
-	state.define_buf.zero();
-	state.repeat_buf.zero();
-
-	auto define_ptr = (uint8_t *)state.define_buf.ptr;
-	auto repeat_ptr = (uint8_t *)state.repeat_buf.ptr;
-
-	auto root_reader = ((StructColumnReader *)state.root_reader.get());
-
-	if (state.filters) {
-		vector<bool> need_to_read(result.ColumnCount(), true);
-
-		// first load the columns that are used in filters
-		for (auto &filter_col : state.filters->filters) {
-			auto file_col_idx = state.column_ids[filter_col.first];
-			// row_group skipping of columns that are never scanned.
-			if (filter_mask.none()) { // if no rows are left we can stop checking filters
-				break;
-			}
-
-			root_reader->GetChildReader(file_col_idx)
-			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[filter_col.first]);
-
-			need_to_read[filter_col.first] = false;
-
-			ApplyFilter(result.data[filter_col.first], *filter_col.second, filter_mask, this_output_chunk_rows);
-		}
-
-		// we still may have to read some cols
-		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
-			if (!need_to_read[out_col_idx]) {
-				continue;
-			}
-			auto file_col_idx = state.column_ids[out_col_idx];
-
-			if (filter_mask.none()) {
-				root_reader->GetChildReader(file_col_idx)->Skip(result.size());
-				continue;
-			}
-			// TODO handle ROWID here, too
-			root_reader->GetChildReader(file_col_idx)
-			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
-		}
-
-		idx_t sel_size = 0;
-		for (idx_t i = 0; i < this_output_chunk_rows; i++) {
-			if (filter_mask[i]) {
-				state.sel.set_index(sel_size++, i);
-			}
-		}
-
-		result.Slice(state.sel, sel_size);
-		result.Verify();
-
-	} else { // #nofilter, just fricking load the data
-		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
-			auto file_col_idx = state.column_ids[out_col_idx];
-
-			if (file_col_idx == COLUMN_IDENTIFIER_ROW_ID) {
-				Value constant_42 = Value::BIGINT(42);
-				result.data[out_col_idx].Reference(constant_42);
-				continue;
-			}
-
-			//			std::cout << "Reading nofilter for col " <<
-			// root_reader->GetChildReader(file_col_idx)->Schema().name
-			//<< "\n";
-			root_reader->GetChildReader(file_col_idx)
-			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
-		}
-	}
-
-	state.group_offset += this_output_chunk_rows;
-	return true;
-}
-
-} // namespace duckdb
-
-
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/types/blob.hpp"
-#include "duckdb/common/types/value.hpp"
-#include "duckdb/storage/statistics/numeric_statistics.hpp"
-#include "duckdb/storage/statistics/string_statistics.hpp"
-#endif
-
-namespace duckdb {
-
-using duckdb_parquet::format::ConvertedType;
-using duckdb_parquet::format::Type;
-
-static unique_ptr<BaseStatistics> CreateNumericStats(const LogicalType &type,
-                                                     const duckdb_parquet::format::SchemaElement &schema_ele,
-                                                     const duckdb_parquet::format::Statistics &parquet_stats) {
-	auto stats = make_unique<NumericStatistics>(type, StatisticsType::LOCAL_STATS);
-
-	// for reasons unknown to science, Parquet defines *both* `min` and `min_value` as well as `max` and
-	// `max_value`. All are optional. such elegance.
-	if (parquet_stats.__isset.min) {
-		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min).CastAs(type);
-	} else if (parquet_stats.__isset.min_value) {
-		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min_value).CastAs(type);
-	} else {
-		stats->min = Value(type);
-	}
-	if (parquet_stats.__isset.max) {
-		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max).CastAs(type);
-	} else if (parquet_stats.__isset.max_value) {
-		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max_value).CastAs(type);
-	} else {
-		stats->max = Value(type);
-	}
-	return move(stats);
-}
-
-Value ParquetStatisticsUtils::ConvertValue(const LogicalType &type,
-                                           const duckdb_parquet::format::SchemaElement &schema_ele,
-                                           const std::string &stats) {
-	if (stats.empty()) {
-		return Value();
-	}
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN: {
-		if (stats.size() != sizeof(bool)) {
-			throw InternalException("Incorrect stats size for type BOOLEAN");
-		}
-		return Value::BOOLEAN(Load<bool>((data_ptr_t)stats.c_str()));
-	}
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-		if (stats.size() != sizeof(uint32_t)) {
-			throw InternalException("Incorrect stats size for type UINTEGER");
-		}
-		return Value::UINTEGER(Load<uint32_t>((data_ptr_t)stats.c_str()));
-	case LogicalTypeId::UBIGINT:
-		if (stats.size() != sizeof(uint64_t)) {
-			throw InternalException("Incorrect stats size for type UBIGINT");
-		}
-		return Value::UBIGINT(Load<uint64_t>((data_ptr_t)stats.c_str()));
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-		if (stats.size() != sizeof(int32_t)) {
-			throw InternalException("Incorrect stats size for type INTEGER");
-		}
-		return Value::INTEGER(Load<int32_t>((data_ptr_t)stats.c_str()));
-	case LogicalTypeId::BIGINT:
-		if (stats.size() != sizeof(int64_t)) {
-			throw InternalException("Incorrect stats size for type BIGINT");
-		}
-		return Value::BIGINT(Load<int64_t>((data_ptr_t)stats.c_str()));
-	case LogicalTypeId::FLOAT: {
-		if (stats.size() != sizeof(float)) {
-			throw InternalException("Incorrect stats size for type FLOAT");
-		}
-		auto val = Load<float>((data_ptr_t)stats.c_str());
-		if (!Value::FloatIsFinite(val)) {
-			return Value();
-		}
-		return Value::FLOAT(val);
-	}
-	case LogicalTypeId::DOUBLE: {
-		if (stats.size() != sizeof(double)) {
-			throw InternalException("Incorrect stats size for type DOUBLE");
-		}
-		auto val = Load<double>((data_ptr_t)stats.c_str());
-		if (!Value::DoubleIsFinite(val)) {
-			return Value();
-		}
-		return Value::DOUBLE(val);
-	}
-	case LogicalTypeId::DECIMAL: {
-		auto width = DecimalType::GetWidth(type);
-		auto scale = DecimalType::GetScale(type);
-		switch (schema_ele.type) {
-		case Type::INT32: {
-			if (stats.size() != sizeof(int32_t)) {
-				throw InternalException("Incorrect stats size for type %s", type.ToString());
-			}
-			return Value::DECIMAL(Load<int32_t>((data_ptr_t)stats.c_str()), width, scale);
-		}
-		case Type::INT64: {
-			if (stats.size() != sizeof(int64_t)) {
-				throw InternalException("Incorrect stats size for type %s", type.ToString());
-			}
-			return Value::DECIMAL(Load<int64_t>((data_ptr_t)stats.c_str()), width, scale);
-		}
-		case Type::BYTE_ARRAY:
-		case Type::FIXED_LEN_BYTE_ARRAY:
-			switch (type.InternalType()) {
-			case PhysicalType::INT16:
-				return Value::DECIMAL(
-				    ParquetDecimalUtils::ReadDecimalValue<int16_t>((const_data_ptr_t)stats.c_str(), stats.size()),
-				    width, scale);
-			case PhysicalType::INT32:
-				return Value::DECIMAL(
-				    ParquetDecimalUtils::ReadDecimalValue<int32_t>((const_data_ptr_t)stats.c_str(), stats.size()),
-				    width, scale);
-			case PhysicalType::INT64:
-				return Value::DECIMAL(
-				    ParquetDecimalUtils::ReadDecimalValue<int64_t>((const_data_ptr_t)stats.c_str(), stats.size()),
-				    width, scale);
-			case PhysicalType::INT128:
-				return Value::DECIMAL(
-				    ParquetDecimalUtils::ReadDecimalValue<hugeint_t>((const_data_ptr_t)stats.c_str(), stats.size()),
-				    width, scale);
-			default:
-				throw InternalException("Unsupported internal type for decimal");
-			}
-		default:
-			throw InternalException("Unsupported internal type for decimal?..");
-		}
-	}
-	case LogicalType::VARCHAR:
-	case LogicalType::BLOB:
-		if (Value::StringIsValid(stats)) {
-			return Value(stats);
-		} else {
-			return Value(Blob::ToString(string_t(stats)));
-		}
-	case LogicalTypeId::DATE:
-		if (stats.size() != sizeof(int32_t)) {
-			throw InternalException("Incorrect stats size for type DATE");
-		}
-		return Value::DATE(date_t(Load<int32_t>((data_ptr_t)stats.c_str())));
-	case LogicalTypeId::TIME:
-		if (stats.size() != sizeof(int64_t)) {
-			throw InternalException("Incorrect stats size for type TIME");
-		}
-		return Value::TIME(dtime_t(Load<int64_t>((data_ptr_t)stats.c_str())));
-	case LogicalTypeId::TIMESTAMP: {
-		if (schema_ele.type == Type::INT96) {
-			if (stats.size() != sizeof(Int96)) {
-				throw InternalException("Incorrect stats size for type TIMESTAMP");
-			}
-			return Value::TIMESTAMP(ImpalaTimestampToTimestamp(Load<Int96>((data_ptr_t)stats.c_str())));
-		} else {
-			D_ASSERT(schema_ele.type == Type::INT64);
-			if (stats.size() != sizeof(int64_t)) {
-				throw InternalException("Incorrect stats size for type TIMESTAMP");
-			}
-			auto val = Load<int64_t>((data_ptr_t)stats.c_str());
-			if (schema_ele.converted_type == duckdb_parquet::format::ConvertedType::TIMESTAMP_MILLIS) {
-				return Value::TIMESTAMPMS(timestamp_t(val));
-			} else {
-				return Value::TIMESTAMP(timestamp_t(val));
-			}
-		}
-	}
-	default:
-		throw InternalException("Unsupported type for stats %s", type.ToString());
-	}
-}
-
-unique_ptr<BaseStatistics> ParquetStatisticsUtils::TransformColumnStatistics(const SchemaElement &s_ele,
-                                                                             const LogicalType &type,
-                                                                             const ColumnChunk &column_chunk) {
-	if (!column_chunk.__isset.meta_data || !column_chunk.meta_data.__isset.statistics) {
-		// no stats present for row group
-		return nullptr;
-	}
-	auto &parquet_stats = column_chunk.meta_data.statistics;
-	unique_ptr<BaseStatistics> row_group_stats;
-
-	switch (type.id()) {
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::DECIMAL:
-		row_group_stats = CreateNumericStats(type, s_ele, parquet_stats);
-		break;
-	case LogicalTypeId::VARCHAR: {
-		auto string_stats = make_unique<StringStatistics>(type, StatisticsType::LOCAL_STATS);
-		if (parquet_stats.__isset.min) {
-			string_stats->Update(parquet_stats.min);
-		} else if (parquet_stats.__isset.min_value) {
-			string_stats->Update(parquet_stats.min_value);
-		} else {
-			return nullptr;
-		}
-		if (parquet_stats.__isset.max) {
-			string_stats->Update(parquet_stats.max);
-		} else if (parquet_stats.__isset.max_value) {
-			string_stats->Update(parquet_stats.max_value);
-		} else {
-			return nullptr;
-		}
-		string_stats->has_unicode = true; // we dont know better
-		string_stats->max_string_length = NumericLimits<uint32_t>::Maximum();
-		row_group_stats = move(string_stats);
-		break;
-	}
-	default:
-		// no stats for you
-		break;
-	} // end of type switch
-
-	// null count is generic
-	if (row_group_stats) {
-		if (column_chunk.meta_data.type == duckdb_parquet::format::Type::FLOAT ||
-		    column_chunk.meta_data.type == duckdb_parquet::format::Type::DOUBLE) {
-			// floats/doubles can have infinity, which can become NULL
-			row_group_stats->validity_stats = make_unique<ValidityStatistics>(true);
-		} else if (parquet_stats.__isset.null_count) {
-			row_group_stats->validity_stats = make_unique<ValidityStatistics>(parquet_stats.null_count != 0);
-		} else {
-			row_group_stats->validity_stats = make_unique<ValidityStatistics>(true);
-		}
-	} else {
-		// if stats are missing from any row group we know squat
-		return nullptr;
-	}
-
-	return row_group_stats;
-}
-
-} // namespace duckdb
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/common/types/date.hpp"
-#include "duckdb/common/types/time.hpp"
-#include "duckdb/common/types/timestamp.hpp"
-#endif
-
-namespace duckdb {
-
-// surely they are joking
-static constexpr int64_t JULIAN_TO_UNIX_EPOCH_DAYS = 2440588LL;
-static constexpr int64_t MILLISECONDS_PER_DAY = 86400000LL;
-static constexpr int64_t NANOSECONDS_PER_DAY = MILLISECONDS_PER_DAY * 1000LL * 1000LL;
-
-int64_t ImpalaTimestampToNanoseconds(const Int96 &impala_timestamp) {
-	int64_t days_since_epoch = impala_timestamp.value[2] - JULIAN_TO_UNIX_EPOCH_DAYS;
-	auto nanoseconds = Load<int64_t>((data_ptr_t)impala_timestamp.value);
-	return days_since_epoch * NANOSECONDS_PER_DAY + nanoseconds;
-}
-
-timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts) {
-	auto impala_ns = ImpalaTimestampToNanoseconds(raw_ts);
-	return Timestamp::FromEpochNanoSeconds(impala_ns);
-}
-
-Int96 TimestampToImpalaTimestamp(timestamp_t &ts) {
-	int32_t hour, min, sec, msec;
-	Time::Convert(Timestamp::GetTime(ts), hour, min, sec, msec);
-	uint64_t ms_since_midnight = hour * 60 * 60 * 1000 + min * 60 * 1000 + sec * 1000 + msec;
-	auto days_since_epoch = Date::Epoch(Timestamp::GetDate(ts)) / (24 * 60 * 60);
-	// first two uint32 in Int96 are nanoseconds since midnights
-	// last uint32 is number of days since year 4713 BC ("Julian date")
-	Int96 impala_ts;
-	Store<uint64_t>(ms_since_midnight * 1000000, (data_ptr_t)impala_ts.value);
-	impala_ts.value[2] = days_since_epoch + JULIAN_TO_UNIX_EPOCH_DAYS;
-	return impala_ts;
-}
-
-timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts) {
-	return Timestamp::FromEpochMicroSeconds(raw_ts);
-}
-timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts) {
-	return Timestamp::FromEpochMs(raw_ts);
-}
-
-date_t ParquetIntToDate(const int32_t &raw_date) {
-	return date_t(raw_date);
-}
-
-dtime_t ParquetIntToTime(const int64_t &raw_time) {
-	return dtime_t(raw_time);
-}
-
-} // namespace duckdb
-
-
-
-#include "duckdb.hpp"
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/function/table_function.hpp"
-#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/main/connection.hpp"
-#include "duckdb/common/file_system.hpp"
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/common/serializer/buffered_file_writer.hpp"
-#endif
-
-namespace duckdb {
-
-using namespace duckdb_apache::thrift;            // NOLINT
-using namespace duckdb_apache::thrift::protocol;  // NOLINT
-using namespace duckdb_apache::thrift::transport; // NOLINT
-
-using duckdb_parquet::format::CompressionCodec;
-using duckdb_parquet::format::ConvertedType;
-using duckdb_parquet::format::Encoding;
-using duckdb_parquet::format::FieldRepetitionType;
-using duckdb_parquet::format::FileMetaData;
-using duckdb_parquet::format::PageHeader;
-using duckdb_parquet::format::PageType;
-using ParquetRowGroup = duckdb_parquet::format::RowGroup;
-using duckdb_parquet::format::Type;
-
-class MyTransport : public TTransport {
-public:
-	explicit MyTransport(Serializer &serializer) : serializer(serializer) {
-	}
-
-	bool isOpen() const override {
-		return true;
-	}
-
-	void open() override {
-	}
-
-	void close() override {
-	}
-
-	void write_virt(const uint8_t *buf, uint32_t len) override {
-		serializer.WriteData((const_data_ptr_t)buf, len);
-	}
-
-private:
-	Serializer &serializer;
-};
-
-Type::type ParquetWriter::DuckDBTypeToParquetType(const LogicalType &duckdb_type) {
-	switch (duckdb_type.id()) {
-	case LogicalTypeId::BOOLEAN:
-		return Type::BOOLEAN;
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::DATE:
-		return Type::INT32;
-	case LogicalTypeId::BIGINT:
-		return Type::INT64;
-	case LogicalTypeId::FLOAT:
-		return Type::FLOAT;
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::HUGEINT:
-		return Type::DOUBLE;
-	case LogicalTypeId::ENUM:
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-	case LogicalTypeId::BLOB:
-		return Type::BYTE_ARRAY;
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return Type::INT64;
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-		return Type::INT32;
-	case LogicalTypeId::UBIGINT:
-		return Type::INT64;
-	case LogicalTypeId::INTERVAL:
-	case LogicalTypeId::UUID:
-		return Type::FIXED_LEN_BYTE_ARRAY;
-	case LogicalTypeId::DECIMAL:
-		switch (duckdb_type.InternalType()) {
-		case PhysicalType::INT16:
-		case PhysicalType::INT32:
-			return Type::INT32;
-		case PhysicalType::INT64:
-			return Type::INT64;
-		case PhysicalType::INT128:
-			return Type::FIXED_LEN_BYTE_ARRAY;
-		default:
-			throw InternalException("Unsupported internal decimal type");
-		}
-	default:
-		throw NotImplementedException("Unimplemented type for Parquet \"%s\"", duckdb_type.ToString());
-	}
-}
-
-void ParquetWriter::SetSchemaProperties(const LogicalType &duckdb_type,
-                                        duckdb_parquet::format::SchemaElement &schema_ele) {
-	switch (duckdb_type.id()) {
-	case LogicalTypeId::TINYINT:
-		schema_ele.converted_type = ConvertedType::INT_8;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::SMALLINT:
-		schema_ele.converted_type = ConvertedType::INT_16;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::INTEGER:
-		schema_ele.converted_type = ConvertedType::INT_32;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::BIGINT:
-		schema_ele.converted_type = ConvertedType::INT_64;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::UTINYINT:
-		schema_ele.converted_type = ConvertedType::UINT_8;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::USMALLINT:
-		schema_ele.converted_type = ConvertedType::UINT_16;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::UINTEGER:
-		schema_ele.converted_type = ConvertedType::UINT_32;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::UBIGINT:
-		schema_ele.converted_type = ConvertedType::UINT_64;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::DATE:
-		schema_ele.converted_type = ConvertedType::DATE;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::TIME_TZ:
-	case LogicalTypeId::TIME:
-		schema_ele.converted_type = ConvertedType::TIME_MICROS;
-		schema_ele.__isset.converted_type = true;
-		schema_ele.logicalType.__isset.TIME = true;
-		schema_ele.logicalType.TIME.isAdjustedToUTC = (duckdb_type.id() == LogicalTypeId::TIME_TZ);
-		schema_ele.logicalType.TIME.unit.__isset.MICROS = true;
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-		schema_ele.converted_type = ConvertedType::TIMESTAMP_MICROS;
-		schema_ele.__isset.converted_type = true;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.TIMESTAMP = true;
-		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC = (duckdb_type.id() == LogicalTypeId::TIMESTAMP_TZ);
-		schema_ele.logicalType.TIMESTAMP.unit.__isset.MICROS = true;
-		break;
-	case LogicalTypeId::TIMESTAMP_MS:
-		schema_ele.converted_type = ConvertedType::TIMESTAMP_MILLIS;
-		schema_ele.__isset.converted_type = true;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.TIMESTAMP = true;
-		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC = false;
-		schema_ele.logicalType.TIMESTAMP.unit.__isset.MILLIS = true;
-		break;
-	case LogicalTypeId::ENUM:
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::JSON:
-		schema_ele.converted_type = ConvertedType::UTF8;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::INTERVAL:
-		schema_ele.type_length = 12;
-		schema_ele.converted_type = ConvertedType::INTERVAL;
-		schema_ele.__isset.type_length = true;
-		schema_ele.__isset.converted_type = true;
-		break;
-	case LogicalTypeId::UUID:
-		schema_ele.type_length = 16;
-		schema_ele.__isset.type_length = true;
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.UUID = true;
-		break;
-	case LogicalTypeId::DECIMAL:
-		schema_ele.converted_type = ConvertedType::DECIMAL;
-		schema_ele.precision = DecimalType::GetWidth(duckdb_type);
-		schema_ele.scale = DecimalType::GetScale(duckdb_type);
-		schema_ele.__isset.converted_type = true;
-		schema_ele.__isset.precision = true;
-		schema_ele.__isset.scale = true;
-		if (duckdb_type.InternalType() == PhysicalType::INT128) {
-			schema_ele.type_length = 16;
-			schema_ele.__isset.type_length = true;
-		}
-		schema_ele.__isset.logicalType = true;
-		schema_ele.logicalType.__isset.DECIMAL = true;
-		schema_ele.logicalType.DECIMAL.precision = schema_ele.precision;
-		schema_ele.logicalType.DECIMAL.scale = schema_ele.scale;
-		break;
-	default:
-		break;
-	}
-}
-
-ParquetWriter::ParquetWriter(FileSystem &fs, string file_name_p, FileOpener *file_opener_p, vector<LogicalType> types_p,
-                             vector<string> names_p, CompressionCodec::type codec)
-    : file_name(move(file_name_p)), sql_types(move(types_p)), column_names(move(names_p)), codec(codec) {
-	// initialize the file writer
-	writer = make_unique<BufferedFileWriter>(
-	    fs, file_name.c_str(), FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW, file_opener_p);
-	// parquet files start with the string "PAR1"
-	writer->WriteData((const_data_ptr_t) "PAR1", 4);
-	TCompactProtocolFactoryT<MyTransport> tproto_factory;
-	protocol = tproto_factory.getProtocol(make_shared<MyTransport>(*writer));
-
-	file_meta_data.num_rows = 0;
-	file_meta_data.version = 1;
-
-	file_meta_data.__isset.created_by = true;
-	file_meta_data.created_by = "DuckDB";
-
-	file_meta_data.schema.resize(1);
-
-	// populate root schema object
-	file_meta_data.schema[0].name = "duckdb_schema";
-	file_meta_data.schema[0].num_children = sql_types.size();
-	file_meta_data.schema[0].__isset.num_children = true;
-	file_meta_data.schema[0].repetition_type = duckdb_parquet::format::FieldRepetitionType::REQUIRED;
-	file_meta_data.schema[0].__isset.repetition_type = true;
-
-	vector<string> schema_path;
-	for (idx_t i = 0; i < sql_types.size(); i++) {
-		column_writers.push_back(ColumnWriter::CreateWriterRecursive(file_meta_data.schema, *this, sql_types[i],
-		                                                             column_names[i], schema_path));
-	}
-}
-
-void ParquetWriter::Flush(ChunkCollection &buffer) {
-	if (buffer.Count() == 0) {
-		return;
-	}
-	lock_guard<mutex> glock(lock);
-
-	// set up a new row group for this chunk collection
-	ParquetRowGroup row_group;
-	row_group.num_rows = buffer.Count();
-	row_group.file_offset = writer->GetTotalWritten();
-	row_group.__isset.file_offset = true;
-
-	// iterate over each of the columns of the chunk collection and write them
-	auto &chunks = buffer.Chunks();
-	D_ASSERT(buffer.ColumnCount() == column_writers.size());
-	for (idx_t col_idx = 0; col_idx < buffer.ColumnCount(); col_idx++) {
-		auto write_state = column_writers[col_idx]->InitializeWriteState(row_group);
-		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-			column_writers[col_idx]->Prepare(*write_state, nullptr, chunks[chunk_idx]->data[col_idx],
-			                                 chunks[chunk_idx]->size());
-		}
-		column_writers[col_idx]->BeginWrite(*write_state);
-		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
-			column_writers[col_idx]->Write(*write_state, chunks[chunk_idx]->data[col_idx], chunks[chunk_idx]->size());
-		}
-		column_writers[col_idx]->FinalizeWrite(*write_state);
-	}
-
-	// append the row group to the file meta data
-	file_meta_data.row_groups.push_back(row_group);
-	file_meta_data.num_rows += buffer.Count();
-}
-
-void ParquetWriter::Finalize() {
-	auto start_offset = writer->GetTotalWritten();
-	file_meta_data.write(protocol.get());
-
-	writer->Write<uint32_t>(writer->GetTotalWritten() - start_offset);
-
-	// parquet files also end with the string "PAR1"
-	writer->WriteData((const_data_ptr_t) "PAR1", 4);
-
-	// flush to disk
-	writer->Sync();
-	writer.reset();
-}
-
-} // namespace duckdb
-
-
-
-namespace duckdb {
-
-struct ZstdStreamWrapper : public StreamWrapper {
-	~ZstdStreamWrapper() override;
-
-	CompressedFile *file = nullptr;
-	duckdb_zstd::ZSTD_DStream *zstd_stream_ptr = nullptr;
-	duckdb_zstd::ZSTD_CStream *zstd_compress_ptr = nullptr;
-	bool writing = false;
-
-public:
-	void Initialize(CompressedFile &file, bool write) override;
-	bool Read(StreamData &stream_data) override;
-	void Write(CompressedFile &file, StreamData &stream_data, data_ptr_t buffer, int64_t nr_bytes) override;
-
-	void Close() override;
-
-	void FlushStream();
-};
-
-ZstdStreamWrapper::~ZstdStreamWrapper() {
-	if (Exception::UncaughtException()) {
-		return;
-	}
-	try {
-		Close();
-	} catch (...) {
-	}
-}
-
-void ZstdStreamWrapper::Initialize(CompressedFile &file, bool write) {
-	Close();
-	this->file = &file;
-	this->writing = write;
-	if (write) {
-		zstd_compress_ptr = duckdb_zstd::ZSTD_createCStream();
-	} else {
-		zstd_stream_ptr = duckdb_zstd::ZSTD_createDStream();
-	}
-}
-
-bool ZstdStreamWrapper::Read(StreamData &sd) {
-	D_ASSERT(!writing);
-
-	duckdb_zstd::ZSTD_inBuffer in_buffer;
-	duckdb_zstd::ZSTD_outBuffer out_buffer;
-
-	in_buffer.src = sd.in_buff_start;
-	in_buffer.size = sd.in_buff_end - sd.in_buff_start;
-	in_buffer.pos = 0;
-
-	out_buffer.dst = sd.out_buff_start;
-	out_buffer.size = sd.out_buf_size;
-	out_buffer.pos = 0;
-
-	auto res = duckdb_zstd::ZSTD_decompressStream(zstd_stream_ptr, &out_buffer, &in_buffer);
-	if (duckdb_zstd::ZSTD_isError(res)) {
-		throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
-	}
-
-	sd.in_buff_start = (data_ptr_t)in_buffer.src + in_buffer.pos;
-	sd.in_buff_end = (data_ptr_t)in_buffer.src + in_buffer.size;
-	sd.out_buff_end = (data_ptr_t)out_buffer.dst + out_buffer.pos;
-	return false;
-}
-
-void ZstdStreamWrapper::Write(CompressedFile &file, StreamData &sd, data_ptr_t uncompressed_data,
-                              int64_t uncompressed_size) {
-	D_ASSERT(writing);
-
-	auto remaining = uncompressed_size;
-	while (remaining > 0) {
-		D_ASSERT(sd.out_buff.get() + sd.out_buf_size > sd.out_buff_start);
-		idx_t output_remaining = (sd.out_buff.get() + sd.out_buf_size) - sd.out_buff_start;
-
-		duckdb_zstd::ZSTD_inBuffer in_buffer;
-		duckdb_zstd::ZSTD_outBuffer out_buffer;
-
-		in_buffer.src = uncompressed_data;
-		in_buffer.size = remaining;
-		in_buffer.pos = 0;
-
-		out_buffer.dst = sd.out_buff_start;
-		out_buffer.size = output_remaining;
-		out_buffer.pos = 0;
-		auto res =
-		    duckdb_zstd::ZSTD_compressStream2(zstd_compress_ptr, &out_buffer, &in_buffer, duckdb_zstd::ZSTD_e_continue);
-		if (duckdb_zstd::ZSTD_isError(res)) {
-			throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
-		}
-		idx_t input_consumed = in_buffer.pos;
-		idx_t written_to_output = out_buffer.pos;
-		sd.out_buff_start += written_to_output;
-		if (sd.out_buff_start == sd.out_buff.get() + sd.out_buf_size) {
-			// no more output buffer available: flush
-			file.child_handle->Write(sd.out_buff.get(), sd.out_buff_start - sd.out_buff.get());
-			sd.out_buff_start = sd.out_buff.get();
-		}
-		uncompressed_data += input_consumed;
-		remaining -= input_consumed;
-	}
-}
-
-void ZstdStreamWrapper::FlushStream() {
-	auto &sd = file->stream_data;
-	duckdb_zstd::ZSTD_inBuffer in_buffer;
-	duckdb_zstd::ZSTD_outBuffer out_buffer;
-
-	in_buffer.src = nullptr;
-	in_buffer.size = 0;
-	in_buffer.pos = 0;
-	while (true) {
-		idx_t output_remaining = (sd.out_buff.get() + sd.out_buf_size) - sd.out_buff_start;
-
-		out_buffer.dst = sd.out_buff_start;
-		out_buffer.size = output_remaining;
-		out_buffer.pos = 0;
-
-		auto res =
-		    duckdb_zstd::ZSTD_compressStream2(zstd_compress_ptr, &out_buffer, &in_buffer, duckdb_zstd::ZSTD_e_end);
-		if (duckdb_zstd::ZSTD_isError(res)) {
-			throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
-		}
-		idx_t written_to_output = out_buffer.pos;
-		sd.out_buff_start += written_to_output;
-		if (sd.out_buff_start > sd.out_buff.get()) {
-			file->child_handle->Write(sd.out_buff.get(), sd.out_buff_start - sd.out_buff.get());
-			sd.out_buff_start = sd.out_buff.get();
-		}
-		if (res == 0) {
-			break;
-		}
-	}
-}
-
-void ZstdStreamWrapper::Close() {
-	if (!zstd_stream_ptr && !zstd_compress_ptr) {
-		return;
-	}
-	if (writing) {
-		FlushStream();
-	}
-	if (zstd_stream_ptr) {
-		duckdb_zstd::ZSTD_freeDStream(zstd_stream_ptr);
-	}
-	if (zstd_compress_ptr) {
-		duckdb_zstd::ZSTD_freeCStream(zstd_compress_ptr);
-	}
-	zstd_stream_ptr = nullptr;
-	zstd_compress_ptr = nullptr;
-}
-
-class ZStdFile : public CompressedFile {
-public:
-	ZStdFile(unique_ptr<FileHandle> child_handle_p, const string &path, bool write)
-	    : CompressedFile(zstd_fs, move(child_handle_p), path) {
-		Initialize(write);
-	}
-
-	ZStdFileSystem zstd_fs;
-};
-
-unique_ptr<FileHandle> ZStdFileSystem::OpenCompressedFile(unique_ptr<FileHandle> handle, bool write) {
-	auto path = handle->path;
-	return make_unique<ZStdFile>(move(handle), path, write);
-}
-
-unique_ptr<StreamWrapper> ZStdFileSystem::CreateStream() {
-	return make_unique<ZstdStreamWrapper>();
-}
-
-idx_t ZStdFileSystem::InBufferSize() {
-	return duckdb_zstd::ZSTD_DStreamInSize();
-}
-
-idx_t ZStdFileSystem::OutBufferSize() {
-	return duckdb_zstd::ZSTD_DStreamOutSize();
-}
-
-} // namespace duckdb
-
 
 // LICENSE_CHANGE_BEGIN
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #1
@@ -9048,8 +107,8 @@ parquetConstants::parquetConstants() {
  * under the License.
  */
 
-#ifndef _THRIFT_TOSTRING_H_
-#define _THRIFT_TOSTRING_H_ 1
+#ifndef _DUCKDB_THRIFT_TOSTRING_H_
+#define _DUCKDB_THRIFT_TOSTRING_H_ 1
 
 #include <cmath>
 #include <limits>
@@ -9142,7 +201,7 @@ std::string to_string(const std::set<T>& s) {
 }
 } // duckdb_apache::thrift
 
-#endif // _THRIFT_TOSTRING_H_
+#endif // _DUCKDB_THRIFT_TOSTRING_H_
 
 
 // LICENSE_CHANGE_END
@@ -15816,6 +6875,11803 @@ void FileCryptoMetaData::printTo(std::ostream& out) const {
 
 
 // LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#include <string.h>
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
+#define THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
+
+#include <stddef.h>
+
+namespace duckdb_snappy {
+
+// A Sink is an interface that consumes a sequence of bytes.
+class Sink {
+ public:
+  Sink() { }
+  virtual ~Sink();
+
+  // Append "bytes[0,n-1]" to this.
+  virtual void Append(const char* bytes, size_t n) = 0;
+
+  // Returns a writable buffer of the specified length for appending.
+  // May return a pointer to the caller-owned scratch buffer which
+  // must have at least the indicated length.  The returned buffer is
+  // only valid until the next operation on this Sink.
+  //
+  // After writing at most "length" bytes, call Append() with the
+  // pointer returned from this function and the number of bytes
+  // written.  Many Append() implementations will avoid copying
+  // bytes if this function returned an internal buffer.
+  //
+  // If a non-scratch buffer is returned, the caller may only pass a
+  // prefix of it to Append().  That is, it is not correct to pass an
+  // interior pointer of the returned array to Append().
+  //
+  // The default implementation always returns the scratch buffer.
+  virtual char* GetAppendBuffer(size_t length, char* scratch);
+
+  // For higher performance, Sink implementations can provide custom
+  // AppendAndTakeOwnership() and GetAppendBufferVariable() methods.
+  // These methods can reduce the number of copies done during
+  // compression/decompression.
+
+  // Append "bytes[0,n-1] to the sink. Takes ownership of "bytes"
+  // and calls the deleter function as (*deleter)(deleter_arg, bytes, n)
+  // to free the buffer. deleter function must be non NULL.
+  //
+  // The default implementation just calls Append and frees "bytes".
+  // Other implementations may avoid a copy while appending the buffer.
+  virtual void AppendAndTakeOwnership(
+      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
+      void *deleter_arg);
+
+  // Returns a writable buffer for appending and writes the buffer's capacity to
+  // *allocated_size. Guarantees *allocated_size >= min_size.
+  // May return a pointer to the caller-owned scratch buffer which must have
+  // scratch_size >= min_size.
+  //
+  // The returned buffer is only valid until the next operation
+  // on this ByteSink.
+  //
+  // After writing at most *allocated_size bytes, call Append() with the
+  // pointer returned from this function and the number of bytes written.
+  // Many Append() implementations will avoid copying bytes if this function
+  // returned an internal buffer.
+  //
+  // If the sink implementation allocates or reallocates an internal buffer,
+  // it should use the desired_size_hint if appropriate. If a caller cannot
+  // provide a reasonable guess at the desired capacity, it should set
+  // desired_size_hint = 0.
+  //
+  // If a non-scratch buffer is returned, the caller may only pass
+  // a prefix to it to Append(). That is, it is not correct to pass an
+  // interior pointer to Append().
+  //
+  // The default implementation always returns the scratch buffer.
+  virtual char* GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size);
+
+ private:
+  // No copying
+  Sink(const Sink&);
+  void operator=(const Sink&);
+};
+
+// A Source is an interface that yields a sequence of bytes
+class Source {
+ public:
+  Source() { }
+  virtual ~Source();
+
+  // Return the number of bytes left to read from the source
+  virtual size_t Available() const = 0;
+
+  // Peek at the next flat region of the source.  Does not reposition
+  // the source.  The returned region is empty iff Available()==0.
+  //
+  // Returns a pointer to the beginning of the region and store its
+  // length in *len.
+  //
+  // The returned region is valid until the next call to Skip() or
+  // until this object is destroyed, whichever occurs first.
+  //
+  // The returned region may be larger than Available() (for example
+  // if this ByteSource is a view on a substring of a larger source).
+  // The caller is responsible for ensuring that it only reads the
+  // Available() bytes.
+  virtual const char* Peek(size_t* len) = 0;
+
+  // Skip the next n bytes.  Invalidates any buffer returned by
+  // a previous call to Peek().
+  // REQUIRES: Available() >= n
+  virtual void Skip(size_t n) = 0;
+
+ private:
+  // No copying
+  Source(const Source&);
+  void operator=(const Source&);
+};
+
+// A Source implementation that yields the contents of a flat array
+class ByteArraySource : public Source {
+ public:
+  ByteArraySource(const char* p, size_t n) : ptr_(p), left_(n) { }
+  virtual ~ByteArraySource();
+  virtual size_t Available() const;
+  virtual const char* Peek(size_t* len);
+  virtual void Skip(size_t n);
+ private:
+  const char* ptr_;
+  size_t left_;
+};
+
+// A Sink implementation that writes to a flat array without any bound checks.
+class UncheckedByteArraySink : public Sink {
+ public:
+  explicit UncheckedByteArraySink(char* dest) : dest_(dest) { }
+  virtual ~UncheckedByteArraySink();
+  virtual void Append(const char* data, size_t n);
+  virtual char* GetAppendBuffer(size_t len, char* scratch);
+  virtual char* GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size);
+  virtual void AppendAndTakeOwnership(
+      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
+      void *deleter_arg);
+
+  // Return the current output pointer so that a caller can see how
+  // many bytes were produced.
+  // Note: this is not a Sink method.
+  char* CurrentDestination() const { return dest_; }
+ private:
+  char* dest_;
+};
+
+}  // namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
+
+
+// LICENSE_CHANGE_END
+
+
+namespace duckdb_snappy {
+
+Source::~Source() { }
+
+Sink::~Sink() { }
+
+char* Sink::GetAppendBuffer(size_t length, char* scratch) {
+  return scratch;
+}
+
+char* Sink::GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size) {
+  *allocated_size = scratch_size;
+  return scratch;
+}
+
+void Sink::AppendAndTakeOwnership(
+    char* bytes, size_t n,
+    void (*deleter)(void*, const char*, size_t),
+    void *deleter_arg) {
+  Append(bytes, n);
+  (*deleter)(deleter_arg, bytes, n);
+}
+
+ByteArraySource::~ByteArraySource() { }
+
+size_t ByteArraySource::Available() const { return left_; }
+
+const char* ByteArraySource::Peek(size_t* len) {
+  *len = left_;
+  return ptr_;
+}
+
+void ByteArraySource::Skip(size_t n) {
+  left_ -= n;
+  ptr_ += n;
+}
+
+UncheckedByteArraySink::~UncheckedByteArraySink() { }
+
+void UncheckedByteArraySink::Append(const char* data, size_t n) {
+  // Do no copying if the caller filled in the result of GetAppendBuffer()
+  if (data != dest_) {
+    memcpy(dest_, data, n);
+  }
+  dest_ += n;
+}
+
+char* UncheckedByteArraySink::GetAppendBuffer(size_t len, char* scratch) {
+  return dest_;
+}
+
+void UncheckedByteArraySink::AppendAndTakeOwnership(
+    char* data, size_t n,
+    void (*deleter)(void*, const char*, size_t),
+    void *deleter_arg) {
+  if (data != dest_) {
+    memcpy(dest_, data, n);
+    (*deleter)(deleter_arg, data, n);
+  }
+  dest_ += n;
+}
+
+char* UncheckedByteArraySink::GetAppendBufferVariable(
+      size_t min_size, size_t desired_size_hint, char* scratch,
+      size_t scratch_size, size_t* allocated_size) {
+  *allocated_size = desired_size_hint;
+  return dest_;
+}
+
+}  // namespace duckdb_snappy
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#include <algorithm>
+#include <string>
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Various stubs for the open-source version of Snappy.
+
+#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
+#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
+
+// #ifdef HAVE_CONFIG_H
+// #include "config.h"
+// #endif
+
+#include <string>
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef HAVE_SYS_MMAN_H
+#include <sys/mman.h>
+#endif
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif  // defined(_MSC_VER)
+
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+
+#if __has_feature(memory_sanitizer)
+#include <sanitizer/msan_interface.h>
+#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) \
+    __msan_unpoison((address), (size))
+#else
+#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) /* empty */
+#endif  // __has_feature(memory_sanitizer)
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2011 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Various type stubs for the open-source version of Snappy.
+//
+// This file cannot include config.h, as it is included from snappy.h,
+// which is a public header. Instead, snappy-stubs-public.h is generated by
+// from snappy-stubs-public.h.in at configure time.
+
+#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+
+#ifndef _WIN32  // HAVE_SYS_UIO_H
+#include <sys/uio.h>
+#endif  // HAVE_SYS_UIO_H
+
+#define SNAPPY_MAJOR 1
+#define SNAPPY_MINOR 1
+#define SNAPPY_PATCHLEVEL 7
+#define SNAPPY_VERSION \
+    ((SNAPPY_MAJOR << 16) | (SNAPPY_MINOR << 8) | SNAPPY_PATCHLEVEL)
+
+namespace duckdb_snappy {
+
+using int8 = std::int8_t;
+using uint8 = std::uint8_t;
+using int16 = std::int16_t;
+using uint16 = std::uint16_t;
+using int32 = std::int32_t;
+using uint32 = std::uint32_t;
+using int64 = std::int64_t;
+using uint64 = std::uint64_t;
+
+using string = std::string;
+
+#ifdef _WIN32  // !HAVE_SYS_UIO_H
+// Windows does not have an iovec type, yet the concept is universally useful.
+// It is simple to define it ourselves, so we put it inside our own namespace.
+struct iovec {
+  void* iov_base;
+  size_t iov_len;
+};
+#endif  // !HAVE_SYS_UIO_H
+
+}  // namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_PUBLIC_H_
+
+
+// LICENSE_CHANGE_END
+
+
+#if defined(__x86_64__)
+
+// Enable 64-bit optimized versions of some routines.
+#define ARCH_K8 1
+
+#elif defined(__ppc64__)
+
+#define ARCH_PPC 1
+
+#elif defined(__aarch64__)
+
+#define ARCH_ARM 1
+
+#endif
+
+// Needed by OS X, among others.
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+
+// The size of an array, if known at compile-time.
+// Will give unexpected results if used on a pointer.
+// We undefine it first, since some compilers already have a definition.
+#ifdef ARRAYSIZE
+#undef ARRAYSIZE
+#endif
+#define ARRAYSIZE(a) (sizeof(a) / sizeof(*(a)))
+
+// Static prediction hints.
+#ifdef HAVE_BUILTIN_EXPECT
+#define SNAPPY_PREDICT_FALSE(x) (__builtin_expect(x, 0))
+#define SNAPPY_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
+#else
+#define SNAPPY_PREDICT_FALSE(x) x
+#define SNAPPY_PREDICT_TRUE(x) x
+#endif
+
+// This is only used for recomputing the tag byte table used during
+// decompression; for simplicity we just remove it from the open-source
+// version (anyone who wants to regenerate it can just do the call
+// themselves within main()).
+#define DEFINE_bool(flag_name, default_value, description) \
+  bool FLAGS_ ## flag_name = default_value
+#define DECLARE_bool(flag_name) \
+  extern bool FLAGS_ ## flag_name
+
+namespace duckdb_snappy {
+
+//static const uint32 kuint32max = static_cast<uint32>(0xFFFFFFFF);
+//static const int64 kint64max = static_cast<int64>(0x7FFFFFFFFFFFFFFFLL);
+
+
+// HM: Always use aligned load to keep ourselves out of trouble. Sorry.
+
+inline uint16 UNALIGNED_LOAD16(const void *p) {
+  uint16 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline uint32 UNALIGNED_LOAD32(const void *p) {
+  uint32 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline uint64 UNALIGNED_LOAD64(const void *p) {
+  uint64 t;
+  memcpy(&t, p, sizeof t);
+  return t;
+}
+
+inline void UNALIGNED_STORE16(void *p, uint16 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+inline void UNALIGNED_STORE32(void *p, uint32 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+inline void UNALIGNED_STORE64(void *p, uint64 v) {
+  memcpy(p, &v, sizeof v);
+}
+
+
+// The following guarantees declaration of the byte swap functions.
+#if defined(SNAPPY_IS_BIG_ENDIAN)
+
+#ifdef HAVE_SYS_BYTEORDER_H
+#include <sys/byteorder.h>
+#endif
+
+#ifdef HAVE_SYS_ENDIAN_H
+#include <sys/endian.h>
+#endif
+
+#ifdef _MSC_VER
+#include <stdlib.h>
+#define bswap_16(x) _byteswap_ushort(x)
+#define bswap_32(x) _byteswap_ulong(x)
+#define bswap_64(x) _byteswap_uint64(x)
+
+#elif defined(__APPLE__)
+// Mac OS X / Darwin features
+#include <libkern/OSByteOrder.h>
+#define bswap_16(x) OSSwapInt16(x)
+#define bswap_32(x) OSSwapInt32(x)
+#define bswap_64(x) OSSwapInt64(x)
+
+#elif defined(HAVE_BYTESWAP_H)
+#include <byteswap.h>
+
+#elif defined(bswap32)
+// FreeBSD defines bswap{16,32,64} in <sys/endian.h> (already #included).
+#define bswap_16(x) bswap16(x)
+#define bswap_32(x) bswap32(x)
+#define bswap_64(x) bswap64(x)
+
+#elif defined(BSWAP_64)
+// Solaris 10 defines BSWAP_{16,32,64} in <sys/byteorder.h> (already #included).
+#define bswap_16(x) BSWAP_16(x)
+#define bswap_32(x) BSWAP_32(x)
+#define bswap_64(x) BSWAP_64(x)
+
+#else
+
+inline uint16 bswap_16(uint16 x) {
+  return (x << 8) | (x >> 8);
+}
+
+inline uint32 bswap_32(uint32 x) {
+  x = ((x & 0xff00ff00UL) >> 8) | ((x & 0x00ff00ffUL) << 8);
+  return (x >> 16) | (x << 16);
+}
+
+inline uint64 bswap_64(uint64 x) {
+  x = ((x & 0xff00ff00ff00ff00ULL) >> 8) | ((x & 0x00ff00ff00ff00ffULL) << 8);
+  x = ((x & 0xffff0000ffff0000ULL) >> 16) | ((x & 0x0000ffff0000ffffULL) << 16);
+  return (x >> 32) | (x << 32);
+}
+
+#endif
+
+#endif  // defined(SNAPPY_IS_BIG_ENDIAN)
+
+// Convert to little-endian storage, opposite of network format.
+// Convert x from host to little endian: x = LittleEndian.FromHost(x);
+// convert x from little endian to host: x = LittleEndian.ToHost(x);
+//
+//  Store values into unaligned memory converting to little endian order:
+//    LittleEndian.Store16(p, x);
+//
+//  Load unaligned values stored in little endian converting to host order:
+//    x = LittleEndian.Load16(p);
+class LittleEndian {
+ public:
+  // Conversion functions.
+#if defined(SNAPPY_IS_BIG_ENDIAN)
+
+  static uint16 FromHost16(uint16 x) { return bswap_16(x); }
+  static uint16 ToHost16(uint16 x) { return bswap_16(x); }
+
+  static uint32 FromHost32(uint32 x) { return bswap_32(x); }
+  static uint32 ToHost32(uint32 x) { return bswap_32(x); }
+
+  static bool IsLittleEndian() { return false; }
+
+#else  // !defined(SNAPPY_IS_BIG_ENDIAN)
+
+  static uint16 FromHost16(uint16 x) { return x; }
+  static uint16 ToHost16(uint16 x) { return x; }
+
+  static uint32 FromHost32(uint32 x) { return x; }
+  static uint32 ToHost32(uint32 x) { return x; }
+
+  static bool IsLittleEndian() { return true; }
+
+#endif  // !defined(SNAPPY_IS_BIG_ENDIAN)
+
+  // Functions to do unaligned loads and stores in little-endian order.
+  static uint16 Load16(const void *p) {
+    return ToHost16(UNALIGNED_LOAD16(p));
+  }
+
+  static void Store16(void *p, uint16 v) {
+    UNALIGNED_STORE16(p, FromHost16(v));
+  }
+
+  static uint32 Load32(const void *p) {
+    return ToHost32(UNALIGNED_LOAD32(p));
+  }
+
+  static void Store32(void *p, uint32 v) {
+    UNALIGNED_STORE32(p, FromHost32(v));
+  }
+};
+
+// Some bit-manipulation functions.
+class Bits {
+ public:
+  // Return floor(log2(n)) for positive integer n.
+  static int Log2FloorNonZero(uint32 n);
+
+  // Return floor(log2(n)) for positive integer n.  Returns -1 iff n == 0.
+  static int Log2Floor(uint32 n);
+
+  // Return the first set least / most significant bit, 0-indexed.  Returns an
+  // undefined value if n == 0.  FindLSBSetNonZero() is similar to ffs() except
+  // that it's 0-indexed.
+  static int FindLSBSetNonZero(uint32 n);
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+  static int FindLSBSetNonZero64(uint64 n);
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+ private:
+  // No copying
+  Bits(const Bits&);
+  void operator=(const Bits&);
+};
+
+#ifdef HAVE_BUILTIN_CTZ
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+  // (31 ^ x) is equivalent to (31 - x) for x in [0, 31]. An easy proof
+  // represents subtraction in base 2 and observes that there's no carry.
+  //
+  // GCC and Clang represent __builtin_clz on x86 as 31 ^ _bit_scan_reverse(x).
+  // Using "31 ^" here instead of "31 -" allows the optimizer to strip the
+  // function body down to _bit_scan_reverse(x).
+  return 31 ^ __builtin_clz(n);
+}
+
+inline int Bits::Log2Floor(uint32 n) {
+  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
+}
+
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
+  return __builtin_ctz(n);
+}
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
+  return __builtin_ctzll(n);
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+#elif defined(_MSC_VER)
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+  unsigned long where;
+  _BitScanReverse(&where, n);
+  return static_cast<int>(where);
+}
+
+inline int Bits::Log2Floor(uint32 n) {
+  unsigned long where;
+  if (_BitScanReverse(&where, n))
+    return static_cast<int>(where);
+  return -1;
+}
+
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
+  unsigned long where;
+  if (_BitScanForward(&where, n))
+    return static_cast<int>(where);
+  return 32;
+}
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
+  unsigned long where;
+  if (_BitScanForward64(&where, n))
+    return static_cast<int>(where);
+  return 64;
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+#else  // Portable versions.
+
+inline int Bits::Log2FloorNonZero(uint32 n) {
+  assert(n != 0);
+
+  int log = 0;
+  uint32 value = n;
+  for (int i = 4; i >= 0; --i) {
+    int shift = (1 << i);
+    uint32 x = value >> shift;
+    if (x != 0) {
+      value = x;
+      log += shift;
+    }
+  }
+  assert(value == 1);
+  return log;
+}
+
+inline int Bits::Log2Floor(uint32 n) {
+  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
+}
+
+inline int Bits::FindLSBSetNonZero(uint32 n) {
+  assert(n != 0);
+
+  int rc = 31;
+  for (int i = 4, shift = 1 << 4; i >= 0; --i) {
+    const uint32 x = n << shift;
+    if (x != 0) {
+      n = x;
+      rc -= shift;
+    }
+    shift >>= 1;
+  }
+  return rc;
+}
+
+#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+// FindLSBSetNonZero64() is defined in terms of FindLSBSetNonZero().
+inline int Bits::FindLSBSetNonZero64(uint64 n) {
+  assert(n != 0);
+
+  const uint32 bottombits = static_cast<uint32>(n);
+  if (bottombits == 0) {
+    // Bottom bits are zero, so scan in top bits
+    return 32 + FindLSBSetNonZero(static_cast<uint32>(n >> 32));
+  } else {
+    return FindLSBSetNonZero(bottombits);
+  }
+}
+#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
+
+#endif  // End portable versions.
+
+// Variable-length integer encoding.
+class Varint {
+ public:
+  // Maximum lengths of varint encoding of uint32.
+  static const int kMax32 = 5;
+
+  // Attempts to parse a varint32 from a prefix of the bytes in [ptr,limit-1].
+  // Never reads a character at or beyond limit.  If a valid/terminated varint32
+  // was found in the range, stores it in *OUTPUT and returns a pointer just
+  // past the last byte of the varint32. Else returns NULL.  On success,
+  // "result <= limit".
+  static const char* Parse32WithLimit(const char* ptr, const char* limit,
+                                      uint32* OUTPUT);
+
+  // REQUIRES   "ptr" points to a buffer of length sufficient to hold "v".
+  // EFFECTS    Encodes "v" into "ptr" and returns a pointer to the
+  //            byte just past the last encoded byte.
+  static char* Encode32(char* ptr, uint32 v);
+
+  // EFFECTS    Appends the varint representation of "value" to "*s".
+  static void Append32(string* s, uint32 value);
+};
+
+inline const char* Varint::Parse32WithLimit(const char* p,
+                                            const char* l,
+                                            uint32* OUTPUT) {
+  const unsigned char* ptr = reinterpret_cast<const unsigned char*>(p);
+  const unsigned char* limit = reinterpret_cast<const unsigned char*>(l);
+  uint32 b, result;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result = b & 127;          if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) <<  7; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 14; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 21; if (b < 128) goto done;
+  if (ptr >= limit) return NULL;
+  b = *(ptr++); result |= (b & 127) << 28; if (b < 16) goto done;
+  return NULL;       // Value is too long to be a varint32
+ done:
+  *OUTPUT = result;
+  return reinterpret_cast<const char*>(ptr);
+}
+
+inline char* Varint::Encode32(char* sptr, uint32 v) {
+  // Operate on characters as unsigneds
+  unsigned char* ptr = reinterpret_cast<unsigned char*>(sptr);
+  static const int B = 128;
+  if (v < (1<<7)) {
+    *(ptr++) = v;
+  } else if (v < (1<<14)) {
+    *(ptr++) = v | B;
+    *(ptr++) = v>>7;
+  } else if (v < (1<<21)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = v>>14;
+  } else if (v < (1<<28)) {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = v>>21;
+  } else {
+    *(ptr++) = v | B;
+    *(ptr++) = (v>>7) | B;
+    *(ptr++) = (v>>14) | B;
+    *(ptr++) = (v>>21) | B;
+    *(ptr++) = v>>28;
+  }
+  return reinterpret_cast<char*>(ptr);
+}
+
+// If you know the internal layout of the std::string in use, you can
+// replace this function with one that resizes the string without
+// filling the new space with zeros (if applicable) --
+// it will be non-portable but faster.
+inline void STLStringResizeUninitialized(string* s, size_t new_size) {
+  s->resize(new_size);
+}
+
+// Return a mutable char* pointing to a string's internal buffer,
+// which may not be null-terminated. Writing through this pointer will
+// modify the string.
+//
+// string_as_array(&str)[i] is valid for 0 <= i < str.size() until the
+// next call to a string method that invalidates iterators.
+//
+// As of 2006-04, there is no standard-blessed way of getting a
+// mutable reference to a string's internal buffer. However, issue 530
+// (http://www.open-std.org/JTC1/SC22/WG21/docs/lwg-defects.html#530)
+// proposes this as the method. It will officially be part of the standard
+// for C++0x. This should already work on all current implementations.
+inline char* string_as_array(string* str) {
+  return str->empty() ? NULL : &*str->begin();
+}
+
+}  // namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
+
+
+// LICENSE_CHANGE_END
+
+
+namespace duckdb_snappy {
+
+void Varint::Append32(string* s, uint32 value) {
+  char buf[Varint::kMax32];
+  const char* p = Varint::Encode32(buf, value);
+  s->append(buf, p - buf);
+}
+
+}  // namespace duckdb_snappy
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2005 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2005 and onwards Google Inc.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// A light-weight compression algorithm.  It is designed for speed of
+// compression and decompression, rather than for the utmost in space
+// savings.
+//
+// For getting better compression ratios when you are compressing data
+// with long repeated sequences or compressing data that is similar to
+// other data, while still compressing fast, you might look at first
+// using BMDiff and then compressing the output of BMDiff with
+// Snappy.
+
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_H__
+#define THIRD_PARTY_SNAPPY_SNAPPY_H__
+
+#include <cstddef>
+#include <string>
+
+
+
+namespace duckdb_snappy {
+  class Source;
+  class Sink;
+
+  // ------------------------------------------------------------------------
+  // Generic compression/decompression routines.
+  // ------------------------------------------------------------------------
+
+  // Compress the bytes read from "*source" and append to "*sink". Return the
+  // number of bytes written.
+  size_t Compress(Source* source, Sink* sink);
+
+  // Find the uncompressed length of the given stream, as given by the header.
+  // Note that the true length could deviate from this; the stream could e.g.
+  // be truncated.
+  //
+  // Also note that this leaves "*source" in a state that is unsuitable for
+  // further operations, such as RawUncompress(). You will need to rewind
+  // or recreate the source yourself before attempting any further calls.
+  bool GetUncompressedLength(Source* source, uint32* result);
+
+  // ------------------------------------------------------------------------
+  // Higher-level string based routines (should be sufficient for most users)
+  // ------------------------------------------------------------------------
+
+  // Sets "*output" to the compressed version of "input[0,input_length-1]".
+  // Original contents of *output are lost.
+  //
+  // REQUIRES: "input[]" is not an alias of "*output".
+  size_t Compress(const char* input, size_t input_length, string* output);
+
+  // Decompresses "compressed[0,compressed_length-1]" to "*uncompressed".
+  // Original contents of "*uncompressed" are lost.
+  //
+  // REQUIRES: "compressed[]" is not an alias of "*uncompressed".
+  //
+  // returns false if the message is corrupted and could not be decompressed
+  bool Uncompress(const char* compressed, size_t compressed_length,
+                  string* uncompressed);
+
+  // Decompresses "compressed" to "*uncompressed".
+  //
+  // returns false if the message is corrupted and could not be decompressed
+  bool Uncompress(Source* compressed, Sink* uncompressed);
+
+  // This routine uncompresses as much of the "compressed" as possible
+  // into sink.  It returns the number of valid bytes added to sink
+  // (extra invalid bytes may have been added due to errors; the caller
+  // should ignore those). The emitted data typically has length
+  // GetUncompressedLength(), but may be shorter if an error is
+  // encountered.
+  size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed);
+
+  // ------------------------------------------------------------------------
+  // Lower-level character array based routines.  May be useful for
+  // efficiency reasons in certain circumstances.
+  // ------------------------------------------------------------------------
+
+  // REQUIRES: "compressed" must point to an area of memory that is at
+  // least "MaxCompressedLength(input_length)" bytes in length.
+  //
+  // Takes the data stored in "input[0..input_length]" and stores
+  // it in the array pointed to by "compressed".
+  //
+  // "*compressed_length" is set to the length of the compressed output.
+  //
+  // Example:
+  //    char* output = new char[snappy::MaxCompressedLength(input_length)];
+  //    size_t output_length;
+  //    RawCompress(input, input_length, output, &output_length);
+  //    ... Process(output, output_length) ...
+  //    delete [] output;
+  void RawCompress(const char* input,
+                   size_t input_length,
+                   char* compressed,
+                   size_t* compressed_length);
+
+  // Given data in "compressed[0..compressed_length-1]" generated by
+  // calling the Snappy::Compress routine, this routine
+  // stores the uncompressed data to
+  //    uncompressed[0..GetUncompressedLength(compressed)-1]
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompress(const char* compressed, size_t compressed_length,
+                     char* uncompressed);
+
+  // Given data from the byte source 'compressed' generated by calling
+  // the Snappy::Compress routine, this routine stores the uncompressed
+  // data to
+  //    uncompressed[0..GetUncompressedLength(compressed,compressed_length)-1]
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompress(Source* compressed, char* uncompressed);
+
+  // Given data in "compressed[0..compressed_length-1]" generated by
+  // calling the Snappy::Compress routine, this routine
+  // stores the uncompressed data to the iovec "iov". The number of physical
+  // buffers in "iov" is given by iov_cnt and their cumulative size
+  // must be at least GetUncompressedLength(compressed). The individual buffers
+  // in "iov" must not overlap with each other.
+  //
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
+                            const struct iovec* iov, size_t iov_cnt);
+
+  // Given data from the byte source 'compressed' generated by calling
+  // the Snappy::Compress routine, this routine stores the uncompressed
+  // data to the iovec "iov". The number of physical
+  // buffers in "iov" is given by iov_cnt and their cumulative size
+  // must be at least GetUncompressedLength(compressed). The individual buffers
+  // in "iov" must not overlap with each other.
+  //
+  // returns false if the message is corrupted and could not be decrypted
+  bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
+                            size_t iov_cnt);
+
+  // Returns the maximal size of the compressed representation of
+  // input data that is "source_bytes" bytes in length;
+  size_t MaxCompressedLength(size_t source_bytes);
+
+  // REQUIRES: "compressed[]" was produced by RawCompress() or Compress()
+  // Returns true and stores the length of the uncompressed data in
+  // *result normally.  Returns false on parsing error.
+  // This operation takes O(1) time.
+  bool GetUncompressedLength(const char* compressed, size_t compressed_length,
+                             size_t* result);
+
+  // Returns true iff the contents of "compressed[]" can be uncompressed
+  // successfully.  Does not return the uncompressed data.  Takes
+  // time proportional to compressed_length, but is usually at least
+  // a factor of four faster than actual decompression.
+  bool IsValidCompressedBuffer(const char* compressed,
+                               size_t compressed_length);
+
+  // Returns true iff the contents of "compressed" can be uncompressed
+  // successfully.  Does not return the uncompressed data.  Takes
+  // time proportional to *compressed length, but is usually at least
+  // a factor of four faster than actual decompression.
+  // On success, consumes all of *compressed.  On failure, consumes an
+  // unspecified prefix of *compressed.
+  bool IsValidCompressed(Source* compressed);
+
+}  // end namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_H__
+
+
+// LICENSE_CHANGE_END
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #3
+// See the end of this file for a list
+
+// Copyright 2008 Google Inc. All Rights Reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//     * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//     * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+//
+// Internals shared between the Snappy implementation and its unittest.
+
+#ifndef THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
+#define THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
+
+
+
+namespace duckdb_snappy {
+namespace internal {
+
+// Working memory performs a single allocation to hold all scratch space
+// required for compression.
+class WorkingMemory {
+ public:
+  explicit WorkingMemory(size_t input_size);
+  ~WorkingMemory();
+
+  // Allocates and clears a hash table using memory in "*this",
+  // stores the number of buckets in "*table_size" and returns a pointer to
+  // the base of the hash table.
+  uint16* GetHashTable(size_t fragment_size, int* table_size) const;
+  char* GetScratchInput() const { return input_; }
+  char* GetScratchOutput() const { return output_; }
+
+ private:
+  char* mem_;      // the allocated memory, never nullptr
+  size_t size_;    // the size of the allocated memory, never 0
+  uint16* table_;  // the pointer to the hashtable
+  char* input_;    // the pointer to the input scratch buffer
+  char* output_;   // the pointer to the output scratch buffer
+
+  // No copying
+  WorkingMemory(const WorkingMemory&);
+  void operator=(const WorkingMemory&);
+};
+
+// Flat array compression that does not emit the "uncompressed length"
+// prefix. Compresses "input" string to the "*op" buffer.
+//
+// REQUIRES: "input_length <= kBlockSize"
+// REQUIRES: "op" points to an array of memory that is at least
+// "MaxCompressedLength(input_length)" in size.
+// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
+// REQUIRES: "table_size" is a power of two
+//
+// Returns an "end" pointer into "op" buffer.
+// "end - op" is the compressed size of "input".
+char* CompressFragment(const char* input,
+                       size_t input_length,
+                       char* op,
+                       uint16* table,
+                       const int table_size);
+
+// Find the largest n such that
+//
+//   s1[0,n-1] == s2[0,n-1]
+//   and n <= (s2_limit - s2).
+//
+// Return make_pair(n, n < 8).
+// Does not read *s2_limit or beyond.
+// Does not read *(s1 + (s2_limit - s2)) or beyond.
+// Requires that s2_limit >= s2.
+//
+// Separate implementation for 64-bit, little-endian cpus.
+#if !defined(SNAPPY_IS_BIG_ENDIAN) && \
+    (defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM))
+static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
+                                                      const char* s2,
+                                                      const char* s2_limit) {
+  assert(s2_limit >= s2);
+  size_t matched = 0;
+
+  // This block isn't necessary for correctness; we could just start looping
+  // immediately.  As an optimization though, it is useful.  It creates some not
+  // uncommon code paths that determine, without extra effort, whether the match
+  // length is less than 8.  In short, we are hoping to avoid a conditional
+  // branch, and perhaps get better code layout from the C++ compiler.
+  if (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
+    uint64 a1 = UNALIGNED_LOAD64(s1);
+    uint64 a2 = UNALIGNED_LOAD64(s2);
+    if (a1 != a2) {
+      return std::pair<size_t, bool>(Bits::FindLSBSetNonZero64(a1 ^ a2) >> 3,
+                                     true);
+    } else {
+      matched = 8;
+      s2 += 8;
+    }
+  }
+
+  // Find out how long the match is. We loop over the data 64 bits at a
+  // time until we find a 64-bit block that doesn't match; then we find
+  // the first non-matching bit and use that to calculate the total
+  // length of the match.
+  while (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
+    if (UNALIGNED_LOAD64(s2) == UNALIGNED_LOAD64(s1 + matched)) {
+      s2 += 8;
+      matched += 8;
+    } else {
+      uint64 x = UNALIGNED_LOAD64(s2) ^ UNALIGNED_LOAD64(s1 + matched);
+      int matching_bits = Bits::FindLSBSetNonZero64(x);
+      matched += matching_bits >> 3;
+      assert(matched >= 8);
+      return std::pair<size_t, bool>(matched, false);
+    }
+  }
+  while (SNAPPY_PREDICT_TRUE(s2 < s2_limit)) {
+    if (s1[matched] == *s2) {
+      ++s2;
+      ++matched;
+    } else {
+      return std::pair<size_t, bool>(matched, matched < 8);
+    }
+  }
+  return std::pair<size_t, bool>(matched, matched < 8);
+}
+#else
+static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
+                                                      const char* s2,
+                                                      const char* s2_limit) {
+  // Implementation based on the x86-64 version, above.
+  assert(s2_limit >= s2);
+  int matched = 0;
+
+  while (s2 <= s2_limit - 4 &&
+         UNALIGNED_LOAD32(s2) == UNALIGNED_LOAD32(s1 + matched)) {
+    s2 += 4;
+    matched += 4;
+  }
+  if (LittleEndian::IsLittleEndian() && s2 <= s2_limit - 4) {
+    uint32 x = UNALIGNED_LOAD32(s2) ^ UNALIGNED_LOAD32(s1 + matched);
+    int matching_bits = Bits::FindLSBSetNonZero(x);
+    matched += matching_bits >> 3;
+  } else {
+    while ((s2 < s2_limit) && (s1[matched] == *s2)) {
+      ++s2;
+      ++matched;
+    }
+  }
+  return std::pair<size_t, bool>(matched, matched < 8);
+}
+#endif
+
+// Lookup tables for decompression code.  Give --snappy_dump_decompression_table
+// to the unit test to recompute char_table.
+
+enum {
+  LITERAL = 0,
+  COPY_1_BYTE_OFFSET = 1,  // 3 bit length + 3 bits of offset in opcode
+  COPY_2_BYTE_OFFSET = 2,
+  COPY_4_BYTE_OFFSET = 3
+};
+static const int kMaximumTagLength = 5;  // COPY_4_BYTE_OFFSET plus the actual offset.
+
+// Data stored per entry in lookup table:
+//      Range   Bits-used       Description
+//      ------------------------------------
+//      1..64   0..7            Literal/copy length encoded in opcode byte
+//      0..7    8..10           Copy offset encoded in opcode byte / 256
+//      0..4    11..13          Extra bytes after opcode
+//
+// We use eight bits for the length even though 7 would have sufficed
+// because of efficiency reasons:
+//      (1) Extracting a byte is faster than a bit-field
+//      (2) It properly aligns copy offset so we do not need a <<8
+static const uint16 char_table[256] = {
+  0x0001, 0x0804, 0x1001, 0x2001, 0x0002, 0x0805, 0x1002, 0x2002,
+  0x0003, 0x0806, 0x1003, 0x2003, 0x0004, 0x0807, 0x1004, 0x2004,
+  0x0005, 0x0808, 0x1005, 0x2005, 0x0006, 0x0809, 0x1006, 0x2006,
+  0x0007, 0x080a, 0x1007, 0x2007, 0x0008, 0x080b, 0x1008, 0x2008,
+  0x0009, 0x0904, 0x1009, 0x2009, 0x000a, 0x0905, 0x100a, 0x200a,
+  0x000b, 0x0906, 0x100b, 0x200b, 0x000c, 0x0907, 0x100c, 0x200c,
+  0x000d, 0x0908, 0x100d, 0x200d, 0x000e, 0x0909, 0x100e, 0x200e,
+  0x000f, 0x090a, 0x100f, 0x200f, 0x0010, 0x090b, 0x1010, 0x2010,
+  0x0011, 0x0a04, 0x1011, 0x2011, 0x0012, 0x0a05, 0x1012, 0x2012,
+  0x0013, 0x0a06, 0x1013, 0x2013, 0x0014, 0x0a07, 0x1014, 0x2014,
+  0x0015, 0x0a08, 0x1015, 0x2015, 0x0016, 0x0a09, 0x1016, 0x2016,
+  0x0017, 0x0a0a, 0x1017, 0x2017, 0x0018, 0x0a0b, 0x1018, 0x2018,
+  0x0019, 0x0b04, 0x1019, 0x2019, 0x001a, 0x0b05, 0x101a, 0x201a,
+  0x001b, 0x0b06, 0x101b, 0x201b, 0x001c, 0x0b07, 0x101c, 0x201c,
+  0x001d, 0x0b08, 0x101d, 0x201d, 0x001e, 0x0b09, 0x101e, 0x201e,
+  0x001f, 0x0b0a, 0x101f, 0x201f, 0x0020, 0x0b0b, 0x1020, 0x2020,
+  0x0021, 0x0c04, 0x1021, 0x2021, 0x0022, 0x0c05, 0x1022, 0x2022,
+  0x0023, 0x0c06, 0x1023, 0x2023, 0x0024, 0x0c07, 0x1024, 0x2024,
+  0x0025, 0x0c08, 0x1025, 0x2025, 0x0026, 0x0c09, 0x1026, 0x2026,
+  0x0027, 0x0c0a, 0x1027, 0x2027, 0x0028, 0x0c0b, 0x1028, 0x2028,
+  0x0029, 0x0d04, 0x1029, 0x2029, 0x002a, 0x0d05, 0x102a, 0x202a,
+  0x002b, 0x0d06, 0x102b, 0x202b, 0x002c, 0x0d07, 0x102c, 0x202c,
+  0x002d, 0x0d08, 0x102d, 0x202d, 0x002e, 0x0d09, 0x102e, 0x202e,
+  0x002f, 0x0d0a, 0x102f, 0x202f, 0x0030, 0x0d0b, 0x1030, 0x2030,
+  0x0031, 0x0e04, 0x1031, 0x2031, 0x0032, 0x0e05, 0x1032, 0x2032,
+  0x0033, 0x0e06, 0x1033, 0x2033, 0x0034, 0x0e07, 0x1034, 0x2034,
+  0x0035, 0x0e08, 0x1035, 0x2035, 0x0036, 0x0e09, 0x1036, 0x2036,
+  0x0037, 0x0e0a, 0x1037, 0x2037, 0x0038, 0x0e0b, 0x1038, 0x2038,
+  0x0039, 0x0f04, 0x1039, 0x2039, 0x003a, 0x0f05, 0x103a, 0x203a,
+  0x003b, 0x0f06, 0x103b, 0x203b, 0x003c, 0x0f07, 0x103c, 0x203c,
+  0x0801, 0x0f08, 0x103d, 0x203d, 0x1001, 0x0f09, 0x103e, 0x203e,
+  0x1801, 0x0f0a, 0x103f, 0x203f, 0x2001, 0x0f0b, 0x1040, 0x2040
+};
+
+}  // end namespace internal
+
+
+// The size of a compression block. Note that many parts of the compression
+// code assumes that kBlockSize <= 65536; in particular, the hash table
+// can only store 16-bit offsets, and EmitCopy() also assumes the offset
+// is 65535 bytes or less. Note also that if you change this, it will
+// affect the framing format (see framing_format.txt).
+//
+// Note that there might be older data around that is compressed with larger
+// block sizes, so the decompression code should not rely on the
+// non-existence of long backreferences.
+static const int kBlockLog = 16;
+static const size_t kBlockSize = 1 << kBlockLog;
+
+static const int kMaxHashTableBits = 14;
+static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
+
+
+}  // end namespace duckdb_snappy
+
+#endif  // THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
+
+
+// LICENSE_CHANGE_END
+
+
+
+#if !defined(SNAPPY_HAVE_SSSE3)
+// __SSSE3__ is defined by GCC and Clang. Visual Studio doesn't target SIMD
+// support between SSE2 and AVX (so SSSE3 instructions require AVX support), and
+// defines __AVX__ when AVX support is available.
+#if defined(__SSSE3__) || defined(__AVX__)
+#define SNAPPY_HAVE_SSSE3 1
+#else
+#define SNAPPY_HAVE_SSSE3 0
+#endif
+#endif  // !defined(SNAPPY_HAVE_SSSE3)
+
+#if !defined(SNAPPY_HAVE_BMI2)
+// __BMI2__ is defined by GCC and Clang. Visual Studio doesn't target BMI2
+// specifically, but it does define __AVX2__ when AVX2 support is available.
+// Fortunately, AVX2 was introduced in Haswell, just like BMI2.
+//
+// BMI2 is not defined as a subset of AVX2 (unlike SSSE3 and AVX above). So,
+// GCC and Clang can build code with AVX2 enabled but BMI2 disabled, in which
+// case issuing BMI2 instructions results in a compiler error.
+#if defined(__BMI2__) || (defined(_MSC_VER) && defined(__AVX2__))
+#define SNAPPY_HAVE_BMI2 1
+#else
+#define SNAPPY_HAVE_BMI2 0
+#endif
+#endif  // !defined(SNAPPY_HAVE_BMI2)
+
+#if SNAPPY_HAVE_SSSE3
+// Please do not replace with <x86intrin.h>. or with headers that assume more
+// advanced SSE versions without checking with all the OWNERS.
+#include <tmmintrin.h>
+#endif
+
+#if SNAPPY_HAVE_BMI2
+// Please do not replace with <x86intrin.h>. or with headers that assume more
+// advanced SSE versions without checking with all the OWNERS.
+#include <immintrin.h>
+#endif
+
+#include <stdio.h>
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+namespace duckdb_snappy {
+
+using internal::COPY_1_BYTE_OFFSET;
+using internal::COPY_2_BYTE_OFFSET;
+using internal::LITERAL;
+using internal::char_table;
+using internal::kMaximumTagLength;
+
+// Any hash function will produce a valid compressed bitstream, but a good
+// hash function reduces the number of collisions and thus yields better
+// compression for compressible input, and more speed for incompressible
+// input. Of course, it doesn't hurt if the hash function is reasonably fast
+// either, as it gets called a lot.
+static inline uint32 HashBytes(uint32 bytes, int shift) {
+  uint32 kMul = 0x1e35a7bd;
+  return (bytes * kMul) >> shift;
+}
+static inline uint32 Hash(const char* p, int shift) {
+  return HashBytes(UNALIGNED_LOAD32(p), shift);
+}
+
+size_t MaxCompressedLength(size_t source_len) {
+  // Compressed data can be defined as:
+  //    compressed := item* literal*
+  //    item       := literal* copy
+  //
+  // The trailing literal sequence has a space blowup of at most 62/60
+  // since a literal of length 60 needs one tag byte + one extra byte
+  // for length information.
+  //
+  // Item blowup is trickier to measure.  Suppose the "copy" op copies
+  // 4 bytes of data.  Because of a special check in the encoding code,
+  // we produce a 4-byte copy only if the offset is < 65536.  Therefore
+  // the copy op takes 3 bytes to encode, and this type of item leads
+  // to at most the 62/60 blowup for representing literals.
+  //
+  // Suppose the "copy" op copies 5 bytes of data.  If the offset is big
+  // enough, it will take 5 bytes to encode the copy op.  Therefore the
+  // worst case here is a one-byte literal followed by a five-byte copy.
+  // I.e., 6 bytes of input turn into 7 bytes of "compressed" data.
+  //
+  // This last factor dominates the blowup, so the final estimate is:
+  return 32 + source_len + source_len/6;
+}
+
+namespace {
+
+void UnalignedCopy64(const void* src, void* dst) {
+  char tmp[8];
+  memcpy(tmp, src, 8);
+  memcpy(dst, tmp, 8);
+}
+
+void UnalignedCopy128(const void* src, void* dst) {
+  // memcpy gets vectorized when the appropriate compiler options are used.
+  // For example, x86 compilers targeting SSE2+ will optimize to an SSE2 load
+  // and store.
+  char tmp[16];
+  memcpy(tmp, src, 16);
+  memcpy(dst, tmp, 16);
+}
+
+// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) a byte at a time. Used
+// for handling COPY operations where the input and output regions may overlap.
+// For example, suppose:
+//    src       == "ab"
+//    op        == src + 2
+//    op_limit  == op + 20
+// After IncrementalCopySlow(src, op, op_limit), the result will have eleven
+// copies of "ab"
+//    ababababababababababab
+// Note that this does not match the semantics of either memcpy() or memmove().
+inline char* IncrementalCopySlow(const char* src, char* op,
+                                 char* const op_limit) {
+  // TODO: Remove pragma when LLVM is aware this
+  // function is only called in cold regions and when cold regions don't get
+  // vectorized or unrolled.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+  while (op < op_limit) {
+    *op++ = *src++;
+  }
+  return op_limit;
+}
+
+#if SNAPPY_HAVE_SSSE3
+
+// This is a table of shuffle control masks that can be used as the source
+// operand for PSHUFB to permute the contents of the destination XMM register
+// into a repeating byte pattern.
+alignas(16) const char pshufb_fill_patterns[7][16] = {
+  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+  {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
+  {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0},
+  {0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3},
+  {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0},
+  {0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3},
+  {0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1},
+};
+
+#endif  // SNAPPY_HAVE_SSSE3
+
+// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) but faster than
+// IncrementalCopySlow. buf_limit is the address past the end of the writable
+// region of the buffer.
+inline char* IncrementalCopy(const char* src, char* op, char* const op_limit,
+                             char* const buf_limit) {
+  // Terminology:
+  //
+  // slop = buf_limit - op
+  // pat  = op - src
+  // len  = limit - op
+  assert(src < op);
+  assert(op <= op_limit);
+  assert(op_limit <= buf_limit);
+  // NOTE: The compressor always emits 4 <= len <= 64. It is ok to assume that
+  // to optimize this function but we have to also handle other cases in case
+  // the input does not satisfy these conditions.
+
+  size_t pattern_size = op - src;
+  // The cases are split into different branches to allow the branch predictor,
+  // FDO, and static prediction hints to work better. For each input we list the
+  // ratio of invocations that match each condition.
+  //
+  // input        slop < 16   pat < 8  len > 16
+  // ------------------------------------------
+  // html|html4|cp   0%         1.01%    27.73%
+  // urls            0%         0.88%    14.79%
+  // jpg             0%        64.29%     7.14%
+  // pdf             0%         2.56%    58.06%
+  // txt[1-4]        0%         0.23%     0.97%
+  // pb              0%         0.96%    13.88%
+  // bin             0.01%     22.27%    41.17%
+  //
+  // It is very rare that we don't have enough slop for doing block copies. It
+  // is also rare that we need to expand a pattern. Small patterns are common
+  // for incompressible formats and for those we are plenty fast already.
+  // Lengths are normally not greater than 16 but they vary depending on the
+  // input. In general if we always predict len <= 16 it would be an ok
+  // prediction.
+  //
+  // In order to be fast we want a pattern >= 8 bytes and an unrolled loop
+  // copying 2x 8 bytes at a time.
+
+  // Handle the uncommon case where pattern is less than 8 bytes.
+  if (SNAPPY_PREDICT_FALSE(pattern_size < 8)) {
+#if SNAPPY_HAVE_SSSE3
+    // Load the first eight bytes into an 128-bit XMM register, then use PSHUFB
+    // to permute the register's contents in-place into a repeating sequence of
+    // the first "pattern_size" bytes.
+    // For example, suppose:
+    //    src       == "abc"
+    //    op        == op + 3
+    // After _mm_shuffle_epi8(), "pattern" will have five copies of "abc"
+    // followed by one byte of slop: abcabcabcabcabca.
+    //
+    // The non-SSE fallback implementation suffers from store-forwarding stalls
+    // because its loads and stores partly overlap. By expanding the pattern
+    // in-place, we avoid the penalty.
+    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 16)) {
+      const __m128i shuffle_mask = _mm_load_si128(
+          reinterpret_cast<const __m128i*>(pshufb_fill_patterns)
+          + pattern_size - 1);
+      const __m128i pattern = _mm_shuffle_epi8(
+          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src)), shuffle_mask);
+      // Uninitialized bytes are masked out by the shuffle mask.
+      // TODO: remove annotation and macro defs once MSan is fixed.
+      SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(&pattern, sizeof(pattern));
+      pattern_size *= 16 / pattern_size;
+      char* op_end = std::min(op_limit, buf_limit - 15);
+      while (op < op_end) {
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(op), pattern);
+        op += pattern_size;
+      }
+      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
+    }
+    return IncrementalCopySlow(src, op, op_limit);
+#else  // !SNAPPY_HAVE_SSSE3
+    // If plenty of buffer space remains, expand the pattern to at least 8
+    // bytes. The way the following loop is written, we need 8 bytes of buffer
+    // space if pattern_size >= 4, 11 bytes if pattern_size is 1 or 3, and 10
+    // bytes if pattern_size is 2.  Precisely encoding that is probably not
+    // worthwhile; instead, invoke the slow path if we cannot write 11 bytes
+    // (because 11 are required in the worst case).
+    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 11)) {
+      while (pattern_size < 8) {
+        UnalignedCopy64(src, op);
+        op += pattern_size;
+        pattern_size *= 2;
+      }
+      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
+    } else {
+      return IncrementalCopySlow(src, op, op_limit);
+    }
+#endif  // SNAPPY_HAVE_SSSE3
+  }
+  assert(pattern_size >= 8);
+
+  // Copy 2x 8 bytes at a time. Because op - src can be < 16, a single
+  // UnalignedCopy128 might overwrite data in op. UnalignedCopy64 is safe
+  // because expanding the pattern to at least 8 bytes guarantees that
+  // op - src >= 8.
+  //
+  // Typically, the op_limit is the gating factor so try to simplify the loop
+  // based on that.
+  if (SNAPPY_PREDICT_TRUE(op_limit <= buf_limit - 16)) {
+    // Factor the displacement from op to the source into a variable. This helps
+    // simplify the loop below by only varying the op pointer which we need to
+    // test for the end. Note that this was done after carefully examining the
+    // generated code to allow the addressing modes in the loop below to
+    // maximize micro-op fusion where possible on modern Intel processors. The
+    // generated code should be checked carefully for new processors or with
+    // major changes to the compiler.
+    // TODO: Simplify this code when the compiler reliably produces
+    // the correct x86 instruction sequence.
+    ptrdiff_t op_to_src = src - op;
+
+    // The trip count of this loop is not large and so unrolling will only hurt
+    // code size without helping performance.
+    //
+    // TODO: Replace with loop trip count hint.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+    do {
+      UnalignedCopy64(op + op_to_src, op);
+      UnalignedCopy64(op + op_to_src + 8, op + 8);
+      op += 16;
+    } while (op < op_limit);
+    return op_limit;
+  }
+
+  // Fall back to doing as much as we can with the available slop in the
+  // buffer. This code path is relatively cold however so we save code size by
+  // avoiding unrolling and vectorizing.
+  //
+  // TODO: Remove pragma when when cold regions don't get vectorized
+  // or unrolled.
+#ifdef __clang__
+#pragma clang loop unroll(disable)
+#endif
+  for (char *op_end = buf_limit - 16; op < op_end; op += 16, src += 16) {
+    UnalignedCopy64(src, op);
+    UnalignedCopy64(src + 8, op + 8);
+  }
+  if (op >= op_limit)
+    return op_limit;
+
+  // We only take this branch if we didn't have enough slop and we can do a
+  // single 8 byte copy.
+  if (SNAPPY_PREDICT_FALSE(op <= buf_limit - 8)) {
+    UnalignedCopy64(src, op);
+    src += 8;
+    op += 8;
+  }
+  return IncrementalCopySlow(src, op, op_limit);
+}
+
+}  // namespace
+
+template <bool allow_fast_path>
+static inline char* EmitLiteral(char* op,
+                                const char* literal,
+                                int len) {
+  // The vast majority of copies are below 16 bytes, for which a
+  // call to memcpy is overkill. This fast path can sometimes
+  // copy up to 15 bytes too much, but that is okay in the
+  // main loop, since we have a bit to go on for both sides:
+  //
+  //   - The input will always have kInputMarginBytes = 15 extra
+  //     available bytes, as long as we're in the main loop, and
+  //     if not, allow_fast_path = false.
+  //   - The output will always have 32 spare bytes (see
+  //     MaxCompressedLength).
+  assert(len > 0);      // Zero-length literals are disallowed
+  int n = len - 1;
+  if (allow_fast_path && len <= 16) {
+    // Fits in tag byte
+    *op++ = LITERAL | (n << 2);
+
+    UnalignedCopy128(literal, op);
+    return op + len;
+  }
+
+  if (n < 60) {
+    // Fits in tag byte
+    *op++ = LITERAL | (n << 2);
+  } else {
+    int count = (Bits::Log2Floor(n) >> 3) + 1;
+    assert(count >= 1);
+    assert(count <= 4);
+    *op++ = LITERAL | ((59 + count) << 2);
+    // Encode in upcoming bytes.
+    // Write 4 bytes, though we may care about only 1 of them. The output buffer
+    // is guaranteed to have at least 3 more spaces left as 'len >= 61' holds
+    // here and there is a memcpy of size 'len' below.
+    LittleEndian::Store32(op, n);
+    op += count;
+  }
+  memcpy(op, literal, len);
+  return op + len;
+}
+
+template <bool len_less_than_12>
+static inline char* EmitCopyAtMost64(char* op, size_t offset, size_t len) {
+  assert(len <= 64);
+  assert(len >= 4);
+  assert(offset < 65536);
+  assert(len_less_than_12 == (len < 12));
+
+  if (len_less_than_12 && SNAPPY_PREDICT_TRUE(offset < 2048)) {
+    // offset fits in 11 bits.  The 3 highest go in the top of the first byte,
+    // and the rest go in the second byte.
+    *op++ = COPY_1_BYTE_OFFSET + ((len - 4) << 2) + ((offset >> 3) & 0xe0);
+    *op++ = offset & 0xff;
+  } else {
+    // Write 4 bytes, though we only care about 3 of them.  The output buffer
+    // is required to have some slack, so the extra byte won't overrun it.
+    uint32 u = COPY_2_BYTE_OFFSET + ((len - 1) << 2) + (offset << 8);
+    LittleEndian::Store32(op, u);
+    op += 3;
+  }
+  return op;
+}
+
+template <bool len_less_than_12>
+static inline char* EmitCopy(char* op, size_t offset, size_t len) {
+  assert(len_less_than_12 == (len < 12));
+  if (len_less_than_12) {
+    return EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
+  } else {
+    // A special case for len <= 64 might help, but so far measurements suggest
+    // it's in the noise.
+
+    // Emit 64 byte copies but make sure to keep at least four bytes reserved.
+    while (SNAPPY_PREDICT_FALSE(len >= 68)) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 64);
+      len -= 64;
+    }
+
+    // One or two copies will now finish the job.
+    if (len > 64) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 60);
+      len -= 60;
+    }
+
+    // Emit remainder.
+    if (len < 12) {
+      op = EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
+    } else {
+      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, len);
+    }
+    return op;
+  }
+}
+
+bool GetUncompressedLength(const char* start, size_t n, size_t* result) {
+  uint32 v = 0;
+  const char* limit = start + n;
+  if (Varint::Parse32WithLimit(start, limit, &v) != NULL) {
+    *result = v;
+    return true;
+  } else {
+    return false;
+  }
+}
+
+namespace {
+uint32 CalculateTableSize(uint32 input_size) {
+  assert(kMaxHashTableSize >= 256);
+  if (input_size > kMaxHashTableSize) {
+    return kMaxHashTableSize;
+  }
+  if (input_size < 256) {
+    return 256;
+  }
+  // This is equivalent to Log2Ceiling(input_size), assuming input_size > 1.
+  // 2 << Log2Floor(x - 1) is equivalent to 1 << (1 + Log2Floor(x - 1)).
+  return 2u << Bits::Log2Floor(input_size - 1);
+}
+}  // namespace
+
+namespace internal {
+WorkingMemory::WorkingMemory(size_t input_size) {
+  const size_t max_fragment_size = std::min(input_size, kBlockSize);
+  const size_t table_size = CalculateTableSize(max_fragment_size);
+  size_ = table_size * sizeof(*table_) + max_fragment_size +
+          MaxCompressedLength(max_fragment_size);
+  mem_ = std::allocator<char>().allocate(size_);
+  table_ = reinterpret_cast<uint16*>(mem_);
+  input_ = mem_ + table_size * sizeof(*table_);
+  output_ = input_ + max_fragment_size;
+}
+
+WorkingMemory::~WorkingMemory() {
+  std::allocator<char>().deallocate(mem_, size_);
+}
+
+uint16* WorkingMemory::GetHashTable(size_t fragment_size,
+                                    int* table_size) const {
+  const size_t htsize = CalculateTableSize(fragment_size);
+  memset(table_, 0, htsize * sizeof(*table_));
+  *table_size = htsize;
+  return table_;
+}
+}  // end namespace internal
+
+// For 0 <= offset <= 4, GetUint32AtOffset(GetEightBytesAt(p), offset) will
+// equal UNALIGNED_LOAD32(p + offset).  Motivation: On x86-64 hardware we have
+// empirically found that overlapping loads such as
+//  UNALIGNED_LOAD32(p) ... UNALIGNED_LOAD32(p+1) ... UNALIGNED_LOAD32(p+2)
+// are slower than UNALIGNED_LOAD64(p) followed by shifts and casts to uint32.
+//
+// We have different versions for 64- and 32-bit; ideally we would avoid the
+// two functions and just inline the UNALIGNED_LOAD64 call into
+// GetUint32AtOffset, but GCC (at least not as of 4.6) is seemingly not clever
+// enough to avoid loading the value multiple times then. For 64-bit, the load
+// is done when GetEightBytesAt() is called, whereas for 32-bit, the load is
+// done at GetUint32AtOffset() time.
+
+#ifdef ARCH_K8
+
+typedef uint64 EightBytesReference;
+
+static inline EightBytesReference GetEightBytesAt(const char* ptr) {
+  return UNALIGNED_LOAD64(ptr);
+}
+
+static inline uint32 GetUint32AtOffset(uint64 v, int offset) {
+  assert(offset >= 0);
+  assert(offset <= 4);
+  return v >> (LittleEndian::IsLittleEndian() ? 8 * offset : 32 - 8 * offset);
+}
+
+#else
+
+typedef const char* EightBytesReference;
+
+static inline EightBytesReference GetEightBytesAt(const char* ptr) {
+  return ptr;
+}
+
+static inline uint32 GetUint32AtOffset(const char* v, int offset) {
+  assert(offset >= 0);
+  assert(offset <= 4);
+  return UNALIGNED_LOAD32(v + offset);
+}
+
+#endif
+
+// Flat array compression that does not emit the "uncompressed length"
+// prefix. Compresses "input" string to the "*op" buffer.
+//
+// REQUIRES: "input" is at most "kBlockSize" bytes long.
+// REQUIRES: "op" points to an array of memory that is at least
+// "MaxCompressedLength(input.size())" in size.
+// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
+// REQUIRES: "table_size" is a power of two
+//
+// Returns an "end" pointer into "op" buffer.
+// "end - op" is the compressed size of "input".
+namespace internal {
+char* CompressFragment(const char* input,
+                       size_t input_size,
+                       char* op,
+                       uint16* table,
+                       const int table_size) {
+  // "ip" is the input pointer, and "op" is the output pointer.
+  const char* ip = input;
+  assert(input_size <= kBlockSize);
+  assert((table_size & (table_size - 1)) == 0);  // table must be power of two
+  const int shift = 32 - Bits::Log2Floor(table_size);
+  // assert(static_cast<int>(kuint32max >> shift) == table_size - 1);
+  const char* ip_end = input + input_size;
+  const char* base_ip = ip;
+  // Bytes in [next_emit, ip) will be emitted as literal bytes.  Or
+  // [next_emit, ip_end) after the main loop.
+  const char* next_emit = ip;
+
+  const size_t kInputMarginBytes = 15;
+  if (SNAPPY_PREDICT_TRUE(input_size >= kInputMarginBytes)) {
+    const char* ip_limit = input + input_size - kInputMarginBytes;
+
+    for (uint32 next_hash = Hash(++ip, shift); ; ) {
+      assert(next_emit < ip);
+      // The body of this loop calls EmitLiteral once and then EmitCopy one or
+      // more times.  (The exception is that when we're close to exhausting
+      // the input we goto emit_remainder.)
+      //
+      // In the first iteration of this loop we're just starting, so
+      // there's nothing to copy, so calling EmitLiteral once is
+      // necessary.  And we only start a new iteration when the
+      // current iteration has determined that a call to EmitLiteral will
+      // precede the next call to EmitCopy (if any).
+      //
+      // Step 1: Scan forward in the input looking for a 4-byte-long match.
+      // If we get close to exhausting the input then goto emit_remainder.
+      //
+      // Heuristic match skipping: If 32 bytes are scanned with no matches
+      // found, start looking only at every other byte. If 32 more bytes are
+      // scanned (or skipped), look at every third byte, etc.. When a match is
+      // found, immediately go back to looking at every byte. This is a small
+      // loss (~5% performance, ~0.1% density) for compressible data due to more
+      // bookkeeping, but for non-compressible data (such as JPEG) it's a huge
+      // win since the compressor quickly "realizes" the data is incompressible
+      // and doesn't bother looking for matches everywhere.
+      //
+      // The "skip" variable keeps track of how many bytes there are since the
+      // last match; dividing it by 32 (ie. right-shifting by five) gives the
+      // number of bytes to move ahead for each iteration.
+      uint32 skip = 32;
+
+      const char* next_ip = ip;
+      const char* candidate;
+      do {
+        ip = next_ip;
+        uint32 hash = next_hash;
+        assert(hash == Hash(ip, shift));
+        uint32 bytes_between_hash_lookups = skip >> 5;
+        skip += bytes_between_hash_lookups;
+        next_ip = ip + bytes_between_hash_lookups;
+        if (SNAPPY_PREDICT_FALSE(next_ip > ip_limit)) {
+          goto emit_remainder;
+        }
+        next_hash = Hash(next_ip, shift);
+        candidate = base_ip + table[hash];
+        assert(candidate >= base_ip);
+        assert(candidate < ip);
+
+        table[hash] = ip - base_ip;
+      } while (SNAPPY_PREDICT_TRUE(UNALIGNED_LOAD32(ip) !=
+                                 UNALIGNED_LOAD32(candidate)));
+
+      // Step 2: A 4-byte match has been found.  We'll later see if more
+      // than 4 bytes match.  But, prior to the match, input
+      // bytes [next_emit, ip) are unmatched.  Emit them as "literal bytes."
+      assert(next_emit + 16 <= ip_end);
+      op = EmitLiteral</*allow_fast_path=*/true>(op, next_emit, ip - next_emit);
+
+      // Step 3: Call EmitCopy, and then see if another EmitCopy could
+      // be our next move.  Repeat until we find no match for the
+      // input immediately after what was consumed by the last EmitCopy call.
+      //
+      // If we exit this loop normally then we need to call EmitLiteral next,
+      // though we don't yet know how big the literal will be.  We handle that
+      // by proceeding to the next iteration of the main loop.  We also can exit
+      // this loop via goto if we get close to exhausting the input.
+      EightBytesReference input_bytes;
+      uint32 candidate_bytes = 0;
+
+      do {
+        // We have a 4-byte match at ip, and no need to emit any
+        // "literal bytes" prior to ip.
+        const char* base = ip;
+        std::pair<size_t, bool> p =
+            FindMatchLength(candidate + 4, ip + 4, ip_end);
+        size_t matched = 4 + p.first;
+        ip += matched;
+        size_t offset = base - candidate;
+        assert(0 == memcmp(base, candidate, matched));
+        if (p.second) {
+          op = EmitCopy</*len_less_than_12=*/true>(op, offset, matched);
+        } else {
+          op = EmitCopy</*len_less_than_12=*/false>(op, offset, matched);
+        }
+        next_emit = ip;
+        if (SNAPPY_PREDICT_FALSE(ip >= ip_limit)) {
+          goto emit_remainder;
+        }
+        // We are now looking for a 4-byte match again.  We read
+        // table[Hash(ip, shift)] for that.  To improve compression,
+        // we also update table[Hash(ip - 1, shift)] and table[Hash(ip, shift)].
+        input_bytes = GetEightBytesAt(ip - 1);
+        uint32 prev_hash = HashBytes(GetUint32AtOffset(input_bytes, 0), shift);
+        table[prev_hash] = ip - base_ip - 1;
+        uint32 cur_hash = HashBytes(GetUint32AtOffset(input_bytes, 1), shift);
+        candidate = base_ip + table[cur_hash];
+        candidate_bytes = UNALIGNED_LOAD32(candidate);
+        table[cur_hash] = ip - base_ip;
+      } while (GetUint32AtOffset(input_bytes, 1) == candidate_bytes);
+
+      next_hash = HashBytes(GetUint32AtOffset(input_bytes, 2), shift);
+      ++ip;
+    }
+  }
+
+ emit_remainder:
+  // Emit the remaining bytes as a literal
+  if (next_emit < ip_end) {
+    op = EmitLiteral</*allow_fast_path=*/false>(op, next_emit,
+                                                ip_end - next_emit);
+  }
+
+  return op;
+}
+}  // end namespace internal
+
+// Called back at avery compression call to trace parameters and sizes.
+static inline void Report(const char *algorithm, size_t compressed_size,
+                          size_t uncompressed_size) {}
+
+// Signature of output types needed by decompression code.
+// The decompression code is templatized on a type that obeys this
+// signature so that we do not pay virtual function call overhead in
+// the middle of a tight decompression loop.
+//
+// class DecompressionWriter {
+//  public:
+//   // Called before decompression
+//   void SetExpectedLength(size_t length);
+//
+//   // Called after decompression
+//   bool CheckLength() const;
+//
+//   // Called repeatedly during decompression
+//   bool Append(const char* ip, size_t length);
+//   bool AppendFromSelf(uint32 offset, size_t length);
+//
+//   // The rules for how TryFastAppend differs from Append are somewhat
+//   // convoluted:
+//   //
+//   //  - TryFastAppend is allowed to decline (return false) at any
+//   //    time, for any reason -- just "return false" would be
+//   //    a perfectly legal implementation of TryFastAppend.
+//   //    The intention is for TryFastAppend to allow a fast path
+//   //    in the common case of a small append.
+//   //  - TryFastAppend is allowed to read up to <available> bytes
+//   //    from the input buffer, whereas Append is allowed to read
+//   //    <length>. However, if it returns true, it must leave
+//   //    at least five (kMaximumTagLength) bytes in the input buffer
+//   //    afterwards, so that there is always enough space to read the
+//   //    next tag without checking for a refill.
+//   //  - TryFastAppend must always return decline (return false)
+//   //    if <length> is 61 or more, as in this case the literal length is not
+//   //    decoded fully. In practice, this should not be a big problem,
+//   //    as it is unlikely that one would implement a fast path accepting
+//   //    this much data.
+//   //
+//   bool TryFastAppend(const char* ip, size_t available, size_t length);
+// };
+
+static inline uint32 ExtractLowBytes(uint32 v, int n) {
+  assert(n >= 0);
+  assert(n <= 4);
+#if SNAPPY_HAVE_BMI2
+  return _bzhi_u32(v, 8 * n);
+#else
+  // This needs to be wider than uint32 otherwise `mask << 32` will be
+  // undefined.
+  uint64 mask = 0xffffffff;
+  return v & ~(mask << (8 * n));
+#endif
+}
+
+static inline bool LeftShiftOverflows(uint8 value, uint32 shift) {
+  assert(shift < 32);
+  static const uint8 masks[] = {
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
+      0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe};
+  return (value & masks[shift]) != 0;
+}
+
+// Helper class for decompression
+class SnappyDecompressor {
+ private:
+  Source*       reader_;         // Underlying source of bytes to decompress
+  const char*   ip_;             // Points to next buffered byte
+  const char*   ip_limit_;       // Points just past buffered bytes
+  uint32        peeked_;         // Bytes peeked from reader (need to skip)
+  bool          eof_;            // Hit end of input without an error?
+  char          scratch_[kMaximumTagLength];  // See RefillTag().
+
+  // Ensure that all of the tag metadata for the next tag is available
+  // in [ip_..ip_limit_-1].  Also ensures that [ip,ip+4] is readable even
+  // if (ip_limit_ - ip_ < 5).
+  //
+  // Returns true on success, false on error or end of input.
+  bool RefillTag();
+
+ public:
+  explicit SnappyDecompressor(Source* reader)
+      : reader_(reader),
+        ip_(NULL),
+        ip_limit_(NULL),
+        peeked_(0),
+        eof_(false) {
+  }
+
+  ~SnappyDecompressor() {
+    // Advance past any bytes we peeked at from the reader
+    reader_->Skip(peeked_);
+  }
+
+  // Returns true iff we have hit the end of the input without an error.
+  bool eof() const {
+    return eof_;
+  }
+
+  // Read the uncompressed length stored at the start of the compressed data.
+  // On success, stores the length in *result and returns true.
+  // On failure, returns false.
+  bool ReadUncompressedLength(uint32* result) {
+    assert(ip_ == NULL);       // Must not have read anything yet
+    // Length is encoded in 1..5 bytes
+    *result = 0;
+    uint32 shift = 0;
+    while (true) {
+      if (shift >= 32) return false;
+      size_t n;
+      const char* ip = reader_->Peek(&n);
+      if (n == 0) return false;
+      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
+      reader_->Skip(1);
+      uint32 val = c & 0x7f;
+      if (LeftShiftOverflows(static_cast<uint8>(val), shift)) return false;
+      *result |= val << shift;
+      if (c < 128) {
+        break;
+      }
+      shift += 7;
+    }
+    return true;
+  }
+
+  // Process the next item found in the input.
+  // Returns true if successful, false on error or end of input.
+  template <class Writer>
+#if defined(__GNUC__) && defined(__x86_64__)
+  __attribute__((aligned(32)))
+#endif
+  void DecompressAllTags(Writer* writer) {
+    // In x86, pad the function body to start 16 bytes later. This function has
+    // a couple of hotspots that are highly sensitive to alignment: we have
+    // observed regressions by more than 20% in some metrics just by moving the
+    // exact same code to a different position in the benchmark binary.
+    //
+    // Putting this code on a 32-byte-aligned boundary + 16 bytes makes us hit
+    // the "lucky" case consistently. Unfortunately, this is a very brittle
+    // workaround, and future differences in code generation may reintroduce
+    // this regression. If you experience a big, difficult to explain, benchmark
+    // performance regression here, first try removing this hack.
+#if defined(__GNUC__) && defined(__x86_64__)
+    // Two 8-byte "NOP DWORD ptr [EAX + EAX*1 + 00000000H]" instructions.
+    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
+    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
+#endif
+
+    const char* ip = ip_;
+    // We could have put this refill fragment only at the beginning of the loop.
+    // However, duplicating it at the end of each branch gives the compiler more
+    // scope to optimize the <ip_limit_ - ip> expression based on the local
+    // context, which overall increases speed.
+    #define MAYBE_REFILL() \
+        if (ip_limit_ - ip < kMaximumTagLength) { \
+          ip_ = ip; \
+          if (!RefillTag()) return; \
+          ip = ip_; \
+        }
+
+    MAYBE_REFILL();
+    for ( ;; ) {
+      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip++));
+
+      // Ratio of iterations that have LITERAL vs non-LITERAL for different
+      // inputs.
+      //
+      // input          LITERAL  NON_LITERAL
+      // -----------------------------------
+      // html|html4|cp   23%        77%
+      // urls            36%        64%
+      // jpg             47%        53%
+      // pdf             19%        81%
+      // txt[1-4]        25%        75%
+      // pb              24%        76%
+      // bin             24%        76%
+      if (SNAPPY_PREDICT_FALSE((c & 0x3) == LITERAL)) {
+        size_t literal_length = (c >> 2) + 1u;
+        if (writer->TryFastAppend(ip, ip_limit_ - ip, literal_length)) {
+          assert(literal_length < 61);
+          ip += literal_length;
+          // NOTE: There is no MAYBE_REFILL() here, as TryFastAppend()
+          // will not return true unless there's already at least five spare
+          // bytes in addition to the literal.
+          continue;
+        }
+        if (SNAPPY_PREDICT_FALSE(literal_length >= 61)) {
+          // Long literal.
+          const size_t literal_length_length = literal_length - 60;
+          literal_length =
+              ExtractLowBytes(LittleEndian::Load32(ip), literal_length_length) +
+              1;
+          ip += literal_length_length;
+        }
+
+        size_t avail = ip_limit_ - ip;
+        while (avail < literal_length) {
+          if (!writer->Append(ip, avail)) return;
+          literal_length -= avail;
+          reader_->Skip(peeked_);
+          size_t n;
+          ip = reader_->Peek(&n);
+          avail = n;
+          peeked_ = avail;
+          if (avail == 0) return;  // Premature end of input
+          ip_limit_ = ip + avail;
+        }
+        if (!writer->Append(ip, literal_length)) {
+          return;
+        }
+        ip += literal_length;
+        MAYBE_REFILL();
+      } else {
+        const size_t entry = char_table[c];
+        const size_t trailer =
+            ExtractLowBytes(LittleEndian::Load32(ip), entry >> 11);
+        const size_t length = entry & 0xff;
+        ip += entry >> 11;
+
+        // copy_offset/256 is encoded in bits 8..10.  By just fetching
+        // those bits, we get copy_offset (since the bit-field starts at
+        // bit 8).
+        const size_t copy_offset = entry & 0x700;
+        if (!writer->AppendFromSelf(copy_offset + trailer, length)) {
+          return;
+        }
+        MAYBE_REFILL();
+      }
+    }
+
+#undef MAYBE_REFILL
+  }
+};
+
+bool SnappyDecompressor::RefillTag() {
+  const char* ip = ip_;
+  if (ip == ip_limit_) {
+    // Fetch a new fragment from the reader
+    reader_->Skip(peeked_);   // All peeked bytes are used up
+    size_t n;
+    ip = reader_->Peek(&n);
+    peeked_ = n;
+    eof_ = (n == 0);
+    if (eof_) return false;
+    ip_limit_ = ip + n;
+  }
+
+  // Read the tag character
+  assert(ip < ip_limit_);
+  const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
+  const uint32 entry = char_table[c];
+  const uint32 needed = (entry >> 11) + 1;  // +1 byte for 'c'
+  assert(needed <= sizeof(scratch_));
+
+  // Read more bytes from reader if needed
+  uint32 nbuf = ip_limit_ - ip;
+  if (nbuf < needed) {
+    // Stitch together bytes from ip and reader to form the word
+    // contents.  We store the needed bytes in "scratch_".  They
+    // will be consumed immediately by the caller since we do not
+    // read more than we need.
+    memmove(scratch_, ip, nbuf);
+    reader_->Skip(peeked_);  // All peeked bytes are used up
+    peeked_ = 0;
+    while (nbuf < needed) {
+      size_t length;
+      const char* src = reader_->Peek(&length);
+      if (length == 0) return false;
+      uint32 to_add = std::min<uint32>(needed - nbuf, length);
+      memcpy(scratch_ + nbuf, src, to_add);
+      nbuf += to_add;
+      reader_->Skip(to_add);
+    }
+    assert(nbuf == needed);
+    ip_ = scratch_;
+    ip_limit_ = scratch_ + needed;
+  } else if (nbuf < kMaximumTagLength) {
+    // Have enough bytes, but move into scratch_ so that we do not
+    // read past end of input
+    memmove(scratch_, ip, nbuf);
+    reader_->Skip(peeked_);  // All peeked bytes are used up
+    peeked_ = 0;
+    ip_ = scratch_;
+    ip_limit_ = scratch_ + nbuf;
+  } else {
+    // Pass pointer to buffer returned by reader_.
+    ip_ = ip;
+  }
+  return true;
+}
+
+template <typename Writer>
+static bool InternalUncompress(Source* r, Writer* writer) {
+  // Read the uncompressed length from the front of the compressed input
+  SnappyDecompressor decompressor(r);
+  uint32 uncompressed_len = 0;
+  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) return false;
+
+  return InternalUncompressAllTags(&decompressor, writer, r->Available(),
+                                   uncompressed_len);
+}
+
+template <typename Writer>
+static bool InternalUncompressAllTags(SnappyDecompressor* decompressor,
+                                      Writer* writer,
+                                      uint32 compressed_len,
+                                      uint32 uncompressed_len) {
+  Report("snappy_uncompress", compressed_len, uncompressed_len);
+
+  writer->SetExpectedLength(uncompressed_len);
+
+  // Process the entire input
+  decompressor->DecompressAllTags(writer);
+  writer->Flush();
+  return (decompressor->eof() && writer->CheckLength());
+}
+
+bool GetUncompressedLength(Source* source, uint32* result) {
+  SnappyDecompressor decompressor(source);
+  return decompressor.ReadUncompressedLength(result);
+}
+
+size_t Compress(Source* reader, Sink* writer) {
+  size_t written = 0;
+  size_t N = reader->Available();
+  const size_t uncompressed_size = N;
+  char ulength[Varint::kMax32];
+  char* p = Varint::Encode32(ulength, N);
+  writer->Append(ulength, p-ulength);
+  written += (p - ulength);
+
+  internal::WorkingMemory wmem(N);
+
+  while (N > 0) {
+    // Get next block to compress (without copying if possible)
+    size_t fragment_size;
+    const char* fragment = reader->Peek(&fragment_size);
+    assert(fragment_size != 0);  // premature end of input
+    const size_t num_to_read = std::min(N, kBlockSize);
+    size_t bytes_read = fragment_size;
+
+    size_t pending_advance = 0;
+    if (bytes_read >= num_to_read) {
+      // Buffer returned by reader is large enough
+      pending_advance = num_to_read;
+      fragment_size = num_to_read;
+    } else {
+      char* scratch = wmem.GetScratchInput();
+      memcpy(scratch, fragment, bytes_read);
+      reader->Skip(bytes_read);
+
+      while (bytes_read < num_to_read) {
+        fragment = reader->Peek(&fragment_size);
+        size_t n = std::min<size_t>(fragment_size, num_to_read - bytes_read);
+        memcpy(scratch + bytes_read, fragment, n);
+        bytes_read += n;
+        reader->Skip(n);
+      }
+      assert(bytes_read == num_to_read);
+      fragment = scratch;
+      fragment_size = num_to_read;
+    }
+    assert(fragment_size == num_to_read);
+
+    // Get encoding table for compression
+    int table_size;
+    uint16* table = wmem.GetHashTable(num_to_read, &table_size);
+
+    // Compress input_fragment and append to dest
+    const int max_output = MaxCompressedLength(num_to_read);
+
+    // Need a scratch buffer for the output, in case the byte sink doesn't
+    // have room for us directly.
+
+    // Since we encode kBlockSize regions followed by a region
+    // which is <= kBlockSize in length, a previously allocated
+    // scratch_output[] region is big enough for this iteration.
+    char* dest = writer->GetAppendBuffer(max_output, wmem.GetScratchOutput());
+    char* end = internal::CompressFragment(fragment, fragment_size, dest, table,
+                                           table_size);
+    writer->Append(dest, end - dest);
+    written += (end - dest);
+
+    N -= num_to_read;
+    reader->Skip(pending_advance);
+  }
+
+  Report("snappy_compress", written, uncompressed_size);
+
+  return written;
+}
+
+// -----------------------------------------------------------------------
+// IOVec interfaces
+// -----------------------------------------------------------------------
+
+// A type that writes to an iovec.
+// Note that this is not a "ByteSink", but a type that matches the
+// Writer template argument to SnappyDecompressor::DecompressAllTags().
+class SnappyIOVecWriter {
+ private:
+  // output_iov_end_ is set to iov + count and used to determine when
+  // the end of the iovs is reached.
+  const struct iovec* output_iov_end_;
+
+#if !defined(NDEBUG)
+  const struct iovec* output_iov_;
+#endif  // !defined(NDEBUG)
+
+  // Current iov that is being written into.
+  const struct iovec* curr_iov_;
+
+  // Pointer to current iov's write location.
+  char* curr_iov_output_;
+
+  // Remaining bytes to write into curr_iov_output.
+  size_t curr_iov_remaining_;
+
+  // Total bytes decompressed into output_iov_ so far.
+  size_t total_written_;
+
+  // Maximum number of bytes that will be decompressed into output_iov_.
+  size_t output_limit_;
+
+  static inline char* GetIOVecPointer(const struct iovec* iov, size_t offset) {
+    return reinterpret_cast<char*>(iov->iov_base) + offset;
+  }
+
+ public:
+  // Does not take ownership of iov. iov must be valid during the
+  // entire lifetime of the SnappyIOVecWriter.
+  inline SnappyIOVecWriter(const struct iovec* iov, size_t iov_count)
+      : output_iov_end_(iov + iov_count),
+#if !defined(NDEBUG)
+        output_iov_(iov),
+#endif  // !defined(NDEBUG)
+        curr_iov_(iov),
+        curr_iov_output_(iov_count ? reinterpret_cast<char*>(iov->iov_base)
+                                   : nullptr),
+        curr_iov_remaining_(iov_count ? iov->iov_len : 0),
+        total_written_(0),
+        output_limit_(-1) {}
+
+  inline void SetExpectedLength(size_t len) {
+    output_limit_ = len;
+  }
+
+  inline bool CheckLength() const {
+    return total_written_ == output_limit_;
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    if (total_written_ + len > output_limit_) {
+      return false;
+    }
+
+    return AppendNoCheck(ip, len);
+  }
+
+  inline bool AppendNoCheck(const char* ip, size_t len) {
+    while (len > 0) {
+      if (curr_iov_remaining_ == 0) {
+        // This iovec is full. Go to the next one.
+        if (curr_iov_ + 1 >= output_iov_end_) {
+          return false;
+        }
+        ++curr_iov_;
+        curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
+        curr_iov_remaining_ = curr_iov_->iov_len;
+      }
+
+      const size_t to_write = std::min(len, curr_iov_remaining_);
+      memcpy(curr_iov_output_, ip, to_write);
+      curr_iov_output_ += to_write;
+      curr_iov_remaining_ -= to_write;
+      total_written_ += to_write;
+      ip += to_write;
+      len -= to_write;
+    }
+
+    return true;
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
+    const size_t space_left = output_limit_ - total_written_;
+    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16 &&
+        curr_iov_remaining_ >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, curr_iov_output_);
+      curr_iov_output_ += len;
+      curr_iov_remaining_ -= len;
+      total_written_ += len;
+      return true;
+    }
+
+    return false;
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (offset - 1u >= total_written_) {
+      return false;
+    }
+    const size_t space_left = output_limit_ - total_written_;
+    if (len > space_left) {
+      return false;
+    }
+
+    // Locate the iovec from which we need to start the copy.
+    const iovec* from_iov = curr_iov_;
+    size_t from_iov_offset = curr_iov_->iov_len - curr_iov_remaining_;
+    while (offset > 0) {
+      if (from_iov_offset >= offset) {
+        from_iov_offset -= offset;
+        break;
+      }
+
+      offset -= from_iov_offset;
+      --from_iov;
+#if !defined(NDEBUG)
+      assert(from_iov >= output_iov_);
+#endif  // !defined(NDEBUG)
+      from_iov_offset = from_iov->iov_len;
+    }
+
+    // Copy <len> bytes starting from the iovec pointed to by from_iov_index to
+    // the current iovec.
+    while (len > 0) {
+      assert(from_iov <= curr_iov_);
+      if (from_iov != curr_iov_) {
+        const size_t to_copy =
+            std::min((unsigned long)(from_iov->iov_len - from_iov_offset), (unsigned long)len);
+        AppendNoCheck(GetIOVecPointer(from_iov, from_iov_offset), to_copy);
+        len -= to_copy;
+        if (len > 0) {
+          ++from_iov;
+          from_iov_offset = 0;
+        }
+      } else {
+        size_t to_copy = curr_iov_remaining_;
+        if (to_copy == 0) {
+          // This iovec is full. Go to the next one.
+          if (curr_iov_ + 1 >= output_iov_end_) {
+            return false;
+          }
+          ++curr_iov_;
+          curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
+          curr_iov_remaining_ = curr_iov_->iov_len;
+          continue;
+        }
+        if (to_copy > len) {
+          to_copy = len;
+        }
+
+        IncrementalCopy(GetIOVecPointer(from_iov, from_iov_offset),
+                        curr_iov_output_, curr_iov_output_ + to_copy,
+                        curr_iov_output_ + curr_iov_remaining_);
+        curr_iov_output_ += to_copy;
+        curr_iov_remaining_ -= to_copy;
+        from_iov_offset += to_copy;
+        total_written_ += to_copy;
+        len -= to_copy;
+      }
+    }
+
+    return true;
+  }
+
+  inline void Flush() {}
+};
+
+bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
+                          const struct iovec* iov, size_t iov_cnt) {
+  ByteArraySource reader(compressed, compressed_length);
+  return RawUncompressToIOVec(&reader, iov, iov_cnt);
+}
+
+bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
+                          size_t iov_cnt) {
+  SnappyIOVecWriter output(iov, iov_cnt);
+  return InternalUncompress(compressed, &output);
+}
+
+// -----------------------------------------------------------------------
+// Flat array interfaces
+// -----------------------------------------------------------------------
+
+// A type that writes to a flat array.
+// Note that this is not a "ByteSink", but a type that matches the
+// Writer template argument to SnappyDecompressor::DecompressAllTags().
+class SnappyArrayWriter {
+ private:
+  char* base_;
+  char* op_;
+  char* op_limit_;
+
+ public:
+  inline explicit SnappyArrayWriter(char* dst)
+      : base_(dst),
+        op_(dst),
+        op_limit_(dst) {
+  }
+
+  inline void SetExpectedLength(size_t len) {
+    op_limit_ = op_ + len;
+  }
+
+  inline bool CheckLength() const {
+    return op_ == op_limit_;
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    char* op = op_;
+    const size_t space_left = op_limit_ - op;
+    if (space_left < len) {
+      return false;
+    }
+    memcpy(op, ip, len);
+    op_ = op + len;
+    return true;
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
+    char* op = op_;
+    const size_t space_left = op_limit_ - op;
+    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, op);
+      op_ = op + len;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    char* const op_end = op_ + len;
+
+    // Check if we try to append from before the start of the buffer.
+    // Normally this would just be a check for "produced < offset",
+    // but "produced <= offset - 1u" is equivalent for every case
+    // except the one where offset==0, where the right side will wrap around
+    // to a very big number. This is convenient, as offset==0 is another
+    // invalid case that we also want to catch, so that we do not go
+    // into an infinite loop.
+    if (Produced() <= offset - 1u || op_end > op_limit_) return false;
+    op_ = IncrementalCopy(op_ - offset, op_, op_end, op_limit_);
+
+    return true;
+  }
+  inline size_t Produced() const {
+    assert(op_ >= base_);
+    return op_ - base_;
+  }
+  inline void Flush() {}
+};
+
+bool RawUncompress(const char* compressed, size_t n, char* uncompressed) {
+  ByteArraySource reader(compressed, n);
+  return RawUncompress(&reader, uncompressed);
+}
+
+bool RawUncompress(Source* compressed, char* uncompressed) {
+  SnappyArrayWriter output(uncompressed);
+  return InternalUncompress(compressed, &output);
+}
+
+bool Uncompress(const char* compressed, size_t n, string* uncompressed) {
+  size_t ulength;
+  if (!GetUncompressedLength(compressed, n, &ulength)) {
+    return false;
+  }
+  // On 32-bit builds: max_size() < kuint32max.  Check for that instead
+  // of crashing (e.g., consider externally specified compressed data).
+  if (ulength > uncompressed->max_size()) {
+    return false;
+  }
+  STLStringResizeUninitialized(uncompressed, ulength);
+  return RawUncompress(compressed, n, string_as_array(uncompressed));
+}
+
+// A Writer that drops everything on the floor and just does validation
+class SnappyDecompressionValidator {
+ private:
+  size_t expected_;
+  size_t produced_;
+
+ public:
+  inline SnappyDecompressionValidator() : expected_(0), produced_(0) { }
+  inline void SetExpectedLength(size_t len) {
+    expected_ = len;
+  }
+  inline bool CheckLength() const {
+    return expected_ == produced_;
+  }
+  inline bool Append(const char* ip, size_t len) {
+    produced_ += len;
+    return produced_ <= expected_;
+  }
+  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
+    return false;
+  }
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (produced_ <= offset - 1u) return false;
+    produced_ += len;
+    return produced_ <= expected_;
+  }
+  inline void Flush() {}
+};
+
+bool IsValidCompressedBuffer(const char* compressed, size_t n) {
+  ByteArraySource reader(compressed, n);
+  SnappyDecompressionValidator writer;
+  return InternalUncompress(&reader, &writer);
+}
+
+bool IsValidCompressed(Source* compressed) {
+  SnappyDecompressionValidator writer;
+  return InternalUncompress(compressed, &writer);
+}
+
+void RawCompress(const char* input,
+                 size_t input_length,
+                 char* compressed,
+                 size_t* compressed_length) {
+  ByteArraySource reader(input, input_length);
+  UncheckedByteArraySink writer(compressed);
+  Compress(&reader, &writer);
+
+  // Compute how many bytes were added
+  *compressed_length = (writer.CurrentDestination() - compressed);
+}
+
+size_t Compress(const char* input, size_t input_length, string* compressed) {
+  // Pre-grow the buffer to the max length of the compressed output
+  STLStringResizeUninitialized(compressed, MaxCompressedLength(input_length));
+
+  size_t compressed_length;
+  RawCompress(input, input_length, string_as_array(compressed),
+              &compressed_length);
+  compressed->resize(compressed_length);
+  return compressed_length;
+}
+
+// -----------------------------------------------------------------------
+// Sink interface
+// -----------------------------------------------------------------------
+
+// A type that decompresses into a Sink. The template parameter
+// Allocator must export one method "char* Allocate(int size);", which
+// allocates a buffer of "size" and appends that to the destination.
+template <typename Allocator>
+class SnappyScatteredWriter {
+  Allocator allocator_;
+
+  // We need random access into the data generated so far.  Therefore
+  // we keep track of all of the generated data as an array of blocks.
+  // All of the blocks except the last have length kBlockSize.
+  std::vector<char*> blocks_;
+  size_t expected_;
+
+  // Total size of all fully generated blocks so far
+  size_t full_size_;
+
+  // Pointer into current output block
+  char* op_base_;       // Base of output block
+  char* op_ptr_;        // Pointer to next unfilled byte in block
+  char* op_limit_;      // Pointer just past block
+
+  inline size_t Size() const {
+    return full_size_ + (op_ptr_ - op_base_);
+  }
+
+  bool SlowAppend(const char* ip, size_t len);
+  bool SlowAppendFromSelf(size_t offset, size_t len);
+
+ public:
+  inline explicit SnappyScatteredWriter(const Allocator& allocator)
+      : allocator_(allocator),
+        full_size_(0),
+        op_base_(NULL),
+        op_ptr_(NULL),
+        op_limit_(NULL) {
+  }
+
+  inline void SetExpectedLength(size_t len) {
+    assert(blocks_.empty());
+    expected_ = len;
+  }
+
+  inline bool CheckLength() const {
+    return Size() == expected_;
+  }
+
+  // Return the number of bytes actually uncompressed so far
+  inline size_t Produced() const {
+    return Size();
+  }
+
+  inline bool Append(const char* ip, size_t len) {
+    size_t avail = op_limit_ - op_ptr_;
+    if (len <= avail) {
+      // Fast path
+      memcpy(op_ptr_, ip, len);
+      op_ptr_ += len;
+      return true;
+    } else {
+      return SlowAppend(ip, len);
+    }
+  }
+
+  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
+    char* op = op_ptr_;
+    const int space_left = op_limit_ - op;
+    if (length <= 16 && available >= 16 + kMaximumTagLength &&
+        space_left >= 16) {
+      // Fast path, used for the majority (about 95%) of invocations.
+      UnalignedCopy128(ip, op);
+      op_ptr_ = op + length;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  inline bool AppendFromSelf(size_t offset, size_t len) {
+    char* const op_end = op_ptr_ + len;
+    // See SnappyArrayWriter::AppendFromSelf for an explanation of
+    // the "offset - 1u" trick.
+    if (SNAPPY_PREDICT_TRUE(offset - 1u < (size_t)(op_ptr_ - op_base_) &&
+                          op_end <= op_limit_)) {
+      // Fast path: src and dst in current block.
+      op_ptr_ = IncrementalCopy(op_ptr_ - offset, op_ptr_, op_end, op_limit_);
+      return true;
+    }
+    return SlowAppendFromSelf(offset, len);
+  }
+
+  // Called at the end of the decompress. We ask the allocator
+  // write all blocks to the sink.
+  inline void Flush() { allocator_.Flush(Produced()); }
+};
+
+template<typename Allocator>
+bool SnappyScatteredWriter<Allocator>::SlowAppend(const char* ip, size_t len) {
+  size_t avail = op_limit_ - op_ptr_;
+  while (len > avail) {
+    // Completely fill this block
+    memcpy(op_ptr_, ip, avail);
+    op_ptr_ += avail;
+    assert(op_limit_ - op_ptr_ == 0);
+    full_size_ += (op_ptr_ - op_base_);
+    len -= avail;
+    ip += avail;
+
+    // Bounds check
+    if (full_size_ + len > expected_) {
+      return false;
+    }
+
+    // Make new block
+    size_t bsize = std::min<size_t>(kBlockSize, expected_ - full_size_);
+    op_base_ = allocator_.Allocate(bsize);
+    op_ptr_ = op_base_;
+    op_limit_ = op_base_ + bsize;
+    blocks_.push_back(op_base_);
+    avail = bsize;
+  }
+
+  memcpy(op_ptr_, ip, len);
+  op_ptr_ += len;
+  return true;
+}
+
+template<typename Allocator>
+bool SnappyScatteredWriter<Allocator>::SlowAppendFromSelf(size_t offset,
+                                                         size_t len) {
+  // Overflow check
+  // See SnappyArrayWriter::AppendFromSelf for an explanation of
+  // the "offset - 1u" trick.
+  const size_t cur = Size();
+  if (offset - 1u >= cur) return false;
+  if (expected_ - cur < len) return false;
+
+  // Currently we shouldn't ever hit this path because Compress() chops the
+  // input into blocks and does not create cross-block copies. However, it is
+  // nice if we do not rely on that, since we can get better compression if we
+  // allow cross-block copies and thus might want to change the compressor in
+  // the future.
+  size_t src = cur - offset;
+  while (len-- > 0) {
+    char c = blocks_[src >> kBlockLog][src & (kBlockSize-1)];
+    Append(&c, 1);
+    src++;
+  }
+  return true;
+}
+
+class SnappySinkAllocator {
+ public:
+  explicit SnappySinkAllocator(Sink* dest): dest_(dest) {}
+  ~SnappySinkAllocator() {}
+
+  char* Allocate(int size) {
+    Datablock block(new char[size], size);
+    blocks_.push_back(block);
+    return block.data;
+  }
+
+  // We flush only at the end, because the writer wants
+  // random access to the blocks and once we hand the
+  // block over to the sink, we can't access it anymore.
+  // Also we don't write more than has been actually written
+  // to the blocks.
+  void Flush(size_t size) {
+    size_t size_written = 0;
+    size_t block_size;
+    for (size_t i = 0; i < blocks_.size(); ++i) {
+      block_size = std::min<size_t>(blocks_[i].size, size - size_written);
+      dest_->AppendAndTakeOwnership(blocks_[i].data, block_size,
+                                    &SnappySinkAllocator::Deleter, NULL);
+      size_written += block_size;
+    }
+    blocks_.clear();
+  }
+
+ private:
+  struct Datablock {
+    char* data;
+    size_t size;
+    Datablock(char* p, size_t s) : data(p), size(s) {}
+  };
+
+  static void Deleter(void* arg, const char* bytes, size_t size) {
+    delete[] bytes;
+  }
+
+  Sink* dest_;
+  std::vector<Datablock> blocks_;
+
+  // Note: copying this object is allowed
+};
+
+size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed) {
+  SnappySinkAllocator allocator(uncompressed);
+  SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
+  InternalUncompress(compressed, &writer);
+  return writer.Produced();
+}
+
+bool Uncompress(Source* compressed, Sink* uncompressed) {
+  // Read the uncompressed length from the front of the compressed input
+  SnappyDecompressor decompressor(compressed);
+  uint32 uncompressed_len = 0;
+  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) {
+    return false;
+  }
+
+  char c;
+  size_t allocated_size;
+  char* buf = uncompressed->GetAppendBufferVariable(
+      1, uncompressed_len, &c, 1, &allocated_size);
+
+  const size_t compressed_len = compressed->Available();
+  // If we can get a flat buffer, then use it, otherwise do block by block
+  // uncompression
+  if (allocated_size >= uncompressed_len) {
+    SnappyArrayWriter writer(buf);
+    bool result = InternalUncompressAllTags(&decompressor, &writer,
+                                            compressed_len, uncompressed_len);
+    uncompressed->Append(buf, writer.Produced());
+    return result;
+  } else {
+    SnappySinkAllocator allocator(uncompressed);
+    SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
+    return InternalUncompressAllTags(&decompressor, &writer, compressed_len,
+                                     uncompressed_len);
+  }
+}
+
+}  // namespace duckdb_snappy
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
+// See the end of this file for a list
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+
+
+namespace duckdb_apache {
+namespace thrift {
+namespace protocol {
+
+TProtocol::~TProtocol() = default;
+uint32_t TProtocol::skip_virt(TType type) {
+  return ::duckdb_apache::thrift::protocol::skip(*this, type);
+}
+
+TProtocolFactory::~TProtocolFactory() = default;
+
+}}} // duckdb_apache::thrift::protocol
+
+
+// LICENSE_CHANGE_END
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// parquet_timestamp.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+#include "duckdb.hpp"
+
+namespace duckdb {
+
+struct Int96 {
+	uint32_t value[3];
+};
+
+int64_t ImpalaTimestampToNanoseconds(const Int96 &impala_timestamp);
+timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts);
+Int96 TimestampToImpalaTimestamp(timestamp_t &ts);
+timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts);
+timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts);
+date_t ParquetIntToDate(const int32_t &raw_date);
+dtime_t ParquetIntToTime(const int64_t &raw_time);
+
+} // namespace duckdb
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
+// See the end of this file for a list
+
+
+
+#include <string>
+#include <cassert>
+#include <cstring>
+
+namespace duckdb {
+
+enum class UnicodeType { INVALID, ASCII, UNICODE };
+enum class UnicodeInvalidReason { BYTE_MISMATCH, NULL_BYTE };
+
+class Utf8Proc {
+public:
+	//! Distinguishes ASCII, Valid UTF8 and Invalid UTF8 strings
+	static UnicodeType Analyze(const char *s, size_t len, UnicodeInvalidReason *invalid_reason = nullptr, size_t *invalid_pos = nullptr);
+	//! Performs UTF NFC normalization of string, return value needs to be free'd
+	static char* Normalize(const char* s, size_t len);
+	//! Returns whether or not the UTF8 string is valid
+	static bool IsValid(const char *s, size_t len);
+	//! Returns the position (in bytes) of the next grapheme cluster
+	static size_t NextGraphemeCluster(const char *s, size_t len, size_t pos);
+	//! Returns the position (in bytes) of the previous grapheme cluster
+	static size_t PreviousGraphemeCluster(const char *s, size_t len, size_t pos);
+
+	//! Transform a codepoint to utf8 and writes it to "c", sets "sz" to the size of the codepoint
+	static bool CodepointToUtf8(int cp, int &sz, char *c);
+	//! Returns the codepoint length in bytes when encoded in UTF8
+	static int CodepointLength(int cp);
+	//! Transform a UTF8 string to a codepoint; returns the codepoint and writes the length of the codepoint (in UTF8) to sz
+	static int32_t UTF8ToCodepoint(const char *c, int &sz);
+	static size_t RenderWidth(const char *s, size_t len, size_t pos);
+
+};
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// boolean_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// templated__column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+namespace duckdb {
+
+template <class VALUE_TYPE>
+struct TemplatedParquetValueConversion {
+	static VALUE_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		D_ASSERT(offset < dict.len / sizeof(VALUE_TYPE));
+		return ((VALUE_TYPE *)dict.ptr)[offset];
+	}
+
+	static VALUE_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		return plain_data.read<VALUE_TYPE>();
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		plain_data.inc(sizeof(VALUE_TYPE));
+	}
+};
+
+template <class VALUE_TYPE, class VALUE_CONVERSION>
+class TemplatedColumnReader : public ColumnReader {
+public:
+	TemplatedColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                      idx_t max_define_p, idx_t max_repeat_p)
+	    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p) {};
+
+	shared_ptr<ByteBuffer> dict;
+
+public:
+	void Dictionary(shared_ptr<ByteBuffer> data, idx_t num_entries) override {
+		dict = move(data);
+	}
+
+	void Offsets(uint32_t *offsets, uint8_t *defines, uint64_t num_values, parquet_filter_t &filter,
+	             idx_t result_offset, Vector &result) override {
+		auto result_ptr = FlatVector::GetData<VALUE_TYPE>(result);
+		auto &result_mask = FlatVector::Validity(result);
+
+		idx_t offset_idx = 0;
+		for (idx_t row_idx = 0; row_idx < num_values; row_idx++) {
+			if (HasDefines() && defines[row_idx + result_offset] != max_define) {
+				result_mask.SetInvalid(row_idx + result_offset);
+				continue;
+			}
+			if (filter[row_idx + result_offset]) {
+				VALUE_TYPE val = VALUE_CONVERSION::DictRead(*dict, offsets[offset_idx++], *this);
+				result_ptr[row_idx + result_offset] = val;
+			} else {
+				offset_idx++;
+			}
+		}
+	}
+
+	void Plain(shared_ptr<ByteBuffer> plain_data, uint8_t *defines, uint64_t num_values, parquet_filter_t &filter,
+	           idx_t result_offset, Vector &result) override {
+		auto result_ptr = FlatVector::GetData<VALUE_TYPE>(result);
+		auto &result_mask = FlatVector::Validity(result);
+		for (idx_t row_idx = 0; row_idx < num_values; row_idx++) {
+			if (HasDefines() && defines[row_idx + result_offset] != max_define) {
+				result_mask.SetInvalid(row_idx + result_offset);
+				continue;
+			}
+			if (filter[row_idx + result_offset]) {
+				VALUE_TYPE val = VALUE_CONVERSION::PlainRead(*plain_data, *this);
+				result_ptr[row_idx + result_offset] = val;
+			} else { // there is still some data there that we have to skip over
+				VALUE_CONVERSION::PlainSkip(*plain_data, *this);
+			}
+		}
+	}
+};
+
+template <class PARQUET_PHYSICAL_TYPE, class DUCKDB_PHYSICAL_TYPE,
+          DUCKDB_PHYSICAL_TYPE (*FUNC)(const PARQUET_PHYSICAL_TYPE &input)>
+struct CallbackParquetValueConversion {
+	static DUCKDB_PHYSICAL_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		return TemplatedParquetValueConversion<DUCKDB_PHYSICAL_TYPE>::DictRead(dict, offset, reader);
+	}
+
+	static DUCKDB_PHYSICAL_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		return FUNC(plain_data.read<PARQUET_PHYSICAL_TYPE>());
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		plain_data.inc(sizeof(PARQUET_PHYSICAL_TYPE));
+	}
+};
+
+} // namespace duckdb
+
+
+namespace duckdb {
+
+struct BooleanParquetValueConversion;
+
+class BooleanColumnReader : public TemplatedColumnReader<bool, BooleanParquetValueConversion> {
+public:
+	BooleanColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                    idx_t max_define_p, idx_t max_repeat_p)
+	    : TemplatedColumnReader<bool, BooleanParquetValueConversion>(reader, move(type_p), schema_p, schema_idx_p,
+	                                                                 max_define_p, max_repeat_p),
+	      byte_pos(0) {};
+
+	uint8_t byte_pos;
+
+	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
+		byte_pos = 0;
+		TemplatedColumnReader<bool, BooleanParquetValueConversion>::InitializeRead(columns, protocol_p);
+	}
+};
+
+struct BooleanParquetValueConversion {
+	static bool DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		throw std::runtime_error("Dicts for booleans make no sense");
+	}
+
+	static bool PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		plain_data.available(1);
+		auto &byte_pos = ((BooleanColumnReader &)reader).byte_pos;
+		bool ret = (*plain_data.ptr >> byte_pos) & 1;
+		byte_pos++;
+		if (byte_pos == 8) {
+			byte_pos = 0;
+			plain_data.inc(1);
+		}
+		return ret;
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		PlainRead(plain_data, reader);
+	}
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// cast_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+namespace duckdb {
+
+//! A column reader that represents a cast over a child reader
+class CastColumnReader : public ColumnReader {
+public:
+	CastColumnReader(unique_ptr<ColumnReader> child_reader, LogicalType target_type);
+
+	unique_ptr<ColumnReader> child_reader;
+	DataChunk intermediate_chunk;
+
+public:
+	unique_ptr<BaseStatistics> Stats(const std::vector<ColumnChunk> &columns) override;
+	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
+
+	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+	           Vector &result) override;
+
+	void Skip(idx_t num_values) override;
+	idx_t GroupRowsAvailable() override;
+
+	uint64_t TotalCompressedSize() override {
+		return child_reader->TotalCompressedSize();
+	}
+
+	idx_t FileOffset() const override {
+		return child_reader->FileOffset();
+	}
+
+	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
+		child_reader->RegisterPrefetch(transport, allow_merge);
+	}
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// callback_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+
+namespace duckdb {
+
+template <class PARQUET_PHYSICAL_TYPE, class DUCKDB_PHYSICAL_TYPE,
+          DUCKDB_PHYSICAL_TYPE (*FUNC)(const PARQUET_PHYSICAL_TYPE &input)>
+class CallbackColumnReader
+    : public TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
+                                   CallbackParquetValueConversion<PARQUET_PHYSICAL_TYPE, DUCKDB_PHYSICAL_TYPE, FUNC>> {
+
+public:
+	CallbackColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
+	                     idx_t max_define_p, idx_t max_repeat_p)
+	    : TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
+	                            CallbackParquetValueConversion<PARQUET_PHYSICAL_TYPE, DUCKDB_PHYSICAL_TYPE, FUNC>>(
+	          reader, move(type_p), schema_p, file_idx_p, max_define_p, max_repeat_p) {
+	}
+
+protected:
+	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) {
+		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(DUCKDB_PHYSICAL_TYPE));
+		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)this->dict->ptr;
+		for (idx_t i = 0; i < num_entries; i++) {
+			dict_ptr[i] = FUNC(dictionary_data->read<PARQUET_PHYSICAL_TYPE>());
+		}
+	}
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// parquet_decimal_utils.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+namespace duckdb {
+
+class ParquetDecimalUtils {
+public:
+	template <class PHYSICAL_TYPE>
+	static PHYSICAL_TYPE ReadDecimalValue(const_data_ptr_t pointer, idx_t size) {
+		D_ASSERT(size <= sizeof(PHYSICAL_TYPE));
+		PHYSICAL_TYPE res = 0;
+
+		auto res_ptr = (uint8_t *)&res;
+		bool positive = (*pointer & 0x80) == 0;
+
+		// numbers are stored as two's complement so some muckery is required
+		for (idx_t i = 0; i < size; i++) {
+			auto byte = *(pointer + (size - i - 1));
+			res_ptr[i] = positive ? byte : byte ^ 0xFF;
+		}
+		if (!positive) {
+			res += 1;
+			return -res;
+		}
+		return res;
+	}
+
+	static unique_ptr<ColumnReader> CreateReader(ParquetReader &reader, const LogicalType &type_p,
+	                                             const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
+	                                             idx_t max_repeat);
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// list_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+namespace duckdb {
+
+class ListColumnReader : public ColumnReader {
+public:
+	ListColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                 idx_t max_define_p, idx_t max_repeat_p, unique_ptr<ColumnReader> child_column_reader_p);
+
+	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+	           Vector &result_out) override;
+
+	void ApplyPendingSkips(idx_t num_values) override;
+
+	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override {
+		child_column_reader->InitializeRead(columns, protocol_p);
+	}
+
+	idx_t GroupRowsAvailable() override {
+		return child_column_reader->GroupRowsAvailable() + overflow_child_count;
+	}
+
+	uint64_t TotalCompressedSize() override {
+		return child_column_reader->TotalCompressedSize();
+	}
+
+	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override {
+		child_column_reader->RegisterPrefetch(transport, allow_merge);
+	}
+
+private:
+	unique_ptr<ColumnReader> child_column_reader;
+	ResizeableBuffer child_defines;
+	ResizeableBuffer child_repeats;
+	uint8_t *child_defines_ptr;
+	uint8_t *child_repeats_ptr;
+
+	VectorCache read_cache;
+	Vector read_vector;
+
+	parquet_filter_t child_filter;
+
+	idx_t overflow_child_count;
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// string_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+namespace duckdb {
+
+struct StringParquetValueConversion {
+	static string_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader);
+
+	static string_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader);
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader);
+};
+
+class StringColumnReader : public TemplatedColumnReader<string_t, StringParquetValueConversion> {
+public:
+	StringColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                   idx_t max_define_p, idx_t max_repeat_p);
+
+	unique_ptr<string_t[]> dict_strings;
+	idx_t fixed_width_string_length;
+
+public:
+	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) override;
+
+	uint32_t VerifyString(const char *str_data, uint32_t str_len);
+
+protected:
+	void DictReference(Vector &result) override;
+	void PlainReference(shared_ptr<ByteBuffer> plain_data, Vector &result) override;
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// struct_column_reader.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+namespace duckdb {
+
+class StructColumnReader : public ColumnReader {
+public:
+	StructColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t schema_idx_p,
+	                   idx_t max_define_p, idx_t max_repeat_p, vector<unique_ptr<ColumnReader>> child_readers_p);
+
+	vector<unique_ptr<ColumnReader>> child_readers;
+
+public:
+	ColumnReader *GetChildReader(idx_t child_idx);
+
+	void InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) override;
+
+	idx_t Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+	           Vector &result) override;
+
+	void Skip(idx_t num_values) override;
+	idx_t GroupRowsAvailable() override;
+	uint64_t TotalCompressedSize() override;
+	void RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) override;
+};
+
+} // namespace duckdb
+
+
+
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #5
+// See the end of this file for a list
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// miniz_wrapper.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #5
+// See the end of this file for a list
+
+/* miniz.c 2.0.8 - public domain deflate/inflate, zlib-subset, ZIP reading/writing/appending, PNG writing
+   See "unlicense" statement at the end of this file.
+   Rich Geldreich <richgel99@gmail.com>, last updated Oct. 13, 2013
+   Implements RFC 1950: http://www.ietf.org/rfc/rfc1950.txt and RFC 1951: http://www.ietf.org/rfc/rfc1951.txt
+
+   Most API's defined in miniz.c are optional. For example, to disable the archive related functions just define
+   MINIZ_NO_ARCHIVE_APIS, or to get rid of all stdio usage define MINIZ_NO_STDIO (see the list below for more macros).
+
+   * Low-level Deflate/Inflate implementation notes:
+
+     Compression: Use the "tdefl" API's. The compressor supports raw, static, and dynamic blocks, lazy or
+     greedy parsing, match length filtering, RLE-only, and Huffman-only streams. It performs and compresses
+     approximately as well as zlib.
+
+     Decompression: Use the "tinfl" API's. The entire decompressor is implemented as a single function
+     coroutine: see tinfl_decompress(). It supports decompression into a 32KB (or larger power of 2) wrapping buffer, or into a memory
+     block large enough to hold the entire file.
+
+     The low-level tdefl/tinfl API's do not make any use of dynamic memory allocation.
+
+   * zlib-style API notes:
+
+     miniz.c implements a fairly large subset of zlib. There's enough functionality present for it to be a drop-in
+     zlib replacement in many apps:
+        The z_stream struct, optional memory allocation callbacks
+        deflateInit/deflateInit2/deflate/deflateReset/deflateEnd/deflateBound
+        inflateInit/inflateInit2/inflate/inflateEnd
+        compress, compress2, compressBound, uncompress
+        CRC-32, Adler-32 - Using modern, minimal code size, CPU cache friendly routines.
+        Supports raw deflate streams or standard zlib streams with adler-32 checking.
+
+     Limitations:
+      The callback API's are not implemented yet. No support for gzip headers or zlib static dictionaries.
+      I've tried to closely emulate zlib's various flavors of stream flushing and return status codes, but
+      there are no guarantees that miniz.c pulls this off perfectly.
+
+   * PNG writing: See the tdefl_write_image_to_png_file_in_memory() function, originally written by
+     Alex Evans. Supports 1-4 bytes/pixel images.
+
+   * ZIP archive API notes:
+
+     The ZIP archive API's where designed with simplicity and efficiency in mind, with just enough abstraction to
+     get the job done with minimal fuss. There are simple API's to retrieve file information, read files from
+     existing archives, create new archives, append new files to existing archives, or clone archive data from
+     one archive to another. It supports archives located in memory or the heap, on disk (using stdio.h),
+     or you can specify custom file read/write callbacks.
+
+     - Archive reading: Just call this function to read a single file from a disk archive:
+
+      void *mz_zip_extract_archive_file_to_heap(const char *pZip_filename, const char *pArchive_name,
+        size_t *pSize, mz_uint zip_flags);
+
+     For more complex cases, use the "mz_zip_reader" functions. Upon opening an archive, the entire central
+     directory is located and read as-is into memory, and subsequent file access only occurs when reading individual files.
+
+     - Archives file scanning: The simple way is to use this function to scan a loaded archive for a specific file:
+
+     int mz_zip_reader_locate_file(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags);
+
+     The locate operation can optionally check file comments too, which (as one example) can be used to identify
+     multiple versions of the same file in an archive. This function uses a simple linear search through the central
+     directory, so it's not very fast.
+
+     Alternately, you can iterate through all the files in an archive (using mz_zip_reader_get_num_files()) and
+     retrieve detailed info on each file by calling mz_zip_reader_file_stat().
+
+     - Archive creation: Use the "mz_zip_writer" functions. The ZIP writer immediately writes compressed file data
+     to disk and builds an exact image of the central directory in memory. The central directory image is written
+     all at once at the end of the archive file when the archive is finalized.
+
+     The archive writer can optionally align each file's local header and file data to any power of 2 alignment,
+     which can be useful when the archive will be read from optical media. Also, the writer supports placing
+     arbitrary data blobs at the very beginning of ZIP archives. Archives written using either feature are still
+     readable by any ZIP tool.
+
+     - Archive appending: The simple way to add a single file to an archive is to call this function:
+
+      mz_bool mz_zip_add_mem_to_archive_file_in_place(const char *pZip_filename, const char *pArchive_name,
+        const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
+
+     The archive will be created if it doesn't already exist, otherwise it'll be appended to.
+     Note the appending is done in-place and is not an atomic operation, so if something goes wrong
+     during the operation it's possible the archive could be left without a central directory (although the local
+     file headers and file data will be fine, so the archive will be recoverable).
+
+     For more complex archive modification scenarios:
+     1. The safest way is to use a mz_zip_reader to read the existing archive, cloning only those bits you want to
+     preserve into a new archive using using the mz_zip_writer_add_from_zip_reader() function (which compiles the
+     compressed file data as-is). When you're done, delete the old archive and rename the newly written archive, and
+     you're done. This is safe but requires a bunch of temporary disk space or heap memory.
+
+     2. Or, you can convert an mz_zip_reader in-place to an mz_zip_writer using mz_zip_writer_init_from_reader(),
+     append new files as needed, then finalize the archive which will write an updated central directory to the
+     original archive. (This is basically what mz_zip_add_mem_to_archive_file_in_place() does.) There's a
+     possibility that the archive's central directory could be lost with this method if anything goes wrong, though.
+
+     - ZIP archive support limitations:
+     No zip64 or spanning support. Extraction functions can only handle unencrypted, stored or deflated files.
+     Requires streams capable of seeking.
+
+   * This is a header file library, like stb_image.c. To get only a header file, either cut and paste the
+     below header, or create miniz.h, #define MINIZ_HEADER_FILE_ONLY, and then include miniz.c from it.
+
+   * Important: For best perf. be sure to customize the below macros for your target platform:
+     #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 1
+     #define MINIZ_LITTLE_ENDIAN 1
+     #define MINIZ_HAS_64BIT_REGISTERS 1
+
+   * On platforms using glibc, Be sure to "#define _LARGEFILE64_SOURCE 1" before including miniz.c to ensure miniz
+     uses the 64-bit variants: fopen64(), stat64(), etc. Otherwise you won't be able to process large files
+     (i.e. 32-bit stat() fails for me on files > 0x7FFFFFFF bytes).
+*/
+
+
+
+
+
+/* Defines to completely disable specific portions of miniz.c:
+   If all macros here are defined the only functionality remaining will be CRC-32, adler-32, tinfl, and tdefl. */
+
+/* Define MINIZ_NO_STDIO to disable all usage and any functions which rely on stdio for file I/O. */
+#define MINIZ_NO_STDIO
+
+/* If MINIZ_NO_TIME is specified then the ZIP archive functions will not be able to get the current time, or */
+/* get/set file times, and the C run-time funcs that get/set times won't be called. */
+/* The current downside is the times written to your archives will be from 1979. */
+#define MINIZ_NO_TIME
+
+/* Define MINIZ_NO_ARCHIVE_APIS to disable all ZIP archive API's. */
+/* #define MINIZ_NO_ARCHIVE_APIS */
+
+/* Define MINIZ_NO_ARCHIVE_WRITING_APIS to disable all writing related ZIP archive API's. */
+/* #define MINIZ_NO_ARCHIVE_WRITING_APIS */
+
+/* Define MINIZ_NO_ZLIB_APIS to remove all ZLIB-style compression/decompression API's. */
+/*#define MINIZ_NO_ZLIB_APIS */
+
+/* Define MINIZ_NO_ZLIB_COMPATIBLE_NAME to disable zlib names, to prevent conflicts against stock zlib. */
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+
+/* Define MINIZ_NO_MALLOC to disable all calls to malloc, free, and realloc.
+   Note if MINIZ_NO_MALLOC is defined then the user must always provide custom user alloc/free/realloc
+   callbacks to the zlib and archive API's, and a few stand-alone helper API's which don't provide custom user
+   functions (such as tdefl_compress_mem_to_heap() and tinfl_decompress_mem_to_heap()) won't work. */
+/*#define MINIZ_NO_MALLOC */
+
+#if defined(__TINYC__) && (defined(__linux) || defined(__linux__))
+/* TODO: Work around "error: include file 'sys\utime.h' when compiling with tcc on Linux */
+#define MINIZ_NO_TIME
+#endif
+
+#include <stddef.h>
+
+
+
+#if !defined(MINIZ_NO_TIME) && !defined(MINIZ_NO_ARCHIVE_APIS)
+#include <time.h>
+#endif
+
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__i386) || defined(__i486__) || defined(__i486) || defined(i386) || defined(__ia64__) || defined(__x86_64__)
+/* MINIZ_X86_OR_X64_CPU is only used to help set the below macros. */
+#define MINIZ_X86_OR_X64_CPU 1
+#else
+#define MINIZ_X86_OR_X64_CPU 0
+#endif
+
+#if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || MINIZ_X86_OR_X64_CPU
+/* Set MINIZ_LITTLE_ENDIAN to 1 if the processor is little endian. */
+#define MINIZ_LITTLE_ENDIAN 1
+#else
+#define MINIZ_LITTLE_ENDIAN 0
+#endif
+
+#if MINIZ_X86_OR_X64_CPU
+/* Set MINIZ_USE_UNALIGNED_LOADS_AND_STORES to 1 on CPU's that permit efficient integer loads and stores from unaligned addresses. */
+#define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0 // always 0 because alignment
+#else
+#define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0
+#endif
+
+#if defined(_M_X64) || defined(_WIN64) || defined(__MINGW64__) || defined(_LP64) || defined(__LP64__) || defined(__ia64__) || defined(__x86_64__)
+/* Set MINIZ_HAS_64BIT_REGISTERS to 1 if operations on 64-bit integers are reasonably fast (and don't involve compiler generated calls to helper functions). */
+#define MINIZ_HAS_64BIT_REGISTERS 1
+#else
+#define MINIZ_HAS_64BIT_REGISTERS 0
+#endif
+
+namespace duckdb_miniz {
+
+/* ------------------- zlib-style API Definitions. */
+
+/* For more compatibility with zlib, miniz.c uses unsigned long for some parameters/struct members. Beware: mz_ulong can be either 32 or 64-bits! */
+typedef unsigned long mz_ulong;
+
+/* mz_free() internally uses the MZ_FREE() macro (which by default calls free() unless you've modified the MZ_MALLOC macro) to release a block allocated from the heap. */
+void mz_free(void *p);
+
+#define MZ_ADLER32_INIT (1)
+/* mz_adler32() returns the initial adler-32 value to use when called with ptr==NULL. */
+mz_ulong mz_adler32(mz_ulong adler, const unsigned char *ptr, size_t buf_len);
+
+#define MZ_CRC32_INIT (0)
+/* mz_crc32() returns the initial CRC-32 value to use when called with ptr==NULL. */
+mz_ulong mz_crc32(mz_ulong crc, const unsigned char *ptr, size_t buf_len);
+
+/* Compression strategies. */
+enum { MZ_DEFAULT_STRATEGY = 0, MZ_FILTERED = 1, MZ_HUFFMAN_ONLY = 2, MZ_RLE = 3, MZ_FIXED = 4 };
+
+/* Method */
+#define MZ_DEFLATED 8
+
+/* Heap allocation callbacks.
+Note that mz_alloc_func parameter types purpsosely differ from zlib's: items/size is size_t, not unsigned long. */
+typedef void *(*mz_alloc_func)(void *opaque, size_t items, size_t size);
+typedef void (*mz_free_func)(void *opaque, void *address);
+typedef void *(*mz_realloc_func)(void *opaque, void *address, size_t items, size_t size);
+
+/* Compression levels: 0-9 are the standard zlib-style levels, 10 is best possible compression (not zlib compatible, and may be very slow), MZ_DEFAULT_COMPRESSION=MZ_DEFAULT_LEVEL. */
+enum {
+	MZ_NO_COMPRESSION = 0,
+	MZ_BEST_SPEED = 1,
+	MZ_BEST_COMPRESSION = 9,
+	MZ_UBER_COMPRESSION = 10,
+	MZ_DEFAULT_LEVEL = 6,
+	MZ_DEFAULT_COMPRESSION = -1
+};
+
+#define MZ_VERSION "10.0.3"
+#define MZ_VERNUM 0xA030
+#define MZ_VER_MAJOR 10
+#define MZ_VER_MINOR 0
+#define MZ_VER_REVISION 3
+#define MZ_VER_SUBREVISION 0
+
+#ifndef MINIZ_NO_ZLIB_APIS
+
+/* Flush values. For typical usage you only need MZ_NO_FLUSH and MZ_FINISH. The other values are for advanced use (refer to the zlib docs). */
+enum { MZ_NO_FLUSH = 0, MZ_PARTIAL_FLUSH = 1, MZ_SYNC_FLUSH = 2, MZ_FULL_FLUSH = 3, MZ_FINISH = 4, MZ_BLOCK = 5 };
+
+/* Return status codes. MZ_PARAM_ERROR is non-standard. */
+enum {
+	MZ_OK = 0,
+	MZ_STREAM_END = 1,
+	MZ_NEED_DICT = 2,
+	MZ_ERRNO = -1,
+	MZ_STREAM_ERROR = -2,
+	MZ_DATA_ERROR = -3,
+	MZ_MEM_ERROR = -4,
+	MZ_BUF_ERROR = -5,
+	MZ_VERSION_ERROR = -6,
+	MZ_PARAM_ERROR = -10000
+};
+
+/* Window bits */
+#define MZ_DEFAULT_WINDOW_BITS 15
+
+struct mz_internal_state;
+
+/* Compression/decompression stream struct. */
+typedef struct mz_stream_s {
+	const unsigned char *next_in; /* pointer to next byte to read */
+	unsigned int avail_in;        /* number of bytes available at next_in */
+	mz_ulong total_in;            /* total number of bytes consumed so far */
+
+	unsigned char *next_out; /* pointer to next byte to write */
+	unsigned int avail_out;  /* number of bytes that can be written to next_out */
+	mz_ulong total_out;      /* total number of bytes produced so far */
+
+	char *msg;                       /* error msg (unused) */
+	struct mz_internal_state *state; /* internal state, allocated by zalloc/zfree */
+
+	mz_alloc_func zalloc; /* optional heap allocation function (defaults to malloc) */
+	mz_free_func zfree;   /* optional heap free function (defaults to free) */
+	void *opaque;         /* heap alloc function user pointer */
+
+	int data_type;     /* data_type (unused) */
+	mz_ulong adler;    /* adler32 of the source or uncompressed data */
+	mz_ulong reserved; /* not used */
+} mz_stream;
+
+typedef mz_stream *mz_streamp;
+
+/* Returns the version string of miniz.c. */
+const char *mz_version(void);
+
+/* mz_deflateInit() initializes a compressor with default options: */
+/* Parameters: */
+/*  pStream must point to an initialized mz_stream struct. */
+/*  level must be between [MZ_NO_COMPRESSION, MZ_BEST_COMPRESSION]. */
+/*  level 1 enables a specially optimized compression function that's been optimized purely for performance, not ratio.
+ */
+/*  (This special func. is currently only enabled when MINIZ_USE_UNALIGNED_LOADS_AND_STORES and MINIZ_LITTLE_ENDIAN are defined.) */
+/* Return values: */
+/*  MZ_OK on success. */
+/*  MZ_STREAM_ERROR if the stream is bogus. */
+/*  MZ_PARAM_ERROR if the input parameters are bogus. */
+/*  MZ_MEM_ERROR on out of memory. */
+int mz_deflateInit(mz_streamp pStream, int level);
+
+/* mz_deflateInit2() is like mz_deflate(), except with more control: */
+/* Additional parameters: */
+/*   method must be MZ_DEFLATED */
+/*   window_bits must be MZ_DEFAULT_WINDOW_BITS (to wrap the deflate stream with zlib header/adler-32 footer) or -MZ_DEFAULT_WINDOW_BITS (raw deflate/no header or footer) */
+/*   mem_level must be between [1, 9] (it's checked but ignored by miniz.c) */
+int mz_deflateInit2(mz_streamp pStream, int level, int method, int window_bits, int mem_level, int strategy);
+
+/* Quickly resets a compressor without having to reallocate anything. Same as calling mz_deflateEnd() followed by mz_deflateInit()/mz_deflateInit2(). */
+int mz_deflateReset(mz_streamp pStream);
+
+/* mz_deflate() compresses the input to output, consuming as much of the input and producing as much output as possible.
+ */
+/* Parameters: */
+/*   pStream is the stream to read from and write to. You must initialize/update the next_in, avail_in, next_out, and avail_out members. */
+/*   flush may be MZ_NO_FLUSH, MZ_PARTIAL_FLUSH/MZ_SYNC_FLUSH, MZ_FULL_FLUSH, or MZ_FINISH. */
+/* Return values: */
+/*   MZ_OK on success (when flushing, or if more input is needed but not available, and/or there's more output to be written but the output buffer is full). */
+/*   MZ_STREAM_END if all input has been consumed and all output bytes have been written. Don't call mz_deflate() on the stream anymore. */
+/*   MZ_STREAM_ERROR if the stream is bogus. */
+/*   MZ_PARAM_ERROR if one of the parameters is invalid. */
+/*   MZ_BUF_ERROR if no forward progress is possible because the input and/or output buffers are empty. (Fill up the input buffer or free up some output space and try again.) */
+int mz_deflate(mz_streamp pStream, int flush);
+
+/* mz_deflateEnd() deinitializes a compressor: */
+/* Return values: */
+/*  MZ_OK on success. */
+/*  MZ_STREAM_ERROR if the stream is bogus. */
+int mz_deflateEnd(mz_streamp pStream);
+
+/* mz_deflateBound() returns a (very) conservative upper bound on the amount of data that could be generated by deflate(), assuming flush is set to only MZ_NO_FLUSH or MZ_FINISH. */
+mz_ulong mz_deflateBound(mz_streamp pStream, mz_ulong source_len);
+
+/* Single-call compression functions mz_compress() and mz_compress2(): */
+/* Returns MZ_OK on success, or one of the error codes from mz_deflate() on failure. */
+int mz_compress(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len);
+int mz_compress2(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len,
+                 int level);
+
+/* mz_compressBound() returns a (very) conservative upper bound on the amount of data that could be generated by calling mz_compress(). */
+mz_ulong mz_compressBound(mz_ulong source_len);
+
+/* Initializes a decompressor. */
+int mz_inflateInit(mz_streamp pStream);
+
+/* mz_inflateInit2() is like mz_inflateInit() with an additional option that controls the window size and whether or not the stream has been wrapped with a zlib header/footer: */
+/* window_bits must be MZ_DEFAULT_WINDOW_BITS (to parse zlib header/footer) or -MZ_DEFAULT_WINDOW_BITS (raw deflate). */
+int mz_inflateInit2(mz_streamp pStream, int window_bits);
+
+/* Decompresses the input stream to the output, consuming only as much of the input as needed, and writing as much to the output as possible. */
+/* Parameters: */
+/*   pStream is the stream to read from and write to. You must initialize/update the next_in, avail_in, next_out, and avail_out members. */
+/*   flush may be MZ_NO_FLUSH, MZ_SYNC_FLUSH, or MZ_FINISH. */
+/*   On the first call, if flush is MZ_FINISH it's assumed the input and output buffers are both sized large enough to decompress the entire stream in a single call (this is slightly faster). */
+/*   MZ_FINISH implies that there are no more source bytes available beside what's already in the input buffer, and that the output buffer is large enough to hold the rest of the decompressed data. */
+/* Return values: */
+/*   MZ_OK on success. Either more input is needed but not available, and/or there's more output to be written but the output buffer is full. */
+/*   MZ_STREAM_END if all needed input has been consumed and all output bytes have been written. For zlib streams, the adler-32 of the decompressed data has also been verified. */
+/*   MZ_STREAM_ERROR if the stream is bogus. */
+/*   MZ_DATA_ERROR if the deflate stream is invalid. */
+/*   MZ_PARAM_ERROR if one of the parameters is invalid. */
+/*   MZ_BUF_ERROR if no forward progress is possible because the input buffer is empty but the inflater needs more input to continue, or if the output buffer is not large enough. Call mz_inflate() again */
+/*   with more input data, or with more room in the output buffer (except when using single call decompression, described above). */
+int mz_inflate(mz_streamp pStream, int flush);
+
+/* Deinitializes a decompressor. */
+int mz_inflateEnd(mz_streamp pStream);
+
+/* Single-call decompression. */
+/* Returns MZ_OK on success, or one of the error codes from mz_inflate() on failure. */
+int mz_uncompress(unsigned char *pDest, mz_ulong *pDest_len, const unsigned char *pSource, mz_ulong source_len);
+
+/* Returns a string description of the specified error code, or NULL if the error code is invalid. */
+const char *mz_error(int err);
+
+/* Redefine zlib-compatible names to miniz equivalents, so miniz.c can be used as a drop-in replacement for the subset of zlib that miniz.c supports. */
+/* Define MINIZ_NO_ZLIB_COMPATIBLE_NAMES to disable zlib-compatibility if you use zlib in the same project. */
+#ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+typedef unsigned char Byte;
+typedef unsigned int uInt;
+typedef mz_ulong uLong;
+typedef Byte Bytef;
+typedef uInt uIntf;
+typedef char charf;
+typedef int intf;
+typedef void *voidpf;
+typedef uLong uLongf;
+typedef void *voidp;
+typedef void *const voidpc;
+#define Z_NULL 0
+#define Z_NO_FLUSH MZ_NO_FLUSH
+#define Z_PARTIAL_FLUSH MZ_PARTIAL_FLUSH
+#define Z_SYNC_FLUSH MZ_SYNC_FLUSH
+#define Z_FULL_FLUSH MZ_FULL_FLUSH
+#define Z_FINISH MZ_FINISH
+#define Z_BLOCK MZ_BLOCK
+#define Z_OK MZ_OK
+#define Z_STREAM_END MZ_STREAM_END
+#define Z_NEED_DICT MZ_NEED_DICT
+#define Z_ERRNO MZ_ERRNO
+#define Z_STREAM_ERROR MZ_STREAM_ERROR
+#define Z_DATA_ERROR MZ_DATA_ERROR
+#define Z_MEM_ERROR MZ_MEM_ERROR
+#define Z_BUF_ERROR MZ_BUF_ERROR
+#define Z_VERSION_ERROR MZ_VERSION_ERROR
+#define Z_PARAM_ERROR MZ_PARAM_ERROR
+#define Z_NO_COMPRESSION MZ_NO_COMPRESSION
+#define Z_BEST_SPEED MZ_BEST_SPEED
+#define Z_BEST_COMPRESSION MZ_BEST_COMPRESSION
+#define Z_DEFAULT_COMPRESSION MZ_DEFAULT_COMPRESSION
+#define Z_DEFAULT_STRATEGY MZ_DEFAULT_STRATEGY
+#define Z_FILTERED MZ_FILTERED
+#define Z_HUFFMAN_ONLY MZ_HUFFMAN_ONLY
+#define Z_RLE MZ_RLE
+#define Z_FIXED MZ_FIXED
+#define Z_DEFLATED MZ_DEFLATED
+#define Z_DEFAULT_WINDOW_BITS MZ_DEFAULT_WINDOW_BITS
+#define alloc_func mz_alloc_func
+#define free_func mz_free_func
+#define internal_state mz_internal_state
+#define z_stream mz_stream
+#define deflateInit mz_deflateInit
+#define deflateInit2 mz_deflateInit2
+#define deflateReset mz_deflateReset
+#define deflate mz_deflate
+#define deflateEnd mz_deflateEnd
+#define deflateBound mz_deflateBound
+#define compress mz_compress
+#define compress2 mz_compress2
+#define compressBound mz_compressBound
+#define inflateInit mz_inflateInit
+#define inflateInit2 mz_inflateInit2
+#define inflate mz_inflate
+#define inflateEnd mz_inflateEnd
+#define uncompress mz_uncompress
+#define crc32 mz_crc32
+#define adler32 mz_adler32
+#define MAX_WBITS 15
+#define MAX_MEM_LEVEL 9
+#define zError mz_error
+#define ZLIB_VERSION MZ_VERSION
+#define ZLIB_VERNUM MZ_VERNUM
+#define ZLIB_VER_MAJOR MZ_VER_MAJOR
+#define ZLIB_VER_MINOR MZ_VER_MINOR
+#define ZLIB_VER_REVISION MZ_VER_REVISION
+#define ZLIB_VER_SUBREVISION MZ_VER_SUBREVISION
+#define zlibVersion mz_version
+#define zlib_version mz_version()
+#endif /* #ifndef MINIZ_NO_ZLIB_COMPATIBLE_NAMES */
+
+#endif /* MINIZ_NO_ZLIB_APIS */
+
+}
+
+
+#include <assert.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+namespace duckdb_miniz {
+
+/* ------------------- Types and macros */
+typedef unsigned char mz_uint8;
+typedef signed short mz_int16;
+typedef unsigned short mz_uint16;
+typedef unsigned int mz_uint32;
+typedef unsigned int mz_uint;
+typedef int64_t mz_int64;
+typedef uint64_t mz_uint64;
+typedef int mz_bool;
+
+#define MZ_FALSE (0)
+#define MZ_TRUE (1)
+
+/* Works around MSVC's spammy "warning C4127: conditional expression is constant" message. */
+#ifdef _MSC_VER
+#define MZ_MACRO_END while (0, 0)
+#else
+#define MZ_MACRO_END while (0)
+#endif
+
+#ifdef MINIZ_NO_STDIO
+#define MZ_FILE void *
+#else
+#include <stdio.h>
+#define MZ_FILE FILE
+#endif /* #ifdef MINIZ_NO_STDIO */
+
+#ifdef MINIZ_NO_TIME
+typedef struct mz_dummy_time_t_tag
+{
+    int m_dummy;
+} mz_dummy_time_t;
+#define MZ_TIME_T mz_dummy_time_t
+#else
+#define MZ_TIME_T time_t
+#endif
+
+#define MZ_ASSERT(x) assert(x)
+
+#ifdef MINIZ_NO_MALLOC
+#define MZ_MALLOC(x) NULL
+#define MZ_FREE(x) (void)x, ((void)0)
+#define MZ_REALLOC(p, x) NULL
+#else
+#define MZ_MALLOC(x) malloc(x)
+#define MZ_FREE(x) free(x)
+#define MZ_REALLOC(p, x) realloc(p, x)
+#endif
+
+#define MZ_MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MZ_MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MZ_CLEAR_OBJ(obj) memset(&(obj), 0, sizeof(obj))
+
+#if MINIZ_USE_UNALIGNED_LOADS_AND_STORES && MINIZ_LITTLE_ENDIAN
+#define MZ_READ_LE16(p) *((const mz_uint16 *)(p))
+#define MZ_READ_LE32(p) *((const mz_uint32 *)(p))
+#else
+#define MZ_READ_LE16(p) ((mz_uint32)(((const mz_uint8 *)(p))[0]) | ((mz_uint32)(((const mz_uint8 *)(p))[1]) << 8U))
+#define MZ_READ_LE32(p) ((mz_uint32)(((const mz_uint8 *)(p))[0]) | ((mz_uint32)(((const mz_uint8 *)(p))[1]) << 8U) | ((mz_uint32)(((const mz_uint8 *)(p))[2]) << 16U) | ((mz_uint32)(((const mz_uint8 *)(p))[3]) << 24U))
+#endif
+
+#define MZ_READ_LE64(p) (((mz_uint64)MZ_READ_LE32(p)) | (((mz_uint64)MZ_READ_LE32((const mz_uint8 *)(p) + sizeof(mz_uint32))) << 32U))
+
+#ifdef _MSC_VER
+#define MZ_FORCEINLINE __forceinline
+#elif defined(__GNUC__)
+#define MZ_FORCEINLINE __inline__ __attribute__((__always_inline__))
+#else
+#define MZ_FORCEINLINE inline
+#endif
+
+extern void *miniz_def_alloc_func(void *opaque, size_t items, size_t size);
+extern void miniz_def_free_func(void *opaque, void *address);
+extern void *miniz_def_realloc_func(void *opaque, void *address, size_t items, size_t size);
+
+#define MZ_UINT16_MAX (0xFFFFU)
+#define MZ_UINT32_MAX (0xFFFFFFFFU)
+
+
+
+
+
+/* ------------------- Low-level Compression API Definitions */
+
+/* Set TDEFL_LESS_MEMORY to 1 to use less memory (compression will be slightly slower, and raw/dynamic blocks will be output more frequently). */
+#define TDEFL_LESS_MEMORY 0
+
+/* tdefl_init() compression flags logically OR'd together (low 12 bits contain the max. number of probes per dictionary search): */
+/* TDEFL_DEFAULT_MAX_PROBES: The compressor defaults to 128 dictionary probes per dictionary search. 0=Huffman only, 1=Huffman+LZ (fastest/crap compression), 4095=Huffman+LZ (slowest/best compression). */
+enum
+{
+    TDEFL_HUFFMAN_ONLY = 0,
+    TDEFL_DEFAULT_MAX_PROBES = 128,
+    TDEFL_MAX_PROBES_MASK = 0xFFF
+};
+
+/* TDEFL_WRITE_ZLIB_HEADER: If set, the compressor outputs a zlib header before the deflate data, and the Adler-32 of the source data at the end. Otherwise, you'll get raw deflate data. */
+/* TDEFL_COMPUTE_ADLER32: Always compute the adler-32 of the input data (even when not writing zlib headers). */
+/* TDEFL_GREEDY_PARSING_FLAG: Set to use faster greedy parsing, instead of more efficient lazy parsing. */
+/* TDEFL_NONDETERMINISTIC_PARSING_FLAG: Enable to decrease the compressor's initialization time to the minimum, but the output may vary from run to run given the same input (depending on the contents of memory). */
+/* TDEFL_RLE_MATCHES: Only look for RLE matches (matches with a distance of 1) */
+/* TDEFL_FILTER_MATCHES: Discards matches <= 5 chars if enabled. */
+/* TDEFL_FORCE_ALL_STATIC_BLOCKS: Disable usage of optimized Huffman tables. */
+/* TDEFL_FORCE_ALL_RAW_BLOCKS: Only use raw (uncompressed) deflate blocks. */
+/* The low 12 bits are reserved to control the max # of hash probes per dictionary lookup (see TDEFL_MAX_PROBES_MASK). */
+enum
+{
+    TDEFL_WRITE_ZLIB_HEADER = 0x01000,
+    TDEFL_COMPUTE_ADLER32 = 0x02000,
+    TDEFL_GREEDY_PARSING_FLAG = 0x04000,
+    TDEFL_NONDETERMINISTIC_PARSING_FLAG = 0x08000,
+    TDEFL_RLE_MATCHES = 0x10000,
+    TDEFL_FILTER_MATCHES = 0x20000,
+    TDEFL_FORCE_ALL_STATIC_BLOCKS = 0x40000,
+    TDEFL_FORCE_ALL_RAW_BLOCKS = 0x80000
+};
+
+/* High level compression functions: */
+/* tdefl_compress_mem_to_heap() compresses a block in memory to a heap block allocated via malloc(). */
+/* On entry: */
+/*  pSrc_buf, src_buf_len: Pointer and size of source block to compress. */
+/*  flags: The max match finder probes (default is 128) logically OR'd against the above flags. Higher probes are slower but improve compression. */
+/* On return: */
+/*  Function returns a pointer to the compressed data, or NULL on failure. */
+/*  *pOut_len will be set to the compressed data's size, which could be larger than src_buf_len on uncompressible data. */
+/*  The caller must free() the returned block when it's no longer needed. */
+void *tdefl_compress_mem_to_heap(const void *pSrc_buf, size_t src_buf_len, size_t *pOut_len, int flags);
+
+/* tdefl_compress_mem_to_mem() compresses a block in memory to another block in memory. */
+/* Returns 0 on failure. */
+size_t tdefl_compress_mem_to_mem(void *pOut_buf, size_t out_buf_len, const void *pSrc_buf, size_t src_buf_len, int flags);
+
+/* Compresses an image to a compressed PNG file in memory. */
+/* On entry: */
+/*  pImage, w, h, and num_chans describe the image to compress. num_chans may be 1, 2, 3, or 4. */
+/*  The image pitch in bytes per scanline will be w*num_chans. The leftmost pixel on the top scanline is stored first in memory. */
+/*  level may range from [0,10], use MZ_NO_COMPRESSION, MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc. or a decent default is MZ_DEFAULT_LEVEL */
+/*  If flip is true, the image will be flipped on the Y axis (useful for OpenGL apps). */
+/* On return: */
+/*  Function returns a pointer to the compressed data, or NULL on failure. */
+/*  *pLen_out will be set to the size of the PNG image file. */
+/*  The caller must mz_free() the returned heap block (which will typically be larger than *pLen_out) when it's no longer needed. */
+void *tdefl_write_image_to_png_file_in_memory_ex(const void *pImage, int w, int h, int num_chans, size_t *pLen_out, mz_uint level, mz_bool flip);
+void *tdefl_write_image_to_png_file_in_memory(const void *pImage, int w, int h, int num_chans, size_t *pLen_out);
+
+/* Output stream interface. The compressor uses this interface to write compressed data. It'll typically be called TDEFL_OUT_BUF_SIZE at a time. */
+typedef mz_bool (*tdefl_put_buf_func_ptr)(const void *pBuf, int len, void *pUser);
+
+/* tdefl_compress_mem_to_output() compresses a block to an output stream. The above helpers use this function internally. */
+mz_bool tdefl_compress_mem_to_output(const void *pBuf, size_t buf_len, tdefl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
+
+enum
+{
+    TDEFL_MAX_HUFF_TABLES = 3,
+    TDEFL_MAX_HUFF_SYMBOLS_0 = 288,
+    TDEFL_MAX_HUFF_SYMBOLS_1 = 32,
+    TDEFL_MAX_HUFF_SYMBOLS_2 = 19,
+    TDEFL_LZ_DICT_SIZE = 32768,
+    TDEFL_LZ_DICT_SIZE_MASK = TDEFL_LZ_DICT_SIZE - 1,
+    TDEFL_MIN_MATCH_LEN = 3,
+    TDEFL_MAX_MATCH_LEN = 258
+};
+
+/* TDEFL_OUT_BUF_SIZE MUST be large enough to hold a single entire compressed output block (using static/fixed Huffman codes). */
+#if TDEFL_LESS_MEMORY
+enum
+{
+    TDEFL_LZ_CODE_BUF_SIZE = 24 * 1024,
+    TDEFL_OUT_BUF_SIZE = (TDEFL_LZ_CODE_BUF_SIZE * 13) / 10,
+    TDEFL_MAX_HUFF_SYMBOLS = 288,
+    TDEFL_LZ_HASH_BITS = 12,
+    TDEFL_LEVEL1_HASH_SIZE_MASK = 4095,
+    TDEFL_LZ_HASH_SHIFT = (TDEFL_LZ_HASH_BITS + 2) / 3,
+    TDEFL_LZ_HASH_SIZE = 1 << TDEFL_LZ_HASH_BITS
+};
+#else
+enum
+{
+    TDEFL_LZ_CODE_BUF_SIZE = 64 * 1024,
+    TDEFL_OUT_BUF_SIZE = (TDEFL_LZ_CODE_BUF_SIZE * 13) / 10,
+    TDEFL_MAX_HUFF_SYMBOLS = 288,
+    TDEFL_LZ_HASH_BITS = 15,
+    TDEFL_LEVEL1_HASH_SIZE_MASK = 4095,
+    TDEFL_LZ_HASH_SHIFT = (TDEFL_LZ_HASH_BITS + 2) / 3,
+    TDEFL_LZ_HASH_SIZE = 1 << TDEFL_LZ_HASH_BITS
+};
+#endif
+
+/* The low-level tdefl functions below may be used directly if the above helper functions aren't flexible enough. The low-level functions don't make any heap allocations, unlike the above helper functions. */
+typedef enum {
+    TDEFL_STATUS_BAD_PARAM = -2,
+    TDEFL_STATUS_PUT_BUF_FAILED = -1,
+    TDEFL_STATUS_OKAY = 0,
+    TDEFL_STATUS_DONE = 1
+} tdefl_status;
+
+/* Must map to MZ_NO_FLUSH, MZ_SYNC_FLUSH, etc. enums */
+typedef enum {
+    TDEFL_NO_FLUSH = 0,
+    TDEFL_SYNC_FLUSH = 2,
+    TDEFL_FULL_FLUSH = 3,
+    TDEFL_FINISH = 4
+} tdefl_flush;
+
+/* tdefl's compression state structure. */
+typedef struct
+{
+    tdefl_put_buf_func_ptr m_pPut_buf_func;
+    void *m_pPut_buf_user;
+    mz_uint m_flags, m_max_probes[2];
+    int m_greedy_parsing;
+    mz_uint m_adler32, m_lookahead_pos, m_lookahead_size, m_dict_size;
+    mz_uint8 *m_pLZ_code_buf, *m_pLZ_flags, *m_pOutput_buf, *m_pOutput_buf_end;
+    mz_uint m_num_flags_left, m_total_lz_bytes, m_lz_code_buf_dict_pos, m_bits_in, m_bit_buffer;
+    mz_uint m_saved_match_dist, m_saved_match_len, m_saved_lit, m_output_flush_ofs, m_output_flush_remaining, m_finished, m_block_index, m_wants_to_finish;
+    tdefl_status m_prev_return_status;
+    const void *m_pIn_buf;
+    void *m_pOut_buf;
+    size_t *m_pIn_buf_size, *m_pOut_buf_size;
+    tdefl_flush m_flush;
+    const mz_uint8 *m_pSrc;
+    size_t m_src_buf_left, m_out_buf_ofs;
+    mz_uint8 m_dict[TDEFL_LZ_DICT_SIZE + TDEFL_MAX_MATCH_LEN - 1];
+    mz_uint16 m_huff_count[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
+    mz_uint16 m_huff_codes[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
+    mz_uint8 m_huff_code_sizes[TDEFL_MAX_HUFF_TABLES][TDEFL_MAX_HUFF_SYMBOLS];
+    mz_uint8 m_lz_code_buf[TDEFL_LZ_CODE_BUF_SIZE];
+    mz_uint16 m_next[TDEFL_LZ_DICT_SIZE];
+    mz_uint16 m_hash[TDEFL_LZ_HASH_SIZE];
+    mz_uint8 m_output_buf[TDEFL_OUT_BUF_SIZE];
+} tdefl_compressor;
+
+/* Initializes the compressor. */
+/* There is no corresponding deinit() function because the tdefl API's do not dynamically allocate memory. */
+/* pBut_buf_func: If NULL, output data will be supplied to the specified callback. In this case, the user should call the tdefl_compress_buffer() API for compression. */
+/* If pBut_buf_func is NULL the user should always call the tdefl_compress() API. */
+/* flags: See the above enums (TDEFL_HUFFMAN_ONLY, TDEFL_WRITE_ZLIB_HEADER, etc.) */
+tdefl_status tdefl_init(tdefl_compressor *d, tdefl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
+
+/* Compresses a block of data, consuming as much of the specified input buffer as possible, and writing as much compressed data to the specified output buffer as possible. */
+tdefl_status tdefl_compress(tdefl_compressor *d, const void *pIn_buf, size_t *pIn_buf_size, void *pOut_buf, size_t *pOut_buf_size, tdefl_flush flush);
+
+/* tdefl_compress_buffer() is only usable when the tdefl_init() is called with a non-NULL tdefl_put_buf_func_ptr. */
+/* tdefl_compress_buffer() always consumes the entire input buffer. */
+tdefl_status tdefl_compress_buffer(tdefl_compressor *d, const void *pIn_buf, size_t in_buf_size, tdefl_flush flush);
+
+tdefl_status tdefl_get_prev_return_status(tdefl_compressor *d);
+mz_uint32 tdefl_get_adler32(tdefl_compressor *d);
+
+/* Create tdefl_compress() flags given zlib-style compression parameters. */
+/* level may range from [0,10] (where 10 is absolute max compression, but may be much slower on some files) */
+/* window_bits may be -15 (raw deflate) or 15 (zlib) */
+/* strategy may be either MZ_DEFAULT_STRATEGY, MZ_FILTERED, MZ_HUFFMAN_ONLY, MZ_RLE, or MZ_FIXED */
+mz_uint tdefl_create_comp_flags_from_zip_params(int level, int window_bits, int strategy);
+
+/* Allocate the tdefl_compressor structure in C so that */
+/* non-C language bindings to tdefl_ API don't need to worry about */
+/* structure size and allocation mechanism. */
+tdefl_compressor *tdefl_compressor_alloc();
+void tdefl_compressor_free(tdefl_compressor *pComp);
+
+
+
+
+/* ------------------- Low-level Decompression API Definitions */
+
+
+/* Decompression flags used by tinfl_decompress(). */
+/* TINFL_FLAG_PARSE_ZLIB_HEADER: If set, the input has a valid zlib header and ends with an adler32 checksum (it's a valid zlib stream). Otherwise, the input is a raw deflate stream. */
+/* TINFL_FLAG_HAS_MORE_INPUT: If set, there are more input bytes available beyond the end of the supplied input buffer. If clear, the input buffer contains all remaining input. */
+/* TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF: If set, the output buffer is large enough to hold the entire decompressed stream. If clear, the output buffer is at least the size of the dictionary (typically 32KB). */
+/* TINFL_FLAG_COMPUTE_ADLER32: Force adler-32 checksum computation of the decompressed bytes. */
+enum
+{
+    TINFL_FLAG_PARSE_ZLIB_HEADER = 1,
+    TINFL_FLAG_HAS_MORE_INPUT = 2,
+    TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF = 4,
+    TINFL_FLAG_COMPUTE_ADLER32 = 8
+};
+
+/* High level decompression functions: */
+/* tinfl_decompress_mem_to_heap() decompresses a block in memory to a heap block allocated via malloc(). */
+/* On entry: */
+/*  pSrc_buf, src_buf_len: Pointer and size of the Deflate or zlib source data to decompress. */
+/* On return: */
+/*  Function returns a pointer to the decompressed data, or NULL on failure. */
+/*  *pOut_len will be set to the decompressed data's size, which could be larger than src_buf_len on uncompressible data. */
+/*  The caller must call mz_free() on the returned block when it's no longer needed. */
+void *tinfl_decompress_mem_to_heap(const void *pSrc_buf, size_t src_buf_len, size_t *pOut_len, int flags);
+
+/* tinfl_decompress_mem_to_mem() decompresses a block in memory to another block in memory. */
+/* Returns TINFL_DECOMPRESS_MEM_TO_MEM_FAILED on failure, or the number of bytes written on success. */
+#define TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ((size_t)(-1))
+size_t tinfl_decompress_mem_to_mem(void *pOut_buf, size_t out_buf_len, const void *pSrc_buf, size_t src_buf_len, int flags);
+
+/* tinfl_decompress_mem_to_callback() decompresses a block in memory to an internal 32KB buffer, and a user provided callback function will be called to flush the buffer. */
+/* Returns 1 on success or 0 on failure. */
+typedef int (*tinfl_put_buf_func_ptr)(const void *pBuf, int len, void *pUser);
+int tinfl_decompress_mem_to_callback(const void *pIn_buf, size_t *pIn_buf_size, tinfl_put_buf_func_ptr pPut_buf_func, void *pPut_buf_user, int flags);
+
+struct tinfl_decompressor_tag;
+typedef struct tinfl_decompressor_tag tinfl_decompressor;
+
+/* Allocate the tinfl_decompressor structure in C so that */
+/* non-C language bindings to tinfl_ API don't need to worry about */
+/* structure size and allocation mechanism. */
+
+tinfl_decompressor *tinfl_decompressor_alloc();
+void tinfl_decompressor_free(tinfl_decompressor *pDecomp);
+
+/* Max size of LZ dictionary. */
+#define TINFL_LZ_DICT_SIZE 32768
+
+/* Return status. */
+typedef enum {
+    /* This flags indicates the inflator needs 1 or more input bytes to make forward progress, but the caller is indicating that no more are available. The compressed data */
+    /* is probably corrupted. If you call the inflator again with more bytes it'll try to continue processing the input but this is a BAD sign (either the data is corrupted or you called it incorrectly). */
+    /* If you call it again with no input you'll just get TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS again. */
+    TINFL_STATUS_FAILED_CANNOT_MAKE_PROGRESS = -4,
+
+    /* This flag indicates that one or more of the input parameters was obviously bogus. (You can try calling it again, but if you get this error the calling code is wrong.) */
+    TINFL_STATUS_BAD_PARAM = -3,
+
+    /* This flags indicate the inflator is finished but the adler32 check of the uncompressed data didn't match. If you call it again it'll return TINFL_STATUS_DONE. */
+    TINFL_STATUS_ADLER32_MISMATCH = -2,
+
+    /* This flags indicate the inflator has somehow failed (bad code, corrupted input, etc.). If you call it again without resetting via tinfl_init() it it'll just keep on returning the same status failure code. */
+    TINFL_STATUS_FAILED = -1,
+
+    /* Any status code less than TINFL_STATUS_DONE must indicate a failure. */
+
+    /* This flag indicates the inflator has returned every byte of uncompressed data that it can, has consumed every byte that it needed, has successfully reached the end of the deflate stream, and */
+    /* if zlib headers and adler32 checking enabled that it has successfully checked the uncompressed data's adler32. If you call it again you'll just get TINFL_STATUS_DONE over and over again. */
+    TINFL_STATUS_DONE = 0,
+
+    /* This flag indicates the inflator MUST have more input data (even 1 byte) before it can make any more forward progress, or you need to clear the TINFL_FLAG_HAS_MORE_INPUT */
+    /* flag on the next call if you don't have any more source data. If the source data was somehow corrupted it's also possible (but unlikely) for the inflator to keep on demanding input to */
+    /* proceed, so be sure to properly set the TINFL_FLAG_HAS_MORE_INPUT flag. */
+    TINFL_STATUS_NEEDS_MORE_INPUT = 1,
+
+    /* This flag indicates the inflator definitely has 1 or more bytes of uncompressed data available, but it cannot write this data into the output buffer. */
+    /* Note if the source compressed data was corrupted it's possible for the inflator to return a lot of uncompressed data to the caller. I've been assuming you know how much uncompressed data to expect */
+    /* (either exact or worst case) and will stop calling the inflator and fail after receiving too much. In pure streaming scenarios where you have no idea how many bytes to expect this may not be possible */
+    /* so I may need to add some code to address this. */
+    TINFL_STATUS_HAS_MORE_OUTPUT = 2
+} tinfl_status;
+
+/* Initializes the decompressor to its initial state. */
+#define tinfl_init(r)     \
+    do                    \
+    {                     \
+        (r)->m_state = 0; \
+    }                     \
+    MZ_MACRO_END
+#define tinfl_get_adler32(r) (r)->m_check_adler32
+
+/* Main low-level decompressor coroutine function. This is the only function actually needed for decompression. All the other functions are just high-level helpers for improved usability. */
+/* This is a universal API, i.e. it can be used as a building block to build any desired higher level decompression API. In the limit case, it can be called once per every byte input or output. */
+tinfl_status tinfl_decompress(tinfl_decompressor *r, const mz_uint8 *pIn_buf_next, size_t *pIn_buf_size, mz_uint8 *pOut_buf_start, mz_uint8 *pOut_buf_next, size_t *pOut_buf_size, const mz_uint32 decomp_flags);
+
+/* Internal/private bits follow. */
+enum
+{
+    TINFL_MAX_HUFF_TABLES = 3,
+    TINFL_MAX_HUFF_SYMBOLS_0 = 288,
+    TINFL_MAX_HUFF_SYMBOLS_1 = 32,
+    TINFL_MAX_HUFF_SYMBOLS_2 = 19,
+    TINFL_FAST_LOOKUP_BITS = 10,
+    TINFL_FAST_LOOKUP_SIZE = 1 << TINFL_FAST_LOOKUP_BITS
+};
+
+typedef struct
+{
+    mz_uint8 m_code_size[TINFL_MAX_HUFF_SYMBOLS_0];
+    mz_int16 m_look_up[TINFL_FAST_LOOKUP_SIZE], m_tree[TINFL_MAX_HUFF_SYMBOLS_0 * 2];
+} tinfl_huff_table;
+
+#if MINIZ_HAS_64BIT_REGISTERS
+#define TINFL_USE_64BIT_BITBUF 1
+#else
+#define TINFL_USE_64BIT_BITBUF 0
+#endif
+
+#if TINFL_USE_64BIT_BITBUF
+typedef mz_uint64 tinfl_bit_buf_t;
+#define TINFL_BITBUF_SIZE (64)
+#else
+typedef mz_uint32 tinfl_bit_buf_t;
+#define TINFL_BITBUF_SIZE (32)
+#endif
+
+struct tinfl_decompressor_tag
+{
+    mz_uint32 m_state, m_num_bits, m_zhdr0, m_zhdr1, m_z_adler32, m_final, m_type, m_check_adler32, m_dist, m_counter, m_num_extra, m_table_sizes[TINFL_MAX_HUFF_TABLES];
+    tinfl_bit_buf_t m_bit_buf;
+    size_t m_dist_from_out_buf_start;
+    tinfl_huff_table m_tables[TINFL_MAX_HUFF_TABLES];
+    mz_uint8 m_raw_header[4], m_len_codes[TINFL_MAX_HUFF_SYMBOLS_0 + TINFL_MAX_HUFF_SYMBOLS_1 + 137];
+};
+
+
+
+
+
+
+/* ------------------- ZIP archive reading/writing */
+
+#ifndef MINIZ_NO_ARCHIVE_APIS
+
+
+enum
+{
+    /* Note: These enums can be reduced as needed to save memory or stack space - they are pretty conservative. */
+    MZ_ZIP_MAX_IO_BUF_SIZE = 64 * 1024,
+    MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE = 512,
+    MZ_ZIP_MAX_ARCHIVE_FILE_COMMENT_SIZE = 512
+};
+
+typedef struct
+{
+    /* Central directory file index. */
+    mz_uint32 m_file_index;
+
+    /* Byte offset of this entry in the archive's central directory. Note we currently only support up to UINT_MAX or less bytes in the central dir. */
+    mz_uint64 m_central_dir_ofs;
+
+    /* These fields are copied directly from the zip's central dir. */
+    mz_uint16 m_version_made_by;
+    mz_uint16 m_version_needed;
+    mz_uint16 m_bit_flag;
+    mz_uint16 m_method;
+
+#ifndef MINIZ_NO_TIME
+    MZ_TIME_T m_time;
+#endif
+
+    /* CRC-32 of uncompressed data. */
+    mz_uint32 m_crc32;
+
+    /* File's compressed size. */
+    mz_uint64 m_comp_size;
+
+    /* File's uncompressed size. Note, I've seen some old archives where directory entries had 512 bytes for their uncompressed sizes, but when you try to unpack them you actually get 0 bytes. */
+    mz_uint64 m_uncomp_size;
+
+    /* Zip internal and external file attributes. */
+    mz_uint16 m_internal_attr;
+    mz_uint32 m_external_attr;
+
+    /* Entry's local header file offset in bytes. */
+    mz_uint64 m_local_header_ofs;
+
+    /* Size of comment in bytes. */
+    mz_uint32 m_comment_size;
+
+    /* MZ_TRUE if the entry appears to be a directory. */
+    mz_bool m_is_directory;
+
+    /* MZ_TRUE if the entry uses encryption/strong encryption (which miniz_zip doesn't support) */
+    mz_bool m_is_encrypted;
+
+    /* MZ_TRUE if the file is not encrypted, a patch file, and if it uses a compression method we support. */
+    mz_bool m_is_supported;
+
+    /* Filename. If string ends in '/' it's a subdirectory entry. */
+    /* Guaranteed to be zero terminated, may be truncated to fit. */
+    char m_filename[MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE];
+
+    /* Comment field. */
+    /* Guaranteed to be zero terminated, may be truncated to fit. */
+    char m_comment[MZ_ZIP_MAX_ARCHIVE_FILE_COMMENT_SIZE];
+
+} mz_zip_archive_file_stat;
+
+typedef size_t (*mz_file_read_func)(void *pOpaque, mz_uint64 file_ofs, void *pBuf, size_t n);
+typedef size_t (*mz_file_write_func)(void *pOpaque, mz_uint64 file_ofs, const void *pBuf, size_t n);
+typedef mz_bool (*mz_file_needs_keepalive)(void *pOpaque);
+
+struct mz_zip_internal_state_tag;
+typedef struct mz_zip_internal_state_tag mz_zip_internal_state;
+
+typedef enum {
+    MZ_ZIP_MODE_INVALID = 0,
+    MZ_ZIP_MODE_READING = 1,
+    MZ_ZIP_MODE_WRITING = 2,
+    MZ_ZIP_MODE_WRITING_HAS_BEEN_FINALIZED = 3
+} mz_zip_mode;
+
+typedef enum {
+    MZ_ZIP_FLAG_CASE_SENSITIVE = 0x0100,
+    MZ_ZIP_FLAG_IGNORE_PATH = 0x0200,
+    MZ_ZIP_FLAG_COMPRESSED_DATA = 0x0400,
+    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY = 0x0800,
+    MZ_ZIP_FLAG_VALIDATE_LOCATE_FILE_FLAG = 0x1000, /* if enabled, mz_zip_reader_locate_file() will be called on each file as its validated to ensure the func finds the file in the central dir (intended for testing) */
+    MZ_ZIP_FLAG_VALIDATE_HEADERS_ONLY = 0x2000,     /* validate the local headers, but don't decompress the entire file and check the crc32 */
+    MZ_ZIP_FLAG_WRITE_ZIP64 = 0x4000,               /* always use the zip64 file format, instead of the original zip file format with automatic switch to zip64. Use as flags parameter with mz_zip_writer_init*_v2 */
+    MZ_ZIP_FLAG_WRITE_ALLOW_READING = 0x8000,
+    MZ_ZIP_FLAG_ASCII_FILENAME = 0x10000
+} mz_zip_flags;
+
+typedef enum {
+    MZ_ZIP_TYPE_INVALID = 0,
+    MZ_ZIP_TYPE_USER,
+    MZ_ZIP_TYPE_MEMORY,
+    MZ_ZIP_TYPE_HEAP,
+    MZ_ZIP_TYPE_FILE,
+    MZ_ZIP_TYPE_CFILE,
+    MZ_ZIP_TOTAL_TYPES
+} mz_zip_type;
+
+/* miniz error codes. Be sure to update mz_zip_get_error_string() if you add or modify this enum. */
+typedef enum {
+    MZ_ZIP_NO_ERROR = 0,
+    MZ_ZIP_UNDEFINED_ERROR,
+    MZ_ZIP_TOO_MANY_FILES,
+    MZ_ZIP_FILE_TOO_LARGE,
+    MZ_ZIP_UNSUPPORTED_METHOD,
+    MZ_ZIP_UNSUPPORTED_ENCRYPTION,
+    MZ_ZIP_UNSUPPORTED_FEATURE,
+    MZ_ZIP_FAILED_FINDING_CENTRAL_DIR,
+    MZ_ZIP_NOT_AN_ARCHIVE,
+    MZ_ZIP_INVALID_HEADER_OR_CORRUPTED,
+    MZ_ZIP_UNSUPPORTED_MULTIDISK,
+    MZ_ZIP_DECOMPRESSION_FAILED,
+    MZ_ZIP_COMPRESSION_FAILED,
+    MZ_ZIP_UNEXPECTED_DECOMPRESSED_SIZE,
+    MZ_ZIP_CRC_CHECK_FAILED,
+    MZ_ZIP_UNSUPPORTED_CDIR_SIZE,
+    MZ_ZIP_ALLOC_FAILED,
+    MZ_ZIP_FILE_OPEN_FAILED,
+    MZ_ZIP_FILE_CREATE_FAILED,
+    MZ_ZIP_FILE_WRITE_FAILED,
+    MZ_ZIP_FILE_READ_FAILED,
+    MZ_ZIP_FILE_CLOSE_FAILED,
+    MZ_ZIP_FILE_SEEK_FAILED,
+    MZ_ZIP_FILE_STAT_FAILED,
+    MZ_ZIP_INVALID_PARAMETER,
+    MZ_ZIP_INVALID_FILENAME,
+    MZ_ZIP_BUF_TOO_SMALL,
+    MZ_ZIP_INTERNAL_ERROR,
+    MZ_ZIP_FILE_NOT_FOUND,
+    MZ_ZIP_ARCHIVE_TOO_LARGE,
+    MZ_ZIP_VALIDATION_FAILED,
+    MZ_ZIP_WRITE_CALLBACK_FAILED,
+    MZ_ZIP_TOTAL_ERRORS
+} mz_zip_error;
+
+typedef struct
+{
+    mz_uint64 m_archive_size;
+    mz_uint64 m_central_directory_file_ofs;
+
+    /* We only support up to UINT32_MAX files in zip64 mode. */
+    mz_uint32 m_total_files;
+    mz_zip_mode m_zip_mode;
+    mz_zip_type m_zip_type;
+    mz_zip_error m_last_error;
+
+    mz_uint64 m_file_offset_alignment;
+
+    mz_alloc_func m_pAlloc;
+    mz_free_func m_pFree;
+    mz_realloc_func m_pRealloc;
+    void *m_pAlloc_opaque;
+
+    mz_file_read_func m_pRead;
+    mz_file_write_func m_pWrite;
+    mz_file_needs_keepalive m_pNeeds_keepalive;
+    void *m_pIO_opaque;
+
+    mz_zip_internal_state *m_pState;
+
+} mz_zip_archive;
+
+typedef struct
+{
+    mz_zip_archive *pZip;
+    mz_uint flags;
+
+    int status;
+#ifndef MINIZ_DISABLE_ZIP_READER_CRC32_CHECKS
+    mz_uint file_crc32;
+#endif
+    mz_uint64 read_buf_size, read_buf_ofs, read_buf_avail, comp_remaining, out_buf_ofs, cur_file_ofs;
+    mz_zip_archive_file_stat file_stat;
+    void *pRead_buf;
+    void *pWrite_buf;
+
+    size_t out_blk_remain;
+
+    tinfl_decompressor inflator;
+
+} mz_zip_reader_extract_iter_state;
+
+/* -------- ZIP reading */
+
+/* Inits a ZIP archive reader. */
+/* These functions read and validate the archive's central directory. */
+mz_bool mz_zip_reader_init(mz_zip_archive *pZip, mz_uint64 size, mz_uint flags);
+
+mz_bool mz_zip_reader_init_mem(mz_zip_archive *pZip, const void *pMem, size_t size, mz_uint flags);
+
+#ifndef MINIZ_NO_STDIO
+/* Read a archive from a disk file. */
+/* file_start_ofs is the file offset where the archive actually begins, or 0. */
+/* actual_archive_size is the true total size of the archive, which may be smaller than the file's actual size on disk. If zero the entire file is treated as the archive. */
+mz_bool mz_zip_reader_init_file(mz_zip_archive *pZip, const char *pFilename, mz_uint32 flags);
+mz_bool mz_zip_reader_init_file_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint flags, mz_uint64 file_start_ofs, mz_uint64 archive_size);
+
+/* Read an archive from an already opened FILE, beginning at the current file position. */
+/* The archive is assumed to be archive_size bytes long. If archive_size is < 0, then the entire rest of the file is assumed to contain the archive. */
+/* The FILE will NOT be closed when mz_zip_reader_end() is called. */
+mz_bool mz_zip_reader_init_cfile(mz_zip_archive *pZip, MZ_FILE *pFile, mz_uint64 archive_size, mz_uint flags);
+#endif
+
+/* Ends archive reading, freeing all allocations, and closing the input archive file if mz_zip_reader_init_file() was used. */
+mz_bool mz_zip_reader_end(mz_zip_archive *pZip);
+
+/* -------- ZIP reading or writing */
+
+/* Clears a mz_zip_archive struct to all zeros. */
+/* Important: This must be done before passing the struct to any mz_zip functions. */
+void mz_zip_zero_struct(mz_zip_archive *pZip);
+
+mz_zip_mode mz_zip_get_mode(mz_zip_archive *pZip);
+mz_zip_type mz_zip_get_type(mz_zip_archive *pZip);
+
+/* Returns the total number of files in the archive. */
+mz_uint mz_zip_reader_get_num_files(mz_zip_archive *pZip);
+
+mz_uint64 mz_zip_get_archive_size(mz_zip_archive *pZip);
+mz_uint64 mz_zip_get_archive_file_start_offset(mz_zip_archive *pZip);
+MZ_FILE *mz_zip_get_cfile(mz_zip_archive *pZip);
+
+/* Reads n bytes of raw archive data, starting at file offset file_ofs, to pBuf. */
+size_t mz_zip_read_archive_data(mz_zip_archive *pZip, mz_uint64 file_ofs, void *pBuf, size_t n);
+
+/* All mz_zip funcs set the m_last_error field in the mz_zip_archive struct. These functions retrieve/manipulate this field. */
+/* Note that the m_last_error functionality is not thread safe. */
+mz_zip_error mz_zip_set_last_error(mz_zip_archive *pZip, mz_zip_error err_num);
+mz_zip_error mz_zip_peek_last_error(mz_zip_archive *pZip);
+mz_zip_error mz_zip_clear_last_error(mz_zip_archive *pZip);
+mz_zip_error mz_zip_get_last_error(mz_zip_archive *pZip);
+const char *mz_zip_get_error_string(mz_zip_error mz_err);
+
+/* MZ_TRUE if the archive file entry is a directory entry. */
+mz_bool mz_zip_reader_is_file_a_directory(mz_zip_archive *pZip, mz_uint file_index);
+
+/* MZ_TRUE if the file is encrypted/strong encrypted. */
+mz_bool mz_zip_reader_is_file_encrypted(mz_zip_archive *pZip, mz_uint file_index);
+
+/* MZ_TRUE if the compression method is supported, and the file is not encrypted, and the file is not a compressed patch file. */
+mz_bool mz_zip_reader_is_file_supported(mz_zip_archive *pZip, mz_uint file_index);
+
+/* Retrieves the filename of an archive file entry. */
+/* Returns the number of bytes written to pFilename, or if filename_buf_size is 0 this function returns the number of bytes needed to fully store the filename. */
+mz_uint mz_zip_reader_get_filename(mz_zip_archive *pZip, mz_uint file_index, char *pFilename, mz_uint filename_buf_size);
+
+/* Attempts to locates a file in the archive's central directory. */
+/* Valid flags: MZ_ZIP_FLAG_CASE_SENSITIVE, MZ_ZIP_FLAG_IGNORE_PATH */
+/* Returns -1 if the file cannot be found. */
+int mz_zip_reader_locate_file(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags);
+int mz_zip_reader_locate_file_v2(mz_zip_archive *pZip, const char *pName, const char *pComment, mz_uint flags, mz_uint32 *file_index);
+
+/* Returns detailed information about an archive file entry. */
+mz_bool mz_zip_reader_file_stat(mz_zip_archive *pZip, mz_uint file_index, mz_zip_archive_file_stat *pStat);
+
+/* MZ_TRUE if the file is in zip64 format. */
+/* A file is considered zip64 if it contained a zip64 end of central directory marker, or if it contained any zip64 extended file information fields in the central directory. */
+mz_bool mz_zip_is_zip64(mz_zip_archive *pZip);
+
+/* Returns the total central directory size in bytes. */
+/* The current max supported size is <= MZ_UINT32_MAX. */
+size_t mz_zip_get_central_dir_size(mz_zip_archive *pZip);
+
+/* Extracts a archive file to a memory buffer using no memory allocation. */
+/* There must be at least enough room on the stack to store the inflator's state (~34KB or so). */
+mz_bool mz_zip_reader_extract_to_mem_no_alloc(mz_zip_archive *pZip, mz_uint file_index, void *pBuf, size_t buf_size, mz_uint flags, void *pUser_read_buf, size_t user_read_buf_size);
+mz_bool mz_zip_reader_extract_file_to_mem_no_alloc(mz_zip_archive *pZip, const char *pFilename, void *pBuf, size_t buf_size, mz_uint flags, void *pUser_read_buf, size_t user_read_buf_size);
+
+/* Extracts a archive file to a memory buffer. */
+mz_bool mz_zip_reader_extract_to_mem(mz_zip_archive *pZip, mz_uint file_index, void *pBuf, size_t buf_size, mz_uint flags);
+mz_bool mz_zip_reader_extract_file_to_mem(mz_zip_archive *pZip, const char *pFilename, void *pBuf, size_t buf_size, mz_uint flags);
+
+/* Extracts a archive file to a dynamically allocated heap buffer. */
+/* The memory will be allocated via the mz_zip_archive's alloc/realloc functions. */
+/* Returns NULL and sets the last error on failure. */
+void *mz_zip_reader_extract_to_heap(mz_zip_archive *pZip, mz_uint file_index, size_t *pSize, mz_uint flags);
+void *mz_zip_reader_extract_file_to_heap(mz_zip_archive *pZip, const char *pFilename, size_t *pSize, mz_uint flags);
+
+/* Extracts a archive file using a callback function to output the file's data. */
+mz_bool mz_zip_reader_extract_to_callback(mz_zip_archive *pZip, mz_uint file_index, mz_file_write_func pCallback, void *pOpaque, mz_uint flags);
+mz_bool mz_zip_reader_extract_file_to_callback(mz_zip_archive *pZip, const char *pFilename, mz_file_write_func pCallback, void *pOpaque, mz_uint flags);
+
+/* Extract a file iteratively */
+mz_zip_reader_extract_iter_state* mz_zip_reader_extract_iter_new(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
+mz_zip_reader_extract_iter_state* mz_zip_reader_extract_file_iter_new(mz_zip_archive *pZip, const char *pFilename, mz_uint flags);
+size_t mz_zip_reader_extract_iter_read(mz_zip_reader_extract_iter_state* pState, void* pvBuf, size_t buf_size);
+mz_bool mz_zip_reader_extract_iter_free(mz_zip_reader_extract_iter_state* pState);
+
+#ifndef MINIZ_NO_STDIO
+/* Extracts a archive file to a disk file and sets its last accessed and modified times. */
+/* This function only extracts files, not archive directory records. */
+mz_bool mz_zip_reader_extract_to_file(mz_zip_archive *pZip, mz_uint file_index, const char *pDst_filename, mz_uint flags);
+mz_bool mz_zip_reader_extract_file_to_file(mz_zip_archive *pZip, const char *pArchive_filename, const char *pDst_filename, mz_uint flags);
+
+/* Extracts a archive file starting at the current position in the destination FILE stream. */
+mz_bool mz_zip_reader_extract_to_cfile(mz_zip_archive *pZip, mz_uint file_index, MZ_FILE *File, mz_uint flags);
+mz_bool mz_zip_reader_extract_file_to_cfile(mz_zip_archive *pZip, const char *pArchive_filename, MZ_FILE *pFile, mz_uint flags);
+#endif
+
+#if 0
+/* TODO */
+	typedef void *mz_zip_streaming_extract_state_ptr;
+	mz_zip_streaming_extract_state_ptr mz_zip_streaming_extract_begin(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
+	uint64_t mz_zip_streaming_extract_get_size(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
+	uint64_t mz_zip_streaming_extract_get_cur_ofs(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
+	mz_bool mz_zip_streaming_extract_seek(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState, uint64_t new_ofs);
+	size_t mz_zip_streaming_extract_read(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState, void *pBuf, size_t buf_size);
+	mz_bool mz_zip_streaming_extract_end(mz_zip_archive *pZip, mz_zip_streaming_extract_state_ptr pState);
+#endif
+
+/* This function compares the archive's local headers, the optional local zip64 extended information block, and the optional descriptor following the compressed data vs. the data in the central directory. */
+/* It also validates that each file can be successfully uncompressed unless the MZ_ZIP_FLAG_VALIDATE_HEADERS_ONLY is specified. */
+mz_bool mz_zip_validate_file(mz_zip_archive *pZip, mz_uint file_index, mz_uint flags);
+
+/* Validates an entire archive by calling mz_zip_validate_file() on each file. */
+mz_bool mz_zip_validate_archive(mz_zip_archive *pZip, mz_uint flags);
+
+/* Misc utils/helpers, valid for ZIP reading or writing */
+mz_bool mz_zip_validate_mem_archive(const void *pMem, size_t size, mz_uint flags, mz_zip_error *pErr);
+mz_bool mz_zip_validate_file_archive(const char *pFilename, mz_uint flags, mz_zip_error *pErr);
+
+/* Universal end function - calls either mz_zip_reader_end() or mz_zip_writer_end(). */
+mz_bool mz_zip_end(mz_zip_archive *pZip);
+
+/* -------- ZIP writing */
+
+#ifndef MINIZ_NO_ARCHIVE_WRITING_APIS
+
+/* Inits a ZIP archive writer. */
+/*Set pZip->m_pWrite (and pZip->m_pIO_opaque) before calling mz_zip_writer_init or mz_zip_writer_init_v2*/
+/*The output is streamable, i.e. file_ofs in mz_file_write_func always increases only by n*/
+mz_bool mz_zip_writer_init(mz_zip_archive *pZip, mz_uint64 existing_size);
+mz_bool mz_zip_writer_init_v2(mz_zip_archive *pZip, mz_uint64 existing_size, mz_uint flags);
+
+mz_bool mz_zip_writer_init_heap(mz_zip_archive *pZip, size_t size_to_reserve_at_beginning, size_t initial_allocation_size);
+mz_bool mz_zip_writer_init_heap_v2(mz_zip_archive *pZip, size_t size_to_reserve_at_beginning, size_t initial_allocation_size, mz_uint flags);
+
+#ifndef MINIZ_NO_STDIO
+mz_bool mz_zip_writer_init_file(mz_zip_archive *pZip, const char *pFilename, mz_uint64 size_to_reserve_at_beginning);
+mz_bool mz_zip_writer_init_file_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint64 size_to_reserve_at_beginning, mz_uint flags);
+mz_bool mz_zip_writer_init_cfile(mz_zip_archive *pZip, MZ_FILE *pFile, mz_uint flags);
+#endif
+
+/* Converts a ZIP archive reader object into a writer object, to allow efficient in-place file appends to occur on an existing archive. */
+/* For archives opened using mz_zip_reader_init_file, pFilename must be the archive's filename so it can be reopened for writing. If the file can't be reopened, mz_zip_reader_end() will be called. */
+/* For archives opened using mz_zip_reader_init_mem, the memory block must be growable using the realloc callback (which defaults to realloc unless you've overridden it). */
+/* Finally, for archives opened using mz_zip_reader_init, the mz_zip_archive's user provided m_pWrite function cannot be NULL. */
+/* Note: In-place archive modification is not recommended unless you know what you're doing, because if execution stops or something goes wrong before */
+/* the archive is finalized the file's central directory will be hosed. */
+mz_bool mz_zip_writer_init_from_reader(mz_zip_archive *pZip, const char *pFilename);
+mz_bool mz_zip_writer_init_from_reader_v2(mz_zip_archive *pZip, const char *pFilename, mz_uint flags);
+
+/* Adds the contents of a memory buffer to an archive. These functions record the current local time into the archive. */
+/* To add a directory entry, call this method with an archive name ending in a forwardslash with an empty buffer. */
+/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
+mz_bool mz_zip_writer_add_mem(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, mz_uint level_and_flags);
+
+/* Like mz_zip_writer_add_mem(), except you can specify a file comment field, and optionally supply the function with already compressed data. */
+/* uncomp_size/uncomp_crc32 are only used if the MZ_ZIP_FLAG_COMPRESSED_DATA flag is specified. */
+mz_bool mz_zip_writer_add_mem_ex(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags,
+                                 mz_uint64 uncomp_size, mz_uint32 uncomp_crc32);
+
+mz_bool mz_zip_writer_add_mem_ex_v2(mz_zip_archive *pZip, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags,
+                                    mz_uint64 uncomp_size, mz_uint32 uncomp_crc32, MZ_TIME_T *last_modified, const char *user_extra_data_local, mz_uint user_extra_data_local_len,
+                                    const char *user_extra_data_central, mz_uint user_extra_data_central_len);
+
+#ifndef MINIZ_NO_STDIO
+/* Adds the contents of a disk file to an archive. This function also records the disk file's modified time into the archive. */
+/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
+mz_bool mz_zip_writer_add_file(mz_zip_archive *pZip, const char *pArchive_name, const char *pSrc_filename, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
+
+/* Like mz_zip_writer_add_file(), except the file data is read from the specified FILE stream. */
+mz_bool mz_zip_writer_add_cfile(mz_zip_archive *pZip, const char *pArchive_name, MZ_FILE *pSrc_file, mz_uint64 size_to_add,
+                                const MZ_TIME_T *pFile_time, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags, const char *user_extra_data_local, mz_uint user_extra_data_local_len,
+                                const char *user_extra_data_central, mz_uint user_extra_data_central_len);
+#endif
+
+/* Adds a file to an archive by fully cloning the data from another archive. */
+/* This function fully clones the source file's compressed data (no recompression), along with its full filename, extra data (it may add or modify the zip64 local header extra data field), and the optional descriptor following the compressed data. */
+mz_bool mz_zip_writer_add_from_zip_reader(mz_zip_archive *pZip, mz_zip_archive *pSource_zip, mz_uint src_file_index);
+
+/* Finalizes the archive by writing the central directory records followed by the end of central directory record. */
+/* After an archive is finalized, the only valid call on the mz_zip_archive struct is mz_zip_writer_end(). */
+/* An archive must be manually finalized by calling this function for it to be valid. */
+mz_bool mz_zip_writer_finalize_archive(mz_zip_archive *pZip);
+
+/* Finalizes a heap archive, returning a poiner to the heap block and its size. */
+/* The heap block will be allocated using the mz_zip_archive's alloc/realloc callbacks. */
+mz_bool mz_zip_writer_finalize_heap_archive(mz_zip_archive *pZip, void **ppBuf, size_t *pSize);
+
+/* Ends archive writing, freeing all allocations, and closing the output file if mz_zip_writer_init_file() was used. */
+/* Note for the archive to be valid, it *must* have been finalized before ending (this function will not do it for you). */
+mz_bool mz_zip_writer_end(mz_zip_archive *pZip);
+
+/* -------- Misc. high-level helper functions: */
+
+/* mz_zip_add_mem_to_archive_file_in_place() efficiently (but not atomically) appends a memory blob to a ZIP archive. */
+/* Note this is NOT a fully safe operation. If it crashes or dies in some way your archive can be left in a screwed up state (without a central directory). */
+/* level_and_flags - compression level (0-10, see MZ_BEST_SPEED, MZ_BEST_COMPRESSION, etc.) logically OR'd with zero or more mz_zip_flags, or just set to MZ_DEFAULT_COMPRESSION. */
+/* TODO: Perhaps add an option to leave the existing central dir in place in case the add dies? We could then truncate the file (so the old central dir would be at the end) if something goes wrong. */
+mz_bool mz_zip_add_mem_to_archive_file_in_place(const char *pZip_filename, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags);
+mz_bool mz_zip_add_mem_to_archive_file_in_place_v2(const char *pZip_filename, const char *pArchive_name, const void *pBuf, size_t buf_size, const void *pComment, mz_uint16 comment_size, mz_uint level_and_flags, mz_zip_error *pErr);
+
+/* Reads a single file from an archive into a heap block. */
+/* If pComment is not NULL, only the file with the specified comment will be extracted. */
+/* Returns NULL on failure. */
+void *mz_zip_extract_archive_file_to_heap(const char *pZip_filename, const char *pArchive_name, size_t *pSize, mz_uint flags);
+void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const char *pArchive_name, const char *pComment, size_t *pSize, mz_uint flags, mz_zip_error *pErr);
+
+#endif /* #ifndef MINIZ_NO_ARCHIVE_WRITING_APIS */
+
+
+
+#endif /* MINIZ_NO_ARCHIVE_APIS */
+
+} // namespace duckdb_miniz
+
+
+// LICENSE_CHANGE_END
+
+#include <string>
+#include <stdexcept>
+
+namespace duckdb {
+
+enum class MiniZStreamType {
+	MINIZ_TYPE_NONE,
+	MINIZ_TYPE_INFLATE,
+	MINIZ_TYPE_DEFLATE
+};
+
+struct MiniZStream {
+	static constexpr uint8_t GZIP_HEADER_MINSIZE = 10;
+	static constexpr uint8_t GZIP_FOOTER_SIZE = 8;
+	static constexpr uint8_t GZIP_COMPRESSION_DEFLATE = 0x08;
+	static constexpr unsigned char GZIP_FLAG_UNSUPPORTED = 0x1 | 0x2 | 0x4 | 0x10 | 0x20;
+
+public:
+	MiniZStream() : type(MiniZStreamType::MINIZ_TYPE_NONE) {
+		memset(&stream, 0, sizeof(duckdb_miniz::mz_stream));
+	}
+	~MiniZStream() {
+		switch(type) {
+		case MiniZStreamType::MINIZ_TYPE_INFLATE:
+			duckdb_miniz::mz_inflateEnd(&stream);
+			break;
+		case MiniZStreamType::MINIZ_TYPE_DEFLATE:
+			duckdb_miniz::mz_deflateEnd(&stream);
+			break;
+		default:
+			break;
+		}
+	}
+	void FormatException(std::string error_msg) {
+		throw std::runtime_error(error_msg);
+	}
+	void FormatException(const char *error_msg, int mz_ret) {
+		auto err = duckdb_miniz::mz_error(mz_ret);
+		FormatException(error_msg + std::string(": ") + (err ? err : "Unknown error code"));
+	}
+	void Decompress(const char *compressed_data, size_t compressed_size, char *out_data, size_t out_size) {
+		auto mz_ret = mz_inflateInit2(&stream, -MZ_DEFAULT_WINDOW_BITS);
+		if (mz_ret != duckdb_miniz::MZ_OK) {
+			FormatException("Failed to initialize miniz", mz_ret);
+		}
+		type = MiniZStreamType::MINIZ_TYPE_INFLATE;
+
+		if (compressed_size < GZIP_HEADER_MINSIZE) {
+			FormatException("Failed to decompress GZIP block: compressed size is less than gzip header size");
+		}
+		auto gzip_hdr = (const unsigned char *)compressed_data;
+		if (gzip_hdr[0] != 0x1F || gzip_hdr[1] != 0x8B || gzip_hdr[2] != GZIP_COMPRESSION_DEFLATE ||
+		    gzip_hdr[3] & GZIP_FLAG_UNSUPPORTED) {
+			FormatException("Input is invalid/unsupported GZIP stream");
+		}
+
+		stream.next_in = (const unsigned char *)compressed_data + GZIP_HEADER_MINSIZE;
+		stream.avail_in = compressed_size - GZIP_HEADER_MINSIZE;
+		stream.next_out = (unsigned char *)out_data;
+		stream.avail_out = out_size;
+
+		mz_ret = mz_inflate(&stream, duckdb_miniz::MZ_FINISH);
+		if (mz_ret != duckdb_miniz::MZ_OK && mz_ret != duckdb_miniz::MZ_STREAM_END) {
+			FormatException("Failed to decompress GZIP block", mz_ret);
+		}
+	}
+	size_t MaxCompressedLength(size_t input_size) {
+		return duckdb_miniz::mz_compressBound(input_size) + GZIP_HEADER_MINSIZE + GZIP_FOOTER_SIZE;
+	}
+	static void InitializeGZIPHeader(unsigned char *gzip_header) {
+		memset(gzip_header, 0, GZIP_HEADER_MINSIZE);
+		gzip_header[0] = 0x1F;
+		gzip_header[1] = 0x8B;
+		gzip_header[2] = GZIP_COMPRESSION_DEFLATE;
+		gzip_header[3] = 0;
+		gzip_header[4] = 0;
+		gzip_header[5] = 0;
+		gzip_header[6] = 0;
+		gzip_header[7] = 0;
+		gzip_header[8] = 0;
+		gzip_header[9] = 0xFF;
+	}
+
+	static void InitializeGZIPFooter(unsigned char *gzip_footer, duckdb_miniz::mz_ulong crc, idx_t uncompressed_size) {
+		gzip_footer[0] = crc & 0xFF;
+		gzip_footer[1] = (crc >> 8) & 0xFF;
+		gzip_footer[2] = (crc >> 16) & 0xFF;
+		gzip_footer[3] = (crc >> 24) & 0xFF;
+		gzip_footer[4] = uncompressed_size & 0xFF;
+		gzip_footer[5] = (uncompressed_size >> 8) & 0xFF;
+		gzip_footer[6] = (uncompressed_size >> 16) & 0xFF;
+		gzip_footer[7] = (uncompressed_size >> 24) & 0xFF;
+	}
+
+	void Compress(const char *uncompressed_data, size_t uncompressed_size, char *out_data, size_t *out_size) {
+		auto mz_ret = mz_deflateInit2(&stream, duckdb_miniz::MZ_DEFAULT_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 1, 0);
+		if (mz_ret != duckdb_miniz::MZ_OK) {
+			FormatException("Failed to initialize miniz", mz_ret);
+		}
+		type = MiniZStreamType::MINIZ_TYPE_DEFLATE;
+
+		auto gzip_header = (unsigned char*) out_data;
+		InitializeGZIPHeader(gzip_header);
+
+		auto gzip_body = gzip_header + GZIP_HEADER_MINSIZE;
+
+		stream.next_in = (const unsigned char*) uncompressed_data;
+		stream.avail_in = uncompressed_size;
+		stream.next_out = gzip_body;
+		stream.avail_out = *out_size - GZIP_HEADER_MINSIZE;
+
+		mz_ret = mz_deflate(&stream, duckdb_miniz::MZ_FINISH);
+		if (mz_ret != duckdb_miniz::MZ_OK && mz_ret != duckdb_miniz::MZ_STREAM_END) {
+			FormatException("Failed to compress GZIP block", mz_ret);
+		}
+		auto gzip_footer = gzip_body + stream.total_out;
+		auto crc = duckdb_miniz::mz_crc32(MZ_CRC32_INIT, (const unsigned char*) uncompressed_data, uncompressed_size);
+		InitializeGZIPFooter(gzip_footer, crc, uncompressed_size);
+
+		*out_size = stream.total_out + GZIP_HEADER_MINSIZE + GZIP_FOOTER_SIZE;
+	}
+
+private:
+	duckdb_miniz::mz_stream stream;
+	MiniZStreamType type;
+};
+
+}
+
+
+// LICENSE_CHANGE_END
+
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
+// See the end of this file for a list
+
+/*
+ * Copyright (c) 2016-2020, Yann Collet, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under both the BSD-style license (found in the
+ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
+ * in the COPYING file in the root directory of this source tree).
+ * You may select, at your option, one of the above-listed licenses.
+ */
+#ifndef ZSTD_H_235446
+#define ZSTD_H_235446
+
+/* ======   Dependency   ======*/
+#include <limits.h>   /* INT_MAX */
+#include <stddef.h>   /* size_t */
+
+
+/* =====   ZSTDLIB_API : control library symbols visibility   ===== */
+#ifndef ZSTDLIB_VISIBILITY
+#  if defined(__GNUC__) && (__GNUC__ >= 4)
+#    define ZSTDLIB_VISIBILITY __attribute__ ((visibility ("default")))
+#  else
+#    define ZSTDLIB_VISIBILITY
+#  endif
+#endif
+#if defined(ZSTD_DLL_EXPORT) && (ZSTD_DLL_EXPORT==1)
+#  define ZSTDLIB_API __declspec(dllexport) ZSTDLIB_VISIBILITY
+#elif defined(ZSTD_DLL_IMPORT) && (ZSTD_DLL_IMPORT==1)
+#  define ZSTDLIB_API __declspec(dllimport) ZSTDLIB_VISIBILITY /* It isn't required but allows to generate better code, saving a function pointer load from the IAT and an indirect jump.*/
+#else
+#  define ZSTDLIB_API ZSTDLIB_VISIBILITY
+#endif
+
+namespace duckdb_zstd {
+
+/*******************************************************************************
+  Introduction
+
+  zstd, short for Zstandard, is a fast lossless compression algorithm, targeting
+  real-time compression scenarios at zlib-level and better compression ratios.
+  The zstd compression library provides in-memory compression and decompression
+  functions.
+
+  The library supports regular compression levels from 1 up to ZSTD_maxCLevel(),
+  which is currently 22. Levels >= 20, labeled `--ultra`, should be used with
+  caution, as they require more memory. The library also offers negative
+  compression levels, which extend the range of speed vs. ratio preferences.
+  The lower the level, the faster the speed (at the cost of compression).
+
+  Compression can be done in:
+    - a single step (described as Simple API)
+    - a single step, reusing a context (described as Explicit context)
+    - unbounded multiple steps (described as Streaming compression)
+
+  The compression ratio achievable on small data can be highly improved using
+  a dictionary. Dictionary compression can be performed in:
+    - a single step (described as Simple dictionary API)
+    - a single step, reusing a dictionary (described as Bulk-processing
+      dictionary API)
+
+  Advanced experimental functions can be accessed using
+  `#define ZSTD_STATIC_LINKING_ONLY` before including zstd.h.
+
+  Advanced experimental APIs should never be used with a dynamically-linked
+  library. They are not "stable"; their definitions or signatures may change in
+  the future. Only static linking is allowed.
+*******************************************************************************/
+
+/*------   Version   ------*/
+#define ZSTD_VERSION_MAJOR    1
+#define ZSTD_VERSION_MINOR    4
+#define ZSTD_VERSION_RELEASE  5
+
+#define ZSTD_VERSION_NUMBER  (ZSTD_VERSION_MAJOR *100*100 + ZSTD_VERSION_MINOR *100 + ZSTD_VERSION_RELEASE)
+ZSTDLIB_API unsigned ZSTD_versionNumber(void);   /**< to check runtime library version */
+
+#define ZSTD_LIB_VERSION ZSTD_VERSION_MAJOR.ZSTD_VERSION_MINOR.ZSTD_VERSION_RELEASE
+#define ZSTD_QUOTE(str) #str
+#define ZSTD_EXPAND_AND_QUOTE(str) ZSTD_QUOTE(str)
+#define ZSTD_VERSION_STRING ZSTD_EXPAND_AND_QUOTE(ZSTD_LIB_VERSION)
+ZSTDLIB_API const char* ZSTD_versionString(void);   /* requires v1.3.0+ */
+
+/* *************************************
+ *  Default constant
+ ***************************************/
+#ifndef ZSTD_CLEVEL_DEFAULT
+#  define ZSTD_CLEVEL_DEFAULT 3
+#endif
+
+/* *************************************
+ *  Constants
+ ***************************************/
+
+/* All magic numbers are supposed read/written to/from files/memory using little-endian convention */
+#define ZSTD_MAGICNUMBER            0xFD2FB528    /* valid since v0.8.0 */
+#define ZSTD_MAGIC_DICTIONARY       0xEC30A437    /* valid since v0.7.0 */
+#define ZSTD_MAGIC_SKIPPABLE_START  0x184D2A50    /* all 16 values, from 0x184D2A50 to 0x184D2A5F, signal the beginning of a skippable frame */
+#define ZSTD_MAGIC_SKIPPABLE_MASK   0xFFFFFFF0
+
+#define ZSTD_BLOCKSIZELOG_MAX  17
+#define ZSTD_BLOCKSIZE_MAX     (1<<ZSTD_BLOCKSIZELOG_MAX)
+
+
+
+/***************************************
+*  Simple API
+***************************************/
+/*! ZSTD_compress() :
+ *  Compresses `src` content as a single zstd compressed frame into already allocated `dst`.
+ *  Hint : compression runs faster if `dstCapacity` >=  `ZSTD_compressBound(srcSize)`.
+ *  @return : compressed size written into `dst` (<= `dstCapacity),
+ *            or an error code if it fails (which can be tested using ZSTD_isError()). */
+ZSTDLIB_API size_t ZSTD_compress( void* dst, size_t dstCapacity,
+                            const void* src, size_t srcSize,
+                                  int compressionLevel);
+
+/*! ZSTD_decompress() :
+ *  `compressedSize` : must be the _exact_ size of some number of compressed and/or skippable frames.
+ *  `dstCapacity` is an upper bound of originalSize to regenerate.
+ *  If user cannot imply a maximum upper bound, it's better to use streaming mode to decompress data.
+ *  @return : the number of bytes decompressed into `dst` (<= `dstCapacity`),
+ *            or an errorCode if it fails (which can be tested using ZSTD_isError()). */
+ZSTDLIB_API size_t ZSTD_decompress( void* dst, size_t dstCapacity,
+                              const void* src, size_t compressedSize);
+
+/*! ZSTD_getFrameContentSize() : requires v1.3.0+
+ *  `src` should point to the start of a ZSTD encoded frame.
+ *  `srcSize` must be at least as large as the frame header.
+ *            hint : any size >= `ZSTD_frameHeaderSize_max` is large enough.
+ *  @return : - decompressed size of `src` frame content, if known
+ *            - ZSTD_CONTENTSIZE_UNKNOWN if the size cannot be determined
+ *            - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small)
+ *   note 1 : a 0 return value means the frame is valid but "empty".
+ *   note 2 : decompressed size is an optional field, it may not be present, typically in streaming mode.
+ *            When `return==ZSTD_CONTENTSIZE_UNKNOWN`, data to decompress could be any size.
+ *            In which case, it's necessary to use streaming mode to decompress data.
+ *            Optionally, application can rely on some implicit limit,
+ *            as ZSTD_decompress() only needs an upper bound of decompressed size.
+ *            (For example, data could be necessarily cut into blocks <= 16 KB).
+ *   note 3 : decompressed size is always present when compression is completed using single-pass functions,
+ *            such as ZSTD_compress(), ZSTD_compressCCtx() ZSTD_compress_usingDict() or ZSTD_compress_usingCDict().
+ *   note 4 : decompressed size can be very large (64-bits value),
+ *            potentially larger than what local system can handle as a single memory segment.
+ *            In which case, it's necessary to use streaming mode to decompress data.
+ *   note 5 : If source is untrusted, decompressed size could be wrong or intentionally modified.
+ *            Always ensure return value fits within application's authorized limits.
+ *            Each application can set its own limits.
+ *   note 6 : This function replaces ZSTD_getDecompressedSize() */
+#define ZSTD_CONTENTSIZE_UNKNOWN (0ULL - 1)
+#define ZSTD_CONTENTSIZE_ERROR   (0ULL - 2)
+ZSTDLIB_API unsigned long long ZSTD_getFrameContentSize(const void *src, size_t srcSize);
+
+/*! ZSTD_getDecompressedSize() :
+ *  NOTE: This function is now obsolete, in favor of ZSTD_getFrameContentSize().
+ *  Both functions work the same way, but ZSTD_getDecompressedSize() blends
+ *  "empty", "unknown" and "error" results to the same return value (0),
+ *  while ZSTD_getFrameContentSize() gives them separate return values.
+ * @return : decompressed size of `src` frame content _if known and not empty_, 0 otherwise. */
+ZSTDLIB_API unsigned long long ZSTD_getDecompressedSize(const void* src, size_t srcSize);
+
+/*! ZSTD_findFrameCompressedSize() :
+ * `src` should point to the start of a ZSTD frame or skippable frame.
+ * `srcSize` must be >= first frame size
+ * @return : the compressed size of the first frame starting at `src`,
+ *           suitable to pass as `srcSize` to `ZSTD_decompress` or similar,
+ *        or an error code if input is invalid */
+ZSTDLIB_API size_t ZSTD_findFrameCompressedSize(const void* src, size_t srcSize);
+
+
+/*======  Helper functions  ======*/
+#define ZSTD_COMPRESSBOUND(srcSize)   ((srcSize) + ((srcSize)>>8) + (((srcSize) < (128<<10)) ? (((128<<10) - (srcSize)) >> 11) /* margin, from 64 to 0 */ : 0))  /* this formula ensures that bound(A) + bound(B) <= bound(A+B) as long as A and B >= 128 KB */
+ZSTDLIB_API size_t      ZSTD_compressBound(size_t srcSize); /*!< maximum compressed size in worst case single-pass scenario */
+ZSTDLIB_API unsigned    ZSTD_isError(size_t code);          /*!< tells if a `size_t` function result is an error code */
+ZSTDLIB_API const char* ZSTD_getErrorName(size_t code);     /*!< provides readable string from an error code */
+ZSTDLIB_API int         ZSTD_minCLevel(void);               /*!< minimum negative compression level allowed */
+ZSTDLIB_API int         ZSTD_maxCLevel(void);               /*!< maximum compression level available */
+
+
+/***************************************
+*  Explicit context
+***************************************/
+/*= Compression context
+ *  When compressing many times,
+ *  it is recommended to allocate a context just once,
+ *  and re-use it for each successive compression operation.
+ *  This will make workload friendlier for system's memory.
+ *  Note : re-using context is just a speed / resource optimization.
+ *         It doesn't change the compression ratio, which remains identical.
+ *  Note 2 : In multi-threaded environments,
+ *         use one different context per thread for parallel execution.
+ */
+typedef struct ZSTD_CCtx_s ZSTD_CCtx;
+ZSTDLIB_API ZSTD_CCtx* ZSTD_createCCtx(void);
+ZSTDLIB_API size_t     ZSTD_freeCCtx(ZSTD_CCtx* cctx);
+
+/*! ZSTD_compressCCtx() :
+ *  Same as ZSTD_compress(), using an explicit ZSTD_CCtx.
+ *  Important : in order to behave similarly to `ZSTD_compress()`,
+ *  this function compresses at requested compression level,
+ *  __ignoring any other parameter__ .
+ *  If any advanced parameter was set using the advanced API,
+ *  they will all be reset. Only `compressionLevel` remains.
+ */
+ZSTDLIB_API size_t ZSTD_compressCCtx(ZSTD_CCtx* cctx,
+                                     void* dst, size_t dstCapacity,
+                               const void* src, size_t srcSize,
+                                     int compressionLevel);
+
+/*= Decompression context
+ *  When decompressing many times,
+ *  it is recommended to allocate a context only once,
+ *  and re-use it for each successive compression operation.
+ *  This will make workload friendlier for system's memory.
+ *  Use one context per thread for parallel execution. */
+typedef struct ZSTD_DCtx_s ZSTD_DCtx;
+ZSTDLIB_API ZSTD_DCtx* ZSTD_createDCtx(void);
+ZSTDLIB_API size_t     ZSTD_freeDCtx(ZSTD_DCtx* dctx);
+
+/*! ZSTD_decompressDCtx() :
+ *  Same as ZSTD_decompress(),
+ *  requires an allocated ZSTD_DCtx.
+ *  Compatible with sticky parameters.
+ */
+ZSTDLIB_API size_t ZSTD_decompressDCtx(ZSTD_DCtx* dctx,
+                                       void* dst, size_t dstCapacity,
+                                 const void* src, size_t srcSize);
+
+
+/***************************************
+*  Advanced compression API
+***************************************/
+
+/* API design :
+ *   Parameters are pushed one by one into an existing context,
+ *   using ZSTD_CCtx_set*() functions.
+ *   Pushed parameters are sticky : they are valid for next compressed frame, and any subsequent frame.
+ *   "sticky" parameters are applicable to `ZSTD_compress2()` and `ZSTD_compressStream*()` !
+ *   __They do not apply to "simple" one-shot variants such as ZSTD_compressCCtx()__ .
+ *
+ *   It's possible to reset all parameters to "default" using ZSTD_CCtx_reset().
+ *
+ *   This API supercedes all other "advanced" API entry points in the experimental section.
+ *   In the future, we expect to remove from experimental API entry points which are redundant with this API.
+ */
+
+
+/* Compression strategies, listed from fastest to strongest */
+typedef enum { ZSTD_fast=1,
+               ZSTD_dfast=2,
+               ZSTD_greedy=3,
+               ZSTD_lazy=4,
+               ZSTD_lazy2=5,
+               ZSTD_btlazy2=6,
+               ZSTD_btopt=7,
+               ZSTD_btultra=8,
+               ZSTD_btultra2=9
+               /* note : new strategies _might_ be added in the future.
+                         Only the order (from fast to strong) is guaranteed */
+} ZSTD_strategy;
+
+
+typedef enum {
+
+    /* compression parameters
+     * Note: When compressing with a ZSTD_CDict these parameters are superseded
+     * by the parameters used to construct the ZSTD_CDict.
+     * See ZSTD_CCtx_refCDict() for more info (superseded-by-cdict). */
+    ZSTD_c_compressionLevel=100, /* Set compression parameters according to pre-defined cLevel table.
+                              * Note that exact compression parameters are dynamically determined,
+                              * depending on both compression level and srcSize (when known).
+                              * Default level is ZSTD_CLEVEL_DEFAULT==3.
+                              * Special: value 0 means default, which is controlled by ZSTD_CLEVEL_DEFAULT.
+                              * Note 1 : it's possible to pass a negative compression level.
+                              * Note 2 : setting a level does not automatically set all other compression parameters
+                              *   to default. Setting this will however eventually dynamically impact the compression
+                              *   parameters which have not been manually set. The manually set
+                              *   ones will 'stick'. */
+    /* Advanced compression parameters :
+     * It's possible to pin down compression parameters to some specific values.
+     * In which case, these values are no longer dynamically selected by the compressor */
+    ZSTD_c_windowLog=101,    /* Maximum allowed back-reference distance, expressed as power of 2.
+                              * This will set a memory budget for streaming decompression,
+                              * with larger values requiring more memory
+                              * and typically compressing more.
+                              * Must be clamped between ZSTD_WINDOWLOG_MIN and ZSTD_WINDOWLOG_MAX.
+                              * Special: value 0 means "use default windowLog".
+                              * Note: Using a windowLog greater than ZSTD_WINDOWLOG_LIMIT_DEFAULT
+                              *       requires explicitly allowing such size at streaming decompression stage. */
+    ZSTD_c_hashLog=102,      /* Size of the initial probe table, as a power of 2.
+                              * Resulting memory usage is (1 << (hashLog+2)).
+                              * Must be clamped between ZSTD_HASHLOG_MIN and ZSTD_HASHLOG_MAX.
+                              * Larger tables improve compression ratio of strategies <= dFast,
+                              * and improve speed of strategies > dFast.
+                              * Special: value 0 means "use default hashLog". */
+    ZSTD_c_chainLog=103,     /* Size of the multi-probe search table, as a power of 2.
+                              * Resulting memory usage is (1 << (chainLog+2)).
+                              * Must be clamped between ZSTD_CHAINLOG_MIN and ZSTD_CHAINLOG_MAX.
+                              * Larger tables result in better and slower compression.
+                              * This parameter is useless for "fast" strategy.
+                              * It's still useful when using "dfast" strategy,
+                              * in which case it defines a secondary probe table.
+                              * Special: value 0 means "use default chainLog". */
+    ZSTD_c_searchLog=104,    /* Number of search attempts, as a power of 2.
+                              * More attempts result in better and slower compression.
+                              * This parameter is useless for "fast" and "dFast" strategies.
+                              * Special: value 0 means "use default searchLog". */
+    ZSTD_c_minMatch=105,     /* Minimum size of searched matches.
+                              * Note that Zstandard can still find matches of smaller size,
+                              * it just tweaks its search algorithm to look for this size and larger.
+                              * Larger values increase compression and decompression speed, but decrease ratio.
+                              * Must be clamped between ZSTD_MINMATCH_MIN and ZSTD_MINMATCH_MAX.
+                              * Note that currently, for all strategies < btopt, effective minimum is 4.
+                              *                    , for all strategies > fast, effective maximum is 6.
+                              * Special: value 0 means "use default minMatchLength". */
+    ZSTD_c_targetLength=106, /* Impact of this field depends on strategy.
+                              * For strategies btopt, btultra & btultra2:
+                              *     Length of Match considered "good enough" to stop search.
+                              *     Larger values make compression stronger, and slower.
+                              * For strategy fast:
+                              *     Distance between match sampling.
+                              *     Larger values make compression faster, and weaker.
+                              * Special: value 0 means "use default targetLength". */
+    ZSTD_c_strategy=107,     /* See ZSTD_strategy enum definition.
+                              * The higher the value of selected strategy, the more complex it is,
+                              * resulting in stronger and slower compression.
+                              * Special: value 0 means "use default strategy". */
+
+    /* LDM mode parameters */
+    ZSTD_c_enableLongDistanceMatching=160, /* Enable long distance matching.
+                                     * This parameter is designed to improve compression ratio
+                                     * for large inputs, by finding large matches at long distance.
+                                     * It increases memory usage and window size.
+                                     * Note: enabling this parameter increases default ZSTD_c_windowLog to 128 MB
+                                     * except when expressly set to a different value. */
+    ZSTD_c_ldmHashLog=161,   /* Size of the table for long distance matching, as a power of 2.
+                              * Larger values increase memory usage and compression ratio,
+                              * but decrease compression speed.
+                              * Must be clamped between ZSTD_HASHLOG_MIN and ZSTD_HASHLOG_MAX
+                              * default: windowlog - 7.
+                              * Special: value 0 means "automatically determine hashlog". */
+    ZSTD_c_ldmMinMatch=162,  /* Minimum match size for long distance matcher.
+                              * Larger/too small values usually decrease compression ratio.
+                              * Must be clamped between ZSTD_LDM_MINMATCH_MIN and ZSTD_LDM_MINMATCH_MAX.
+                              * Special: value 0 means "use default value" (default: 64). */
+    ZSTD_c_ldmBucketSizeLog=163, /* Log size of each bucket in the LDM hash table for collision resolution.
+                              * Larger values improve collision resolution but decrease compression speed.
+                              * The maximum value is ZSTD_LDM_BUCKETSIZELOG_MAX.
+                              * Special: value 0 means "use default value" (default: 3). */
+    ZSTD_c_ldmHashRateLog=164, /* Frequency of inserting/looking up entries into the LDM hash table.
+                              * Must be clamped between 0 and (ZSTD_WINDOWLOG_MAX - ZSTD_HASHLOG_MIN).
+                              * Default is MAX(0, (windowLog - ldmHashLog)), optimizing hash table usage.
+                              * Larger values improve compression speed.
+                              * Deviating far from default value will likely result in a compression ratio decrease.
+                              * Special: value 0 means "automatically determine hashRateLog". */
+
+    /* frame parameters */
+    ZSTD_c_contentSizeFlag=200, /* Content size will be written into frame header _whenever known_ (default:1)
+                              * Content size must be known at the beginning of compression.
+                              * This is automatically the case when using ZSTD_compress2(),
+                              * For streaming scenarios, content size must be provided with ZSTD_CCtx_setPledgedSrcSize() */
+    ZSTD_c_checksumFlag=201, /* A 32-bits checksum of content is written at end of frame (default:0) */
+    ZSTD_c_dictIDFlag=202,   /* When applicable, dictionary's ID is written into frame header (default:1) */
+
+    /* multi-threading parameters */
+    /* These parameters are only useful if multi-threading is enabled (compiled with build macro ZSTD_MULTITHREAD).
+     * They return an error otherwise. */
+    ZSTD_c_nbWorkers=400,    /* Select how many threads will be spawned to compress in parallel.
+                              * When nbWorkers >= 1, triggers asynchronous mode when used with ZSTD_compressStream*() :
+                              * ZSTD_compressStream*() consumes input and flush output if possible, but immediately gives back control to caller,
+                              * while compression work is performed in parallel, within worker threads.
+                              * (note : a strong exception to this rule is when first invocation of ZSTD_compressStream2() sets ZSTD_e_end :
+                              *  in which case, ZSTD_compressStream2() delegates to ZSTD_compress2(), which is always a blocking call).
+                              * More workers improve speed, but also increase memory usage.
+                              * Default value is `0`, aka "single-threaded mode" : no worker is spawned, compression is performed inside Caller's thread, all invocations are blocking */
+    ZSTD_c_jobSize=401,      /* Size of a compression job. This value is enforced only when nbWorkers >= 1.
+                              * Each compression job is completed in parallel, so this value can indirectly impact the nb of active threads.
+                              * 0 means default, which is dynamically determined based on compression parameters.
+                              * Job size must be a minimum of overlap size, or 1 MB, whichever is largest.
+                              * The minimum size is automatically and transparently enforced. */
+    ZSTD_c_overlapLog=402,   /* Control the overlap size, as a fraction of window size.
+                              * The overlap size is an amount of data reloaded from previous job at the beginning of a new job.
+                              * It helps preserve compression ratio, while each job is compressed in parallel.
+                              * This value is enforced only when nbWorkers >= 1.
+                              * Larger values increase compression ratio, but decrease speed.
+                              * Possible values range from 0 to 9 :
+                              * - 0 means "default" : value will be determined by the library, depending on strategy
+                              * - 1 means "no overlap"
+                              * - 9 means "full overlap", using a full window size.
+                              * Each intermediate rank increases/decreases load size by a factor 2 :
+                              * 9: full window;  8: w/2;  7: w/4;  6: w/8;  5:w/16;  4: w/32;  3:w/64;  2:w/128;  1:no overlap;  0:default
+                              * default value varies between 6 and 9, depending on strategy */
+
+    /* note : additional experimental parameters are also available
+     * within the experimental section of the API.
+     * At the time of this writing, they include :
+     * ZSTD_c_rsyncable
+     * ZSTD_c_format
+     * ZSTD_c_forceMaxWindow
+     * ZSTD_c_forceAttachDict
+     * ZSTD_c_literalCompressionMode
+     * ZSTD_c_targetCBlockSize
+     * ZSTD_c_srcSizeHint
+     * Because they are not stable, it's necessary to define ZSTD_STATIC_LINKING_ONLY to access them.
+     * note : never ever use experimentalParam? names directly;
+     *        also, the enums values themselves are unstable and can still change.
+     */
+     ZSTD_c_experimentalParam1=500,
+     ZSTD_c_experimentalParam2=10,
+     ZSTD_c_experimentalParam3=1000,
+     ZSTD_c_experimentalParam4=1001,
+     ZSTD_c_experimentalParam5=1002,
+     ZSTD_c_experimentalParam6=1003,
+     ZSTD_c_experimentalParam7=1004
+} ZSTD_cParameter;
+
+typedef struct {
+    size_t error;
+    int lowerBound;
+    int upperBound;
+} ZSTD_bounds;
+
+/*! ZSTD_cParam_getBounds() :
+ *  All parameters must belong to an interval with lower and upper bounds,
+ *  otherwise they will either trigger an error or be automatically clamped.
+ * @return : a structure, ZSTD_bounds, which contains
+ *         - an error status field, which must be tested using ZSTD_isError()
+ *         - lower and upper bounds, both inclusive
+ */
+ZSTDLIB_API ZSTD_bounds ZSTD_cParam_getBounds(ZSTD_cParameter cParam);
+
+/*! ZSTD_CCtx_setParameter() :
+ *  Set one compression parameter, selected by enum ZSTD_cParameter.
+ *  All parameters have valid bounds. Bounds can be queried using ZSTD_cParam_getBounds().
+ *  Providing a value beyond bound will either clamp it, or trigger an error (depending on parameter).
+ *  Setting a parameter is generally only possible during frame initialization (before starting compression).
+ *  Exception : when using multi-threading mode (nbWorkers >= 1),
+ *              the following parameters can be updated _during_ compression (within same frame):
+ *              => compressionLevel, hashLog, chainLog, searchLog, minMatch, targetLength and strategy.
+ *              new parameters will be active for next job only (after a flush()).
+ * @return : an error code (which can be tested using ZSTD_isError()).
+ */
+ZSTDLIB_API size_t ZSTD_CCtx_setParameter(ZSTD_CCtx* cctx, ZSTD_cParameter param, int value);
+
+/*! ZSTD_CCtx_setPledgedSrcSize() :
+ *  Total input data size to be compressed as a single frame.
+ *  Value will be written in frame header, unless if explicitly forbidden using ZSTD_c_contentSizeFlag.
+ *  This value will also be controlled at end of frame, and trigger an error if not respected.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Note 1 : pledgedSrcSize==0 actually means zero, aka an empty frame.
+ *           In order to mean "unknown content size", pass constant ZSTD_CONTENTSIZE_UNKNOWN.
+ *           ZSTD_CONTENTSIZE_UNKNOWN is default value for any new frame.
+ *  Note 2 : pledgedSrcSize is only valid once, for the next frame.
+ *           It's discarded at the end of the frame, and replaced by ZSTD_CONTENTSIZE_UNKNOWN.
+ *  Note 3 : Whenever all input data is provided and consumed in a single round,
+ *           for example with ZSTD_compress2(),
+ *           or invoking immediately ZSTD_compressStream2(,,,ZSTD_e_end),
+ *           this value is automatically overridden by srcSize instead.
+ */
+ZSTDLIB_API size_t ZSTD_CCtx_setPledgedSrcSize(ZSTD_CCtx* cctx, unsigned long long pledgedSrcSize);
+
+typedef enum {
+    ZSTD_reset_session_only = 1,
+    ZSTD_reset_parameters = 2,
+    ZSTD_reset_session_and_parameters = 3
+} ZSTD_ResetDirective;
+
+/*! ZSTD_CCtx_reset() :
+ *  There are 2 different things that can be reset, independently or jointly :
+ *  - The session : will stop compressing current frame, and make CCtx ready to start a new one.
+ *                  Useful after an error, or to interrupt any ongoing compression.
+ *                  Any internal data not yet flushed is cancelled.
+ *                  Compression parameters and dictionary remain unchanged.
+ *                  They will be used to compress next frame.
+ *                  Resetting session never fails.
+ *  - The parameters : changes all parameters back to "default".
+ *                  This removes any reference to any dictionary too.
+ *                  Parameters can only be changed between 2 sessions (i.e. no compression is currently ongoing)
+ *                  otherwise the reset fails, and function returns an error value (which can be tested using ZSTD_isError())
+ *  - Both : similar to resetting the session, followed by resetting parameters.
+ */
+ZSTDLIB_API size_t ZSTD_CCtx_reset(ZSTD_CCtx* cctx, ZSTD_ResetDirective reset);
+
+/*! ZSTD_compress2() :
+ *  Behave the same as ZSTD_compressCCtx(), but compression parameters are set using the advanced API.
+ *  ZSTD_compress2() always starts a new frame.
+ *  Should cctx hold data from a previously unfinished frame, everything about it is forgotten.
+ *  - Compression parameters are pushed into CCtx before starting compression, using ZSTD_CCtx_set*()
+ *  - The function is always blocking, returns when compression is completed.
+ *  Hint : compression runs faster if `dstCapacity` >=  `ZSTD_compressBound(srcSize)`.
+ * @return : compressed size written into `dst` (<= `dstCapacity),
+ *           or an error code if it fails (which can be tested using ZSTD_isError()).
+ */
+ZSTDLIB_API size_t ZSTD_compress2( ZSTD_CCtx* cctx,
+                                   void* dst, size_t dstCapacity,
+                             const void* src, size_t srcSize);
+
+
+/***************************************
+*  Advanced decompression API
+***************************************/
+
+/* The advanced API pushes parameters one by one into an existing DCtx context.
+ * Parameters are sticky, and remain valid for all following frames
+ * using the same DCtx context.
+ * It's possible to reset parameters to default values using ZSTD_DCtx_reset().
+ * Note : This API is compatible with existing ZSTD_decompressDCtx() and ZSTD_decompressStream().
+ *        Therefore, no new decompression function is necessary.
+ */
+
+typedef enum {
+
+    ZSTD_d_windowLogMax=100, /* Select a size limit (in power of 2) beyond which
+                              * the streaming API will refuse to allocate memory buffer
+                              * in order to protect the host from unreasonable memory requirements.
+                              * This parameter is only useful in streaming mode, since no internal buffer is allocated in single-pass mode.
+                              * By default, a decompression context accepts window sizes <= (1 << ZSTD_WINDOWLOG_LIMIT_DEFAULT).
+                              * Special: value 0 means "use default maximum windowLog". */
+
+    /* note : additional experimental parameters are also available
+     * within the experimental section of the API.
+     * At the time of this writing, they include :
+     * ZSTD_d_format
+     * ZSTD_d_stableOutBuffer
+     * Because they are not stable, it's necessary to define ZSTD_STATIC_LINKING_ONLY to access them.
+     * note : never ever use experimentalParam? names directly
+     */
+     ZSTD_d_experimentalParam1=1000,
+     ZSTD_d_experimentalParam2=1001
+
+} ZSTD_dParameter;
+
+/*! ZSTD_dParam_getBounds() :
+ *  All parameters must belong to an interval with lower and upper bounds,
+ *  otherwise they will either trigger an error or be automatically clamped.
+ * @return : a structure, ZSTD_bounds, which contains
+ *         - an error status field, which must be tested using ZSTD_isError()
+ *         - both lower and upper bounds, inclusive
+ */
+ZSTDLIB_API ZSTD_bounds ZSTD_dParam_getBounds(ZSTD_dParameter dParam);
+
+/*! ZSTD_DCtx_setParameter() :
+ *  Set one compression parameter, selected by enum ZSTD_dParameter.
+ *  All parameters have valid bounds. Bounds can be queried using ZSTD_dParam_getBounds().
+ *  Providing a value beyond bound will either clamp it, or trigger an error (depending on parameter).
+ *  Setting a parameter is only possible during frame initialization (before starting decompression).
+ * @return : 0, or an error code (which can be tested using ZSTD_isError()).
+ */
+ZSTDLIB_API size_t ZSTD_DCtx_setParameter(ZSTD_DCtx* dctx, ZSTD_dParameter param, int value);
+
+/*! ZSTD_DCtx_reset() :
+ *  Return a DCtx to clean state.
+ *  Session and parameters can be reset jointly or separately.
+ *  Parameters can only be reset when no active frame is being decompressed.
+ * @return : 0, or an error code, which can be tested with ZSTD_isError()
+ */
+ZSTDLIB_API size_t ZSTD_DCtx_reset(ZSTD_DCtx* dctx, ZSTD_ResetDirective reset);
+
+
+/****************************
+*  Streaming
+****************************/
+
+typedef struct ZSTD_inBuffer_s {
+  const void* src;    /**< start of input buffer */
+  size_t size;        /**< size of input buffer */
+  size_t pos;         /**< position where reading stopped. Will be updated. Necessarily 0 <= pos <= size */
+} ZSTD_inBuffer;
+
+typedef struct ZSTD_outBuffer_s {
+  void*  dst;         /**< start of output buffer */
+  size_t size;        /**< size of output buffer */
+  size_t pos;         /**< position where writing stopped. Will be updated. Necessarily 0 <= pos <= size */
+} ZSTD_outBuffer;
+
+
+
+/*-***********************************************************************
+*  Streaming compression - HowTo
+*
+*  A ZSTD_CStream object is required to track streaming operation.
+*  Use ZSTD_createCStream() and ZSTD_freeCStream() to create/release resources.
+*  ZSTD_CStream objects can be reused multiple times on consecutive compression operations.
+*  It is recommended to re-use ZSTD_CStream since it will play nicer with system's memory, by re-using already allocated memory.
+*
+*  For parallel execution, use one separate ZSTD_CStream per thread.
+*
+*  note : since v1.3.0, ZSTD_CStream and ZSTD_CCtx are the same thing.
+*
+*  Parameters are sticky : when starting a new compression on the same context,
+*  it will re-use the same sticky parameters as previous compression session.
+*  When in doubt, it's recommended to fully initialize the context before usage.
+*  Use ZSTD_CCtx_reset() to reset the context and ZSTD_CCtx_setParameter(),
+*  ZSTD_CCtx_setPledgedSrcSize(), or ZSTD_CCtx_loadDictionary() and friends to
+*  set more specific parameters, the pledged source size, or load a dictionary.
+*
+*  Use ZSTD_compressStream2() with ZSTD_e_continue as many times as necessary to
+*  consume input stream. The function will automatically update both `pos`
+*  fields within `input` and `output`.
+*  Note that the function may not consume the entire input, for example, because
+*  the output buffer is already full, in which case `input.pos < input.size`.
+*  The caller must check if input has been entirely consumed.
+*  If not, the caller must make some room to receive more compressed data,
+*  and then present again remaining input data.
+*  note: ZSTD_e_continue is guaranteed to make some forward progress when called,
+*        but doesn't guarantee maximal forward progress. This is especially relevant
+*        when compressing with multiple threads. The call won't block if it can
+*        consume some input, but if it can't it will wait for some, but not all,
+*        output to be flushed.
+* @return : provides a minimum amount of data remaining to be flushed from internal buffers
+*           or an error code, which can be tested using ZSTD_isError().
+*
+*  At any moment, it's possible to flush whatever data might remain stuck within internal buffer,
+*  using ZSTD_compressStream2() with ZSTD_e_flush. `output->pos` will be updated.
+*  Note that, if `output->size` is too small, a single invocation with ZSTD_e_flush might not be enough (return code > 0).
+*  In which case, make some room to receive more compressed data, and call again ZSTD_compressStream2() with ZSTD_e_flush.
+*  You must continue calling ZSTD_compressStream2() with ZSTD_e_flush until it returns 0, at which point you can change the
+*  operation.
+*  note: ZSTD_e_flush will flush as much output as possible, meaning when compressing with multiple threads, it will
+*        block until the flush is complete or the output buffer is full.
+*  @return : 0 if internal buffers are entirely flushed,
+*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
+*            or an error code, which can be tested using ZSTD_isError().
+*
+*  Calling ZSTD_compressStream2() with ZSTD_e_end instructs to finish a frame.
+*  It will perform a flush and write frame epilogue.
+*  The epilogue is required for decoders to consider a frame completed.
+*  flush operation is the same, and follows same rules as calling ZSTD_compressStream2() with ZSTD_e_flush.
+*  You must continue calling ZSTD_compressStream2() with ZSTD_e_end until it returns 0, at which point you are free to
+*  start a new frame.
+*  note: ZSTD_e_end will flush as much output as possible, meaning when compressing with multiple threads, it will
+*        block until the flush is complete or the output buffer is full.
+*  @return : 0 if frame fully completed and fully flushed,
+*            >0 if some data still present within internal buffer (the value is minimal estimation of remaining size),
+*            or an error code, which can be tested using ZSTD_isError().
+*
+* *******************************************************************/
+
+typedef ZSTD_CCtx ZSTD_CStream;  /**< CCtx and CStream are now effectively same object (>= v1.3.0) */
+                                 /* Continue to distinguish them for compatibility with older versions <= v1.2.0 */
+/*===== ZSTD_CStream management functions =====*/
+ZSTDLIB_API ZSTD_CStream* ZSTD_createCStream(void);
+ZSTDLIB_API size_t ZSTD_freeCStream(ZSTD_CStream* zcs);
+
+/*===== Streaming compression functions =====*/
+typedef enum {
+    ZSTD_e_continue=0, /* collect more data, encoder decides when to output compressed result, for optimal compression ratio */
+    ZSTD_e_flush=1,    /* flush any data provided so far,
+                        * it creates (at least) one new block, that can be decoded immediately on reception;
+                        * frame will continue: any future data can still reference previously compressed data, improving compression.
+                        * note : multithreaded compression will block to flush as much output as possible. */
+    ZSTD_e_end=2       /* flush any remaining data _and_ close current frame.
+                        * note that frame is only closed after compressed data is fully flushed (return value == 0).
+                        * After that point, any additional data starts a new frame.
+                        * note : each frame is independent (does not reference any content from previous frame).
+                        : note : multithreaded compression will block to flush as much output as possible. */
+} ZSTD_EndDirective;
+
+/*! ZSTD_compressStream2() :
+ *  Behaves about the same as ZSTD_compressStream, with additional control on end directive.
+ *  - Compression parameters are pushed into CCtx before starting compression, using ZSTD_CCtx_set*()
+ *  - Compression parameters cannot be changed once compression is started (save a list of exceptions in multi-threading mode)
+ *  - output->pos must be <= dstCapacity, input->pos must be <= srcSize
+ *  - output->pos and input->pos will be updated. They are guaranteed to remain below their respective limit.
+ *  - When nbWorkers==0 (default), function is blocking : it completes its job before returning to caller.
+ *  - When nbWorkers>=1, function is non-blocking : it just acquires a copy of input, and distributes jobs to internal worker threads, flush whatever is available,
+ *                                                  and then immediately returns, just indicating that there is some data remaining to be flushed.
+ *                                                  The function nonetheless guarantees forward progress : it will return only after it reads or write at least 1+ byte.
+ *  - Exception : if the first call requests a ZSTD_e_end directive and provides enough dstCapacity, the function delegates to ZSTD_compress2() which is always blocking.
+ *  - @return provides a minimum amount of data remaining to be flushed from internal buffers
+ *            or an error code, which can be tested using ZSTD_isError().
+ *            if @return != 0, flush is not fully completed, there is still some data left within internal buffers.
+ *            This is useful for ZSTD_e_flush, since in this case more flushes are necessary to empty all buffers.
+ *            For ZSTD_e_end, @return == 0 when internal buffers are fully flushed and frame is completed.
+ *  - after a ZSTD_e_end directive, if internal buffer is not fully flushed (@return != 0),
+ *            only ZSTD_e_end or ZSTD_e_flush operations are allowed.
+ *            Before starting a new compression job, or changing compression parameters,
+ *            it is required to fully flush internal buffers.
+ */
+ZSTDLIB_API size_t ZSTD_compressStream2( ZSTD_CCtx* cctx,
+                                         ZSTD_outBuffer* output,
+                                         ZSTD_inBuffer* input,
+                                         ZSTD_EndDirective endOp);
+
+
+/* These buffer sizes are softly recommended.
+ * They are not required : ZSTD_compressStream*() happily accepts any buffer size, for both input and output.
+ * Respecting the recommended size just makes it a bit easier for ZSTD_compressStream*(),
+ * reducing the amount of memory shuffling and buffering, resulting in minor performance savings.
+ *
+ * However, note that these recommendations are from the perspective of a C caller program.
+ * If the streaming interface is invoked from some other language,
+ * especially managed ones such as Java or Go, through a foreign function interface such as jni or cgo,
+ * a major performance rule is to reduce crossing such interface to an absolute minimum.
+ * It's not rare that performance ends being spent more into the interface, rather than compression itself.
+ * In which cases, prefer using large buffers, as large as practical,
+ * for both input and output, to reduce the nb of roundtrips.
+ */
+ZSTDLIB_API size_t ZSTD_CStreamInSize(void);    /**< recommended size for input buffer */
+ZSTDLIB_API size_t ZSTD_CStreamOutSize(void);   /**< recommended size for output buffer. Guarantee to successfully flush at least one complete compressed block. */
+
+
+/* *****************************************************************************
+ * This following is a legacy streaming API.
+ * It can be replaced by ZSTD_CCtx_reset() and ZSTD_compressStream2().
+ * It is redundant, but remains fully supported.
+ * Advanced parameters and dictionary compression can only be used through the
+ * new API.
+ ******************************************************************************/
+
+/*!
+ * Equivalent to:
+ *
+ *     ZSTD_CCtx_reset(zcs, ZSTD_reset_session_only);
+ *     ZSTD_CCtx_refCDict(zcs, NULL); // clear the dictionary (if any)
+ *     ZSTD_CCtx_setParameter(zcs, ZSTD_c_compressionLevel, compressionLevel);
+ */
+ZSTDLIB_API size_t ZSTD_initCStream(ZSTD_CStream* zcs, int compressionLevel);
+/*!
+ * Alternative for ZSTD_compressStream2(zcs, output, input, ZSTD_e_continue).
+ * NOTE: The return value is different. ZSTD_compressStream() returns a hint for
+ * the next read size (if non-zero and not an error). ZSTD_compressStream2()
+ * returns the minimum nb of bytes left to flush (if non-zero and not an error).
+ */
+ZSTDLIB_API size_t ZSTD_compressStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output, ZSTD_inBuffer* input);
+/*! Equivalent to ZSTD_compressStream2(zcs, output, &emptyInput, ZSTD_e_flush). */
+ZSTDLIB_API size_t ZSTD_flushStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output);
+/*! Equivalent to ZSTD_compressStream2(zcs, output, &emptyInput, ZSTD_e_end). */
+ZSTDLIB_API size_t ZSTD_endStream(ZSTD_CStream* zcs, ZSTD_outBuffer* output);
+
+
+/*-***************************************************************************
+*  Streaming decompression - HowTo
+*
+*  A ZSTD_DStream object is required to track streaming operations.
+*  Use ZSTD_createDStream() and ZSTD_freeDStream() to create/release resources.
+*  ZSTD_DStream objects can be re-used multiple times.
+*
+*  Use ZSTD_initDStream() to start a new decompression operation.
+* @return : recommended first input size
+*  Alternatively, use advanced API to set specific properties.
+*
+*  Use ZSTD_decompressStream() repetitively to consume your input.
+*  The function will update both `pos` fields.
+*  If `input.pos < input.size`, some input has not been consumed.
+*  It's up to the caller to present again remaining data.
+*  The function tries to flush all data decoded immediately, respecting output buffer size.
+*  If `output.pos < output.size`, decoder has flushed everything it could.
+*  But if `output.pos == output.size`, there might be some data left within internal buffers.,
+*  In which case, call ZSTD_decompressStream() again to flush whatever remains in the buffer.
+*  Note : with no additional input provided, amount of data flushed is necessarily <= ZSTD_BLOCKSIZE_MAX.
+* @return : 0 when a frame is completely decoded and fully flushed,
+*        or an error code, which can be tested using ZSTD_isError(),
+*        or any other value > 0, which means there is still some decoding or flushing to do to complete current frame :
+*                                the return value is a suggested next input size (just a hint for better latency)
+*                                that will never request more than the remaining frame size.
+* *******************************************************************************/
+
+typedef ZSTD_DCtx ZSTD_DStream;  /**< DCtx and DStream are now effectively same object (>= v1.3.0) */
+                                 /* For compatibility with versions <= v1.2.0, prefer differentiating them. */
+/*===== ZSTD_DStream management functions =====*/
+ZSTDLIB_API ZSTD_DStream* ZSTD_createDStream(void);
+ZSTDLIB_API size_t ZSTD_freeDStream(ZSTD_DStream* zds);
+
+/*===== Streaming decompression functions =====*/
+
+/* This function is redundant with the advanced API and equivalent to:
+ *
+ *     ZSTD_DCtx_reset(zds, ZSTD_reset_session_only);
+ *     ZSTD_DCtx_refDDict(zds, NULL);
+ */
+ZSTDLIB_API size_t ZSTD_initDStream(ZSTD_DStream* zds);
+
+ZSTDLIB_API size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input);
+
+ZSTDLIB_API size_t ZSTD_DStreamInSize(void);    /*!< recommended size for input buffer */
+ZSTDLIB_API size_t ZSTD_DStreamOutSize(void);   /*!< recommended size for output buffer. Guarantee to successfully flush at least one complete block in all circumstances. */
+
+
+/**************************
+*  Simple dictionary API
+***************************/
+/*! ZSTD_compress_usingDict() :
+ *  Compression at an explicit compression level using a Dictionary.
+ *  A dictionary can be any arbitrary data segment (also called a prefix),
+ *  or a buffer with specified information (see dict/zdict.h).
+ *  Note : This function loads the dictionary, resulting in significant startup delay.
+ *         It's intended for a dictionary used only once.
+ *  Note 2 : When `dict == NULL || dictSize < 8` no dictionary is used. */
+ZSTDLIB_API size_t ZSTD_compress_usingDict(ZSTD_CCtx* ctx,
+                                           void* dst, size_t dstCapacity,
+                                     const void* src, size_t srcSize,
+                                     const void* dict,size_t dictSize,
+                                           int compressionLevel);
+
+/*! ZSTD_decompress_usingDict() :
+ *  Decompression using a known Dictionary.
+ *  Dictionary must be identical to the one used during compression.
+ *  Note : This function loads the dictionary, resulting in significant startup delay.
+ *         It's intended for a dictionary used only once.
+ *  Note : When `dict == NULL || dictSize < 8` no dictionary is used. */
+ZSTDLIB_API size_t ZSTD_decompress_usingDict(ZSTD_DCtx* dctx,
+                                             void* dst, size_t dstCapacity,
+                                       const void* src, size_t srcSize,
+                                       const void* dict,size_t dictSize);
+
+
+/***********************************
+ *  Bulk processing dictionary API
+ **********************************/
+typedef struct ZSTD_CDict_s ZSTD_CDict;
+
+/*! ZSTD_createCDict() :
+ *  When compressing multiple messages or blocks using the same dictionary,
+ *  it's recommended to digest the dictionary only once, since it's a costly operation.
+ *  ZSTD_createCDict() will create a state from digesting a dictionary.
+ *  The resulting state can be used for future compression operations with very limited startup cost.
+ *  ZSTD_CDict can be created once and shared by multiple threads concurrently, since its usage is read-only.
+ * @dictBuffer can be released after ZSTD_CDict creation, because its content is copied within CDict.
+ *  Note 1 : Consider experimental function `ZSTD_createCDict_byReference()` if you prefer to not duplicate @dictBuffer content.
+ *  Note 2 : A ZSTD_CDict can be created from an empty @dictBuffer,
+ *      in which case the only thing that it transports is the @compressionLevel.
+ *      This can be useful in a pipeline featuring ZSTD_compress_usingCDict() exclusively,
+ *      expecting a ZSTD_CDict parameter with any data, including those without a known dictionary. */
+ZSTDLIB_API ZSTD_CDict* ZSTD_createCDict(const void* dictBuffer, size_t dictSize,
+                                         int compressionLevel);
+
+/*! ZSTD_freeCDict() :
+ *  Function frees memory allocated by ZSTD_createCDict(). */
+ZSTDLIB_API size_t      ZSTD_freeCDict(ZSTD_CDict* CDict);
+
+/*! ZSTD_compress_usingCDict() :
+ *  Compression using a digested Dictionary.
+ *  Recommended when same dictionary is used multiple times.
+ *  Note : compression level is _decided at dictionary creation time_,
+ *     and frame parameters are hardcoded (dictID=yes, contentSize=yes, checksum=no) */
+ZSTDLIB_API size_t ZSTD_compress_usingCDict(ZSTD_CCtx* cctx,
+                                            void* dst, size_t dstCapacity,
+                                      const void* src, size_t srcSize,
+                                      const ZSTD_CDict* cdict);
+
+
+typedef struct ZSTD_DDict_s ZSTD_DDict;
+
+/*! ZSTD_createDDict() :
+ *  Create a digested dictionary, ready to start decompression operation without startup delay.
+ *  dictBuffer can be released after DDict creation, as its content is copied inside DDict. */
+ZSTDLIB_API ZSTD_DDict* ZSTD_createDDict(const void* dictBuffer, size_t dictSize);
+
+/*! ZSTD_freeDDict() :
+ *  Function frees memory allocated with ZSTD_createDDict() */
+ZSTDLIB_API size_t      ZSTD_freeDDict(ZSTD_DDict* ddict);
+
+/*! ZSTD_decompress_usingDDict() :
+ *  Decompression using a digested Dictionary.
+ *  Recommended when same dictionary is used multiple times. */
+ZSTDLIB_API size_t ZSTD_decompress_usingDDict(ZSTD_DCtx* dctx,
+                                              void* dst, size_t dstCapacity,
+                                        const void* src, size_t srcSize,
+                                        const ZSTD_DDict* ddict);
+
+
+/********************************
+ *  Dictionary helper functions
+ *******************************/
+
+/*! ZSTD_getDictID_fromDict() :
+ *  Provides the dictID stored within dictionary.
+ *  if @return == 0, the dictionary is not conformant with Zstandard specification.
+ *  It can still be loaded, but as a content-only dictionary. */
+ZSTDLIB_API unsigned ZSTD_getDictID_fromDict(const void* dict, size_t dictSize);
+
+/*! ZSTD_getDictID_fromDDict() :
+ *  Provides the dictID of the dictionary loaded into `ddict`.
+ *  If @return == 0, the dictionary is not conformant to Zstandard specification, or empty.
+ *  Non-conformant dictionaries can still be loaded, but as content-only dictionaries. */
+ZSTDLIB_API unsigned ZSTD_getDictID_fromDDict(const ZSTD_DDict* ddict);
+
+/*! ZSTD_getDictID_fromFrame() :
+ *  Provides the dictID required to decompressed the frame stored within `src`.
+ *  If @return == 0, the dictID could not be decoded.
+ *  This could for one of the following reasons :
+ *  - The frame does not require a dictionary to be decoded (most common case).
+ *  - The frame was built with dictID intentionally removed. Whatever dictionary is necessary is a hidden information.
+ *    Note : this use case also happens when using a non-conformant dictionary.
+ *  - `srcSize` is too small, and as a result, the frame header could not be decoded (only possible if `srcSize < ZSTD_FRAMEHEADERSIZE_MAX`).
+ *  - This is not a Zstandard frame.
+ *  When identifying the exact failure cause, it's possible to use ZSTD_getFrameHeader(), which will provide a more precise error code. */
+ZSTDLIB_API unsigned ZSTD_getDictID_fromFrame(const void* src, size_t srcSize);
+
+
+/*******************************************************************************
+ * Advanced dictionary and prefix API
+ *
+ * This API allows dictionaries to be used with ZSTD_compress2(),
+ * ZSTD_compressStream2(), and ZSTD_decompress(). Dictionaries are sticky, and
+ * only reset with the context is reset with ZSTD_reset_parameters or
+ * ZSTD_reset_session_and_parameters. Prefixes are single-use.
+ ******************************************************************************/
+
+
+/*! ZSTD_CCtx_loadDictionary() :
+ *  Create an internal CDict from `dict` buffer.
+ *  Decompression will have to use same dictionary.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Special: Loading a NULL (or 0-size) dictionary invalidates previous dictionary,
+ *           meaning "return to no-dictionary mode".
+ *  Note 1 : Dictionary is sticky, it will be used for all future compressed frames.
+ *           To return to "no-dictionary" situation, load a NULL dictionary (or reset parameters).
+ *  Note 2 : Loading a dictionary involves building tables.
+ *           It's also a CPU consuming operation, with non-negligible impact on latency.
+ *           Tables are dependent on compression parameters, and for this reason,
+ *           compression parameters can no longer be changed after loading a dictionary.
+ *  Note 3 :`dict` content will be copied internally.
+ *           Use experimental ZSTD_CCtx_loadDictionary_byReference() to reference content instead.
+ *           In such a case, dictionary buffer must outlive its users.
+ *  Note 4 : Use ZSTD_CCtx_loadDictionary_advanced()
+ *           to precisely select how dictionary content must be interpreted. */
+ZSTDLIB_API size_t ZSTD_CCtx_loadDictionary(ZSTD_CCtx* cctx, const void* dict, size_t dictSize);
+
+/*! ZSTD_CCtx_refCDict() :
+ *  Reference a prepared dictionary, to be used for all next compressed frames.
+ *  Note that compression parameters are enforced from within CDict,
+ *  and supersede any compression parameter previously set within CCtx.
+ *  The parameters ignored are labled as "superseded-by-cdict" in the ZSTD_cParameter enum docs.
+ *  The ignored parameters will be used again if the CCtx is returned to no-dictionary mode.
+ *  The dictionary will remain valid for future compressed frames using same CCtx.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Special : Referencing a NULL CDict means "return to no-dictionary mode".
+ *  Note 1 : Currently, only one dictionary can be managed.
+ *           Referencing a new dictionary effectively "discards" any previous one.
+ *  Note 2 : CDict is just referenced, its lifetime must outlive its usage within CCtx. */
+ZSTDLIB_API size_t ZSTD_CCtx_refCDict(ZSTD_CCtx* cctx, const ZSTD_CDict* cdict);
+
+/*! ZSTD_CCtx_refPrefix() :
+ *  Reference a prefix (single-usage dictionary) for next compressed frame.
+ *  A prefix is **only used once**. Tables are discarded at end of frame (ZSTD_e_end).
+ *  Decompression will need same prefix to properly regenerate data.
+ *  Compressing with a prefix is similar in outcome as performing a diff and compressing it,
+ *  but performs much faster, especially during decompression (compression speed is tunable with compression level).
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Special: Adding any prefix (including NULL) invalidates any previous prefix or dictionary
+ *  Note 1 : Prefix buffer is referenced. It **must** outlive compression.
+ *           Its content must remain unmodified during compression.
+ *  Note 2 : If the intention is to diff some large src data blob with some prior version of itself,
+ *           ensure that the window size is large enough to contain the entire source.
+ *           See ZSTD_c_windowLog.
+ *  Note 3 : Referencing a prefix involves building tables, which are dependent on compression parameters.
+ *           It's a CPU consuming operation, with non-negligible impact on latency.
+ *           If there is a need to use the same prefix multiple times, consider loadDictionary instead.
+ *  Note 4 : By default, the prefix is interpreted as raw content (ZSTD_dct_rawContent).
+ *           Use experimental ZSTD_CCtx_refPrefix_advanced() to alter dictionary interpretation. */
+ZSTDLIB_API size_t ZSTD_CCtx_refPrefix(ZSTD_CCtx* cctx,
+                                 const void* prefix, size_t prefixSize);
+
+/*! ZSTD_DCtx_loadDictionary() :
+ *  Create an internal DDict from dict buffer,
+ *  to be used to decompress next frames.
+ *  The dictionary remains valid for all future frames, until explicitly invalidated.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Special : Adding a NULL (or 0-size) dictionary invalidates any previous dictionary,
+ *            meaning "return to no-dictionary mode".
+ *  Note 1 : Loading a dictionary involves building tables,
+ *           which has a non-negligible impact on CPU usage and latency.
+ *           It's recommended to "load once, use many times", to amortize the cost
+ *  Note 2 :`dict` content will be copied internally, so `dict` can be released after loading.
+ *           Use ZSTD_DCtx_loadDictionary_byReference() to reference dictionary content instead.
+ *  Note 3 : Use ZSTD_DCtx_loadDictionary_advanced() to take control of
+ *           how dictionary content is loaded and interpreted.
+ */
+ZSTDLIB_API size_t ZSTD_DCtx_loadDictionary(ZSTD_DCtx* dctx, const void* dict, size_t dictSize);
+
+/*! ZSTD_DCtx_refDDict() :
+ *  Reference a prepared dictionary, to be used to decompress next frames.
+ *  The dictionary remains active for decompression of future frames using same DCtx.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Note 1 : Currently, only one dictionary can be managed.
+ *           Referencing a new dictionary effectively "discards" any previous one.
+ *  Special: referencing a NULL DDict means "return to no-dictionary mode".
+ *  Note 2 : DDict is just referenced, its lifetime must outlive its usage from DCtx.
+ */
+ZSTDLIB_API size_t ZSTD_DCtx_refDDict(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict);
+
+/*! ZSTD_DCtx_refPrefix() :
+ *  Reference a prefix (single-usage dictionary) to decompress next frame.
+ *  This is the reverse operation of ZSTD_CCtx_refPrefix(),
+ *  and must use the same prefix as the one used during compression.
+ *  Prefix is **only used once**. Reference is discarded at end of frame.
+ *  End of frame is reached when ZSTD_decompressStream() returns 0.
+ * @result : 0, or an error code (which can be tested with ZSTD_isError()).
+ *  Note 1 : Adding any prefix (including NULL) invalidates any previously set prefix or dictionary
+ *  Note 2 : Prefix buffer is referenced. It **must** outlive decompression.
+ *           Prefix buffer must remain unmodified up to the end of frame,
+ *           reached when ZSTD_decompressStream() returns 0.
+ *  Note 3 : By default, the prefix is treated as raw content (ZSTD_dct_rawContent).
+ *           Use ZSTD_CCtx_refPrefix_advanced() to alter dictMode (Experimental section)
+ *  Note 4 : Referencing a raw content prefix has almost no cpu nor memory cost.
+ *           A full dictionary is more costly, as it requires building tables.
+ */
+ZSTDLIB_API size_t ZSTD_DCtx_refPrefix(ZSTD_DCtx* dctx,
+                                 const void* prefix, size_t prefixSize);
+
+/* ===   Memory management   === */
+
+/*! ZSTD_sizeof_*() :
+ *  These functions give the _current_ memory usage of selected object.
+ *  Note that object memory usage can evolve (increase or decrease) over time. */
+ZSTDLIB_API size_t ZSTD_sizeof_CCtx(const ZSTD_CCtx* cctx);
+ZSTDLIB_API size_t ZSTD_sizeof_DCtx(const ZSTD_DCtx* dctx);
+ZSTDLIB_API size_t ZSTD_sizeof_CStream(const ZSTD_CStream* zcs);
+ZSTDLIB_API size_t ZSTD_sizeof_DStream(const ZSTD_DStream* zds);
+ZSTDLIB_API size_t ZSTD_sizeof_CDict(const ZSTD_CDict* cdict);
+ZSTDLIB_API size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict);
+
+}
+#endif  /* ZSTD_H_235446 */
+
+
+// LICENSE_CHANGE_END
+
+#include <iostream>
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/types/chunk_collection.hpp"
+#endif
+
+namespace duckdb {
+
+using duckdb_parquet::format::CompressionCodec;
+using duckdb_parquet::format::ConvertedType;
+using duckdb_parquet::format::Encoding;
+using duckdb_parquet::format::PageType;
+using duckdb_parquet::format::Type;
+
+const uint32_t ParquetDecodeUtils::BITPACK_MASKS[] = {
+    0,       1,       3,        7,        15,       31,        63,        127,       255,        511,       1023,
+    2047,    4095,    8191,     16383,    32767,    65535,     131071,    262143,    524287,     1048575,   2097151,
+    4194303, 8388607, 16777215, 33554431, 67108863, 134217727, 268435455, 536870911, 1073741823, 2147483647};
+
+const uint8_t ParquetDecodeUtils::BITPACK_DLEN = 8;
+
+ColumnReader::ColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
+                           idx_t max_define_p, idx_t max_repeat_p)
+    : schema(schema_p), file_idx(file_idx_p), max_define(max_define_p), max_repeat(max_repeat_p), reader(reader),
+      type(move(type_p)), page_rows_available(0) {
+
+	// dummies for Skip()
+	none_filter.none();
+	dummy_define.resize(reader.allocator, STANDARD_VECTOR_SIZE);
+	dummy_repeat.resize(reader.allocator, STANDARD_VECTOR_SIZE);
+}
+
+ColumnReader::~ColumnReader() {
+}
+
+ParquetReader &ColumnReader::Reader() {
+	return reader;
+}
+
+const LogicalType &ColumnReader::Type() const {
+	return type;
+}
+
+const SchemaElement &ColumnReader::Schema() const {
+	return schema;
+}
+
+idx_t ColumnReader::FileIdx() const {
+	return file_idx;
+}
+
+idx_t ColumnReader::MaxDefine() const {
+	return max_define;
+}
+
+idx_t ColumnReader::MaxRepeat() const {
+	return max_repeat;
+}
+
+void ColumnReader::RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) {
+	if (chunk) {
+		uint64_t size = chunk->meta_data.total_compressed_size;
+		transport.RegisterPrefetch(FileOffset(), size, allow_merge);
+	}
+}
+
+uint64_t ColumnReader::TotalCompressedSize() {
+	if (!chunk) {
+		return 0;
+	}
+
+	return chunk->meta_data.total_compressed_size;
+}
+
+// Note: It's not trivial to determine where all Column data is stored. Chunk->file_offset
+// apparently is not the first page of the data. Therefore we determine the address of the first page by taking the
+// minimum of all page offsets.
+idx_t ColumnReader::FileOffset() const {
+	if (!chunk) {
+		throw std::runtime_error("FileOffset called on ColumnReader with no chunk");
+	}
+	auto min_offset = NumericLimits<idx_t>::Maximum();
+	if (chunk->meta_data.__isset.dictionary_page_offset) {
+		min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.dictionary_page_offset);
+	}
+	if (chunk->meta_data.__isset.index_page_offset) {
+		min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.index_page_offset);
+	}
+	min_offset = MinValue<idx_t>(min_offset, chunk->meta_data.data_page_offset);
+
+	return min_offset;
+}
+
+idx_t ColumnReader::GroupRowsAvailable() {
+	return group_rows_available;
+}
+
+unique_ptr<BaseStatistics> ColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
+	if (Type().id() == LogicalTypeId::LIST || Type().id() == LogicalTypeId::STRUCT ||
+	    Type().id() == LogicalTypeId::MAP) {
+		return nullptr;
+	}
+	return ParquetStatisticsUtils::TransformColumnStatistics(Schema(), Type(), columns[file_idx]);
+}
+
+void ColumnReader::Plain(shared_ptr<ByteBuffer> plain_data, uint8_t *defines, idx_t num_values, // NOLINT
+                         parquet_filter_t &filter, idx_t result_offset, Vector &result) {
+	throw NotImplementedException("Plain");
+}
+
+void ColumnReader::Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
+	throw NotImplementedException("Dictionary");
+}
+
+void ColumnReader::Offsets(uint32_t *offsets, uint8_t *defines, idx_t num_values, parquet_filter_t &filter,
+                           idx_t result_offset, Vector &result) {
+	throw NotImplementedException("Offsets");
+}
+
+void ColumnReader::DictReference(Vector &result) {
+}
+void ColumnReader::PlainReference(shared_ptr<ByteBuffer>, Vector &result) { // NOLINT
+}
+
+void ColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
+	D_ASSERT(file_idx < columns.size());
+	chunk = &columns[file_idx];
+	protocol = &protocol_p;
+	D_ASSERT(chunk);
+	D_ASSERT(chunk->__isset.meta_data);
+
+	if (chunk->__isset.file_path) {
+		throw std::runtime_error("Only inlined data files are supported (no references)");
+	}
+
+	// ugh. sometimes there is an extra offset for the dict. sometimes it's wrong.
+	chunk_read_offset = chunk->meta_data.data_page_offset;
+	if (chunk->meta_data.__isset.dictionary_page_offset && chunk->meta_data.dictionary_page_offset >= 4) {
+		// this assumes the data pages follow the dict pages directly.
+		chunk_read_offset = chunk->meta_data.dictionary_page_offset;
+	}
+	group_rows_available = chunk->meta_data.num_values;
+}
+
+void ColumnReader::PrepareRead(parquet_filter_t &filter) {
+	dict_decoder.reset();
+	defined_decoder.reset();
+	block.reset();
+
+	PageHeader page_hdr;
+	page_hdr.read(protocol);
+
+	switch (page_hdr.type) {
+	case PageType::DATA_PAGE_V2:
+		PreparePageV2(page_hdr);
+		PrepareDataPage(page_hdr);
+		break;
+	case PageType::DATA_PAGE:
+		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
+		PrepareDataPage(page_hdr);
+		break;
+	case PageType::DICTIONARY_PAGE:
+		PreparePage(page_hdr.compressed_page_size, page_hdr.uncompressed_page_size);
+		Dictionary(move(block), page_hdr.dictionary_page_header.num_values);
+		break;
+	default:
+		break; // ignore INDEX page type and any other custom extensions
+	}
+}
+
+void ColumnReader::PreparePageV2(PageHeader &page_hdr) {
+	// FIXME this is copied from the other prepare, merge the decomp part
+
+	D_ASSERT(page_hdr.type == PageType::DATA_PAGE_V2);
+
+	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
+
+	block = make_shared<ResizeableBuffer>(reader.allocator, page_hdr.uncompressed_page_size + 1);
+	// copy repeats & defines as-is because FOR SOME REASON they are uncompressed
+	auto uncompressed_bytes = page_hdr.data_page_header_v2.repetition_levels_byte_length +
+	                          page_hdr.data_page_header_v2.definition_levels_byte_length;
+	auto possibly_compressed_bytes = page_hdr.compressed_page_size - uncompressed_bytes;
+	trans.read((uint8_t *)block->ptr, uncompressed_bytes);
+
+	switch (chunk->meta_data.codec) {
+	case CompressionCodec::UNCOMPRESSED:
+		trans.read(((uint8_t *)block->ptr) + uncompressed_bytes, possibly_compressed_bytes);
+		break;
+
+	case CompressionCodec::SNAPPY: {
+		// TODO move allocation outta here
+		ResizeableBuffer compressed_bytes_buffer(reader.allocator, possibly_compressed_bytes);
+		trans.read((uint8_t *)compressed_bytes_buffer.ptr, possibly_compressed_bytes);
+
+		auto res = duckdb_snappy::RawUncompress((const char *)compressed_bytes_buffer.ptr, possibly_compressed_bytes,
+		                                        ((char *)block->ptr) + uncompressed_bytes);
+		if (!res) {
+			throw std::runtime_error("Decompression failure");
+		}
+		break;
+	}
+
+	default: {
+		std::stringstream codec_name;
+		codec_name << chunk->meta_data.codec;
+		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
+		                         "\". Supported options are uncompressed, gzip or snappy");
+		break;
+	}
+	}
+}
+
+void ColumnReader::PreparePage(idx_t compressed_page_size, idx_t uncompressed_page_size) {
+	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
+
+	block = make_shared<ResizeableBuffer>(reader.allocator, compressed_page_size + 1);
+	trans.read((uint8_t *)block->ptr, compressed_page_size);
+
+	// TODO this allocation should probably be avoided
+	shared_ptr<ResizeableBuffer> unpacked_block;
+	if (chunk->meta_data.codec != CompressionCodec::UNCOMPRESSED) {
+		unpacked_block = make_shared<ResizeableBuffer>(reader.allocator, uncompressed_page_size + 1);
+	}
+
+	switch (chunk->meta_data.codec) {
+	case CompressionCodec::UNCOMPRESSED:
+		break;
+	case CompressionCodec::GZIP: {
+		MiniZStream s;
+
+		s.Decompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr,
+		             uncompressed_page_size);
+		block = move(unpacked_block);
+
+		break;
+	}
+	case CompressionCodec::SNAPPY: {
+		auto res =
+		    duckdb_snappy::RawUncompress((const char *)block->ptr, compressed_page_size, (char *)unpacked_block->ptr);
+		if (!res) {
+			throw std::runtime_error("Decompression failure");
+		}
+		block = move(unpacked_block);
+		break;
+	}
+	case CompressionCodec::ZSTD: {
+		auto res = duckdb_zstd::ZSTD_decompress((char *)unpacked_block->ptr, uncompressed_page_size,
+		                                        (const char *)block->ptr, compressed_page_size);
+		if (duckdb_zstd::ZSTD_isError(res) || res != (size_t)uncompressed_page_size) {
+			throw std::runtime_error("ZSTD Decompression failure");
+		}
+		block = move(unpacked_block);
+		break;
+	}
+
+	default: {
+		std::stringstream codec_name;
+		codec_name << chunk->meta_data.codec;
+		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
+		                         "\". Supported options are uncompressed, gzip or snappy");
+		break;
+	}
+	}
+}
+
+void ColumnReader::PrepareDataPage(PageHeader &page_hdr) {
+	if (page_hdr.type == PageType::DATA_PAGE && !page_hdr.__isset.data_page_header) {
+		throw std::runtime_error("Missing data page header from data page");
+	}
+	if (page_hdr.type == PageType::DATA_PAGE_V2 && !page_hdr.__isset.data_page_header_v2) {
+		throw std::runtime_error("Missing data page header from data page v2");
+	}
+
+	page_rows_available = page_hdr.type == PageType::DATA_PAGE ? page_hdr.data_page_header.num_values
+	                                                           : page_hdr.data_page_header_v2.num_values;
+	auto page_encoding = page_hdr.type == PageType::DATA_PAGE ? page_hdr.data_page_header.encoding
+	                                                          : page_hdr.data_page_header_v2.encoding;
+
+	if (HasRepeats()) {
+		uint32_t rep_length = page_hdr.type == PageType::DATA_PAGE
+		                          ? block->read<uint32_t>()
+		                          : page_hdr.data_page_header_v2.repetition_levels_byte_length;
+		block->available(rep_length);
+		repeated_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, rep_length,
+		                                             RleBpDecoder::ComputeBitWidth(max_repeat));
+		block->inc(rep_length);
+	}
+
+	if (HasDefines()) {
+		uint32_t def_length = page_hdr.type == PageType::DATA_PAGE
+		                          ? block->read<uint32_t>()
+		                          : page_hdr.data_page_header_v2.definition_levels_byte_length;
+		block->available(def_length);
+		defined_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, def_length,
+		                                            RleBpDecoder::ComputeBitWidth(max_define));
+		block->inc(def_length);
+	}
+
+	switch (page_encoding) {
+	case Encoding::RLE_DICTIONARY:
+	case Encoding::PLAIN_DICTIONARY: {
+		// where is it otherwise??
+		auto dict_width = block->read<uint8_t>();
+		// TODO somehow dict_width can be 0 ?
+		dict_decoder = make_unique<RleBpDecoder>((const uint8_t *)block->ptr, block->len, dict_width);
+		block->inc(block->len);
+		break;
+	}
+	case Encoding::DELTA_BINARY_PACKED: {
+		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)block->ptr, block->len);
+		block->inc(block->len);
+		break;
+	}
+		/*
+	case Encoding::DELTA_BYTE_ARRAY: {
+		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)block->ptr, block->len);
+		auto prefix_buffer = make_shared<ResizeableBuffer>();
+		prefix_buffer->resize(reader.allocator, sizeof(uint32_t) * page_hdr.data_page_header_v2.num_rows);
+
+		auto suffix_buffer = make_shared<ResizeableBuffer>();
+		suffix_buffer->resize(reader.allocator, sizeof(uint32_t) * page_hdr.data_page_header_v2.num_rows);
+
+		dbp_decoder->GetBatch<uint32_t>(prefix_buffer->ptr, page_hdr.data_page_header_v2.num_rows);
+		auto buffer_after_prefixes = dbp_decoder->BufferPtr();
+
+		dbp_decoder = make_unique<DbpDecoder>((const uint8_t *)buffer_after_prefixes.ptr, buffer_after_prefixes.len);
+		dbp_decoder->GetBatch<uint32_t>(suffix_buffer->ptr, page_hdr.data_page_header_v2.num_rows);
+
+		auto string_buffer = dbp_decoder->BufferPtr();
+
+		for (idx_t i = 0 ; i < page_hdr.data_page_header_v2.num_rows; i++) {
+		    auto suffix_length = (uint32_t*) suffix_buffer->ptr;
+		    string str( suffix_length[i] + 1, '\0');
+		    string_buffer.copy_to((char*) str.data(), suffix_length[i]);
+		    printf("%s\n", str.c_str());
+		}
+		throw std::runtime_error("eek");
+
+
+		// This is also known as incremental encoding or front compression: for each element in a sequence of strings,
+		// store the prefix length of the previous entry plus the suffix. This is stored as a sequence of delta-encoded
+		// prefix lengths (DELTA_BINARY_PACKED), followed by the suffixes encoded as delta length byte arrays
+		// (DELTA_LENGTH_BYTE_ARRAY). DELTA_LENGTH_BYTE_ARRAY: The encoded data would be DeltaEncoding(5, 5, 6, 6)
+		// "HelloWorldFoobarABCDEF"
+
+		// TODO actually do something here
+		break;
+	}
+		 */
+	case Encoding::PLAIN:
+		// nothing to do here, will be read directly below
+		break;
+
+	default:
+		throw std::runtime_error("Unsupported page encoding");
+	}
+}
+
+idx_t ColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+                         Vector &result) {
+	// we need to reset the location because multiple column readers share the same protocol
+	auto &trans = (ThriftFileTransport &)*protocol->getTransport();
+	trans.SetLocation(chunk_read_offset);
+
+	// Perform any skips that were not applied yet.
+	if (pending_skips > 0) {
+		ApplyPendingSkips(pending_skips);
+	}
+
+	idx_t result_offset = 0;
+	auto to_read = num_values;
+
+	while (to_read > 0) {
+		while (page_rows_available == 0) {
+			PrepareRead(filter);
+		}
+
+		D_ASSERT(block);
+		auto read_now = MinValue<idx_t>(to_read, page_rows_available);
+
+		D_ASSERT(read_now <= STANDARD_VECTOR_SIZE);
+
+		if (HasRepeats()) {
+			D_ASSERT(repeated_decoder);
+			repeated_decoder->GetBatch<uint8_t>((char *)repeat_out + result_offset, read_now);
+		}
+
+		if (HasDefines()) {
+			D_ASSERT(defined_decoder);
+			defined_decoder->GetBatch<uint8_t>((char *)define_out + result_offset, read_now);
+		}
+
+		idx_t null_count = 0;
+
+		if ((dict_decoder || dbp_decoder) && HasDefines()) {
+			// we need the null count because the dictionary offsets have no entries for nulls
+			for (idx_t i = 0; i < read_now; i++) {
+				if (define_out[i + result_offset] != max_define) {
+					null_count++;
+				}
+			}
+		}
+
+		if (dict_decoder) {
+			offset_buffer.resize(reader.allocator, sizeof(uint32_t) * (read_now - null_count));
+			dict_decoder->GetBatch<uint32_t>(offset_buffer.ptr, read_now - null_count);
+			DictReference(result);
+			Offsets((uint32_t *)offset_buffer.ptr, define_out, read_now, filter, result_offset, result);
+		} else if (dbp_decoder) {
+			// TODO keep this in the state
+			auto read_buf = make_shared<ResizeableBuffer>();
+
+			switch (type.id()) {
+			case LogicalTypeId::INTEGER:
+				read_buf->resize(reader.allocator, sizeof(int32_t) * (read_now - null_count));
+				dbp_decoder->GetBatch<int32_t>(read_buf->ptr, read_now - null_count);
+
+				break;
+			case LogicalTypeId::BIGINT:
+				read_buf->resize(reader.allocator, sizeof(int64_t) * (read_now - null_count));
+				dbp_decoder->GetBatch<int64_t>(read_buf->ptr, read_now - null_count);
+				break;
+
+			default:
+				throw std::runtime_error("DELTA_BINARY_PACKED should only be INT32 or INT64");
+			}
+			// Plain() will put NULLs in the right place
+			Plain(read_buf, define_out, read_now, filter, result_offset, result);
+		} else {
+			PlainReference(block, result);
+			Plain(block, define_out, read_now, filter, result_offset, result);
+		}
+
+		result_offset += read_now;
+		page_rows_available -= read_now;
+		to_read -= read_now;
+	}
+	group_rows_available -= num_values;
+	chunk_read_offset = trans.GetLocation();
+
+	return num_values;
+}
+
+void ColumnReader::Skip(idx_t num_values) {
+	pending_skips += num_values;
+}
+
+void ColumnReader::ApplyPendingSkips(idx_t num_values) {
+	pending_skips -= num_values;
+
+	dummy_define.zero();
+	dummy_repeat.zero();
+
+	// TODO this can be optimized, for example we dont actually have to bitunpack offsets
+	Vector dummy_result(type, nullptr);
+
+	idx_t remaining = num_values;
+	idx_t read = 0;
+
+	while (remaining) {
+		idx_t to_read = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE);
+		read += Read(to_read, none_filter, (uint8_t *)dummy_define.ptr, (uint8_t *)dummy_repeat.ptr, dummy_result);
+		remaining -= to_read;
+	}
+
+	if (read != num_values) {
+		throw std::runtime_error("Row count mismatch when skipping rows");
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// String Column Reader
+//===--------------------------------------------------------------------===//
+StringColumnReader::StringColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
+                                       idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p)
+    : TemplatedColumnReader<string_t, StringParquetValueConversion>(reader, move(type_p), schema_p, schema_idx_p,
+                                                                    max_define_p, max_repeat_p) {
+	fixed_width_string_length = 0;
+	if (schema_p.type == Type::FIXED_LEN_BYTE_ARRAY) {
+		D_ASSERT(schema_p.__isset.type_length);
+		fixed_width_string_length = schema_p.type_length;
+	}
+}
+
+uint32_t StringColumnReader::VerifyString(const char *str_data, uint32_t str_len) {
+	if (Type() != LogicalTypeId::VARCHAR) {
+		return str_len;
+	}
+	// verify if a string is actually UTF8, and if there are no null bytes in the middle of the string
+	// technically Parquet should guarantee this, but reality is often disappointing
+	UnicodeInvalidReason reason;
+	size_t pos;
+	auto utf_type = Utf8Proc::Analyze(str_data, str_len, &reason, &pos);
+	if (utf_type == UnicodeType::INVALID) {
+		if (reason == UnicodeInvalidReason::NULL_BYTE) {
+			// for null bytes we just truncate the string
+			return pos;
+		}
+		throw InvalidInputException("Invalid string encoding found in Parquet file: value \"" +
+		                            Blob::ToString(string_t(str_data, str_len)) + "\" is not valid UTF8!");
+	}
+	return str_len;
+}
+
+void StringColumnReader::Dictionary(shared_ptr<ByteBuffer> data, idx_t num_entries) {
+	dict = move(data);
+	dict_strings = unique_ptr<string_t[]>(new string_t[num_entries]);
+	for (idx_t dict_idx = 0; dict_idx < num_entries; dict_idx++) {
+		uint32_t str_len;
+		if (fixed_width_string_length == 0) {
+			// variable length string: read from dictionary
+			str_len = dict->read<uint32_t>();
+		} else {
+			// fixed length string
+			str_len = fixed_width_string_length;
+		}
+		dict->available(str_len);
+
+		auto actual_str_len = VerifyString(dict->ptr, str_len);
+		dict_strings[dict_idx] = string_t(dict->ptr, actual_str_len);
+		dict->inc(str_len);
+	}
+}
+
+class ParquetStringVectorBuffer : public VectorBuffer {
+public:
+	explicit ParquetStringVectorBuffer(shared_ptr<ByteBuffer> buffer_p)
+	    : VectorBuffer(VectorBufferType::OPAQUE_BUFFER), buffer(move(buffer_p)) {
+	}
+
+private:
+	shared_ptr<ByteBuffer> buffer;
+};
+
+void StringColumnReader::DictReference(Vector &result) {
+	StringVector::AddBuffer(result, make_buffer<ParquetStringVectorBuffer>(dict));
+}
+void StringColumnReader::PlainReference(shared_ptr<ByteBuffer> plain_data, Vector &result) {
+	StringVector::AddBuffer(result, make_buffer<ParquetStringVectorBuffer>(move(plain_data)));
+}
+
+string_t StringParquetValueConversion::DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+	auto &dict_strings = ((StringColumnReader &)reader).dict_strings;
+	return dict_strings[offset];
+}
+
+string_t StringParquetValueConversion::PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+	auto &scr = ((StringColumnReader &)reader);
+	uint32_t str_len = scr.fixed_width_string_length == 0 ? plain_data.read<uint32_t>() : scr.fixed_width_string_length;
+	plain_data.available(str_len);
+	auto actual_str_len = ((StringColumnReader &)reader).VerifyString(plain_data.ptr, str_len);
+	auto ret_str = string_t(plain_data.ptr, actual_str_len);
+	plain_data.inc(str_len);
+	return ret_str;
+}
+
+void StringParquetValueConversion::PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+	auto &scr = ((StringColumnReader &)reader);
+	uint32_t str_len = scr.fixed_width_string_length == 0 ? plain_data.read<uint32_t>() : scr.fixed_width_string_length;
+	plain_data.inc(str_len);
+}
+
+//===--------------------------------------------------------------------===//
+// List Column Reader
+//===--------------------------------------------------------------------===//
+idx_t ListColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+                             Vector &result_out) {
+	idx_t result_offset = 0;
+	auto result_ptr = FlatVector::GetData<list_entry_t>(result_out);
+	auto &result_mask = FlatVector::Validity(result_out);
+
+	if (pending_skips > 0) {
+		ApplyPendingSkips(pending_skips);
+	}
+
+	D_ASSERT(ListVector::GetListSize(result_out) == 0);
+	// if an individual list is longer than STANDARD_VECTOR_SIZE we actually have to loop the child read to fill it
+	bool finished = false;
+	while (!finished) {
+		idx_t child_actual_num_values = 0;
+
+		// check if we have any overflow from a previous read
+		if (overflow_child_count == 0) {
+			// we don't: read elements from the child reader
+			child_defines.zero();
+			child_repeats.zero();
+			// we don't know in advance how many values to read because of the beautiful repetition/definition setup
+			// we just read (up to) a vector from the child column, and see if we have read enough
+			// if we have not read enough, we read another vector
+			// if we have read enough, we leave any unhandled elements in the overflow vector for a subsequent read
+			auto child_req_num_values =
+			    MinValue<idx_t>(STANDARD_VECTOR_SIZE, child_column_reader->GroupRowsAvailable());
+			read_vector.ResetFromCache(read_cache);
+			child_actual_num_values = child_column_reader->Read(child_req_num_values, child_filter, child_defines_ptr,
+			                                                    child_repeats_ptr, read_vector);
+		} else {
+			// we do: use the overflow values
+			child_actual_num_values = overflow_child_count;
+			overflow_child_count = 0;
+		}
+
+		if (child_actual_num_values == 0) {
+			// no more elements available: we are done
+			break;
+		}
+		read_vector.Verify(child_actual_num_values);
+		idx_t current_chunk_offset = ListVector::GetListSize(result_out);
+
+		// hard-won piece of code this, modify at your own risk
+		// the intuition is that we have to only collapse values into lists that are repeated *on this level*
+		// the rest is pretty much handed up as-is as a single-valued list or NULL
+		idx_t child_idx;
+		for (child_idx = 0; child_idx < child_actual_num_values; child_idx++) {
+			if (child_repeats_ptr[child_idx] == max_repeat) {
+				// value repeats on this level, append
+				D_ASSERT(result_offset > 0);
+				result_ptr[result_offset - 1].length++;
+				continue;
+			}
+
+			if (result_offset >= num_values) {
+				// we ran out of output space
+				finished = true;
+				break;
+			}
+			if (child_defines_ptr[child_idx] >= max_define) {
+				// value has been defined down the stack, hence its NOT NULL
+				result_ptr[result_offset].offset = child_idx + current_chunk_offset;
+				result_ptr[result_offset].length = 1;
+			} else if (child_defines_ptr[child_idx] == max_define - 1) {
+				// empty list
+				result_ptr[result_offset].offset = child_idx + current_chunk_offset;
+				result_ptr[result_offset].length = 0;
+			} else {
+				// value is NULL somewhere up the stack
+				result_mask.SetInvalid(result_offset);
+				result_ptr[result_offset].offset = 0;
+				result_ptr[result_offset].length = 0;
+			}
+
+			repeat_out[result_offset] = child_repeats_ptr[child_idx];
+			define_out[result_offset] = child_defines_ptr[child_idx];
+
+			result_offset++;
+		}
+		// actually append the required elements to the child list
+		ListVector::Append(result_out, read_vector, child_idx);
+
+		// we have read more values from the child reader than we can fit into the result for this read
+		// we have to pass everything from child_idx to child_actual_num_values into the next call
+		if (child_idx < child_actual_num_values && result_offset == num_values) {
+			read_vector.Slice(read_vector, child_idx);
+			overflow_child_count = child_actual_num_values - child_idx;
+			read_vector.Verify(overflow_child_count);
+
+			// move values in the child repeats and defines *backward* by child_idx
+			for (idx_t repdef_idx = 0; repdef_idx < overflow_child_count; repdef_idx++) {
+				child_defines_ptr[repdef_idx] = child_defines_ptr[child_idx + repdef_idx];
+				child_repeats_ptr[repdef_idx] = child_repeats_ptr[child_idx + repdef_idx];
+			}
+		}
+	}
+	result_out.Verify(result_offset);
+	return result_offset;
+}
+
+ListColumnReader::ListColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
+                                   idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p,
+                                   unique_ptr<ColumnReader> child_column_reader_p)
+    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
+      child_column_reader(move(child_column_reader_p)), read_cache(reader.allocator, ListType::GetChildType(Type())),
+      read_vector(read_cache), overflow_child_count(0) {
+
+	child_defines.resize(reader.allocator, STANDARD_VECTOR_SIZE);
+	child_repeats.resize(reader.allocator, STANDARD_VECTOR_SIZE);
+	child_defines_ptr = (uint8_t *)child_defines.ptr;
+	child_repeats_ptr = (uint8_t *)child_repeats.ptr;
+
+	child_filter.set();
+}
+
+void ListColumnReader::ApplyPendingSkips(idx_t num_values) {
+	pending_skips -= num_values;
+
+	auto define_out = unique_ptr<uint8_t[]>(new uint8_t[num_values]);
+	auto repeat_out = unique_ptr<uint8_t[]>(new uint8_t[num_values]);
+
+	idx_t remaining = num_values;
+	idx_t read = 0;
+
+	while (remaining) {
+		Vector result_out(Type());
+		parquet_filter_t filter;
+		idx_t to_read = MinValue<idx_t>(remaining, STANDARD_VECTOR_SIZE);
+		read += Read(to_read, filter, define_out.get(), repeat_out.get(), result_out);
+		remaining -= to_read;
+	}
+
+	if (read != num_values) {
+		throw InternalException("Not all skips done!");
+	}
+}
+//===--------------------------------------------------------------------===//
+// Cast Column Reader
+//===--------------------------------------------------------------------===//
+CastColumnReader::CastColumnReader(unique_ptr<ColumnReader> child_reader_p, LogicalType target_type_p)
+    : ColumnReader(child_reader_p->Reader(), move(target_type_p), child_reader_p->Schema(), child_reader_p->FileIdx(),
+                   child_reader_p->MaxDefine(), child_reader_p->MaxRepeat()),
+      child_reader(move(child_reader_p)) {
+	vector<LogicalType> intermediate_types {child_reader->Type()};
+	intermediate_chunk.Initialize(reader.allocator, intermediate_types);
+}
+
+unique_ptr<BaseStatistics> CastColumnReader::Stats(const std::vector<ColumnChunk> &columns) {
+	// casting stats is not supported (yet)
+	return nullptr;
+}
+
+void CastColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
+	child_reader->InitializeRead(columns, protocol_p);
+}
+
+idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+                             Vector &result) {
+	intermediate_chunk.Reset();
+	auto &intermediate_vector = intermediate_chunk.data[0];
+
+	auto amount = child_reader->Read(num_values, filter, define_out, repeat_out, intermediate_vector);
+	if (!filter.all()) {
+		// work-around for filters: set all values that are filtered to NULL to prevent the cast from failing on
+		// uninitialized data
+		intermediate_vector.Normalify(amount);
+		auto &validity = FlatVector::Validity(intermediate_vector);
+		for (idx_t i = 0; i < amount; i++) {
+			if (!filter[i]) {
+				validity.SetInvalid(i);
+			}
+		}
+	}
+	VectorOperations::Cast(intermediate_vector, result, amount);
+	return amount;
+}
+
+void CastColumnReader::Skip(idx_t num_values) {
+	child_reader->Skip(num_values);
+}
+
+idx_t CastColumnReader::GroupRowsAvailable() {
+	return child_reader->GroupRowsAvailable();
+}
+
+//===--------------------------------------------------------------------===//
+// Struct Column Reader
+//===--------------------------------------------------------------------===//
+StructColumnReader::StructColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p,
+                                       idx_t schema_idx_p, idx_t max_define_p, idx_t max_repeat_p,
+                                       vector<unique_ptr<ColumnReader>> child_readers_p)
+    : ColumnReader(reader, move(type_p), schema_p, schema_idx_p, max_define_p, max_repeat_p),
+      child_readers(move(child_readers_p)) {
+	D_ASSERT(type.InternalType() == PhysicalType::STRUCT);
+}
+
+ColumnReader *StructColumnReader::GetChildReader(idx_t child_idx) {
+	return child_readers[child_idx].get();
+}
+
+void StructColumnReader::InitializeRead(const std::vector<ColumnChunk> &columns, TProtocol &protocol_p) {
+	for (auto &child : child_readers) {
+		child->InitializeRead(columns, protocol_p);
+	}
+}
+
+idx_t StructColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, uint8_t *define_out, uint8_t *repeat_out,
+                               Vector &result) {
+	auto &struct_entries = StructVector::GetEntries(result);
+	D_ASSERT(StructType::GetChildTypes(Type()).size() == struct_entries.size());
+
+	if (pending_skips > 0) {
+		ApplyPendingSkips(pending_skips);
+	}
+
+	idx_t read_count = num_values;
+	for (idx_t i = 0; i < struct_entries.size(); i++) {
+		auto child_num_values = child_readers[i]->Read(num_values, filter, define_out, repeat_out, *struct_entries[i]);
+		if (i == 0) {
+			read_count = child_num_values;
+		} else if (read_count != child_num_values) {
+			throw std::runtime_error("Struct child row count mismatch");
+		}
+	}
+	// set the validity mask for this level
+	auto &validity = FlatVector::Validity(result);
+	for (idx_t i = 0; i < read_count; i++) {
+		if (define_out[i] < max_define) {
+			validity.SetInvalid(i);
+		}
+	}
+
+	return read_count;
+}
+
+void StructColumnReader::Skip(idx_t num_values) {
+	for (auto &child_reader : child_readers) {
+		child_reader->Skip(num_values);
+	}
+}
+
+void StructColumnReader::RegisterPrefetch(ThriftFileTransport &transport, bool allow_merge) {
+	for (auto &child : child_readers) {
+		child->RegisterPrefetch(transport, allow_merge);
+	}
+}
+
+uint64_t StructColumnReader::TotalCompressedSize() {
+	uint64_t size = 0;
+	for (auto &child : child_readers) {
+		size += child->TotalCompressedSize();
+	}
+	return size;
+}
+
+static bool TypeHasExactRowCount(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		return false;
+	case LogicalTypeId::STRUCT:
+		for (auto &kv : StructType::GetChildTypes(type)) {
+			if (TypeHasExactRowCount(kv.second.id())) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return true;
+	}
+}
+
+idx_t StructColumnReader::GroupRowsAvailable() {
+	for (idx_t i = 0; i < child_readers.size(); i++) {
+		if (TypeHasExactRowCount(child_readers[i]->Type())) {
+			return child_readers[i]->GroupRowsAvailable();
+		}
+	}
+	return child_readers[0]->GroupRowsAvailable();
+}
+
+//===--------------------------------------------------------------------===//
+// Decimal Column Reader
+//===--------------------------------------------------------------------===//
+template <class DUCKDB_PHYSICAL_TYPE, bool FIXED_LENGTH>
+struct DecimalParquetValueConversion {
+	static DUCKDB_PHYSICAL_TYPE DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)dict.ptr;
+		return dict_ptr[offset];
+	}
+
+	static DUCKDB_PHYSICAL_TYPE PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		idx_t byte_len;
+		if (FIXED_LENGTH) {
+			byte_len = (idx_t)reader.Schema().type_length; /* sure, type length needs to be a signed int */
+		} else {
+			byte_len = plain_data.read<uint32_t>();
+		}
+		plain_data.available(byte_len);
+		auto res =
+		    ParquetDecimalUtils::ReadDecimalValue<DUCKDB_PHYSICAL_TYPE>((const_data_ptr_t)plain_data.ptr, byte_len);
+
+		plain_data.inc(byte_len);
+		return res;
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		uint32_t decimal_len = FIXED_LENGTH ? reader.Schema().type_length : plain_data.read<uint32_t>();
+		plain_data.inc(decimal_len);
+	}
+};
+
+template <class DUCKDB_PHYSICAL_TYPE, bool FIXED_LENGTH>
+class DecimalColumnReader
+    : public TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
+                                   DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>> {
+
+public:
+	DecimalColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, // NOLINT
+	                    idx_t file_idx_p, idx_t max_define_p, idx_t max_repeat_p)
+	    : TemplatedColumnReader<DUCKDB_PHYSICAL_TYPE,
+	                            DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>>(
+	          reader, move(type_p), schema_p, file_idx_p, max_define_p, max_repeat_p) {};
+
+protected:
+	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
+		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(DUCKDB_PHYSICAL_TYPE));
+		auto dict_ptr = (DUCKDB_PHYSICAL_TYPE *)this->dict->ptr;
+		for (idx_t i = 0; i < num_entries; i++) {
+			dict_ptr[i] =
+			    DecimalParquetValueConversion<DUCKDB_PHYSICAL_TYPE, FIXED_LENGTH>::PlainRead(*dictionary_data, *this);
+		}
+	}
+};
+
+template <bool FIXED_LENGTH>
+static unique_ptr<ColumnReader> CreateDecimalReaderInternal(ParquetReader &reader, const LogicalType &type_p,
+                                                            const SchemaElement &schema_p, idx_t file_idx_p,
+                                                            idx_t max_define, idx_t max_repeat) {
+	switch (type_p.InternalType()) {
+	case PhysicalType::INT16:
+		return make_unique<DecimalColumnReader<int16_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
+		                                                               max_repeat);
+	case PhysicalType::INT32:
+		return make_unique<DecimalColumnReader<int32_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
+		                                                               max_repeat);
+	case PhysicalType::INT64:
+		return make_unique<DecimalColumnReader<int64_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p, max_define,
+		                                                               max_repeat);
+	case PhysicalType::INT128:
+		return make_unique<DecimalColumnReader<hugeint_t, FIXED_LENGTH>>(reader, type_p, schema_p, file_idx_p,
+		                                                                 max_define, max_repeat);
+	default:
+		throw InternalException("Unrecognized type for Decimal");
+	}
+}
+
+unique_ptr<ColumnReader> ParquetDecimalUtils::CreateReader(ParquetReader &reader, const LogicalType &type_p,
+                                                           const SchemaElement &schema_p, idx_t file_idx_p,
+                                                           idx_t max_define, idx_t max_repeat) {
+	if (schema_p.__isset.type_length) {
+		return CreateDecimalReaderInternal<true>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	} else {
+		return CreateDecimalReaderInternal<false>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// UUID Column Reader
+//===--------------------------------------------------------------------===//
+struct UUIDValueConversion {
+	static hugeint_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		auto dict_ptr = (hugeint_t *)dict.ptr;
+		return dict_ptr[offset];
+	}
+
+	static hugeint_t ReadParquetUUID(const_data_ptr_t input) {
+		hugeint_t result;
+		result.lower = 0;
+		uint64_t unsigned_upper = 0;
+		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
+			unsigned_upper <<= 8;
+			unsigned_upper += input[i];
+		}
+		for (idx_t i = sizeof(uint64_t); i < sizeof(hugeint_t); i++) {
+			result.lower <<= 8;
+			result.lower += input[i];
+		}
+		result.upper = unsigned_upper;
+		result.upper ^= (int64_t(1) << 63);
+		return result;
+	}
+
+	static hugeint_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		idx_t byte_len = sizeof(hugeint_t);
+		plain_data.available(byte_len);
+		auto res = ReadParquetUUID((const_data_ptr_t)plain_data.ptr);
+
+		plain_data.inc(byte_len);
+		return res;
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		plain_data.inc(sizeof(hugeint_t));
+	}
+};
+
+class UUIDColumnReader : public TemplatedColumnReader<hugeint_t, UUIDValueConversion> {
+
+public:
+	UUIDColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
+	                 idx_t max_define_p, idx_t max_repeat_p)
+	    : TemplatedColumnReader<hugeint_t, UUIDValueConversion>(reader, move(type_p), schema_p, file_idx_p,
+	                                                            max_define_p, max_repeat_p) {};
+
+protected:
+	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) { // NOLINT
+		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(hugeint_t));
+		auto dict_ptr = (hugeint_t *)this->dict->ptr;
+		for (idx_t i = 0; i < num_entries; i++) {
+			dict_ptr[i] = UUIDValueConversion::PlainRead(*dictionary_data, *this);
+		}
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Interval Column Reader
+//===--------------------------------------------------------------------===//
+struct IntervalValueConversion {
+	static constexpr const idx_t PARQUET_INTERVAL_SIZE = 12;
+
+	static interval_t DictRead(ByteBuffer &dict, uint32_t &offset, ColumnReader &reader) {
+		auto dict_ptr = (interval_t *)dict.ptr;
+		return dict_ptr[offset];
+	}
+
+	static interval_t ReadParquetInterval(const_data_ptr_t input) {
+		interval_t result;
+		result.months = Load<uint32_t>(input);
+		result.days = Load<uint32_t>(input + sizeof(uint32_t));
+		result.micros = int64_t(Load<uint32_t>(input + sizeof(uint32_t) * 2)) * 1000;
+		return result;
+	}
+
+	static interval_t PlainRead(ByteBuffer &plain_data, ColumnReader &reader) {
+		idx_t byte_len = PARQUET_INTERVAL_SIZE;
+		plain_data.available(byte_len);
+		auto res = ReadParquetInterval((const_data_ptr_t)plain_data.ptr);
+
+		plain_data.inc(byte_len);
+		return res;
+	}
+
+	static void PlainSkip(ByteBuffer &plain_data, ColumnReader &reader) {
+		plain_data.inc(PARQUET_INTERVAL_SIZE);
+	}
+};
+
+class IntervalColumnReader : public TemplatedColumnReader<interval_t, IntervalValueConversion> {
+
+public:
+	IntervalColumnReader(ParquetReader &reader, LogicalType type_p, const SchemaElement &schema_p, idx_t file_idx_p,
+	                     idx_t max_define_p, idx_t max_repeat_p)
+	    : TemplatedColumnReader<interval_t, IntervalValueConversion>(reader, move(type_p), schema_p, file_idx_p,
+	                                                                 max_define_p, max_repeat_p) {};
+
+protected:
+	void Dictionary(shared_ptr<ByteBuffer> dictionary_data, idx_t num_entries) override { // NOLINT
+		this->dict = make_shared<ResizeableBuffer>(this->reader.allocator, num_entries * sizeof(interval_t));
+		auto dict_ptr = (interval_t *)this->dict->ptr;
+		for (idx_t i = 0; i < num_entries; i++) {
+			dict_ptr[i] = IntervalValueConversion::PlainRead(*dictionary_data, *this);
+		}
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Create Column Reader
+//===--------------------------------------------------------------------===//
+template <class T>
+unique_ptr<ColumnReader> CreateDecimalReader(ParquetReader &reader, const LogicalType &type_p,
+                                             const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
+                                             idx_t max_repeat) {
+	switch (type_p.InternalType()) {
+	case PhysicalType::INT16:
+		return make_unique<TemplatedColumnReader<int16_t, TemplatedParquetValueConversion<T>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case PhysicalType::INT32:
+		return make_unique<TemplatedColumnReader<int32_t, TemplatedParquetValueConversion<T>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case PhysicalType::INT64:
+		return make_unique<TemplatedColumnReader<int64_t, TemplatedParquetValueConversion<T>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	default:
+		throw NotImplementedException("Unimplemented internal type for CreateDecimalReader");
+	}
+}
+
+unique_ptr<ColumnReader> ColumnReader::CreateReader(ParquetReader &reader, const LogicalType &type_p,
+                                                    const SchemaElement &schema_p, idx_t file_idx_p, idx_t max_define,
+                                                    idx_t max_repeat) {
+	switch (type_p.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return make_unique<BooleanColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::UTINYINT:
+		return make_unique<TemplatedColumnReader<uint8_t, TemplatedParquetValueConversion<uint32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::USMALLINT:
+		return make_unique<TemplatedColumnReader<uint16_t, TemplatedParquetValueConversion<uint32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::UINTEGER:
+		return make_unique<TemplatedColumnReader<uint32_t, TemplatedParquetValueConversion<uint32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::UBIGINT:
+		return make_unique<TemplatedColumnReader<uint64_t, TemplatedParquetValueConversion<uint64_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::TINYINT:
+		return make_unique<TemplatedColumnReader<int8_t, TemplatedParquetValueConversion<int32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::SMALLINT:
+		return make_unique<TemplatedColumnReader<int16_t, TemplatedParquetValueConversion<int32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::INTEGER:
+		return make_unique<TemplatedColumnReader<int32_t, TemplatedParquetValueConversion<int32_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::BIGINT:
+		return make_unique<TemplatedColumnReader<int64_t, TemplatedParquetValueConversion<int64_t>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::FLOAT:
+		return make_unique<TemplatedColumnReader<float, TemplatedParquetValueConversion<float>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::DOUBLE:
+		return make_unique<TemplatedColumnReader<double, TemplatedParquetValueConversion<double>>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::TIMESTAMP:
+		switch (schema_p.type) {
+		case Type::INT96:
+			return make_unique<CallbackColumnReader<Int96, timestamp_t, ImpalaTimestampToTimestamp>>(
+			    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+		case Type::INT64:
+			switch (schema_p.converted_type) {
+			case ConvertedType::TIMESTAMP_MICROS:
+				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMicrosToTimestamp>>(
+				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+			case ConvertedType::TIMESTAMP_MILLIS:
+				return make_unique<CallbackColumnReader<int64_t, timestamp_t, ParquetTimestampMsToTimestamp>>(
+				    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+			default:
+				break;
+			}
+		default:
+			break;
+		}
+		break;
+	case LogicalTypeId::DATE:
+		return make_unique<CallbackColumnReader<int32_t, date_t, ParquetIntToDate>>(reader, type_p, schema_p,
+		                                                                            file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::TIME:
+		return make_unique<CallbackColumnReader<int64_t, dtime_t, ParquetIntToTime>>(
+		    reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::VARCHAR:
+		return make_unique<StringColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::DECIMAL:
+		// we have to figure out what kind of int we need
+		switch (schema_p.type) {
+		case Type::INT32:
+			return CreateDecimalReader<int32_t>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+		case Type::INT64:
+			return CreateDecimalReader<int64_t>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+		case Type::BYTE_ARRAY:
+		case Type::FIXED_LEN_BYTE_ARRAY:
+			return ParquetDecimalUtils::CreateReader(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+		default:
+			throw NotImplementedException("Unrecognized Parquet type for Decimal");
+		}
+		break;
+	case LogicalTypeId::UUID:
+		return make_unique<UUIDColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::INTERVAL:
+		return make_unique<IntervalColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	default:
+		break;
+	}
+	throw NotImplementedException(type_p.ToString());
+}
+
+} // namespace duckdb
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// parquet_rle_bp_encoder.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+
+
+namespace duckdb {
+
+class RleBpEncoder {
+public:
+	RleBpEncoder(uint32_t bit_width);
+
+public:
+	//! NOTE: Prepare is only required if a byte count is required BEFORE writing
+	//! This is the case with e.g. writing repetition/definition levels
+	//! If GetByteCount() is not required, prepare can be safely skipped
+	void BeginPrepare(uint32_t first_value);
+	void PrepareValue(uint32_t value);
+	void FinishPrepare();
+
+	void BeginWrite(Serializer &writer, uint32_t first_value);
+	void WriteValue(Serializer &writer, uint32_t value);
+	void FinishWrite(Serializer &writer);
+
+	idx_t GetByteCount();
+
+private:
+	//! meta information
+	uint32_t byte_width;
+	//! RLE run information
+	idx_t byte_count;
+	idx_t run_count;
+	idx_t current_run_count;
+	uint32_t last_value;
+
+private:
+	void FinishRun();
+	void WriteRun(Serializer &writer);
+};
+
+} // namespace duckdb
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/common.hpp"
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/serializer/buffered_file_writer.hpp"
+#include "duckdb/common/types/chunk_collection.hpp"
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/hugeint.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/serializer/buffered_serializer.hpp"
+#include "duckdb/common/operator/comparison_operators.hpp"
+#endif
+
+
+
+
+
+namespace duckdb {
+
+using namespace duckdb_parquet; // NOLINT
+using namespace duckdb_miniz;   // NOLINT
+
+using duckdb_parquet::format::CompressionCodec;
+using duckdb_parquet::format::ConvertedType;
+using duckdb_parquet::format::Encoding;
+using duckdb_parquet::format::FieldRepetitionType;
+using duckdb_parquet::format::FileMetaData;
+using duckdb_parquet::format::PageHeader;
+using duckdb_parquet::format::PageType;
+using ParquetRowGroup = duckdb_parquet::format::RowGroup;
+using duckdb_parquet::format::Type;
+
+#define PARQUET_DEFINE_VALID 65535
+
+static void VarintEncode(uint32_t val, Serializer &ser) {
+	do {
+		uint8_t byte = val & 127;
+		val >>= 7;
+		if (val != 0) {
+			byte |= 128;
+		}
+		ser.Write<uint8_t>(byte);
+	} while (val != 0);
+}
+
+static uint8_t GetVarintSize(uint32_t val) {
+	uint8_t res = 0;
+	do {
+		val >>= 7;
+		res++;
+	} while (val != 0);
+	return res;
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnWriterStatistics
+//===--------------------------------------------------------------------===//
+ColumnWriterStatistics::~ColumnWriterStatistics() {
+}
+
+string ColumnWriterStatistics::GetMin() {
+	return string();
+}
+
+string ColumnWriterStatistics::GetMax() {
+	return string();
+}
+
+string ColumnWriterStatistics::GetMinValue() {
+	return string();
+}
+
+string ColumnWriterStatistics::GetMaxValue() {
+	return string();
+}
+
+//===--------------------------------------------------------------------===//
+// RleBpEncoder
+//===--------------------------------------------------------------------===//
+RleBpEncoder::RleBpEncoder(uint32_t bit_width)
+    : byte_width((bit_width + 7) / 8), byte_count(idx_t(-1)), run_count(idx_t(-1)) {
+}
+
+// we always RLE everything (for now)
+void RleBpEncoder::BeginPrepare(uint32_t first_value) {
+	byte_count = 0;
+	run_count = 1;
+	current_run_count = 1;
+	last_value = first_value;
+}
+
+void RleBpEncoder::FinishRun() {
+	// last value, or value has changed
+	// write out the current run
+	byte_count += GetVarintSize(current_run_count << 1) + byte_width;
+	current_run_count = 1;
+	run_count++;
+}
+
+void RleBpEncoder::PrepareValue(uint32_t value) {
+	if (value != last_value) {
+		FinishRun();
+		last_value = value;
+	} else {
+		current_run_count++;
+	}
+}
+
+void RleBpEncoder::FinishPrepare() {
+	FinishRun();
+}
+
+idx_t RleBpEncoder::GetByteCount() {
+	D_ASSERT(byte_count != idx_t(-1));
+	return byte_count;
+}
+
+void RleBpEncoder::BeginWrite(Serializer &writer, uint32_t first_value) {
+	// start the RLE runs
+	last_value = first_value;
+	current_run_count = 1;
+}
+
+void RleBpEncoder::WriteRun(Serializer &writer) {
+	// write the header of the run
+	VarintEncode(current_run_count << 1, writer);
+	// now write the value
+	switch (byte_width) {
+	case 1:
+		writer.Write<uint8_t>(last_value);
+		break;
+	case 2:
+		writer.Write<uint16_t>(last_value);
+		break;
+	case 3:
+		writer.Write<uint8_t>(last_value & 0xFF);
+		writer.Write<uint8_t>((last_value >> 8) & 0xFF);
+		writer.Write<uint8_t>((last_value >> 16) & 0xFF);
+		break;
+	case 4:
+		writer.Write<uint32_t>(last_value);
+		break;
+	default:
+		throw InternalException("unsupported byte width for RLE encoding");
+	}
+	current_run_count = 1;
+}
+
+void RleBpEncoder::WriteValue(Serializer &writer, uint32_t value) {
+	if (value != last_value) {
+		WriteRun(writer);
+		last_value = value;
+	} else {
+		current_run_count++;
+	}
+}
+
+void RleBpEncoder::FinishWrite(Serializer &writer) {
+	WriteRun(writer);
+}
+
+//===--------------------------------------------------------------------===//
+// ColumnWriter
+//===--------------------------------------------------------------------===//
+ColumnWriter::ColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+                           idx_t max_define, bool can_have_nulls)
+    : writer(writer), schema_idx(schema_idx), schema_path(move(schema_path_p)), max_repeat(max_repeat),
+      max_define(max_define), can_have_nulls(can_have_nulls), null_count(0) {
+}
+ColumnWriter::~ColumnWriter() {
+}
+
+ColumnWriterState::~ColumnWriterState() {
+}
+
+void ColumnWriter::CompressPage(BufferedSerializer &temp_writer, size_t &compressed_size, data_ptr_t &compressed_data,
+                                unique_ptr<data_t[]> &compressed_buf) {
+	switch (writer.codec) {
+	case CompressionCodec::UNCOMPRESSED:
+		compressed_size = temp_writer.blob.size;
+		compressed_data = temp_writer.blob.data.get();
+		break;
+	case CompressionCodec::SNAPPY: {
+		compressed_size = duckdb_snappy::MaxCompressedLength(temp_writer.blob.size);
+		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
+		duckdb_snappy::RawCompress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size,
+		                           (char *)compressed_buf.get(), &compressed_size);
+		compressed_data = compressed_buf.get();
+		D_ASSERT(compressed_size <= duckdb_snappy::MaxCompressedLength(temp_writer.blob.size));
+		break;
+	}
+	case CompressionCodec::GZIP: {
+		MiniZStream s;
+		compressed_size = s.MaxCompressedLength(temp_writer.blob.size);
+		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
+		s.Compress((const char *)temp_writer.blob.data.get(), temp_writer.blob.size, (char *)compressed_buf.get(),
+		           &compressed_size);
+		compressed_data = compressed_buf.get();
+		break;
+	}
+	case CompressionCodec::ZSTD: {
+		compressed_size = duckdb_zstd::ZSTD_compressBound(temp_writer.blob.size);
+		compressed_buf = unique_ptr<data_t[]>(new data_t[compressed_size]);
+		compressed_size = duckdb_zstd::ZSTD_compress((void *)compressed_buf.get(), compressed_size,
+		                                             (const void *)temp_writer.blob.data.get(), temp_writer.blob.size,
+		                                             ZSTD_CLEVEL_DEFAULT);
+		compressed_data = compressed_buf.get();
+		break;
+	}
+	default:
+		throw InternalException("Unsupported codec for Parquet Writer");
+	}
+
+	if (compressed_size > idx_t(NumericLimits<int32_t>::Maximum())) {
+		throw InternalException("Parquet writer: %d compressed page size out of range for type integer",
+		                        temp_writer.blob.size);
+	}
+}
+
+class ColumnWriterPageState {
+public:
+	virtual ~ColumnWriterPageState() {
+	}
+};
+
+struct PageInformation {
+	idx_t offset = 0;
+	idx_t row_count = 0;
+	idx_t empty_count = 0;
+	idx_t estimated_page_size = 0;
+};
+
+struct PageWriteInformation {
+	PageHeader page_header;
+	unique_ptr<BufferedSerializer> temp_writer;
+	unique_ptr<ColumnWriterPageState> page_state;
+	idx_t write_page_idx = 0;
+	idx_t write_count = 0;
+	idx_t max_write_count = 0;
+	size_t compressed_size;
+	data_ptr_t compressed_data;
+	unique_ptr<data_t[]> compressed_buf;
+};
+
+class StandardColumnWriterState : public ColumnWriterState {
+public:
+	StandardColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
+	    : row_group(row_group), col_idx(col_idx) {
+		page_info.emplace_back();
+	}
+	~StandardColumnWriterState() override = default;
+
+	duckdb_parquet::format::RowGroup &row_group;
+	idx_t col_idx;
+	vector<PageInformation> page_info;
+	vector<PageWriteInformation> write_info;
+	unique_ptr<ColumnWriterStatistics> stats_state;
+	idx_t current_page = 0;
+};
+
+unique_ptr<ColumnWriterState> ColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
+	auto result = make_unique<StandardColumnWriterState>(row_group, row_group.columns.size());
+
+	duckdb_parquet::format::ColumnChunk column_chunk;
+	column_chunk.__isset.meta_data = true;
+	column_chunk.meta_data.codec = writer.codec;
+	column_chunk.meta_data.path_in_schema = schema_path;
+	column_chunk.meta_data.num_values = 0;
+	column_chunk.meta_data.type = writer.file_meta_data.schema[schema_idx].type;
+	row_group.columns.push_back(move(column_chunk));
+
+	return move(result);
+}
+
+void ColumnWriter::HandleRepeatLevels(ColumnWriterState &state, ColumnWriterState *parent, idx_t count,
+                                      idx_t max_repeat) {
+	if (!parent) {
+		// no repeat levels without a parent node
+		return;
+	}
+	while (state.repetition_levels.size() < parent->repetition_levels.size()) {
+		state.repetition_levels.push_back(parent->repetition_levels[state.repetition_levels.size()]);
+	}
+}
+
+void ColumnWriter::HandleDefineLevels(ColumnWriterState &state, ColumnWriterState *parent, ValidityMask &validity,
+                                      idx_t count, uint16_t define_value, uint16_t null_value) {
+	if (parent) {
+		// parent node: inherit definition level from the parent
+		idx_t vector_index = 0;
+		while (state.definition_levels.size() < parent->definition_levels.size()) {
+			idx_t current_index = state.definition_levels.size();
+			if (parent->definition_levels[current_index] != PARQUET_DEFINE_VALID) {
+				state.definition_levels.push_back(parent->definition_levels[current_index]);
+			} else if (validity.RowIsValid(vector_index)) {
+				state.definition_levels.push_back(define_value);
+			} else {
+				if (!can_have_nulls) {
+					throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
+				}
+				null_count++;
+				state.definition_levels.push_back(null_value);
+			}
+			if (parent->is_empty.empty() || !parent->is_empty[current_index]) {
+				vector_index++;
+			}
+		}
+	} else {
+		// no parent: set definition levels only from this validity mask
+		for (idx_t i = 0; i < count; i++) {
+			if (validity.RowIsValid(i)) {
+				state.definition_levels.push_back(define_value);
+			} else {
+				if (!can_have_nulls) {
+					throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
+				}
+				null_count++;
+				state.definition_levels.push_back(null_value);
+			}
+		}
+	}
+}
+
+void ColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (StandardColumnWriterState &)state_p;
+	auto &col_chunk = state.row_group.columns[state.col_idx];
+
+	idx_t start = 0;
+	idx_t vcount = parent ? parent->definition_levels.size() - state.definition_levels.size() : count;
+	idx_t parent_index = state.definition_levels.size();
+	auto &validity = FlatVector::Validity(vector);
+	HandleRepeatLevels(state_p, parent, count, max_repeat);
+	HandleDefineLevels(state_p, parent, validity, count, max_define, max_define - 1);
+
+	idx_t vector_index = 0;
+	for (idx_t i = start; i < vcount; i++) {
+		auto &page_info = state.page_info.back();
+		page_info.row_count++;
+		col_chunk.meta_data.num_values++;
+		if (parent && !parent->is_empty.empty() && parent->is_empty[parent_index + i]) {
+			page_info.empty_count++;
+			continue;
+		}
+		if (validity.RowIsValid(vector_index)) {
+			page_info.estimated_page_size += GetRowSize(vector, vector_index);
+			if (page_info.estimated_page_size >= MAX_UNCOMPRESSED_PAGE_SIZE) {
+				PageInformation new_info;
+				new_info.offset = page_info.offset + page_info.row_count;
+				state.page_info.push_back(new_info);
+			}
+		}
+		vector_index++;
+	}
+}
+
+unique_ptr<ColumnWriterPageState> ColumnWriter::InitializePageState() {
+	return nullptr;
+}
+
+void ColumnWriter::FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state) {
+}
+
+duckdb_parquet::format::Encoding::type ColumnWriter::GetEncoding() {
+	return Encoding::PLAIN;
+}
+
+void ColumnWriter::BeginWrite(ColumnWriterState &state_p) {
+	auto &state = (StandardColumnWriterState &)state_p;
+
+	// set up the page write info
+	state.stats_state = InitializeStatsState();
+	for (idx_t page_idx = 0; page_idx < state.page_info.size(); page_idx++) {
+		auto &page_info = state.page_info[page_idx];
+		if (page_info.row_count == 0) {
+			D_ASSERT(page_idx + 1 == state.page_info.size());
+			state.page_info.erase(state.page_info.begin() + page_idx);
+			break;
+		}
+		PageWriteInformation write_info;
+		// set up the header
+		auto &hdr = write_info.page_header;
+		hdr.compressed_page_size = 0;
+		hdr.uncompressed_page_size = 0;
+		hdr.type = PageType::DATA_PAGE;
+		hdr.__isset.data_page_header = true;
+
+		hdr.data_page_header.num_values = page_info.row_count;
+		hdr.data_page_header.encoding = GetEncoding();
+		hdr.data_page_header.definition_level_encoding = Encoding::RLE;
+		hdr.data_page_header.repetition_level_encoding = Encoding::RLE;
+
+		write_info.temp_writer = make_unique<BufferedSerializer>();
+		write_info.write_count = page_info.empty_count;
+		write_info.max_write_count = page_info.row_count;
+		write_info.page_state = InitializePageState();
+
+		write_info.compressed_size = 0;
+		write_info.compressed_data = nullptr;
+
+		state.write_info.push_back(move(write_info));
+	}
+
+	// start writing the first page
+	NextPage(state_p);
+}
+
+void ColumnWriter::WriteLevels(Serializer &temp_writer, const vector<uint16_t> &levels, idx_t max_value, idx_t offset,
+                               idx_t count) {
+	if (levels.empty() || count == 0) {
+		return;
+	}
+
+	// write the levels using the RLE-BP encoding
+	auto bit_width = RleBpDecoder::ComputeBitWidth((max_value));
+	RleBpEncoder rle_encoder(bit_width);
+
+	rle_encoder.BeginPrepare(levels[offset]);
+	for (idx_t i = offset + 1; i < offset + count; i++) {
+		rle_encoder.PrepareValue(levels[i]);
+	}
+	rle_encoder.FinishPrepare();
+
+	// start off by writing the byte count as a uint32_t
+	temp_writer.Write<uint32_t>(rle_encoder.GetByteCount());
+	rle_encoder.BeginWrite(temp_writer, levels[offset]);
+	for (idx_t i = offset + 1; i < offset + count; i++) {
+		rle_encoder.WriteValue(temp_writer, levels[i]);
+	}
+	rle_encoder.FinishWrite(temp_writer);
+}
+
+void ColumnWriter::NextPage(ColumnWriterState &state_p) {
+	auto &state = (StandardColumnWriterState &)state_p;
+
+	if (state.current_page > 0) {
+		// need to flush the current page
+		FlushPage(state_p);
+	}
+	if (state.current_page >= state.write_info.size()) {
+		state.current_page = state.write_info.size() + 1;
+		return;
+	}
+	auto &page_info = state.page_info[state.current_page];
+	auto &write_info = state.write_info[state.current_page];
+	state.current_page++;
+
+	auto &temp_writer = *write_info.temp_writer;
+
+	// write the repetition levels
+	WriteLevels(temp_writer, state.repetition_levels, max_repeat, page_info.offset, page_info.row_count);
+
+	// write the definition levels
+	WriteLevels(temp_writer, state.definition_levels, max_define, page_info.offset, page_info.row_count);
+}
+
+void ColumnWriter::FlushPage(ColumnWriterState &state_p) {
+	auto &state = (StandardColumnWriterState &)state_p;
+	D_ASSERT(state.current_page > 0);
+	if (state.current_page > state.write_info.size()) {
+		return;
+	}
+
+	// compress the page info
+	auto &write_info = state.write_info[state.current_page - 1];
+	auto &temp_writer = *write_info.temp_writer;
+	auto &hdr = write_info.page_header;
+
+	FlushPageState(temp_writer, write_info.page_state.get());
+
+	// now that we have finished writing the data we know the uncompressed size
+	if (temp_writer.blob.size > idx_t(NumericLimits<int32_t>::Maximum())) {
+		throw InternalException("Parquet writer: %d uncompressed page size out of range for type integer",
+		                        temp_writer.blob.size);
+	}
+	hdr.uncompressed_page_size = temp_writer.blob.size;
+
+	// compress the data
+	CompressPage(temp_writer, write_info.compressed_size, write_info.compressed_data, write_info.compressed_buf);
+	hdr.compressed_page_size = write_info.compressed_size;
+	D_ASSERT(hdr.uncompressed_page_size > 0);
+	D_ASSERT(hdr.compressed_page_size > 0);
+
+	if (write_info.compressed_buf) {
+		// if the data has been compressed, we no longer need the compressed data
+		D_ASSERT(write_info.compressed_buf.get() == write_info.compressed_data);
+		write_info.temp_writer.reset();
+	}
+}
+
+unique_ptr<ColumnWriterStatistics> ColumnWriter::InitializeStatsState() {
+	return make_unique<ColumnWriterStatistics>();
+}
+
+void ColumnWriter::WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats,
+                               ColumnWriterPageState *page_state, Vector &input_column, idx_t chunk_start,
+                               idx_t chunk_end) {
+	throw InternalException("WriteVector unsupported for struct/list column writers");
+}
+
+idx_t ColumnWriter::GetRowSize(Vector &vector, idx_t index) {
+	throw InternalException("GetRowSize unsupported for struct/list column writers");
+}
+
+void ColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
+	auto &state = (StandardColumnWriterState &)state_p;
+
+	idx_t remaining = count;
+	idx_t offset = 0;
+	while (remaining > 0) {
+		auto &write_info = state.write_info[state.current_page - 1];
+		if (!write_info.temp_writer) {
+			throw InternalException("Writes are not correctly aligned!?");
+		}
+		auto &temp_writer = *write_info.temp_writer;
+		idx_t write_count = MinValue<idx_t>(remaining, write_info.max_write_count - write_info.write_count);
+		D_ASSERT(write_count > 0);
+
+		WriteVector(temp_writer, state.stats_state.get(), write_info.page_state.get(), vector, offset,
+		            offset + write_count);
+
+		write_info.write_count += write_count;
+		if (write_info.write_count == write_info.max_write_count) {
+			NextPage(state_p);
+		}
+		offset += write_count;
+		remaining -= write_count;
+	}
+}
+
+void ColumnWriter::SetParquetStatistics(StandardColumnWriterState &state,
+                                        duckdb_parquet::format::ColumnChunk &column_chunk) {
+	if (max_repeat == 0) {
+		column_chunk.meta_data.statistics.null_count = null_count;
+		column_chunk.meta_data.statistics.__isset.null_count = true;
+		column_chunk.meta_data.__isset.statistics = true;
+	}
+	// set min/max/min_value/max_value
+	// this code is not going to win any beauty contests, but well
+	auto min = state.stats_state->GetMin();
+	if (!min.empty()) {
+		column_chunk.meta_data.statistics.min = move(min);
+		column_chunk.meta_data.statistics.__isset.min = true;
+		column_chunk.meta_data.__isset.statistics = true;
+	}
+	auto max = state.stats_state->GetMax();
+	if (!max.empty()) {
+		column_chunk.meta_data.statistics.max = move(max);
+		column_chunk.meta_data.statistics.__isset.max = true;
+		column_chunk.meta_data.__isset.statistics = true;
+	}
+	auto min_value = state.stats_state->GetMinValue();
+	if (!min_value.empty()) {
+		column_chunk.meta_data.statistics.min_value = move(min_value);
+		column_chunk.meta_data.statistics.__isset.min_value = true;
+		column_chunk.meta_data.__isset.statistics = true;
+	}
+	auto max_value = state.stats_state->GetMaxValue();
+	if (!max_value.empty()) {
+		column_chunk.meta_data.statistics.max_value = move(max_value);
+		column_chunk.meta_data.statistics.__isset.max_value = true;
+		column_chunk.meta_data.__isset.statistics = true;
+	}
+}
+
+void ColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
+	auto &state = (StandardColumnWriterState &)state_p;
+	auto &column_chunk = state.row_group.columns[state.col_idx];
+
+	// flush the last page (if any remains)
+	FlushPage(state);
+	// flush the dictionary
+	FlushDictionary(state, state.stats_state.get());
+
+	// record the start position of the pages for this column
+	column_chunk.meta_data.data_page_offset = writer.writer->GetTotalWritten();
+	SetParquetStatistics(state, column_chunk);
+
+	// write the individual pages to disk
+	for (auto &write_info : state.write_info) {
+		D_ASSERT(write_info.page_header.uncompressed_page_size > 0);
+		write_info.page_header.write(writer.protocol.get());
+		writer.writer->WriteData(write_info.compressed_data, write_info.compressed_size);
+	}
+	column_chunk.meta_data.total_compressed_size =
+	    writer.writer->GetTotalWritten() - column_chunk.meta_data.data_page_offset;
+}
+
+void ColumnWriter::WriteDictionary(ColumnWriterState &state_p, unique_ptr<BufferedSerializer> temp_writer,
+                                   idx_t row_count) {
+	auto &state = (StandardColumnWriterState &)state_p;
+	D_ASSERT(temp_writer);
+	D_ASSERT(temp_writer->blob.size > 0);
+
+	// write the dictionary page header
+	PageWriteInformation write_info;
+	// set up the header
+	auto &hdr = write_info.page_header;
+	hdr.uncompressed_page_size = temp_writer->blob.size;
+	hdr.type = PageType::DICTIONARY_PAGE;
+	hdr.__isset.dictionary_page_header = true;
+
+	hdr.dictionary_page_header.encoding = Encoding::PLAIN;
+	hdr.dictionary_page_header.is_sorted = false;
+	hdr.dictionary_page_header.num_values = row_count;
+
+	write_info.temp_writer = move(temp_writer);
+	write_info.write_count = 0;
+	write_info.max_write_count = 0;
+
+	// compress the contents of the dictionary page
+	CompressPage(*write_info.temp_writer, write_info.compressed_size, write_info.compressed_data,
+	             write_info.compressed_buf);
+	hdr.compressed_page_size = write_info.compressed_size;
+
+	// insert the dictionary page as the first page to write for this column
+	state.write_info.insert(state.write_info.begin(), move(write_info));
+}
+
+void ColumnWriter::FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats) {
+	// nop: standard pages do not have a dictionary
+}
+
+//===--------------------------------------------------------------------===//
+// Standard Column Writer
+//===--------------------------------------------------------------------===//
+template <class SRC, class T, class OP>
+class NumericStatisticsState : public ColumnWriterStatistics {
+public:
+	NumericStatisticsState() : min(NumericLimits<T>::Maximum()), max(NumericLimits<T>::Minimum()) {
+	}
+
+	T min;
+	T max;
+
+public:
+	bool HasStats() {
+		return min <= max;
+	}
+
+	string GetMin() override {
+		return NumericLimits<SRC>::IsSigned() ? GetMinValue() : string();
+	}
+	string GetMax() override {
+		return NumericLimits<SRC>::IsSigned() ? GetMaxValue() : string();
+	}
+	string GetMinValue() override {
+		return HasStats() ? string((char *)&min, sizeof(T)) : string();
+	}
+	string GetMaxValue() override {
+		return HasStats() ? string((char *)&max, sizeof(T)) : string();
+	}
+};
+
+struct BaseParquetOperator {
+	template <class SRC, class TGT>
+	static unique_ptr<ColumnWriterStatistics> InitializeStats() {
+		return make_unique<NumericStatisticsState<SRC, TGT, BaseParquetOperator>>();
+	}
+
+	template <class SRC, class TGT>
+	static void HandleStats(ColumnWriterStatistics *stats, SRC source_value, TGT target_value) {
+		auto &numeric_stats = (NumericStatisticsState<SRC, TGT, BaseParquetOperator> &)*stats;
+		if (LessThan::Operation(target_value, numeric_stats.min)) {
+			numeric_stats.min = target_value;
+		}
+		if (GreaterThan::Operation(target_value, numeric_stats.max)) {
+			numeric_stats.max = target_value;
+		}
+	}
+};
+
+struct ParquetCastOperator : public BaseParquetOperator {
+	template <class SRC, class TGT>
+	static TGT Operation(SRC input) {
+		return TGT(input);
+	}
+};
+
+struct ParquetTimestampNSOperator : public BaseParquetOperator {
+	template <class SRC, class TGT>
+	static TGT Operation(SRC input) {
+		return Timestamp::FromEpochNanoSeconds(input).value;
+	}
+};
+
+struct ParquetTimestampSOperator : public BaseParquetOperator {
+	template <class SRC, class TGT>
+	static TGT Operation(SRC input) {
+		return Timestamp::FromEpochSeconds(input).value;
+	}
+};
+
+struct ParquetHugeintOperator {
+	template <class SRC, class TGT>
+	static TGT Operation(SRC input) {
+		return Hugeint::Cast<double>(input);
+	}
+
+	template <class SRC, class TGT>
+	static unique_ptr<ColumnWriterStatistics> InitializeStats() {
+		return make_unique<ColumnWriterStatistics>();
+	}
+
+	template <class SRC, class TGT>
+	static void HandleStats(ColumnWriterStatistics *stats, SRC source_value, TGT target_value) {
+	}
+};
+
+template <class SRC, class TGT, class OP = ParquetCastOperator>
+static void TemplatedWritePlain(Vector &col, ColumnWriterStatistics *stats, idx_t chunk_start, idx_t chunk_end,
+                                ValidityMask &mask, Serializer &ser) {
+	auto *ptr = FlatVector::GetData<SRC>(col);
+	for (idx_t r = chunk_start; r < chunk_end; r++) {
+		if (mask.RowIsValid(r)) {
+			TGT target_value = OP::template Operation<SRC, TGT>(ptr[r]);
+			OP::template HandleStats<SRC, TGT>(stats, ptr[r], target_value);
+			ser.Write<TGT>(target_value);
+		}
+	}
+}
+
+template <class SRC, class TGT, class OP = ParquetCastOperator>
+class StandardColumnWriter : public ColumnWriter {
+public:
+	StandardColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, // NOLINT
+	                     idx_t max_repeat, idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~StandardColumnWriter() override = default;
+
+public:
+	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
+		return OP::template InitializeStats<SRC, TGT>();
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats, ColumnWriterPageState *page_state,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &mask = FlatVector::Validity(input_column);
+		TemplatedWritePlain<SRC, TGT, OP>(input_column, stats, chunk_start, chunk_end, mask, temp_writer);
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return sizeof(TGT);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Boolean Column Writer
+//===--------------------------------------------------------------------===//
+class BooleanStatisticsState : public ColumnWriterStatistics {
+public:
+	BooleanStatisticsState() : min(true), max(false) {
+	}
+
+	bool min;
+	bool max;
+
+public:
+	bool HasStats() {
+		return !(min && !max);
+	}
+
+	string GetMin() override {
+		return GetMinValue();
+	}
+	string GetMax() override {
+		return GetMaxValue();
+	}
+	string GetMinValue() override {
+		return HasStats() ? string((char *)&min, sizeof(bool)) : string();
+	}
+	string GetMaxValue() override {
+		return HasStats() ? string((char *)&max, sizeof(bool)) : string();
+	}
+};
+
+class BooleanWriterPageState : public ColumnWriterPageState {
+public:
+	uint8_t byte = 0;
+	uint8_t byte_pos = 0;
+};
+
+class BooleanColumnWriter : public ColumnWriter {
+public:
+	BooleanColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                    idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~BooleanColumnWriter() override = default;
+
+public:
+	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
+		return make_unique<BooleanStatisticsState>();
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *state_p,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &stats = (BooleanStatisticsState &)*stats_p;
+		auto &state = (BooleanWriterPageState &)*state_p;
+		auto &mask = FlatVector::Validity(input_column);
+
+		auto *ptr = FlatVector::GetData<bool>(input_column);
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				// only encode if non-null
+				if (ptr[r]) {
+					stats.max = true;
+					state.byte |= 1 << state.byte_pos;
+				} else {
+					stats.min = false;
+				}
+				state.byte_pos++;
+
+				if (state.byte_pos == 8) {
+					temp_writer.Write<uint8_t>(state.byte);
+					state.byte = 0;
+					state.byte_pos = 0;
+				}
+			}
+		}
+	}
+
+	unique_ptr<ColumnWriterPageState> InitializePageState() override {
+		return make_unique<BooleanWriterPageState>();
+	}
+
+	void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state_p) override {
+		auto &state = (BooleanWriterPageState &)*state_p;
+		if (state.byte_pos > 0) {
+			temp_writer.Write<uint8_t>(state.byte);
+			state.byte = 0;
+			state.byte_pos = 0;
+		}
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return sizeof(bool);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Decimal Column Writer
+//===--------------------------------------------------------------------===//
+static void WriteParquetDecimal(hugeint_t input, data_ptr_t result) {
+	bool positive = input >= 0;
+	// numbers are stored as two's complement so some muckery is required
+	if (!positive) {
+		input = NumericLimits<hugeint_t>::Maximum() + input + 1;
+	}
+	uint64_t high_bytes = uint64_t(input.upper);
+	uint64_t low_bytes = input.lower;
+
+	for (idx_t i = 0; i < sizeof(uint64_t); i++) {
+		auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
+		result[i] = (high_bytes >> shift_count) & 0xFF;
+	}
+	for (idx_t i = 0; i < sizeof(uint64_t); i++) {
+		auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
+		result[sizeof(uint64_t) + i] = (low_bytes >> shift_count) & 0xFF;
+	}
+	if (!positive) {
+		result[0] |= 0x80;
+	}
+}
+
+class FixedDecimalStatistics : public ColumnWriterStatistics {
+public:
+	FixedDecimalStatistics() : min(NumericLimits<hugeint_t>::Maximum()), max(NumericLimits<hugeint_t>::Minimum()) {
+	}
+
+	hugeint_t min;
+	hugeint_t max;
+
+public:
+	string GetStats(hugeint_t &input) {
+		data_t buffer[16];
+		WriteParquetDecimal(input, buffer);
+		return string((char *)buffer, 16);
+	}
+
+	bool HasStats() {
+		return min <= max;
+	}
+
+	void Update(hugeint_t &val) {
+		if (LessThan::Operation(val, min)) {
+			min = val;
+		}
+		if (GreaterThan::Operation(val, max)) {
+			max = val;
+		}
+	}
+
+	string GetMin() override {
+		return GetMinValue();
+	}
+	string GetMax() override {
+		return GetMaxValue();
+	}
+	string GetMinValue() override {
+		return HasStats() ? GetStats(min) : string();
+	}
+	string GetMaxValue() override {
+		return HasStats() ? GetStats(max) : string();
+	}
+};
+
+class FixedDecimalColumnWriter : public ColumnWriter {
+public:
+	FixedDecimalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                         idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~FixedDecimalColumnWriter() override = default;
+
+public:
+	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
+		return make_unique<FixedDecimalStatistics>();
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &mask = FlatVector::Validity(input_column);
+		auto *ptr = FlatVector::GetData<hugeint_t>(input_column);
+		auto &stats = (FixedDecimalStatistics &)*stats_p;
+
+		data_t temp_buffer[16];
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				stats.Update(ptr[r]);
+				WriteParquetDecimal(ptr[r], temp_buffer);
+				temp_writer.WriteData(temp_buffer, 16);
+			}
+		}
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return sizeof(hugeint_t);
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// UUID Column Writer
+//===--------------------------------------------------------------------===//
+class UUIDColumnWriter : public ColumnWriter {
+	static constexpr const idx_t PARQUET_UUID_SIZE = 16;
+
+public:
+	UUIDColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                 idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~UUIDColumnWriter() override = default;
+
+public:
+	static void WriteParquetUUID(hugeint_t input, data_ptr_t result) {
+		uint64_t high_bytes = input.upper ^ (int64_t(1) << 63);
+		uint64_t low_bytes = input.lower;
+
+		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
+			auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
+			result[i] = (high_bytes >> shift_count) & 0xFF;
+		}
+		for (idx_t i = 0; i < sizeof(uint64_t); i++) {
+			auto shift_count = (sizeof(uint64_t) - i - 1) * 8;
+			result[sizeof(uint64_t) + i] = (low_bytes >> shift_count) & 0xFF;
+		}
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &mask = FlatVector::Validity(input_column);
+		auto *ptr = FlatVector::GetData<hugeint_t>(input_column);
+
+		data_t temp_buffer[PARQUET_UUID_SIZE];
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				WriteParquetUUID(ptr[r], temp_buffer);
+				temp_writer.WriteData(temp_buffer, PARQUET_UUID_SIZE);
+			}
+		}
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return PARQUET_UUID_SIZE;
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Interval Column Writer
+//===--------------------------------------------------------------------===//
+class IntervalColumnWriter : public ColumnWriter {
+	static constexpr const idx_t PARQUET_INTERVAL_SIZE = 12;
+
+public:
+	IntervalColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                     idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~IntervalColumnWriter() override = default;
+
+public:
+	static void WriteParquetInterval(interval_t input, data_ptr_t result) {
+		if (input.days < 0 || input.months < 0 || input.micros < 0) {
+			throw IOException("Parquet files do not support negative intervals");
+		}
+		Store<uint32_t>(input.months, result);
+		Store<uint32_t>(input.days, result + sizeof(uint32_t));
+		Store<uint32_t>(input.micros / 1000, result + sizeof(uint32_t) * 2);
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &mask = FlatVector::Validity(input_column);
+		auto *ptr = FlatVector::GetData<interval_t>(input_column);
+
+		data_t temp_buffer[PARQUET_INTERVAL_SIZE];
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				WriteParquetInterval(ptr[r], temp_buffer);
+				temp_writer.WriteData(temp_buffer, PARQUET_INTERVAL_SIZE);
+			}
+		}
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return PARQUET_INTERVAL_SIZE;
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// String Column Writer
+//===--------------------------------------------------------------------===//
+class StringStatisticsState : public ColumnWriterStatistics {
+	static constexpr const idx_t MAX_STRING_STATISTICS_SIZE = 10000;
+
+public:
+	StringStatisticsState() : has_stats(false), values_too_big(false), min(), max() {
+	}
+
+	bool has_stats;
+	bool values_too_big;
+	string min;
+	string max;
+
+public:
+	bool HasStats() {
+		return has_stats;
+	}
+
+	void Update(const string_t &val) {
+		if (values_too_big) {
+			return;
+		}
+		auto str_len = val.GetSize();
+		if (str_len > MAX_STRING_STATISTICS_SIZE) {
+			// we avoid gathering stats when individual string values are too large
+			// this is because the statistics are copied into the Parquet file meta data in uncompressed format
+			// ideally we avoid placing several mega or giga-byte long strings there
+			// we put a threshold of 10KB, if we see strings that exceed this threshold we avoid gathering stats
+			values_too_big = true;
+			min = string();
+			max = string();
+			return;
+		}
+		if (!has_stats || LessThan::Operation(val, string_t(min))) {
+			min = val.GetString();
+		}
+		if (!has_stats || GreaterThan::Operation(val, string_t(max))) {
+			max = val.GetString();
+		}
+		has_stats = true;
+	}
+
+	string GetMin() override {
+		return GetMinValue();
+	}
+	string GetMax() override {
+		return GetMaxValue();
+	}
+	string GetMinValue() override {
+		return HasStats() ? min : string();
+	}
+	string GetMaxValue() override {
+		return HasStats() ? max : string();
+	}
+};
+
+class StringColumnWriter : public ColumnWriter {
+public:
+	StringColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                   idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls) {
+	}
+	~StringColumnWriter() override = default;
+
+public:
+	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
+		return make_unique<StringStatisticsState>();
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &mask = FlatVector::Validity(input_column);
+		auto &stats = (StringStatisticsState &)*stats_p;
+
+		auto *ptr = FlatVector::GetData<string_t>(input_column);
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				stats.Update(ptr[r]);
+				temp_writer.Write<uint32_t>(ptr[r].GetSize());
+				temp_writer.WriteData((const_data_ptr_t)ptr[r].GetDataUnsafe(), ptr[r].GetSize());
+			}
+		}
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		auto strings = FlatVector::GetData<string_t>(vector);
+		return strings[index].GetSize();
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Enum Column Writer
+//===--------------------------------------------------------------------===//
+class EnumWriterPageState : public ColumnWriterPageState {
+public:
+	explicit EnumWriterPageState(uint32_t bit_width) : encoder(bit_width), written_value(false) {
+	}
+
+	RleBpEncoder encoder;
+	bool written_value;
+};
+
+class EnumColumnWriter : public ColumnWriter {
+public:
+	EnumColumnWriter(ParquetWriter &writer, LogicalType enum_type_p, idx_t schema_idx, vector<string> schema_path_p,
+	                 idx_t max_repeat, idx_t max_define, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
+	      enum_type(move(enum_type_p)) {
+		bit_width = RleBpDecoder::ComputeBitWidth(EnumType::GetSize(enum_type));
+	}
+	~EnumColumnWriter() override = default;
+
+	LogicalType enum_type;
+	uint32_t bit_width;
+
+public:
+	unique_ptr<ColumnWriterStatistics> InitializeStatsState() override {
+		return make_unique<StringStatisticsState>();
+	}
+
+	template <class T>
+	void WriteEnumInternal(Serializer &temp_writer, Vector &input_column, idx_t chunk_start, idx_t chunk_end,
+	                       EnumWriterPageState &page_state) {
+		auto &mask = FlatVector::Validity(input_column);
+		auto *ptr = FlatVector::GetData<T>(input_column);
+		for (idx_t r = chunk_start; r < chunk_end; r++) {
+			if (mask.RowIsValid(r)) {
+				if (!page_state.written_value) {
+					// first value
+					// write the bit-width as a one-byte entry
+					temp_writer.Write<uint8_t>(bit_width);
+					// now begin writing the actual value
+					page_state.encoder.BeginWrite(temp_writer, ptr[r]);
+					page_state.written_value = true;
+				} else {
+					page_state.encoder.WriteValue(temp_writer, ptr[r]);
+				}
+			}
+		}
+	}
+
+	void WriteVector(Serializer &temp_writer, ColumnWriterStatistics *stats_p, ColumnWriterPageState *page_state_p,
+	                 Vector &input_column, idx_t chunk_start, idx_t chunk_end) override {
+		auto &page_state = (EnumWriterPageState &)*page_state_p;
+		switch (enum_type.InternalType()) {
+		case PhysicalType::UINT8:
+			WriteEnumInternal<uint8_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
+			break;
+		case PhysicalType::UINT16:
+			WriteEnumInternal<uint16_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
+			break;
+		case PhysicalType::UINT32:
+			WriteEnumInternal<uint32_t>(temp_writer, input_column, chunk_start, chunk_end, page_state);
+			break;
+		default:
+			throw InternalException("Unsupported internal enum type");
+		}
+	}
+
+	unique_ptr<ColumnWriterPageState> InitializePageState() override {
+		return make_unique<EnumWriterPageState>(bit_width);
+	}
+
+	void FlushPageState(Serializer &temp_writer, ColumnWriterPageState *state_p) override {
+		auto &page_state = (EnumWriterPageState &)*state_p;
+		if (!page_state.written_value) {
+			// all values are null
+			// just write the bit width
+			temp_writer.Write<uint8_t>(bit_width);
+			return;
+		}
+		page_state.encoder.FinishWrite(temp_writer);
+	}
+
+	duckdb_parquet::format::Encoding::type GetEncoding() override {
+		return Encoding::RLE_DICTIONARY;
+	}
+
+	void FlushDictionary(ColumnWriterState &state, ColumnWriterStatistics *stats_p) override {
+		auto &stats = (StringStatisticsState &)*stats_p;
+		// write the enum values to a dictionary page
+		auto &enum_values = EnumType::GetValuesInsertOrder(enum_type);
+		auto enum_count = EnumType::GetSize(enum_type);
+		auto string_values = FlatVector::GetData<string_t>(enum_values);
+		// first write the contents of the dictionary page to a temporary buffer
+		auto temp_writer = make_unique<BufferedSerializer>();
+		for (idx_t r = 0; r < enum_count; r++) {
+			D_ASSERT(!FlatVector::IsNull(enum_values, r));
+			// update the statistics
+			stats.Update(string_values[r]);
+			// write this string value to the dictionary
+			temp_writer->Write<uint32_t>(string_values[r].GetSize());
+			temp_writer->WriteData((const_data_ptr_t)string_values[r].GetDataUnsafe(), string_values[r].GetSize());
+		}
+		// flush the dictionary page and add it to the to-be-written pages
+		WriteDictionary(state, move(temp_writer), enum_count);
+	}
+
+	idx_t GetRowSize(Vector &vector, idx_t index) override {
+		return (bit_width + 7) / 8;
+	}
+};
+
+//===--------------------------------------------------------------------===//
+// Struct Column Writer
+//===--------------------------------------------------------------------===//
+class StructColumnWriter : public ColumnWriter {
+public:
+	StructColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                   idx_t max_define, vector<unique_ptr<ColumnWriter>> child_writers_p, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
+	      child_writers(move(child_writers_p)) {
+	}
+	~StructColumnWriter() override = default;
+
+	vector<unique_ptr<ColumnWriter>> child_writers;
+
+public:
+	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
+	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
+
+	void BeginWrite(ColumnWriterState &state) override;
+	void Write(ColumnWriterState &state, Vector &vector, idx_t count) override;
+	void FinalizeWrite(ColumnWriterState &state) override;
+};
+
+class StructColumnWriterState : public ColumnWriterState {
+public:
+	StructColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
+	    : row_group(row_group), col_idx(col_idx) {
+	}
+	~StructColumnWriterState() override = default;
+
+	duckdb_parquet::format::RowGroup &row_group;
+	idx_t col_idx;
+	vector<unique_ptr<ColumnWriterState>> child_states;
+};
+
+unique_ptr<ColumnWriterState> StructColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
+	auto result = make_unique<StructColumnWriterState>(row_group, row_group.columns.size());
+
+	result->child_states.reserve(child_writers.size());
+	for (auto &child_writer : child_writers) {
+		result->child_states.push_back(child_writer->InitializeWriteState(row_group));
+	}
+	return move(result);
+}
+
+void StructColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (StructColumnWriterState &)state_p;
+
+	auto &validity = FlatVector::Validity(vector);
+	if (parent) {
+		// propagate empty entries from the parent
+		while (state.is_empty.size() < parent->is_empty.size()) {
+			state.is_empty.push_back(parent->is_empty[state.is_empty.size()]);
+		}
+	}
+	HandleRepeatLevels(state_p, parent, count, max_repeat);
+	HandleDefineLevels(state_p, parent, validity, count, PARQUET_DEFINE_VALID, max_define - 1);
+	auto &child_vectors = StructVector::GetEntries(vector);
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		child_writers[child_idx]->Prepare(*state.child_states[child_idx], &state_p, *child_vectors[child_idx], count);
+	}
+}
+
+void StructColumnWriter::BeginWrite(ColumnWriterState &state_p) {
+	auto &state = (StructColumnWriterState &)state_p;
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		child_writers[child_idx]->BeginWrite(*state.child_states[child_idx]);
+	}
+}
+
+void StructColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
+	auto &state = (StructColumnWriterState &)state_p;
+	auto &child_vectors = StructVector::GetEntries(vector);
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		child_writers[child_idx]->Write(*state.child_states[child_idx], *child_vectors[child_idx], count);
+	}
+}
+
+void StructColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
+	auto &state = (StructColumnWriterState &)state_p;
+	for (idx_t child_idx = 0; child_idx < child_writers.size(); child_idx++) {
+		// we add the null count of the struct to the null count of the children
+		child_writers[child_idx]->null_count += null_count;
+		child_writers[child_idx]->FinalizeWrite(*state.child_states[child_idx]);
+	}
+}
+
+//===--------------------------------------------------------------------===//
+// List Column Writer
+//===--------------------------------------------------------------------===//
+class ListColumnWriter : public ColumnWriter {
+public:
+	ListColumnWriter(ParquetWriter &writer, idx_t schema_idx, vector<string> schema_path_p, idx_t max_repeat,
+	                 idx_t max_define, unique_ptr<ColumnWriter> child_writer_p, bool can_have_nulls)
+	    : ColumnWriter(writer, schema_idx, move(schema_path_p), max_repeat, max_define, can_have_nulls),
+	      child_writer(move(child_writer_p)) {
+	}
+	~ListColumnWriter() override = default;
+
+	unique_ptr<ColumnWriter> child_writer;
+
+public:
+	unique_ptr<ColumnWriterState> InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) override;
+	void Prepare(ColumnWriterState &state, ColumnWriterState *parent, Vector &vector, idx_t count) override;
+
+	void BeginWrite(ColumnWriterState &state) override;
+	void Write(ColumnWriterState &state, Vector &vector, idx_t count) override;
+	void FinalizeWrite(ColumnWriterState &state) override;
+};
+
+class ListColumnWriterState : public ColumnWriterState {
+public:
+	ListColumnWriterState(duckdb_parquet::format::RowGroup &row_group, idx_t col_idx)
+	    : row_group(row_group), col_idx(col_idx) {
+	}
+	~ListColumnWriterState() override = default;
+
+	duckdb_parquet::format::RowGroup &row_group;
+	idx_t col_idx;
+	unique_ptr<ColumnWriterState> child_state;
+	idx_t parent_index = 0;
+};
+
+unique_ptr<ColumnWriterState> ListColumnWriter::InitializeWriteState(duckdb_parquet::format::RowGroup &row_group) {
+	auto result = make_unique<ListColumnWriterState>(row_group, row_group.columns.size());
+	result->child_state = child_writer->InitializeWriteState(row_group);
+	return move(result);
+}
+
+void ListColumnWriter::Prepare(ColumnWriterState &state_p, ColumnWriterState *parent, Vector &vector, idx_t count) {
+	auto &state = (ListColumnWriterState &)state_p;
+
+	auto list_data = FlatVector::GetData<list_entry_t>(vector);
+	auto &validity = FlatVector::Validity(vector);
+
+	// write definition levels and repeats
+	idx_t start = 0;
+	idx_t vcount = parent ? parent->definition_levels.size() - state.parent_index : count;
+	idx_t vector_index = 0;
+	for (idx_t i = start; i < vcount; i++) {
+		idx_t parent_index = state.parent_index + i;
+		if (parent && !parent->is_empty.empty() && parent->is_empty[parent_index]) {
+			state.definition_levels.push_back(parent->definition_levels[parent_index]);
+			state.repetition_levels.push_back(parent->repetition_levels[parent_index]);
+			state.is_empty.push_back(true);
+			continue;
+		}
+		auto first_repeat_level =
+		    parent && !parent->repetition_levels.empty() ? parent->repetition_levels[parent_index] : max_repeat;
+		if (parent && parent->definition_levels[parent_index] != PARQUET_DEFINE_VALID) {
+			state.definition_levels.push_back(parent->definition_levels[parent_index]);
+			state.repetition_levels.push_back(first_repeat_level);
+			state.is_empty.push_back(true);
+		} else if (validity.RowIsValid(vector_index)) {
+			// push the repetition levels
+			if (list_data[vector_index].length == 0) {
+				state.definition_levels.push_back(max_define);
+				state.is_empty.push_back(true);
+			} else {
+				state.definition_levels.push_back(PARQUET_DEFINE_VALID);
+				state.is_empty.push_back(false);
+			}
+			state.repetition_levels.push_back(first_repeat_level);
+			for (idx_t k = 1; k < list_data[vector_index].length; k++) {
+				state.repetition_levels.push_back(max_repeat + 1);
+				state.definition_levels.push_back(PARQUET_DEFINE_VALID);
+				state.is_empty.push_back(false);
+			}
+		} else {
+			if (!can_have_nulls) {
+				throw IOException("Parquet writer: map key column is not allowed to contain NULL values");
+			}
+			state.definition_levels.push_back(max_define - 1);
+			state.repetition_levels.push_back(first_repeat_level);
+			state.is_empty.push_back(true);
+		}
+		vector_index++;
+	}
+	state.parent_index += vcount;
+
+	auto &list_child = ListVector::GetEntry(vector);
+	auto list_count = ListVector::GetListSize(vector);
+	child_writer->Prepare(*state.child_state, &state_p, list_child, list_count);
+}
+
+void ListColumnWriter::BeginWrite(ColumnWriterState &state_p) {
+	auto &state = (ListColumnWriterState &)state_p;
+	child_writer->BeginWrite(*state.child_state);
+}
+
+void ListColumnWriter::Write(ColumnWriterState &state_p, Vector &vector, idx_t count) {
+	auto &state = (ListColumnWriterState &)state_p;
+
+	auto &list_child = ListVector::GetEntry(vector);
+	auto list_count = ListVector::GetListSize(vector);
+	child_writer->Write(*state.child_state, list_child, list_count);
+}
+
+void ListColumnWriter::FinalizeWrite(ColumnWriterState &state_p) {
+	auto &state = (ListColumnWriterState &)state_p;
+	child_writer->FinalizeWrite(*state.child_state);
+}
+
+//===--------------------------------------------------------------------===//
+// Create Column Writer
+//===--------------------------------------------------------------------===//
+unique_ptr<ColumnWriter> ColumnWriter::CreateWriterRecursive(vector<duckdb_parquet::format::SchemaElement> &schemas,
+                                                             ParquetWriter &writer, const LogicalType &type,
+                                                             const string &name, vector<string> schema_path,
+                                                             idx_t max_repeat, idx_t max_define, bool can_have_nulls) {
+	auto null_type = can_have_nulls ? FieldRepetitionType::OPTIONAL : FieldRepetitionType::REQUIRED;
+	if (!can_have_nulls) {
+		max_define--;
+	}
+	idx_t schema_idx = schemas.size();
+	if (type.id() == LogicalTypeId::STRUCT) {
+		auto &child_types = StructType::GetChildTypes(type);
+		// set up the schema element for this struct
+		duckdb_parquet::format::SchemaElement schema_element;
+		schema_element.repetition_type = null_type;
+		schema_element.num_children = child_types.size();
+		schema_element.__isset.num_children = true;
+		schema_element.__isset.type = false;
+		schema_element.__isset.repetition_type = true;
+		schema_element.name = name;
+		schemas.push_back(move(schema_element));
+		schema_path.push_back(name);
+
+		// construct the child types recursively
+		vector<unique_ptr<ColumnWriter>> child_writers;
+		child_writers.reserve(child_types.size());
+		for (auto &child_type : child_types) {
+			child_writers.push_back(CreateWriterRecursive(schemas, writer, child_type.second, child_type.first,
+			                                              schema_path, max_repeat, max_define + 1));
+		}
+		return make_unique<StructColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                       move(child_writers), can_have_nulls);
+	}
+	if (type.id() == LogicalTypeId::LIST) {
+		auto &child_type = ListType::GetChildType(type);
+		// set up the two schema elements for the list
+		// for some reason we only set the converted type in the OPTIONAL element
+		// first an OPTIONAL element
+		duckdb_parquet::format::SchemaElement optional_element;
+		optional_element.repetition_type = null_type;
+		optional_element.num_children = 1;
+		optional_element.converted_type = ConvertedType::LIST;
+		optional_element.__isset.num_children = true;
+		optional_element.__isset.type = false;
+		optional_element.__isset.repetition_type = true;
+		optional_element.__isset.converted_type = true;
+		optional_element.name = name;
+		schemas.push_back(move(optional_element));
+		schema_path.push_back(name);
+
+		// then a REPEATED element
+		duckdb_parquet::format::SchemaElement repeated_element;
+		repeated_element.repetition_type = FieldRepetitionType::REPEATED;
+		repeated_element.num_children = 1;
+		repeated_element.__isset.num_children = true;
+		repeated_element.__isset.type = false;
+		repeated_element.__isset.repetition_type = true;
+		repeated_element.name = "list";
+		schemas.push_back(move(repeated_element));
+		schema_path.emplace_back("list");
+
+		auto child_writer =
+		    CreateWriterRecursive(schemas, writer, child_type, "element", schema_path, max_repeat + 1, max_define + 2);
+		return make_unique<ListColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                     move(child_writer), can_have_nulls);
+	}
+	if (type.id() == LogicalTypeId::MAP) {
+		// map type
+		// maps are stored as follows:
+		// <map-repetition> group <name> (MAP) {
+		// 	repeated group key_value {
+		// 		required <key-type> key;
+		// 		<value-repetition> <value-type> value;
+		// 	}
+		// }
+		// top map element
+		duckdb_parquet::format::SchemaElement top_element;
+		top_element.repetition_type = null_type;
+		top_element.num_children = 1;
+		top_element.converted_type = ConvertedType::MAP;
+		top_element.__isset.repetition_type = true;
+		top_element.__isset.num_children = true;
+		top_element.__isset.converted_type = true;
+		top_element.__isset.type = false;
+		top_element.name = name;
+		schemas.push_back(move(top_element));
+		schema_path.push_back(name);
+
+		// key_value element
+		duckdb_parquet::format::SchemaElement kv_element;
+		kv_element.repetition_type = FieldRepetitionType::REPEATED;
+		kv_element.num_children = 2;
+		kv_element.__isset.repetition_type = true;
+		kv_element.__isset.num_children = true;
+		kv_element.__isset.type = false;
+		kv_element.name = "key_value";
+		schemas.push_back(move(kv_element));
+		schema_path.emplace_back("key_value");
+
+		// construct the child types recursively
+		vector<LogicalType> kv_types {MapType::KeyType(type), MapType::ValueType(type)};
+		vector<string> kv_names {"key", "value"};
+		vector<unique_ptr<ColumnWriter>> child_writers;
+		child_writers.reserve(2);
+		for (idx_t i = 0; i < 2; i++) {
+			// key needs to be marked as REQUIRED
+			bool is_key = i == 0;
+			auto child_writer = CreateWriterRecursive(schemas, writer, kv_types[i], kv_names[i], schema_path,
+			                                          max_repeat + 1, max_define + 2, !is_key);
+			auto list_writer = make_unique<ListColumnWriter>(writer, schema_idx, schema_path, max_repeat, max_define,
+			                                                 move(child_writer), can_have_nulls);
+			child_writers.push_back(move(list_writer));
+		}
+		return make_unique<StructColumnWriter>(writer, schema_idx, schema_path, max_repeat, max_define,
+		                                       move(child_writers), can_have_nulls);
+	}
+	duckdb_parquet::format::SchemaElement schema_element;
+	schema_element.type = ParquetWriter::DuckDBTypeToParquetType(type);
+	schema_element.repetition_type = null_type;
+	schema_element.num_children = 0;
+	schema_element.__isset.num_children = true;
+	schema_element.__isset.type = true;
+	schema_element.__isset.repetition_type = true;
+	schema_element.name = name;
+	ParquetWriter::SetSchemaProperties(type, schema_element);
+	schemas.push_back(move(schema_element));
+	schema_path.push_back(name);
+
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return make_unique<BooleanColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                        can_have_nulls);
+	case LogicalTypeId::TINYINT:
+		return make_unique<StandardColumnWriter<int8_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                          max_define, can_have_nulls);
+	case LogicalTypeId::SMALLINT:
+		return make_unique<StandardColumnWriter<int16_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                           max_define, can_have_nulls);
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::DATE:
+		return make_unique<StandardColumnWriter<int32_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                           max_define, can_have_nulls);
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_MS:
+		return make_unique<StandardColumnWriter<int64_t, int64_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                           max_define, can_have_nulls);
+	case LogicalTypeId::HUGEINT:
+		return make_unique<StandardColumnWriter<hugeint_t, double, ParquetHugeintOperator>>(
+		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
+	case LogicalTypeId::TIMESTAMP_NS:
+		return make_unique<StandardColumnWriter<int64_t, int64_t, ParquetTimestampNSOperator>>(
+		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return make_unique<StandardColumnWriter<int64_t, int64_t, ParquetTimestampSOperator>>(
+		    writer, schema_idx, move(schema_path), max_repeat, max_define, can_have_nulls);
+	case LogicalTypeId::UTINYINT:
+		return make_unique<StandardColumnWriter<uint8_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                           max_define, can_have_nulls);
+	case LogicalTypeId::USMALLINT:
+		return make_unique<StandardColumnWriter<uint16_t, int32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                            max_define, can_have_nulls);
+	case LogicalTypeId::UINTEGER:
+		return make_unique<StandardColumnWriter<uint32_t, uint32_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                             max_define, can_have_nulls);
+	case LogicalTypeId::UBIGINT:
+		return make_unique<StandardColumnWriter<uint64_t, uint64_t>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                             max_define, can_have_nulls);
+	case LogicalTypeId::FLOAT:
+		return make_unique<StandardColumnWriter<float, float>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                       max_define, can_have_nulls);
+	case LogicalTypeId::DOUBLE:
+		return make_unique<StandardColumnWriter<double, double>>(writer, schema_idx, move(schema_path), max_repeat,
+		                                                         max_define, can_have_nulls);
+	case LogicalTypeId::DECIMAL:
+		switch (type.InternalType()) {
+		case PhysicalType::INT16:
+			return make_unique<StandardColumnWriter<int16_t, int32_t>>(writer, schema_idx, move(schema_path),
+			                                                           max_repeat, max_define, can_have_nulls);
+		case PhysicalType::INT32:
+			return make_unique<StandardColumnWriter<int32_t, int32_t>>(writer, schema_idx, move(schema_path),
+			                                                           max_repeat, max_define, can_have_nulls);
+		case PhysicalType::INT64:
+			return make_unique<StandardColumnWriter<int64_t, int64_t>>(writer, schema_idx, move(schema_path),
+			                                                           max_repeat, max_define, can_have_nulls);
+		default:
+			return make_unique<FixedDecimalColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+			                                             can_have_nulls);
+		}
+	case LogicalTypeId::BLOB:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		return make_unique<StringColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                       can_have_nulls);
+	case LogicalTypeId::UUID:
+		return make_unique<UUIDColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                     can_have_nulls);
+	case LogicalTypeId::INTERVAL:
+		return make_unique<IntervalColumnWriter>(writer, schema_idx, move(schema_path), max_repeat, max_define,
+		                                         can_have_nulls);
+	case LogicalTypeId::ENUM:
+		return make_unique<EnumColumnWriter>(writer, type, schema_idx, move(schema_path), max_repeat, max_define,
+		                                     can_have_nulls);
+	default:
+		throw InternalException("Unsupported type \"%s\" in Parquet writer", type.ToString());
+	}
+}
+
+} // namespace duckdb
+#define DUCKDB_EXTENSION_MAIN
+
+#include <string>
+#include <vector>
+#include <fstream>
+#include <iostream>
+
+
+
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// parquet_metadata.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+
+
+namespace duckdb {
+
+class ParquetMetaDataFunction : public TableFunction {
+public:
+	ParquetMetaDataFunction();
+};
+
+class ParquetSchemaFunction : public TableFunction {
+public:
+	ParquetSchemaFunction();
+};
+
+} // namespace duckdb
+
+//===----------------------------------------------------------------------===//
+//                         DuckDB
+//
+// zstd_file_system.hpp
+//
+//
+//===----------------------------------------------------------------------===//
+
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/compressed_file_system.hpp"
+#endif
+
+namespace duckdb {
+
+class ZStdFileSystem : public CompressedFileSystem {
+public:
+	unique_ptr<FileHandle> OpenCompressedFile(unique_ptr<FileHandle> handle, bool write) override;
+
+	std::string GetName() const override {
+		return "ZStdFileSystem";
+	}
+
+	unique_ptr<StreamWrapper> CreateStream() override;
+	idx_t InBufferSize() override;
+	idx_t OutBufferSize() override;
+};
+
+} // namespace duckdb
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/types/chunk_collection.hpp"
+#include "duckdb/function/copy_function.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+
+#include "duckdb/common/enums/file_compression_type.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
+
+#include "duckdb/storage/statistics/base_statistics.hpp"
+
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#endif
+
+namespace duckdb {
+
+struct ParquetReadBindData : public TableFunctionData {
+	shared_ptr<ParquetReader> initial_reader;
+	vector<string> files;
+	vector<column_t> column_ids;
+	atomic<idx_t> chunk_count;
+	atomic<idx_t> cur_file;
+	vector<string> names;
+	vector<LogicalType> types;
+};
+
+struct ParquetReadLocalState : public LocalTableFunctionState {
+	shared_ptr<ParquetReader> reader;
+	ParquetReaderScanState scan_state;
+	bool is_parallel;
+	idx_t batch_index;
+	idx_t file_index;
+	vector<column_t> column_ids;
+	TableFilterSet *table_filters;
+};
+
+struct ParquetReadGlobalState : public GlobalTableFunctionState {
+	mutex lock;
+	shared_ptr<ParquetReader> current_reader;
+	idx_t batch_index;
+	idx_t file_index;
+	idx_t row_group_index;
+	idx_t max_threads;
+
+	idx_t MaxThreads() const override {
+		return max_threads;
+	}
+};
+
+class ParquetScanFunction {
+public:
+	static TableFunctionSet GetFunctionSet() {
+		TableFunctionSet set("parquet_scan");
+		TableFunction table_function({LogicalType::VARCHAR}, ParquetScanImplementation, ParquetScanBind,
+		                             ParquetScanInitGlobal, ParquetScanInitLocal);
+		table_function.statistics = ParquetScanStats;
+		table_function.cardinality = ParquetCardinality;
+		table_function.table_scan_progress = ParquetProgress;
+		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
+		table_function.get_batch_index = ParquetScanGetBatchIndex;
+		table_function.projection_pushdown = true;
+		table_function.filter_pushdown = true;
+		set.AddFunction(table_function);
+		table_function.arguments = {LogicalType::LIST(LogicalType::VARCHAR)};
+		table_function.bind = ParquetScanBindList;
+		table_function.named_parameters["binary_as_string"] = LogicalType::BOOLEAN;
+		set.AddFunction(table_function);
+		return set;
+	}
+
+	static unique_ptr<FunctionData> ParquetReadBind(ClientContext &context, CopyInfo &info,
+	                                                vector<string> &expected_names,
+	                                                vector<LogicalType> &expected_types) {
+		D_ASSERT(expected_names.size() == expected_types.size());
+		for (auto &option : info.options) {
+			auto loption = StringUtil::Lower(option.first);
+			if (loption == "compression" || loption == "codec") {
+				// CODEC option has no effect on parquet read: we determine codec from the file
+				continue;
+			} else {
+				throw NotImplementedException("Unsupported option for COPY FROM parquet: %s", option.first);
+			}
+		}
+		auto result = make_unique<ParquetReadBindData>();
+
+		FileSystem &fs = FileSystem::GetFileSystem(context);
+		result->files = fs.Glob(info.file_path, context);
+		if (result->files.empty()) {
+			throw IOException("No files found that match the pattern \"%s\"", info.file_path);
+		}
+		ParquetOptions parquet_options(context);
+		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], expected_types, parquet_options);
+		result->names = result->initial_reader->names;
+		result->types = result->initial_reader->return_types;
+		return move(result);
+	}
+
+	static unique_ptr<BaseStatistics> ParquetScanStats(ClientContext &context, const FunctionData *bind_data_p,
+	                                                   column_t column_index) {
+		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
+
+		if (column_index == COLUMN_IDENTIFIER_ROW_ID) {
+			return nullptr;
+		}
+
+		// we do not want to parse the Parquet metadata for the sole purpose of getting column statistics
+
+		// We already parsed the metadata for the first file in a glob because we need some type info.
+		auto overall_stats = ParquetReader::ReadStatistics(
+		    *bind_data.initial_reader, bind_data.initial_reader->return_types[column_index], column_index,
+		    bind_data.initial_reader->metadata->metadata.get());
+
+		if (!overall_stats) {
+			return nullptr;
+		}
+
+		// if there is only one file in the glob (quite common case), we are done
+		auto &config = DBConfig::GetConfig(context);
+		if (bind_data.files.size() < 2) {
+			return overall_stats;
+		} else if (config.object_cache_enable) {
+			auto &cache = ObjectCache::GetObjectCache(context);
+			// for more than one file, we could be lucky and metadata for *every* file is in the object cache (if
+			// enabled at all)
+			FileSystem &fs = FileSystem::GetFileSystem(context);
+			for (idx_t file_idx = 1; file_idx < bind_data.files.size(); file_idx++) {
+				auto &file_name = bind_data.files[file_idx];
+				auto metadata = cache.Get<ParquetFileMetadataCache>(file_name);
+				if (!metadata) {
+					// missing metadata entry in cache, no usable stats
+					return nullptr;
+				}
+				auto handle = fs.OpenFile(file_name, FileFlags::FILE_FLAGS_READ, FileSystem::DEFAULT_LOCK,
+				                          FileSystem::DEFAULT_COMPRESSION, FileSystem::GetFileOpener(context));
+				// we need to check if the metadata cache entries are current
+				if (fs.GetLastModifiedTime(*handle) >= metadata->read_time) {
+					// missing or invalid metadata entry in cache, no usable stats overall
+					return nullptr;
+				}
+				// get and merge stats for file
+				auto file_stats = ParquetReader::ReadStatistics(*bind_data.initial_reader,
+				                                                bind_data.initial_reader->return_types[column_index],
+				                                                column_index, metadata->metadata.get());
+				if (!file_stats) {
+					return nullptr;
+				}
+				overall_stats->Merge(*file_stats);
+			}
+			// success!
+			return overall_stats;
+		}
+		// we have more than one file and no object cache so no statistics overall
+		return nullptr;
+	}
+
+	static unique_ptr<FunctionData> ParquetScanBindInternal(ClientContext &context, vector<string> files,
+	                                                        vector<LogicalType> &return_types, vector<string> &names,
+	                                                        ParquetOptions parquet_options) {
+		auto result = make_unique<ParquetReadBindData>();
+		result->files = move(files);
+
+		result->initial_reader = make_shared<ParquetReader>(context, result->files[0], parquet_options);
+		return_types = result->types = result->initial_reader->return_types;
+		names = result->names = result->initial_reader->names;
+		return move(result);
+	}
+
+	static vector<string> ParquetGlob(FileSystem &fs, const string &glob, ClientContext &context) {
+		auto files = fs.Glob(glob, FileSystem::GetFileOpener(context));
+		if (files.empty()) {
+			throw IOException("No files found that match the pattern \"%s\"", glob);
+		}
+		return files;
+	}
+
+	static unique_ptr<FunctionData> ParquetScanBind(ClientContext &context, TableFunctionBindInput &input,
+	                                                vector<LogicalType> &return_types, vector<string> &names) {
+		auto &config = DBConfig::GetConfig(context);
+		if (!config.enable_external_access) {
+			throw PermissionException("Scanning Parquet files is disabled through configuration");
+		}
+		auto file_name = input.inputs[0].GetValue<string>();
+		ParquetOptions parquet_options(context);
+		for (auto &kv : input.named_parameters) {
+			if (kv.first == "binary_as_string") {
+				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
+			}
+		}
+		FileSystem &fs = FileSystem::GetFileSystem(context);
+		auto files = ParquetGlob(fs, file_name, context);
+		return ParquetScanBindInternal(context, move(files), return_types, names, parquet_options);
+	}
+
+	static unique_ptr<FunctionData> ParquetScanBindList(ClientContext &context, TableFunctionBindInput &input,
+	                                                    vector<LogicalType> &return_types, vector<string> &names) {
+		auto &config = DBConfig::GetConfig(context);
+		if (!config.enable_external_access) {
+			throw PermissionException("Scanning Parquet files is disabled through configuration");
+		}
+		FileSystem &fs = FileSystem::GetFileSystem(context);
+		vector<string> files;
+		for (auto &val : ListValue::GetChildren(input.inputs[0])) {
+			auto glob_files = ParquetGlob(fs, val.ToString(), context);
+			files.insert(files.end(), glob_files.begin(), glob_files.end());
+		}
+		if (files.empty()) {
+			throw IOException("Parquet reader needs at least one file to read");
+		}
+		ParquetOptions parquet_options(context);
+		for (auto &kv : input.named_parameters) {
+			if (kv.first == "binary_as_string") {
+				parquet_options.binary_as_string = BooleanValue::Get(kv.second);
+			}
+		}
+		return ParquetScanBindInternal(context, move(files), return_types, names, parquet_options);
+	}
+
+	static double ParquetProgress(ClientContext &context, const FunctionData *bind_data_p,
+	                              const GlobalTableFunctionState *global_state) {
+		auto &bind_data = (ParquetReadBindData &)*bind_data_p;
+		if (bind_data.initial_reader->NumRows() == 0) {
+			return (100.0 * (bind_data.cur_file + 1)) / bind_data.files.size();
+		}
+		auto percentage = (bind_data.chunk_count * STANDARD_VECTOR_SIZE * 100.0 / bind_data.initial_reader->NumRows()) /
+		                  bind_data.files.size();
+		percentage += 100.0 * bind_data.cur_file / bind_data.files.size();
+		return percentage;
+	}
+
+	static unique_ptr<LocalTableFunctionState>
+	ParquetScanInitLocal(ExecutionContext &context, TableFunctionInitInput &input, GlobalTableFunctionState *gstate_p) {
+		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
+		auto &gstate = (ParquetReadGlobalState &)*gstate_p;
+
+		auto result = make_unique<ParquetReadLocalState>();
+		result->column_ids = input.column_ids;
+		result->is_parallel = true;
+		result->batch_index = 0;
+		result->table_filters = input.filters;
+		if (!ParquetParallelStateNext(context.client, bind_data, *result, gstate)) {
+			return nullptr;
+		}
+		return move(result);
+	}
+
+	static unique_ptr<GlobalTableFunctionState> ParquetScanInitGlobal(ClientContext &context,
+	                                                                  TableFunctionInitInput &input) {
+		auto &bind_data = (ParquetReadBindData &)*input.bind_data;
+		auto result = make_unique<ParquetReadGlobalState>();
+		result->current_reader = bind_data.initial_reader;
+		result->row_group_index = 0;
+		result->file_index = 0;
+		result->batch_index = 0;
+		result->max_threads = ParquetScanMaxThreads(context, input.bind_data);
+		return move(result);
+	}
+
+	static idx_t ParquetScanGetBatchIndex(ClientContext &context, const FunctionData *bind_data_p,
+	                                      LocalTableFunctionState *local_state,
+	                                      GlobalTableFunctionState *global_state) {
+		auto &data = (ParquetReadLocalState &)*local_state;
+		return data.batch_index;
+	}
+
+	static void ParquetScanImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+		if (!data_p.local_state) {
+			return;
+		}
+		auto &data = (ParquetReadLocalState &)*data_p.local_state;
+		auto &gstate = (ParquetReadGlobalState &)*data_p.global_state;
+		auto &bind_data = (ParquetReadBindData &)*data_p.bind_data;
+
+		do {
+			data.reader->Scan(data.scan_state, output);
+			bind_data.chunk_count++;
+			if (output.size() > 0) {
+				return;
+			}
+			if (!ParquetParallelStateNext(context, bind_data, data, gstate)) {
+				return;
+			}
+		} while (true);
+	}
+
+	static unique_ptr<NodeStatistics> ParquetCardinality(ClientContext &context, const FunctionData *bind_data) {
+		auto &data = (ParquetReadBindData &)*bind_data;
+		return make_unique<NodeStatistics>(data.initial_reader->NumRows() * data.files.size());
+	}
+
+	static idx_t ParquetScanMaxThreads(ClientContext &context, const FunctionData *bind_data) {
+		auto &data = (ParquetReadBindData &)*bind_data;
+		return data.initial_reader->NumRowGroups() * data.files.size();
+	}
+
+	static bool ParquetParallelStateNext(ClientContext &context, const ParquetReadBindData &bind_data,
+	                                     ParquetReadLocalState &scan_data, ParquetReadGlobalState &parallel_state) {
+
+		lock_guard<mutex> parallel_lock(parallel_state.lock);
+		if (parallel_state.row_group_index < parallel_state.current_reader->NumRowGroups()) {
+			// groups remain in the current parquet file: read the next group
+			scan_data.reader = parallel_state.current_reader;
+			vector<idx_t> group_indexes {parallel_state.row_group_index};
+			scan_data.reader->InitializeScan(scan_data.scan_state, scan_data.column_ids, group_indexes,
+			                                 scan_data.table_filters);
+			scan_data.batch_index = parallel_state.batch_index++;
+			scan_data.file_index = parallel_state.file_index;
+			parallel_state.row_group_index++;
+			return true;
+		} else {
+			// no groups remain in the current parquet file: check if there are more files to read
+			while (parallel_state.file_index + 1 < bind_data.files.size()) {
+				// read the next file
+				string file = bind_data.files[++parallel_state.file_index];
+				parallel_state.current_reader =
+				    make_shared<ParquetReader>(context, file, bind_data.names, bind_data.types, scan_data.column_ids,
+				                               parallel_state.current_reader->parquet_options, bind_data.files[0]);
+				if (parallel_state.current_reader->NumRowGroups() == 0) {
+					// empty parquet file, move to next file
+					continue;
+				}
+				// set up the scan state to read the first group
+				scan_data.reader = parallel_state.current_reader;
+				vector<idx_t> group_indexes {0};
+				scan_data.reader->InitializeScan(scan_data.scan_state, scan_data.column_ids, group_indexes,
+				                                 scan_data.table_filters);
+				scan_data.batch_index = parallel_state.batch_index++;
+				scan_data.file_index = parallel_state.file_index;
+				parallel_state.row_group_index = 1;
+				return true;
+			}
+		}
+		return false;
+	}
+};
+
+struct ParquetWriteBindData : public TableFunctionData {
+	vector<LogicalType> sql_types;
+	string file_name;
+	vector<string> column_names;
+	duckdb_parquet::format::CompressionCodec::type codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
+	idx_t row_group_size = 100000;
+};
+
+struct ParquetWriteGlobalState : public GlobalFunctionData {
+	unique_ptr<ParquetWriter> writer;
+};
+
+struct ParquetWriteLocalState : public LocalFunctionData {
+	explicit ParquetWriteLocalState(Allocator &allocator) {
+		buffer = make_unique<ChunkCollection>(allocator);
+	}
+
+	unique_ptr<ChunkCollection> buffer;
+};
+
+unique_ptr<FunctionData> ParquetWriteBind(ClientContext &context, CopyInfo &info, vector<string> &names,
+                                          vector<LogicalType> &sql_types) {
+	auto bind_data = make_unique<ParquetWriteBindData>();
+	for (auto &option : info.options) {
+		auto loption = StringUtil::Lower(option.first);
+		if (loption == "row_group_size" || loption == "chunk_size") {
+			bind_data->row_group_size = option.second[0].GetValue<uint64_t>();
+		} else if (loption == "compression" || loption == "codec") {
+			if (!option.second.empty()) {
+				auto roption = StringUtil::Lower(option.second[0].ToString());
+				if (roption == "uncompressed") {
+					bind_data->codec = duckdb_parquet::format::CompressionCodec::UNCOMPRESSED;
+					continue;
+				} else if (roption == "snappy") {
+					bind_data->codec = duckdb_parquet::format::CompressionCodec::SNAPPY;
+					continue;
+				} else if (roption == "gzip") {
+					bind_data->codec = duckdb_parquet::format::CompressionCodec::GZIP;
+					continue;
+				} else if (roption == "zstd") {
+					bind_data->codec = duckdb_parquet::format::CompressionCodec::ZSTD;
+					continue;
+				}
+			}
+			throw ParserException("Expected %s argument to be either [uncompressed, snappy, gzip or zstd]", loption);
+		} else {
+			throw NotImplementedException("Unrecognized option for PARQUET: %s", option.first.c_str());
+		}
+	}
+	bind_data->sql_types = sql_types;
+	bind_data->column_names = names;
+	bind_data->file_name = info.file_path;
+	return move(bind_data);
+}
+
+unique_ptr<GlobalFunctionData> ParquetWriteInitializeGlobal(ClientContext &context, FunctionData &bind_data,
+                                                            const string &file_path) {
+	auto global_state = make_unique<ParquetWriteGlobalState>();
+	auto &parquet_bind = (ParquetWriteBindData &)bind_data;
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	global_state->writer =
+	    make_unique<ParquetWriter>(fs, file_path, FileSystem::GetFileOpener(context), parquet_bind.sql_types,
+	                               parquet_bind.column_names, parquet_bind.codec);
+	return move(global_state);
+}
+
+void ParquetWriteSink(ExecutionContext &context, FunctionData &bind_data_p, GlobalFunctionData &gstate,
+                      LocalFunctionData &lstate, DataChunk &input) {
+	auto &bind_data = (ParquetWriteBindData &)bind_data_p;
+	auto &global_state = (ParquetWriteGlobalState &)gstate;
+	auto &local_state = (ParquetWriteLocalState &)lstate;
+
+	// append data to the local (buffered) chunk collection
+	local_state.buffer->Append(input);
+	if (local_state.buffer->Count() > bind_data.row_group_size) {
+		// if the chunk collection exceeds a certain size we flush it to the parquet file
+		global_state.writer->Flush(*local_state.buffer);
+		// and reset the buffer
+		local_state.buffer = make_unique<ChunkCollection>(Allocator::Get(context.client));
+	}
+}
+
+void ParquetWriteCombine(ExecutionContext &context, FunctionData &bind_data, GlobalFunctionData &gstate,
+                         LocalFunctionData &lstate) {
+	auto &global_state = (ParquetWriteGlobalState &)gstate;
+	auto &local_state = (ParquetWriteLocalState &)lstate;
+	// flush any data left in the local state to the file
+	global_state.writer->Flush(*local_state.buffer);
+}
+
+void ParquetWriteFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate) {
+	auto &global_state = (ParquetWriteGlobalState &)gstate;
+	// finalize: write any additional metadata to the file here
+	global_state.writer->Finalize();
+}
+
+unique_ptr<LocalFunctionData> ParquetWriteInitializeLocal(ExecutionContext &context, FunctionData &bind_data) {
+	return make_unique<ParquetWriteLocalState>(Allocator::Get(context.client));
+}
+
+unique_ptr<TableFunctionRef> ParquetScanReplacement(ClientContext &context, const string &table_name,
+                                                    ReplacementScanData *data) {
+	if (!StringUtil::EndsWith(StringUtil::Lower(table_name), ".parquet")) {
+		return nullptr;
+	}
+	auto table_function = make_unique<TableFunctionRef>();
+	vector<unique_ptr<ParsedExpression>> children;
+	children.push_back(make_unique<ConstantExpression>(Value(table_name)));
+	table_function->function = make_unique<FunctionExpression>("parquet_scan", move(children));
+	return table_function;
+}
+
+void ParquetExtension::Load(DuckDB &db) {
+	auto &fs = db.GetFileSystem();
+	fs.RegisterSubSystem(FileCompressionType::ZSTD, make_unique<ZStdFileSystem>());
+
+	auto scan_fun = ParquetScanFunction::GetFunctionSet();
+	CreateTableFunctionInfo cinfo(scan_fun);
+	cinfo.name = "read_parquet";
+	CreateTableFunctionInfo pq_scan = cinfo;
+	pq_scan.name = "parquet_scan";
+
+	ParquetMetaDataFunction meta_fun;
+	CreateTableFunctionInfo meta_cinfo(meta_fun);
+
+	ParquetSchemaFunction schema_fun;
+	CreateTableFunctionInfo schema_cinfo(schema_fun);
+
+	CopyFunction function("parquet");
+	function.copy_to_bind = ParquetWriteBind;
+	function.copy_to_initialize_global = ParquetWriteInitializeGlobal;
+	function.copy_to_initialize_local = ParquetWriteInitializeLocal;
+	function.copy_to_sink = ParquetWriteSink;
+	function.copy_to_combine = ParquetWriteCombine;
+	function.copy_to_finalize = ParquetWriteFinalize;
+	function.copy_from_bind = ParquetScanFunction::ParquetReadBind;
+	function.copy_from_function = scan_fun.functions[0];
+
+	function.extension = "parquet";
+	CreateCopyFunctionInfo info(function);
+
+	Connection con(db);
+	con.BeginTransaction();
+	auto &context = *con.context;
+	auto &catalog = Catalog::GetCatalog(context);
+	catalog.CreateCopyFunction(context, &info);
+	catalog.CreateTableFunction(context, &cinfo);
+	catalog.CreateTableFunction(context, &pq_scan);
+	catalog.CreateTableFunction(context, &meta_cinfo);
+	catalog.CreateTableFunction(context, &schema_cinfo);
+	con.Commit();
+
+	auto &config = DBConfig::GetConfig(*db.instance);
+	config.replacement_scans.emplace_back(ParquetScanReplacement);
+	config.AddExtensionOption("binary_as_string", "In Parquet files, interpret binary data as a string.",
+	                          LogicalType::BOOLEAN);
+}
+
+std::string ParquetExtension::Name() {
+	return "parquet";
+}
+
+} // namespace duckdb
+
+#ifndef DUCKDB_EXTENSION_MAIN
+#error DUCKDB_EXTENSION_MAIN not defined
+#endif
+
+
+
+#include <sstream>
+
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/types/blob.hpp"
+#include "duckdb/main/config.hpp"
+#endif
+
+namespace duckdb {
+
+struct ParquetMetaDataBindData : public TableFunctionData {
+	vector<LogicalType> return_types;
+	vector<string> files;
+
+public:
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = (const ParquetMetaDataBindData &)other_p;
+		return other.return_types == return_types && files == other.files;
+	}
+};
+
+struct ParquetMetaDataOperatorData : public GlobalTableFunctionState {
+	explicit ParquetMetaDataOperatorData(Allocator &allocator) : collection(allocator) {
+	}
+
+	idx_t file_index;
+	ChunkCollection collection;
+
+	static void BindMetaData(vector<LogicalType> &return_types, vector<string> &names);
+	static void BindSchema(vector<LogicalType> &return_types, vector<string> &names);
+
+	void LoadFileMetaData(ClientContext &context, const vector<LogicalType> &return_types, const string &file_path);
+	void LoadSchemaData(ClientContext &context, const vector<LogicalType> &return_types, const string &file_path);
+};
+
+template <class T>
+string ConvertParquetElementToString(T &&entry) {
+	std::stringstream ss;
+	ss << entry;
+	return ss.str();
+}
+
+template <class T>
+string PrintParquetElementToString(T &&entry) {
+	std::stringstream ss;
+	entry.printTo(ss);
+	return ss.str();
+}
+
+void ParquetMetaDataOperatorData::BindMetaData(vector<LogicalType> &return_types, vector<string> &names) {
+	names.emplace_back("file_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("row_group_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("row_group_num_rows");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("row_group_num_columns");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("row_group_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("column_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("file_offset");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("num_values");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("path_in_schema");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("stats_min");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("stats_max");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("stats_null_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("stats_distinct_count");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("stats_min_value");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("stats_max_value");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("compression");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("encodings");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("index_page_offset");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("dictionary_page_offset");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("data_page_offset");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("total_compressed_size");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("total_uncompressed_size");
+	return_types.emplace_back(LogicalType::BIGINT);
+}
+
+Value ConvertParquetStats(const LogicalType &type, const duckdb_parquet::format::SchemaElement &schema_ele,
+                          bool stats_is_set, const std::string &stats) {
+	if (!stats_is_set) {
+		return Value(LogicalType::VARCHAR);
+	}
+	return ParquetStatisticsUtils::ConvertValue(type, schema_ele, stats).CastAs(LogicalType::VARCHAR);
+}
+
+void ParquetMetaDataOperatorData::LoadFileMetaData(ClientContext &context, const vector<LogicalType> &return_types,
+                                                   const string &file_path) {
+	collection.Reset();
+	ParquetOptions parquet_options(context);
+	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
+	idx_t count = 0;
+	DataChunk current_chunk;
+	current_chunk.Initialize(context, return_types);
+	auto meta_data = reader->GetFileMetadata();
+	vector<LogicalType> column_types;
+	vector<idx_t> schema_indexes;
+	for (idx_t schema_idx = 0; schema_idx < meta_data->schema.size(); schema_idx++) {
+		auto &schema_element = meta_data->schema[schema_idx];
+		if (schema_element.num_children > 0) {
+			continue;
+		}
+		column_types.push_back(ParquetReader::DeriveLogicalType(schema_element, false));
+		schema_indexes.push_back(schema_idx);
+	}
+
+	for (idx_t row_group_idx = 0; row_group_idx < meta_data->row_groups.size(); row_group_idx++) {
+		auto &row_group = meta_data->row_groups[row_group_idx];
+
+		if (row_group.columns.size() > column_types.size()) {
+			throw InternalException("Too many column in row group: corrupt file?");
+		}
+		for (idx_t col_idx = 0; col_idx < row_group.columns.size(); col_idx++) {
+			auto &column = row_group.columns[col_idx];
+			auto &col_meta = column.meta_data;
+			auto &stats = col_meta.statistics;
+			auto &schema_element = meta_data->schema[schema_indexes[col_idx]];
+			auto &column_type = column_types[col_idx];
+
+			// file_name, LogicalType::VARCHAR
+			current_chunk.SetValue(0, count, file_path);
+
+			// row_group_id, LogicalType::BIGINT
+			current_chunk.SetValue(1, count, Value::BIGINT(row_group_idx));
+
+			// row_group_num_rows, LogicalType::BIGINT
+			current_chunk.SetValue(2, count, Value::BIGINT(row_group.num_rows));
+
+			// row_group_num_columns, LogicalType::BIGINT
+			current_chunk.SetValue(3, count, Value::BIGINT(row_group.columns.size()));
+
+			// row_group_bytes, LogicalType::BIGINT
+			current_chunk.SetValue(4, count, Value::BIGINT(row_group.total_byte_size));
+
+			// column_id, LogicalType::BIGINT
+			current_chunk.SetValue(5, count, Value::BIGINT(col_idx));
+
+			// file_offset, LogicalType::BIGINT
+			current_chunk.SetValue(6, count, Value::BIGINT(column.file_offset));
+
+			// num_values, LogicalType::BIGINT
+			current_chunk.SetValue(7, count, Value::BIGINT(col_meta.num_values));
+
+			// path_in_schema, LogicalType::VARCHAR
+			current_chunk.SetValue(8, count, StringUtil::Join(col_meta.path_in_schema, ", "));
+
+			// type, LogicalType::VARCHAR
+			current_chunk.SetValue(9, count, ConvertParquetElementToString(col_meta.type));
+
+			// stats_min, LogicalType::VARCHAR
+			current_chunk.SetValue(10, count,
+			                       ConvertParquetStats(column_type, schema_element, stats.__isset.min, stats.min));
+
+			// stats_max, LogicalType::VARCHAR
+			current_chunk.SetValue(11, count,
+			                       ConvertParquetStats(column_type, schema_element, stats.__isset.max, stats.max));
+
+			// stats_null_count, LogicalType::BIGINT
+			current_chunk.SetValue(
+			    12, count, stats.__isset.null_count ? Value::BIGINT(stats.null_count) : Value(LogicalType::BIGINT));
+
+			// stats_distinct_count, LogicalType::BIGINT
+			current_chunk.SetValue(13, count,
+			                       stats.__isset.distinct_count ? Value::BIGINT(stats.distinct_count)
+			                                                    : Value(LogicalType::BIGINT));
+
+			// stats_min_value, LogicalType::VARCHAR
+			current_chunk.SetValue(
+			    14, count, ConvertParquetStats(column_type, schema_element, stats.__isset.min_value, stats.min_value));
+
+			// stats_max_value, LogicalType::VARCHAR
+			current_chunk.SetValue(
+			    15, count, ConvertParquetStats(column_type, schema_element, stats.__isset.max_value, stats.max_value));
+
+			// compression, LogicalType::VARCHAR
+			current_chunk.SetValue(16, count, ConvertParquetElementToString(col_meta.codec));
+
+			// encodings, LogicalType::VARCHAR
+			vector<string> encoding_string;
+			for (auto &encoding : col_meta.encodings) {
+				encoding_string.push_back(ConvertParquetElementToString(encoding));
+			}
+			current_chunk.SetValue(17, count, Value(StringUtil::Join(encoding_string, ", ")));
+
+			// index_page_offset, LogicalType::BIGINT
+			current_chunk.SetValue(18, count, Value::BIGINT(col_meta.index_page_offset));
+
+			// dictionary_page_offset, LogicalType::BIGINT
+			current_chunk.SetValue(19, count, Value::BIGINT(col_meta.dictionary_page_offset));
+
+			// data_page_offset, LogicalType::BIGINT
+			current_chunk.SetValue(20, count, Value::BIGINT(col_meta.data_page_offset));
+
+			// total_compressed_size, LogicalType::BIGINT
+			current_chunk.SetValue(21, count, Value::BIGINT(col_meta.total_compressed_size));
+
+			// total_uncompressed_size, LogicalType::BIGINT
+			current_chunk.SetValue(22, count, Value::BIGINT(col_meta.total_uncompressed_size));
+
+			count++;
+			if (count >= STANDARD_VECTOR_SIZE) {
+				current_chunk.SetCardinality(count);
+				collection.Append(current_chunk);
+
+				count = 0;
+				current_chunk.Reset();
+			}
+		}
+	}
+	current_chunk.SetCardinality(count);
+	collection.Append(current_chunk);
+}
+
+void ParquetMetaDataOperatorData::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+	names.emplace_back("file_name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("type_length");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("repetition_type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("num_children");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("converted_type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("scale");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("precision");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("field_id");
+	return_types.emplace_back(LogicalType::BIGINT);
+
+	names.emplace_back("logical_type");
+	return_types.emplace_back(LogicalType::VARCHAR);
+}
+
+Value ParquetLogicalTypeToString(const duckdb_parquet::format::LogicalType &type) {
+
+	if (type.__isset.STRING) {
+		return Value(PrintParquetElementToString(type.STRING));
+	}
+	if (type.__isset.MAP) {
+		return Value(PrintParquetElementToString(type.MAP));
+	}
+	if (type.__isset.LIST) {
+		return Value(PrintParquetElementToString(type.LIST));
+	}
+	if (type.__isset.ENUM) {
+		return Value(PrintParquetElementToString(type.ENUM));
+	}
+	if (type.__isset.DECIMAL) {
+		return Value(PrintParquetElementToString(type.DECIMAL));
+	}
+	if (type.__isset.DATE) {
+		return Value(PrintParquetElementToString(type.DATE));
+	}
+	if (type.__isset.TIME) {
+		return Value(PrintParquetElementToString(type.TIME));
+	}
+	if (type.__isset.TIMESTAMP) {
+		return Value(PrintParquetElementToString(type.TIMESTAMP));
+	}
+	if (type.__isset.INTEGER) {
+		return Value(PrintParquetElementToString(type.INTEGER));
+	}
+	if (type.__isset.UNKNOWN) {
+		return Value(PrintParquetElementToString(type.UNKNOWN));
+	}
+	if (type.__isset.JSON) {
+		return Value(PrintParquetElementToString(type.JSON));
+	}
+	if (type.__isset.BSON) {
+		return Value(PrintParquetElementToString(type.BSON));
+	}
+	if (type.__isset.UUID) {
+		return Value(PrintParquetElementToString(type.UUID));
+	}
+	return Value();
+}
+
+void ParquetMetaDataOperatorData::LoadSchemaData(ClientContext &context, const vector<LogicalType> &return_types,
+                                                 const string &file_path) {
+	collection.Reset();
+	ParquetOptions parquet_options(context);
+	auto reader = make_unique<ParquetReader>(context, file_path, parquet_options);
+	idx_t count = 0;
+	DataChunk current_chunk;
+	current_chunk.Initialize(context, return_types);
+	auto meta_data = reader->GetFileMetadata();
+	for (idx_t col_idx = 0; col_idx < meta_data->schema.size(); col_idx++) {
+		auto &column = meta_data->schema[col_idx];
+
+		// file_name, LogicalType::VARCHAR
+		current_chunk.SetValue(0, count, file_path);
+
+		// name, LogicalType::VARCHAR
+		current_chunk.SetValue(1, count, column.name);
+
+		// type, LogicalType::VARCHAR
+		current_chunk.SetValue(2, count, ConvertParquetElementToString(column.type));
+
+		// type_length, LogicalType::VARCHAR
+		current_chunk.SetValue(3, count, Value::INTEGER(column.type_length));
+
+		// repetition_type, LogicalType::VARCHAR
+		current_chunk.SetValue(4, count, ConvertParquetElementToString(column.repetition_type));
+
+		// num_children, LogicalType::BIGINT
+		current_chunk.SetValue(5, count, Value::BIGINT(column.num_children));
+
+		// converted_type, LogicalType::VARCHAR
+		current_chunk.SetValue(6, count, ConvertParquetElementToString(column.converted_type));
+
+		// scale, LogicalType::BIGINT
+		current_chunk.SetValue(7, count, Value::BIGINT(column.scale));
+
+		// precision, LogicalType::BIGINT
+		current_chunk.SetValue(8, count, Value::BIGINT(column.precision));
+
+		// field_id, LogicalType::BIGINT
+		current_chunk.SetValue(9, count, Value::BIGINT(column.field_id));
+
+		// logical_type, LogicalType::VARCHAR
+		current_chunk.SetValue(10, count, ParquetLogicalTypeToString(column.logicalType));
+
+		count++;
+		if (count >= STANDARD_VECTOR_SIZE) {
+			current_chunk.SetCardinality(count);
+			collection.Append(current_chunk);
+
+			count = 0;
+			current_chunk.Reset();
+		}
+	}
+	current_chunk.SetCardinality(count);
+	collection.Append(current_chunk);
+}
+
+template <bool SCHEMA>
+unique_ptr<FunctionData> ParquetMetaDataBind(ClientContext &context, TableFunctionBindInput &input,
+                                             vector<LogicalType> &return_types, vector<string> &names) {
+	auto &config = DBConfig::GetConfig(context);
+	if (!config.enable_external_access) {
+		throw PermissionException("Scanning Parquet files is disabled through configuration");
+	}
+	if (SCHEMA) {
+		ParquetMetaDataOperatorData::BindSchema(return_types, names);
+	} else {
+		ParquetMetaDataOperatorData::BindMetaData(return_types, names);
+	}
+
+	auto file_name = input.inputs[0].GetValue<string>();
+	auto result = make_unique<ParquetMetaDataBindData>();
+
+	FileSystem &fs = FileSystem::GetFileSystem(context);
+	result->return_types = return_types;
+	result->files = fs.Glob(file_name, context);
+	if (result->files.empty()) {
+		throw IOException("No files found that match the pattern \"%s\"", file_name);
+	}
+	return move(result);
+}
+
+template <bool SCHEMA>
+unique_ptr<GlobalTableFunctionState> ParquetMetaDataInit(ClientContext &context, TableFunctionInitInput &input) {
+	auto &bind_data = (ParquetMetaDataBindData &)*input.bind_data;
+	D_ASSERT(!bind_data.files.empty());
+
+	auto result = make_unique<ParquetMetaDataOperatorData>(Allocator::Get(context));
+	if (SCHEMA) {
+		result->LoadSchemaData(context, bind_data.return_types, bind_data.files[0]);
+	} else {
+		result->LoadFileMetaData(context, bind_data.return_types, bind_data.files[0]);
+	}
+	result->file_index = 0;
+	return move(result);
+}
+
+template <bool SCHEMA>
+void ParquetMetaDataImplementation(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = (ParquetMetaDataOperatorData &)*data_p.global_state;
+	auto &bind_data = (ParquetMetaDataBindData &)*data_p.bind_data;
+	while (true) {
+		auto chunk = data.collection.Fetch();
+		if (!chunk) {
+			if (data.file_index + 1 < bind_data.files.size()) {
+				// load the metadata for the next file
+				data.file_index++;
+				if (SCHEMA) {
+					data.LoadSchemaData(context, bind_data.return_types, bind_data.files[data.file_index]);
+				} else {
+					data.LoadFileMetaData(context, bind_data.return_types, bind_data.files[data.file_index]);
+				}
+				continue;
+			} else {
+				// no files remaining: done
+				return;
+			}
+		}
+		output.Move(*chunk);
+		if (output.size() != 0) {
+			return;
+		}
+	}
+}
+
+ParquetMetaDataFunction::ParquetMetaDataFunction()
+    : TableFunction("parquet_metadata", {LogicalType::VARCHAR}, ParquetMetaDataImplementation<false>,
+                    ParquetMetaDataBind<false>, ParquetMetaDataInit<false>) {
+}
+
+ParquetSchemaFunction::ParquetSchemaFunction()
+    : TableFunction("parquet_schema", {LogicalType::VARCHAR}, ParquetMetaDataImplementation<true>,
+                    ParquetMetaDataBind<true>, ParquetMetaDataInit<true>) {
+}
+
+} // namespace duckdb
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/filter/constant_filter.hpp"
+#include "duckdb/planner/filter/null_filter.hpp"
+#include "duckdb/planner/filter/conjunction_filter.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/pair.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
+
+#include "duckdb/storage/object_cache.hpp"
+#endif
+
+#include <sstream>
+#include <cassert>
+#include <chrono>
+#include <cstring>
+
+namespace duckdb {
+
+using duckdb_parquet::format::ColumnChunk;
+using duckdb_parquet::format::ConvertedType;
+using duckdb_parquet::format::FieldRepetitionType;
+using duckdb_parquet::format::FileMetaData;
+using ParquetRowGroup = duckdb_parquet::format::RowGroup;
+using duckdb_parquet::format::SchemaElement;
+using duckdb_parquet::format::Statistics;
+using duckdb_parquet::format::Type;
+
+static unique_ptr<duckdb_apache::thrift::protocol::TProtocol>
+CreateThriftProtocol(Allocator &allocator, FileHandle &file_handle, FileOpener &opener, bool prefetch_mode) {
+	auto transport = make_shared<ThriftFileTransport>(allocator, file_handle, opener, prefetch_mode);
+	return make_unique<duckdb_apache::thrift::protocol::TCompactProtocolT<ThriftFileTransport>>(move(transport));
+}
+
+static shared_ptr<ParquetFileMetadataCache> LoadMetadata(Allocator &allocator, FileHandle &file_handle,
+                                                         FileOpener &opener) {
+	auto current_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+	auto proto = CreateThriftProtocol(allocator, file_handle, opener, false);
+	auto &transport = ((ThriftFileTransport &)*proto->getTransport());
+	auto file_size = transport.GetSize();
+	if (file_size < 12) {
+		throw InvalidInputException("File '%s' too small to be a Parquet file", file_handle.path);
+	}
+
+	ResizeableBuffer buf;
+	buf.resize(allocator, 8);
+	buf.zero();
+
+	transport.SetLocation(file_size - 8);
+	transport.read((uint8_t *)buf.ptr, 8);
+
+	if (strncmp(buf.ptr + 4, "PAR1", 4) != 0) {
+		throw InvalidInputException("No magic bytes found at end of file '%s'", file_handle.path);
+	}
+	// read four-byte footer length from just before the end magic bytes
+	auto footer_len = *(uint32_t *)buf.ptr;
+	if (footer_len <= 0 || file_size < 12 + footer_len) {
+		throw InvalidInputException("Footer length error in file '%s'", file_handle.path);
+	}
+	auto metadata_pos = file_size - (footer_len + 8);
+	transport.SetLocation(metadata_pos);
+	transport.Prefetch(metadata_pos, footer_len);
+
+	auto metadata = make_unique<FileMetaData>();
+	metadata->read(proto.get());
+	return make_shared<ParquetFileMetadataCache>(move(metadata), current_time);
+}
+
+LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele, bool binary_as_string) {
+	// inner node
+	D_ASSERT(s_ele.__isset.type && s_ele.num_children == 0);
+	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && !s_ele.__isset.type_length) {
+		throw IOException("FIXED_LEN_BYTE_ARRAY requires length to be set");
+	}
+	if (s_ele.type == Type::FIXED_LEN_BYTE_ARRAY && s_ele.__isset.logicalType && s_ele.logicalType.__isset.UUID) {
+		return LogicalType::UUID;
+	}
+	if (s_ele.__isset.converted_type) {
+		switch (s_ele.converted_type) {
+		case ConvertedType::INT_8:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::TINYINT;
+			} else {
+				throw IOException("INT8 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::INT_16:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::SMALLINT;
+			} else {
+				throw IOException("INT16 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::INT_32:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::INTEGER;
+			} else {
+				throw IOException("INT32 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::INT_64:
+			if (s_ele.type == Type::INT64) {
+				return LogicalType::BIGINT;
+			} else {
+				throw IOException("INT64 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::UINT_8:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::UTINYINT;
+			} else {
+				throw IOException("UINT8 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::UINT_16:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::USMALLINT;
+			} else {
+				throw IOException("UINT16 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::UINT_32:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::UINTEGER;
+			} else {
+				throw IOException("UINT32 converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::UINT_64:
+			if (s_ele.type == Type::INT64) {
+				return LogicalType::UBIGINT;
+			} else {
+				throw IOException("UINT64 converted type can only be set for value of Type::INT64");
+			}
+		case ConvertedType::DATE:
+			if (s_ele.type == Type::INT32) {
+				return LogicalType::DATE;
+			} else {
+				throw IOException("DATE converted type can only be set for value of Type::INT32");
+			}
+		case ConvertedType::TIMESTAMP_MICROS:
+		case ConvertedType::TIMESTAMP_MILLIS:
+			if (s_ele.type == Type::INT64) {
+				return LogicalType::TIMESTAMP;
+			} else {
+				throw IOException("TIMESTAMP converted type can only be set for value of Type::INT64");
+			}
+		case ConvertedType::DECIMAL:
+			if (!s_ele.__isset.precision || !s_ele.__isset.scale) {
+				throw IOException("DECIMAL requires a length and scale specifier!");
+			}
+			switch (s_ele.type) {
+			case Type::BYTE_ARRAY:
+			case Type::FIXED_LEN_BYTE_ARRAY:
+			case Type::INT32:
+			case Type::INT64:
+				return LogicalType::DECIMAL(s_ele.precision, s_ele.scale);
+			default:
+				throw IOException(
+				    "DECIMAL converted type can only be set for value of Type::(FIXED_LEN_)BYTE_ARRAY/INT32/INT64");
+			}
+		case ConvertedType::UTF8:
+		case ConvertedType::ENUM:
+			switch (s_ele.type) {
+			case Type::BYTE_ARRAY:
+			case Type::FIXED_LEN_BYTE_ARRAY:
+				return LogicalType::VARCHAR;
+			default:
+				throw IOException("UTF8 converted type can only be set for Type::(FIXED_LEN_)BYTE_ARRAY");
+			}
+		case ConvertedType::TIME_MILLIS:
+		case ConvertedType::TIME_MICROS:
+			if (s_ele.type == Type::INT64) {
+				return LogicalType::TIME;
+			} else {
+				throw IOException("TIME_MICROS converted type can only be set for value of Type::INT64");
+			}
+		case ConvertedType::INTERVAL:
+			return LogicalType::INTERVAL;
+		case ConvertedType::MAP:
+		case ConvertedType::MAP_KEY_VALUE:
+		case ConvertedType::LIST:
+		case ConvertedType::JSON:
+		case ConvertedType::BSON:
+		default:
+			throw IOException("Unsupported converted type");
+		}
+	} else {
+		// no converted type set
+		// use default type for each physical type
+		switch (s_ele.type) {
+		case Type::BOOLEAN:
+			return LogicalType::BOOLEAN;
+		case Type::INT32:
+			return LogicalType::INTEGER;
+		case Type::INT64:
+			return LogicalType::BIGINT;
+		case Type::INT96: // always a timestamp it would seem
+			return LogicalType::TIMESTAMP;
+		case Type::FLOAT:
+			return LogicalType::FLOAT;
+		case Type::DOUBLE:
+			return LogicalType::DOUBLE;
+		case Type::BYTE_ARRAY:
+		case Type::FIXED_LEN_BYTE_ARRAY:
+			if (binary_as_string) {
+				return LogicalType::VARCHAR;
+			}
+			return LogicalType::BLOB;
+		default:
+			return LogicalType::INVALID;
+		}
+	}
+}
+
+LogicalType ParquetReader::DeriveLogicalType(const SchemaElement &s_ele) {
+	return DeriveLogicalType(s_ele, parquet_options.binary_as_string);
+}
+
+unique_ptr<ColumnReader> ParquetReader::CreateReaderRecursive(const FileMetaData *file_meta_data, idx_t depth,
+                                                              idx_t max_define, idx_t max_repeat,
+                                                              idx_t &next_schema_idx, idx_t &next_file_idx) {
+	D_ASSERT(file_meta_data);
+	D_ASSERT(next_schema_idx < file_meta_data->schema.size());
+	auto &s_ele = file_meta_data->schema[next_schema_idx];
+	auto this_idx = next_schema_idx;
+
+	if (s_ele.__isset.repetition_type) {
+		if (s_ele.repetition_type != FieldRepetitionType::REQUIRED) {
+			max_define++;
+		}
+		if (s_ele.repetition_type == FieldRepetitionType::REPEATED) {
+			max_repeat++;
+		}
+	}
+
+	if (!s_ele.__isset.type) { // inner node
+		if (s_ele.num_children == 0) {
+			throw std::runtime_error("Node has no children but should");
+		}
+		child_list_t<LogicalType> child_types;
+		vector<unique_ptr<ColumnReader>> child_readers;
+
+		idx_t c_idx = 0;
+		while (c_idx < (idx_t)s_ele.num_children) {
+			next_schema_idx++;
+
+			auto &child_ele = file_meta_data->schema[next_schema_idx];
+
+			auto child_reader = CreateReaderRecursive(file_meta_data, depth + 1, max_define, max_repeat,
+			                                          next_schema_idx, next_file_idx);
+			child_types.push_back(make_pair(child_ele.name, child_reader->Type()));
+			child_readers.push_back(move(child_reader));
+
+			c_idx++;
+		}
+		D_ASSERT(!child_types.empty());
+		unique_ptr<ColumnReader> result;
+		LogicalType result_type;
+
+		bool is_repeated = s_ele.repetition_type == FieldRepetitionType::REPEATED;
+		bool is_list = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::LIST;
+		bool is_map = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::MAP;
+		bool is_map_kv = s_ele.__isset.converted_type && s_ele.converted_type == ConvertedType::MAP_KEY_VALUE;
+		if (!is_map_kv && this_idx > 0) {
+			// check if the parent node of this is a map
+			auto &p_ele = file_meta_data->schema[this_idx - 1];
+			bool parent_is_map = p_ele.__isset.converted_type && p_ele.converted_type == ConvertedType::MAP;
+			bool parent_has_children = p_ele.__isset.num_children && p_ele.num_children == 1;
+			is_map_kv = parent_is_map && parent_has_children;
+		}
+
+		if (is_map_kv) {
+			if (child_types.size() != 2) {
+				throw IOException("MAP_KEY_VALUE requires two children");
+			}
+			if (!is_repeated) {
+				throw IOException("MAP_KEY_VALUE needs to be repeated");
+			}
+			result_type = LogicalType::MAP(move(child_types[0].second), move(child_types[1].second));
+			for (auto &child_reader : child_readers) {
+				auto child_type = LogicalType::LIST(child_reader->Type());
+				child_reader = make_unique<ListColumnReader>(*this, move(child_type), s_ele, this_idx, max_define,
+				                                             max_repeat, move(child_reader));
+			}
+			result = make_unique<StructColumnReader>(*this, result_type, s_ele, this_idx, max_define - 1,
+			                                         max_repeat - 1, move(child_readers));
+			return result;
+		}
+		if (child_types.size() > 1 || (!is_list && !is_map && !is_repeated)) {
+			result_type = LogicalType::STRUCT(move(child_types));
+			result = make_unique<StructColumnReader>(*this, result_type, s_ele, this_idx, max_define, max_repeat,
+			                                         move(child_readers));
+		} else {
+			// if we have a struct with only a single type, pull up
+			result_type = child_types[0].second;
+			result = move(child_readers[0]);
+		}
+		if (is_repeated) {
+			result_type = LogicalType::LIST(result_type);
+			return make_unique<ListColumnReader>(*this, result_type, s_ele, this_idx, max_define, max_repeat,
+			                                     move(result));
+		}
+		return result;
+	} else { // leaf node
+		if (s_ele.repetition_type == FieldRepetitionType::REPEATED) {
+			const auto derived_type = DeriveLogicalType(s_ele);
+			auto list_type = LogicalType::LIST(derived_type);
+
+			auto element_reader =
+			    ColumnReader::CreateReader(*this, derived_type, s_ele, next_file_idx++, max_define, max_repeat);
+
+			return make_unique<ListColumnReader>(*this, list_type, s_ele, this_idx, max_define, max_repeat,
+			                                     move(element_reader));
+		}
+
+		// TODO check return value of derive type or should we only do this on read()
+		return ColumnReader::CreateReader(*this, DeriveLogicalType(s_ele), s_ele, next_file_idx++, max_define,
+		                                  max_repeat);
+	}
+}
+
+// TODO we don't need readers for columns we are not going to read ay
+unique_ptr<ColumnReader> ParquetReader::CreateReader(const duckdb_parquet::format::FileMetaData *file_meta_data) {
+	idx_t next_schema_idx = 0;
+	idx_t next_file_idx = 0;
+
+	auto ret = CreateReaderRecursive(file_meta_data, 0, 0, 0, next_schema_idx, next_file_idx);
+	D_ASSERT(next_schema_idx == file_meta_data->schema.size() - 1);
+	D_ASSERT(file_meta_data->row_groups.empty() || next_file_idx == file_meta_data->row_groups[0].columns.size());
+
+	// add casts if required
+	for (auto &entry : cast_map) {
+		auto column_idx = entry.first;
+		auto &expected_type = entry.second;
+
+		auto &root_struct_reader = (StructColumnReader &)*ret;
+		auto child_reader = move(root_struct_reader.child_readers[column_idx]);
+		auto cast_reader = make_unique<CastColumnReader>(move(child_reader), expected_type);
+		root_struct_reader.child_readers[column_idx] = move(cast_reader);
+	}
+	return ret;
+}
+
+void ParquetReader::InitializeSchema(const vector<string> &expected_names, const vector<LogicalType> &expected_types,
+                                     const vector<column_t> &column_ids, const string &initial_filename_p) {
+	D_ASSERT(expected_names.size() == expected_types.size() || (expected_names.empty() && column_ids.empty()));
+	auto file_meta_data = GetFileMetadata();
+
+	if (file_meta_data->__isset.encryption_algorithm) {
+		throw FormatException("Encrypted Parquet files are not supported");
+	}
+	// check if we like this schema
+	if (file_meta_data->schema.size() < 2) {
+		throw FormatException("Need at least one non-root column in the file");
+	}
+
+	bool has_expected_names = !expected_names.empty();
+	bool has_expected_types = !expected_types.empty();
+	auto root_reader = CreateReader(file_meta_data);
+
+	auto &root_type = root_reader->Type();
+	auto &child_types = StructType::GetChildTypes(root_type);
+	D_ASSERT(root_type.id() == LogicalTypeId::STRUCT);
+	for (auto &type_pair : child_types) {
+		names.push_back(type_pair.first);
+		return_types.push_back(type_pair.second);
+	}
+	D_ASSERT(!names.empty());
+	D_ASSERT(!return_types.empty());
+	if (!has_expected_types) {
+		return;
+	}
+	if (!has_expected_names && has_expected_types) {
+		// we ONLY have expected types, but no expected names
+		// in this case we need all types to match in-order
+		if (return_types.size() != expected_types.size()) {
+			throw FormatException("column count mismatch: expected %d columns but found %d", expected_types.size(),
+			                      return_types.size());
+		}
+		for (idx_t col_idx = 0; col_idx < return_types.size(); col_idx++) {
+			if (return_types[col_idx] == expected_types[col_idx]) {
+				continue;
+			}
+			// type mismatch: have to add a cast
+			cast_map[col_idx] = expected_types[col_idx];
+		}
+		return;
+	}
+	D_ASSERT(column_ids.size() > 0);
+	// we have expected types: create a map of name -> column index
+	unordered_map<string, idx_t> name_map;
+	for (idx_t col_idx = 0; col_idx < names.size(); col_idx++) {
+		name_map[names[col_idx]] = col_idx;
+	}
+	// now for each of the expected names, look it up in the name map and fill the column_id_map
+	D_ASSERT(column_id_map.empty());
+	for (idx_t i = 0; i < column_ids.size(); i++) {
+		if (column_ids[i] == COLUMN_IDENTIFIER_ROW_ID) {
+			continue;
+		}
+		auto &expected_name = expected_names[column_ids[i]];
+		auto &expected_type = expected_types[column_ids[i]];
+		auto entry = name_map.find(expected_name);
+		if (entry == name_map.end()) {
+			throw FormatException("schema mismatch in Parquet glob: column \"%s\" was read from the original file "
+			                      "\"%s\", but could not be found in file \"%s\"",
+			                      expected_name, initial_filename_p, file_name);
+		}
+		auto column_idx = entry->second;
+		column_id_map.push_back(column_idx);
+		if (expected_type != return_types[column_idx]) {
+			// type mismatch: have to add a cast
+			cast_map[column_idx] = expected_type;
+		}
+	}
+}
+
+ParquetOptions::ParquetOptions(ClientContext &context) {
+	Value binary_as_string_val;
+	if (context.TryGetCurrentSetting("binary_as_string", binary_as_string_val)) {
+		binary_as_string = binary_as_string_val.GetValue<bool>();
+	}
+}
+
+ParquetReader::ParquetReader(Allocator &allocator_p, unique_ptr<FileHandle> file_handle_p,
+                             const vector<LogicalType> &expected_types_p, const string &initial_filename_p)
+    : allocator(allocator_p) {
+	file_name = file_handle_p->path;
+	file_handle = move(file_handle_p);
+	metadata = LoadMetadata(allocator, *file_handle, *file_opener);
+	vector<string> expected_names;
+	vector<column_t> expected_column_ids;
+	InitializeSchema(expected_names, expected_types_p, expected_column_ids, initial_filename_p);
+}
+
+ParquetReader::ParquetReader(ClientContext &context_p, string file_name_p, const vector<string> &expected_names,
+                             const vector<LogicalType> &expected_types_p, const vector<column_t> &column_ids,
+                             ParquetOptions parquet_options_p, const string &initial_filename_p)
+    : allocator(BufferAllocator::Get(context_p)), file_opener(FileSystem::GetFileOpener(context_p)),
+      parquet_options(parquet_options_p) {
+	auto &fs = FileSystem::GetFileSystem(context_p);
+	file_name = move(file_name_p);
+	file_handle = fs.OpenFile(file_name, FileFlags::FILE_FLAGS_READ, FileSystem::DEFAULT_LOCK,
+	                          FileSystem::DEFAULT_COMPRESSION, file_opener);
+	if (!file_handle->CanSeek()) {
+		throw NotImplementedException(
+		    "Reading parquet files from a FIFO stream is not supported and cannot be efficiently supported since "
+		    "metadata is located at the end of the file. Write the stream to disk first and read from there instead.");
+	}
+	// If object cached is disabled
+	// or if this file has cached metadata
+	// or if the cached version already expired
+	auto last_modify_time = fs.GetLastModifiedTime(*file_handle);
+	if (!ObjectCache::ObjectCacheEnabled(context_p)) {
+		metadata = LoadMetadata(allocator, *file_handle, *file_opener);
+	} else {
+		metadata = ObjectCache::GetObjectCache(context_p).Get<ParquetFileMetadataCache>(file_name);
+		if (!metadata || (last_modify_time + 10 >= metadata->read_time)) {
+			metadata = LoadMetadata(allocator, *file_handle, *file_opener);
+			ObjectCache::GetObjectCache(context_p).Put(file_name, metadata);
+		}
+	}
+	InitializeSchema(expected_names, expected_types_p, column_ids, initial_filename_p);
+}
+
+ParquetReader::~ParquetReader() {
+}
+
+const FileMetaData *ParquetReader::GetFileMetadata() {
+	D_ASSERT(metadata);
+	D_ASSERT(metadata->metadata);
+	return metadata->metadata.get();
+}
+
+// TODO also somewhat ugly, perhaps this can be moved to the column reader too
+unique_ptr<BaseStatistics> ParquetReader::ReadStatistics(ParquetReader &reader, LogicalType &type,
+                                                         column_t file_col_idx, const FileMetaData *file_meta_data) {
+	unique_ptr<BaseStatistics> column_stats;
+	auto root_reader = reader.CreateReader(file_meta_data);
+	auto column_reader = ((StructColumnReader *)root_reader.get())->GetChildReader(file_col_idx);
+
+	for (auto &row_group : file_meta_data->row_groups) {
+		auto chunk_stats = column_reader->Stats(row_group.columns);
+		if (!chunk_stats) {
+			return nullptr;
+		}
+		if (!column_stats) {
+			column_stats = move(chunk_stats);
+		} else {
+			column_stats->Merge(*chunk_stats);
+		}
+	}
+	return column_stats;
+}
+
+const ParquetRowGroup &ParquetReader::GetGroup(ParquetReaderScanState &state) {
+	auto file_meta_data = GetFileMetadata();
+	D_ASSERT(state.current_group >= 0 && (idx_t)state.current_group < state.group_idx_list.size());
+	D_ASSERT(state.group_idx_list[state.current_group] >= 0 &&
+	         state.group_idx_list[state.current_group] < file_meta_data->row_groups.size());
+	return file_meta_data->row_groups[state.group_idx_list[state.current_group]];
+}
+
+uint64_t ParquetReader::GetGroupCompressedSize(ParquetReaderScanState &state) {
+	auto &group = GetGroup(state);
+	auto total_compressed_size = group.total_compressed_size;
+
+	idx_t calc_compressed_size = 0;
+
+	// If the global total_compressed_size is not set, we can still calculate it
+	if (group.total_compressed_size == 0) {
+		for (auto &column_chunk : group.columns) {
+			calc_compressed_size += column_chunk.meta_data.total_compressed_size;
+		}
+	}
+
+	if (total_compressed_size != 0 && calc_compressed_size != 0 &&
+	    (idx_t)total_compressed_size != calc_compressed_size) {
+		throw std::runtime_error("mismatch between calculated compressed size and reported compressed size");
+	}
+
+	return total_compressed_size ? total_compressed_size : calc_compressed_size;
+}
+
+uint64_t ParquetReader::GetGroupSpan(ParquetReaderScanState &state) {
+	auto &group = GetGroup(state);
+	idx_t min_offset = NumericLimits<idx_t>::Maximum();
+	idx_t max_offset = NumericLimits<idx_t>::Minimum();
+
+	for (auto &column_chunk : group.columns) {
+
+		// Set the min offset
+		idx_t current_min_offset = NumericLimits<idx_t>::Maximum();
+		if (column_chunk.meta_data.__isset.dictionary_page_offset) {
+			current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.dictionary_page_offset);
+		}
+		if (column_chunk.meta_data.__isset.index_page_offset) {
+			current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.index_page_offset);
+		}
+		current_min_offset = MinValue<idx_t>(current_min_offset, column_chunk.meta_data.data_page_offset);
+		min_offset = MinValue<idx_t>(current_min_offset, min_offset);
+		max_offset = MaxValue<idx_t>(max_offset, column_chunk.meta_data.total_compressed_size + current_min_offset);
+	}
+
+	return max_offset - min_offset;
+}
+
+idx_t ParquetReader::GetGroupOffset(ParquetReaderScanState &state) {
+	auto &group = GetGroup(state);
+	idx_t min_offset = NumericLimits<idx_t>::Maximum();
+
+	for (auto &column_chunk : group.columns) {
+		if (column_chunk.meta_data.__isset.dictionary_page_offset) {
+			min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.dictionary_page_offset);
+		}
+		if (column_chunk.meta_data.__isset.index_page_offset) {
+			min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.index_page_offset);
+		}
+		min_offset = MinValue<idx_t>(min_offset, column_chunk.meta_data.data_page_offset);
+	}
+
+	return min_offset;
+}
+
+void ParquetReader::PrepareRowGroupBuffer(ParquetReaderScanState &state, idx_t out_col_idx) {
+	auto &group = GetGroup(state);
+
+	auto column_reader = ((StructColumnReader *)state.root_reader.get())->GetChildReader(state.column_ids[out_col_idx]);
+
+	// TODO move this to columnreader too
+	if (state.filters) {
+		auto stats = column_reader->Stats(group.columns);
+		// filters contain output chunk index, not file col idx!
+		auto filter_entry = state.filters->filters.find(out_col_idx);
+		if (stats && filter_entry != state.filters->filters.end()) {
+			bool skip_chunk = false;
+			auto &filter = *filter_entry->second;
+			auto prune_result = filter.CheckStatistics(*stats);
+			if (prune_result == FilterPropagateResult::FILTER_ALWAYS_FALSE) {
+				skip_chunk = true;
+			}
+			if (skip_chunk) {
+				// this effectively will skip this chunk
+				state.group_offset = group.num_rows;
+				return;
+			}
+		}
+	}
+
+	state.root_reader->InitializeRead(group.columns, *state.thrift_file_proto);
+}
+
+idx_t ParquetReader::NumRows() {
+	return GetFileMetadata()->num_rows;
+}
+
+idx_t ParquetReader::NumRowGroups() {
+	return GetFileMetadata()->row_groups.size();
+}
+
+void ParquetReader::InitializeScan(ParquetReaderScanState &state, vector<column_t> column_ids,
+                                   vector<idx_t> groups_to_read, TableFilterSet *filters) {
+	state.current_group = -1;
+	state.finished = false;
+	state.column_ids = column_id_map.empty() ? move(column_ids) : column_id_map;
+	state.group_offset = 0;
+	state.group_idx_list = move(groups_to_read);
+	state.filters = filters;
+	state.sel.Initialize(STANDARD_VECTOR_SIZE);
+
+	if (!state.file_handle || state.file_handle->path != file_handle->path) {
+		auto flags = FileFlags::FILE_FLAGS_READ;
+
+		if (!file_handle->OnDiskFile() && file_handle->CanSeek()) {
+			state.prefetch_mode = true;
+			flags |= FileFlags::FILE_FLAGS_DIRECT_IO;
+		} else {
+			state.prefetch_mode = false;
+		}
+
+		state.file_handle = file_handle->file_system.OpenFile(file_handle->path, flags, FileSystem::DEFAULT_LOCK,
+		                                                      FileSystem::DEFAULT_COMPRESSION, file_opener);
+	}
+
+	state.thrift_file_proto = CreateThriftProtocol(allocator, *state.file_handle, *file_opener, state.prefetch_mode);
+	state.root_reader = CreateReader(GetFileMetadata());
+
+	state.define_buf.resize(allocator, STANDARD_VECTOR_SIZE);
+	state.repeat_buf.resize(allocator, STANDARD_VECTOR_SIZE);
+}
+
+void FilterIsNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
+	auto &mask = FlatVector::Validity(v);
+	if (mask.AllValid()) {
+		filter_mask.reset();
+	} else {
+		for (idx_t i = 0; i < count; i++) {
+			filter_mask[i] = filter_mask[i] && !mask.RowIsValid(i);
+		}
+	}
+}
+
+void FilterIsNotNull(Vector &v, parquet_filter_t &filter_mask, idx_t count) {
+	auto &mask = FlatVector::Validity(v);
+	if (!mask.AllValid()) {
+		for (idx_t i = 0; i < count; i++) {
+			filter_mask[i] = filter_mask[i] && mask.RowIsValid(i);
+		}
+	}
+}
+
+template <class T, class OP>
+void TemplatedFilterOperation(Vector &v, T constant, parquet_filter_t &filter_mask, idx_t count) {
+	D_ASSERT(v.GetVectorType() == VectorType::FLAT_VECTOR); // we just created the damn thing it better be
+
+	auto v_ptr = FlatVector::GetData<T>(v);
+	auto &mask = FlatVector::Validity(v);
+
+	if (!mask.AllValid()) {
+		for (idx_t i = 0; i < count; i++) {
+			if (mask.RowIsValid(i)) {
+				filter_mask[i] = filter_mask[i] && OP::Operation(v_ptr[i], constant);
+			}
+		}
+	} else {
+		for (idx_t i = 0; i < count; i++) {
+			filter_mask[i] = filter_mask[i] && OP::Operation(v_ptr[i], constant);
+		}
+	}
+}
+
+template <class T, class OP>
+void TemplatedFilterOperation(Vector &v, const Value &constant, parquet_filter_t &filter_mask, idx_t count) {
+	TemplatedFilterOperation<T, OP>(v, constant.template GetValueUnsafe<T>(), filter_mask, count);
+}
+
+template <class OP>
+static void FilterOperationSwitch(Vector &v, Value &constant, parquet_filter_t &filter_mask, idx_t count) {
+	if (filter_mask.none() || count == 0) {
+		return;
+	}
+	switch (v.GetType().InternalType()) {
+	case PhysicalType::BOOL:
+		TemplatedFilterOperation<bool, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::UINT8:
+		TemplatedFilterOperation<uint8_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::UINT16:
+		TemplatedFilterOperation<uint16_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::UINT32:
+		TemplatedFilterOperation<uint32_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::UINT64:
+		TemplatedFilterOperation<uint64_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::INT8:
+		TemplatedFilterOperation<int8_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::INT16:
+		TemplatedFilterOperation<int16_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::INT32:
+		TemplatedFilterOperation<int32_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::INT64:
+		TemplatedFilterOperation<int64_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::INT128:
+		TemplatedFilterOperation<hugeint_t, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::FLOAT:
+		TemplatedFilterOperation<float, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::DOUBLE:
+		TemplatedFilterOperation<double, OP>(v, constant, filter_mask, count);
+		break;
+	case PhysicalType::VARCHAR:
+		TemplatedFilterOperation<string_t, OP>(v, constant, filter_mask, count);
+		break;
+	default:
+		throw NotImplementedException("Unsupported type for filter %s", v.ToString());
+	}
+}
+
+static void ApplyFilter(Vector &v, TableFilter &filter, parquet_filter_t &filter_mask, idx_t count) {
+	switch (filter.filter_type) {
+	case TableFilterType::CONJUNCTION_AND: {
+		auto &conjunction = (ConjunctionAndFilter &)filter;
+		for (auto &child_filter : conjunction.child_filters) {
+			ApplyFilter(v, *child_filter, filter_mask, count);
+		}
+		break;
+	}
+	case TableFilterType::CONJUNCTION_OR: {
+		auto &conjunction = (ConjunctionOrFilter &)filter;
+		parquet_filter_t or_mask;
+		for (auto &child_filter : conjunction.child_filters) {
+			parquet_filter_t child_mask = filter_mask;
+			ApplyFilter(v, *child_filter, child_mask, count);
+			or_mask |= child_mask;
+		}
+		filter_mask &= or_mask;
+		break;
+	}
+	case TableFilterType::CONSTANT_COMPARISON: {
+		auto &constant_filter = (ConstantFilter &)filter;
+		switch (constant_filter.comparison_type) {
+		case ExpressionType::COMPARE_EQUAL:
+			FilterOperationSwitch<Equals>(v, constant_filter.constant, filter_mask, count);
+			break;
+		case ExpressionType::COMPARE_LESSTHAN:
+			FilterOperationSwitch<LessThan>(v, constant_filter.constant, filter_mask, count);
+			break;
+		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+			FilterOperationSwitch<LessThanEquals>(v, constant_filter.constant, filter_mask, count);
+			break;
+		case ExpressionType::COMPARE_GREATERTHAN:
+			FilterOperationSwitch<GreaterThan>(v, constant_filter.constant, filter_mask, count);
+			break;
+		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+			FilterOperationSwitch<GreaterThanEquals>(v, constant_filter.constant, filter_mask, count);
+			break;
+		default:
+			D_ASSERT(0);
+		}
+		break;
+	}
+	case TableFilterType::IS_NOT_NULL:
+		FilterIsNotNull(v, filter_mask, count);
+		break;
+	case TableFilterType::IS_NULL:
+		FilterIsNull(v, filter_mask, count);
+		break;
+	default:
+		D_ASSERT(0);
+		break;
+	}
+}
+
+void ParquetReader::Scan(ParquetReaderScanState &state, DataChunk &result) {
+	while (ScanInternal(state, result)) {
+		if (result.size() > 0) {
+			break;
+		}
+		result.Reset();
+	}
+}
+
+bool ParquetReader::ScanInternal(ParquetReaderScanState &state, DataChunk &result) {
+	if (state.finished) {
+		return false;
+	}
+
+	// see if we have to switch to the next row group in the parquet file
+	if (state.current_group < 0 || (int64_t)state.group_offset >= GetGroup(state).num_rows) {
+		state.current_group++;
+		state.group_offset = 0;
+
+		auto &trans = (ThriftFileTransport &)*state.thrift_file_proto->getTransport();
+		trans.ClearPrefetch();
+		state.current_group_prefetched = false;
+
+		if ((idx_t)state.current_group == state.group_idx_list.size()) {
+			state.finished = true;
+			return false;
+		}
+
+		uint64_t to_scan_compressed_bytes = 0;
+		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
+			// this is a special case where we are not interested in the actual contents of the file
+			if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
+				continue;
+			}
+
+			PrepareRowGroupBuffer(state, out_col_idx);
+
+			auto file_col_idx = state.column_ids[out_col_idx];
+
+			auto root_reader = ((StructColumnReader *)state.root_reader.get());
+			to_scan_compressed_bytes += root_reader->GetChildReader(file_col_idx)->TotalCompressedSize();
+		}
+
+		auto &group = GetGroup(state);
+		if (state.prefetch_mode && state.group_offset != (idx_t)group.num_rows) {
+
+			uint64_t total_row_group_span = GetGroupSpan(state);
+
+			double scan_percentage = (double)(to_scan_compressed_bytes) / total_row_group_span;
+
+			if (to_scan_compressed_bytes > total_row_group_span) {
+				throw std::runtime_error(
+				    "Malformed parquet file: sum of total compressed bytes of columns seems incorrect");
+			}
+
+			if (!state.filters && scan_percentage > ParquetReaderPrefetchConfig::WHOLE_GROUP_PREFETCH_MINIMUM_SCAN) {
+				// Prefetch the whole row group
+				if (!state.current_group_prefetched) {
+					auto total_compressed_size = GetGroupCompressedSize(state);
+					if (total_compressed_size > 0) {
+						trans.Prefetch(GetGroupOffset(state), total_row_group_span);
+					}
+					state.current_group_prefetched = true;
+				}
+			} else {
+				// lazy fetching is when all tuples in a column can be skipped. With lazy fetching the buffer is only
+				// fetched on the first read to that buffer.
+				bool lazy_fetch = state.filters;
+
+				// Prefetch column-wise
+				for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
+
+					if (state.column_ids[out_col_idx] == COLUMN_IDENTIFIER_ROW_ID) {
+						continue;
+					}
+
+					auto file_col_idx = state.column_ids[out_col_idx];
+					auto root_reader = ((StructColumnReader *)state.root_reader.get());
+
+					bool has_filter =
+					    state.filters && state.filters->filters.find(out_col_idx) != state.filters->filters.end();
+					root_reader->GetChildReader(file_col_idx)->RegisterPrefetch(trans, !(lazy_fetch && !has_filter));
+				}
+
+				trans.FinalizeRegistration();
+
+				if (!lazy_fetch) {
+					trans.PrefetchRegistered();
+				}
+			}
+		}
+		return true;
+	}
+
+	auto this_output_chunk_rows = MinValue<idx_t>(STANDARD_VECTOR_SIZE, GetGroup(state).num_rows - state.group_offset);
+	result.SetCardinality(this_output_chunk_rows);
+
+	if (this_output_chunk_rows == 0) {
+		state.finished = true;
+		return false; // end of last group, we are done
+	}
+
+	// we evaluate simple table filters directly in this scan so we can skip decoding column data that's never going to
+	// be relevant
+	parquet_filter_t filter_mask;
+	filter_mask.set();
+
+	// mask out unused part of bitset
+	for (idx_t i = this_output_chunk_rows; i < STANDARD_VECTOR_SIZE; i++) {
+		filter_mask.set(i, false);
+	}
+
+	state.define_buf.zero();
+	state.repeat_buf.zero();
+
+	auto define_ptr = (uint8_t *)state.define_buf.ptr;
+	auto repeat_ptr = (uint8_t *)state.repeat_buf.ptr;
+
+	auto root_reader = ((StructColumnReader *)state.root_reader.get());
+
+	if (state.filters) {
+		vector<bool> need_to_read(result.ColumnCount(), true);
+
+		// first load the columns that are used in filters
+		for (auto &filter_col : state.filters->filters) {
+			auto file_col_idx = state.column_ids[filter_col.first];
+			// row_group skipping of columns that are never scanned.
+			if (filter_mask.none()) { // if no rows are left we can stop checking filters
+				break;
+			}
+
+			root_reader->GetChildReader(file_col_idx)
+			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[filter_col.first]);
+
+			need_to_read[filter_col.first] = false;
+
+			ApplyFilter(result.data[filter_col.first], *filter_col.second, filter_mask, this_output_chunk_rows);
+		}
+
+		// we still may have to read some cols
+		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
+			if (!need_to_read[out_col_idx]) {
+				continue;
+			}
+			auto file_col_idx = state.column_ids[out_col_idx];
+
+			if (filter_mask.none()) {
+				root_reader->GetChildReader(file_col_idx)->Skip(result.size());
+				continue;
+			}
+			// TODO handle ROWID here, too
+			root_reader->GetChildReader(file_col_idx)
+			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
+		}
+
+		idx_t sel_size = 0;
+		for (idx_t i = 0; i < this_output_chunk_rows; i++) {
+			if (filter_mask[i]) {
+				state.sel.set_index(sel_size++, i);
+			}
+		}
+
+		result.Slice(state.sel, sel_size);
+		result.Verify();
+
+	} else { // #nofilter, just fricking load the data
+		for (idx_t out_col_idx = 0; out_col_idx < result.ColumnCount(); out_col_idx++) {
+			auto file_col_idx = state.column_ids[out_col_idx];
+
+			if (file_col_idx == COLUMN_IDENTIFIER_ROW_ID) {
+				Value constant_42 = Value::BIGINT(42);
+				result.data[out_col_idx].Reference(constant_42);
+				continue;
+			}
+
+			//			std::cout << "Reading nofilter for col " <<
+			// root_reader->GetChildReader(file_col_idx)->Schema().name
+			//<< "\n";
+			root_reader->GetChildReader(file_col_idx)
+			    ->Read(result.size(), filter_mask, define_ptr, repeat_ptr, result.data[out_col_idx]);
+		}
+	}
+
+	state.group_offset += this_output_chunk_rows;
+	return true;
+}
+
+} // namespace duckdb
+
+
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/types/blob.hpp"
+#include "duckdb/common/types/value.hpp"
+#include "duckdb/storage/statistics/numeric_statistics.hpp"
+#include "duckdb/storage/statistics/string_statistics.hpp"
+#endif
+
+namespace duckdb {
+
+using duckdb_parquet::format::ConvertedType;
+using duckdb_parquet::format::Type;
+
+static unique_ptr<BaseStatistics> CreateNumericStats(const LogicalType &type,
+                                                     const duckdb_parquet::format::SchemaElement &schema_ele,
+                                                     const duckdb_parquet::format::Statistics &parquet_stats) {
+	auto stats = make_unique<NumericStatistics>(type, StatisticsType::LOCAL_STATS);
+
+	// for reasons unknown to science, Parquet defines *both* `min` and `min_value` as well as `max` and
+	// `max_value`. All are optional. such elegance.
+	if (parquet_stats.__isset.min) {
+		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min).CastAs(type);
+	} else if (parquet_stats.__isset.min_value) {
+		stats->min = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.min_value).CastAs(type);
+	} else {
+		stats->min = Value(type);
+	}
+	if (parquet_stats.__isset.max) {
+		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max).CastAs(type);
+	} else if (parquet_stats.__isset.max_value) {
+		stats->max = ParquetStatisticsUtils::ConvertValue(type, schema_ele, parquet_stats.max_value).CastAs(type);
+	} else {
+		stats->max = Value(type);
+	}
+	return move(stats);
+}
+
+Value ParquetStatisticsUtils::ConvertValue(const LogicalType &type,
+                                           const duckdb_parquet::format::SchemaElement &schema_ele,
+                                           const std::string &stats) {
+	if (stats.empty()) {
+		return Value();
+	}
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN: {
+		if (stats.size() != sizeof(bool)) {
+			throw InternalException("Incorrect stats size for type BOOLEAN");
+		}
+		return Value::BOOLEAN(Load<bool>((data_ptr_t)stats.c_str()));
+	}
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+		if (stats.size() != sizeof(uint32_t)) {
+			throw InternalException("Incorrect stats size for type UINTEGER");
+		}
+		return Value::UINTEGER(Load<uint32_t>((data_ptr_t)stats.c_str()));
+	case LogicalTypeId::UBIGINT:
+		if (stats.size() != sizeof(uint64_t)) {
+			throw InternalException("Incorrect stats size for type UBIGINT");
+		}
+		return Value::UBIGINT(Load<uint64_t>((data_ptr_t)stats.c_str()));
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+		if (stats.size() != sizeof(int32_t)) {
+			throw InternalException("Incorrect stats size for type INTEGER");
+		}
+		return Value::INTEGER(Load<int32_t>((data_ptr_t)stats.c_str()));
+	case LogicalTypeId::BIGINT:
+		if (stats.size() != sizeof(int64_t)) {
+			throw InternalException("Incorrect stats size for type BIGINT");
+		}
+		return Value::BIGINT(Load<int64_t>((data_ptr_t)stats.c_str()));
+	case LogicalTypeId::FLOAT: {
+		if (stats.size() != sizeof(float)) {
+			throw InternalException("Incorrect stats size for type FLOAT");
+		}
+		auto val = Load<float>((data_ptr_t)stats.c_str());
+		if (!Value::FloatIsFinite(val)) {
+			return Value();
+		}
+		return Value::FLOAT(val);
+	}
+	case LogicalTypeId::DOUBLE: {
+		if (stats.size() != sizeof(double)) {
+			throw InternalException("Incorrect stats size for type DOUBLE");
+		}
+		auto val = Load<double>((data_ptr_t)stats.c_str());
+		if (!Value::DoubleIsFinite(val)) {
+			return Value();
+		}
+		return Value::DOUBLE(val);
+	}
+	case LogicalTypeId::DECIMAL: {
+		auto width = DecimalType::GetWidth(type);
+		auto scale = DecimalType::GetScale(type);
+		switch (schema_ele.type) {
+		case Type::INT32: {
+			if (stats.size() != sizeof(int32_t)) {
+				throw InternalException("Incorrect stats size for type %s", type.ToString());
+			}
+			return Value::DECIMAL(Load<int32_t>((data_ptr_t)stats.c_str()), width, scale);
+		}
+		case Type::INT64: {
+			if (stats.size() != sizeof(int64_t)) {
+				throw InternalException("Incorrect stats size for type %s", type.ToString());
+			}
+			return Value::DECIMAL(Load<int64_t>((data_ptr_t)stats.c_str()), width, scale);
+		}
+		case Type::BYTE_ARRAY:
+		case Type::FIXED_LEN_BYTE_ARRAY:
+			switch (type.InternalType()) {
+			case PhysicalType::INT16:
+				return Value::DECIMAL(
+				    ParquetDecimalUtils::ReadDecimalValue<int16_t>((const_data_ptr_t)stats.c_str(), stats.size()),
+				    width, scale);
+			case PhysicalType::INT32:
+				return Value::DECIMAL(
+				    ParquetDecimalUtils::ReadDecimalValue<int32_t>((const_data_ptr_t)stats.c_str(), stats.size()),
+				    width, scale);
+			case PhysicalType::INT64:
+				return Value::DECIMAL(
+				    ParquetDecimalUtils::ReadDecimalValue<int64_t>((const_data_ptr_t)stats.c_str(), stats.size()),
+				    width, scale);
+			case PhysicalType::INT128:
+				return Value::DECIMAL(
+				    ParquetDecimalUtils::ReadDecimalValue<hugeint_t>((const_data_ptr_t)stats.c_str(), stats.size()),
+				    width, scale);
+			default:
+				throw InternalException("Unsupported internal type for decimal");
+			}
+		default:
+			throw InternalException("Unsupported internal type for decimal?..");
+		}
+	}
+	case LogicalType::VARCHAR:
+	case LogicalType::BLOB:
+		if (Value::StringIsValid(stats)) {
+			return Value(stats);
+		} else {
+			return Value(Blob::ToString(string_t(stats)));
+		}
+	case LogicalTypeId::DATE:
+		if (stats.size() != sizeof(int32_t)) {
+			throw InternalException("Incorrect stats size for type DATE");
+		}
+		return Value::DATE(date_t(Load<int32_t>((data_ptr_t)stats.c_str())));
+	case LogicalTypeId::TIME:
+		if (stats.size() != sizeof(int64_t)) {
+			throw InternalException("Incorrect stats size for type TIME");
+		}
+		return Value::TIME(dtime_t(Load<int64_t>((data_ptr_t)stats.c_str())));
+	case LogicalTypeId::TIMESTAMP: {
+		if (schema_ele.type == Type::INT96) {
+			if (stats.size() != sizeof(Int96)) {
+				throw InternalException("Incorrect stats size for type TIMESTAMP");
+			}
+			return Value::TIMESTAMP(ImpalaTimestampToTimestamp(Load<Int96>((data_ptr_t)stats.c_str())));
+		} else {
+			D_ASSERT(schema_ele.type == Type::INT64);
+			if (stats.size() != sizeof(int64_t)) {
+				throw InternalException("Incorrect stats size for type TIMESTAMP");
+			}
+			auto val = Load<int64_t>((data_ptr_t)stats.c_str());
+			if (schema_ele.converted_type == duckdb_parquet::format::ConvertedType::TIMESTAMP_MILLIS) {
+				return Value::TIMESTAMPMS(timestamp_t(val));
+			} else {
+				return Value::TIMESTAMP(timestamp_t(val));
+			}
+		}
+	}
+	default:
+		throw InternalException("Unsupported type for stats %s", type.ToString());
+	}
+}
+
+unique_ptr<BaseStatistics> ParquetStatisticsUtils::TransformColumnStatistics(const SchemaElement &s_ele,
+                                                                             const LogicalType &type,
+                                                                             const ColumnChunk &column_chunk) {
+	if (!column_chunk.__isset.meta_data || !column_chunk.meta_data.__isset.statistics) {
+		// no stats present for row group
+		return nullptr;
+	}
+	auto &parquet_stats = column_chunk.meta_data.statistics;
+	unique_ptr<BaseStatistics> row_group_stats;
+
+	switch (type.id()) {
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::DECIMAL:
+		row_group_stats = CreateNumericStats(type, s_ele, parquet_stats);
+		break;
+	case LogicalTypeId::VARCHAR: {
+		auto string_stats = make_unique<StringStatistics>(type, StatisticsType::LOCAL_STATS);
+		if (parquet_stats.__isset.min) {
+			string_stats->Update(parquet_stats.min);
+		} else if (parquet_stats.__isset.min_value) {
+			string_stats->Update(parquet_stats.min_value);
+		} else {
+			return nullptr;
+		}
+		if (parquet_stats.__isset.max) {
+			string_stats->Update(parquet_stats.max);
+		} else if (parquet_stats.__isset.max_value) {
+			string_stats->Update(parquet_stats.max_value);
+		} else {
+			return nullptr;
+		}
+		string_stats->has_unicode = true; // we dont know better
+		string_stats->max_string_length = NumericLimits<uint32_t>::Maximum();
+		row_group_stats = move(string_stats);
+		break;
+	}
+	default:
+		// no stats for you
+		break;
+	} // end of type switch
+
+	// null count is generic
+	if (row_group_stats) {
+		if (column_chunk.meta_data.type == duckdb_parquet::format::Type::FLOAT ||
+		    column_chunk.meta_data.type == duckdb_parquet::format::Type::DOUBLE) {
+			// floats/doubles can have infinity, which can become NULL
+			row_group_stats->validity_stats = make_unique<ValidityStatistics>(true);
+		} else if (parquet_stats.__isset.null_count) {
+			row_group_stats->validity_stats = make_unique<ValidityStatistics>(parquet_stats.null_count != 0);
+		} else {
+			row_group_stats->validity_stats = make_unique<ValidityStatistics>(true);
+		}
+	} else {
+		// if stats are missing from any row group we know squat
+		return nullptr;
+	}
+
+	return row_group_stats;
+}
+
+} // namespace duckdb
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/time.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+#endif
+
+namespace duckdb {
+
+// surely they are joking
+static constexpr int64_t JULIAN_TO_UNIX_EPOCH_DAYS = 2440588LL;
+static constexpr int64_t MILLISECONDS_PER_DAY = 86400000LL;
+static constexpr int64_t NANOSECONDS_PER_DAY = MILLISECONDS_PER_DAY * 1000LL * 1000LL;
+
+int64_t ImpalaTimestampToNanoseconds(const Int96 &impala_timestamp) {
+	int64_t days_since_epoch = impala_timestamp.value[2] - JULIAN_TO_UNIX_EPOCH_DAYS;
+	auto nanoseconds = Load<int64_t>((data_ptr_t)impala_timestamp.value);
+	return days_since_epoch * NANOSECONDS_PER_DAY + nanoseconds;
+}
+
+timestamp_t ImpalaTimestampToTimestamp(const Int96 &raw_ts) {
+	auto impala_ns = ImpalaTimestampToNanoseconds(raw_ts);
+	return Timestamp::FromEpochNanoSeconds(impala_ns);
+}
+
+Int96 TimestampToImpalaTimestamp(timestamp_t &ts) {
+	int32_t hour, min, sec, msec;
+	Time::Convert(Timestamp::GetTime(ts), hour, min, sec, msec);
+	uint64_t ms_since_midnight = hour * 60 * 60 * 1000 + min * 60 * 1000 + sec * 1000 + msec;
+	auto days_since_epoch = Date::Epoch(Timestamp::GetDate(ts)) / (24 * 60 * 60);
+	// first two uint32 in Int96 are nanoseconds since midnights
+	// last uint32 is number of days since year 4713 BC ("Julian date")
+	Int96 impala_ts;
+	Store<uint64_t>(ms_since_midnight * 1000000, (data_ptr_t)impala_ts.value);
+	impala_ts.value[2] = days_since_epoch + JULIAN_TO_UNIX_EPOCH_DAYS;
+	return impala_ts;
+}
+
+timestamp_t ParquetTimestampMicrosToTimestamp(const int64_t &raw_ts) {
+	return Timestamp::FromEpochMicroSeconds(raw_ts);
+}
+timestamp_t ParquetTimestampMsToTimestamp(const int64_t &raw_ts) {
+	return Timestamp::FromEpochMs(raw_ts);
+}
+
+date_t ParquetIntToDate(const int32_t &raw_date) {
+	return date_t(raw_date);
+}
+
+dtime_t ParquetIntToTime(const int64_t &raw_time) {
+	return dtime_t(raw_time);
+}
+
+} // namespace duckdb
+
+
+
+#include "duckdb.hpp"
+#ifndef DUCKDB_AMALGAMATION
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_copy_function_info.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/serializer/buffered_file_writer.hpp"
+#endif
+
+namespace duckdb {
+
+using namespace duckdb_apache::thrift;            // NOLINT
+using namespace duckdb_apache::thrift::protocol;  // NOLINT
+using namespace duckdb_apache::thrift::transport; // NOLINT
+
+using duckdb_parquet::format::CompressionCodec;
+using duckdb_parquet::format::ConvertedType;
+using duckdb_parquet::format::Encoding;
+using duckdb_parquet::format::FieldRepetitionType;
+using duckdb_parquet::format::FileMetaData;
+using duckdb_parquet::format::PageHeader;
+using duckdb_parquet::format::PageType;
+using ParquetRowGroup = duckdb_parquet::format::RowGroup;
+using duckdb_parquet::format::Type;
+
+class MyTransport : public TTransport {
+public:
+	explicit MyTransport(Serializer &serializer) : serializer(serializer) {
+	}
+
+	bool isOpen() const override {
+		return true;
+	}
+
+	void open() override {
+	}
+
+	void close() override {
+	}
+
+	void write_virt(const uint8_t *buf, uint32_t len) override {
+		serializer.WriteData((const_data_ptr_t)buf, len);
+	}
+
+private:
+	Serializer &serializer;
+};
+
+Type::type ParquetWriter::DuckDBTypeToParquetType(const LogicalType &duckdb_type) {
+	switch (duckdb_type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return Type::BOOLEAN;
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::DATE:
+		return Type::INT32;
+	case LogicalTypeId::BIGINT:
+		return Type::INT64;
+	case LogicalTypeId::FLOAT:
+		return Type::FLOAT;
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::HUGEINT:
+		return Type::DOUBLE;
+	case LogicalTypeId::ENUM:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+	case LogicalTypeId::BLOB:
+		return Type::BYTE_ARRAY;
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_SEC:
+		return Type::INT64;
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+		return Type::INT32;
+	case LogicalTypeId::UBIGINT:
+		return Type::INT64;
+	case LogicalTypeId::INTERVAL:
+	case LogicalTypeId::UUID:
+		return Type::FIXED_LEN_BYTE_ARRAY;
+	case LogicalTypeId::DECIMAL:
+		switch (duckdb_type.InternalType()) {
+		case PhysicalType::INT16:
+		case PhysicalType::INT32:
+			return Type::INT32;
+		case PhysicalType::INT64:
+			return Type::INT64;
+		case PhysicalType::INT128:
+			return Type::FIXED_LEN_BYTE_ARRAY;
+		default:
+			throw InternalException("Unsupported internal decimal type");
+		}
+	default:
+		throw NotImplementedException("Unimplemented type for Parquet \"%s\"", duckdb_type.ToString());
+	}
+}
+
+void ParquetWriter::SetSchemaProperties(const LogicalType &duckdb_type,
+                                        duckdb_parquet::format::SchemaElement &schema_ele) {
+	switch (duckdb_type.id()) {
+	case LogicalTypeId::TINYINT:
+		schema_ele.converted_type = ConvertedType::INT_8;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::SMALLINT:
+		schema_ele.converted_type = ConvertedType::INT_16;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::INTEGER:
+		schema_ele.converted_type = ConvertedType::INT_32;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::BIGINT:
+		schema_ele.converted_type = ConvertedType::INT_64;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::UTINYINT:
+		schema_ele.converted_type = ConvertedType::UINT_8;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::USMALLINT:
+		schema_ele.converted_type = ConvertedType::UINT_16;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::UINTEGER:
+		schema_ele.converted_type = ConvertedType::UINT_32;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::UBIGINT:
+		schema_ele.converted_type = ConvertedType::UINT_64;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::DATE:
+		schema_ele.converted_type = ConvertedType::DATE;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIME:
+		schema_ele.converted_type = ConvertedType::TIME_MICROS;
+		schema_ele.__isset.converted_type = true;
+		schema_ele.logicalType.__isset.TIME = true;
+		schema_ele.logicalType.TIME.isAdjustedToUTC = (duckdb_type.id() == LogicalTypeId::TIME_TZ);
+		schema_ele.logicalType.TIME.unit.__isset.MICROS = true;
+		break;
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_SEC:
+		schema_ele.converted_type = ConvertedType::TIMESTAMP_MICROS;
+		schema_ele.__isset.converted_type = true;
+		schema_ele.__isset.logicalType = true;
+		schema_ele.logicalType.__isset.TIMESTAMP = true;
+		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC = (duckdb_type.id() == LogicalTypeId::TIMESTAMP_TZ);
+		schema_ele.logicalType.TIMESTAMP.unit.__isset.MICROS = true;
+		break;
+	case LogicalTypeId::TIMESTAMP_MS:
+		schema_ele.converted_type = ConvertedType::TIMESTAMP_MILLIS;
+		schema_ele.__isset.converted_type = true;
+		schema_ele.__isset.logicalType = true;
+		schema_ele.logicalType.__isset.TIMESTAMP = true;
+		schema_ele.logicalType.TIMESTAMP.isAdjustedToUTC = false;
+		schema_ele.logicalType.TIMESTAMP.unit.__isset.MILLIS = true;
+		break;
+	case LogicalTypeId::ENUM:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::JSON:
+		schema_ele.converted_type = ConvertedType::UTF8;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::INTERVAL:
+		schema_ele.type_length = 12;
+		schema_ele.converted_type = ConvertedType::INTERVAL;
+		schema_ele.__isset.type_length = true;
+		schema_ele.__isset.converted_type = true;
+		break;
+	case LogicalTypeId::UUID:
+		schema_ele.type_length = 16;
+		schema_ele.__isset.type_length = true;
+		schema_ele.__isset.logicalType = true;
+		schema_ele.logicalType.__isset.UUID = true;
+		break;
+	case LogicalTypeId::DECIMAL:
+		schema_ele.converted_type = ConvertedType::DECIMAL;
+		schema_ele.precision = DecimalType::GetWidth(duckdb_type);
+		schema_ele.scale = DecimalType::GetScale(duckdb_type);
+		schema_ele.__isset.converted_type = true;
+		schema_ele.__isset.precision = true;
+		schema_ele.__isset.scale = true;
+		if (duckdb_type.InternalType() == PhysicalType::INT128) {
+			schema_ele.type_length = 16;
+			schema_ele.__isset.type_length = true;
+		}
+		schema_ele.__isset.logicalType = true;
+		schema_ele.logicalType.__isset.DECIMAL = true;
+		schema_ele.logicalType.DECIMAL.precision = schema_ele.precision;
+		schema_ele.logicalType.DECIMAL.scale = schema_ele.scale;
+		break;
+	default:
+		break;
+	}
+}
+
+ParquetWriter::ParquetWriter(FileSystem &fs, string file_name_p, FileOpener *file_opener_p, vector<LogicalType> types_p,
+                             vector<string> names_p, CompressionCodec::type codec)
+    : file_name(move(file_name_p)), sql_types(move(types_p)), column_names(move(names_p)), codec(codec) {
+	// initialize the file writer
+	writer = make_unique<BufferedFileWriter>(
+	    fs, file_name.c_str(), FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE_NEW, file_opener_p);
+	// parquet files start with the string "PAR1"
+	writer->WriteData((const_data_ptr_t) "PAR1", 4);
+	TCompactProtocolFactoryT<MyTransport> tproto_factory;
+	protocol = tproto_factory.getProtocol(make_shared<MyTransport>(*writer));
+
+	file_meta_data.num_rows = 0;
+	file_meta_data.version = 1;
+
+	file_meta_data.__isset.created_by = true;
+	file_meta_data.created_by = "DuckDB";
+
+	file_meta_data.schema.resize(1);
+
+	// populate root schema object
+	file_meta_data.schema[0].name = "duckdb_schema";
+	file_meta_data.schema[0].num_children = sql_types.size();
+	file_meta_data.schema[0].__isset.num_children = true;
+	file_meta_data.schema[0].repetition_type = duckdb_parquet::format::FieldRepetitionType::REQUIRED;
+	file_meta_data.schema[0].__isset.repetition_type = true;
+
+	vector<string> schema_path;
+	for (idx_t i = 0; i < sql_types.size(); i++) {
+		column_writers.push_back(ColumnWriter::CreateWriterRecursive(file_meta_data.schema, *this, sql_types[i],
+		                                                             column_names[i], schema_path));
+	}
+}
+
+void ParquetWriter::Flush(ChunkCollection &buffer) {
+	if (buffer.Count() == 0) {
+		return;
+	}
+	lock_guard<mutex> glock(lock);
+
+	// set up a new row group for this chunk collection
+	ParquetRowGroup row_group;
+	row_group.num_rows = buffer.Count();
+	row_group.file_offset = writer->GetTotalWritten();
+	row_group.__isset.file_offset = true;
+
+	// iterate over each of the columns of the chunk collection and write them
+	auto &chunks = buffer.Chunks();
+	D_ASSERT(buffer.ColumnCount() == column_writers.size());
+	for (idx_t col_idx = 0; col_idx < buffer.ColumnCount(); col_idx++) {
+		auto write_state = column_writers[col_idx]->InitializeWriteState(row_group);
+		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
+			column_writers[col_idx]->Prepare(*write_state, nullptr, chunks[chunk_idx]->data[col_idx],
+			                                 chunks[chunk_idx]->size());
+		}
+		column_writers[col_idx]->BeginWrite(*write_state);
+		for (idx_t chunk_idx = 0; chunk_idx < chunks.size(); chunk_idx++) {
+			column_writers[col_idx]->Write(*write_state, chunks[chunk_idx]->data[col_idx], chunks[chunk_idx]->size());
+		}
+		column_writers[col_idx]->FinalizeWrite(*write_state);
+	}
+
+	// append the row group to the file meta data
+	file_meta_data.row_groups.push_back(row_group);
+	file_meta_data.num_rows += buffer.Count();
+}
+
+void ParquetWriter::Finalize() {
+	auto start_offset = writer->GetTotalWritten();
+	file_meta_data.write(protocol.get());
+
+	writer->Write<uint32_t>(writer->GetTotalWritten() - start_offset);
+
+	// parquet files also end with the string "PAR1"
+	writer->WriteData((const_data_ptr_t) "PAR1", 4);
+
+	// flush to disk
+	writer->Sync();
+	writer.reset();
+}
+
+} // namespace duckdb
+
+
+
+namespace duckdb {
+
+struct ZstdStreamWrapper : public StreamWrapper {
+	~ZstdStreamWrapper() override;
+
+	CompressedFile *file = nullptr;
+	duckdb_zstd::ZSTD_DStream *zstd_stream_ptr = nullptr;
+	duckdb_zstd::ZSTD_CStream *zstd_compress_ptr = nullptr;
+	bool writing = false;
+
+public:
+	void Initialize(CompressedFile &file, bool write) override;
+	bool Read(StreamData &stream_data) override;
+	void Write(CompressedFile &file, StreamData &stream_data, data_ptr_t buffer, int64_t nr_bytes) override;
+
+	void Close() override;
+
+	void FlushStream();
+};
+
+ZstdStreamWrapper::~ZstdStreamWrapper() {
+	if (Exception::UncaughtException()) {
+		return;
+	}
+	try {
+		Close();
+	} catch (...) {
+	}
+}
+
+void ZstdStreamWrapper::Initialize(CompressedFile &file, bool write) {
+	Close();
+	this->file = &file;
+	this->writing = write;
+	if (write) {
+		zstd_compress_ptr = duckdb_zstd::ZSTD_createCStream();
+	} else {
+		zstd_stream_ptr = duckdb_zstd::ZSTD_createDStream();
+	}
+}
+
+bool ZstdStreamWrapper::Read(StreamData &sd) {
+	D_ASSERT(!writing);
+
+	duckdb_zstd::ZSTD_inBuffer in_buffer;
+	duckdb_zstd::ZSTD_outBuffer out_buffer;
+
+	in_buffer.src = sd.in_buff_start;
+	in_buffer.size = sd.in_buff_end - sd.in_buff_start;
+	in_buffer.pos = 0;
+
+	out_buffer.dst = sd.out_buff_start;
+	out_buffer.size = sd.out_buf_size;
+	out_buffer.pos = 0;
+
+	auto res = duckdb_zstd::ZSTD_decompressStream(zstd_stream_ptr, &out_buffer, &in_buffer);
+	if (duckdb_zstd::ZSTD_isError(res)) {
+		throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
+	}
+
+	sd.in_buff_start = (data_ptr_t)in_buffer.src + in_buffer.pos;
+	sd.in_buff_end = (data_ptr_t)in_buffer.src + in_buffer.size;
+	sd.out_buff_end = (data_ptr_t)out_buffer.dst + out_buffer.pos;
+	return false;
+}
+
+void ZstdStreamWrapper::Write(CompressedFile &file, StreamData &sd, data_ptr_t uncompressed_data,
+                              int64_t uncompressed_size) {
+	D_ASSERT(writing);
+
+	auto remaining = uncompressed_size;
+	while (remaining > 0) {
+		D_ASSERT(sd.out_buff.get() + sd.out_buf_size > sd.out_buff_start);
+		idx_t output_remaining = (sd.out_buff.get() + sd.out_buf_size) - sd.out_buff_start;
+
+		duckdb_zstd::ZSTD_inBuffer in_buffer;
+		duckdb_zstd::ZSTD_outBuffer out_buffer;
+
+		in_buffer.src = uncompressed_data;
+		in_buffer.size = remaining;
+		in_buffer.pos = 0;
+
+		out_buffer.dst = sd.out_buff_start;
+		out_buffer.size = output_remaining;
+		out_buffer.pos = 0;
+		auto res =
+		    duckdb_zstd::ZSTD_compressStream2(zstd_compress_ptr, &out_buffer, &in_buffer, duckdb_zstd::ZSTD_e_continue);
+		if (duckdb_zstd::ZSTD_isError(res)) {
+			throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
+		}
+		idx_t input_consumed = in_buffer.pos;
+		idx_t written_to_output = out_buffer.pos;
+		sd.out_buff_start += written_to_output;
+		if (sd.out_buff_start == sd.out_buff.get() + sd.out_buf_size) {
+			// no more output buffer available: flush
+			file.child_handle->Write(sd.out_buff.get(), sd.out_buff_start - sd.out_buff.get());
+			sd.out_buff_start = sd.out_buff.get();
+		}
+		uncompressed_data += input_consumed;
+		remaining -= input_consumed;
+	}
+}
+
+void ZstdStreamWrapper::FlushStream() {
+	auto &sd = file->stream_data;
+	duckdb_zstd::ZSTD_inBuffer in_buffer;
+	duckdb_zstd::ZSTD_outBuffer out_buffer;
+
+	in_buffer.src = nullptr;
+	in_buffer.size = 0;
+	in_buffer.pos = 0;
+	while (true) {
+		idx_t output_remaining = (sd.out_buff.get() + sd.out_buf_size) - sd.out_buff_start;
+
+		out_buffer.dst = sd.out_buff_start;
+		out_buffer.size = output_remaining;
+		out_buffer.pos = 0;
+
+		auto res =
+		    duckdb_zstd::ZSTD_compressStream2(zstd_compress_ptr, &out_buffer, &in_buffer, duckdb_zstd::ZSTD_e_end);
+		if (duckdb_zstd::ZSTD_isError(res)) {
+			throw IOException(duckdb_zstd::ZSTD_getErrorName(res));
+		}
+		idx_t written_to_output = out_buffer.pos;
+		sd.out_buff_start += written_to_output;
+		if (sd.out_buff_start > sd.out_buff.get()) {
+			file->child_handle->Write(sd.out_buff.get(), sd.out_buff_start - sd.out_buff.get());
+			sd.out_buff_start = sd.out_buff.get();
+		}
+		if (res == 0) {
+			break;
+		}
+	}
+}
+
+void ZstdStreamWrapper::Close() {
+	if (!zstd_stream_ptr && !zstd_compress_ptr) {
+		return;
+	}
+	if (writing) {
+		FlushStream();
+	}
+	if (zstd_stream_ptr) {
+		duckdb_zstd::ZSTD_freeDStream(zstd_stream_ptr);
+	}
+	if (zstd_compress_ptr) {
+		duckdb_zstd::ZSTD_freeCStream(zstd_compress_ptr);
+	}
+	zstd_stream_ptr = nullptr;
+	zstd_compress_ptr = nullptr;
+}
+
+class ZStdFile : public CompressedFile {
+public:
+	ZStdFile(unique_ptr<FileHandle> child_handle_p, const string &path, bool write)
+	    : CompressedFile(zstd_fs, move(child_handle_p), path) {
+		Initialize(write);
+	}
+
+	ZStdFileSystem zstd_fs;
+};
+
+unique_ptr<FileHandle> ZStdFileSystem::OpenCompressedFile(unique_ptr<FileHandle> handle, bool write) {
+	auto path = handle->path;
+	return make_unique<ZStdFile>(move(handle), path, write);
+}
+
+unique_ptr<StreamWrapper> ZStdFileSystem::CreateStream() {
+	return make_unique<ZstdStreamWrapper>();
+}
+
+idx_t ZStdFileSystem::InBufferSize() {
+	return duckdb_zstd::ZSTD_DStreamInSize();
+}
+
+idx_t ZStdFileSystem::OutBufferSize() {
+	return duckdb_zstd::ZSTD_DStreamOutSize();
+}
+
+} // namespace duckdb
 
 
 // LICENSE_CHANGE_BEGIN
@@ -33746,3052 +36602,6 @@ size_t ZSTD_compressBlock_btultra_extDict(
 
 
 // LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
-#include <cassert>
-#include <algorithm>
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-#ifndef THRIFT_EXPORT_H
-#define THRIFT_EXPORT_H
-
-#ifdef THRIFT_STATIC_DEFINE
-#  define THRIFT_EXPORT
-#elif defined(_MSC_VER )
-#  ifndef THRIFT_EXPORT
-#    ifdef thrift_EXPORTS
-          /* We are building this library */
-#      define THRIFT_EXPORT __declspec(dllexport)
-#    else
-          /* We are using this library */
-#      define THRIFT_EXPORT __declspec(dllimport)
-#    endif
-#  endif
-#else
-#  define THRIFT_EXPORT
-#endif
-
-#endif /* THRIFT_EXPORT_H */
-
-
-// LICENSE_CHANGE_END
-
-
-
-
-using std::string;
-
-namespace duckdb_apache {
-namespace thrift {
-namespace transport {
-
-
-
-
-void TMemoryBuffer::computeRead(uint32_t len, uint8_t** out_start, uint32_t* out_give) {
-  // Correct rBound_ so we can use the fast path in the future.
-  rBound_ = wBase_;
-
-  // Decide how much to give.
-  uint32_t give = (std::min)(len, available_read());
-
-  *out_start = rBase_;
-  *out_give = give;
-
-  // Preincrement rBase_ so the caller doesn't have to.
-  rBase_ += give;
-}
-
-uint32_t TMemoryBuffer::readSlow(uint8_t* buf, uint32_t len) {
-  uint8_t* start;
-  uint32_t give;
-  computeRead(len, &start, &give);
-
-  // Copy into the provided buffer.
-  memcpy(buf, start, give);
-
-  return give;
-}
-
-uint32_t TMemoryBuffer::readAppendToString(std::string& str, uint32_t len) {
-  // Don't get some stupid assertion failure.
-  if (buffer_ == nullptr) {
-    return 0;
-  }
-
-  uint8_t* start;
-  uint32_t give;
-  computeRead(len, &start, &give);
-
-  // Append to the provided string.
-  str.append((char*)start, give);
-
-  return give;
-}
-
-void TMemoryBuffer::ensureCanWrite(uint32_t len) {
-  // Check available space
-  uint32_t avail = available_write();
-  if (len <= avail) {
-    return;
-  }
-
-  if (!owner_) {
-    throw TTransportException("Insufficient space in external MemoryBuffer");
-  }
-
-  // Grow the buffer as necessary.
-  uint64_t new_size = bufferSize_;
-  while (len > avail) {
-    new_size = new_size > 0 ? new_size * 2 : 1;
-    if (new_size > maxBufferSize_) {
-      throw TTransportException(TTransportException::BAD_ARGS,
-                                "Internal buffer size overflow");
-    }
-    avail = available_write() + (static_cast<uint32_t>(new_size) - bufferSize_);
-  }
-
-  // Allocate into a new pointer so we don't bork ours if it fails.
-  auto* new_buffer = static_cast<uint8_t*>(std::realloc(buffer_, new_size));
-  if (new_buffer == nullptr) {
-    throw std::bad_alloc();
-  }
-
-  rBase_ = new_buffer + (rBase_ - buffer_);
-  rBound_ = new_buffer + (rBound_ - buffer_);
-  wBase_ = new_buffer + (wBase_ - buffer_);
-  wBound_ = new_buffer + new_size;
-  buffer_ = new_buffer;
-  bufferSize_ = static_cast<uint32_t>(new_size);
-}
-
-void TMemoryBuffer::writeSlow(const uint8_t* buf, uint32_t len) {
-  ensureCanWrite(len);
-
-  // Copy into the buffer and increment wBase_.
-  memcpy(wBase_, buf, len);
-  wBase_ += len;
-}
-
-void TMemoryBuffer::wroteBytes(uint32_t len) {
-  uint32_t avail = available_write();
-  if (len > avail) {
-    throw TTransportException("Client wrote more bytes than size of buffer.");
-  }
-  wBase_ += len;
-}
-
-const uint8_t* TMemoryBuffer::borrowSlow(uint8_t* buf, uint32_t* len) {
-  (void)buf;
-  rBound_ = wBase_;
-  if (available_read() >= *len) {
-    *len = available_read();
-    return rBase_;
-  }
-  return nullptr;
-}
-}
-}
-} // duckdb_apache::thrift::transport
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
-
-#include <cstring>
-
-
-
-using std::string;
-
-namespace duckdb_apache {
-namespace thrift {
-namespace transport {
-
-const char* TTransportException::what() const noexcept {
-  if (message_.empty()) {
-    switch (type_) {
-    case UNKNOWN:
-      return "TTransportException: Unknown transport exception";
-    case NOT_OPEN:
-      return "TTransportException: Transport not open";
-    case TIMED_OUT:
-      return "TTransportException: Timed out";
-    case END_OF_FILE:
-      return "TTransportException: End of file";
-    case INTERRUPTED:
-      return "TTransportException: Interrupted";
-    case BAD_ARGS:
-      return "TTransportException: Invalid arguments";
-    case CORRUPTED_DATA:
-      return "TTransportException: Corrupted Data";
-    case INTERNAL_ERROR:
-      return "TTransportException: Internal error";
-    default:
-      return "TTransportException: (Invalid exception type)";
-    }
-  } else {
-    return message_.c_str();
-  }
-}
-}
-}
-} // duckdb_apache::thrift::transport
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#include <string.h>
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-#define THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-
-#include <stddef.h>
-
-namespace duckdb_snappy {
-
-// A Sink is an interface that consumes a sequence of bytes.
-class Sink {
- public:
-  Sink() { }
-  virtual ~Sink();
-
-  // Append "bytes[0,n-1]" to this.
-  virtual void Append(const char* bytes, size_t n) = 0;
-
-  // Returns a writable buffer of the specified length for appending.
-  // May return a pointer to the caller-owned scratch buffer which
-  // must have at least the indicated length.  The returned buffer is
-  // only valid until the next operation on this Sink.
-  //
-  // After writing at most "length" bytes, call Append() with the
-  // pointer returned from this function and the number of bytes
-  // written.  Many Append() implementations will avoid copying
-  // bytes if this function returned an internal buffer.
-  //
-  // If a non-scratch buffer is returned, the caller may only pass a
-  // prefix of it to Append().  That is, it is not correct to pass an
-  // interior pointer of the returned array to Append().
-  //
-  // The default implementation always returns the scratch buffer.
-  virtual char* GetAppendBuffer(size_t length, char* scratch);
-
-  // For higher performance, Sink implementations can provide custom
-  // AppendAndTakeOwnership() and GetAppendBufferVariable() methods.
-  // These methods can reduce the number of copies done during
-  // compression/decompression.
-
-  // Append "bytes[0,n-1] to the sink. Takes ownership of "bytes"
-  // and calls the deleter function as (*deleter)(deleter_arg, bytes, n)
-  // to free the buffer. deleter function must be non NULL.
-  //
-  // The default implementation just calls Append and frees "bytes".
-  // Other implementations may avoid a copy while appending the buffer.
-  virtual void AppendAndTakeOwnership(
-      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
-      void *deleter_arg);
-
-  // Returns a writable buffer for appending and writes the buffer's capacity to
-  // *allocated_size. Guarantees *allocated_size >= min_size.
-  // May return a pointer to the caller-owned scratch buffer which must have
-  // scratch_size >= min_size.
-  //
-  // The returned buffer is only valid until the next operation
-  // on this ByteSink.
-  //
-  // After writing at most *allocated_size bytes, call Append() with the
-  // pointer returned from this function and the number of bytes written.
-  // Many Append() implementations will avoid copying bytes if this function
-  // returned an internal buffer.
-  //
-  // If the sink implementation allocates or reallocates an internal buffer,
-  // it should use the desired_size_hint if appropriate. If a caller cannot
-  // provide a reasonable guess at the desired capacity, it should set
-  // desired_size_hint = 0.
-  //
-  // If a non-scratch buffer is returned, the caller may only pass
-  // a prefix to it to Append(). That is, it is not correct to pass an
-  // interior pointer to Append().
-  //
-  // The default implementation always returns the scratch buffer.
-  virtual char* GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size);
-
- private:
-  // No copying
-  Sink(const Sink&);
-  void operator=(const Sink&);
-};
-
-// A Source is an interface that yields a sequence of bytes
-class Source {
- public:
-  Source() { }
-  virtual ~Source();
-
-  // Return the number of bytes left to read from the source
-  virtual size_t Available() const = 0;
-
-  // Peek at the next flat region of the source.  Does not reposition
-  // the source.  The returned region is empty iff Available()==0.
-  //
-  // Returns a pointer to the beginning of the region and store its
-  // length in *len.
-  //
-  // The returned region is valid until the next call to Skip() or
-  // until this object is destroyed, whichever occurs first.
-  //
-  // The returned region may be larger than Available() (for example
-  // if this ByteSource is a view on a substring of a larger source).
-  // The caller is responsible for ensuring that it only reads the
-  // Available() bytes.
-  virtual const char* Peek(size_t* len) = 0;
-
-  // Skip the next n bytes.  Invalidates any buffer returned by
-  // a previous call to Peek().
-  // REQUIRES: Available() >= n
-  virtual void Skip(size_t n) = 0;
-
- private:
-  // No copying
-  Source(const Source&);
-  void operator=(const Source&);
-};
-
-// A Source implementation that yields the contents of a flat array
-class ByteArraySource : public Source {
- public:
-  ByteArraySource(const char* p, size_t n) : ptr_(p), left_(n) { }
-  virtual ~ByteArraySource();
-  virtual size_t Available() const;
-  virtual const char* Peek(size_t* len);
-  virtual void Skip(size_t n);
- private:
-  const char* ptr_;
-  size_t left_;
-};
-
-// A Sink implementation that writes to a flat array without any bound checks.
-class UncheckedByteArraySink : public Sink {
- public:
-  explicit UncheckedByteArraySink(char* dest) : dest_(dest) { }
-  virtual ~UncheckedByteArraySink();
-  virtual void Append(const char* data, size_t n);
-  virtual char* GetAppendBuffer(size_t len, char* scratch);
-  virtual char* GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size);
-  virtual void AppendAndTakeOwnership(
-      char* bytes, size_t n, void (*deleter)(void*, const char*, size_t),
-      void *deleter_arg);
-
-  // Return the current output pointer so that a caller can see how
-  // many bytes were produced.
-  // Note: this is not a Sink method.
-  char* CurrentDestination() const { return dest_; }
- private:
-  char* dest_;
-};
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_SINKSOURCE_H_
-
-
-// LICENSE_CHANGE_END
-
-
-namespace duckdb_snappy {
-
-Source::~Source() { }
-
-Sink::~Sink() { }
-
-char* Sink::GetAppendBuffer(size_t length, char* scratch) {
-  return scratch;
-}
-
-char* Sink::GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size) {
-  *allocated_size = scratch_size;
-  return scratch;
-}
-
-void Sink::AppendAndTakeOwnership(
-    char* bytes, size_t n,
-    void (*deleter)(void*, const char*, size_t),
-    void *deleter_arg) {
-  Append(bytes, n);
-  (*deleter)(deleter_arg, bytes, n);
-}
-
-ByteArraySource::~ByteArraySource() { }
-
-size_t ByteArraySource::Available() const { return left_; }
-
-const char* ByteArraySource::Peek(size_t* len) {
-  *len = left_;
-  return ptr_;
-}
-
-void ByteArraySource::Skip(size_t n) {
-  left_ -= n;
-  ptr_ += n;
-}
-
-UncheckedByteArraySink::~UncheckedByteArraySink() { }
-
-void UncheckedByteArraySink::Append(const char* data, size_t n) {
-  // Do no copying if the caller filled in the result of GetAppendBuffer()
-  if (data != dest_) {
-    memcpy(dest_, data, n);
-  }
-  dest_ += n;
-}
-
-char* UncheckedByteArraySink::GetAppendBuffer(size_t len, char* scratch) {
-  return dest_;
-}
-
-void UncheckedByteArraySink::AppendAndTakeOwnership(
-    char* data, size_t n,
-    void (*deleter)(void*, const char*, size_t),
-    void *deleter_arg) {
-  if (data != dest_) {
-    memcpy(dest_, data, n);
-    (*deleter)(deleter_arg, data, n);
-  }
-  dest_ += n;
-}
-
-char* UncheckedByteArraySink::GetAppendBufferVariable(
-      size_t min_size, size_t desired_size_hint, char* scratch,
-      size_t scratch_size, size_t* allocated_size) {
-  *allocated_size = desired_size_hint;
-  return dest_;
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-#include <algorithm>
-#include <string>
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2011 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Various stubs for the open-source version of Snappy.
-
-#ifndef THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-#define THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-
-// #ifdef HAVE_CONFIG_H
-// #include "config.h"
-// #endif
-
-#include <string>
-
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
-
-#ifdef HAVE_SYS_MMAN_H
-#include <sys/mman.h>
-#endif
-
-#ifdef HAVE_UNISTD_H
-#include <unistd.h>
-#endif
-
-#if defined(_MSC_VER)
-#include <intrin.h>
-#endif  // defined(_MSC_VER)
-
-#ifndef __has_feature
-#define __has_feature(x) 0
-#endif
-
-#if __has_feature(memory_sanitizer)
-#include <sanitizer/msan_interface.h>
-#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) \
-    __msan_unpoison((address), (size))
-#else
-#define SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(address, size) /* empty */
-#endif  // __has_feature(memory_sanitizer)
-
-
-
-#if defined(__x86_64__)
-
-// Enable 64-bit optimized versions of some routines.
-#define ARCH_K8 1
-
-#elif defined(__ppc64__)
-
-#define ARCH_PPC 1
-
-#elif defined(__aarch64__)
-
-#define ARCH_ARM 1
-
-#endif
-
-// Needed by OS X, among others.
-#ifndef MAP_ANONYMOUS
-#define MAP_ANONYMOUS MAP_ANON
-#endif
-
-// The size of an array, if known at compile-time.
-// Will give unexpected results if used on a pointer.
-// We undefine it first, since some compilers already have a definition.
-#ifdef ARRAYSIZE
-#undef ARRAYSIZE
-#endif
-#define ARRAYSIZE(a) (sizeof(a) / sizeof(*(a)))
-
-// Static prediction hints.
-#ifdef HAVE_BUILTIN_EXPECT
-#define SNAPPY_PREDICT_FALSE(x) (__builtin_expect(x, 0))
-#define SNAPPY_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
-#else
-#define SNAPPY_PREDICT_FALSE(x) x
-#define SNAPPY_PREDICT_TRUE(x) x
-#endif
-
-// This is only used for recomputing the tag byte table used during
-// decompression; for simplicity we just remove it from the open-source
-// version (anyone who wants to regenerate it can just do the call
-// themselves within main()).
-#define DEFINE_bool(flag_name, default_value, description) \
-  bool FLAGS_ ## flag_name = default_value
-#define DECLARE_bool(flag_name) \
-  extern bool FLAGS_ ## flag_name
-
-namespace duckdb_snappy {
-
-//static const uint32 kuint32max = static_cast<uint32>(0xFFFFFFFF);
-//static const int64 kint64max = static_cast<int64>(0x7FFFFFFFFFFFFFFFLL);
-
-
-// HM: Always use aligned load to keep ourselves out of trouble. Sorry.
-
-inline uint16 UNALIGNED_LOAD16(const void *p) {
-  uint16 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline uint32 UNALIGNED_LOAD32(const void *p) {
-  uint32 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline uint64 UNALIGNED_LOAD64(const void *p) {
-  uint64 t;
-  memcpy(&t, p, sizeof t);
-  return t;
-}
-
-inline void UNALIGNED_STORE16(void *p, uint16 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-inline void UNALIGNED_STORE32(void *p, uint32 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-inline void UNALIGNED_STORE64(void *p, uint64 v) {
-  memcpy(p, &v, sizeof v);
-}
-
-
-// The following guarantees declaration of the byte swap functions.
-#if defined(SNAPPY_IS_BIG_ENDIAN)
-
-#ifdef HAVE_SYS_BYTEORDER_H
-#include <sys/byteorder.h>
-#endif
-
-#ifdef HAVE_SYS_ENDIAN_H
-#include <sys/endian.h>
-#endif
-
-#ifdef _MSC_VER
-#include <stdlib.h>
-#define bswap_16(x) _byteswap_ushort(x)
-#define bswap_32(x) _byteswap_ulong(x)
-#define bswap_64(x) _byteswap_uint64(x)
-
-#elif defined(__APPLE__)
-// Mac OS X / Darwin features
-#include <libkern/OSByteOrder.h>
-#define bswap_16(x) OSSwapInt16(x)
-#define bswap_32(x) OSSwapInt32(x)
-#define bswap_64(x) OSSwapInt64(x)
-
-#elif defined(HAVE_BYTESWAP_H)
-#include <byteswap.h>
-
-#elif defined(bswap32)
-// FreeBSD defines bswap{16,32,64} in <sys/endian.h> (already #included).
-#define bswap_16(x) bswap16(x)
-#define bswap_32(x) bswap32(x)
-#define bswap_64(x) bswap64(x)
-
-#elif defined(BSWAP_64)
-// Solaris 10 defines BSWAP_{16,32,64} in <sys/byteorder.h> (already #included).
-#define bswap_16(x) BSWAP_16(x)
-#define bswap_32(x) BSWAP_32(x)
-#define bswap_64(x) BSWAP_64(x)
-
-#else
-
-inline uint16 bswap_16(uint16 x) {
-  return (x << 8) | (x >> 8);
-}
-
-inline uint32 bswap_32(uint32 x) {
-  x = ((x & 0xff00ff00UL) >> 8) | ((x & 0x00ff00ffUL) << 8);
-  return (x >> 16) | (x << 16);
-}
-
-inline uint64 bswap_64(uint64 x) {
-  x = ((x & 0xff00ff00ff00ff00ULL) >> 8) | ((x & 0x00ff00ff00ff00ffULL) << 8);
-  x = ((x & 0xffff0000ffff0000ULL) >> 16) | ((x & 0x0000ffff0000ffffULL) << 16);
-  return (x >> 32) | (x << 32);
-}
-
-#endif
-
-#endif  // defined(SNAPPY_IS_BIG_ENDIAN)
-
-// Convert to little-endian storage, opposite of network format.
-// Convert x from host to little endian: x = LittleEndian.FromHost(x);
-// convert x from little endian to host: x = LittleEndian.ToHost(x);
-//
-//  Store values into unaligned memory converting to little endian order:
-//    LittleEndian.Store16(p, x);
-//
-//  Load unaligned values stored in little endian converting to host order:
-//    x = LittleEndian.Load16(p);
-class LittleEndian {
- public:
-  // Conversion functions.
-#if defined(SNAPPY_IS_BIG_ENDIAN)
-
-  static uint16 FromHost16(uint16 x) { return bswap_16(x); }
-  static uint16 ToHost16(uint16 x) { return bswap_16(x); }
-
-  static uint32 FromHost32(uint32 x) { return bswap_32(x); }
-  static uint32 ToHost32(uint32 x) { return bswap_32(x); }
-
-  static bool IsLittleEndian() { return false; }
-
-#else  // !defined(SNAPPY_IS_BIG_ENDIAN)
-
-  static uint16 FromHost16(uint16 x) { return x; }
-  static uint16 ToHost16(uint16 x) { return x; }
-
-  static uint32 FromHost32(uint32 x) { return x; }
-  static uint32 ToHost32(uint32 x) { return x; }
-
-  static bool IsLittleEndian() { return true; }
-
-#endif  // !defined(SNAPPY_IS_BIG_ENDIAN)
-
-  // Functions to do unaligned loads and stores in little-endian order.
-  static uint16 Load16(const void *p) {
-    return ToHost16(UNALIGNED_LOAD16(p));
-  }
-
-  static void Store16(void *p, uint16 v) {
-    UNALIGNED_STORE16(p, FromHost16(v));
-  }
-
-  static uint32 Load32(const void *p) {
-    return ToHost32(UNALIGNED_LOAD32(p));
-  }
-
-  static void Store32(void *p, uint32 v) {
-    UNALIGNED_STORE32(p, FromHost32(v));
-  }
-};
-
-// Some bit-manipulation functions.
-class Bits {
- public:
-  // Return floor(log2(n)) for positive integer n.
-  static int Log2FloorNonZero(uint32 n);
-
-  // Return floor(log2(n)) for positive integer n.  Returns -1 iff n == 0.
-  static int Log2Floor(uint32 n);
-
-  // Return the first set least / most significant bit, 0-indexed.  Returns an
-  // undefined value if n == 0.  FindLSBSetNonZero() is similar to ffs() except
-  // that it's 0-indexed.
-  static int FindLSBSetNonZero(uint32 n);
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-  static int FindLSBSetNonZero64(uint64 n);
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
- private:
-  // No copying
-  Bits(const Bits&);
-  void operator=(const Bits&);
-};
-
-#ifdef HAVE_BUILTIN_CTZ
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-  // (31 ^ x) is equivalent to (31 - x) for x in [0, 31]. An easy proof
-  // represents subtraction in base 2 and observes that there's no carry.
-  //
-  // GCC and Clang represent __builtin_clz on x86 as 31 ^ _bit_scan_reverse(x).
-  // Using "31 ^" here instead of "31 -" allows the optimizer to strip the
-  // function body down to _bit_scan_reverse(x).
-  return 31 ^ __builtin_clz(n);
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-  return __builtin_ctz(n);
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-  return __builtin_ctzll(n);
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#elif defined(_MSC_VER)
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-  unsigned long where;
-  _BitScanReverse(&where, n);
-  return static_cast<int>(where);
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  unsigned long where;
-  if (_BitScanReverse(&where, n))
-    return static_cast<int>(where);
-  return -1;
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-  unsigned long where;
-  if (_BitScanForward(&where, n))
-    return static_cast<int>(where);
-  return 32;
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-  unsigned long where;
-  if (_BitScanForward64(&where, n))
-    return static_cast<int>(where);
-  return 64;
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#else  // Portable versions.
-
-inline int Bits::Log2FloorNonZero(uint32 n) {
-  assert(n != 0);
-
-  int log = 0;
-  uint32 value = n;
-  for (int i = 4; i >= 0; --i) {
-    int shift = (1 << i);
-    uint32 x = value >> shift;
-    if (x != 0) {
-      value = x;
-      log += shift;
-    }
-  }
-  assert(value == 1);
-  return log;
-}
-
-inline int Bits::Log2Floor(uint32 n) {
-  return (n == 0) ? -1 : Bits::Log2FloorNonZero(n);
-}
-
-inline int Bits::FindLSBSetNonZero(uint32 n) {
-  assert(n != 0);
-
-  int rc = 31;
-  for (int i = 4, shift = 1 << 4; i >= 0; --i) {
-    const uint32 x = n << shift;
-    if (x != 0) {
-      n = x;
-      rc -= shift;
-    }
-    shift >>= 1;
-  }
-  return rc;
-}
-
-#if defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-// FindLSBSetNonZero64() is defined in terms of FindLSBSetNonZero().
-inline int Bits::FindLSBSetNonZero64(uint64 n) {
-  assert(n != 0);
-
-  const uint32 bottombits = static_cast<uint32>(n);
-  if (bottombits == 0) {
-    // Bottom bits are zero, so scan in top bits
-    return 32 + FindLSBSetNonZero(static_cast<uint32>(n >> 32));
-  } else {
-    return FindLSBSetNonZero(bottombits);
-  }
-}
-#endif  // defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM)
-
-#endif  // End portable versions.
-
-// Variable-length integer encoding.
-class Varint {
- public:
-  // Maximum lengths of varint encoding of uint32.
-  static const int kMax32 = 5;
-
-  // Attempts to parse a varint32 from a prefix of the bytes in [ptr,limit-1].
-  // Never reads a character at or beyond limit.  If a valid/terminated varint32
-  // was found in the range, stores it in *OUTPUT and returns a pointer just
-  // past the last byte of the varint32. Else returns NULL.  On success,
-  // "result <= limit".
-  static const char* Parse32WithLimit(const char* ptr, const char* limit,
-                                      uint32* OUTPUT);
-
-  // REQUIRES   "ptr" points to a buffer of length sufficient to hold "v".
-  // EFFECTS    Encodes "v" into "ptr" and returns a pointer to the
-  //            byte just past the last encoded byte.
-  static char* Encode32(char* ptr, uint32 v);
-
-  // EFFECTS    Appends the varint representation of "value" to "*s".
-  static void Append32(string* s, uint32 value);
-};
-
-inline const char* Varint::Parse32WithLimit(const char* p,
-                                            const char* l,
-                                            uint32* OUTPUT) {
-  const unsigned char* ptr = reinterpret_cast<const unsigned char*>(p);
-  const unsigned char* limit = reinterpret_cast<const unsigned char*>(l);
-  uint32 b, result;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result = b & 127;          if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) <<  7; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 14; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 21; if (b < 128) goto done;
-  if (ptr >= limit) return NULL;
-  b = *(ptr++); result |= (b & 127) << 28; if (b < 16) goto done;
-  return NULL;       // Value is too long to be a varint32
- done:
-  *OUTPUT = result;
-  return reinterpret_cast<const char*>(ptr);
-}
-
-inline char* Varint::Encode32(char* sptr, uint32 v) {
-  // Operate on characters as unsigneds
-  unsigned char* ptr = reinterpret_cast<unsigned char*>(sptr);
-  static const int B = 128;
-  if (v < (1<<7)) {
-    *(ptr++) = v;
-  } else if (v < (1<<14)) {
-    *(ptr++) = v | B;
-    *(ptr++) = v>>7;
-  } else if (v < (1<<21)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = v>>14;
-  } else if (v < (1<<28)) {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = (v>>14) | B;
-    *(ptr++) = v>>21;
-  } else {
-    *(ptr++) = v | B;
-    *(ptr++) = (v>>7) | B;
-    *(ptr++) = (v>>14) | B;
-    *(ptr++) = (v>>21) | B;
-    *(ptr++) = v>>28;
-  }
-  return reinterpret_cast<char*>(ptr);
-}
-
-// If you know the internal layout of the std::string in use, you can
-// replace this function with one that resizes the string without
-// filling the new space with zeros (if applicable) --
-// it will be non-portable but faster.
-inline void STLStringResizeUninitialized(string* s, size_t new_size) {
-  s->resize(new_size);
-}
-
-// Return a mutable char* pointing to a string's internal buffer,
-// which may not be null-terminated. Writing through this pointer will
-// modify the string.
-//
-// string_as_array(&str)[i] is valid for 0 <= i < str.size() until the
-// next call to a string method that invalidates iterators.
-//
-// As of 2006-04, there is no standard-blessed way of getting a
-// mutable reference to a string's internal buffer. However, issue 530
-// (http://www.open-std.org/JTC1/SC22/WG21/docs/lwg-defects.html#530)
-// proposes this as the method. It will officially be part of the standard
-// for C++0x. This should already work on all current implementations.
-inline char* string_as_array(string* str) {
-  return str->empty() ? NULL : &*str->begin();
-}
-
-}  // namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_OPENSOURCE_SNAPPY_STUBS_INTERNAL_H_
-
-
-// LICENSE_CHANGE_END
-
-
-namespace duckdb_snappy {
-
-void Varint::Append32(string* s, uint32 value) {
-  char buf[Varint::kMax32];
-  const char* p = Varint::Encode32(buf, value);
-  s->append(buf, p - buf);
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2005 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #4
-// See the end of this file for a list
-
-// Copyright 2008 Google Inc. All Rights Reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Internals shared between the Snappy implementation and its unittest.
-
-#ifndef THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-#define THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-
-
-
-namespace duckdb_snappy {
-namespace internal {
-
-// Working memory performs a single allocation to hold all scratch space
-// required for compression.
-class WorkingMemory {
- public:
-  explicit WorkingMemory(size_t input_size);
-  ~WorkingMemory();
-
-  // Allocates and clears a hash table using memory in "*this",
-  // stores the number of buckets in "*table_size" and returns a pointer to
-  // the base of the hash table.
-  uint16* GetHashTable(size_t fragment_size, int* table_size) const;
-  char* GetScratchInput() const { return input_; }
-  char* GetScratchOutput() const { return output_; }
-
- private:
-  char* mem_;      // the allocated memory, never nullptr
-  size_t size_;    // the size of the allocated memory, never 0
-  uint16* table_;  // the pointer to the hashtable
-  char* input_;    // the pointer to the input scratch buffer
-  char* output_;   // the pointer to the output scratch buffer
-
-  // No copying
-  WorkingMemory(const WorkingMemory&);
-  void operator=(const WorkingMemory&);
-};
-
-// Flat array compression that does not emit the "uncompressed length"
-// prefix. Compresses "input" string to the "*op" buffer.
-//
-// REQUIRES: "input_length <= kBlockSize"
-// REQUIRES: "op" points to an array of memory that is at least
-// "MaxCompressedLength(input_length)" in size.
-// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
-// REQUIRES: "table_size" is a power of two
-//
-// Returns an "end" pointer into "op" buffer.
-// "end - op" is the compressed size of "input".
-char* CompressFragment(const char* input,
-                       size_t input_length,
-                       char* op,
-                       uint16* table,
-                       const int table_size);
-
-// Find the largest n such that
-//
-//   s1[0,n-1] == s2[0,n-1]
-//   and n <= (s2_limit - s2).
-//
-// Return make_pair(n, n < 8).
-// Does not read *s2_limit or beyond.
-// Does not read *(s1 + (s2_limit - s2)) or beyond.
-// Requires that s2_limit >= s2.
-//
-// Separate implementation for 64-bit, little-endian cpus.
-#if !defined(SNAPPY_IS_BIG_ENDIAN) && \
-    (defined(ARCH_K8) || defined(ARCH_PPC) || defined(ARCH_ARM))
-static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
-                                                      const char* s2,
-                                                      const char* s2_limit) {
-  assert(s2_limit >= s2);
-  size_t matched = 0;
-
-  // This block isn't necessary for correctness; we could just start looping
-  // immediately.  As an optimization though, it is useful.  It creates some not
-  // uncommon code paths that determine, without extra effort, whether the match
-  // length is less than 8.  In short, we are hoping to avoid a conditional
-  // branch, and perhaps get better code layout from the C++ compiler.
-  if (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
-    uint64 a1 = UNALIGNED_LOAD64(s1);
-    uint64 a2 = UNALIGNED_LOAD64(s2);
-    if (a1 != a2) {
-      return std::pair<size_t, bool>(Bits::FindLSBSetNonZero64(a1 ^ a2) >> 3,
-                                     true);
-    } else {
-      matched = 8;
-      s2 += 8;
-    }
-  }
-
-  // Find out how long the match is. We loop over the data 64 bits at a
-  // time until we find a 64-bit block that doesn't match; then we find
-  // the first non-matching bit and use that to calculate the total
-  // length of the match.
-  while (SNAPPY_PREDICT_TRUE(s2 <= s2_limit - 8)) {
-    if (UNALIGNED_LOAD64(s2) == UNALIGNED_LOAD64(s1 + matched)) {
-      s2 += 8;
-      matched += 8;
-    } else {
-      uint64 x = UNALIGNED_LOAD64(s2) ^ UNALIGNED_LOAD64(s1 + matched);
-      int matching_bits = Bits::FindLSBSetNonZero64(x);
-      matched += matching_bits >> 3;
-      assert(matched >= 8);
-      return std::pair<size_t, bool>(matched, false);
-    }
-  }
-  while (SNAPPY_PREDICT_TRUE(s2 < s2_limit)) {
-    if (s1[matched] == *s2) {
-      ++s2;
-      ++matched;
-    } else {
-      return std::pair<size_t, bool>(matched, matched < 8);
-    }
-  }
-  return std::pair<size_t, bool>(matched, matched < 8);
-}
-#else
-static inline std::pair<size_t, bool> FindMatchLength(const char* s1,
-                                                      const char* s2,
-                                                      const char* s2_limit) {
-  // Implementation based on the x86-64 version, above.
-  assert(s2_limit >= s2);
-  int matched = 0;
-
-  while (s2 <= s2_limit - 4 &&
-         UNALIGNED_LOAD32(s2) == UNALIGNED_LOAD32(s1 + matched)) {
-    s2 += 4;
-    matched += 4;
-  }
-  if (LittleEndian::IsLittleEndian() && s2 <= s2_limit - 4) {
-    uint32 x = UNALIGNED_LOAD32(s2) ^ UNALIGNED_LOAD32(s1 + matched);
-    int matching_bits = Bits::FindLSBSetNonZero(x);
-    matched += matching_bits >> 3;
-  } else {
-    while ((s2 < s2_limit) && (s1[matched] == *s2)) {
-      ++s2;
-      ++matched;
-    }
-  }
-  return std::pair<size_t, bool>(matched, matched < 8);
-}
-#endif
-
-// Lookup tables for decompression code.  Give --snappy_dump_decompression_table
-// to the unit test to recompute char_table.
-
-enum {
-  LITERAL = 0,
-  COPY_1_BYTE_OFFSET = 1,  // 3 bit length + 3 bits of offset in opcode
-  COPY_2_BYTE_OFFSET = 2,
-  COPY_4_BYTE_OFFSET = 3
-};
-static const int kMaximumTagLength = 5;  // COPY_4_BYTE_OFFSET plus the actual offset.
-
-// Data stored per entry in lookup table:
-//      Range   Bits-used       Description
-//      ------------------------------------
-//      1..64   0..7            Literal/copy length encoded in opcode byte
-//      0..7    8..10           Copy offset encoded in opcode byte / 256
-//      0..4    11..13          Extra bytes after opcode
-//
-// We use eight bits for the length even though 7 would have sufficed
-// because of efficiency reasons:
-//      (1) Extracting a byte is faster than a bit-field
-//      (2) It properly aligns copy offset so we do not need a <<8
-static const uint16 char_table[256] = {
-  0x0001, 0x0804, 0x1001, 0x2001, 0x0002, 0x0805, 0x1002, 0x2002,
-  0x0003, 0x0806, 0x1003, 0x2003, 0x0004, 0x0807, 0x1004, 0x2004,
-  0x0005, 0x0808, 0x1005, 0x2005, 0x0006, 0x0809, 0x1006, 0x2006,
-  0x0007, 0x080a, 0x1007, 0x2007, 0x0008, 0x080b, 0x1008, 0x2008,
-  0x0009, 0x0904, 0x1009, 0x2009, 0x000a, 0x0905, 0x100a, 0x200a,
-  0x000b, 0x0906, 0x100b, 0x200b, 0x000c, 0x0907, 0x100c, 0x200c,
-  0x000d, 0x0908, 0x100d, 0x200d, 0x000e, 0x0909, 0x100e, 0x200e,
-  0x000f, 0x090a, 0x100f, 0x200f, 0x0010, 0x090b, 0x1010, 0x2010,
-  0x0011, 0x0a04, 0x1011, 0x2011, 0x0012, 0x0a05, 0x1012, 0x2012,
-  0x0013, 0x0a06, 0x1013, 0x2013, 0x0014, 0x0a07, 0x1014, 0x2014,
-  0x0015, 0x0a08, 0x1015, 0x2015, 0x0016, 0x0a09, 0x1016, 0x2016,
-  0x0017, 0x0a0a, 0x1017, 0x2017, 0x0018, 0x0a0b, 0x1018, 0x2018,
-  0x0019, 0x0b04, 0x1019, 0x2019, 0x001a, 0x0b05, 0x101a, 0x201a,
-  0x001b, 0x0b06, 0x101b, 0x201b, 0x001c, 0x0b07, 0x101c, 0x201c,
-  0x001d, 0x0b08, 0x101d, 0x201d, 0x001e, 0x0b09, 0x101e, 0x201e,
-  0x001f, 0x0b0a, 0x101f, 0x201f, 0x0020, 0x0b0b, 0x1020, 0x2020,
-  0x0021, 0x0c04, 0x1021, 0x2021, 0x0022, 0x0c05, 0x1022, 0x2022,
-  0x0023, 0x0c06, 0x1023, 0x2023, 0x0024, 0x0c07, 0x1024, 0x2024,
-  0x0025, 0x0c08, 0x1025, 0x2025, 0x0026, 0x0c09, 0x1026, 0x2026,
-  0x0027, 0x0c0a, 0x1027, 0x2027, 0x0028, 0x0c0b, 0x1028, 0x2028,
-  0x0029, 0x0d04, 0x1029, 0x2029, 0x002a, 0x0d05, 0x102a, 0x202a,
-  0x002b, 0x0d06, 0x102b, 0x202b, 0x002c, 0x0d07, 0x102c, 0x202c,
-  0x002d, 0x0d08, 0x102d, 0x202d, 0x002e, 0x0d09, 0x102e, 0x202e,
-  0x002f, 0x0d0a, 0x102f, 0x202f, 0x0030, 0x0d0b, 0x1030, 0x2030,
-  0x0031, 0x0e04, 0x1031, 0x2031, 0x0032, 0x0e05, 0x1032, 0x2032,
-  0x0033, 0x0e06, 0x1033, 0x2033, 0x0034, 0x0e07, 0x1034, 0x2034,
-  0x0035, 0x0e08, 0x1035, 0x2035, 0x0036, 0x0e09, 0x1036, 0x2036,
-  0x0037, 0x0e0a, 0x1037, 0x2037, 0x0038, 0x0e0b, 0x1038, 0x2038,
-  0x0039, 0x0f04, 0x1039, 0x2039, 0x003a, 0x0f05, 0x103a, 0x203a,
-  0x003b, 0x0f06, 0x103b, 0x203b, 0x003c, 0x0f07, 0x103c, 0x203c,
-  0x0801, 0x0f08, 0x103d, 0x203d, 0x1001, 0x0f09, 0x103e, 0x203e,
-  0x1801, 0x0f0a, 0x103f, 0x203f, 0x2001, 0x0f0b, 0x1040, 0x2040
-};
-
-}  // end namespace internal
-
-
-// The size of a compression block. Note that many parts of the compression
-// code assumes that kBlockSize <= 65536; in particular, the hash table
-// can only store 16-bit offsets, and EmitCopy() also assumes the offset
-// is 65535 bytes or less. Note also that if you change this, it will
-// affect the framing format (see framing_format.txt).
-//
-// Note that there might be older data around that is compressed with larger
-// block sizes, so the decompression code should not rely on the
-// non-existence of long backreferences.
-static const int kBlockLog = 16;
-static const size_t kBlockSize = 1 << kBlockLog;
-
-static const int kMaxHashTableBits = 14;
-static const size_t kMaxHashTableSize = 1 << kMaxHashTableBits;
-
-
-}  // end namespace duckdb_snappy
-
-#endif  // THIRD_PARTY_SNAPPY_SNAPPY_INTERNAL_H_
-
-
-// LICENSE_CHANGE_END
-
-
-
-#if !defined(SNAPPY_HAVE_SSSE3)
-// __SSSE3__ is defined by GCC and Clang. Visual Studio doesn't target SIMD
-// support between SSE2 and AVX (so SSSE3 instructions require AVX support), and
-// defines __AVX__ when AVX support is available.
-#if defined(__SSSE3__) || defined(__AVX__)
-#define SNAPPY_HAVE_SSSE3 1
-#else
-#define SNAPPY_HAVE_SSSE3 0
-#endif
-#endif  // !defined(SNAPPY_HAVE_SSSE3)
-
-#if !defined(SNAPPY_HAVE_BMI2)
-// __BMI2__ is defined by GCC and Clang. Visual Studio doesn't target BMI2
-// specifically, but it does define __AVX2__ when AVX2 support is available.
-// Fortunately, AVX2 was introduced in Haswell, just like BMI2.
-//
-// BMI2 is not defined as a subset of AVX2 (unlike SSSE3 and AVX above). So,
-// GCC and Clang can build code with AVX2 enabled but BMI2 disabled, in which
-// case issuing BMI2 instructions results in a compiler error.
-#if defined(__BMI2__) || (defined(_MSC_VER) && defined(__AVX2__))
-#define SNAPPY_HAVE_BMI2 1
-#else
-#define SNAPPY_HAVE_BMI2 0
-#endif
-#endif  // !defined(SNAPPY_HAVE_BMI2)
-
-#if SNAPPY_HAVE_SSSE3
-// Please do not replace with <x86intrin.h>. or with headers that assume more
-// advanced SSE versions without checking with all the OWNERS.
-#include <tmmintrin.h>
-#endif
-
-#if SNAPPY_HAVE_BMI2
-// Please do not replace with <x86intrin.h>. or with headers that assume more
-// advanced SSE versions without checking with all the OWNERS.
-#include <immintrin.h>
-#endif
-
-#include <stdio.h>
-
-#include <algorithm>
-#include <string>
-#include <vector>
-
-namespace duckdb_snappy {
-
-using internal::COPY_1_BYTE_OFFSET;
-using internal::COPY_2_BYTE_OFFSET;
-using internal::LITERAL;
-using internal::char_table;
-using internal::kMaximumTagLength;
-
-// Any hash function will produce a valid compressed bitstream, but a good
-// hash function reduces the number of collisions and thus yields better
-// compression for compressible input, and more speed for incompressible
-// input. Of course, it doesn't hurt if the hash function is reasonably fast
-// either, as it gets called a lot.
-static inline uint32 HashBytes(uint32 bytes, int shift) {
-  uint32 kMul = 0x1e35a7bd;
-  return (bytes * kMul) >> shift;
-}
-static inline uint32 Hash(const char* p, int shift) {
-  return HashBytes(UNALIGNED_LOAD32(p), shift);
-}
-
-size_t MaxCompressedLength(size_t source_len) {
-  // Compressed data can be defined as:
-  //    compressed := item* literal*
-  //    item       := literal* copy
-  //
-  // The trailing literal sequence has a space blowup of at most 62/60
-  // since a literal of length 60 needs one tag byte + one extra byte
-  // for length information.
-  //
-  // Item blowup is trickier to measure.  Suppose the "copy" op copies
-  // 4 bytes of data.  Because of a special check in the encoding code,
-  // we produce a 4-byte copy only if the offset is < 65536.  Therefore
-  // the copy op takes 3 bytes to encode, and this type of item leads
-  // to at most the 62/60 blowup for representing literals.
-  //
-  // Suppose the "copy" op copies 5 bytes of data.  If the offset is big
-  // enough, it will take 5 bytes to encode the copy op.  Therefore the
-  // worst case here is a one-byte literal followed by a five-byte copy.
-  // I.e., 6 bytes of input turn into 7 bytes of "compressed" data.
-  //
-  // This last factor dominates the blowup, so the final estimate is:
-  return 32 + source_len + source_len/6;
-}
-
-namespace {
-
-void UnalignedCopy64(const void* src, void* dst) {
-  char tmp[8];
-  memcpy(tmp, src, 8);
-  memcpy(dst, tmp, 8);
-}
-
-void UnalignedCopy128(const void* src, void* dst) {
-  // memcpy gets vectorized when the appropriate compiler options are used.
-  // For example, x86 compilers targeting SSE2+ will optimize to an SSE2 load
-  // and store.
-  char tmp[16];
-  memcpy(tmp, src, 16);
-  memcpy(dst, tmp, 16);
-}
-
-// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) a byte at a time. Used
-// for handling COPY operations where the input and output regions may overlap.
-// For example, suppose:
-//    src       == "ab"
-//    op        == src + 2
-//    op_limit  == op + 20
-// After IncrementalCopySlow(src, op, op_limit), the result will have eleven
-// copies of "ab"
-//    ababababababababababab
-// Note that this does not match the semantics of either memcpy() or memmove().
-inline char* IncrementalCopySlow(const char* src, char* op,
-                                 char* const op_limit) {
-  // TODO: Remove pragma when LLVM is aware this
-  // function is only called in cold regions and when cold regions don't get
-  // vectorized or unrolled.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-  while (op < op_limit) {
-    *op++ = *src++;
-  }
-  return op_limit;
-}
-
-#if SNAPPY_HAVE_SSSE3
-
-// This is a table of shuffle control masks that can be used as the source
-// operand for PSHUFB to permute the contents of the destination XMM register
-// into a repeating byte pattern.
-alignas(16) const char pshufb_fill_patterns[7][16] = {
-  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-  {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
-  {0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0},
-  {0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3},
-  {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0},
-  {0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3},
-  {0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6, 0, 1},
-};
-
-#endif  // SNAPPY_HAVE_SSSE3
-
-// Copy [src, src+(op_limit-op)) to [op, (op_limit-op)) but faster than
-// IncrementalCopySlow. buf_limit is the address past the end of the writable
-// region of the buffer.
-inline char* IncrementalCopy(const char* src, char* op, char* const op_limit,
-                             char* const buf_limit) {
-  // Terminology:
-  //
-  // slop = buf_limit - op
-  // pat  = op - src
-  // len  = limit - op
-  assert(src < op);
-  assert(op <= op_limit);
-  assert(op_limit <= buf_limit);
-  // NOTE: The compressor always emits 4 <= len <= 64. It is ok to assume that
-  // to optimize this function but we have to also handle other cases in case
-  // the input does not satisfy these conditions.
-
-  size_t pattern_size = op - src;
-  // The cases are split into different branches to allow the branch predictor,
-  // FDO, and static prediction hints to work better. For each input we list the
-  // ratio of invocations that match each condition.
-  //
-  // input        slop < 16   pat < 8  len > 16
-  // ------------------------------------------
-  // html|html4|cp   0%         1.01%    27.73%
-  // urls            0%         0.88%    14.79%
-  // jpg             0%        64.29%     7.14%
-  // pdf             0%         2.56%    58.06%
-  // txt[1-4]        0%         0.23%     0.97%
-  // pb              0%         0.96%    13.88%
-  // bin             0.01%     22.27%    41.17%
-  //
-  // It is very rare that we don't have enough slop for doing block copies. It
-  // is also rare that we need to expand a pattern. Small patterns are common
-  // for incompressible formats and for those we are plenty fast already.
-  // Lengths are normally not greater than 16 but they vary depending on the
-  // input. In general if we always predict len <= 16 it would be an ok
-  // prediction.
-  //
-  // In order to be fast we want a pattern >= 8 bytes and an unrolled loop
-  // copying 2x 8 bytes at a time.
-
-  // Handle the uncommon case where pattern is less than 8 bytes.
-  if (SNAPPY_PREDICT_FALSE(pattern_size < 8)) {
-#if SNAPPY_HAVE_SSSE3
-    // Load the first eight bytes into an 128-bit XMM register, then use PSHUFB
-    // to permute the register's contents in-place into a repeating sequence of
-    // the first "pattern_size" bytes.
-    // For example, suppose:
-    //    src       == "abc"
-    //    op        == op + 3
-    // After _mm_shuffle_epi8(), "pattern" will have five copies of "abc"
-    // followed by one byte of slop: abcabcabcabcabca.
-    //
-    // The non-SSE fallback implementation suffers from store-forwarding stalls
-    // because its loads and stores partly overlap. By expanding the pattern
-    // in-place, we avoid the penalty.
-    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 16)) {
-      const __m128i shuffle_mask = _mm_load_si128(
-          reinterpret_cast<const __m128i*>(pshufb_fill_patterns)
-          + pattern_size - 1);
-      const __m128i pattern = _mm_shuffle_epi8(
-          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src)), shuffle_mask);
-      // Uninitialized bytes are masked out by the shuffle mask.
-      // TODO: remove annotation and macro defs once MSan is fixed.
-      SNAPPY_ANNOTATE_MEMORY_IS_INITIALIZED(&pattern, sizeof(pattern));
-      pattern_size *= 16 / pattern_size;
-      char* op_end = std::min(op_limit, buf_limit - 15);
-      while (op < op_end) {
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(op), pattern);
-        op += pattern_size;
-      }
-      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
-    }
-    return IncrementalCopySlow(src, op, op_limit);
-#else  // !SNAPPY_HAVE_SSSE3
-    // If plenty of buffer space remains, expand the pattern to at least 8
-    // bytes. The way the following loop is written, we need 8 bytes of buffer
-    // space if pattern_size >= 4, 11 bytes if pattern_size is 1 or 3, and 10
-    // bytes if pattern_size is 2.  Precisely encoding that is probably not
-    // worthwhile; instead, invoke the slow path if we cannot write 11 bytes
-    // (because 11 are required in the worst case).
-    if (SNAPPY_PREDICT_TRUE(op <= buf_limit - 11)) {
-      while (pattern_size < 8) {
-        UnalignedCopy64(src, op);
-        op += pattern_size;
-        pattern_size *= 2;
-      }
-      if (SNAPPY_PREDICT_TRUE(op >= op_limit)) return op_limit;
-    } else {
-      return IncrementalCopySlow(src, op, op_limit);
-    }
-#endif  // SNAPPY_HAVE_SSSE3
-  }
-  assert(pattern_size >= 8);
-
-  // Copy 2x 8 bytes at a time. Because op - src can be < 16, a single
-  // UnalignedCopy128 might overwrite data in op. UnalignedCopy64 is safe
-  // because expanding the pattern to at least 8 bytes guarantees that
-  // op - src >= 8.
-  //
-  // Typically, the op_limit is the gating factor so try to simplify the loop
-  // based on that.
-  if (SNAPPY_PREDICT_TRUE(op_limit <= buf_limit - 16)) {
-    // Factor the displacement from op to the source into a variable. This helps
-    // simplify the loop below by only varying the op pointer which we need to
-    // test for the end. Note that this was done after carefully examining the
-    // generated code to allow the addressing modes in the loop below to
-    // maximize micro-op fusion where possible on modern Intel processors. The
-    // generated code should be checked carefully for new processors or with
-    // major changes to the compiler.
-    // TODO: Simplify this code when the compiler reliably produces
-    // the correct x86 instruction sequence.
-    ptrdiff_t op_to_src = src - op;
-
-    // The trip count of this loop is not large and so unrolling will only hurt
-    // code size without helping performance.
-    //
-    // TODO: Replace with loop trip count hint.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-    do {
-      UnalignedCopy64(op + op_to_src, op);
-      UnalignedCopy64(op + op_to_src + 8, op + 8);
-      op += 16;
-    } while (op < op_limit);
-    return op_limit;
-  }
-
-  // Fall back to doing as much as we can with the available slop in the
-  // buffer. This code path is relatively cold however so we save code size by
-  // avoiding unrolling and vectorizing.
-  //
-  // TODO: Remove pragma when when cold regions don't get vectorized
-  // or unrolled.
-#ifdef __clang__
-#pragma clang loop unroll(disable)
-#endif
-  for (char *op_end = buf_limit - 16; op < op_end; op += 16, src += 16) {
-    UnalignedCopy64(src, op);
-    UnalignedCopy64(src + 8, op + 8);
-  }
-  if (op >= op_limit)
-    return op_limit;
-
-  // We only take this branch if we didn't have enough slop and we can do a
-  // single 8 byte copy.
-  if (SNAPPY_PREDICT_FALSE(op <= buf_limit - 8)) {
-    UnalignedCopy64(src, op);
-    src += 8;
-    op += 8;
-  }
-  return IncrementalCopySlow(src, op, op_limit);
-}
-
-}  // namespace
-
-template <bool allow_fast_path>
-static inline char* EmitLiteral(char* op,
-                                const char* literal,
-                                int len) {
-  // The vast majority of copies are below 16 bytes, for which a
-  // call to memcpy is overkill. This fast path can sometimes
-  // copy up to 15 bytes too much, but that is okay in the
-  // main loop, since we have a bit to go on for both sides:
-  //
-  //   - The input will always have kInputMarginBytes = 15 extra
-  //     available bytes, as long as we're in the main loop, and
-  //     if not, allow_fast_path = false.
-  //   - The output will always have 32 spare bytes (see
-  //     MaxCompressedLength).
-  assert(len > 0);      // Zero-length literals are disallowed
-  int n = len - 1;
-  if (allow_fast_path && len <= 16) {
-    // Fits in tag byte
-    *op++ = LITERAL | (n << 2);
-
-    UnalignedCopy128(literal, op);
-    return op + len;
-  }
-
-  if (n < 60) {
-    // Fits in tag byte
-    *op++ = LITERAL | (n << 2);
-  } else {
-    int count = (Bits::Log2Floor(n) >> 3) + 1;
-    assert(count >= 1);
-    assert(count <= 4);
-    *op++ = LITERAL | ((59 + count) << 2);
-    // Encode in upcoming bytes.
-    // Write 4 bytes, though we may care about only 1 of them. The output buffer
-    // is guaranteed to have at least 3 more spaces left as 'len >= 61' holds
-    // here and there is a memcpy of size 'len' below.
-    LittleEndian::Store32(op, n);
-    op += count;
-  }
-  memcpy(op, literal, len);
-  return op + len;
-}
-
-template <bool len_less_than_12>
-static inline char* EmitCopyAtMost64(char* op, size_t offset, size_t len) {
-  assert(len <= 64);
-  assert(len >= 4);
-  assert(offset < 65536);
-  assert(len_less_than_12 == (len < 12));
-
-  if (len_less_than_12 && SNAPPY_PREDICT_TRUE(offset < 2048)) {
-    // offset fits in 11 bits.  The 3 highest go in the top of the first byte,
-    // and the rest go in the second byte.
-    *op++ = COPY_1_BYTE_OFFSET + ((len - 4) << 2) + ((offset >> 3) & 0xe0);
-    *op++ = offset & 0xff;
-  } else {
-    // Write 4 bytes, though we only care about 3 of them.  The output buffer
-    // is required to have some slack, so the extra byte won't overrun it.
-    uint32 u = COPY_2_BYTE_OFFSET + ((len - 1) << 2) + (offset << 8);
-    LittleEndian::Store32(op, u);
-    op += 3;
-  }
-  return op;
-}
-
-template <bool len_less_than_12>
-static inline char* EmitCopy(char* op, size_t offset, size_t len) {
-  assert(len_less_than_12 == (len < 12));
-  if (len_less_than_12) {
-    return EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
-  } else {
-    // A special case for len <= 64 might help, but so far measurements suggest
-    // it's in the noise.
-
-    // Emit 64 byte copies but make sure to keep at least four bytes reserved.
-    while (SNAPPY_PREDICT_FALSE(len >= 68)) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 64);
-      len -= 64;
-    }
-
-    // One or two copies will now finish the job.
-    if (len > 64) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, 60);
-      len -= 60;
-    }
-
-    // Emit remainder.
-    if (len < 12) {
-      op = EmitCopyAtMost64</*len_less_than_12=*/true>(op, offset, len);
-    } else {
-      op = EmitCopyAtMost64</*len_less_than_12=*/false>(op, offset, len);
-    }
-    return op;
-  }
-}
-
-bool GetUncompressedLength(const char* start, size_t n, size_t* result) {
-  uint32 v = 0;
-  const char* limit = start + n;
-  if (Varint::Parse32WithLimit(start, limit, &v) != NULL) {
-    *result = v;
-    return true;
-  } else {
-    return false;
-  }
-}
-
-namespace {
-uint32 CalculateTableSize(uint32 input_size) {
-  assert(kMaxHashTableSize >= 256);
-  if (input_size > kMaxHashTableSize) {
-    return kMaxHashTableSize;
-  }
-  if (input_size < 256) {
-    return 256;
-  }
-  // This is equivalent to Log2Ceiling(input_size), assuming input_size > 1.
-  // 2 << Log2Floor(x - 1) is equivalent to 1 << (1 + Log2Floor(x - 1)).
-  return 2u << Bits::Log2Floor(input_size - 1);
-}
-}  // namespace
-
-namespace internal {
-WorkingMemory::WorkingMemory(size_t input_size) {
-  const size_t max_fragment_size = std::min(input_size, kBlockSize);
-  const size_t table_size = CalculateTableSize(max_fragment_size);
-  size_ = table_size * sizeof(*table_) + max_fragment_size +
-          MaxCompressedLength(max_fragment_size);
-  mem_ = std::allocator<char>().allocate(size_);
-  table_ = reinterpret_cast<uint16*>(mem_);
-  input_ = mem_ + table_size * sizeof(*table_);
-  output_ = input_ + max_fragment_size;
-}
-
-WorkingMemory::~WorkingMemory() {
-  std::allocator<char>().deallocate(mem_, size_);
-}
-
-uint16* WorkingMemory::GetHashTable(size_t fragment_size,
-                                    int* table_size) const {
-  const size_t htsize = CalculateTableSize(fragment_size);
-  memset(table_, 0, htsize * sizeof(*table_));
-  *table_size = htsize;
-  return table_;
-}
-}  // end namespace internal
-
-// For 0 <= offset <= 4, GetUint32AtOffset(GetEightBytesAt(p), offset) will
-// equal UNALIGNED_LOAD32(p + offset).  Motivation: On x86-64 hardware we have
-// empirically found that overlapping loads such as
-//  UNALIGNED_LOAD32(p) ... UNALIGNED_LOAD32(p+1) ... UNALIGNED_LOAD32(p+2)
-// are slower than UNALIGNED_LOAD64(p) followed by shifts and casts to uint32.
-//
-// We have different versions for 64- and 32-bit; ideally we would avoid the
-// two functions and just inline the UNALIGNED_LOAD64 call into
-// GetUint32AtOffset, but GCC (at least not as of 4.6) is seemingly not clever
-// enough to avoid loading the value multiple times then. For 64-bit, the load
-// is done when GetEightBytesAt() is called, whereas for 32-bit, the load is
-// done at GetUint32AtOffset() time.
-
-#ifdef ARCH_K8
-
-typedef uint64 EightBytesReference;
-
-static inline EightBytesReference GetEightBytesAt(const char* ptr) {
-  return UNALIGNED_LOAD64(ptr);
-}
-
-static inline uint32 GetUint32AtOffset(uint64 v, int offset) {
-  assert(offset >= 0);
-  assert(offset <= 4);
-  return v >> (LittleEndian::IsLittleEndian() ? 8 * offset : 32 - 8 * offset);
-}
-
-#else
-
-typedef const char* EightBytesReference;
-
-static inline EightBytesReference GetEightBytesAt(const char* ptr) {
-  return ptr;
-}
-
-static inline uint32 GetUint32AtOffset(const char* v, int offset) {
-  assert(offset >= 0);
-  assert(offset <= 4);
-  return UNALIGNED_LOAD32(v + offset);
-}
-
-#endif
-
-// Flat array compression that does not emit the "uncompressed length"
-// prefix. Compresses "input" string to the "*op" buffer.
-//
-// REQUIRES: "input" is at most "kBlockSize" bytes long.
-// REQUIRES: "op" points to an array of memory that is at least
-// "MaxCompressedLength(input.size())" in size.
-// REQUIRES: All elements in "table[0..table_size-1]" are initialized to zero.
-// REQUIRES: "table_size" is a power of two
-//
-// Returns an "end" pointer into "op" buffer.
-// "end - op" is the compressed size of "input".
-namespace internal {
-char* CompressFragment(const char* input,
-                       size_t input_size,
-                       char* op,
-                       uint16* table,
-                       const int table_size) {
-  // "ip" is the input pointer, and "op" is the output pointer.
-  const char* ip = input;
-  assert(input_size <= kBlockSize);
-  assert((table_size & (table_size - 1)) == 0);  // table must be power of two
-  const int shift = 32 - Bits::Log2Floor(table_size);
-  // assert(static_cast<int>(kuint32max >> shift) == table_size - 1);
-  const char* ip_end = input + input_size;
-  const char* base_ip = ip;
-  // Bytes in [next_emit, ip) will be emitted as literal bytes.  Or
-  // [next_emit, ip_end) after the main loop.
-  const char* next_emit = ip;
-
-  const size_t kInputMarginBytes = 15;
-  if (SNAPPY_PREDICT_TRUE(input_size >= kInputMarginBytes)) {
-    const char* ip_limit = input + input_size - kInputMarginBytes;
-
-    for (uint32 next_hash = Hash(++ip, shift); ; ) {
-      assert(next_emit < ip);
-      // The body of this loop calls EmitLiteral once and then EmitCopy one or
-      // more times.  (The exception is that when we're close to exhausting
-      // the input we goto emit_remainder.)
-      //
-      // In the first iteration of this loop we're just starting, so
-      // there's nothing to copy, so calling EmitLiteral once is
-      // necessary.  And we only start a new iteration when the
-      // current iteration has determined that a call to EmitLiteral will
-      // precede the next call to EmitCopy (if any).
-      //
-      // Step 1: Scan forward in the input looking for a 4-byte-long match.
-      // If we get close to exhausting the input then goto emit_remainder.
-      //
-      // Heuristic match skipping: If 32 bytes are scanned with no matches
-      // found, start looking only at every other byte. If 32 more bytes are
-      // scanned (or skipped), look at every third byte, etc.. When a match is
-      // found, immediately go back to looking at every byte. This is a small
-      // loss (~5% performance, ~0.1% density) for compressible data due to more
-      // bookkeeping, but for non-compressible data (such as JPEG) it's a huge
-      // win since the compressor quickly "realizes" the data is incompressible
-      // and doesn't bother looking for matches everywhere.
-      //
-      // The "skip" variable keeps track of how many bytes there are since the
-      // last match; dividing it by 32 (ie. right-shifting by five) gives the
-      // number of bytes to move ahead for each iteration.
-      uint32 skip = 32;
-
-      const char* next_ip = ip;
-      const char* candidate;
-      do {
-        ip = next_ip;
-        uint32 hash = next_hash;
-        assert(hash == Hash(ip, shift));
-        uint32 bytes_between_hash_lookups = skip >> 5;
-        skip += bytes_between_hash_lookups;
-        next_ip = ip + bytes_between_hash_lookups;
-        if (SNAPPY_PREDICT_FALSE(next_ip > ip_limit)) {
-          goto emit_remainder;
-        }
-        next_hash = Hash(next_ip, shift);
-        candidate = base_ip + table[hash];
-        assert(candidate >= base_ip);
-        assert(candidate < ip);
-
-        table[hash] = ip - base_ip;
-      } while (SNAPPY_PREDICT_TRUE(UNALIGNED_LOAD32(ip) !=
-                                 UNALIGNED_LOAD32(candidate)));
-
-      // Step 2: A 4-byte match has been found.  We'll later see if more
-      // than 4 bytes match.  But, prior to the match, input
-      // bytes [next_emit, ip) are unmatched.  Emit them as "literal bytes."
-      assert(next_emit + 16 <= ip_end);
-      op = EmitLiteral</*allow_fast_path=*/true>(op, next_emit, ip - next_emit);
-
-      // Step 3: Call EmitCopy, and then see if another EmitCopy could
-      // be our next move.  Repeat until we find no match for the
-      // input immediately after what was consumed by the last EmitCopy call.
-      //
-      // If we exit this loop normally then we need to call EmitLiteral next,
-      // though we don't yet know how big the literal will be.  We handle that
-      // by proceeding to the next iteration of the main loop.  We also can exit
-      // this loop via goto if we get close to exhausting the input.
-      EightBytesReference input_bytes;
-      uint32 candidate_bytes = 0;
-
-      do {
-        // We have a 4-byte match at ip, and no need to emit any
-        // "literal bytes" prior to ip.
-        const char* base = ip;
-        std::pair<size_t, bool> p =
-            FindMatchLength(candidate + 4, ip + 4, ip_end);
-        size_t matched = 4 + p.first;
-        ip += matched;
-        size_t offset = base - candidate;
-        assert(0 == memcmp(base, candidate, matched));
-        if (p.second) {
-          op = EmitCopy</*len_less_than_12=*/true>(op, offset, matched);
-        } else {
-          op = EmitCopy</*len_less_than_12=*/false>(op, offset, matched);
-        }
-        next_emit = ip;
-        if (SNAPPY_PREDICT_FALSE(ip >= ip_limit)) {
-          goto emit_remainder;
-        }
-        // We are now looking for a 4-byte match again.  We read
-        // table[Hash(ip, shift)] for that.  To improve compression,
-        // we also update table[Hash(ip - 1, shift)] and table[Hash(ip, shift)].
-        input_bytes = GetEightBytesAt(ip - 1);
-        uint32 prev_hash = HashBytes(GetUint32AtOffset(input_bytes, 0), shift);
-        table[prev_hash] = ip - base_ip - 1;
-        uint32 cur_hash = HashBytes(GetUint32AtOffset(input_bytes, 1), shift);
-        candidate = base_ip + table[cur_hash];
-        candidate_bytes = UNALIGNED_LOAD32(candidate);
-        table[cur_hash] = ip - base_ip;
-      } while (GetUint32AtOffset(input_bytes, 1) == candidate_bytes);
-
-      next_hash = HashBytes(GetUint32AtOffset(input_bytes, 2), shift);
-      ++ip;
-    }
-  }
-
- emit_remainder:
-  // Emit the remaining bytes as a literal
-  if (next_emit < ip_end) {
-    op = EmitLiteral</*allow_fast_path=*/false>(op, next_emit,
-                                                ip_end - next_emit);
-  }
-
-  return op;
-}
-}  // end namespace internal
-
-// Called back at avery compression call to trace parameters and sizes.
-static inline void Report(const char *algorithm, size_t compressed_size,
-                          size_t uncompressed_size) {}
-
-// Signature of output types needed by decompression code.
-// The decompression code is templatized on a type that obeys this
-// signature so that we do not pay virtual function call overhead in
-// the middle of a tight decompression loop.
-//
-// class DecompressionWriter {
-//  public:
-//   // Called before decompression
-//   void SetExpectedLength(size_t length);
-//
-//   // Called after decompression
-//   bool CheckLength() const;
-//
-//   // Called repeatedly during decompression
-//   bool Append(const char* ip, size_t length);
-//   bool AppendFromSelf(uint32 offset, size_t length);
-//
-//   // The rules for how TryFastAppend differs from Append are somewhat
-//   // convoluted:
-//   //
-//   //  - TryFastAppend is allowed to decline (return false) at any
-//   //    time, for any reason -- just "return false" would be
-//   //    a perfectly legal implementation of TryFastAppend.
-//   //    The intention is for TryFastAppend to allow a fast path
-//   //    in the common case of a small append.
-//   //  - TryFastAppend is allowed to read up to <available> bytes
-//   //    from the input buffer, whereas Append is allowed to read
-//   //    <length>. However, if it returns true, it must leave
-//   //    at least five (kMaximumTagLength) bytes in the input buffer
-//   //    afterwards, so that there is always enough space to read the
-//   //    next tag without checking for a refill.
-//   //  - TryFastAppend must always return decline (return false)
-//   //    if <length> is 61 or more, as in this case the literal length is not
-//   //    decoded fully. In practice, this should not be a big problem,
-//   //    as it is unlikely that one would implement a fast path accepting
-//   //    this much data.
-//   //
-//   bool TryFastAppend(const char* ip, size_t available, size_t length);
-// };
-
-static inline uint32 ExtractLowBytes(uint32 v, int n) {
-  assert(n >= 0);
-  assert(n <= 4);
-#if SNAPPY_HAVE_BMI2
-  return _bzhi_u32(v, 8 * n);
-#else
-  // This needs to be wider than uint32 otherwise `mask << 32` will be
-  // undefined.
-  uint64 mask = 0xffffffff;
-  return v & ~(mask << (8 * n));
-#endif
-}
-
-static inline bool LeftShiftOverflows(uint8 value, uint32 shift) {
-  assert(shift < 32);
-  static const uint8 masks[] = {
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  //
-      0x00, 0x80, 0xc0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe};
-  return (value & masks[shift]) != 0;
-}
-
-// Helper class for decompression
-class SnappyDecompressor {
- private:
-  Source*       reader_;         // Underlying source of bytes to decompress
-  const char*   ip_;             // Points to next buffered byte
-  const char*   ip_limit_;       // Points just past buffered bytes
-  uint32        peeked_;         // Bytes peeked from reader (need to skip)
-  bool          eof_;            // Hit end of input without an error?
-  char          scratch_[kMaximumTagLength];  // See RefillTag().
-
-  // Ensure that all of the tag metadata for the next tag is available
-  // in [ip_..ip_limit_-1].  Also ensures that [ip,ip+4] is readable even
-  // if (ip_limit_ - ip_ < 5).
-  //
-  // Returns true on success, false on error or end of input.
-  bool RefillTag();
-
- public:
-  explicit SnappyDecompressor(Source* reader)
-      : reader_(reader),
-        ip_(NULL),
-        ip_limit_(NULL),
-        peeked_(0),
-        eof_(false) {
-  }
-
-  ~SnappyDecompressor() {
-    // Advance past any bytes we peeked at from the reader
-    reader_->Skip(peeked_);
-  }
-
-  // Returns true iff we have hit the end of the input without an error.
-  bool eof() const {
-    return eof_;
-  }
-
-  // Read the uncompressed length stored at the start of the compressed data.
-  // On success, stores the length in *result and returns true.
-  // On failure, returns false.
-  bool ReadUncompressedLength(uint32* result) {
-    assert(ip_ == NULL);       // Must not have read anything yet
-    // Length is encoded in 1..5 bytes
-    *result = 0;
-    uint32 shift = 0;
-    while (true) {
-      if (shift >= 32) return false;
-      size_t n;
-      const char* ip = reader_->Peek(&n);
-      if (n == 0) return false;
-      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
-      reader_->Skip(1);
-      uint32 val = c & 0x7f;
-      if (LeftShiftOverflows(static_cast<uint8>(val), shift)) return false;
-      *result |= val << shift;
-      if (c < 128) {
-        break;
-      }
-      shift += 7;
-    }
-    return true;
-  }
-
-  // Process the next item found in the input.
-  // Returns true if successful, false on error or end of input.
-  template <class Writer>
-#if defined(__GNUC__) && defined(__x86_64__)
-  __attribute__((aligned(32)))
-#endif
-  void DecompressAllTags(Writer* writer) {
-    // In x86, pad the function body to start 16 bytes later. This function has
-    // a couple of hotspots that are highly sensitive to alignment: we have
-    // observed regressions by more than 20% in some metrics just by moving the
-    // exact same code to a different position in the benchmark binary.
-    //
-    // Putting this code on a 32-byte-aligned boundary + 16 bytes makes us hit
-    // the "lucky" case consistently. Unfortunately, this is a very brittle
-    // workaround, and future differences in code generation may reintroduce
-    // this regression. If you experience a big, difficult to explain, benchmark
-    // performance regression here, first try removing this hack.
-#if defined(__GNUC__) && defined(__x86_64__)
-    // Two 8-byte "NOP DWORD ptr [EAX + EAX*1 + 00000000H]" instructions.
-    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
-    asm(".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
-#endif
-
-    const char* ip = ip_;
-    // We could have put this refill fragment only at the beginning of the loop.
-    // However, duplicating it at the end of each branch gives the compiler more
-    // scope to optimize the <ip_limit_ - ip> expression based on the local
-    // context, which overall increases speed.
-    #define MAYBE_REFILL() \
-        if (ip_limit_ - ip < kMaximumTagLength) { \
-          ip_ = ip; \
-          if (!RefillTag()) return; \
-          ip = ip_; \
-        }
-
-    MAYBE_REFILL();
-    for ( ;; ) {
-      const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip++));
-
-      // Ratio of iterations that have LITERAL vs non-LITERAL for different
-      // inputs.
-      //
-      // input          LITERAL  NON_LITERAL
-      // -----------------------------------
-      // html|html4|cp   23%        77%
-      // urls            36%        64%
-      // jpg             47%        53%
-      // pdf             19%        81%
-      // txt[1-4]        25%        75%
-      // pb              24%        76%
-      // bin             24%        76%
-      if (SNAPPY_PREDICT_FALSE((c & 0x3) == LITERAL)) {
-        size_t literal_length = (c >> 2) + 1u;
-        if (writer->TryFastAppend(ip, ip_limit_ - ip, literal_length)) {
-          assert(literal_length < 61);
-          ip += literal_length;
-          // NOTE: There is no MAYBE_REFILL() here, as TryFastAppend()
-          // will not return true unless there's already at least five spare
-          // bytes in addition to the literal.
-          continue;
-        }
-        if (SNAPPY_PREDICT_FALSE(literal_length >= 61)) {
-          // Long literal.
-          const size_t literal_length_length = literal_length - 60;
-          literal_length =
-              ExtractLowBytes(LittleEndian::Load32(ip), literal_length_length) +
-              1;
-          ip += literal_length_length;
-        }
-
-        size_t avail = ip_limit_ - ip;
-        while (avail < literal_length) {
-          if (!writer->Append(ip, avail)) return;
-          literal_length -= avail;
-          reader_->Skip(peeked_);
-          size_t n;
-          ip = reader_->Peek(&n);
-          avail = n;
-          peeked_ = avail;
-          if (avail == 0) return;  // Premature end of input
-          ip_limit_ = ip + avail;
-        }
-        if (!writer->Append(ip, literal_length)) {
-          return;
-        }
-        ip += literal_length;
-        MAYBE_REFILL();
-      } else {
-        const size_t entry = char_table[c];
-        const size_t trailer =
-            ExtractLowBytes(LittleEndian::Load32(ip), entry >> 11);
-        const size_t length = entry & 0xff;
-        ip += entry >> 11;
-
-        // copy_offset/256 is encoded in bits 8..10.  By just fetching
-        // those bits, we get copy_offset (since the bit-field starts at
-        // bit 8).
-        const size_t copy_offset = entry & 0x700;
-        if (!writer->AppendFromSelf(copy_offset + trailer, length)) {
-          return;
-        }
-        MAYBE_REFILL();
-      }
-    }
-
-#undef MAYBE_REFILL
-  }
-};
-
-bool SnappyDecompressor::RefillTag() {
-  const char* ip = ip_;
-  if (ip == ip_limit_) {
-    // Fetch a new fragment from the reader
-    reader_->Skip(peeked_);   // All peeked bytes are used up
-    size_t n;
-    ip = reader_->Peek(&n);
-    peeked_ = n;
-    eof_ = (n == 0);
-    if (eof_) return false;
-    ip_limit_ = ip + n;
-  }
-
-  // Read the tag character
-  assert(ip < ip_limit_);
-  const unsigned char c = *(reinterpret_cast<const unsigned char*>(ip));
-  const uint32 entry = char_table[c];
-  const uint32 needed = (entry >> 11) + 1;  // +1 byte for 'c'
-  assert(needed <= sizeof(scratch_));
-
-  // Read more bytes from reader if needed
-  uint32 nbuf = ip_limit_ - ip;
-  if (nbuf < needed) {
-    // Stitch together bytes from ip and reader to form the word
-    // contents.  We store the needed bytes in "scratch_".  They
-    // will be consumed immediately by the caller since we do not
-    // read more than we need.
-    memmove(scratch_, ip, nbuf);
-    reader_->Skip(peeked_);  // All peeked bytes are used up
-    peeked_ = 0;
-    while (nbuf < needed) {
-      size_t length;
-      const char* src = reader_->Peek(&length);
-      if (length == 0) return false;
-      uint32 to_add = std::min<uint32>(needed - nbuf, length);
-      memcpy(scratch_ + nbuf, src, to_add);
-      nbuf += to_add;
-      reader_->Skip(to_add);
-    }
-    assert(nbuf == needed);
-    ip_ = scratch_;
-    ip_limit_ = scratch_ + needed;
-  } else if (nbuf < kMaximumTagLength) {
-    // Have enough bytes, but move into scratch_ so that we do not
-    // read past end of input
-    memmove(scratch_, ip, nbuf);
-    reader_->Skip(peeked_);  // All peeked bytes are used up
-    peeked_ = 0;
-    ip_ = scratch_;
-    ip_limit_ = scratch_ + nbuf;
-  } else {
-    // Pass pointer to buffer returned by reader_.
-    ip_ = ip;
-  }
-  return true;
-}
-
-template <typename Writer>
-static bool InternalUncompress(Source* r, Writer* writer) {
-  // Read the uncompressed length from the front of the compressed input
-  SnappyDecompressor decompressor(r);
-  uint32 uncompressed_len = 0;
-  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) return false;
-
-  return InternalUncompressAllTags(&decompressor, writer, r->Available(),
-                                   uncompressed_len);
-}
-
-template <typename Writer>
-static bool InternalUncompressAllTags(SnappyDecompressor* decompressor,
-                                      Writer* writer,
-                                      uint32 compressed_len,
-                                      uint32 uncompressed_len) {
-  Report("snappy_uncompress", compressed_len, uncompressed_len);
-
-  writer->SetExpectedLength(uncompressed_len);
-
-  // Process the entire input
-  decompressor->DecompressAllTags(writer);
-  writer->Flush();
-  return (decompressor->eof() && writer->CheckLength());
-}
-
-bool GetUncompressedLength(Source* source, uint32* result) {
-  SnappyDecompressor decompressor(source);
-  return decompressor.ReadUncompressedLength(result);
-}
-
-size_t Compress(Source* reader, Sink* writer) {
-  size_t written = 0;
-  size_t N = reader->Available();
-  const size_t uncompressed_size = N;
-  char ulength[Varint::kMax32];
-  char* p = Varint::Encode32(ulength, N);
-  writer->Append(ulength, p-ulength);
-  written += (p - ulength);
-
-  internal::WorkingMemory wmem(N);
-
-  while (N > 0) {
-    // Get next block to compress (without copying if possible)
-    size_t fragment_size;
-    const char* fragment = reader->Peek(&fragment_size);
-    assert(fragment_size != 0);  // premature end of input
-    const size_t num_to_read = std::min(N, kBlockSize);
-    size_t bytes_read = fragment_size;
-
-    size_t pending_advance = 0;
-    if (bytes_read >= num_to_read) {
-      // Buffer returned by reader is large enough
-      pending_advance = num_to_read;
-      fragment_size = num_to_read;
-    } else {
-      char* scratch = wmem.GetScratchInput();
-      memcpy(scratch, fragment, bytes_read);
-      reader->Skip(bytes_read);
-
-      while (bytes_read < num_to_read) {
-        fragment = reader->Peek(&fragment_size);
-        size_t n = std::min<size_t>(fragment_size, num_to_read - bytes_read);
-        memcpy(scratch + bytes_read, fragment, n);
-        bytes_read += n;
-        reader->Skip(n);
-      }
-      assert(bytes_read == num_to_read);
-      fragment = scratch;
-      fragment_size = num_to_read;
-    }
-    assert(fragment_size == num_to_read);
-
-    // Get encoding table for compression
-    int table_size;
-    uint16* table = wmem.GetHashTable(num_to_read, &table_size);
-
-    // Compress input_fragment and append to dest
-    const int max_output = MaxCompressedLength(num_to_read);
-
-    // Need a scratch buffer for the output, in case the byte sink doesn't
-    // have room for us directly.
-
-    // Since we encode kBlockSize regions followed by a region
-    // which is <= kBlockSize in length, a previously allocated
-    // scratch_output[] region is big enough for this iteration.
-    char* dest = writer->GetAppendBuffer(max_output, wmem.GetScratchOutput());
-    char* end = internal::CompressFragment(fragment, fragment_size, dest, table,
-                                           table_size);
-    writer->Append(dest, end - dest);
-    written += (end - dest);
-
-    N -= num_to_read;
-    reader->Skip(pending_advance);
-  }
-
-  Report("snappy_compress", written, uncompressed_size);
-
-  return written;
-}
-
-// -----------------------------------------------------------------------
-// IOVec interfaces
-// -----------------------------------------------------------------------
-
-// A type that writes to an iovec.
-// Note that this is not a "ByteSink", but a type that matches the
-// Writer template argument to SnappyDecompressor::DecompressAllTags().
-class SnappyIOVecWriter {
- private:
-  // output_iov_end_ is set to iov + count and used to determine when
-  // the end of the iovs is reached.
-  const struct iovec* output_iov_end_;
-
-#if !defined(NDEBUG)
-  const struct iovec* output_iov_;
-#endif  // !defined(NDEBUG)
-
-  // Current iov that is being written into.
-  const struct iovec* curr_iov_;
-
-  // Pointer to current iov's write location.
-  char* curr_iov_output_;
-
-  // Remaining bytes to write into curr_iov_output.
-  size_t curr_iov_remaining_;
-
-  // Total bytes decompressed into output_iov_ so far.
-  size_t total_written_;
-
-  // Maximum number of bytes that will be decompressed into output_iov_.
-  size_t output_limit_;
-
-  static inline char* GetIOVecPointer(const struct iovec* iov, size_t offset) {
-    return reinterpret_cast<char*>(iov->iov_base) + offset;
-  }
-
- public:
-  // Does not take ownership of iov. iov must be valid during the
-  // entire lifetime of the SnappyIOVecWriter.
-  inline SnappyIOVecWriter(const struct iovec* iov, size_t iov_count)
-      : output_iov_end_(iov + iov_count),
-#if !defined(NDEBUG)
-        output_iov_(iov),
-#endif  // !defined(NDEBUG)
-        curr_iov_(iov),
-        curr_iov_output_(iov_count ? reinterpret_cast<char*>(iov->iov_base)
-                                   : nullptr),
-        curr_iov_remaining_(iov_count ? iov->iov_len : 0),
-        total_written_(0),
-        output_limit_(-1) {}
-
-  inline void SetExpectedLength(size_t len) {
-    output_limit_ = len;
-  }
-
-  inline bool CheckLength() const {
-    return total_written_ == output_limit_;
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    if (total_written_ + len > output_limit_) {
-      return false;
-    }
-
-    return AppendNoCheck(ip, len);
-  }
-
-  inline bool AppendNoCheck(const char* ip, size_t len) {
-    while (len > 0) {
-      if (curr_iov_remaining_ == 0) {
-        // This iovec is full. Go to the next one.
-        if (curr_iov_ + 1 >= output_iov_end_) {
-          return false;
-        }
-        ++curr_iov_;
-        curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
-        curr_iov_remaining_ = curr_iov_->iov_len;
-      }
-
-      const size_t to_write = std::min(len, curr_iov_remaining_);
-      memcpy(curr_iov_output_, ip, to_write);
-      curr_iov_output_ += to_write;
-      curr_iov_remaining_ -= to_write;
-      total_written_ += to_write;
-      ip += to_write;
-      len -= to_write;
-    }
-
-    return true;
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
-    const size_t space_left = output_limit_ - total_written_;
-    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16 &&
-        curr_iov_remaining_ >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, curr_iov_output_);
-      curr_iov_output_ += len;
-      curr_iov_remaining_ -= len;
-      total_written_ += len;
-      return true;
-    }
-
-    return false;
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (offset - 1u >= total_written_) {
-      return false;
-    }
-    const size_t space_left = output_limit_ - total_written_;
-    if (len > space_left) {
-      return false;
-    }
-
-    // Locate the iovec from which we need to start the copy.
-    const iovec* from_iov = curr_iov_;
-    size_t from_iov_offset = curr_iov_->iov_len - curr_iov_remaining_;
-    while (offset > 0) {
-      if (from_iov_offset >= offset) {
-        from_iov_offset -= offset;
-        break;
-      }
-
-      offset -= from_iov_offset;
-      --from_iov;
-#if !defined(NDEBUG)
-      assert(from_iov >= output_iov_);
-#endif  // !defined(NDEBUG)
-      from_iov_offset = from_iov->iov_len;
-    }
-
-    // Copy <len> bytes starting from the iovec pointed to by from_iov_index to
-    // the current iovec.
-    while (len > 0) {
-      assert(from_iov <= curr_iov_);
-      if (from_iov != curr_iov_) {
-        const size_t to_copy =
-            std::min((unsigned long)(from_iov->iov_len - from_iov_offset), (unsigned long)len);
-        AppendNoCheck(GetIOVecPointer(from_iov, from_iov_offset), to_copy);
-        len -= to_copy;
-        if (len > 0) {
-          ++from_iov;
-          from_iov_offset = 0;
-        }
-      } else {
-        size_t to_copy = curr_iov_remaining_;
-        if (to_copy == 0) {
-          // This iovec is full. Go to the next one.
-          if (curr_iov_ + 1 >= output_iov_end_) {
-            return false;
-          }
-          ++curr_iov_;
-          curr_iov_output_ = reinterpret_cast<char*>(curr_iov_->iov_base);
-          curr_iov_remaining_ = curr_iov_->iov_len;
-          continue;
-        }
-        if (to_copy > len) {
-          to_copy = len;
-        }
-
-        IncrementalCopy(GetIOVecPointer(from_iov, from_iov_offset),
-                        curr_iov_output_, curr_iov_output_ + to_copy,
-                        curr_iov_output_ + curr_iov_remaining_);
-        curr_iov_output_ += to_copy;
-        curr_iov_remaining_ -= to_copy;
-        from_iov_offset += to_copy;
-        total_written_ += to_copy;
-        len -= to_copy;
-      }
-    }
-
-    return true;
-  }
-
-  inline void Flush() {}
-};
-
-bool RawUncompressToIOVec(const char* compressed, size_t compressed_length,
-                          const struct iovec* iov, size_t iov_cnt) {
-  ByteArraySource reader(compressed, compressed_length);
-  return RawUncompressToIOVec(&reader, iov, iov_cnt);
-}
-
-bool RawUncompressToIOVec(Source* compressed, const struct iovec* iov,
-                          size_t iov_cnt) {
-  SnappyIOVecWriter output(iov, iov_cnt);
-  return InternalUncompress(compressed, &output);
-}
-
-// -----------------------------------------------------------------------
-// Flat array interfaces
-// -----------------------------------------------------------------------
-
-// A type that writes to a flat array.
-// Note that this is not a "ByteSink", but a type that matches the
-// Writer template argument to SnappyDecompressor::DecompressAllTags().
-class SnappyArrayWriter {
- private:
-  char* base_;
-  char* op_;
-  char* op_limit_;
-
- public:
-  inline explicit SnappyArrayWriter(char* dst)
-      : base_(dst),
-        op_(dst),
-        op_limit_(dst) {
-  }
-
-  inline void SetExpectedLength(size_t len) {
-    op_limit_ = op_ + len;
-  }
-
-  inline bool CheckLength() const {
-    return op_ == op_limit_;
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    char* op = op_;
-    const size_t space_left = op_limit_ - op;
-    if (space_left < len) {
-      return false;
-    }
-    memcpy(op, ip, len);
-    op_ = op + len;
-    return true;
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t len) {
-    char* op = op_;
-    const size_t space_left = op_limit_ - op;
-    if (len <= 16 && available >= 16 + kMaximumTagLength && space_left >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, op);
-      op_ = op + len;
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    char* const op_end = op_ + len;
-
-    // Check if we try to append from before the start of the buffer.
-    // Normally this would just be a check for "produced < offset",
-    // but "produced <= offset - 1u" is equivalent for every case
-    // except the one where offset==0, where the right side will wrap around
-    // to a very big number. This is convenient, as offset==0 is another
-    // invalid case that we also want to catch, so that we do not go
-    // into an infinite loop.
-    if (Produced() <= offset - 1u || op_end > op_limit_) return false;
-    op_ = IncrementalCopy(op_ - offset, op_, op_end, op_limit_);
-
-    return true;
-  }
-  inline size_t Produced() const {
-    assert(op_ >= base_);
-    return op_ - base_;
-  }
-  inline void Flush() {}
-};
-
-bool RawUncompress(const char* compressed, size_t n, char* uncompressed) {
-  ByteArraySource reader(compressed, n);
-  return RawUncompress(&reader, uncompressed);
-}
-
-bool RawUncompress(Source* compressed, char* uncompressed) {
-  SnappyArrayWriter output(uncompressed);
-  return InternalUncompress(compressed, &output);
-}
-
-bool Uncompress(const char* compressed, size_t n, string* uncompressed) {
-  size_t ulength;
-  if (!GetUncompressedLength(compressed, n, &ulength)) {
-    return false;
-  }
-  // On 32-bit builds: max_size() < kuint32max.  Check for that instead
-  // of crashing (e.g., consider externally specified compressed data).
-  if (ulength > uncompressed->max_size()) {
-    return false;
-  }
-  STLStringResizeUninitialized(uncompressed, ulength);
-  return RawUncompress(compressed, n, string_as_array(uncompressed));
-}
-
-// A Writer that drops everything on the floor and just does validation
-class SnappyDecompressionValidator {
- private:
-  size_t expected_;
-  size_t produced_;
-
- public:
-  inline SnappyDecompressionValidator() : expected_(0), produced_(0) { }
-  inline void SetExpectedLength(size_t len) {
-    expected_ = len;
-  }
-  inline bool CheckLength() const {
-    return expected_ == produced_;
-  }
-  inline bool Append(const char* ip, size_t len) {
-    produced_ += len;
-    return produced_ <= expected_;
-  }
-  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
-    return false;
-  }
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (produced_ <= offset - 1u) return false;
-    produced_ += len;
-    return produced_ <= expected_;
-  }
-  inline void Flush() {}
-};
-
-bool IsValidCompressedBuffer(const char* compressed, size_t n) {
-  ByteArraySource reader(compressed, n);
-  SnappyDecompressionValidator writer;
-  return InternalUncompress(&reader, &writer);
-}
-
-bool IsValidCompressed(Source* compressed) {
-  SnappyDecompressionValidator writer;
-  return InternalUncompress(compressed, &writer);
-}
-
-void RawCompress(const char* input,
-                 size_t input_length,
-                 char* compressed,
-                 size_t* compressed_length) {
-  ByteArraySource reader(input, input_length);
-  UncheckedByteArraySink writer(compressed);
-  Compress(&reader, &writer);
-
-  // Compute how many bytes were added
-  *compressed_length = (writer.CurrentDestination() - compressed);
-}
-
-size_t Compress(const char* input, size_t input_length, string* compressed) {
-  // Pre-grow the buffer to the max length of the compressed output
-  STLStringResizeUninitialized(compressed, MaxCompressedLength(input_length));
-
-  size_t compressed_length;
-  RawCompress(input, input_length, string_as_array(compressed),
-              &compressed_length);
-  compressed->resize(compressed_length);
-  return compressed_length;
-}
-
-// -----------------------------------------------------------------------
-// Sink interface
-// -----------------------------------------------------------------------
-
-// A type that decompresses into a Sink. The template parameter
-// Allocator must export one method "char* Allocate(int size);", which
-// allocates a buffer of "size" and appends that to the destination.
-template <typename Allocator>
-class SnappyScatteredWriter {
-  Allocator allocator_;
-
-  // We need random access into the data generated so far.  Therefore
-  // we keep track of all of the generated data as an array of blocks.
-  // All of the blocks except the last have length kBlockSize.
-  std::vector<char*> blocks_;
-  size_t expected_;
-
-  // Total size of all fully generated blocks so far
-  size_t full_size_;
-
-  // Pointer into current output block
-  char* op_base_;       // Base of output block
-  char* op_ptr_;        // Pointer to next unfilled byte in block
-  char* op_limit_;      // Pointer just past block
-
-  inline size_t Size() const {
-    return full_size_ + (op_ptr_ - op_base_);
-  }
-
-  bool SlowAppend(const char* ip, size_t len);
-  bool SlowAppendFromSelf(size_t offset, size_t len);
-
- public:
-  inline explicit SnappyScatteredWriter(const Allocator& allocator)
-      : allocator_(allocator),
-        full_size_(0),
-        op_base_(NULL),
-        op_ptr_(NULL),
-        op_limit_(NULL) {
-  }
-
-  inline void SetExpectedLength(size_t len) {
-    assert(blocks_.empty());
-    expected_ = len;
-  }
-
-  inline bool CheckLength() const {
-    return Size() == expected_;
-  }
-
-  // Return the number of bytes actually uncompressed so far
-  inline size_t Produced() const {
-    return Size();
-  }
-
-  inline bool Append(const char* ip, size_t len) {
-    size_t avail = op_limit_ - op_ptr_;
-    if (len <= avail) {
-      // Fast path
-      memcpy(op_ptr_, ip, len);
-      op_ptr_ += len;
-      return true;
-    } else {
-      return SlowAppend(ip, len);
-    }
-  }
-
-  inline bool TryFastAppend(const char* ip, size_t available, size_t length) {
-    char* op = op_ptr_;
-    const int space_left = op_limit_ - op;
-    if (length <= 16 && available >= 16 + kMaximumTagLength &&
-        space_left >= 16) {
-      // Fast path, used for the majority (about 95%) of invocations.
-      UnalignedCopy128(ip, op);
-      op_ptr_ = op + length;
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  inline bool AppendFromSelf(size_t offset, size_t len) {
-    char* const op_end = op_ptr_ + len;
-    // See SnappyArrayWriter::AppendFromSelf for an explanation of
-    // the "offset - 1u" trick.
-    if (SNAPPY_PREDICT_TRUE(offset - 1u < (size_t)(op_ptr_ - op_base_) &&
-                          op_end <= op_limit_)) {
-      // Fast path: src and dst in current block.
-      op_ptr_ = IncrementalCopy(op_ptr_ - offset, op_ptr_, op_end, op_limit_);
-      return true;
-    }
-    return SlowAppendFromSelf(offset, len);
-  }
-
-  // Called at the end of the decompress. We ask the allocator
-  // write all blocks to the sink.
-  inline void Flush() { allocator_.Flush(Produced()); }
-};
-
-template<typename Allocator>
-bool SnappyScatteredWriter<Allocator>::SlowAppend(const char* ip, size_t len) {
-  size_t avail = op_limit_ - op_ptr_;
-  while (len > avail) {
-    // Completely fill this block
-    memcpy(op_ptr_, ip, avail);
-    op_ptr_ += avail;
-    assert(op_limit_ - op_ptr_ == 0);
-    full_size_ += (op_ptr_ - op_base_);
-    len -= avail;
-    ip += avail;
-
-    // Bounds check
-    if (full_size_ + len > expected_) {
-      return false;
-    }
-
-    // Make new block
-    size_t bsize = std::min<size_t>(kBlockSize, expected_ - full_size_);
-    op_base_ = allocator_.Allocate(bsize);
-    op_ptr_ = op_base_;
-    op_limit_ = op_base_ + bsize;
-    blocks_.push_back(op_base_);
-    avail = bsize;
-  }
-
-  memcpy(op_ptr_, ip, len);
-  op_ptr_ += len;
-  return true;
-}
-
-template<typename Allocator>
-bool SnappyScatteredWriter<Allocator>::SlowAppendFromSelf(size_t offset,
-                                                         size_t len) {
-  // Overflow check
-  // See SnappyArrayWriter::AppendFromSelf for an explanation of
-  // the "offset - 1u" trick.
-  const size_t cur = Size();
-  if (offset - 1u >= cur) return false;
-  if (expected_ - cur < len) return false;
-
-  // Currently we shouldn't ever hit this path because Compress() chops the
-  // input into blocks and does not create cross-block copies. However, it is
-  // nice if we do not rely on that, since we can get better compression if we
-  // allow cross-block copies and thus might want to change the compressor in
-  // the future.
-  size_t src = cur - offset;
-  while (len-- > 0) {
-    char c = blocks_[src >> kBlockLog][src & (kBlockSize-1)];
-    Append(&c, 1);
-    src++;
-  }
-  return true;
-}
-
-class SnappySinkAllocator {
- public:
-  explicit SnappySinkAllocator(Sink* dest): dest_(dest) {}
-  ~SnappySinkAllocator() {}
-
-  char* Allocate(int size) {
-    Datablock block(new char[size], size);
-    blocks_.push_back(block);
-    return block.data;
-  }
-
-  // We flush only at the end, because the writer wants
-  // random access to the blocks and once we hand the
-  // block over to the sink, we can't access it anymore.
-  // Also we don't write more than has been actually written
-  // to the blocks.
-  void Flush(size_t size) {
-    size_t size_written = 0;
-    size_t block_size;
-    for (size_t i = 0; i < blocks_.size(); ++i) {
-      block_size = std::min<size_t>(blocks_[i].size, size - size_written);
-      dest_->AppendAndTakeOwnership(blocks_[i].data, block_size,
-                                    &SnappySinkAllocator::Deleter, NULL);
-      size_written += block_size;
-    }
-    blocks_.clear();
-  }
-
- private:
-  struct Datablock {
-    char* data;
-    size_t size;
-    Datablock(char* p, size_t s) : data(p), size(s) {}
-  };
-
-  static void Deleter(void* arg, const char* bytes, size_t size) {
-    delete[] bytes;
-  }
-
-  Sink* dest_;
-  std::vector<Datablock> blocks_;
-
-  // Note: copying this object is allowed
-};
-
-size_t UncompressAsMuchAsPossible(Source* compressed, Sink* uncompressed) {
-  SnappySinkAllocator allocator(uncompressed);
-  SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
-  InternalUncompress(compressed, &writer);
-  return writer.Produced();
-}
-
-bool Uncompress(Source* compressed, Sink* uncompressed) {
-  // Read the uncompressed length from the front of the compressed input
-  SnappyDecompressor decompressor(compressed);
-  uint32 uncompressed_len = 0;
-  if (!decompressor.ReadUncompressedLength(&uncompressed_len)) {
-    return false;
-  }
-
-  char c;
-  size_t allocated_size;
-  char* buf = uncompressed->GetAppendBufferVariable(
-      1, uncompressed_len, &c, 1, &allocated_size);
-
-  const size_t compressed_len = compressed->Available();
-  // If we can get a flat buffer, then use it, otherwise do block by block
-  // uncompression
-  if (allocated_size >= uncompressed_len) {
-    SnappyArrayWriter writer(buf);
-    bool result = InternalUncompressAllTags(&decompressor, &writer,
-                                            compressed_len, uncompressed_len);
-    uncompressed->Append(buf, writer.Produced());
-    return result;
-  } else {
-    SnappySinkAllocator allocator(uncompressed);
-    SnappyScatteredWriter<SnappySinkAllocator> writer(allocator);
-    return InternalUncompressAllTags(&decompressor, &writer, compressed_len,
-                                     uncompressed_len);
-  }
-}
-
-}  // namespace duckdb_snappy
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
 // The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #6
 // See the end of this file for a list
 
@@ -38341,48 +38151,6 @@ void ZSTD_free(void* ptr, ZSTD_customMem customMem)
 }
 
 }
-
-
-// LICENSE_CHANGE_END
-
-
-// LICENSE_CHANGE_BEGIN
-// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
-// See the end of this file for a list
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-
-
-
-namespace duckdb_apache {
-namespace thrift {
-namespace protocol {
-
-TProtocol::~TProtocol() = default;
-uint32_t TProtocol::skip_virt(TType type) {
-  return ::duckdb_apache::thrift::protocol::skip(*this, type);
-}
-
-TProtocolFactory::~TProtocolFactory() = default;
-
-}}} // duckdb_apache::thrift::protocol
 
 
 // LICENSE_CHANGE_END
@@ -43591,5 +43359,250 @@ size_t ZSTD_decompressBlock(ZSTD_DCtx* dctx,
 }
 
 }
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
+// See the end of this file for a list
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+#include <cassert>
+#include <algorithm>
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
+// See the end of this file for a list
+
+#ifndef THRIFT_EXPORT_H
+#define THRIFT_EXPORT_H
+
+#ifdef THRIFT_STATIC_DEFINE
+#  define THRIFT_EXPORT
+#elif defined(_MSC_VER )
+#  ifndef THRIFT_EXPORT
+#    ifdef thrift_EXPORTS
+          /* We are building this library */
+#      define THRIFT_EXPORT __declspec(dllexport)
+#    else
+          /* We are using this library */
+#      define THRIFT_EXPORT __declspec(dllimport)
+#    endif
+#  endif
+#else
+#  define THRIFT_EXPORT
+#endif
+
+#endif /* THRIFT_EXPORT_H */
+
+
+// LICENSE_CHANGE_END
+
+
+
+
+using std::string;
+
+namespace duckdb_apache {
+namespace thrift {
+namespace transport {
+
+
+
+
+void TMemoryBuffer::computeRead(uint32_t len, uint8_t** out_start, uint32_t* out_give) {
+  // Correct rBound_ so we can use the fast path in the future.
+  rBound_ = wBase_;
+
+  // Decide how much to give.
+  uint32_t give = (std::min)(len, available_read());
+
+  *out_start = rBase_;
+  *out_give = give;
+
+  // Preincrement rBase_ so the caller doesn't have to.
+  rBase_ += give;
+}
+
+uint32_t TMemoryBuffer::readSlow(uint8_t* buf, uint32_t len) {
+  uint8_t* start;
+  uint32_t give;
+  computeRead(len, &start, &give);
+
+  // Copy into the provided buffer.
+  memcpy(buf, start, give);
+
+  return give;
+}
+
+uint32_t TMemoryBuffer::readAppendToString(std::string& str, uint32_t len) {
+  // Don't get some stupid assertion failure.
+  if (buffer_ == nullptr) {
+    return 0;
+  }
+
+  uint8_t* start;
+  uint32_t give;
+  computeRead(len, &start, &give);
+
+  // Append to the provided string.
+  str.append((char*)start, give);
+
+  return give;
+}
+
+void TMemoryBuffer::ensureCanWrite(uint32_t len) {
+  // Check available space
+  uint32_t avail = available_write();
+  if (len <= avail) {
+    return;
+  }
+
+  if (!owner_) {
+    throw TTransportException("Insufficient space in external MemoryBuffer");
+  }
+
+  // Grow the buffer as necessary.
+  uint64_t new_size = bufferSize_;
+  while (len > avail) {
+    new_size = new_size > 0 ? new_size * 2 : 1;
+    if (new_size > maxBufferSize_) {
+      throw TTransportException(TTransportException::BAD_ARGS,
+                                "Internal buffer size overflow");
+    }
+    avail = available_write() + (static_cast<uint32_t>(new_size) - bufferSize_);
+  }
+
+  // Allocate into a new pointer so we don't bork ours if it fails.
+  auto* new_buffer = static_cast<uint8_t*>(std::realloc(buffer_, new_size));
+  if (new_buffer == nullptr) {
+    throw std::bad_alloc();
+  }
+
+  rBase_ = new_buffer + (rBase_ - buffer_);
+  rBound_ = new_buffer + (rBound_ - buffer_);
+  wBase_ = new_buffer + (wBase_ - buffer_);
+  wBound_ = new_buffer + new_size;
+  buffer_ = new_buffer;
+  bufferSize_ = static_cast<uint32_t>(new_size);
+}
+
+void TMemoryBuffer::writeSlow(const uint8_t* buf, uint32_t len) {
+  ensureCanWrite(len);
+
+  // Copy into the buffer and increment wBase_.
+  memcpy(wBase_, buf, len);
+  wBase_ += len;
+}
+
+void TMemoryBuffer::wroteBytes(uint32_t len) {
+  uint32_t avail = available_write();
+  if (len > avail) {
+    throw TTransportException("Client wrote more bytes than size of buffer.");
+  }
+  wBase_ += len;
+}
+
+const uint8_t* TMemoryBuffer::borrowSlow(uint8_t* buf, uint32_t* len) {
+  (void)buf;
+  rBound_ = wBase_;
+  if (available_read() >= *len) {
+    *len = available_read();
+    return rBase_;
+  }
+  return nullptr;
+}
+}
+}
+} // duckdb_apache::thrift::transport
+
+
+// LICENSE_CHANGE_END
+
+
+// LICENSE_CHANGE_BEGIN
+// The following code up to LICENSE_CHANGE_END is subject to THIRD PARTY LICENSE #2
+// See the end of this file for a list
+
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements. See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership. The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License. You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+
+#include <cstring>
+
+
+
+using std::string;
+
+namespace duckdb_apache {
+namespace thrift {
+namespace transport {
+
+const char* TTransportException::what() const noexcept {
+  if (message_.empty()) {
+    switch (type_) {
+    case UNKNOWN:
+      return "TTransportException: Unknown transport exception";
+    case NOT_OPEN:
+      return "TTransportException: Transport not open";
+    case TIMED_OUT:
+      return "TTransportException: Timed out";
+    case END_OF_FILE:
+      return "TTransportException: End of file";
+    case INTERRUPTED:
+      return "TTransportException: Interrupted";
+    case BAD_ARGS:
+      return "TTransportException: Invalid arguments";
+    case CORRUPTED_DATA:
+      return "TTransportException: Corrupted Data";
+    case INTERNAL_ERROR:
+      return "TTransportException: Internal error";
+    default:
+      return "TTransportException: (Invalid exception type)";
+    }
+  } else {
+    return message_.c_str();
+  }
+}
+}
+}
+} // duckdb_apache::thrift::transport
+
 
 // LICENSE_CHANGE_END

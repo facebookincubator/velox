@@ -24,6 +24,8 @@ namespace facebook::velox::tpch {
 
 namespace {
 
+DBGenContext globalCtx;
+
 // DBGenLease is a singleton that controls access to the DBGEN C functions. It
 // handles initialization and cleanup of dbgen gunk structures, and set/unset of
 // global variables used by DBGEN.
@@ -34,7 +36,7 @@ class DBGenLease {
   DBGenLease() {
     // load_dists()/cleanup_dists() need to be called to ensure the global
     // variables required by dbgen are populated.
-    load_dists(10 * 1024 * 1024); // 10 MB buffer size for text generation.
+    load_dists(10 * 1024 * 1024, &globalCtx); // 10 MB buffer size for text generation.
   }
   ~DBGenLease() {
     cleanup_dists();
@@ -45,7 +47,8 @@ class DBGenLease {
     auto lock = std::unique_lock<std::mutex>{mutex_};
 
     // DBGEN takes the scale factor through this global variable.
-    scale = scaleFactor;
+    globalCtx.scale_factor = scaleFactor;
+
 
     // This is tricky: dbgen code initializes seeds using hard-coded literals in
     // the C codebase, which are updated every time a record is generated. In
@@ -67,7 +70,7 @@ class DBGenLease {
  private:
   std::mutex mutex_;
 
-  seed_t* seed_{DBGenGlobals::Seed};
+  seed_t* seed_{globalCtx.Seed};
   seed_t seedBackup_[MAX_STREAM + 1];
   bool firstCall_{true};
 };
@@ -84,65 +87,65 @@ DBGenIterator DBGenIterator::create(size_t scaleFactor) {
 }
 
 void DBGenIterator::initNation(size_t offset) {
-  sd_nation(NATION, offset);
+  sd_nation(NATION, offset, &ctx);
 }
 
 void DBGenIterator::initRegion(size_t offset) {
-  sd_region(REGION, offset);
+  sd_region(REGION, offset, &ctx);
 }
 
 void DBGenIterator::initOrder(size_t offset) {
-  sd_order(ORDER, offset);
-  sd_line(LINE, offset);
+  sd_order(ORDER, offset, &ctx);
+  sd_line(LINE, offset, &ctx);
 }
 
 void DBGenIterator::initSupplier(size_t offset) {
-  sd_supp(SUPP, offset);
+  sd_supp(SUPP, offset, &ctx);
 }
 
 void DBGenIterator::initPart(size_t offset) {
-  sd_part(PART, offset);
-  sd_psupp(PSUPP, offset);
+  sd_part(PART, offset, &ctx);
+  sd_psupp(PSUPP, offset, &ctx);
 }
 
 void DBGenIterator::initCustomer(size_t offset) {
-  sd_cust(CUST, offset);
+  sd_cust(CUST, offset, &ctx);
 }
 
 void DBGenIterator::genNation(size_t index, code_t& code) {
-  row_start(NATION);
-  mk_nation(index, &code);
-  row_stop_h(NATION);
+  row_start(NATION, &ctx);
+  mk_nation(index, &code, &ctx);
+  row_stop_h(NATION, &ctx);
 }
 
 void DBGenIterator::genRegion(size_t index, code_t& code) {
-  row_start(REGION);
-  mk_region(index, &code);
-  row_stop_h(REGION);
+  row_start(REGION, &ctx);
+  mk_region(index, &code, &ctx);
+  row_stop_h(REGION, &ctx);
 }
 
 void DBGenIterator::genOrder(size_t index, order_t& order) {
-  row_start(ORDER);
-  mk_order(index, &order, /*update-num=*/0);
-  row_stop_h(ORDER);
+  row_start(ORDER, &ctx);
+  mk_order(index, &order, &ctx, /*update-num=*/0);
+  row_stop_h(ORDER, &ctx);
 }
 
 void DBGenIterator::genSupplier(size_t index, supplier_t& supplier) {
-  row_start(SUPP);
-  mk_supp(index, &supplier);
-  row_stop_h(SUPP);
+  row_start(SUPP, &ctx);
+  mk_supp(index, &supplier, &ctx);
+  row_stop_h(SUPP, &ctx);
 }
 
 void DBGenIterator::genPart(size_t index, part_t& part) {
-  row_start(PART);
-  mk_part(index, &part);
-  row_stop_h(PART);
+  row_start(PART, &ctx);
+  mk_part(index, &part, &ctx);
+  row_stop_h(PART, &ctx);
 }
 
 void DBGenIterator::genCustomer(size_t index, customer_t& customer) {
-  row_start(CUST);
-  mk_cust(index, &customer);
-  row_stop_h(CUST);
+  row_start(CUST, &ctx);
+  mk_cust(index, &customer, &ctx);
+  row_stop_h(CUST, &ctx);
 }
 
 } // namespace facebook::velox::tpch
