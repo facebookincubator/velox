@@ -44,6 +44,30 @@ jobs:
       - name: Run Hdfs Tests
         commands:
           - make NUM_THREADS=16 hdfstest
+  debian-build:
+    name: Debian Build
+    image: hub.byted.org/base/debian.stretch.base:ef646217b93c53a38972d08daf88e299
+    steps:
+      - name: Init Submodules
+        commands:
+          - git submodule sync --recursive
+          - git submodule update --init --recursive
+      - name: Set Up Environment
+        commands:
+          - ./scripts/setup-debian.sh
+      - name: Build
+        commands:
+          - make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+      - name: Run Unit Tests
+        commands:
+          - make NUM_THREADS=16 unittest
+      - name: Run Fuzzer Tests
+        commands:
+          - _build/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0
+      - name: Run the velox examples
+        commands:
+          - _build/debug/velox/examples/velox_example_expression_eval
+          - _build/debug/velox/examples/velox_example_opaque_type
   format-check:
     name: format check
     image: hub.byted.org/base/velox.ci:3af98fe94bb3ad769e823952369eb021
