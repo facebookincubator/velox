@@ -46,7 +46,7 @@ static bool validateDataFormat(const char* flagname, const std::string& value) {
   }
   std::cout
       << fmt::format(
-             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"orc\"]",
+             "Invalid value for --{}: {}. Allowed values are [\"parquet\", \"dwrf\"]",
              flagname,
              value)
       << std::endl;
@@ -142,6 +142,11 @@ BENCHMARK(q4) {
 
 BENCHMARK(q6) {
   const auto planContext = queryBuilder->getQueryPlan(6);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q7) {
+  const auto planContext = queryBuilder->getQueryPlan(7);
   benchmark.run(planContext);
 }
 

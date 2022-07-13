@@ -81,6 +81,7 @@ class TpchQueryBuilder {
   TpchPlan getQ3Plan() const;
   TpchPlan getQ4Plan() const;
   TpchPlan getQ6Plan() const;
+  TpchPlan getQ7Plan() const;
   TpchPlan getQ13Plan() const;
   TpchPlan getQ18Plan() const;
 
@@ -107,6 +108,23 @@ class TpchQueryBuilder {
   std::shared_ptr<const core::PlanNode> getQ3LineItemsPlans(
       std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
       TpchPlan& context) const;
+
+  std::pair<std::string, PlanBuilder> getQ7LineItemPlanBuilder(
+      TpchPlan& context,
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator) const;
+  core::PlanNodePtr getQ7SupplierPlan(
+      TpchPlan& context,
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator) const;
+  core::PlanNodePtr getQ7OrdersPlan(
+      TpchPlan& context,
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator) const;
+  core::PlanNodePtr getQ7CustomerPlan(
+      TpchPlan& context,
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator) const;
+  core::PlanNodePtr getQ7NationPlan(
+      TpchPlan& context,
+      std::shared_ptr<PlanNodeIdGenerator>& planNodeIdGenerator,
+      std::string nationType) const;
 
   const std::vector<std::string>& getTableFilePaths(
       const std::string& tableName) const {
