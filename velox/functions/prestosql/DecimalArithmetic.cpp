@@ -125,6 +125,33 @@ class Addition {
   }
 };
 
+class Subtraction {
+ public:
+  template <typename R, typename A, typename B>
+  inline static void
+  apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
+    r.setUnscaledValue(
+        a.unscaledValue() * DecimalUtil::kPowersOfTen[aRescale] -
+        b.unscaledValue() * DecimalUtil::kPowersOfTen[bRescale]);
+  }
+
+  inline static uint8_t computeRescaleFactor(
+      const uint8_t fromScale,
+      const uint8_t toScale,
+      const uint8_t rScale = 0) {
+    return std::max(0, toScale - fromScale);
+  }
+
+  inline static const std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      uint8_t aPrecision,
+      uint8_t aScale,
+      uint8_t bPrecision,
+      uint8_t bScale) {
+    return Addition::computeResultPrecisionScale(
+        aPrecision, aScale, bPrecision, bScale);
+  }
+};
+
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 decimalAddSubtractSignature() {
   return {
@@ -201,4 +228,8 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_add,
     decimalAddSubtractSignature(),
     createDecimalFunction<Addition>);
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_sub,
+    decimalAddSubtractSignature(),
+    createDecimalFunction<Subtraction>);
 }; // namespace facebook::velox::functions
