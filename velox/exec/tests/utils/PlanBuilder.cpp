@@ -24,6 +24,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
@@ -507,7 +508,7 @@ PlanBuilder& PlanBuilder::finalAggregation() {
   return *this;
 }
 
-PlanBuilder::AggregateExpressionsAndNames
+PlanBuilder::ExpressionsAndNames
 PlanBuilder::createAggregateExpressionsAndNames(
     const std::vector<std::string>& aggregates,
     core::AggregationNode::Step step,
@@ -576,7 +577,7 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(groupingKeys),
       fields(preGroupedKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -599,7 +600,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       fields(groupingKeys),
       fields(groupingKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -696,6 +697,190 @@ PlanBuilder& PlanBuilder::assignUniqueId(
     const int32_t taskUniqueId) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
       nextPlanNodeId(), idName, taskUniqueId, planNode_);
+  return *this;
+}
+
+namespace {
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
+std::string throwWindowFunctionDoesntExist(const std::string& name) {
+  std::stringstream error;
+  error << "Window function doesn't exist: " << name << ".";
+  if (exec::windowFunctions().empty()) {
+    error << " Registry of window functions is empty. "
+             "Make sure to register some window functions.";
+  }
+  VELOX_USER_FAIL(error.str());
+}
+
+std::string throwWindowFunctionSignatureNotSupported(
+    const std::string& name,
+    const std::vector<TypePtr>& types,
+    const std::vector<FunctionSignaturePtr>& signatures) {
+  std::stringstream error;
+  error << "Window function signature is not supported: "
+        << toString(name, types)
+        << ". Supported signatures: " << toString(signatures) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
+TypePtr resolveWindowType(
+    const std::string& windowFunctionName,
+    const std::vector<TypePtr>& inputTypes) {
+  if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
+    for (const auto& signature : signatures.value()) {
+      exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->returnType());
+      }
+    }
+
+    throwWindowFunctionSignatureNotSupported(
+        windowFunctionName, inputTypes, signatures.value());
+  }
+
+  throwWindowFunctionDoesntExist(windowFunctionName);
+  return nullptr;
+}
+
+// The WindowTypeResolver throws an exception if the window function name was
+// not registered or an un-supported signature is used in the Window expression.
+class WindowTypeResolver {
+ public:
+  explicit WindowTypeResolver()
+      : previousHook_(core::Expressions::getResolverHook()) {
+    core::Expressions::setTypeResolverHook(
+        [&](const auto& inputs, const auto& expr) {
+          return resolveType(inputs, expr);
+        });
+  }
+
+  ~WindowTypeResolver() {
+    core::Expressions::setTypeResolverHook(previousHook_);
+  }
+
+  void setResultType(const TypePtr& type) {
+    resultType_ = type;
+  }
+
+ private:
+  TypePtr resolveType(
+      const std::vector<core::TypedExprPtr>& inputs,
+      const std::shared_ptr<const core::CallExpr>& expr) const {
+    if (resultType_) {
+      return resultType_;
+    }
+
+    std::vector<TypePtr> types;
+    for (auto& input : inputs) {
+      types.push_back(input->type());
+    }
+
+    auto functionName = expr->getFunctionName();
+
+    return resolveWindowType(functionName, types);
+  }
+
+  const core::Expressions::TypeResolverHook previousHook_;
+  TypePtr resultType_;
+};
+} // namespace
+
+const core::WindowNode::Frame PlanBuilder::createWindowFrame(
+    const WindowFrame& windowFrame) {
+  core::WindowNode::Frame frame;
+  frame.type = windowFrame.type;
+  frame.startType = windowFrame.startType;
+  frame.startValue =
+      (windowFrame.startValue.has_value()
+           ? inferTypes(duckdb::ParseExpr(windowFrame.startValue.value()))
+           : nullptr);
+  frame.endType = windowFrame.endType;
+  frame.endValue =
+      (windowFrame.endValue.has_value()
+           ? inferTypes(duckdb::ParseExpr(windowFrame.endValue.value()))
+           : nullptr);
+  return frame;
+}
+
+PlanBuilder::ExpressionsAndNames PlanBuilder::createWindowExpressionsAndNames(
+    const std::vector<std::string>& windowFunctions,
+    const std::vector<TypePtr>& resultTypes) {
+  WindowTypeResolver windowResolver;
+  std::vector<core::CallTypedExprPtr> exprs;
+  std::vector<std::string> names;
+  exprs.reserve(windowFunctions.size());
+  names.reserve(windowFunctions.size());
+  for (auto i = 0; i < windowFunctions.size(); i++) {
+    auto& window = windowFunctions[i];
+    if (i < resultTypes.size()) {
+      windowResolver.setResultType(resultTypes[i]);
+    }
+
+    auto untypedExpr = duckdb::parseExpr(window);
+    auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
+        inferTypes(untypedExpr));
+    exprs.emplace_back(expr);
+
+    if (untypedExpr->alias().has_value()) {
+      names.push_back(untypedExpr->alias().value());
+    } else {
+      names.push_back(fmt::format("a{}", i));
+    }
+  }
+
+  return {exprs, names};
+}
+
+PlanBuilder& PlanBuilder::window(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& orderByKeys,
+    const std::vector<std::string>& windowFunctions,
+    const std::vector<WindowFrame>& windowFrames,
+    const std::vector<bool>& ignoreNulls) {
+  VELOX_CHECK_GT(
+      windowFunctions.size(),
+      0,
+      "Window Node requires atleast one window function.");
+  auto [sortingKeys, sortingOrders] =
+      parseOrderByClauses(orderByKeys, planNode_->outputType(), pool_);
+
+  core::WindowNode::Frame defaultFrame{
+      core::WindowNode::WindowType::kRange,
+      core::WindowNode::BoundType::kUnboundedPreceding,
+      nullptr,
+      core::WindowNode::BoundType::kCurrentRow,
+      nullptr};
+
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<TypePtr> resultTypes;
+  auto windowExpressionsAndNames =
+      createWindowExpressionsAndNames(windowFunctions, resultTypes);
+  for (auto i = 0; i < windowExpressionsAndNames.expressions.size(); ++i) {
+    windowNodeFunctions.push_back(
+        {std::move(windowExpressionsAndNames.expressions[i]),
+         (i < windowFrames.size() ? createWindowFrame(windowFrames[i])
+                                  : defaultFrame),
+         (i < ignoreNulls.size() ? ignoreNulls[i] : false)});
+  }
+
+  planNode_ = std::make_shared<core::WindowNode>(
+      nextPlanNodeId(),
+      fields(partitionKeys),
+      sortingKeys,
+      sortingOrders,
+      windowExpressionsAndNames.names,
+      windowNodeFunctions,
+      planNode_);
   return *this;
 }
 
