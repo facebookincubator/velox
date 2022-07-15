@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/type/LongDecimal.h"
+#include "velox/type/DecimalUtils.h"
 
 namespace facebook::velox {
 namespace {
@@ -38,5 +38,33 @@ TEST(DecimalTest, toString) {
       std::to_string(-kMax - 1), "-170141183460469231731687303715884105728");
 }
 
+TEST(DecimalTest, decimalToString) {
+  ASSERT_EQ(
+      "1000",
+      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 0)));
+  ASSERT_EQ(
+      "1.000",
+      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 3)));
+  ASSERT_EQ(
+      "0.001000",
+      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 6)));
+  ASSERT_EQ(
+      "-0.001000",
+      decimalToString<ShortDecimal>(ShortDecimal(-1000), DECIMAL(10, 6)));
+
+  ASSERT_EQ(
+      "1000", decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 0)));
+  ASSERT_EQ(
+      "1.000", decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 3)));
+  ASSERT_EQ(
+      "0.0000001000",
+      decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 10)));
+  ASSERT_EQ(
+      "-0.001000",
+      decimalToString<LongDecimal>(LongDecimal(-1000), DECIMAL(20, 6)));
+  ASSERT_EQ("0", decimalToString<LongDecimal>(LongDecimal(0), DECIMAL(20, 9)));
+
+  ASSERT_THROW(decimalToString<int32_t>(10, INTEGER()), VeloxUserError);
+}
 } // namespace
 } // namespace facebook::velox
