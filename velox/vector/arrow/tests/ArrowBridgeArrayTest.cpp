@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <arrow/c/abi.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
