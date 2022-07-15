@@ -759,7 +759,7 @@ class WindowTypeResolver {
   explicit WindowTypeResolver()
       : previousHook_(core::Expressions::getResolverHook()) {
     core::Expressions::setTypeResolverHook(
-        [&](const auto& inputs, const auto& expr) {
+        [&](const auto& inputs, const auto& expr, bool /*nullOnFailure*/) {
           return resolveType(inputs, expr);
         });
   }
@@ -802,12 +802,12 @@ const core::WindowNode::Frame PlanBuilder::createWindowFrame(
   frame.startType = windowFrame.startType;
   frame.startValue =
       (windowFrame.startValue.has_value()
-           ? inferTypes(duckdb::ParseExpr(windowFrame.startValue.value()))
+           ? inferTypes(duckdb::parseExpr(windowFrame.startValue.value()))
            : nullptr);
   frame.endType = windowFrame.endType;
   frame.endValue =
       (windowFrame.endValue.has_value()
-           ? inferTypes(duckdb::ParseExpr(windowFrame.endValue.value()))
+           ? inferTypes(duckdb::parseExpr(windowFrame.endValue.value()))
            : nullptr);
   return frame;
 }
