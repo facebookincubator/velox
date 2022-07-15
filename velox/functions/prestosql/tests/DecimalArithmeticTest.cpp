@@ -132,3 +132,46 @@ TEST_F(DecimalArithmeticTest, add) {
   testOpDictVectors<ShortDecimal>(
       "plus", resultShortFlat, {shortFlat, shortFlat});
 }
+
+TEST_F(DecimalArithmeticTest, decimalSubTest) {
+  auto resultLongFlat = makeLongDecimalFlatVector({500, 1000}, DECIMAL(19, 3));
+  auto shortFlatA = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(18, 3));
+  auto shortFlatB = makeShortDecimalFlatVector({500, 1000}, DECIMAL(18, 3));
+
+  // Subtract short and short, returning long.
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "minus(c0, c1)", {shortFlatA, shortFlatB});
+  // Subtract short and long, returning long.
+  auto longFlatA = makeLongDecimalFlatVector({100, 200}, DECIMAL(19, 3));
+  resultLongFlat = makeLongDecimalFlatVector({900, 1800}, DECIMAL(20, 3));
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "minus(c0, c1)", {shortFlatA, longFlatA});
+  // Subtract long and short, returning long.
+  resultLongFlat = makeLongDecimalFlatVector({-900, -1800}, DECIMAL(20, 3));
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "minus(c0, c1)", {longFlatA, shortFlatA});
+  // Subtract long and long, returning long.
+  auto longFlatB = makeLongDecimalFlatVector({100, 200}, DECIMAL(19, 2));
+  resultLongFlat = makeLongDecimalFlatVector({-900, -1800}, DECIMAL(21, 3));
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "c0 - c1", {longFlatA, longFlatB});
+
+  // Subtract short and short, returning short.
+  shortFlatA = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(10, 3));
+  shortFlatB = makeShortDecimalFlatVector({500, 1000}, DECIMAL(10, 3));
+  auto resultShortFlat =
+      makeShortDecimalFlatVector({500, 1000}, DECIMAL(11, 3));
+  testDecimalExpr<ShortDecimal>(
+      resultShortFlat, "minus(c0, c1)", {shortFlatA, shortFlatB});
+  auto resultConstantFlat =
+      makeShortDecimalFlatVector({0, -1000}, DECIMAL(11, 3));
+  // Constant and Flat arguments.
+  testOpFlatConstant<ShortDecimal>(
+      "minus", "'1.000'::decimal(10,3)", shortFlatA, resultConstantFlat, true);
+  resultConstantFlat = makeShortDecimalFlatVector({0, 1000}, DECIMAL(11, 3));
+  // Flat and Constant arguments.
+  testOpFlatConstant<ShortDecimal>(
+      "minus", "'1.000'::decimal(10,3)", shortFlatA, resultConstantFlat, false);
+  testOpDictVectors<ShortDecimal>(
+      "minus", resultShortFlat, {shortFlatA, shortFlatB});
+}
