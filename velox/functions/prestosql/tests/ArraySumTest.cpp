@@ -23,7 +23,7 @@ using namespace facebook::velox::functions::test;
 
 namespace {
 
-// Class to test the array_duplicates operator.
+// Class to test the array_sum operator.
 class ArraySumTest : public FunctionBaseTest {
  protected:
   // Evaluate an expression.

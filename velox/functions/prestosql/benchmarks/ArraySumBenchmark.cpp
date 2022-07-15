@@ -25,43 +25,45 @@ using namespace facebook::velox::exec;
 
 namespace {
 
-template <typename IT, typename OT>
-VELOX_UDF_BEGIN(array_sum)
-FOLLY_ALWAYS_INLINE bool call(OT& out, const arg_type<Array<IT>>& array) {
-  if (array.mayHaveNulls()) {
-    bool allNulls = true;
+template <typename T>
+struct udf_array_sum {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+  template <typename IT, typename OT>
+  FOLLY_ALWAYS_INLINE bool call(OT& out, const arg_type<Array<IT>>& array) {
+    if (array.mayHaveNulls()) {
+      bool allNulls = true;
+      OT sum = 0;
+      for (const auto& item : array) {
+        if (item.has_value()) {
+          allNulls = false;
+          sum += *item;
+        }
+      }
+      if (allNulls) {
+        return false;
+      }
+      out = sum;
+      return true;
+    }
+
+    // Not nulls path
     OT sum = 0;
     for (const auto& item : array) {
-      if (item.has_value()) {
-        allNulls = false;
-        sum += *item;
-      }
-    }
-    if (allNulls) {
-      return false;
+      sum += *item;
     }
     out = sum;
     return true;
   }
+};
 
-  // Not nulls path
-  OT sum = 0;
-  for (const auto& item : array) {
-    sum += *item;
-  }
-  out = sum;
-  return true;
-}
-VELOX_UDF_END();
-
-class ArrayContainsBenchmark : public functions::test::FunctionBenchmarkBase {
+class ArraySumBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
-  ArrayContainsBenchmark() : FunctionBenchmarkBase() {
+  ArraySumBenchmark() : FunctionBenchmarkBase() {
     functions::prestosql::registerArrayFunctions();
     functions::prestosql::registerGeneralFunctions();
 
     registerFunction<
-        udf_array_sum<int32_t, int64_t>,
+        udf_array_sum,
         int64_t,
         facebook::velox::Array<int32_t>>({"array_sum_alt"});
   }
@@ -92,12 +94,12 @@ class ArrayContainsBenchmark : public functions::test::FunctionBenchmarkBase {
 };
 
 BENCHMARK(vectorSimpleFunction) {
-  ArrayContainsBenchmark benchmark;
+  ArraySum benchmark;
   benchmark.runInteger("array_sum_alt");
 }
 
 BENCHMARK_RELATIVE(vectorFunctionInteger) {
-  ArrayContainsBenchmark benchmark;
+  ArraySum benchmark;
   benchmark.runInteger("array_sum");
 }
 
