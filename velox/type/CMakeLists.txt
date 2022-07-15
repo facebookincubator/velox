@@ -28,6 +28,7 @@ add_library(
   TimestampConversion.cpp
   Tokenizer.cpp
   Type.cpp
+  DecimalUtils.cpp
   Variant.cpp)
 
 target_link_libraries(
