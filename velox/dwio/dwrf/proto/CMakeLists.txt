@@ -42,6 +42,8 @@ add_custom_target(dwio_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 
 add_library(velox_dwio_dwrf_proto ${PROTO_HDRS} ${PROTO_SRCS})
 
+message(STATUS "Protobuf_LIBRARIES ${Protobuf_LIBRARIES}")
+
 # Access generated proto file with.
 #
 # #include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"

@@ -66,6 +66,10 @@ option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
 option(VELOX_BUILD_PYTHON_PACKAGE "Enable Velox Python bindings" OFF)
 
+message(STATUS "VELOX_ENABLE_ARROW ${VELOX_ENABLE_ARROW}")
+#add_definitions(-DNDEBUG)
+
+
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
