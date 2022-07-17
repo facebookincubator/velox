@@ -49,8 +49,12 @@ option(VELOX_ENABLE_BENCHMARKS_BASIC "Build velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
-option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
+option(VELOX_ENABLE_ARROW "Enable Arrow support" ON)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
+
+set(VELOX_ENABLE_ARROW ON)
+message(STATUS "VELOX_ENABLE_ARROW ${VELOX_ENABLE_ARROW}")
+message(STATUS "VELOX_ENABLE_PARQUET ${VELOX_ENABLE_PARQUET}")
 
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build

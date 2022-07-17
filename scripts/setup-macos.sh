@@ -39,6 +39,8 @@ COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 MACOS_DEPS="ninja flex bison cmake ccache protobuf icu4c boost gflags glog libevent lz4 lzo snappy xz zstd openssl@1.1"
 
+PROMPT_ALWAYS_RESPOND="Y"
+
 function run_and_time {
   time "$@"
   { echo "+ Finished running $*"; } 2> /dev/null
