@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 #include <velox/type/Timestamp.h>
+#include "dwio/common/tests/utils/DataFiles.h"
 #include "velox/common/base/tests/Fs.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/Cursor.h"
