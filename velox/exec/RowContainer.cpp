@@ -394,6 +394,30 @@ void RowContainer::extractComplexType(
   }
 }
 
+void RowContainer::extractOffsetsComplexType(
+    const char* const* rows,
+    const BufferPtr& offsets,
+    RowColumn column,
+    const vector_size_t resultOffset,
+    VectorPtr result) {
+  ByteStream stream;
+  auto nullByte = column.nullByte();
+  auto nullMask = column.nullMask();
+  auto columnOffset = column.offset();
+  auto numRows = offsets->size();
+  auto offsetsVector = offsets->as<vector_size_t>();
+  for (int i = 0; i < numRows; ++i) {
+    auto row = rows[offsetsVector[i]];
+    if (!row || row[nullByte] & nullMask) {
+      result->setNull(resultOffset + i, true);
+    } else {
+      prepareRead(row, columnOffset, stream);
+      ContainerRowSerde::instance().deserialize(
+          stream, resultOffset + i, result.get());
+    }
+  }
+}
+
 //   static
 int32_t RowContainer::compareStringAsc(
     StringView left,

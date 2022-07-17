@@ -20,13 +20,13 @@ namespace facebook::velox::exec {
 // Simple WindowPartition that builds over the RowContainer used for storing
 // the input rows in this Window Operator.
 WindowPartition::WindowPartition(
-    std::vector<exec::RowColumn>& argColumns,
+    std::vector<exec::RowColumn>& columns,
     const std::vector<TypePtr>& argTypes,
     velox::memory::MemoryPool* pool)
-    : argColumns_(argColumns), pool_(pool) {
-  argVectors_.reserve(argColumns.size());
+    : columns_(columns), pool_(pool) {
+  columnVectors_.reserve(columns.size());
   for (const auto& argType : argTypes) {
-    argVectors_.emplace_back(BaseVector::create(argType, 0, pool));
+    columnVectors_.emplace_back(BaseVector::create(argType, 0, pool));
   }
 }
 
@@ -35,20 +35,29 @@ void WindowPartition::resetPartition(const folly::Range<char**>& rows) {
   // of the vector of row pointers, then we can just maintain the
   // vector as a member variable in the Window operator
   partition_ = rows;
-  for (auto& argVector : argVectors_) {
+  for (auto& argVector : columnVectors_) {
     argVector->resize(0);
   }
 }
 
 VectorPtr WindowPartition::argColumn(vector_size_t idx) const {
-  if (argVectors_[idx]->size() != partition_.size()) {
-    argVectors_[idx]->resize(partition_.size());
+  if (columnVectors_[idx]->size() != partition_.size()) {
+    columnVectors_[idx]->resize(partition_.size());
     exec::RowContainer::extractColumn(
         partition_.data(),
         partition_.size(),
-        argColumns_[idx],
-        argVectors_[idx]);
+        columns_[idx],
+        columnVectors_[idx]);
   }
-  return argVectors_[idx];
+  return columnVectors_[idx];
+}
+
+void WindowPartition::extractColumnOffsets(
+    vector_size_t idx,
+    const BufferPtr& offsets,
+    vector_size_t resultOffset,
+    VectorPtr result) const {
+  exec::RowContainer::extractColumnAtOffset(
+      partition_.data(), offsets, columns_[idx], resultOffset, result);
 }
 } // namespace facebook::velox::exec

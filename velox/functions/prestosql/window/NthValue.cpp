@@ -29,7 +29,11 @@ class NthValueFunction : public exec::WindowFunction {
       const std::vector<column_index_t>& argIndices,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool), argIndices_(argIndices) {}
+      : WindowFunction(resultType, pool), argIndices_(argIndices) {
+    // TODO : Put a better estimation of the buffer size here.
+    offsetsBuffer_ = AlignedBuffer::allocate<vector_size_t>(1000, pool);
+    rawOffsetsBuffer_ = offsetsBuffer_->asMutable<vector_size_t>();
+  }
 
   void resetPartition(const exec::WindowPartition* partition) {
     partition_ = partition;
@@ -37,33 +41,28 @@ class NthValueFunction : public exec::WindowFunction {
   }
 
   void apply(
-      const BufferPtr& peerGroupStarts,
+      const BufferPtr& /*peerGroupStarts*/,
       const BufferPtr& /*peerGroupEnds*/,
       const BufferPtr& frameStarts,
       const BufferPtr& /*frameEnds*/,
       int32_t resultOffset,
       const VectorPtr& result) {
-    auto numRows = peerGroupStarts->size();
-
-    auto rawResultsBuffer = result->as<FlatVector<T>>()->mutableRawValues();
+    auto numRows = frameStarts->size();
     auto frameStartsVector = frameStarts->as<vector_size_t>();
 
-    auto columnVector = partition_->argColumn(argIndices_[0]);
-    auto firstArgVector = columnVector->template as<FlatVector<T>>();
+    // This vector can be extracted during resetPartition.
     auto offsetsVector = partition_->argColumn(argIndices_[1])
                              ->template as<FlatVector<int64_t>>();
 
+    offsetsBuffer_->setSize(numRows);
     for (int i = 0; i < numRows; i++) {
       auto offset = offsetsVector->valueAt(partitionOffset_ + i);
       auto frameStart = frameStartsVector[partitionOffset_ + i];
-
-      if (columnVector->isNullAt(frameStart + offset - 1)) {
-        result->setNull(resultOffset + i, true);
-      } else {
-        rawResultsBuffer[resultOffset + i] =
-            firstArgVector->valueAt(frameStart + offset - 1);
-      }
+      rawOffsetsBuffer_[i] = frameStart + offset - 1;
     }
+
+    partition_->extractColumnOffsets(
+        argIndices_[0], offsetsBuffer_, resultOffset, result);
 
     partitionOffset_ += numRows;
   }
@@ -78,6 +77,12 @@ class NthValueFunction : public exec::WindowFunction {
   // This is used to index into the argument vectors from the WindowPartition
   // while outputting all the rows for the partition.
   vector_size_t partitionOffset_;
+
+  // The NthValue function uses the extractColumnAtOffsets API of the
+  // WindowPartition. The offsetsBuffer_ is used as an input to that function.
+  BufferPtr offsetsBuffer_;
+  // Raw pointer to the above buffer.
+  vector_size_t* rawOffsetsBuffer_;
 };
 
 template <TypeKind kind>

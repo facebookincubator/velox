@@ -186,6 +186,16 @@ class RowContainer {
       RowColumn col,
       VectorPtr result);
 
+  // Copies the values at 'columnIndex' at positions in the 'offsets' array for
+  // the rows pointed to by 'rows'. If an entry in 'rows' is null, sets
+  // corresponding row in 'result' to null.
+  static void extractColumnAtOffset(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      RowColumn column,
+      const vector_size_t resultOffset,
+      VectorPtr result);
+
   // Copies the values at 'columnIndex' into 'result' for the
   // 'numRows' rows pointed to by 'rows'. If an entry in 'rows' is null, sets
   //  corresponding row in 'result' to null.
@@ -195,6 +205,19 @@ class RowContainer {
       int32_t columnIndex,
       VectorPtr result) {
     extractColumn(rows, numRows, columnAt(columnIndex), result);
+  }
+
+  // Copies the values at 'columnIndex' at positions in the 'offsets' array for
+  // the rows pointed to by 'rows'. If an entry in 'rows' is null, sets
+  // corresponding row in 'result' to null.
+  void extractColumnAtOffset(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      int32_t columnIndex,
+      const vector_size_t resultOffset,
+      VectorPtr result) {
+    extractColumnAtOffset(
+        rows, offsets, columnAt(columnIndex), resultOffset, result);
   }
 
   static inline int32_t nullByte(int32_t nullOffset) {
@@ -426,6 +449,37 @@ class RowContainer {
     }
   }
 
+  template <TypeKind Kind>
+  static void extractColumnOffsetsTyped(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      RowColumn column,
+      const vector_size_t resultOffset,
+      VectorPtr result) {
+    if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
+        Kind == TypeKind::MAP) {
+      extractOffsetsComplexType(rows, offsets, column, resultOffset, result);
+      return;
+    }
+    using T = typename KindToFlatVector<Kind>::HashRowType;
+    auto* flatResult = result->as<FlatVector<T>>();
+    auto nullMask = column.nullMask();
+    auto columnOffset = column.offset();
+    if (!nullMask) {
+      extractOffsetsValuesNoNulls<T>(
+          rows, offsets, columnOffset, resultOffset, flatResult);
+    } else {
+      extractOffsetsValuesWithNulls<T>(
+          rows,
+          offsets,
+          columnOffset,
+          column.nullByte(),
+          nullMask,
+          resultOffset,
+          flatResult);
+    }
+  }
+
   char*& nextFree(char* row) {
     return *reinterpret_cast<char**>(row + kNextFreeOffset);
   }
@@ -496,6 +550,33 @@ class RowContainer {
   }
 
   template <typename T>
+  static void extractOffsetsValuesWithNulls(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      int32_t columnOffset,
+      int32_t nullByte,
+      uint8_t nullMask,
+      const vector_size_t resultOffset,
+      FlatVector<T>* result) {
+    auto numRows = offsets->size();
+    auto offsetsVector = offsets->as<vector_size_t>();
+
+    auto rawResultsBuffer = result->mutableRawValues();
+    for (int32_t i = 0; i < numRows; ++i) {
+      if (rows[offsetsVector[i]] == nullptr) {
+        result->setNull(resultOffset + i, true);
+      } else {
+        result->setNull(
+            resultOffset + i,
+            isNullAt(rows[offsetsVector[i]], nullByte, nullMask));
+
+        rawResultsBuffer[resultOffset + i] =
+            valueAt<T>(rows[offsetsVector[i]], columnOffset);
+      }
+    }
+  }
+
+  template <typename T>
   static void extractValuesNoNulls(
       const char* const* rows,
       int32_t numRows,
@@ -511,6 +592,29 @@ class RowContainer {
         result->setNull(i, false);
         // Here a StringView will reference the hash table, not copy.
         values[i] = valueAt<T>(rows[i], offset);
+      }
+    }
+  }
+
+  template <typename T>
+  static void extractOffsetsValuesNoNulls(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      int32_t columnOffset,
+      const vector_size_t resultOffset,
+      FlatVector<T>* result) {
+    auto numRows = offsets->size();
+    auto offsetsVector = offsets->as<vector_size_t>();
+
+    auto rawResultsBuffer = result->mutableRawValues();
+    for (int32_t i = 0; i < numRows; ++i) {
+      if (rows[offsetsVector[i]] == nullptr) {
+        result->setNull(resultOffset + i, true);
+      } else {
+        result->setNull(resultOffset + i, false);
+        // Here a StringView will reference the hash table, not copy.
+        rawResultsBuffer[resultOffset + i] =
+            valueAt<T>(rows[offsetsVector[i]], columnOffset);
       }
     }
   }
@@ -730,6 +834,13 @@ class RowContainer {
       RowColumn column,
       VectorPtr result);
 
+  static void extractOffsetsComplexType(
+      const char* const* rows,
+      const BufferPtr& offsets,
+      RowColumn column,
+      const vector_size_t resultOffset,
+      VectorPtr result);
+
   static void extractString(
       StringView value,
       FlatVector<StringView>* values,
@@ -926,6 +1037,16 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
 }
 
+template <>
+inline void RowContainer::extractColumnOffsetsTyped<TypeKind::OPAQUE>(
+    const char* const* /*rows*/,
+    const BufferPtr& /*offsets*/,
+    RowColumn /*column*/,
+    const vector_size_t /*resultOffset*/,
+    VectorPtr /*result*/) {
+  VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
+}
+
 inline void RowContainer::extractColumn(
     const char* const* rows,
     int32_t numRows,
@@ -933,6 +1054,22 @@ inline void RowContainer::extractColumn(
     VectorPtr result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped, result->typeKind(), rows, numRows, column, result);
+}
+
+inline void RowContainer::extractColumnAtOffset(
+    const char* const* rows,
+    const BufferPtr& offsets,
+    RowColumn column,
+    vector_size_t resultOffset,
+    VectorPtr result) {
+  VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
+      extractColumnOffsetsTyped,
+      result->typeKind(),
+      rows,
+      offsets,
+      column,
+      resultOffset,
+      result);
 }
 
 template <bool mayHaveNulls>

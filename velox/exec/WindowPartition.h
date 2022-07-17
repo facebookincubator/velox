@@ -22,22 +22,35 @@ namespace facebook::velox::exec {
 class WindowPartition {
  public:
   WindowPartition(
-      std::vector<exec::RowColumn>& argColumns,
-      const std::vector<TypePtr>& argTypes,
+      std::vector<exec::RowColumn>& columns,
+      const std::vector<TypePtr>& types,
       velox::memory::MemoryPool* pool);
 
   void resetPartition(const folly::Range<char**>& rows);
 
+  // Retrieves the column at a particular index. The function
+  // knows the index in the input columns list for the argument.
   VectorPtr argColumn(vector_size_t idx) const;
+
+  // Extracts into the result VectorPtr (starting from resultOffset),
+  // values from column at index 'idx' and at row offsets in 'offsets'
+  // buffer. This API is useful for Value functions like NthValue
+  // that are just extracting column values but are not interested in
+  // them. Nulls at corresponding positions are copied.
+  void extractColumnOffsets(
+      vector_size_t idx,
+      const BufferPtr& offsets,
+      vector_size_t resultOffset,
+      VectorPtr result) const;
 
   vector_size_t numRows() const {
     return partition_.size();
   }
 
  private:
-  // This is a copy of the arg RowColumn objects that are used for
+  // This is a copy of the input RowColumn objects that are used for
   // accessing the partition row columns
-  std::vector<exec::RowColumn> argColumns_;
+  std::vector<exec::RowColumn> columns_;
   velox::memory::MemoryPool* pool_;
 
   // This folly::Range is for the partition rows iterator provided by the
@@ -45,9 +58,9 @@ class WindowPartition {
   // by the operator.
   folly::Range<char**> partition_;
 
-  // This is a vector of all the argument column vectors obtained from the
+  // This is a vector of all the input column values
   // partition rows. These are used by functions for evaluation. These
   // are constructed only on request by the function.
-  std::vector<VectorPtr> argVectors_;
+  std::vector<VectorPtr> columnVectors_;
 };
 } // namespace facebook::velox::exec
