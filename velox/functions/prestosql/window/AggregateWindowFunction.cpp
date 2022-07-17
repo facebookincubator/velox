@@ -50,19 +50,17 @@ class AggregateWindowFunction : public exec::WindowFunction {
         exec::RowContainer::nullMask(nullOffset),
         /* TODO needed for out of line allocations */ rowSizeOffset);
     singleGroupRowSize_ += aggregate_->accumulatorFixedWidthSize();
-
-    auto singleGroup = std::vector<vector_size_t>{0};
     // Constructing the single row in the MemoryPool for now.
     singleGroupRow_ = (char*)(pool_->allocate(singleGroupRowSize_));
-    aggregate_->initializeNewGroups(&singleGroupRow_, singleGroup);
 
     argVectors_.reserve(argTypes.size());
   }
 
   ~AggregateWindowFunction() {
+    argVectors_.clear();
     std::vector<char*> singleGroupRowVector = {singleGroupRow_};
     aggregate_->destroy(folly::Range(singleGroupRowVector.data(), 1));
-    pool()->free(singleGroupRow_, singleGroupRowSize_);
+    pool_->free(singleGroupRow_, singleGroupRowSize_);
   }
 
   void resetPartition(const exec::WindowPartition* partition) {
@@ -85,13 +83,16 @@ class AggregateWindowFunction : public exec::WindowFunction {
     int numRows = frameStarts->size();
     auto frameStartsVector = frameStarts->as<vector_size_t>();
     auto frameEndsVector = frameEnds->as<vector_size_t>();
-    auto resultVector = BaseVector::create(resultType(), numRows, pool());
+    auto aggregateResultVector =
+        BaseVector::create(resultType(), numRows, pool());
 
+    auto singleGroup = std::vector<vector_size_t>{0};
     for (int i = 0; i < numRows; i++) {
       // Very naive algorithm.
       // Set input rows from frameStart to frameEnd in the SelectivityVector
       // and evaluate the results.
       aggregate_->clear();
+      aggregate_->initializeNewGroups(&singleGroupRow_, singleGroup);
 
       // TODO : Check if we have to offset 1 here for correct accounting.
       rows_.resize(partition_->numRows());
@@ -100,8 +101,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
 
       aggregate_->addSingleGroupRawInput(
           singleGroupRow_, rows_, argVectors_, false);
-      aggregate_->extractValues(&singleGroupRow_, 1, &resultVector);
-      // TODO : Figure how to copy the result.
+      aggregate_->extractValues(&singleGroupRow_, 1, &aggregateResultVector);
+
+      result->copy(aggregateResultVector.get(), resultOffset + i, 0, 1);
     }
   }
 
