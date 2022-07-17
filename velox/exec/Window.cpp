@@ -98,22 +98,29 @@ Window::Window(
     return std::nullopt;
   };
 
+  std::vector<exec::RowColumn> inputColumns;
+  for (int i = 0; i < inputType->children().size(); i++) {
+    inputColumns.push_back(data_->columnAt(i));
+  }
+  // The WindowPartition is structured over all the input columns.
+  // Individual functions access all its input argument columns from it.
+  windowPartition_ = std::make_unique<WindowPartition>(
+      inputColumns, inputType->children(), pool());
+
   for (const auto& windowNodeFunction : windowNode->windowFunctions()) {
     std::vector<TypePtr> argTypes;
-    std::vector<exec::RowColumn> argColumns;
+    std::vector<column_index_t> argIndices;
     argTypes.reserve(windowNodeFunction.functionCall->inputs().size());
-    argColumns.reserve(windowNodeFunction.functionCall->inputs().size());
+    argIndices.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
       argTypes.push_back(arg->type());
-      argColumns.push_back(data_->columnAt(fieldArgToChannel(arg).value()));
+      argIndices.push_back(fieldArgToChannel(arg).value());
     }
-
-    windowPartitions_.push_back(
-        std::make_unique<SimpleWindowPartition>(argColumns, argTypes, pool()));
 
     windowFunctions_.push_back(WindowFunction::create(
         windowNodeFunction.functionCall->name(),
         argTypes,
+        argIndices,
         windowNodeFunction.functionCall->type(),
         operatorCtx_->pool()));
 
@@ -292,9 +299,9 @@ void Window::callResetPartition(vector_size_t idx) {
   auto partitionSize = partitionStartRows_[idx + 1] - partitionStartRows_[idx];
   auto partition = folly::Range(
       sortedRows_.data() + partitionStartRows_[idx], partitionSize);
+  windowPartition_->resetPartition(partition);
   for (int i = 0; i < windowFunctions_.size(); i++) {
-    windowPartitions_[i]->resetPartition(partition);
-    windowFunctions_[i]->resetPartition(windowPartitions_[i].get());
+    windowFunctions_[i]->resetPartition(windowPartition_.get());
   }
 }
 

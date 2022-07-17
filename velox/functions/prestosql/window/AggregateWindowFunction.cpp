@@ -31,9 +31,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
   explicit AggregateWindowFunction(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
+      const std::vector<column_index_t>& argIndices,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool) {
+      : WindowFunction(resultType, pool), argIndices_(argIndices) {
     aggregate_ = exec::Aggregate::create(
         name, core::AggregationNode::Step::kSingle, argTypes, resultType);
 
@@ -54,6 +55,8 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // Constructing the single row in the MemoryPool for now.
     singleGroupRow_ = (char*)(pool_->allocate(singleGroupRowSize_));
     aggregate_->initializeNewGroups(&singleGroupRow_, singleGroup);
+
+    argVectors_.reserve(argTypes.size());
   }
 
   ~AggregateWindowFunction() {
@@ -65,10 +68,10 @@ class AggregateWindowFunction : public exec::WindowFunction {
   void resetPartition(const exec::WindowPartition* partition) {
     partition_ = partition;
 
-    auto numArgs = partition_->numArgs();
-    argVectors_.reserve(numArgs);
+    auto numArgs = argVectors_.capacity();
+    argVectors_.clear();
     for (int i = 0; i < numArgs; i++) {
-      argVectors_.push_back(partition_->argColumn(i));
+      argVectors_.push_back(partition_->argColumn(argIndices_[i]));
     }
   }
 
@@ -112,6 +115,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Current WindowPartition used for accessing rows in the apply method.
   const exec::WindowPartition* partition_;
   std::vector<VectorPtr> argVectors_;
+  std::vector<column_index_t> argIndices_;
 
   // This is a single aggregate row needed by the aggregate function for its
   // computation.
@@ -138,11 +142,12 @@ void registerAggregateWindowFunction(const std::string& name) {
         std::move(signatures),
         [name](
             const std::vector<TypePtr>& argTypes,
+            const std::vector<column_index_t>& argIndices,
             const TypePtr& resultType,
             velox::memory::MemoryPool* pool)
             -> std::unique_ptr<exec::WindowFunction> {
           return std::make_unique<AggregateWindowFunction>(
-              name, argTypes, resultType, pool);
+              name, argTypes, argIndices, resultType, pool);
         });
   }
 }

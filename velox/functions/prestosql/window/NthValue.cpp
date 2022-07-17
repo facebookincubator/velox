@@ -26,9 +26,10 @@ template <typename T>
 class NthValueFunction : public exec::WindowFunction {
  public:
   explicit NthValueFunction(
+      const std::vector<column_index_t>& argIndices,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool)
-      : WindowFunction(resultType, pool) {}
+      : WindowFunction(resultType, pool), argIndices_(argIndices) {}
 
   void resetPartition(const exec::WindowPartition* partition) {
     partition_ = partition;
@@ -47,10 +48,10 @@ class NthValueFunction : public exec::WindowFunction {
     auto rawResultsBuffer = result->as<FlatVector<T>>()->mutableRawValues();
     auto frameStartsVector = frameStarts->as<vector_size_t>();
 
-    auto columnVector = partition_->argColumn(0);
+    auto columnVector = partition_->argColumn(argIndices_[0]);
     auto firstArgVector = columnVector->template as<FlatVector<T>>();
-    auto offsetsVector =
-        partition_->argColumn(1)->template as<FlatVector<int64_t>>();
+    auto offsetsVector = partition_->argColumn(argIndices_[1])
+                             ->template as<FlatVector<int64_t>>();
 
     for (int i = 0; i < numRows; i++) {
       auto offset = offsetsVector->valueAt(partitionOffset_ + i);
@@ -69,6 +70,9 @@ class NthValueFunction : public exec::WindowFunction {
 
  private:
   const exec::WindowPartition* partition_;
+  // This is the index of the nth_value arguments in the WindowNode
+  // input columns list.
+  const std::vector<column_index_t> argIndices_;
 
   // This offset tracks how far along the partition rows have been output.
   // This is used to index into the argument vectors from the WindowPartition
@@ -78,10 +82,11 @@ class NthValueFunction : public exec::WindowFunction {
 
 template <TypeKind kind>
 std::unique_ptr<exec::WindowFunction> createNthValueFunction(
+    const std::vector<column_index_t>& argIndices,
     const TypePtr& resultType,
     velox::memory::MemoryPool* pool) {
   using T = typename TypeTraits<kind>::NativeType;
-  return std::make_unique<NthValueFunction<T>>(resultType, pool);
+  return std::make_unique<NthValueFunction<T>>(argIndices, resultType, pool);
 }
 
 } // namespace
@@ -101,12 +106,13 @@ void registerNthValue(const std::string& name) {
       std::move(signatures),
       [name](
           const std::vector<TypePtr>& argTypes,
+          const std::vector<column_index_t>& argIndices,
           const TypePtr& resultType,
           velox::memory::MemoryPool* pool)
           -> std::unique_ptr<exec::WindowFunction> {
         auto typeKind = argTypes[0]->kind();
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            createNthValueFunction, typeKind, resultType, pool);
+            createNthValueFunction, typeKind, argIndices, resultType, pool);
       });
 }
 } // namespace facebook::velox::window

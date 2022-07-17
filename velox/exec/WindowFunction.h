@@ -18,19 +18,11 @@
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/WindowPartition.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
-class WindowPartition {
- public:
-  virtual VectorPtr argColumn(vector_size_t idx) const = 0;
-
-  virtual vector_size_t numRows() const = 0;
-
-  virtual vector_size_t numArgs() const = 0;
-};
-
 class WindowFunction {
  public:
   explicit WindowFunction(TypePtr resultType, velox::memory::MemoryPool* pool)
@@ -85,6 +77,7 @@ class WindowFunction {
   static std::unique_ptr<WindowFunction> create(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
+      const std::vector<column_index_t>& argIndices,
       const TypePtr& resultType,
       velox::memory::MemoryPool* pool);
 
@@ -95,6 +88,7 @@ class WindowFunction {
 
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
     const std::vector<TypePtr>& argTypes,
+    const std::vector<column_index_t>& argIndices,
     const TypePtr& resultType,
     velox::memory::MemoryPool* pool)>;
 
