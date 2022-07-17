@@ -123,6 +123,17 @@ endif()
 
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
+  # Native Parquet reader requires Apache Thrift and Arrow Parquet writer, which
+  # are included in Arrow.
+  set(VELOX_ENABLE_ARROW ON)
+endif()
+
+if(VELOX_ENABLE_ARROW)
+  set(THRIFT_ROOT
+      ${CMAKE_CURRENT_BINARY_DIR}/third_party/arrow_ep/src/arrow_ep-build/thrift_ep-install
+  )
+  set(THRIFT_LIB ${THRIFT_ROOT}/lib/libthrift.a)
+  set(THRIFT_INCLUDE ${THRIFT_ROOT}/include)
 endif()
 
 # Turn on Codegen only for Clang and non Mac systems.
