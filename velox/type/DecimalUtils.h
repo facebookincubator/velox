@@ -22,43 +22,8 @@
 #include "velox/type/ShortDecimal.h"
 #include "velox/type/Type.h"
 
-namespace {
-
-std::string formatAsDecimal(
-    uint8_t scale,
-    facebook::velox::int128_t unscaledValue) {
-  if (unscaledValue == 0)
-    return "0";
-  std::string result;
-  if (unscaledValue < 0) {
-    result.append("-");
-    unscaledValue = ~unscaledValue + 1;
-  }
-  std::string unscaledStr = std::to_string(unscaledValue);
-  std::string formattedStr;
-  if (unscaledStr.length() <= scale) {
-    formattedStr.append("0");
-  } else {
-    formattedStr.append(unscaledStr.substr(0, unscaledStr.length() - scale));
-  }
-  if (scale > 0) {
-    formattedStr.append(".");
-    if (unscaledStr.length() < scale) {
-      for (auto i = 0; i < scale - unscaledStr.length(); ++i) {
-        formattedStr.append("0");
-      }
-      formattedStr.append(unscaledStr);
-    } else {
-      formattedStr.append(unscaledStr.substr(unscaledStr.length() - scale));
-    }
-  }
-  return result.append(formattedStr);
-}
-} // namespace
-
 namespace facebook::velox {
-
-static const int128_t POWERS_OF_TEN[]{
+static const facebook::velox::int128_t POWERS_OF_TEN[]{
     1,
     10,
     100,
@@ -100,23 +65,52 @@ static const int128_t POWERS_OF_TEN[]{
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
 
 template <typename T>
-inline std::string decimalToString(const T& value, const TypePtr& type) {
+std::string decimalToString(const T& value, const TypePtr& type) {
   VELOX_UNSUPPORTED();
 }
 
 template <>
-inline std::string decimalToString<LongDecimal>(
+std::string decimalToString<LongDecimal>(
     const LongDecimal& value,
-    const TypePtr& type) {
-  auto decimalType = type->asLongDecimal();
-  return formatAsDecimal(decimalType.scale(), value.unscaledValue());
-}
+    const TypePtr& type);
 
 template <>
-inline std::string decimalToString<ShortDecimal>(
+std::string decimalToString<ShortDecimal>(
     const ShortDecimal& value,
-    const TypePtr& type) {
-  auto decimalType = type->asShortDecimal();
-  return formatAsDecimal(decimalType.scale(), value.unscaledValue());
-}
+    const TypePtr& type);
 } // namespace facebook::velox
+
+namespace {
+std::string formatDecimal(
+    uint8_t scale,
+    facebook::velox::int128_t unscaledValue) {
+  if (unscaledValue == 0)
+    return "0";
+  std::string result;
+  if (unscaledValue < 0) {
+    result.append("-");
+    unscaledValue = ~unscaledValue + 1;
+  }
+  facebook::velox::int128_t integralPart =
+      unscaledValue / facebook::velox::POWERS_OF_TEN[scale];
+  facebook::velox::int128_t fractionPart =
+      unscaledValue % facebook::velox::POWERS_OF_TEN[scale];
+  std::string fractionStr = "";
+  if (fractionPart != 0) {
+    fractionStr = std::to_string(fractionPart);
+  }
+  std::string leadingZeros = "";
+  std::string decimal = "";
+  if (scale > 0) {
+    decimal = ".";
+    if (fractionStr.length() < scale) {
+      for (auto i = 0; i < scale - fractionStr.length(); ++i) {
+        leadingZeros += "0";
+      }
+    }
+  }
+  result.append(fmt::format(
+      "{}{}{}{}", integralPart, decimal, leadingZeros, fractionStr));
+  return result;
+}
+} // namespace

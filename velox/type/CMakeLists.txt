@@ -28,7 +28,8 @@ add_library(
   TimestampConversion.cpp
   Tokenizer.cpp
   Type.cpp
-  Variant.cpp)
+  Variant.cpp
+  DecimalUtils.cpp)
 
 target_link_libraries(
   velox_type

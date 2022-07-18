@@ -51,6 +51,9 @@ TEST(DecimalTest, decimalToString) {
   ASSERT_EQ(
       "-0.001000",
       decimalToString<ShortDecimal>(ShortDecimal(-1000), DECIMAL(10, 6)));
+  ASSERT_EQ(
+      "-123.451000",
+      decimalToString<ShortDecimal>(ShortDecimal(-123451000), DECIMAL(10, 6)));
 
   ASSERT_EQ(
       "1000", decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 0)));
