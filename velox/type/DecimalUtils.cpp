@@ -18,62 +18,32 @@
 
 namespace facebook::velox {
 
-std::string formatAsDecimal(const uint8_t scale, int128_t number) {
-  std::stringstream ss;
-  std::string result;
-  if (number == 0)
+std::string formatAsDecimal(uint8_t scale, int128_t unscaledValue) {
+  if (unscaledValue == 0)
     return "0";
-  while (number) {
-    uint64_t remainder = number % 10;
-    number = number / 10;
-    ss << remainder;
-    result.insert(0, ss.str());
-    ss.str("");
+  std::string result;
+  if (unscaledValue < 0) {
+    result.append("-");
+    unscaledValue = ~unscaledValue + 1;
   }
+  std::string unscaledStr = std::to_string(unscaledValue);
   std::string formattedStr;
-  if (result.length() <= scale) {
+  if (unscaledStr.length() <= scale) {
     formattedStr.append("0");
   } else {
-    formattedStr.append(result.substr(0, result.length() - scale));
+    formattedStr.append(unscaledStr.substr(0, unscaledStr.length() - scale));
   }
-
   if (scale > 0) {
     formattedStr.append(".");
-    if (result.length() < scale) {
-      for (auto i = 0; i < scale - result.length(); ++i) {
+    if (unscaledStr.length() < scale) {
+      for (auto i = 0; i < scale - unscaledStr.length(); ++i) {
         formattedStr.append("0");
       }
-      formattedStr.append(result);
+      formattedStr.append(unscaledStr);
     } else {
-      formattedStr.append(result.substr(result.length() - scale));
+      formattedStr.append(unscaledStr.substr(unscaledStr.length() - scale));
     }
   }
-  return formattedStr;
-}
-
-std::string shortDecimalToString(
-    uint8_t precision,
-    uint8_t scale,
-    const ShortDecimal& shortDecimalValue) {
-  auto unscaledValue = shortDecimalValue.unscaledValue();
-  std::string result;
-  if (unscaledValue < 0) {
-    result.append("-");
-    unscaledValue = ~unscaledValue + 1;
-  }
-  return result.append(formatAsDecimal(scale, unscaledValue));
-}
-
-std::string longDecimalToString(
-    uint8_t precision,
-    uint8_t scale,
-    const LongDecimal& longDecimal) {
-  std::string result;
-  auto unscaledValue = longDecimal.unscaledValue();
-  if (unscaledValue < 0) {
-    result.append("-");
-    unscaledValue = ~unscaledValue + 1;
-  }
-  return result.append(formatAsDecimal(scale, unscaledValue));
+  return result.append(formattedStr);
 }
 } // namespace facebook::velox

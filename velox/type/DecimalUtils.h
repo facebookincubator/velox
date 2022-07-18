@@ -65,17 +65,7 @@ static const int128_t POWERS_OF_TEN[]{
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10,
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
 
-std::string formatAsDecimal(const uint8_t scale, int128_t number);
-
-std::string shortDecimalToString(
-    uint8_t precision,
-    uint8_t scale,
-    const ShortDecimal& shortDecimalValue);
-
-std::string longDecimalToString(
-    uint8_t precision,
-    uint8_t scale,
-    const LongDecimal& longDecimal);
+std::string formatAsDecimal(uint8_t scale, int128_t unscaledValue);
 
 template <typename T>
 inline std::string decimalToString(const T& value, const TypePtr& type) {
@@ -87,8 +77,7 @@ inline std::string decimalToString<LongDecimal>(
     const LongDecimal& value,
     const TypePtr& type) {
   auto decimalType = type->asLongDecimal();
-  return longDecimalToString(
-      decimalType.precision(), decimalType.scale(), value);
+  return formatAsDecimal(decimalType.scale(), value.unscaledValue());
 }
 
 template <>
@@ -96,8 +85,7 @@ inline std::string decimalToString<ShortDecimal>(
     const ShortDecimal& value,
     const TypePtr& type) {
   auto decimalType = type->asShortDecimal();
-  return shortDecimalToString(
-      decimalType.precision(), decimalType.scale(), value);
+  return formatAsDecimal(decimalType.scale(), value.unscaledValue());
 }
 
 } // namespace facebook::velox
