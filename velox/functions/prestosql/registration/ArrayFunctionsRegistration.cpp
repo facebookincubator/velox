@@ -25,6 +25,11 @@ inline void registerArrayMinMaxFunctions() {
   registerFunction<ArrayMaxFunction, T, Array<T>>({"array_max"});
 }
 
+template <typename OT, typename IT>
+inline void registerArraySumFunction() {
+  registerFunction<udf_array_sum, OT, IT>({"array_sum"});
+}
+
 template <typename T>
 inline void registerArrayJoinFunctions() {
   registerFunction<
@@ -53,7 +58,6 @@ void registerArrayFunctions() {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_slice, "slice");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, "zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, "array_position");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_sum, "array_sum");
 
   exec::registerStatefulVectorFunction(
       "width_bucket", widthBucketArraySignature(), makeWidthBucketArray);
@@ -79,5 +83,12 @@ void registerArrayFunctions() {
   registerArrayJoinFunctions<Varchar>();
   registerArrayJoinFunctions<Timestamp>();
   registerArrayJoinFunctions<Date>();
+
+  registerArraySumFunction<int8_t, Array<int64_t>>();
+  registerArraySumFunction<int16_t, Array<int64_t>>();
+  registerArraySumFunction<int32_t, Array<int64_t>>();
+  registerArraySumFunction<int64_t, Array<int64_t>>();
+  registerArraySumFunction<float, Array<double>>();
+  registerArraySumFunction<double, Array<double>>();
 }
 }; // namespace facebook::velox::functions
