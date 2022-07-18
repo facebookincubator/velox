@@ -21,6 +21,7 @@
 #include <set>
 #include <string>
 
+#include <velox/common/base/Exceptions.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Filter.h"
 
@@ -82,6 +83,9 @@ std::string Filter::toString() const {
       break;
     case FilterKind::kMultiRange:
       strKind = "MultiRange";
+      break;
+    case FilterKind::kLengthRange:
+      strKind = "LengthRange";
       break;
   };
 
@@ -756,6 +760,21 @@ bool MultiRange::testDoubleRange(double min, double max, bool hasNull) const {
   }
 
   return false;
+}
+
+bool LengthRange::testBytesRange(
+    std::optional<std::string_view> min,
+    std::optional<std::string_view> max,
+    bool hasNull) const {
+  if (hasNull && nullAllowed_) {
+    return true;
+  }
+
+  if (min.has_value() && max.has_value() && min.value() == max.value()) {
+    return testBytes(min.value().data(), min.value().length());
+  }
+
+  return true;
 }
 
 std::unique_ptr<Filter> MultiRange::mergeWith(const Filter* other) const {
@@ -1504,7 +1523,8 @@ std::unique_ptr<Filter> BytesValues::mergeWith(const Filter* other) const {
       return std::make_unique<BytesValues>(
           std::move(newValues), bothNullAllowed);
     }
-    case FilterKind::kNegatedBytesValues: {
+    case FilterKind::kNegatedBytesValues:
+    case FilterKind::kLengthRange: {
       bool bothNullAllowed = nullAllowed_ && other->testNull();
       std::vector<std::string> newValues;
       newValues.reserve(values().size());
@@ -1652,6 +1672,30 @@ std::unique_ptr<Filter> NegatedBytesValues::mergeWith(
           false));
       return std::make_unique<MultiRange>(
           std::move(ranges), bothNullAllowed, false);
+    }
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+std::unique_ptr<Filter> LengthRange::mergeWith(const Filter* other) const {
+  switch (other->kind()) {
+    case FilterKind::kAlwaysTrue:
+    case FilterKind::kAlwaysFalse:
+    case FilterKind::kIsNull:
+    case FilterKind::kBytesValues:
+      return other->mergeWith(this);
+    case FilterKind::kIsNotNull:
+      return this->clone(false);
+    case FilterKind::kLengthRange: {
+      bool bothNullAllowed = nullAllowed_ && other->testNull();
+      auto otherRange = static_cast<const LengthRange*>(other);
+      int64_t lo = std::max(this->lower(), otherRange->lower());
+      int64_t hi = std::min(this->upper(), otherRange->upper());
+      if (lo > hi) {
+        return nullOrFalse(bothNullAllowed);
+      }
+      return std::make_unique<LengthRange>(lo, hi, bothNullAllowed);
     }
     default:
       VELOX_UNREACHABLE();

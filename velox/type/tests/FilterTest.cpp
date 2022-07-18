@@ -1018,6 +1018,56 @@ TEST(FilterTest, multiRangeWithNaNs) {
   EXPECT_TRUE(filter->testDouble(1.3));
 }
 
+TEST(FilterTest, lengthRange) {
+  auto filter =
+      std::make_unique<facebook::velox::common::LengthRange>(2, 5, false);
+
+  EXPECT_TRUE(filter->testBytes("test", 4));
+  EXPECT_TRUE(filter->testBytes("1234", 4));
+  EXPECT_TRUE(filter->testBytes("hi", 2));
+  EXPECT_TRUE(filter->testBytes("hello", 5));
+  EXPECT_TRUE(filter->testBytes("  ", 2));
+
+  EXPECT_FALSE(filter->testBytes("", 0));
+  EXPECT_FALSE(filter->testBytes("a", 1));
+  EXPECT_FALSE(filter->testBytes("8letters", 8));
+  EXPECT_FALSE(filter->testBytes("123456", 6));
+  EXPECT_FALSE(filter->testNull());
+
+  EXPECT_TRUE(filter->hasTestLength());
+  EXPECT_TRUE(filter->testLength(2));
+  EXPECT_TRUE(filter->testLength(5));
+  EXPECT_TRUE(filter->testLength(3));
+
+  EXPECT_FALSE(filter->testLength(1));
+  EXPECT_FALSE(filter->testLength(6));
+  EXPECT_FALSE(filter->testLength(0));
+  EXPECT_FALSE(filter->testLength(-1));
+
+  EXPECT_TRUE(filter->testBytesRange("a", "b", false));
+  EXPECT_TRUE(filter->testBytesRange("aaa", "aaa", false));
+  EXPECT_TRUE(filter->testBytesRange(std::nullopt, "k", false));
+  EXPECT_TRUE(filter->testBytesRange("a", std::nullopt, false));
+
+  EXPECT_FALSE(filter->testBytesRange("z", "z", false));
+  EXPECT_FALSE(filter->testBytesRange("z", "z", true));
+
+  filter = std::make_unique<facebook::velox::common::LengthRange>(0, 2, false);
+  EXPECT_TRUE(filter->testBytes("", 0));
+  EXPECT_TRUE(filter->testBytes("ab", 2));
+  EXPECT_TRUE(filter->testBytesRange("z", "z", false));
+  EXPECT_TRUE(filter->testBytesRange("", "", false));
+  EXPECT_FALSE(filter->testBytesRange("abc", "abc", true));
+
+  auto filterWithNull = filter->clone(true);
+  EXPECT_TRUE(filterWithNull->testNull());
+  EXPECT_TRUE(filterWithNull->testBytesRange("abc", "abc", true));
+
+  auto filterNullClone = filterWithNull->clone();
+  EXPECT_TRUE(filterNullClone->testNull());
+  EXPECT_TRUE(filterNullClone->testBytesRange("abc", "abc", true));
+}
+
 TEST(FilterTest, createBigintValues) {
   // Small number of values from a very large range.
   {
@@ -1585,6 +1635,53 @@ TEST(FilterTest, mergeWithBytesMultiRange) {
   filters.push_back(orFilter(lessThanOrEqual("p"), greaterThanOrEqual("y")));
   filters.push_back(orFilter(lessThan("p"), greaterThan("x")));
   filters.push_back(orFilter(betweenExclusive("b", "f"), lessThanOrEqual("a")));
+
+  for (const auto& left : filters) {
+    for (const auto& right : filters) {
+      testMergeWithBytes(left.get(), right.get());
+    }
+  }
+}
+
+TEST(FilterTest, mergeWithLengthRange) {
+  std::vector<std::unique_ptr<Filter>> filters;
+
+  addUntypedFilters(filters);
+  filters.push_back(in({"e", "f", "!", "h"}));
+  filters.push_back(in({"e", "f", "g", "h"}, true));
+  filters.push_back(in({"!", "!!jj", ">><<"}));
+  filters.push_back(
+      in({"!", "!!jj", ">><<", "[]", "12345", "123", "1", "2"}, true));
+  filters.push_back(
+      in({"",
+          "a",
+          "22",
+          "!?!",
+          "abcc",
+          "12345",
+          "//<<>>",
+          "!@3456&*()",
+          "AbcDedFghIJkl"}));
+  filters.push_back(
+      in({"",
+          "a",
+          "22",
+          "!?!",
+          "abcc",
+          "12345",
+          "//<<>>",
+          "!@3456&*()",
+          "AbcDedFghIJkl"},
+         true));
+
+  filters.push_back(lengthBetween(1, 1));
+  filters.push_back(lengthBetween(1, 1, true));
+  filters.push_back(lengthBetween(0, 2));
+  filters.push_back(lengthBetween(0, 2, true));
+  filters.push_back(lengthBetween(3, 6));
+  filters.push_back(lengthBetween(3, 6, true));
+  filters.push_back(lengthBetween(2, 4));
+  filters.push_back(lengthBetween(2, 4, true));
 
   for (const auto& left : filters) {
     for (const auto& right : filters) {
