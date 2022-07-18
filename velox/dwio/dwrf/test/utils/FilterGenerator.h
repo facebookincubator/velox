@@ -276,8 +276,13 @@ class ColumnStats : public AbstractColumnStats {
     return std::make_unique<velox::common::BigintRange>(max, max, false);
   }
 
+  void generateLengths() {
+    VELOX_UNSUPPORTED("GenerateLengths is not supported for non-string types!")
+  }
+
   static constexpr size_t kUniquesMask = 0xfff;
   std::vector<T> values_;
+  std::vector<int32_t> lengths_ = {}; // used for length testing
 };
 
 template <>

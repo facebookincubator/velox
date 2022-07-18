@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
+#include <velox/common/base/Exceptions.h>
+#include <velox/type/Filter.h>
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
@@ -408,6 +410,9 @@ void SelectiveStringDirectColumnReader::processFilter(
       readHelper<common::NegatedBytesValues, isDense>(
           filter, rows, extractValues);
       break;
+    case common::FilterKind::kLengthRange:
+      readHelper<common::LengthRange, isDense>(filter, rows, extractValues);
+      break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);
       break;
@@ -419,8 +424,6 @@ void SelectiveStringDirectColumnReader::read(
     RowSet rows,
     const uint64_t* incomingNulls) {
   prepareRead<folly::StringPiece>(offset, rows, incomingNulls);
-  bool isDense = rows.back() == rows.size() - 1;
-
   auto end = rows.back() + 1;
   auto numNulls =
       nullsInReadRange_ ? BaseVector::countNulls(nullsInReadRange_, 0, end) : 0;
@@ -428,6 +431,33 @@ void SelectiveStringDirectColumnReader::read(
   lengthDecoder_->nextLengths(lengths_->asMutable<int32_t>(), end - numNulls);
   rawLengths_ = lengths_->as<uint32_t>();
   lengthIndex_ = 0;
+  // variables for handling length filters and only reading relevant rows
+  auto additionalSkips = 0;
+  raw_vector<vector_size_t> selectedRows;
+
+  if (scanSpec_->hasFilter() &&
+      scanSpec_->filter()->kind() == common::FilterKind::kLengthRange) {
+    selectedRows.reserve(rows.size());
+    vector_size_t last = 0;
+    for (int i = 0; i < rows.size(); ++i) {
+      if (scanSpec_->filter()->testLength(rawLengths_[rows[i]])) {
+        selectedRows.push_back(rows[i]);
+        last = rows[i];
+      }
+    }
+    // We want to add rows.back() + 1 to readOffset_ in the end but
+    // readWithVisitor will only advance to selectedRows.back() + 1 instead
+    additionalSkips = rows.back() - last;
+    rows = RowSet(selectedRows);
+  }
+
+  if (rows.size() == 0) {
+    numValues_ = 0;
+    readOffset_ += end;
+    return;
+  }
+  bool isDense = rows.back() == rows.size() - 1;
+
   if (scanSpec_->keepValues()) {
     if (scanSpec_->valueHook()) {
       if (isDense) {
@@ -451,6 +481,9 @@ void SelectiveStringDirectColumnReader::read(
       processFilter<false>(scanSpec_->filter(), rows, DropValues());
     }
   }
+
+  // add additional skips
+  readOffset_ += additionalSkips;
 }
 
 } // namespace facebook::velox::dwrf
