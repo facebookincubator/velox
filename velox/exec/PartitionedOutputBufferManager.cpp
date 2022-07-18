@@ -243,9 +243,13 @@ BlockingReason PartitionedOutputBuffer::enqueue(
         dataToBroadcast_.emplace_back(sharedData);
       }
     } else {
-      auto buffer = buffers_[destination].get();
-      buffer->enqueue(std::move(data));
-      dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+      if (buffers_[destination] != nullptr) {
+        auto buffer = buffers_[destination].get();
+        buffer->enqueue(std::move(data));
+        dataAvailableCallbacks.emplace_back(buffer->getAndClearNotify());
+      } else {
+        totalSize_ -= data->size();
+      }
     }
 
     if (totalSize_ > maxSize_ && future) {

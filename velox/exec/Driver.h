@@ -359,6 +359,11 @@ struct DriverFactory {
 
   bool needsExchangeClient() const {
     VELOX_CHECK(!planNodes.empty());
+    if (auto exchangeNode =
+            std::dynamic_pointer_cast<const core::MergeExchangeNode>(
+                planNodes.front())) {
+      return false;
+    }
     if (auto exchangeNode = std::dynamic_pointer_cast<const core::ExchangeNode>(
             planNodes.front())) {
       return true;
