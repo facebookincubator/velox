@@ -357,8 +357,21 @@ bool GroupingSet::getGlobalAggregationOutput(
       aggregates_[i]->extractValues(groups, 1, &result->childAt(i));
     }
   }
+
+  destroyGlobalAggregations();
+
   iterator.allocationIndex = std::numeric_limits<int32_t>::max();
   return true;
+}
+
+void GroupingSet::destroyGlobalAggregations() {
+  auto groups = lookup_->hits.data();
+
+  for (int32_t i = 0; i < aggregates_.size(); ++i) {
+    if (aggregates_[i]->accumulatorUsesExternalMemory()) {
+      aggregates_[i]->destroy(folly::Range(groups, 1));
+    }
+  }
 }
 
 void GroupingSet::populateTempVectors(
