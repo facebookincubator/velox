@@ -208,6 +208,11 @@ TEST_F(ParquetTpchTest, Q19) {
   assertQuery(19);
 }
 
+TEST_F(ParquetTpchTest, Q21) {
+  std::vector<uint32_t> sortingKeys{0, 1};
+  assertQuery(21, std::move(sortingKeys));
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);

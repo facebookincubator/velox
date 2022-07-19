@@ -127,6 +127,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ18Plan();
     case 19:
       return getQ19Plan();
+    case 21:
+      return getQ21Plan();
     default:
       VELOX_NYI("TPC-H query {} is not supported yet", queryId);
   }
@@ -897,6 +899,149 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
   context.plan = std::move(plan);
   context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
   context.dataFiles[partScanNodeId] = getTableFilePaths(kPart);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ21Plan() const {
+  std::vector<std::string> supplierColumns = {
+      "s_nationkey", "s_name", "s_suppkey"};
+  std::vector<std::string> lineitemColumnsWithDate = {
+      "l_suppkey", "l_commitdate", "l_orderkey", "l_receiptdate"};
+  std::vector<std::string> lineitemColumns = {"l_suppkey", "l_orderkey"};
+  std::vector<std::string> ordersColumns = {"o_orderkey", "o_orderstatus"};
+  std::vector<std::string> nationColumns = {"n_nationkey", "n_name"};
+
+  auto supplierSelectedRowType = getRowType(kSupplier, supplierColumns);
+  const auto& supplierFileColumns = getFileColumnNames(kSupplier);
+  auto lineitemOneSelectedRowType =
+      getRowType(kLineitem, lineitemColumnsWithDate);
+  const auto& lineitemOneFileColumns = getFileColumnNames(kLineitem);
+  auto lineitemTwoSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemTwoFileColumns = getFileColumnNames(kLineitem);
+  auto lineitemThreeSelectedRowType =
+      getRowType(kLineitem, lineitemColumnsWithDate);
+  const auto& lineitemThreeFileColumns = getFileColumnNames(kLineitem);
+  auto ordersSelectedRowType = getRowType(kOrders, ordersColumns);
+  const auto& ordersFileColumns = getFileColumnNames(kOrders);
+  auto nationSelectedRowType = getRowType(kNation, nationColumns);
+  const auto& nationFileColumns = getFileColumnNames(kNation);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId supplierScanNodeId;
+  core::PlanNodeId lineitemOneScanNodeId;
+  core::PlanNodeId lineitemTwoScanNodeId;
+  core::PlanNodeId lineitemThreeScanNodeId;
+  core::PlanNodeId ordersScanNodeId;
+  core::PlanNodeId nationScanNodeId;
+
+  const std::string receiptCommitFilter = "l_receiptdate > l_commitdate";
+
+  auto lineitemTwo =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem, lineitemTwoSelectedRowType, lineitemTwoFileColumns)
+          .capturePlanNodeId(lineitemTwoScanNodeId)
+          .project({"l_orderkey as l_orderkey_2", "l_suppkey as l_suppkey_2"})
+          .planNode();
+
+  auto lineitemThree =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem,
+              lineitemThreeSelectedRowType,
+              lineitemThreeFileColumns,
+              {},
+              receiptCommitFilter)
+          .capturePlanNodeId(lineitemThreeScanNodeId)
+          .project({"l_orderkey as l_orderkey_3", "l_suppkey as l_suppkey_3"})
+          .planNode();
+
+  auto nation = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(
+                        kNation,
+                        nationSelectedRowType,
+                        nationFileColumns,
+                        {"n_name = 'SAUDI ARABIA'"})
+                    .capturePlanNodeId(nationScanNodeId)
+                    .planNode();
+
+  auto supplierJoinNation =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .capturePlanNodeId(supplierScanNodeId)
+          .hashJoin(
+              {"s_nationkey"},
+              {"n_nationkey"},
+              nation,
+              "",
+              {"s_suppkey", "s_name", "s_nationkey"})
+          .planNode();
+
+  auto lineitemJoinSupplier =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem,
+              lineitemOneSelectedRowType,
+              lineitemOneFileColumns,
+              {},
+              receiptCommitFilter)
+          .capturePlanNodeId(lineitemOneScanNodeId)
+          .project({"l_orderkey as l_orderkey_1", "l_suppkey as l_suppkey_1"})
+          .hashJoin(
+              {"l_suppkey_1"},
+              {"s_suppkey"},
+              supplierJoinNation,
+              "",
+              {"l_orderkey_1",
+               "s_nationkey",
+               "l_orderkey_1",
+               "l_suppkey_1",
+               "s_name"})
+          .planNode();
+
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      kOrders,
+                      ordersSelectedRowType,
+                      ordersFileColumns,
+                      {"o_orderstatus = 'F'"})
+                  .capturePlanNodeId(ordersScanNodeId)
+                  .hashJoin(
+                      {"o_orderkey"},
+                      {"l_orderkey_1"},
+                      lineitemJoinSupplier,
+                      "",
+                      {"s_nationkey", "l_orderkey_1", "l_suppkey_1", "s_name"})
+                  .hashJoin(
+                      {"l_orderkey_1"},
+                      {"l_orderkey_2"},
+                      lineitemTwo,
+                      "l_suppkey_2 <> l_suppkey_1",
+                      {"l_orderkey_1", "l_suppkey_1", "s_name"},
+                      core::JoinType::kLeftSemi)
+                  .hashJoin(
+                      {"l_orderkey_1"},
+                      {"l_orderkey_3"},
+                      lineitemThree,
+                      "l_suppkey_3 <> l_suppkey_1",
+                      {"s_name"},
+                      core::JoinType::kAnti)
+                  .partialAggregation({"s_name"}, {"count(1) as numwait"})
+                  .localPartition({})
+                  .finalAggregation()
+                  .orderBy({"numwait DESC", "s_name"}, false)
+                  .limit(0, 100, false)
+                  .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[supplierScanNodeId] = getTableFilePaths(kSupplier);
+  context.dataFiles[lineitemOneScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[lineitemTwoScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[lineitemThreeScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[ordersScanNodeId] = getTableFilePaths(kOrders);
+  context.dataFiles[nationScanNodeId] = getTableFilePaths(kNation);
   context.dataFileFormat = format_;
   return context;
 }
