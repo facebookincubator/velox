@@ -15,12 +15,13 @@
 
 # Minimal setup for Ubuntu 20.04.
 set -eufx -o pipefail
-SCRIPTDIR=$(dirname "$0")
+SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
 source $SCRIPTDIR/setup-helper-functions.sh
 
 # Folly must be built with the same compiler flags so that some low level types
 # are the same size.
-export COMPILER_FLAGS="-mavx2 -mfma -mavx -mf16c -mlzcnt"
+CPU_TARGET="${CPU_TARGET:-avx}"
+export COMPILER_FLAGS=$(get_cxx_flags $CPU_TARGET)
 FB_OS_VERSION=v2022.03.14.00
 NPROC=$(getconf _NPROCESSORS_ONLN)
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}

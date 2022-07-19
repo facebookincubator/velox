@@ -101,7 +101,7 @@ TEST_F(SumTest, sumWithMask) {
           {INTEGER(), TINYINT(), BIGINT(), BIGINT(), INTEGER()});
   auto vectors = makeVectors(rowType, 100, 10);
 
-  std::shared_ptr<core::PlanNode> op;
+  core::PlanNodePtr op;
   createDuckDbTable(vectors);
 
   // Aggregations 0 and 1 will use the same channel, but different masks.
@@ -118,6 +118,20 @@ TEST_F(SumTest, sumWithMask) {
   assertQuery(
       op,
       "SELECT sum(c0) filter (where c2 % 2 = 0), "
+      "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
+      "FROM tmp");
+
+  // Use mask that's always false.
+  op = PlanBuilder()
+           .values(vectors)
+           .project({"c0", "c1", "c2 % 2 > 10 AS m0", "c3 % 3 = 0 AS m1"})
+           .partialAggregation(
+               {}, {"sum(c0)", "sum(c0)", "sum(c1)"}, {"m0", "m1", "m1"})
+           .finalAggregation()
+           .planNode();
+  assertQuery(
+      op,
+      "SELECT sum(c0) filter (where c2 % 2 > 10), "
       "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
       "FROM tmp");
 
@@ -166,6 +180,21 @@ TEST_F(SumTest, sumWithMask) {
       "SELECT c4, sum(c0) filter (where c2 % 2 = 0), "
       "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
       "FROM tmp where c3 % 2 = 0 group by c4");
+
+  // Use mask that's always false.
+  op = PlanBuilder()
+           .values(vectors)
+           .filter("c3 % 2 = 0")
+           .project({"c4", "c0", "c1", "c2 % 2 > 10 AS m0", "c3 % 3 = 0 AS m1"})
+           .partialAggregation(
+               {"c4"}, {"sum(c0)", "sum(c0)", "sum(c1)"}, {"m0", "m1", "m1"})
+           .finalAggregation()
+           .planNode();
+  assertQuery(
+      op,
+      "SELECT c4, sum(c0) filter (where c2 % 2 > 10), "
+      "sum(c0) filter (where c3 % 3 = 0), sum(c1) filter (where c3 % 3 = 0) "
+      "FROM tmp where c3 % 2 = 0 group by c4");
 }
 
 // Test aggregation over boolean key
@@ -195,6 +224,27 @@ TEST_F(SumTest, emptyValues) {
                  .partialAggregation({"c0"}, {"sum(c1)"})
                  .planNode();
   assertQuery(agg, "SELECT 1 LIMIT 0");
+}
+
+/// Test aggregating over lots of null values.
+TEST_F(SumTest, nulls) {
+  vector_size_t size = 10'000;
+  auto data = {makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(
+              size, [](auto row) { return row; }, nullEvery(3)),
+      })};
+  createDuckDbTable(data);
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation({"a"}, {"sum(b) AS sum_b"})
+                  .finalAggregation()
+                  .planNode();
+
+  assertQuery(plan, "SELECT a, sum(b) as sum_b FROM tmp GROUP BY 1");
 }
 
 struct SumRow {

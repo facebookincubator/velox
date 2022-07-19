@@ -110,6 +110,15 @@ TEST(TpchGenTestNation, reproducible) {
   for (size_t i = 0; i < rowVector4->size(); ++i) {
     ASSERT_TRUE(rowVector4->equalValueAt(rowVector5.get(), i, i));
   }
+
+  // Ensure it's also reproducible if we generate batches starting in
+  // different offsets.
+  auto rowVector6 = genTpchNation(100, 0);
+  auto rowVector7 = genTpchNation(90, 10);
+
+  for (size_t i = 0; i < rowVector7->size(); ++i) {
+    ASSERT_TRUE(rowVector7->equalValueAt(rowVector6.get(), i, i + 10));
+  }
 }
 
 // Region.
@@ -157,6 +166,13 @@ TEST(TpchGenTestRegion, reproducible) {
     ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
     ASSERT_TRUE(rowVector1->equalValueAt(rowVector3.get(), i, i));
   }
+
+  auto rowVector4 = genTpchRegion(100, 0);
+  auto rowVector5 = genTpchRegion(98, 2);
+
+  for (size_t i = 0; i < rowVector5->size(); ++i) {
+    ASSERT_TRUE(rowVector5->equalValueAt(rowVector4.get(), i, i + 2));
+  }
 }
 
 // Orders tests.
@@ -168,13 +184,16 @@ TEST(TpchGenTestOrders, batches) {
   EXPECT_EQ(10'000, rowVector1->size());
 
   auto orderKey = rowVector1->childAt(0)->asFlatVector<int64_t>();
+  auto orderTotalPrice = rowVector1->childAt(3)->asFlatVector<double>();
   auto orderDate = rowVector1->childAt(4)->asFlatVector<StringView>();
 
   EXPECT_EQ(1, orderKey->valueAt(0));
+  EXPECT_EQ(173665.47, orderTotalPrice->valueAt(0));
   EXPECT_EQ("1996-01-02"_sv, orderDate->valueAt(0));
   LOG(INFO) << rowVector1->toString(0);
 
   EXPECT_EQ(40'000, orderKey->valueAt(9999));
+  EXPECT_EQ(87784.83, orderTotalPrice->valueAt(9999));
   EXPECT_EQ("1995-01-30"_sv, orderDate->valueAt(9999));
   LOG(INFO) << rowVector1->toString(9999);
 
@@ -185,14 +204,17 @@ TEST(TpchGenTestOrders, batches) {
   EXPECT_EQ(10'000, rowVector2->size());
 
   orderKey = rowVector2->childAt(0)->asFlatVector<int64_t>();
+  orderTotalPrice = rowVector2->childAt(3)->asFlatVector<double>();
   orderDate = rowVector2->childAt(4)->asFlatVector<StringView>();
 
   EXPECT_EQ(40001, orderKey->valueAt(0));
-  EXPECT_EQ("1996-01-02"_sv, orderDate->valueAt(0));
+  EXPECT_EQ(100589.02, orderTotalPrice->valueAt(0));
+  EXPECT_EQ("1995-02-25"_sv, orderDate->valueAt(0));
   LOG(INFO) << rowVector2->toString(0);
 
   EXPECT_EQ(80000, orderKey->valueAt(9999));
-  EXPECT_EQ("1995-01-30"_sv, orderDate->valueAt(9999));
+  EXPECT_EQ(142775.84, orderTotalPrice->valueAt(9999));
+  EXPECT_EQ("1995-12-15"_sv, orderDate->valueAt(9999));
   LOG(INFO) << rowVector2->toString(9999);
 }
 
@@ -227,6 +249,16 @@ TEST(TpchGenTestOrders, reproducible) {
     for (size_t i = 0; i < rowVector1->size(); ++i) {
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector3.get(), i, i));
+    }
+  }
+
+  // Ensure it's reproducible if we generate from different offsets.
+  {
+    auto rowVector1 = genTpchOrders(1000, 0);
+    auto rowVector2 = genTpchOrders(990, 10);
+
+    for (size_t i = 0; i < rowVector2->size(); ++i) {
+      ASSERT_TRUE(rowVector2->equalValueAt(rowVector1.get(), i, i + 10));
     }
   }
 
@@ -276,12 +308,12 @@ TEST(TpchGenTestLineItem, batches) {
   shipDate = rowVector2->childAt(10)->asFlatVector<StringView>();
 
   EXPECT_EQ(389, orderKey->valueAt(0));
-  EXPECT_EQ("1996-03-13"_sv, shipDate->valueAt(0));
+  EXPECT_EQ("1994-04-13"_sv, shipDate->valueAt(0));
   LOG(INFO) << rowVector2->toString(0);
 
   lastRow = rowVector2->size() - 1;
   EXPECT_EQ(800, orderKey->valueAt(lastRow));
-  EXPECT_EQ("1992-12-24"_sv, shipDate->valueAt(lastRow));
+  EXPECT_EQ("1998-07-23"_sv, shipDate->valueAt(lastRow));
   LOG(INFO) << rowVector2->toString(lastRow);
 }
 
@@ -318,6 +350,18 @@ TEST(TpchGenTestLineItem, reproducible) {
     for (size_t i = 0; i < rowVector1->size(); ++i) {
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
       ASSERT_TRUE(rowVector1->equalValueAt(rowVector3.get(), i, i));
+    }
+  }
+
+  // Ensure it's reproducible if we generate from different offsets.
+  {
+    auto rowVector1 = genTpchLineItem(1000);
+    auto rowVector2 = genTpchLineItem(998, 2);
+
+    // The offset for comparisons is 7, since the first generated order has 6
+    // lineitems, and the second has 1.
+    for (size_t i = 0; i < rowVector2->size(); ++i) {
+      ASSERT_TRUE(rowVector2->equalValueAt(rowVector1.get(), i, i + 7));
     }
   }
 
@@ -365,13 +409,13 @@ TEST(TpchGenTestSupplier, batches) {
   phone = rowVector2->childAt(4)->asFlatVector<StringView>();
 
   EXPECT_EQ(1'001, suppKey->valueAt(0));
-  EXPECT_EQ(17, nationKey->valueAt(0));
-  EXPECT_EQ("27-918-335-1736"_sv, phone->valueAt(0));
+  EXPECT_EQ(9, nationKey->valueAt(0));
+  EXPECT_EQ("19-393-671-5272"_sv, phone->valueAt(0));
   LOG(INFO) << rowVector2->toString(0);
 
   EXPECT_EQ(2'000, suppKey->valueAt(999));
-  EXPECT_EQ(17, nationKey->valueAt(999));
-  EXPECT_EQ("27-971-649-2792"_sv, phone->valueAt(999));
+  EXPECT_EQ(11, nationKey->valueAt(999));
+  EXPECT_EQ("21-860-645-7227"_sv, phone->valueAt(999));
   LOG(INFO) << rowVector2->toString(999);
 }
 
@@ -406,6 +450,14 @@ TEST(TpchGenTestSupplier, reproducible) {
   for (size_t i = 0; i < rowVector4->size(); ++i) {
     ASSERT_TRUE(rowVector4->equalValueAt(rowVector5.get(), i, i));
   }
+
+  // Ensure it's also reproducible if we generate from different offsets.
+  auto rowVector6 = genTpchSupplier(100, 0);
+  auto rowVector7 = genTpchSupplier(90, 10);
+
+  for (size_t i = 0; i < rowVector7->size(); ++i) {
+    ASSERT_TRUE(rowVector7->equalValueAt(rowVector6.get(), i, i + 10));
+  }
 }
 
 // Part.
@@ -436,11 +488,11 @@ TEST(TpchGenTestPart, batches) {
   mfgr = rowVector2->childAt(2)->asFlatVector<StringView>();
 
   EXPECT_EQ(1'001, partKey->valueAt(0));
-  EXPECT_EQ("Manufacturer#1"_sv, mfgr->valueAt(0));
+  EXPECT_EQ("Manufacturer#5"_sv, mfgr->valueAt(0));
   LOG(INFO) << rowVector2->toString(0);
 
   EXPECT_EQ(2'000, partKey->valueAt(999));
-  EXPECT_EQ("Manufacturer#2"_sv, mfgr->valueAt(999));
+  EXPECT_EQ("Manufacturer#1"_sv, mfgr->valueAt(999));
   LOG(INFO) << rowVector2->toString(999);
 }
 
@@ -474,6 +526,14 @@ TEST(TpchGenTestPart, reproducible) {
 
   for (size_t i = 0; i < rowVector4->size(); ++i) {
     ASSERT_TRUE(rowVector4->equalValueAt(rowVector5.get(), i, i));
+  }
+
+  // Ensure it's also reproducible if we add different offsets.
+  auto rowVector6 = genTpchPart(100, 0);
+  auto rowVector7 = genTpchPart(90, 10);
+
+  for (size_t i = 0; i < rowVector7->size(); ++i) {
+    ASSERT_TRUE(rowVector7->equalValueAt(rowVector6.get(), i, i + 10));
   }
 }
 
@@ -594,6 +654,7 @@ TEST(TpchGenTestPartSupp, reproducible) {
     ASSERT_TRUE(rowVector1->equalValueAt(rowVector2.get(), i, i));
     ASSERT_TRUE(rowVector1->equalValueAt(rowVector3.get(), i, i));
   }
+
   // Ensure it's also reproducible if we add an offset.
   auto rowVector4 = genTpchPartSupp(100, 10);
   auto rowVector5 = genTpchPartSupp(100, 10);
@@ -601,6 +662,14 @@ TEST(TpchGenTestPartSupp, reproducible) {
 
   for (size_t i = 0; i < rowVector4->size(); ++i) {
     ASSERT_TRUE(rowVector4->equalValueAt(rowVector5.get(), i, i));
+  }
+
+  // Ensure it's also reproducible if we add different offsets.
+  auto rowVector6 = genTpchPartSupp(100, 0);
+  auto rowVector7 = genTpchPartSupp(91, 9);
+
+  for (size_t i = 0; i < rowVector7->size(); ++i) {
+    ASSERT_TRUE(rowVector7->equalValueAt(rowVector6.get(), i, i + 9));
   }
 }
 
@@ -632,11 +701,11 @@ TEST(TpchGenTestCustomer, batches) {
   mktSegment = rowVector2->childAt(6)->asFlatVector<StringView>();
 
   EXPECT_EQ(1'001, custKey->valueAt(0));
-  EXPECT_EQ("BUILDING"_sv, mktSegment->valueAt(0));
+  EXPECT_EQ("MACHINERY"_sv, mktSegment->valueAt(0));
   LOG(INFO) << rowVector2->toString(0);
 
   EXPECT_EQ(2'000, custKey->valueAt(999));
-  EXPECT_EQ("BUILDING"_sv, mktSegment->valueAt(999));
+  EXPECT_EQ("AUTOMOBILE"_sv, mktSegment->valueAt(999));
   LOG(INFO) << rowVector2->toString(999);
 }
 
@@ -670,6 +739,14 @@ TEST(TpchGenTestCustomer, reproducible) {
 
   for (size_t i = 0; i < rowVector4->size(); ++i) {
     ASSERT_TRUE(rowVector4->equalValueAt(rowVector5.get(), i, i));
+  }
+
+  // Ensure it's also reproducible if we add different offsets.
+  auto rowVector6 = genTpchCustomer(100, 0);
+  auto rowVector7 = genTpchCustomer(90, 10);
+
+  for (size_t i = 0; i < rowVector7->size(); ++i) {
+    ASSERT_TRUE(rowVector7->equalValueAt(rowVector6.get(), i, i + 10));
   }
 }
 

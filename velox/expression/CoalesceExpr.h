@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/expression/ControlExpr.h"
+#include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
 
@@ -27,8 +27,8 @@ class CoalesceExpr : public SpecialForm {
 
   void evalSpecialForm(
       const SelectivityVector& rows,
-      EvalCtx* context,
-      VectorPtr* result) override;
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   bool propagatesNulls() const override {
     return false;

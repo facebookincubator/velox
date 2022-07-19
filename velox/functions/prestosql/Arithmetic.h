@@ -170,7 +170,9 @@ struct ClampFunction {
   FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& v, const TInput& lo, const TInput& hi) {
     VELOX_USER_CHECK_LE(lo, hi, "Lo > hi in clamp.");
-    result = std::clamp(v, lo, hi);
+    // std::clamp emits less efficient ASM
+    const TInput& a = v < lo ? lo : v;
+    result = a > hi ? hi : a;
   }
 };
 
@@ -197,63 +199,72 @@ struct Log10Function {
 
 template <typename T>
 struct CosFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::cos(a);
   }
 };
 
 template <typename T>
 struct CoshFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::cosh(a);
   }
 };
 
 template <typename T>
 struct AcosFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::acos(a);
   }
 };
 
 template <typename T>
 struct SinFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::sin(a);
   }
 };
 
 template <typename T>
 struct AsinFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::asin(a);
   }
 };
 
 template <typename T>
 struct TanFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::tan(a);
   }
 };
 
 template <typename T>
 struct TanhFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::tanh(a);
   }
 };
 
 template <typename T>
 struct AtanFunction {
-  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput a) {
     result = std::atan(a);
   }
 };
 
 template <typename T>
 struct Atan2Function {
-  FOLLY_ALWAYS_INLINE void call(double& result, double y, double x) {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput y, TInput x) {
     result = std::atan2(y, x);
   }
 };
@@ -319,6 +330,13 @@ template <typename T>
 struct RadiansFunction {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {
     result = a * (M_PI / 180);
+  }
+};
+
+template <typename T>
+struct DegreesFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result, double a) {
+    result = a * (180 / M_PI);
   }
 };
 
@@ -455,6 +473,13 @@ template <typename T>
 struct PiFunction {
   FOLLY_ALWAYS_INLINE void call(double& result) {
     result = M_PI;
+  }
+};
+
+template <typename T>
+struct EulerConstantFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result) {
+    result = M_E;
   }
 };
 } // namespace facebook::velox::functions

@@ -14,19 +14,45 @@
  * limitations under the License.
  */
 #include "velox/exec/Exchange.h"
+#include <velox/buffer/Buffer.h>
+#include <velox/common/base/Exceptions.h>
+#include <velox/common/memory/MappedMemory.h>
 #include "velox/exec/PartitionedOutputBufferManager.h"
 
 namespace facebook::velox::exec {
 
 SerializedPage::SerializedPage(std::unique_ptr<folly::IOBuf> iobuf)
     : iobuf_(std::move(iobuf)), iobufBytes_(chainBytes(*iobuf_.get())) {
-  VELOX_CHECK(iobuf_);
+  VELOX_CHECK_NOT_NULL(iobuf_);
   for (auto& buf : *iobuf_) {
     int32_t bufSize = buf.size();
     ranges_.push_back(ByteRange{
         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
         bufSize,
         0});
+  }
+}
+
+SerializedPage::SerializedPage(
+    std::unique_ptr<folly::IOBuf> iobuf,
+    memory::MemoryPool* pool)
+    : iobuf_(std::move(iobuf)),
+      iobufBytes_(chainBytes(*iobuf_.get())),
+      pool_(pool) {
+  VELOX_CHECK_NOT_NULL(iobuf_);
+  pool_->reserve(iobufBytes_);
+  for (auto& buf : *iobuf_) {
+    int32_t bufSize = buf.size();
+    ranges_.push_back(ByteRange{
+        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
+        bufSize,
+        0});
+  }
+}
+
+SerializedPage::~SerializedPage() {
+  if (pool_ != nullptr) {
+    pool_->release(iobufBytes_);
   }
 }
 
@@ -45,6 +71,10 @@ std::shared_ptr<ExchangeSource> ExchangeSource::create(
     }
   }
   VELOX_FAIL("No ExchangeSource factory matches {}", taskId);
+}
+
+void ExchangeSource::setMemoryPool(memory::MemoryPool* pool) {
+  pool_ = pool;
 }
 
 // static
@@ -85,8 +115,7 @@ class LocalExchangeSource : public ExchangeSource {
         // Since this lambda may outlive 'this', we need to capture a
         // shared_ptr to the current object (self).
         [self, requestedSequence, buffers, this](
-            std::vector<std::shared_ptr<SerializedPage>>& data,
-            int64_t sequence) {
+            std::vector<std::unique_ptr<folly::IOBuf>> data, int64_t sequence) {
           if (requestedSequence > sequence) {
             VLOG(2) << "Receives earlier sequence than requested: task "
                     << taskId_ << ", destination " << destination_
@@ -105,7 +134,9 @@ class LocalExchangeSource : public ExchangeSource {
               // Keep looping, there could be extra end markers.
               continue;
             }
-            pages.push_back(copyPage(*inputPage));
+            inputPage->unshare();
+            pages.push_back(
+                std::make_unique<SerializedPage>(std::move(inputPage)));
             inputPage = nullptr;
           }
           int64_t ackSequence;
@@ -134,14 +165,6 @@ class LocalExchangeSource : public ExchangeSource {
 
  private:
   static constexpr uint64_t kMaxBytes = 32 * 1024 * 1024; // 32 MB
-
-  // Copies the IOBufs from 'page' so that they no longer hold memory
-  // acounted in the producer Task.
-  static std::unique_ptr<SerializedPage> copyPage(SerializedPage& page) {
-    auto buf = page.getIOBuf();
-    buf->unshare();
-    return std::make_unique<SerializedPage>(std::move(buf));
-  }
 };
 
 std::unique_ptr<ExchangeSource> createLocalExchangeSource(
@@ -157,6 +180,10 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
 
 } // namespace
 
+void ExchangeClient::setMemoryPool(memory::MemoryPool* pool) {
+  pool_ = pool;
+}
+
 void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
   std::shared_ptr<ExchangeSource> toRequest;
   {
@@ -168,6 +195,7 @@ void ExchangeClient::addRemoteTaskId(const std::string& taskId) {
       return;
     }
     auto source = ExchangeSource::create(taskId, destination_, queue_);
+    source->setMemoryPool(pool_);
     sources_.push_back(source);
     queue_->addSource();
     if (source->shouldRequestLocked()) {
@@ -274,7 +302,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
     getSplits(&splitFuture_);
   }
 
-  ContinueFuture dataFuture{false};
+  ContinueFuture dataFuture;
   currentPage_ = exchangeClient_->next(&atEnd_, &dataFuture);
   if (currentPage_ || atEnd_) {
     if (atEnd_ && noMoreSplits_) {
@@ -291,8 +319,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
     futures.push_back(std::move(splitFuture_));
     futures.push_back(std::move(dataFuture));
 
-    *future = folly::collectAny(futures).deferValue(
-        [](auto /*unused*/) { return true; });
+    *future = folly::collectAny(futures).unit();
   } else {
     // Block until data becomes available.
     *future = std::move(dataFuture);

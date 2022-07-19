@@ -18,7 +18,6 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/expression/ControlExpr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 #include "velox/type/Type.h"
@@ -260,6 +259,40 @@ TEST_F(CastExprTest, timestamp) {
       });
 }
 
+TEST_F(CastExprTest, dateToTimestamp) {
+  testCast<Date, Timestamp>(
+      "timestamp",
+      {
+          Date(0),
+          Date(10957),
+          Date(14557),
+          std::nullopt,
+      },
+      {
+          Timestamp(0, 0),
+          Timestamp(946684800, 0),
+          Timestamp(1257724800, 0),
+          std::nullopt,
+      });
+}
+
+TEST_F(CastExprTest, timestampToDate) {
+  testCast<Timestamp, Date>(
+      "date",
+      {
+          Timestamp(0, 0),
+          Timestamp(946684800, 0),
+          Timestamp(1257724800, 0),
+          std::nullopt,
+      },
+      {
+          Date(0),
+          Date(10957),
+          Date(14557),
+          std::nullopt,
+      });
+}
+
 TEST_F(CastExprTest, timestampInvalid) {
   testCast<int8_t, Timestamp>("timestamp", {12}, {Timestamp(0, 0)}, true);
   testCast<int16_t, Timestamp>("timestamp", {1234}, {Timestamp(0, 0)}, true);
@@ -380,7 +413,7 @@ TEST_F(CastExprTest, truncateVsRound) {
   EXPECT_THROW(
       (testCast<int32_t, int8_t>(
           "tinyint", {1111111, 2, 3, 1000, -100101}, {71, 2, 3, -24, -5})),
-      folly::ConversionError);
+      VeloxUserError);
 }
 
 TEST_F(CastExprTest, nullInputs) {

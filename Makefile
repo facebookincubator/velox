@@ -57,6 +57,7 @@ endif
 endif
 
 NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
+CPU_TARGET ?= "avx"
 
 all: release			#: Build the release version
 
@@ -102,8 +103,14 @@ benchmarks-basic-dump:
 unittest: debug			#: Build with debugging and run unit tests
 	cd $(BUILD_BASE_DIR)/debug && ctest -j ${NUM_THREADS} -VV --output-on-failure
 
-fuzzertest: debug		#: Build with debugging and run expression fuzzer test.
-	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test --steps 100000 --logtostderr=1 --minloglevel=0
+# Build with debugging and run expression fuzzer test. Use a fixed seed to 
+# ensure the tests are reproducible.
+fuzzertest: debug
+	$(BUILD_BASE_DIR)/debug/velox/expression/tests/velox_expression_fuzzer_test \
+		--seed 123456 \
+		--steps 100000 \
+		--logtostderr=1 \
+		--minloglevel=0
 
 format-fix: 			#: Fix formatting issues in the current branch
 	scripts/check.py format branch --fix
@@ -130,9 +137,9 @@ velox-torcharrow-container:
 linux-container:
 	rm -rf /tmp/docker && \
 	mkdir -p /tmp/docker && \
-	cp scripts/setup-$(CONTAINER_NAME).sh scripts/$(CONTAINER_NAME)-container.dockfile /tmp/docker && \
+	cp scripts/setup-helper-functions.sh scripts/setup-$(CONTAINER_NAME).sh scripts/$(CONTAINER_NAME)-container.dockfile /tmp/docker && \
 	cd /tmp/docker && \
-	docker build --tag "prestocpp/velox-$(CONTAINER_NAME):${USER}-$(shell date +%Y%m%d)" -f $(CONTAINER_NAME)-container.dockfile .
+	docker build --build-arg cpu_target=$(CPU_TARGET) --tag "prestocpp/velox-$(CPU_TARGET)-$(CONTAINER_NAME):${USER}-$(shell date +%Y%m%d)" -f $(CONTAINER_NAME)-container.dockfile .
 
 help:					#: Show the help messages
 	@cat $(firstword $(MAKEFILE_LIST)) | \

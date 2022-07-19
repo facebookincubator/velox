@@ -21,10 +21,11 @@
 #include <optional>
 #include <vector>
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/MemoryInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/common/exception/Exception.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/test/utils/MapBuilder.h"
@@ -48,19 +49,19 @@ class MockStrideIndexProvider : public StrideIndexProvider {
 
 class MockStreamInformation : public StreamInformation {
  public:
-  explicit MockStreamInformation(const StreamIdentifier& streamIdentifier)
+  explicit MockStreamInformation(const DwrfStreamIdentifier& streamIdentifier)
       : streamIdentifier_{streamIdentifier} {}
 
   StreamKind getKind() const override {
-    return streamIdentifier_.kind;
+    return streamIdentifier_.kind();
   }
 
   uint32_t getNode() const override {
-    return streamIdentifier_.node;
+    return streamIdentifier_.encodingKey().node;
   }
 
   uint32_t getSequence() const override {
-    return streamIdentifier_.sequence;
+    return streamIdentifier_.encodingKey().sequence;
   }
 
   MOCK_CONST_METHOD0(getOffset, uint64_t());
@@ -69,7 +70,7 @@ class MockStreamInformation : public StreamInformation {
   MOCK_CONST_METHOD0(valid, bool());
 
  private:
-  const StreamIdentifier& streamIdentifier_;
+  const DwrfStreamIdentifier& streamIdentifier_;
 };
 
 class TestStripeStreams : public StripeStreamsBase {
@@ -87,7 +88,7 @@ class TestStripeStreams : public StripeStreamsBase {
   }
 
   std::unique_ptr<SeekableInputStream> getStream(
-      const StreamIdentifier& si,
+      const DwrfStreamIdentifier& si,
       bool throwIfNotFound) const override {
     const DataBufferHolder* stream = nullptr;
     if (context_.hasStream(si)) {
@@ -97,10 +98,10 @@ class TestStripeStreams : public StripeStreamsBase {
       if (throwIfNotFound) {
         DWIO_RAISE(fmt::format(
             "stream (node = {}, seq = {}, column = {}, kind = {}) not found",
-            si.node,
-            si.sequence,
-            si.column,
-            si.kind));
+            si.encodingKey().node,
+            si.encodingKey().sequence,
+            si.column(),
+            si.kind()));
       } else {
         return nullptr;
       }
@@ -136,7 +137,7 @@ class TestStripeStreams : public StripeStreamsBase {
       std::function<void(const StreamInformation&)> visitor) const override {
     uint32_t count = 0;
     context_.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.node == node) {
+      if (pair.first.encodingKey().node == node) {
         visitor(MockStreamInformation(pair.first));
         ++count;
       }
@@ -153,7 +154,7 @@ class TestStripeStreams : public StripeStreamsBase {
     return options_;
   }
 
-  bool getUseVInts(const StreamIdentifier& streamId) const override {
+  bool getUseVInts(const DwrfStreamIdentifier& streamId) const override {
     DWIO_ENSURE(
         context_.hasStream(streamId),
         fmt::format("Stream not found: {}", streamId.toString()));
@@ -306,7 +307,7 @@ void testDataTypeWriter(
   auto dataTypeWithId = TypeWithId::create(type, 1);
 
   // write
-  auto writer = ColumnWriter::create(context, *dataTypeWithId, sequence);
+  auto writer = BaseColumnWriter::create(context, *dataTypeWithId, sequence);
   auto size = data.size();
   auto batch = populateBatch(data, &pool);
   const size_t stripeCount = 2;
@@ -348,7 +349,7 @@ TEST(ColumnWriterTests, LowMemoryModeConfig) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config, facebook::velox::memory::getDefaultScopedMemoryPool()};
-  auto writer = ColumnWriter::create(context, *dataTypeWithId);
+  auto writer = BaseColumnWriter::create(context, *dataTypeWithId);
   EXPECT_TRUE(writer->useDictionaryEncoding());
 }
 
@@ -714,6 +715,27 @@ wrapInDictionary(const VectorPtr& batch, size_t stride, MemoryPool& pool) {
   return ret;
 }
 
+template <typename T>
+void getUniqueKeys(
+    std::vector<T>& uniqueKeys,
+    const std::vector<VectorPtr>& batches) {
+  std::unordered_set<T> seenKeys;
+
+  for (auto batch : batches) {
+    auto map = std::dynamic_pointer_cast<MapVector>(batch);
+    ASSERT_TRUE(map);
+    auto keys = map->mapKeys();
+    auto flatKeys = std::dynamic_pointer_cast<FlatVector<T>>(keys);
+    ASSERT_TRUE(flatKeys);
+    for (vector_size_t i = 0; i < flatKeys->size(); i++) {
+      ASSERT_TRUE(!flatKeys->isNullAt(i));
+      seenKeys.insert(flatKeys->valueAt(i));
+    }
+  }
+
+  uniqueKeys.insert(uniqueKeys.end(), seenKeys.begin(), seenKeys.end());
+}
+
 template <typename TKEY, typename TVALUE>
 void testMapWriter(
     MemoryPool& pool,
@@ -721,7 +743,8 @@ void testMapWriter(
     bool useFlatMap,
     bool disableDictionaryEncoding,
     bool testEncoded,
-    bool printMaps = true) {
+    bool printMaps = true,
+    bool isStruct = false) {
   const auto rowType = CppToType<Row<Map<TKEY, TVALUE>>>::create();
   const auto dataType = rowType->childAt(0);
   const auto rowTypeWithId = TypeWithId::create(rowType);
@@ -730,18 +753,30 @@ void testMapWriter(
   const auto writerDataTypeWithId = writerSchema->childAt(0);
 
   VLOG(2) << "Testing map writer " << dataType->toString() << " using "
-          << (useFlatMap ? "Flat Map" : "Regular Map");
+          << (useFlatMap ? "Flat Map" : "Regular Map")
+          << (useFlatMap && isStruct ? " - Struct" : "");
 
   const auto config = std::make_shared<Config>();
   if (useFlatMap) {
+    if (isStruct) {
+      std::vector<TKEY> uniqueKeys;
+      ASSERT_NO_FATAL_FAILURE(getUniqueKeys<TKEY>(uniqueKeys, batches));
+
+      // config->set(Config::MAP_FLAT_STRUCT_COLS,
+      // /* map of column index->vector of keys */);
+    }
+
     config->set(Config::FLATTEN_MAP, true);
     config->set(Config::MAP_FLAT_COLS, {writerDataTypeWithId->column});
     config->set(
         Config::MAP_FLAT_DISABLE_DICT_ENCODING, disableDictionaryEncoding);
+
+    // if isStruct, convert batches to struct before writing
+    // expect that if we pass isStruct true with useFlatMap false, it will fail
   }
 
   WriterContext context{config, getDefaultScopedMemoryPool()};
-  const auto writer = ColumnWriter::create(context, *writerDataTypeWithId);
+  const auto writer = BaseColumnWriter::create(context, *writerDataTypeWithId);
   // For writing flat map with encoded input, we'd like to test all 4
   // combinations.
   size_t strideCount = testEncoded ? 4 : 2;
@@ -808,7 +843,7 @@ void testMapWriter(
     auto valueNodeId = dataTypeWithId->childAt(1)->id;
     auto streamCount = 0;
     context.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.node == valueNodeId) {
+      if (pair.first.encodingKey().node == valueNodeId) {
         ++streamCount;
       }
     });
@@ -819,7 +854,7 @@ void testMapWriter(
 
     streamCount = 0;
     context.iterateUnSuppressedStreams([&](auto& pair) {
-      if (pair.first.node == valueNodeId) {
+      if (pair.first.encodingKey().node == valueNodeId) {
         ++streamCount;
       }
     });
@@ -839,20 +874,21 @@ void testMapWriter(
     MemoryPool& pool,
     const VectorPtr& batch,
     bool useFlatMap,
-    bool printMaps = true) {
+    bool printMaps = true,
+    bool isStruct = false) {
   std::vector<VectorPtr> batches{batch, batch};
   testMapWriter<TKEY, TVALUE>(
-      pool, batches, useFlatMap, true, false, printMaps);
+      pool, batches, useFlatMap, true, false, printMaps, isStruct);
   if (useFlatMap) {
     testMapWriter<TKEY, TVALUE>(
-        pool, batches, useFlatMap, false, false, printMaps);
+        pool, batches, useFlatMap, false, false, printMaps, isStruct);
     testMapWriter<TKEY, TVALUE>(
-        pool, batches, useFlatMap, true, true, printMaps);
+        pool, batches, useFlatMap, true, true, printMaps, isStruct);
   }
 }
 
 template <typename T>
-void testMapWriterNumericKey(bool useFlatMap) {
+void testMapWriterNumericKey(bool useFlatMap, bool isStruct = false) {
   using b = MapBuilder<T, T>;
 
   std::unique_ptr<ScopedMemoryPool> scopedPool = getDefaultScopedMemoryPool();
@@ -867,7 +903,7 @@ void testMapWriterNumericKey(bool useFlatMap) {
            typename b::pair{
                std::numeric_limits<T>::min(), std::numeric_limits<T>::min()}}});
 
-  testMapWriter<T, T>(pool, batch, useFlatMap);
+  testMapWriter<T, T>(pool, batch, useFlatMap, true, isStruct);
 }
 
 TEST(ColumnWriterTests, TestMapWriterFloatKey) {
@@ -876,26 +912,37 @@ TEST(ColumnWriterTests, TestMapWriterFloatKey) {
   EXPECT_THROW(
       { testMapWriterNumericKey<float>(/* useFlatMap */ true); },
       exception::LoggedException);
+
+  EXPECT_THROW(
+      {
+        testMapWriterNumericKey<float>(
+            /* useFlatMap */ true, /* isStruct */ true);
+      },
+      exception::LoggedException);
 }
 
 TEST(ColumnWriterTests, TestMapWriterInt64Key) {
   testMapWriterNumericKey<int64_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int64_t>(/* useFlatMap */ true);
+  testMapWriterNumericKey<int64_t>(/* useFlatMap */ true, /* isStruct */ true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterInt32Key) {
   testMapWriterNumericKey<int32_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int32_t>(/* useFlatMap */ true);
+  testMapWriterNumericKey<int32_t>(/* useFlatMap */ true, /* isStruct */ true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterInt16Key) {
   testMapWriterNumericKey<int16_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int16_t>(/* useFlatMap */ true);
+  testMapWriterNumericKey<int16_t>(/* useFlatMap */ true, /* isStruct */ true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterInt8Key) {
   testMapWriterNumericKey<int8_t>(/* useFlatMap */ false);
   testMapWriterNumericKey<int8_t>(/* useFlatMap */ true);
+  testMapWriterNumericKey<int8_t>(/* useFlatMap */ true, /* isStruct */ true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterStringKey) {
@@ -912,6 +959,8 @@ TEST(ColumnWriterTests, TestMapWriterStringKey) {
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false);
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true);
+  testMapWriter<keyType, valueType>(
+      pool, batch, /* useFlatMap */ true, /* isStruct */ true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterDifferentNumericKeyValue) {
@@ -943,6 +992,8 @@ TEST(ColumnWriterTests, TestMapWriterDifferentKeyValue) {
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false);
 }
+
+TEST(ColumnWriterTests, TestMapWriterIsStructWithoutFlatMap) {}
 
 TEST(ColumnWriterTests, TestMapWriterMixedBatchTypeHandling) {
   using keyType = int32_t;
@@ -992,6 +1043,7 @@ TEST(ColumnWriterTests, TestMapWriterBinaryKey) {
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false);
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true);
+  testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true, true);
 }
 
 template <typename keyType, typename valueType>
@@ -1004,6 +1056,7 @@ void testMapWriterImpl() {
 
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ false);
   testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true);
+  testMapWriter<keyType, valueType>(pool, batch, /* useFlatMap */ true, true);
 }
 
 TEST(ColumnWriterTests, TestMapWriterNestedMap) {
@@ -1657,7 +1710,7 @@ struct IntegerColumnWriterTypedTestCase {
         dictionaryWriteThreshold);
     WriterContext context{config, getDefaultScopedMemoryPool()};
     // Register root node.
-    auto columnWriter = ColumnWriter::create(context, *typeWithId);
+    auto columnWriter = BaseColumnWriter::create(context, *typeWithId);
 
     for (size_t i = 0; i != flushCount; ++i) {
       proto::StripeFooter stripeFooter;
@@ -1688,8 +1741,8 @@ struct IntegerColumnWriterTypedTestCase {
             encoding.kind());
         ASSERT_EQ(finalDictionarySize, encoding.dictionarysize());
       }
-      typeWithId = TypeWithId::create(rowType);
-      auto reqType = typeWithId->childAt(0);
+
+      auto reqType = TypeWithId::create(rowType)->childAt(0);
       auto columnReader = ColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
@@ -2755,13 +2808,13 @@ void testIntegerDictionaryEncodableWriterConstructor() {
   {
     config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, slightlyOver);
     WriterContext context{config, getDefaultScopedMemoryPool()};
-    EXPECT_ANY_THROW(ColumnWriter::create(context, *typeWithId));
+    EXPECT_ANY_THROW(BaseColumnWriter::create(context, *typeWithId));
   }
   float slightlyUnder = -std::numeric_limits<float>::epsilon();
   {
     config->set(Config::DICTIONARY_NUMERIC_KEY_SIZE_THRESHOLD, slightlyUnder);
     WriterContext context{config, getDefaultScopedMemoryPool()};
-    EXPECT_ANY_THROW(ColumnWriter::create(context, *typeWithId));
+    EXPECT_ANY_THROW(BaseColumnWriter::create(context, *typeWithId));
   }
 }
 
@@ -2880,7 +2933,7 @@ struct StringColumnWriterTestCase {
     WriterContext context{config, getDefaultScopedMemoryPool()};
     // Register root node.
     auto typeWithId = TypeWithId::create(type, 1);
-    auto columnWriter = ColumnWriter::create(context, *typeWithId);
+    auto columnWriter = BaseColumnWriter::create(context, *typeWithId);
 
     // Prepare input
     std::vector<VectorPtr> batches;
@@ -2921,8 +2974,8 @@ struct StringColumnWriterTestCase {
             encoding.kind());
         ASSERT_EQ(finalDictionarySize, encoding.dictionarysize());
       }
-      typeWithId = TypeWithId::create(rowType);
-      auto reqType = typeWithId->childAt(0);
+
+      auto reqType = TypeWithId::create(rowType)->childAt(0);
       auto columnReader = ColumnReader::build(reqType, reqType, streams);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
@@ -3723,7 +3776,7 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
   }
   auto vector = populateBatch<int32_t>(data, &pool);
 
-  auto writer = ColumnWriter::create(context, *typeWithId, 0);
+  auto writer = BaseColumnWriter::create(context, *typeWithId, 0);
   writer->write(vector, Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
@@ -3735,11 +3788,11 @@ TEST(ColumnWriterTests, IntDictWriterDirectValueOverflow) {
 
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
-  StreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
+  DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
   // read it as long
-  auto decoder = IntDecoder<false>::createRle(
+  auto decoder = createRleDecoder<false>(
       std::move(stream), RleVersion_1, pool, streams.getUseVInts(si), 8);
   std::array<int64_t, size> actual;
   decoder->next(actual.data(), size, nullptr);
@@ -3769,7 +3822,7 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
   }
   auto vector = populateBatch<int16_t>(data, &pool);
 
-  auto writer = ColumnWriter::create(context, *typeWithId, 0);
+  auto writer = BaseColumnWriter::create(context, *typeWithId, 0);
   writer->write(vector, Ranges::of(0, size));
   writer->createIndexEntry();
   proto::StripeFooter sf;
@@ -3781,11 +3834,11 @@ TEST(ColumnWriterTests, ShortDictWriterDictValueOverflow) {
 
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
-  StreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
+  DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_DATA};
   auto stream = streams.getStream(si, true);
 
   // read it as long
-  auto decoder = IntDecoder<false>::createRle(
+  auto decoder = createRleDecoder<false>(
       std::move(stream), RleVersion_1, pool, streams.getUseVInts(si), 8);
   std::array<int64_t, size> actual;
   decoder->next(actual.data(), size, nullptr);
@@ -3810,7 +3863,7 @@ TEST(ColumnWriterTests, RemovePresentStream) {
   auto typeWithId = TypeWithId::create(type, 1);
 
   // write
-  auto writer = ColumnWriter::create(context, *typeWithId, 0);
+  auto writer = BaseColumnWriter::create(context, *typeWithId, 0);
 
   writer->write(vector, Ranges::of(0, size));
   writer->createIndexEntry();
@@ -3821,8 +3874,47 @@ TEST(ColumnWriterTests, RemovePresentStream) {
 
   // get data stream
   TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
-  StreamIdentifier si{1, 0, 0, proto::Stream_Kind_PRESENT};
+  DwrfStreamIdentifier si{1, 0, 0, proto::Stream_Kind_PRESENT};
   ASSERT_EQ(streams.getStream(si, false), nullptr);
+}
+
+TEST(ColumnWriterTests, ColumnIdInStream) {
+  auto config = std::make_shared<Config>();
+  auto scopedPool = getDefaultScopedMemoryPool();
+  auto& pool = scopedPool->getPool();
+
+  std::vector<std::optional<int32_t>> data;
+  auto size = 100;
+  for (auto i = 0; i < size; ++i) {
+    data.push_back(i);
+  }
+  auto vector = populateBatch<int32_t>(data, &pool);
+  WriterContext context{config, getDefaultScopedMemoryPool()};
+  auto type = std::make_shared<const IntegerType>();
+  const uint32_t kNodeId = 4;
+  const uint32_t kColumnId = 2;
+  auto typeWithId = std::make_shared<const TypeWithId>(
+      type,
+      std::vector<std::shared_ptr<const TypeWithId>>{},
+      /* id */ kNodeId,
+      /* maxId */ kNodeId,
+      /* column */ kColumnId);
+
+  // write
+  auto writer = BaseColumnWriter::create(context, *typeWithId, 0);
+
+  writer->write(vector, Ranges::of(0, size));
+  writer->createIndexEntry();
+  proto::StripeFooter sf;
+  writer->flush([&sf](auto /* unused */) -> proto::ColumnEncoding& {
+    return *sf.add_encoding();
+  });
+
+  // get data stream
+  TestStripeStreams streams(context, sf, ROW({"foo"}, {type}));
+  DwrfStreamIdentifier si{
+      kNodeId, /* sequence */ 0, kColumnId, proto::Stream_Kind_DATA};
+  ASSERT_NE(streams.getStream(si, false), nullptr);
 }
 
 template <typename T>
@@ -3932,7 +4024,7 @@ struct DictColumnWriterTestCase {
     auto batch =
         createDictionaryBatch(size_, valueAt, isNullAt, complexVectorType);
 
-    const auto writer = ColumnWriter::create(context, *typeWithId);
+    const auto writer = BaseColumnWriter::create(context, *typeWithId);
 
     // Testing write direct paths
     if (writeDirect_) {

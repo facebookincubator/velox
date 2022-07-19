@@ -86,7 +86,7 @@ class HashProbe : public Operator {
   // 'rowNumberMapping_'. Returns the number of passing rows.
   vector_size_t evalFilter(vector_size_t numRows);
 
-  void ensureLoadedIfNotAtEnd(ChannelIndex channel);
+  void ensureLoadedIfNotAtEnd(column_index_t channel);
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const uint32_t outputBatchSize_;
@@ -96,7 +96,7 @@ class HashProbe : public Operator {
   std::unique_ptr<HashLookup> lookup_;
 
   // Channel of probe keys in 'input_'.
-  std::vector<ChannelIndex> keyChannels_;
+  std::vector<column_index_t> keyChannels_;
 
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};
@@ -145,7 +145,7 @@ class HashProbe : public Operator {
 
   // Tracks probe side rows which had one or more matches on the build side, but
   // didn't pass the filter.
-  class LeftJoinTracker {
+  class NoMatchDetector {
    public:
     // Called for each row that the filter was evaluated on. Expects that probe
     // side rows with multiple matches on the build side are next to each other.
@@ -182,15 +182,52 @@ class HashProbe : public Operator {
     bool currentRowPassed{false};
   };
 
+  // For left semi join with extra filter, de-duplicates probe side rows with
+  // multiple matches.
+  class LeftSemiJoinTracker {
+   public:
+    // Called for each row that the filter passes. Expects that probe
+    // side rows with multiple matches are next to each other. Calls onLastMatch
+    // just once for each probe side row with at least one match.
+    template <typename TOnLastMatch>
+    void advance(vector_size_t row, TOnLastMatch onLastMatch) {
+      if (currentRow != row) {
+        if (currentRow != -1) {
+          onLastMatch(currentRow);
+        }
+        currentRow = row;
+      }
+    }
+
+    // Called when all rows from the current input batch were processed. Calls
+    // onLastMatch for the last probe row with at least one match.
+    template <typename TOnLastMatch>
+    void finish(TOnLastMatch onLastMatch) {
+      if (currentRow != -1) {
+        onLastMatch(currentRow);
+      }
+
+      currentRow = -1;
+    }
+
+   private:
+    // The last row number passed to advance for the current input batch.
+    vector_size_t currentRow{-1};
+  };
+
   /// True if this is the last HashProbe operator in the pipeline. It is
   /// responsible for producing non-matching build-side rows for the right join.
   bool lastRightJoinProbe_{false};
 
   BaseHashTable::NotProbedRowsIterator rightJoinIterator_;
 
-  /// For left join, tracks the probe side rows which had matches on the build
-  /// side but didn't pass the filter.
-  LeftJoinTracker leftJoinTracker_;
+  /// For left and anti join with filter, tracks the probe side rows which had
+  /// matches on the build side but didn't pass the filter.
+  NoMatchDetector noMatchDetector_;
+
+  /// For left semi join with filter, de-duplicates probe side rows with
+  /// multiple matches.
+  LeftSemiJoinTracker leftSemiJoinTracker_;
 
   // Keeps track of returned results between successive batches of
   // output for a batch of input.

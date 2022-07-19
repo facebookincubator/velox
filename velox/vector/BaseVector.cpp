@@ -32,6 +32,7 @@ namespace velox {
 BaseVector::BaseVector(
     velox::memory::MemoryPool* pool,
     std::shared_ptr<const Type> type,
+    VectorEncoding::Simple encoding,
     BufferPtr nulls,
     size_t length,
     std::optional<vector_size_t> distinctValueCount,
@@ -40,6 +41,7 @@ BaseVector::BaseVector(
     std::optional<ByteCount> storageByteCount)
     : type_(std::move(type)),
       typeKind_(type_->kind()),
+      encoding_(encoding),
       nulls_(std::move(nulls)),
       rawNulls_(nulls_.get() ? nulls_->as<uint64_t>() : nullptr),
       pool_(pool),
@@ -99,26 +101,10 @@ static VectorPtr addDictionary(
     BufferPtr indices,
     size_t size,
     VectorPtr vector) {
-  auto base = vector.get();
-  auto pool = base->pool();
-  auto indicesBuffer = indices.get();
-  auto vsize = vector->size();
+  auto pool = vector->pool();
   return std::make_shared<
       DictionaryVector<typename KindToFlatVector<kind>::WrapperType>>(
-      pool,
-      nulls,
-      size,
-      std::move(vector),
-      TypeKind::INTEGER,
-      std::move(indices),
-      SimpleVectorStats<typename KindToFlatVector<kind>::WrapperType>{},
-      indicesBuffer->size() / sizeof(vector_size_t) /*distinctValueCount*/,
-      base->getNullCount(),
-      false /*isSorted*/,
-      base->representedBytes().has_value()
-          ? std::optional<ByteCount>(
-                base->representedBytes().value() * size / (1 + vsize))
-          : std::nullopt);
+      pool, nulls, size, std::move(vector), std::move(indices));
 }
 
 // static
@@ -127,6 +113,15 @@ VectorPtr BaseVector::wrapInDictionary(
     BufferPtr indices,
     vector_size_t size,
     VectorPtr vector) {
+  // Dictionary that doesn't add nulls over constant is same as constant. Just
+  // make sure to adjust the size.
+  if (vector->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
+    if (size == vector->size()) {
+      return vector;
+    }
+    return BaseVector::wrapInConstant(size, 0, vector);
+  }
+
   auto kind = vector->typeKind();
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       addDictionary, kind, nulls, indices, size, std::move(vector));
@@ -226,19 +221,22 @@ static VectorPtr createEmpty(
     velox::memory::MemoryPool* pool,
     const TypePtr& type) {
   using T = typename TypeTraits<kind>::NativeType;
-  BufferPtr values = AlignedBuffer::allocate<T>(size, pool);
+
+  BufferPtr values;
+  if constexpr (std::is_same<T, StringView>::value) {
+    // Make sure to initialize StringView values so they can be safely accessed.
+    values = AlignedBuffer::allocate<T>(size, pool, T());
+  } else {
+    values = AlignedBuffer::allocate<T>(size, pool);
+  }
+
   return std::make_shared<FlatVector<T>>(
       pool,
       type,
       BufferPtr(nullptr),
       size,
       std::move(values),
-      std::vector<BufferPtr>(),
-      SimpleVectorStats<T>{},
-      0 /*distinctValueCount*/,
-      0 /*nullCount*/,
-      false /*isSorted*/,
-      0 /*representedBytes*/);
+      std::vector<BufferPtr>());
 }
 
 // static
@@ -337,6 +335,12 @@ VectorPtr BaseVector::createInternal(
           size /*nullCount*/,
           true /*isSorted*/,
           0 /*representedBytes*/);
+    }
+    case TypeKind::SHORT_DECIMAL: {
+      return createEmpty<TypeKind::SHORT_DECIMAL>(size, pool, type);
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return createEmpty<TypeKind::LONG_DECIMAL>(size, pool, type);
     }
     default:
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
@@ -447,12 +451,23 @@ std::string BaseVector::toString(vector_size_t index) const {
   return out.str();
 }
 
-std::string BaseVector::toString(vector_size_t from, vector_size_t to) {
+std::string BaseVector::toString(
+    vector_size_t from,
+    vector_size_t to,
+    const std::string& delimiter,
+    bool includeRowNumbers) const {
+  const auto start = std::max(0, std::min<int32_t>(from, length_));
+  const auto end = std::max(0, std::min<int32_t>(to, length_));
+
   std::stringstream out;
-  for (auto i = std::min<int32_t>(from, length_);
-       i < std::min<int32_t>(to, length_);
-       ++i) {
-    out << i << ": " << toString(i) << std::endl;
+  for (auto i = start; i < end; ++i) {
+    if (i > start) {
+      out << delimiter;
+    }
+    if (includeRowNumbers) {
+      out << i << ": ";
+    }
+    out << toString(i);
   }
   return out.str();
 }
@@ -544,6 +559,26 @@ VectorPtr newConstant(
 }
 
 template <>
+VectorPtr newConstant<TypeKind::SHORT_DECIMAL>(
+    variant& value,
+    vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  // ShortDecimal variant is not supported to create
+  // constant vector.
+  VELOX_UNSUPPORTED();
+}
+
+template <>
+VectorPtr newConstant<TypeKind::LONG_DECIMAL>(
+    variant& value,
+    vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  // LongDecimal variant is not supported to create
+  // constant vector.
+  VELOX_UNSUPPORTED();
+}
+
+template <>
 VectorPtr newConstant<TypeKind::OPAQUE>(
     variant& value,
     vector_size_t size,
@@ -578,6 +613,17 @@ std::shared_ptr<BaseVector> BaseVector::createNullConstant(
     return std::make_shared<ConstantVector<ComplexType>>(
         pool, size, true, type, ComplexType());
   }
+
+  if (type->kind() == TypeKind::SHORT_DECIMAL) {
+    return std::make_shared<ConstantVector<ShortDecimal>>(
+        pool, size, true, type, ShortDecimal());
+  }
+
+  if (type->kind() == TypeKind::LONG_DECIMAL) {
+    return std::make_shared<ConstantVector<LongDecimal>>(
+        pool, size, true, type, LongDecimal());
+  }
+
   return BaseVector::createConstant(variant(type->kind()), size, pool);
 }
 
@@ -669,7 +715,7 @@ uint64_t BaseVector::estimateFlatSize() const {
 }
 
 namespace {
-bool isFlatEncoding(VectorEncoding::Simple encoding) {
+bool isReusableEncoding(VectorEncoding::Simple encoding) {
   return encoding == VectorEncoding::Simple::FLAT ||
       encoding == VectorEncoding::Simple::ARRAY ||
       encoding == VectorEncoding::Simple::MAP ||
@@ -681,7 +727,7 @@ bool isFlatEncoding(VectorEncoding::Simple encoding) {
 void BaseVector::prepareForReuse(
     std::shared_ptr<BaseVector>& vector,
     vector_size_t size) {
-  if (!vector.unique() || !isFlatEncoding(vector->encoding())) {
+  if (!vector.unique() || !isReusableEncoding(vector->encoding())) {
     vector = BaseVector::create(vector->type(), size, vector->pool());
     return;
   }

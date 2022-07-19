@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 
@@ -34,18 +35,18 @@ SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
-  lengthDecoder_ = IntDecoder</*isSigned*/ false>::createRle(
+  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true),
       rleVersion,
       memoryPool_,
       lenVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   blobStream_ =
       stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
 }
 
 uint64_t SelectiveStringDirectColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   detail::ensureCapacity<int64_t>(lengths_, numValues, &memoryPool_);
   lengthDecoder_->nextLengths(lengths_->asMutable<int32_t>(), numValues);
   rawLengths_ = lengths_->as<uint32_t>();
@@ -172,7 +173,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
       return false;
     }
     result[resultIndex] = length;
-    auto first16 = xsimd::make_sized_batch_t<char, 16>::load_unaligned(data);
+    auto first16 = xsimd::make_sized_batch_t<int8_t, 16>::load_unaligned(data);
     first16.store_unaligned(reinterpret_cast<char*>(result + resultIndex + 1));
     if (length <= 12) {
       data += length;
@@ -207,7 +208,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
 void SelectiveStringDirectColumnReader::extractSparse(
     const int32_t* rows,
     int32_t numRows) {
-  rowLoop(
+  dwio::common::rowLoop(
       rows,
       0,
       numRows,
@@ -328,11 +329,12 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
     if (nullsInReadRange_) {
       if (TVisitor::dense) {
         returnReaderNulls_ = true;
-        nonNullRowsFromDense(nulls, rows.size(), outerNonNullRows_);
+        dwio::common::nonNullRowsFromDense(
+            nulls, rows.size(), outerNonNullRows_);
         extractSparse(rows.data(), outerNonNullRows_.size());
       } else {
         int32_t tailSkip = -1;
-        anyNulls_ = nonNullRowsFromSparse<false, true>(
+        anyNulls_ = dwio::common::nonNullRowsFromSparse<false, true>(
             nulls,
             rows,
             innerNonNullRows_,
@@ -401,6 +403,10 @@ void SelectiveStringDirectColumnReader::processFilter(
       break;
     case common::FilterKind::kBytesValues:
       readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
+      break;
+    case common::FilterKind::kNegatedBytesValues:
+      readHelper<common::NegatedBytesValues, isDense>(
+          filter, rows, extractValues);
       break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);

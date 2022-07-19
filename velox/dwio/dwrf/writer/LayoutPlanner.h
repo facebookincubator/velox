@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/writer/WriterContext.h"
 
 namespace facebook::velox::dwrf {
 using StreamList =
-    std::vector<std::pair<const StreamIdentifier*, DataBufferHolder*>>;
+    std::vector<std::pair<const DwrfStreamIdentifier*, DataBufferHolder*>>;
 
 StreamList getStreamList(WriterContext& context);
 
@@ -31,10 +32,12 @@ class LayoutPlanner {
   virtual ~LayoutPlanner() = default;
 
   void iterateIndexStreams(
-      std::function<void(const StreamIdentifier&, DataBufferHolder&)> consumer);
+      std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
+          consumer);
 
   void iterateDataStreams(
-      std::function<void(const StreamIdentifier&, DataBufferHolder&)> consumer);
+      std::function<void(const DwrfStreamIdentifier&, DataBufferHolder&)>
+          consumer);
 
   virtual void plan();
 
@@ -47,7 +50,7 @@ class LayoutPlanner {
     static void sort(StreamList::iterator begin, StreamList::iterator end);
   };
 
-  FRIEND_TEST(LayoutPlannerTests, Basic);
+  VELOX_FRIEND_TEST(LayoutPlannerTests, Basic);
 };
 
 } // namespace facebook::velox::dwrf

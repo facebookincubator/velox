@@ -16,20 +16,22 @@
 
 #pragma once
 
+#include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 
 namespace facebook::velox::dwrf {
 
 // structs for extractValues in ColumnVisitor.
 
-NoHook& noHook();
+dwio::common::NoHook& noHook();
 
 // Represents values not being retained after filter evaluation.
 
 struct DropValues {
   static constexpr bool kSkipNulls = false;
-  using HookType = NoHook;
+  using HookType = dwio::common::NoHook;
 
   bool acceptsNulls() const {
     return true;
@@ -38,6 +40,7 @@ struct DropValues {
   template <typename V>
   void addValue(vector_size_t /*rowIndex*/, V /*value*/) {}
 
+  template <typename T>
   void addNull(vector_size_t /*rowIndex*/) {}
 
   HookType& hook() {
@@ -47,7 +50,7 @@ struct DropValues {
 
 template <typename TReader>
 struct ExtractToReader {
-  using HookType = NoHook;
+  using HookType = dwio::common::NoHook;
   static constexpr bool kSkipNulls = false;
   explicit ExtractToReader(TReader* readerIn) : reader(readerIn) {}
 
@@ -55,6 +58,7 @@ struct ExtractToReader {
     return true;
   }
 
+  template <typename T>
   void addNull(vector_size_t rowIndex);
 
   template <typename V>
@@ -64,7 +68,7 @@ struct ExtractToReader {
 
   TReader* reader;
 
-  NoHook& hook() {
+  dwio::common::NoHook& hook() {
     return noHook();
   }
 };
@@ -82,6 +86,7 @@ class ExtractToHook {
     return hook_.acceptsNulls();
   }
 
+  template <typename T>
   void addNull(vector_size_t rowIndex) {
     hook_.addNull(rowIndex);
   }
@@ -110,6 +115,7 @@ class ExtractToGenericHook {
     return hook_->acceptsNulls();
   }
 
+  template <typename T>
   void addNull(vector_size_t rowIndex) {
     hook_->addNull(rowIndex);
   }
@@ -126,6 +132,9 @@ class ExtractToGenericHook {
  private:
   ValueHook* hook_;
 };
+
+template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+class DictionaryColumnVisitor;
 
 // Template parameter for controlling filtering and action on a set of rows.
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
@@ -417,6 +426,9 @@ class ColumnVisitor {
     return reader_->outerNonNullRows();
   }
 
+  DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>
+  toDictionaryColumnVisitor();
+
  protected:
   TFilter& filter_;
   SelectiveColumnReader* reader_;
@@ -448,7 +460,7 @@ inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addResult(
 
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
 inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addNull() {
-  values_.addNull(rowIndex_);
+  values_.template addNull<T>(rowIndex_);
 }
 
 template <typename T, typename TFilter, typename ExtractValues, bool isDense>
@@ -458,8 +470,9 @@ inline void ColumnVisitor<T, TFilter, ExtractValues, isDense>::addOutputRow(
 }
 
 template <typename TReader>
+template <typename T>
 void ExtractToReader<TReader>::addNull(vector_size_t /*rowIndex*/) {
-  reader->template addNull<typename TReader::ValueType>();
+  reader->template addNull<T>();
 }
 
 enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
@@ -597,7 +610,7 @@ inline xsimd::batch<int64_t> cvtU32toI64(
     xsimd::batch<int32_t, xsimd::sse2> values) {
   return _mm256_cvtepu32_epi64(values);
 }
-#elif XSIMD_WITH_SSE2
+#elif XSIMD_WITH_SSE2 || XSIMD_WITH_NEON
 inline xsimd::batch<int64_t> cvtU32toI64(simd::Batch64<int32_t> values) {
   int64_t lo = static_cast<uint32_t>(values.data[0]);
   int64_t hi = static_cast<uint32_t>(values.data[1]);
@@ -993,6 +1006,13 @@ class DictionaryColumnVisitor
   const uint8_t width_;
 };
 
+template <typename T, typename TFilter, typename ExtractValues, bool isDense>
+DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>
+ColumnVisitor<T, TFilter, ExtractValues, isDense>::toDictionaryColumnVisitor() {
+  return DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>(
+      filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
+}
+
 class SelectiveStringDictionaryColumnReader;
 
 template <typename TFilter, typename ExtractValues, bool isDense>
@@ -1087,7 +1107,8 @@ class StringDictionaryColumnVisitor
       }
       DCHECK_EQ(input, values + numValues);
       if (scatter) {
-        scatterDense(input, scatterRows + super::rowIndex_, numInput, values);
+        dwio::common::scatterDense(
+            input, scatterRows + super::rowIndex_, numInput, values);
       }
       numValues = scatter ? scatterRows[super::rowIndex_ + numInput - 1] + 1
                           : numValues + numInput;
@@ -1234,6 +1255,7 @@ class ExtractStringDictionaryToGenericHook {
     return hook_->acceptsNulls();
   }
 
+  template <typename T>
   void addNull(vector_size_t rowIndex) {
     hook_->addNull(rowIndex);
   }
@@ -1312,7 +1334,7 @@ class DirectRleColumnVisitor
     constexpr bool filterOnly =
         std::is_same<typename super::Extract, DropValues>::value;
 
-    processFixedWidthRun<T, filterOnly, scatter, isDense>(
+    dwio::common::processFixedWidthRun<T, filterOnly, scatter, isDense>(
         folly::Range<const vector_size_t*>(super::rows_, super::numRows_),
         super::rowIndex_,
         numInput,

@@ -54,6 +54,8 @@ class BaseHashTable {
 
 #if XSIMD_WITH_SSE2
   using TagVector = xsimd::batch<uint8_t, xsimd::sse2>;
+#elif XSIMD_WITH_NEON
+  using TagVector = xsimd::batch<uint8_t, xsimd::neon>;
 #endif
 
   using MaskType = uint16_t;
@@ -146,6 +148,10 @@ class BaseHashTable {
   /// side. This is used for sizing the internal hash table.
   virtual uint64_t numDistinct() const = 0;
 
+  // Returns table growth in bytes after adding 'numNewDistinct' distinct
+  // entries. This only concerns the hash table, not the payload rows.
+  virtual uint64_t hashTableSizeIncrease(int32_t numnewDistinct) const = 0;
+
   /// Returns true if the hash table contains rows with duplicate keys.
   virtual bool hasDuplicateKeys() const = 0;
 
@@ -188,6 +194,10 @@ class BaseHashTable {
 
   RowContainer* rows() const {
     return rows_.get();
+  }
+
+  std::unique_ptr<RowContainer> moveRows() {
+    return std::move(rows_);
   }
 
   // Static functions for processing internals. Public because used in
@@ -327,9 +337,24 @@ class HashTable : public BaseHashTable {
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables) override;
 
+  uint64_t hashTableSizeIncrease(int32_t numNewDistinct) const override {
+    if (numDistinct_ + numNewDistinct > rehashSize()) {
+      // If rehashed, the table adds size_ entries (i.e. doubles),
+      // adding one pointer and one tag byte for each new position.
+      return size_ * (sizeof(void*) + 1);
+    }
+    return 0;
+  }
+
   std::string toString() override;
 
  private:
+  // Returns the number of entries after which the table gets rehashed.
+  uint64_t rehashSize() const {
+    // This implements the F14 load factor: Resize if less than 1/8 unoccupied.
+    return size_ - (size_ / 8);
+  }
+
   char*& nextRow(char* row) {
     return *reinterpret_cast<char**>(row + nextOffset_);
   }
@@ -337,11 +362,6 @@ class HashTable : public BaseHashTable {
   void arrayGroupProbe(HashLookup& lookup);
 
   void setHashMode(HashMode mode, int32_t numNew) override;
-
-  /// Adds extra values for value id ranges for group by hash tables in
-  /// kArray or kNormalizedKey mode. Identity for join tables since all
-  /// keys are known at build time.
-  int64_t addReserve(int64_t count, TypeKind kind);
 
   /// Tries to use as many range hashers as can in a normalized key situation.
   void enableRangeWhereCan(
@@ -421,6 +441,13 @@ class HashTable : public BaseHashTable {
   // Erases the entries of rows from the hash table and its RowContainer.
   // 'hashes' must be computed according to 'hashMode_'.
   void eraseWithHashes(folly::Range<char**> rows, uint64_t* hashes);
+
+  // Returns the percentage of values to reserve for new keys in range
+  // or distinct mode VectorHashers in a group by hash table. 0 for
+  // join build sides.
+  int32_t reservePct() const {
+    return isJoinBuild_ ? 0 : 50;
+  }
 
   const std::vector<std::unique_ptr<Aggregate>>& aggregates_;
   int8_t sizeBits_;

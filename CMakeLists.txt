@@ -45,7 +45,9 @@ option(VELOX_ENABLE_SUBSTRAIT "Buid Substrait-to-Velox converter." OFF)
 option(VELOX_ENABLE_BENCHMARKS "Build velox top level benchmarks." OFF)
 option(VELOX_ENABLE_BENCHMARKS_BASIC "Build velox basic benchmarks." OFF)
 option(VELOX_ENABLE_S3 "Build S3 Connector" OFF)
+option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
+option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
 
 if(${VELOX_BUILD_MINIMAL})
@@ -109,14 +111,22 @@ if(VELOX_ENABLE_S3)
   add_definitions(-DVELOX_ENABLE_S3)
 endif()
 
+if(VELOX_ENABLE_HDFS)
+  find_library(
+    LIBHDFS3
+    NAMES libhdfs3.so libhdfs3.dylib
+    HINTS "${CMAKE_SOURCE_DIR}/hawq/depends/libhdfs3/_build/src/" REQUIRED)
+  add_definitions(-DVELOX_ENABLE_HDFS3)
+endif()
+
 if(VELOX_ENABLE_PARQUET)
   add_definitions(-DVELOX_ENABLE_PARQUET)
 endif()
 
-# If CODEGEN support isn't explicitly set, we guestimate the value based on the
-# compiler
-if((NOT DEFINED VELOX_CODEGEN_SUPPORT) AND (CMAKE_CXX_COMPILER_ID MATCHES
-                                            "Clang"))
+# Turn on Codegen only for Clang and non Mac systems.
+if((NOT DEFINED VELOX_CODEGEN_SUPPORT)
+   AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
   message(STATUS "Enabling Codegen")
   set(VELOX_CODEGEN_SUPPORT True)
 else()
@@ -141,14 +151,31 @@ if(UNIX AND NOT APPLE)
   add_link_options("-Wl,-export-dynamic")
 endif()
 
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64" AND ${CMAKE_SYSTEM_NAME} MATCHES
+                                                 "Darwin")
+  set(ON_APPLE_M1 True)
+endif()
+
 # Required so velox code can be used in a dynamic library
 set(POSITION_INDEPENDENT_CODE True)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mavx -mf16c -mbmi2 -mbmi -D USE_VELOX_COMMON_BASE"
-)
+
+execute_process(
+  COMMAND
+    bash -c
+    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+  RESULT_VARIABLE COMMAND_STATUS)
+
+if(COMMAND_STATUS EQUAL "1")
+  message(FATAL_ERROR "Unable to determine compiler flags!")
+endif()
+message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D USE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D HAS_UNCAUGHT_EXCEPTIONS")
 
@@ -196,6 +223,7 @@ if("${ENABLE_ALL_WARNINGS}")
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
+       -Wno-nullability-completeness \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
@@ -241,7 +269,11 @@ endif()
 find_library(RE2 re2 REQUIRED)
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  if(ON_APPLE_M1)
+    set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  else()
+    set(CMAKE_PREFIX_PATH "/usr/local/opt/icu4c" ${CMAKE_PREFIX_PATH})
+  endif()
   find_package(ICU REQUIRED)
   include_directories(${ICU_INCLUDE_DIRS})
   link_directories("${ICU_INCLUDE_DIRS}/../lib")
@@ -287,6 +319,45 @@ if(VELOX_BUILD_TESTING AND NOT VELOX_ENABLE_DUCKDB)
       "Unit tests require duckDB to be enabled (VELOX_ENABLE_DUCKDB=ON or VELOX_BUILD_TESTING=OFF)"
   )
 endif()
+
+# Benchmarks and tests at some places are coupled which is not great. See
+# velox/vector/CMakeLists.txt. TODO: Decouple.
+set(VELOX_DISABLE_GOOGLETEST OFF)
+if(NOT VELOX_BUILD_TEST_UTILS
+   AND NOT VELOX_BUILD_TESTING
+   AND NOT VELOX_ENABLE_BENCHMARKS_BASIC)
+  set(VELOX_DISABLE_GOOGLETEST ON)
+  add_definitions(-DVELOX_DISABLE_GOOGLETEST)
+endif()
+
+# On macOS, search Homebrew for keg-only versions of Bison and Flex. Xcode does
+# not provide new enough versions for us to use.
+if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+  execute_process(
+    COMMAND brew --prefix bison
+    RESULT_VARIABLE BREW_BISON
+    OUTPUT_VARIABLE BREW_BISON_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(BREW_BISON EQUAL 0 AND EXISTS "${BREW_BISON_PREFIX}")
+    message(
+      STATUS "Found Bison keg installed by Homebrew at ${BREW_BISON_PREFIX}")
+    set(BISON_EXECUTABLE "${BREW_BISON_PREFIX}/bin/bison")
+  endif()
+
+  execute_process(
+    COMMAND brew --prefix flex
+    RESULT_VARIABLE BREW_FLEX
+    OUTPUT_VARIABLE BREW_FLEX_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(BREW_FLEX EQUAL 0 AND EXISTS "${BREW_FLEX_PREFIX}")
+    message(
+      STATUS "Found Flex keg installed by Homebrew at ${BREW_FLEX_PREFIX}")
+    set(FLEX_EXECUTABLE "${BREW_FLEX_PREFIX}/bin/flex")
+    set(FLEX_INCLUDE_DIR "${BREW_FLEX_PREFIX}/include")
+  endif()
+endif()
+find_package(BISON 3.0.4 REQUIRED)
+find_package(FLEX 2.5.13 REQUIRED)
 
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)

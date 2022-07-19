@@ -30,10 +30,10 @@
 
 namespace facebook::velox {
 
-using ChannelIndex = uint32_t;
+using column_index_t = uint32_t;
 
-constexpr ChannelIndex kConstantChannel =
-    std::numeric_limits<ChannelIndex>::max();
+constexpr column_index_t kConstantChannel =
+    std::numeric_limits<column_index_t>::max();
 
 class RowVector : public BaseVector {
  public:
@@ -44,18 +44,28 @@ class RowVector : public BaseVector {
       size_t length,
       std::vector<VectorPtr> children,
       std::optional<vector_size_t> nullCount = std::nullopt)
-      : BaseVector(pool, type, nulls, length, std::nullopt, nullCount, 1),
+      : BaseVector(
+            pool,
+            type,
+            VectorEncoding::Simple::ROW,
+            nulls,
+            length,
+            std::nullopt,
+            nullCount,
+            1),
         childrenSize_(children.size()),
         children_(std::move(children)) {
     // Some columns may not be projected out
     VELOX_CHECK_LE(children_.size(), type->size());
-    const auto* rowType = dynamic_cast<const RowType*>(type.get());
+    [[maybe_unused]] const auto* rowType =
+        dynamic_cast<const RowType*>(type.get());
 
     // Check child vector types.
+    // This can be an expensive operation, so it's only done at debug time.
     for (auto i = 0; i < children_.size(); i++) {
       const auto& child = children_[i];
       if (child) {
-        VELOX_CHECK(
+        VELOX_DCHECK(
             child->type()->kindEquals(type->childAt(i)),
             "Got type {} for field `{}` at position {}, but expected {}.",
             child->type()->toString(),
@@ -71,10 +81,6 @@ class RowVector : public BaseVector {
       velox::memory::MemoryPool* pool);
 
   virtual ~RowVector() override {}
-
-  VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::ROW;
-  }
 
   std::optional<int32_t> compare(
       const BaseVector* other,
@@ -93,22 +99,14 @@ class RowVector : public BaseVector {
   }
 
   /// Get the child vector at a given offset.
-  VectorPtr& childAt(ChannelIndex index) {
+  VectorPtr& childAt(column_index_t index) {
     VELOX_USER_CHECK_LT(index, childrenSize_);
     return children_[index];
   }
 
-  const VectorPtr& childAt(ChannelIndex index) const {
+  const VectorPtr& childAt(column_index_t index) const {
     VELOX_USER_CHECK_LT(index, childrenSize_);
     return children_[index];
-  }
-  const VectorPtr& loadedChildAt(ChannelIndex index) const {
-    VELOX_USER_CHECK_LT(index, childrenSize_);
-    auto& child = children_[index];
-    if (child->encoding() == VectorEncoding::Simple::LAZY) {
-      child = child->as<LazyVector>()->loadedVectorShared();
-    }
-    return child;
   }
 
   std::vector<VectorPtr>& children() {
@@ -125,6 +123,11 @@ class RowVector : public BaseVector {
       vector_size_t sourceIndex,
       vector_size_t count) override;
 
+  void copy(
+      const BaseVector* source,
+      const SelectivityVector& rows,
+      const vector_size_t* toSourceRow) override;
+
   void move(vector_size_t source, vector_size_t target) override;
 
   uint64_t retainedSize() const override {
@@ -138,6 +141,8 @@ class RowVector : public BaseVector {
   }
 
   uint64_t estimateFlatSize() const override;
+
+  using BaseVector::toString;
 
   std::string toString(vector_size_t index) const override;
 
@@ -205,6 +210,7 @@ class ArrayVector : public BaseVector {
       : BaseVector(
             pool,
             type,
+            VectorEncoding::Simple::ARRAY,
             nulls,
             length,
             std::nullopt /*distinctValueCount*/,
@@ -269,10 +275,6 @@ class ArrayVector : public BaseVector {
   }
 
   virtual ~ArrayVector() override {}
-
-  VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::ARRAY;
-  }
 
   std::optional<int32_t> compare(
       const BaseVector* other,
@@ -366,6 +368,8 @@ class ArrayVector : public BaseVector {
 
   uint64_t estimateFlatSize() const override;
 
+  using BaseVector::toString;
+
   std::string toString(vector_size_t index) const override;
 
   void ensureWritable(const SelectivityVector& rows) override;
@@ -404,6 +408,7 @@ class MapVector : public BaseVector {
       : BaseVector(
             pool,
             type,
+            VectorEncoding::Simple::MAP,
             nulls,
             length,
             std::nullopt /*distinctValueCount*/,
@@ -436,10 +441,6 @@ class MapVector : public BaseVector {
   }
 
   virtual ~MapVector() override {}
-
-  VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::MAP;
-  }
 
   std::optional<int32_t> compare(
       const BaseVector* other,
@@ -544,6 +545,8 @@ class MapVector : public BaseVector {
   }
 
   uint64_t estimateFlatSize() const override;
+
+  using BaseVector::toString;
 
   std::string toString(vector_size_t index) const override;
 

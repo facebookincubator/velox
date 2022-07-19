@@ -28,6 +28,8 @@ libmnl
 zlib
 googletest
 
+[debs]
+libssl-dev
 
 [shipit.pathmap]
 fbcode/katran/public_root = .

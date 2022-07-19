@@ -42,7 +42,7 @@ class ValueStatisticsBuilder {
     return create_(context, root, options);
   }
 
-  void merge(const ColumnWriter& writer) const {
+  void merge(const BaseColumnWriter& writer) const {
     statisticsBuilder_->merge(*writer.indexStatsBuilder_);
     DWIO_ENSURE(
         children_.size() == writer.children_.size(),
@@ -69,7 +69,7 @@ class ValueStatisticsBuilder {
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       const StatisticsBuilderOptions& options) {
-    auto builder = StatisticsBuilder::create(type.type->kind(), options);
+    auto builder = StatisticsBuilder::create(*type.type, options);
 
     std::vector<std::unique_ptr<ValueStatisticsBuilder>> children{};
     for (size_t i = 0; i < type.size(); ++i) {
@@ -102,7 +102,7 @@ class ValueWriter {
         keyInfo_{keyInfo},
         inMap_{createBooleanRleEncoder(context.newStream(
             {type.id, sequence, 0, StreamKind::StreamKind_IN_MAP}))},
-        columnWriter_{ColumnWriter::create(
+        columnWriter_{BaseColumnWriter::create(
             context,
             type,
             sequence,
@@ -112,7 +112,8 @@ class ValueWriter {
         inMapBuffer_{
             context.getMemoryPool(MemoryUsageCategory::GENERAL),
             inMapSize},
-        ranges_{} {}
+        ranges_{},
+        collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {}
 
   void addOffset(uint64_t offset, uint64_t inMapIndex) {
     if (UNLIKELY(inMapBuffer_[inMapIndex])) {
@@ -148,8 +149,13 @@ class ValueWriter {
     return sequence_;
   }
 
-  void createIndexEntry(const ValueStatisticsBuilder& statsBuilder) {
-    statsBuilder.merge(*columnWriter_);
+  void createIndexEntry(
+      const ValueStatisticsBuilder& valueStatsBuilder,
+      MapStatisticsBuilder& mapStatsBuilder) {
+    if (collectMapStats_) {
+      mapStatsBuilder.addValues(keyInfo_, *columnWriter_->indexStatsBuilder_);
+    }
+    valueStatsBuilder.merge(*columnWriter_);
     columnWriter_->createIndexEntry();
   }
 
@@ -174,9 +180,10 @@ class ValueWriter {
   uint32_t sequence_;
   const proto::KeyInfo keyInfo_;
   std::unique_ptr<ByteRleEncoder> inMap_;
-  std::unique_ptr<ColumnWriter> columnWriter_;
+  std::unique_ptr<BaseColumnWriter> columnWriter_;
   dwio::common::DataBuffer<char> inMapBuffer_;
   Ranges ranges_;
+  const bool collectMapStats_;
 };
 
 namespace {
@@ -217,7 +224,7 @@ struct TypeInfo<TypeKind::VARBINARY> {
 } // namespace
 
 template <TypeKind K>
-class FlatMapColumnWriter : public ColumnWriter {
+class FlatMapColumnWriter : public BaseColumnWriter {
  public:
   FlatMapColumnWriter(
       WriterContext& context,
@@ -269,7 +276,7 @@ class FlatMapColumnWriter : public ColumnWriter {
 template <>
 class FlatMapColumnWriter<TypeKind::INVALID> {
  public:
-  static std::unique_ptr<ColumnWriter> create(
+  static std::unique_ptr<BaseColumnWriter> create(
       WriterContext& context,
       const dwio::common::TypeWithId& type,
       const uint32_t sequence) {

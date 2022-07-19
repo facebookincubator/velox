@@ -30,23 +30,23 @@ class JsonCastOperator : public exec::CastOperator {
     return instance;
   }
 
-  bool isSupportedType(const TypePtr& other) const override;
+  bool isSupportedFromType(const TypePtr& other) const override;
+
+  bool isSupportedToType(const TypePtr& other) const override;
 
   void castTo(
       const BaseVector& input,
-      exec::EvalCtx* context,
+      exec::EvalCtx& context,
       const SelectivityVector& rows,
       bool nullOnFailure,
       BaseVector& result) const override;
 
   void castFrom(
-      const BaseVector& /*input*/,
-      exec::EvalCtx* /*context*/,
-      const SelectivityVector& /*rows*/,
-      bool /*nullOnFailure*/,
-      BaseVector& /*result*/) const override {
-    VELOX_NYI("Casting from JSON is not implemented yet.");
-  }
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const SelectivityVector& rows,
+      bool nullOnFailure,
+      BaseVector& result) const override;
 
  private:
   JsonCastOperator() = default;

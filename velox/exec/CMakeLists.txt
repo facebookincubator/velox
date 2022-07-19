@@ -23,6 +23,7 @@ add_library(
   EnforceSingleRow.cpp
   Exchange.cpp
   FilterProject.cpp
+  GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
   HashBuild.cpp
@@ -45,6 +46,7 @@ add_library(
   PartitionedOutputBufferManager.cpp
   PlanNodeStats.cpp
   RowContainer.cpp
+  Spiller.cpp
   StreamingAggregation.cpp
   TableScan.cpp
   TableWriter.cpp

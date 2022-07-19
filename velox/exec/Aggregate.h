@@ -106,7 +106,8 @@ class Aggregate {
   // @param rows Rows of the 'args' to add to the accumulators. These may not be
   // contiguous if the aggregation has mask or is configured to drop null
   // grouping keys. The latter would be the case when aggregation is followed
-  // by the join on the grouping keys.
+  // by the join on the grouping keys. 'rows' is guaranteed to have at least one
+  // active row.
   // @param args Raw input.
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
@@ -124,7 +125,8 @@ class Aggregate {
   // @param rows Rows of the 'args' to add to the accumulators. These may not be
   // contiguous if the aggregation has mask or is configured to drop null
   // grouping keys. The latter would be the case when aggregation is followed
-  // by the join on the grouping keys.
+  // by the join on the grouping keys. 'rows' is guaranteed to have at least one
+  // active row.
   // @param args Intermediate results produced by extractAccumulators().
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
@@ -139,7 +141,8 @@ class Aggregate {
   // aggregation.
   // @param group Pointer to the start of the group row.
   // @param rows Rows of the 'args' to add to the accumulators. These may not
-  // be contiguous if the aggregation has mask.
+  // be contiguous if the aggregation has mask. 'rows' is guaranteed to have at
+  // least one active row.
   // @param args Raw input to add to the accumulators.
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
@@ -154,7 +157,8 @@ class Aggregate {
   // aggregation.
   // @param group Pointer to the start of the group row.
   // @param rows Rows of the 'args' to add to the accumulators. These may not
-  // be contiguous if the aggregation has mask.
+  // be contiguous if the aggregation has mask. 'rows' is guaranteed to have at
+  // least one active row.
   // @param args Intermediate results produced by extractAccumulators().
   // @param mayPushdown True if aggregation can be pushdown down via LazyVector.
   // The pushdown can happen only if this flag is true and 'args' is a single
@@ -206,6 +210,12 @@ class Aggregate {
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType);
 
+  // Returns the intermediate type for 'name' with signature
+  // 'argTypes'. Throws if cannot resolve.
+  static TypePtr intermediateType(
+      const std::string& name,
+      const std::vector<TypePtr>& argTypes);
+
  protected:
   // Shorthand for maintaining accumulator variable length size in
   // accumulator update methods. Use like: { auto tracker =
@@ -232,6 +242,15 @@ class Aggregate {
       groups[i][nullByte_] |= nullMask_;
     }
     numNulls_ += indices.size();
+  }
+
+  inline bool setNull(char* group) {
+    if (group[nullByte_] & nullMask_) {
+      return false;
+    }
+    group[nullByte_] |= nullMask_;
+    ++numNulls_;
+    return true;
   }
 
   inline bool clearNull(char* group) {
@@ -263,7 +282,7 @@ class Aggregate {
 
   static void clearNull(uint64_t* rawNulls, vector_size_t index) {
     if (rawNulls) {
-      bits::clearBit(rawNulls, index);
+      bits::clearNull(rawNulls, index);
     }
   }
 

@@ -19,6 +19,7 @@
 #include <functional>
 #include <unordered_map>
 #include "folly/Conv.h"
+#include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 
 namespace facebook::velox::dwrf {
@@ -78,7 +79,7 @@ class Config {
   }
 
   static Entry<WriterVersion> WRITER_VERSION;
-  static Entry<CompressionKind> COMPRESSION;
+  static Entry<dwio::common::CompressionKind> COMPRESSION;
   static Entry<int32_t> ZLIB_COMPRESSION_LEVEL;
   static Entry<int32_t> ZSTD_COMPRESSION_LEVEL;
   static Entry<uint64_t> COMPRESSION_BLOCK_SIZE;
@@ -88,7 +89,7 @@ class Config {
   static Entry<bool> CREATE_INDEX;
   static Entry<uint32_t> ROW_INDEX_STRIDE;
   static Entry<proto::ChecksumAlgorithm> CHECKSUM_ALGORITHM;
-  static Entry<proto::StripeCacheMode> STRIPE_CACHE_MODE;
+  static Entry<StripeCacheMode> STRIPE_CACHE_MODE;
   static Entry<uint32_t> STRIPE_CACHE_SIZE;
   static Entry<uint32_t> DICTIONARY_ENCODING_INTERVAL;
   static Entry<bool> USE_VINTS;
@@ -119,6 +120,7 @@ class Config {
   // Limit the raw data size per batch to avoid being forced
   // to write oversized stripes.
   static Entry<uint64_t> RAW_DATA_SIZE_PER_BATCH;
+  static Entry<bool> MAP_STATISTICS;
 
  private:
   std::unordered_map<std::string, std::string> configs_;

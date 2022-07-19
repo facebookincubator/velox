@@ -179,7 +179,7 @@ void E2EFilterTestBase::readWithoutFilter(
   dwio::common::ReaderOptions readerOpts;
   dwio::common::RowReaderOptions rowReaderOpts;
   auto reader = makeReader(readerOpts, std::move(input));
-  ;
+
   // The spec must stay live over the lifetime of the reader.
   rowReaderOpts.setScanSpec(spec);
   OwnershipChecker ownershipChecker;
@@ -229,7 +229,6 @@ void E2EFilterTestBase::readWithFilter(
   dwio::common::ReaderOptions readerOpts;
   dwio::common::RowReaderOptions rowReaderOpts;
   auto reader = makeReader(readerOpts, std::move(input));
-  auto factory = std::make_unique<SelectiveColumnReaderFactory>(spec);
   // The  spec must stay live over the lifetime of the reader.
   rowReaderOpts.setScanSpec(spec);
   OwnershipChecker ownershipChecker;
@@ -268,7 +267,7 @@ void E2EFilterTestBase::readWithFilter(
       // Load eventual LazyVectors inside the timed section.
       auto rowVector = batch->asUnchecked<RowVector>();
       for (auto i = 0; i < rowVector->childrenSize(); ++i) {
-        rowVector->loadedChildAt(i);
+        rowVector->childAt(i)->loadedVector();
       }
       if (skipCheck) {
         // Fetch next batch inside timed section.

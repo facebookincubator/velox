@@ -15,6 +15,7 @@ add_executable(
   velox_type_test
   StringViewTest.cpp
   TypeTest.cpp
+  DecimalTest.cpp
   FilterTest.cpp
   SubfieldTest.cpp
   TimestampConversionTest.cpp
@@ -40,6 +41,51 @@ add_executable(velox_filter_benchmark FilterBenchmark.cpp)
 
 target_link_libraries(
   velox_filter_benchmark
+  velox_type
+  velox_serialization
+  ${FOLLY}
+  ${FOLLY_BENCHMARK}
+  ${DOUBLE_CONVERSION}
+  gtest
+  gtest_main
+  ${gflags_LIBRARIES}
+  glog::glog)
+
+add_executable(velox_negated_values_filter_benchmark
+               NegatedValuesFilterBenchmark.cpp)
+
+target_link_libraries(
+  velox_negated_values_filter_benchmark
+  velox_type
+  velox_serialization
+  ${FOLLY}
+  ${FOLLY_BENCHMARK}
+  ${DOUBLE_CONVERSION}
+  gtest
+  gtest_main
+  ${gflags_LIBRARIES}
+  glog::glog)
+
+add_executable(velox_negated_bytes_values_benchmark
+               NegatedBytesValuesBenchmark.cpp)
+
+target_link_libraries(
+  velox_negated_bytes_values_benchmark
+  velox_type
+  velox_serialization
+  ${FOLLY}
+  ${FOLLY_BENCHMARK}
+  ${DOUBLE_CONVERSION}
+  gtest
+  gtest_main
+  ${gflags_LIBRARIES}
+  glog::glog)
+
+add_executable(velox_negated_bigint_range_benchmark
+               NegatedBigintRangeBenchmark.cpp)
+
+target_link_libraries(
+  velox_negated_bigint_range_benchmark
   velox_type
   velox_serialization
   ${FOLLY}

@@ -20,6 +20,7 @@ target_link_libraries(velox_functions_test_lib velox_exec velox_exec_test_util
 add_executable(
   velox_functions_test
   ArithmeticTest.cpp
+  ArrayCombinationsTest.cpp
   ArrayConstructorTest.cpp
   ArrayContainsTest.cpp
   ArrayDistinctTest.cpp
@@ -30,6 +31,7 @@ add_executable(
   ArrayMaxTest.cpp
   ArrayMinTest.cpp
   ArrayPositionTest.cpp
+  ArraySortTest.cpp
   ArraysOverlapTest.cpp
   ArraySumTest.cpp
   BitwiseTest.cpp
@@ -76,4 +78,5 @@ target_link_libraries(
   gtest
   gtest_main
   ${gflags_LIBRARIES}
-  gmock)
+  gmock
+  gmock_main)

@@ -26,9 +26,9 @@
 
 DEFINE_int64(
     seed,
-    123456,
-    "Initial seed for random number generator "
-    "(use it to reproduce previous results).");
+    0,
+    "Initial seed for random number generator used to reproduce previous "
+    "results (0 means start with random seed).");
 
 DEFINE_string(
     only,
@@ -52,33 +52,12 @@ int main(int argc, char** argv) {
   // TODO: List of the functions that at some point crash or fail and need to
   // be fixed before we can enable.
   std::unordered_set<std::string> skipFunctions = {
-      // The pad functions cause the test to OOM. The 2nd arg is only bound by
-      // the max value of int32_t, which leads to strings billions of characters
-      // long.
-      "lpad",
-      "rpad",
       // Fuzzer and the underlying engine are confused about cardinality(HLL)
       // (since HLL is a user defined type), and end up trying to use
       // cardinality passing a VARBINARY (since HLL's implementation uses an
       // alias to VARBINARY).
       "cardinality",
-      // Common path throws and simplified path not throwing. This is due to an
-      // exception thrown in initializate() method of date_parse udf.
-      //
-      // What happened was in common path initialize() was called with an
-      // invalid input that triggers the throw, while in simplified path
-      // initialize() was called with a nullptr input value because it is not
-      // constant folded and not triggering the throw.
-      //
-      // Ideally simplified path should throw in the call() method of the udf
-      // but due to null optimization call() was never called for both. This
-      // brings up the inconsistency for the 2 paths.
-      //
-      // There was previous effort that tried to address this issue by delaying
-      // the throw of exceptions during constant folding. But initialize() is
-      // called prior to constant folding so this case is not caught up.
-      // TODO: T117753276
-      "date_parse",
   };
-  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, FLAGS_seed, skipFunctions);
+  size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
+  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, initialSeed, skipFunctions);
 }

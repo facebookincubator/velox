@@ -109,7 +109,7 @@ RowVectorPtr Merge::getOutput() {
 
   // No merging is needed if there is only one source.
   if (sources_.size() == 1) {
-    ContinueFuture future{false};
+    ContinueFuture future;
     RowVectorPtr data;
     auto reason = sources_[0]->next(data, &future);
     if (reason != BlockingReason::kNotBlocked) {
@@ -214,15 +214,15 @@ void SourceStream::copyToOutput(RowVectorPtr& output) {
 
   outputRows_.clearAll();
 
-  if (currentSourceRow_ == data_->size() - 1) {
+  if (sourceRow == data_->size()) {
     firstSourceRow_ = 0;
   } else {
-    firstSourceRow_ = currentSourceRow_;
+    firstSourceRow_ = sourceRow;
   }
 }
 
 bool SourceStream::fetchMoreData(std::vector<ContinueFuture>& futures) {
-  ContinueFuture future{false};
+  ContinueFuture future;
   auto reason = source_->next(data_, &future);
   if (reason != BlockingReason::kNotBlocked) {
     needData_ = true;

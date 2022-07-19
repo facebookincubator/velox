@@ -144,7 +144,7 @@ std::vector<std::unique_ptr<KeyNode<T>>> getKeyNodesFiltered(
         // if this branch (sequence) is not in the node list yet
         if (processed.count(sequence) == 0) {
           EncodingKey seqEk(dataValueType->id, sequence);
-          auto keyInfo = stripe.getEncoding(seqEk).key();
+          const auto& keyInfo = stripe.getEncoding(seqEk).key();
           auto key = extractKey<T>(keyInfo);
           // check if we have key filter passed through read schema
           if (keyPredicate(key)) {
@@ -300,7 +300,7 @@ void FlatMapColumnReader<T>::initKeysVector(
     VectorPtr& vector,
     vector_size_t size) {
   flatmap_helper::initializeFlatVector<T>(vector, memoryPool_, size, false);
-  vector->setSize(size);
+  vector->resize(size, false);
 }
 
 template <>
@@ -313,7 +313,7 @@ void FlatMapColumnReader<StringView>::initKeysVector(
       size,
       false,
       std::vector<BufferPtr>{stringKeyBuffer_->getBuffer()});
-  vector->setSize(size);
+  vector->resize(size, false);
 }
 
 template <typename T>
@@ -456,12 +456,12 @@ void FlatMapColumnReader<T>::next(
   result = std::make_shared<MapVector>(
       &memoryPool_,
       mapType,
-      nulls,
+      std::move(nulls),
       numValues,
-      offsets,
-      lengths,
-      keysVector,
-      valuesVector,
+      std::move(offsets),
+      std::move(lengths),
+      std::move(keysVector),
+      std::move(valuesVector),
       nullCount);
 }
 
@@ -657,6 +657,7 @@ void FlatMapStructEncodingColumnReader<T>::next(
   if (rowVector) {
     // Track children vectors in a local variable because readNulls may reset
     // the parent vector.
+    result->resize(numValues, false);
     children = rowVector->children();
     DWIO_ENSURE_EQ(children.size(), keyNodes_.size());
   }
@@ -690,7 +691,6 @@ void FlatMapStructEncodingColumnReader<T>::next(
   }
 
   if (result) {
-    result->setSize(numValues);
     result->setNullCount(nullCount);
   } else {
     result = std::make_shared<RowVector>(

@@ -16,17 +16,17 @@
 
 #pragma once
 
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/dwrf/common/BufferedInput.h"
 #include "velox/dwio/dwrf/common/Compression.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
-#include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 #include "velox/dwio/dwrf/reader/StripeMetadataCache.h"
 #include "velox/dwio/dwrf/utils/ProtoUtils.h"
 
 namespace facebook::velox::dwrf {
 
-constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
 constexpr uint64_t DIRECTORY_SIZE_GUESS = 1024 * 1024;
 constexpr uint64_t FILE_PRELOAD_THRESHOLD = 1024 * 1024 * 8;
 
@@ -59,6 +59,9 @@ class FooterStatisticsImpl : public dwio::common::Statistics {
 };
 
 class ReaderBase {
+  static constexpr uint64_t kDefaultFileNum =
+      std::numeric_limits<uint64_t>::max();
+
  public:
   // create reader base from input stream
   ReaderBase(
@@ -66,14 +69,21 @@ class ReaderBase {
       std::unique_ptr<dwio::common::InputStream> stream,
       std::shared_ptr<dwio::common::encryption::DecrypterFactory>
           decryptorFactory = nullptr,
-      std::shared_ptr<BufferedInputFactory> bufferedInputFactory = nullptr,
-      std::shared_ptr<dwio::common::DataCacheConfig> dataCacheConfig = nullptr);
+      std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory =
+          nullptr,
+      uint64_t fileNum = kDefaultFileNum,
+      dwio::common::FileFormat fileFormat = dwio::common::FileFormat::DWRF);
+
+  ReaderBase(
+      memory::MemoryPool& pool,
+      std::unique_ptr<dwio::common::InputStream> stream,
+      dwio::common::FileFormat fileFormat);
 
   // create reader base from metadata
   ReaderBase(
       memory::MemoryPool& pool,
       std::unique_ptr<dwio::common::InputStream> stream,
-      std::unique_ptr<proto::PostScript> ps,
+      std::unique_ptr<PostScript> ps,
       proto::Footer* footer,
       std::unique_ptr<StripeMetadataCache> cache,
       std::unique_ptr<encryption::DecryptionHandler> handler = nullptr)
@@ -84,8 +94,9 @@ class ReaderBase {
         cache_{std::move(cache)},
         handler_{std::move(handler)},
         input_{
-            stream_ ? std::make_unique<BufferedInput>(*stream_, pool_)
-                    : nullptr},
+            stream_
+                ? std::make_unique<dwio::common::BufferedInput>(*stream_, pool_)
+                : nullptr},
         schema_{
             std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
         fileLength_{0},
@@ -110,7 +121,11 @@ class ReaderBase {
     return *stream_;
   }
 
-  const proto::PostScript& getPostScript() const {
+  uint64_t getFileNum() const {
+    return fileNum_;
+  }
+
+  const PostScript& getPostScript() const {
     return *postScript_;
   }
 
@@ -130,13 +145,14 @@ class ReaderBase {
     return schemaWithId_;
   }
 
-  BufferedInput& getBufferedInput() const {
+  dwio::common::BufferedInput& getBufferedInput() const {
     return *input_;
   }
 
-  const BufferedInputFactory& bufferedInputFactory() const {
-    return bufferedInputFactory_ ? *bufferedInputFactory_
-                                 : *BufferedInputFactory::baseFactory();
+  const dwio::common::BufferedInputFactory& bufferedInputFactory() const {
+    return bufferedInputFactory_
+        ? *bufferedInputFactory_
+        : *dwio::common::BufferedInputFactory::baseFactory();
   }
 
   const std::unique_ptr<StripeMetadataCache>& getMetadataCache() const {
@@ -158,22 +174,15 @@ class ReaderBase {
   }
 
   uint64_t getCompressionBlockSize() const {
-    return postScript_->has_compressionblocksize()
-        ? postScript_->compressionblocksize()
-        : DEFAULT_COMPRESSION_BLOCK_SIZE;
+    return postScript_->compressionBlockSize();
   }
 
-  CompressionKind getCompressionKind() const {
-    return postScript_->has_compression()
-        ? static_cast<CompressionKind>(postScript_->compression())
-        : CompressionKind::CompressionKind_NONE;
+  dwio::common::CompressionKind getCompressionKind() const {
+    return postScript_->compression();
   }
 
   WriterVersion getWriterVersion() const {
-    if (!postScript_->has_writerversion()) {
-      return WriterVersion::ORIGINAL;
-    }
-    auto version = postScript_->writerversion();
+    auto version = postScript_->writerVersion();
     return version <= WriterVersion_CURRENT
         ? static_cast<WriterVersion>(version)
         : WriterVersion::FUTURE;
@@ -195,8 +204,8 @@ class ReaderBase {
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
       uint32_t index) const;
 
-  std::unique_ptr<SeekableInputStream> createDecompressedStream(
-      std::unique_ptr<SeekableInputStream> compressed,
+  std::unique_ptr<dwio::common::SeekableInputStream> createDecompressedStream(
+      std::unique_ptr<dwio::common::SeekableInputStream> compressed,
       const std::string& streamDebugInfo,
       const dwio::common::encryption::Decrypter* decrypter = nullptr) const {
     return createDecompressor(
@@ -212,18 +221,18 @@ class ReaderBase {
   std::unique_ptr<T> readProtoFromString(
       const std::string& data,
       const dwio::common::encryption::Decrypter* decrypter = nullptr) const {
-    auto compressed =
-        std::make_unique<SeekableArrayInputStream>(data.data(), data.size());
+    auto compressed = std::make_unique<dwio::common::SeekableArrayInputStream>(
+        data.data(), data.size());
     return ProtoUtils::readProto<T>(createDecompressedStream(
         std::move(compressed), "Protobuf Metadata", decrypter));
   }
 
-  dwio::common::DataCacheConfig* getDataCacheConfig() const {
-    return dataCacheConfig_.get();
-  }
-
   google::protobuf::Arena* arena() const {
     return arena_.get();
+  }
+
+  dwio::common::FileFormat getFileFormat() const {
+    return postScript_->fileFormat();
   }
 
  private:
@@ -234,17 +243,18 @@ class ReaderBase {
   memory::MemoryPool& pool_;
   std::unique_ptr<dwio::common::InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
-  std::unique_ptr<proto::PostScript> postScript_;
+  std::unique_ptr<PostScript> postScript_;
+
   proto::Footer* footer_ = nullptr;
+  uint64_t fileNum_;
   std::unique_ptr<StripeMetadataCache> cache_;
   // Keeps factory alive for possibly async prefetch.
   std::shared_ptr<dwio::common::encryption::DecrypterFactory> decryptorFactory_;
   std::unique_ptr<encryption::DecryptionHandler> handler_;
-  std::shared_ptr<BufferedInputFactory> bufferedInputFactory_;
-  std::shared_ptr<dwio::common::DataCacheConfig> dataCacheConfig_ = nullptr;
+  std::shared_ptr<dwio::common::BufferedInputFactory> bufferedInputFactory_;
 
-  std::unique_ptr<BufferedInput> input_;
-  std::shared_ptr<const RowType> schema_;
+  std::unique_ptr<dwio::common::BufferedInput> input_;
+  RowTypePtr schema_;
   // Lazily populated
   mutable std::shared_ptr<const dwio::common::TypeWithId> schemaWithId_;
   uint64_t fileLength_;

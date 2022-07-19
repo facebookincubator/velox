@@ -34,7 +34,7 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
     ensureRowGroupIndex();
 
     auto positions = toPositions(index_->entry(index));
-    PositionProvider positionsProvider(positions);
+    dwio::common::PositionProvider positionsProvider(positions);
 
     if (flatMapContext_.inMapDecoder) {
       flatMapContext_.inMapDecoder->seekToRowGroup(positionsProvider);
@@ -86,14 +86,15 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   // Fills 'values' from 'data' and 'lengthDecoder'. The count of
   // values is in 'values.numValues'.
   void loadDictionary(
-      SeekableInputStream& data,
-      IntDecoder</*isSigned*/ false>& lengthDecoder,
+      dwio::common::SeekableInputStream& data,
+      dwio::common::IntDecoder</*isSigned*/ false>& lengthDecoder,
       DictionaryValues& values);
   void ensureInitialized();
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> dictIndex_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
-  std::unique_ptr<SeekableInputStream> strideDictStream_;
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> strideDictLengthDecoder_;
+  std::unique_ptr<dwio::common::SeekableInputStream> strideDictStream_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>>
+      strideDictLengthDecoder_;
 
   FlatVectorPtr<StringView> dictionaryValues_;
 
@@ -104,8 +105,8 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   const StrideIndexProvider& provider_;
 
   // lazy load the dictionary
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> lengthDecoder_;
-  std::unique_ptr<SeekableInputStream> blobStream_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
+  std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;
   bool initialized_{false};
 };
 
@@ -163,6 +164,10 @@ void SelectiveStringDictionaryColumnReader::processFilter(
       break;
     case common::FilterKind::kBytesValues:
       readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
+      break;
+    case common::FilterKind::kNegatedBytesValues:
+      readHelper<common::NegatedBytesValues, isDense>(
+          filter, rows, extractValues);
       break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);

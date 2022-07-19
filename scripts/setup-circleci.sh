@@ -16,7 +16,10 @@
 set -efx -o pipefail
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-export CFLAGS="-mavx2 -mfma -mavx -mf16c  -mlzcnt -w -std=c++17"  # Used by LZO.
+SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPTDIR/setup-helper-functions.sh
+CPU_TARGET="${CPU_TARGET:-avx}"
+export CFLAGS=$(get_cxx_flags $CPU_TARGET)  # Used by LZO.
 export CXXFLAGS=$CFLAGS  # Used by boost.
 export CPPFLAGS=$CFLAGS  # Used by LZO.
 
@@ -34,6 +37,7 @@ dnf remove -y gflags
 
 # Required for Thrift
 dnf_install autoconf automake libtool bison flex python3
+
 # install sphinx for doc gen
 pip3 install sphinx sphinx-tabs breathe sphinx_rtd_theme
 
@@ -66,8 +70,11 @@ wget_and_untar https://github.com/google/snappy/archive/1.1.8.tar.gz snappy &
 wget_and_untar https://github.com/facebook/folly/archive/v2022.03.14.00.tar.gz folly &
 wget_and_untar https://github.com/fmtlib/fmt/archive/8.0.0.tar.gz fmt &
 #  wget_and_untar https://github.com/ericniebler/range-v3/archive/0.11.0.tar.gz ranges-v3 &
+wget_and_untar https://archive.apache.org/dist/hadoop/common/hadoop-2.10.1/hadoop-2.10.1.tar.gz hadoop
 
 wait  # For cmake and source downloads to complete.
+
+cp -a hadoop /usr/local/
 
 # Build & install.
 (

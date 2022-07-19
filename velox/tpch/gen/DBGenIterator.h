@@ -26,19 +26,19 @@ namespace facebook::velox::tpch {
 
 /// This class exposes a thread-safe and reproducible iterator over TPC-H
 /// synthetically generated data, backed by DBGEN.
-///
-/// Note that because DBGEN is an old C codebase which relies on global
-/// variables for state, it is not possible to use the underlying functions to
-/// generate datasets in parallel. This class provides thread-safety by ensuring
-/// mutual exclusion (via mutex) when using iterators to generate data in
-/// parallel. This class follows RAII, so the internal lock will be held for as
-/// long as instances are in scope.
 class DBGenIterator {
  public:
-  // Use this function to create instances of DBGEN iterators. This call might
-  // block in case other iterators are still in scope (and thus hold the
-  // internal lock).
-  static DBGenIterator create(size_t scaleFactor);
+  explicit DBGenIterator(size_t scaleFactor);
+
+  // Before generating records using the gen*() functions below, call the
+  // appropriate init*() function to correctly initialize the seed given the
+  // offset to be generated.
+  void initNation(size_t offset);
+  void initRegion(size_t offset);
+  void initOrder(size_t offset);
+  void initSupplier(size_t offset);
+  void initPart(size_t offset);
+  void initCustomer(size_t offset);
 
   // Generate different types of records.
   void genNation(size_t index, code_t& code);
@@ -48,13 +48,7 @@ class DBGenIterator {
   void genPart(size_t index, part_t& part);
   void genCustomer(size_t index, customer_t& customer);
 
- private:
-  // Should not instantiate directly.
-  explicit DBGenIterator(std::unique_lock<std::mutex>&& lease)
-      : lockGuard_(std::move(lease)) {}
-
-  // unique_lock instead of lock_guard so it's movable.
-  std::unique_lock<std::mutex> lockGuard_;
+  DBGenContext dbgenCtx_;
 };
 
 } // namespace facebook::velox::tpch

@@ -19,11 +19,9 @@
 #include <iterator>
 #include <limits>
 
-#include <gtest/gtest_prod.h>
-
+#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
-#include "velox/dwio/dwrf/proto/dwrf_proto.pb.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/LayoutPlanner.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
@@ -65,8 +63,8 @@ class EncodingIter {
 
   void next();
 
-  FRIEND_TEST(TestEncodingIter, Ctor);
-  FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
+  VELOX_FRIEND_TEST(TestEncodingIter, Ctor);
+  VELOX_FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
   bool emptyEncryptionGroups() const;
 
   const proto::StripeFooter& footer_;

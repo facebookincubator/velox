@@ -14,15 +14,19 @@
 # limitations under the License.
 
 set -efx -o pipefail
+
 # Some of the packages must be build with the same compiler flags
 # so that some low level types are the same size. Also, disable warnings.
-export CFLAGS="-mavx2 -mfma -mavx -mf16c -masm=intel -mlzcnt -std=c++17"
+
+SCRIPTDIR=$(dirname "${BASH_SOURCE[0]}")
+source $SCRIPTDIR/setup-helper-functions.sh
+CPU_TARGET="${CPU_TARGET:-avx}"
+export CFLAGS=$(get_cxx_flags $CPU_TARGET)
 export CXXFLAGS=$CFLAGS  # Used by boost.
 
 yum -y install ccache
 yum -y install ninja-build
 yum -y install git
-yum -y install openssl-devel
 yum -y install double-conversion-devel
 yum -y install glog-devel
 yum -y install bzip2-devel
@@ -37,6 +41,10 @@ yum -y install lzo-devel
 yum -y install wget
 yum -y install python3-devel.x86_64
 yum -y install fmt-devel
+yum -y install perl-core
+yum -y install pcre-devel
+yum -y install zlib-devel
+yum -y install flex
 
 #Install conda
 rpm --import https://repo.anaconda.com/pkgs/misc/gpgkeys/anaconda.asc
@@ -63,14 +71,21 @@ function wget_and_untar {
   local URL=$1
   local DIR=$2
   mkdir -p "${DIR}"
-  wget -q --max-redirect 3 -O - "${URL}" | tar -xz -C "${DIR}" --strip-components=1
+  wget --no-check-certificate -q --max-redirect 3 -O - "${URL}" | tar -xz -C "${DIR}" --strip-components=1
 }
 
-
+wget_and_untar https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz gflags
+wget_and_untar https://ftp.openssl.org/source/openssl-1.1.1k.tar.gz openssl &
 wget_and_untar https://boostorg.jfrog.io/artifactory/main/release/1.69.0/source/boost_1_69_0.tar.gz boost &
 wget_and_untar https://github.com/facebook/folly/archive/v2022.03.14.00.tar.gz folly &
 
 wait
+
+(
+  cd openssl
+  ./config --prefix=/usr --openssldir=/etc/ssl --libdir=lib no-shared zlib-dynamic
+  make install
+)
 
 (
   cd boost
@@ -81,4 +96,5 @@ wait
 
 # Folly fails to build in release-mode due
 # AtomicUtil-inl.h:202: Error: operand type mismatch for `bts'
-cmake_install folly -DCMAKE_BUILD_TYPE=Debug
+cmake_install gflags -DBUILD_SHARED_LIBS=ON
+cmake_install folly

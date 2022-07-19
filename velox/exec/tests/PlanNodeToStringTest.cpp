@@ -32,11 +32,10 @@ class PlanNodeToStringTest : public testing::Test, public test::VectorTestBase {
   PlanNodeToStringTest() {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
-    data_ = makeRowVector({
-        makeFlatVector<int16_t>({0, 1, 2, 3, 4}),
-        makeFlatVector<int32_t>({0, 1, 2, 3, 4}),
-        makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
-    });
+    data_ = makeRowVector(
+        {makeFlatVector<int16_t>({0, 1, 2, 3, 4}),
+         makeFlatVector<int32_t>({0, 1, 2, 3, 4}),
+         makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
 
     plan_ = PlanBuilder()
                 .values({data_})
@@ -48,7 +47,7 @@ class PlanNodeToStringTest : public testing::Test, public test::VectorTestBase {
   }
 
   RowVectorPtr data_;
-  std::shared_ptr<core::PlanNode> plan_;
+  core::PlanNodePtr plan_;
 };
 
 TEST_F(PlanNodeToStringTest, basic) {
@@ -168,6 +167,26 @@ TEST_F(PlanNodeToStringTest, aggregation) {
   ASSERT_EQ("-- Aggregation\n", plan->toString());
   ASSERT_EQ(
       "-- Aggregation[SINGLE [c0] a := sum(ROW[\"c1\"]), b := avg(ROW[\"c2\"])] -> c0:SMALLINT, a:BIGINT, b:DOUBLE\n",
+      plan->toString(true, false));
+}
+
+TEST_F(PlanNodeToStringTest, groupId) {
+  auto plan = PlanBuilder()
+                  .values({data_})
+                  .groupId({{"c0"}, {"c1"}}, {"c2"})
+                  .planNode();
+  ASSERT_EQ("-- GroupId\n", plan->toString());
+  ASSERT_EQ(
+      "-- GroupId[[c0], [c1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, group_id:BIGINT\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values({data_})
+             .groupId({{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
+             .planNode();
+  ASSERT_EQ("-- GroupId\n", plan->toString());
+  ASSERT_EQ(
+      "-- GroupId[[c0, c1], [c1]] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT, gid:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -364,19 +383,14 @@ TEST_F(PlanNodeToStringTest, unnest) {
 }
 
 TEST_F(PlanNodeToStringTest, localPartition) {
-  auto plan =
-      PlanBuilder()
-          .localPartition({"c0"}, {PlanBuilder().values({data_}).planNode()})
-          .planNode();
+  auto plan = PlanBuilder().values({data_}).localPartition({"c0"}).planNode();
 
   ASSERT_EQ("-- LocalPartition\n", plan->toString());
   ASSERT_EQ(
       "-- LocalPartition[REPARTITION] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder()
-             .localPartition({}, {PlanBuilder().values({data_}).planNode()})
-             .planNode();
+  plan = PlanBuilder().values({data_}).localPartition({}).planNode();
 
   ASSERT_EQ("-- LocalPartition\n", plan->toString());
   ASSERT_EQ(

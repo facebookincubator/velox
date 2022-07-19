@@ -17,8 +17,8 @@
 #pragma once
 
 #include <google/protobuf/wire_format_lite.h>
+#include "velox/dwio/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
-#include "velox/dwio/dwrf/common/IntCodecCommon.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 #include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
@@ -40,11 +40,14 @@ class MockStripeStreams : public StripeStreams {
  public:
   MockStripeStreams() : scopedPool_{memory::getDefaultScopedMemoryPool()} {};
   ~MockStripeStreams() = default;
-  std::unique_ptr<SeekableInputStream> getStream(
-      const StreamIdentifier& si,
+
+  std::unique_ptr<dwio::common::SeekableInputStream> getStream(
+      const DwrfStreamIdentifier& si,
       bool throwIfNotFound) const override {
-    return std::unique_ptr<SeekableInputStream>(getStreamProxy(
-        si.node, static_cast<proto::Stream_Kind>(si.kind), throwIfNotFound));
+    return std::unique_ptr<dwio::common::SeekableInputStream>(getStreamProxy(
+        si.encodingKey().node,
+        static_cast<proto::Stream_Kind>(si.kind()),
+        throwIfNotFound));
   }
 
   std::function<BufferPtr()> getIntDictionaryInitializerForNode(
@@ -64,6 +67,10 @@ class MockStripeStreams : public StripeStreams {
     return *getEncodingProxy(ek.node);
   }
 
+  virtual dwio::common::FileFormat getFormat() const override {
+    return dwio::common::FileFormat::DWRF;
+  }
+
   MOCK_METHOD2(
       genMockDictDataSetter,
       std::function<void(BufferPtr&, MemoryPool*)>(uint32_t, uint32_t));
@@ -76,7 +83,7 @@ class MockStripeStreams : public StripeStreams {
       uint32_t(uint32_t, std::function<void(const StreamInformation&)>));
   MOCK_CONST_METHOD3(
       getStreamProxy,
-      SeekableInputStream*(uint32_t, proto::Stream_Kind, bool));
+      dwio::common::SeekableInputStream*(uint32_t, proto::Stream_Kind, bool));
   MOCK_CONST_METHOD0(getStrideIndexProviderProxy, StrideIndexProvider*());
   MOCK_CONST_METHOD0(getColumnSelectorProxy, dwio::common::ColumnSelector*());
   MOCK_CONST_METHOD0(
@@ -92,7 +99,7 @@ class MockStripeStreams : public StripeStreams {
     return ptr ? *ptr : options_;
   }
 
-  bool getUseVInts(const StreamIdentifier& streamId) const override {
+  bool getUseVInts(const DwrfStreamIdentifier& /* streamId */) const override {
     return true; // current tests all expect results from using vints
   }
 
@@ -124,11 +131,12 @@ inline int64_t zigZagDecode(uint64_t val) {
 
 inline size_t writeVuLong(char* buffer, size_t pos, uint64_t val) {
   while (true) {
-    if ((val & ~BASE_128_MASK) == 0) {
+    if ((val & ~dwio::common::BASE_128_MASK) == 0) {
       buffer[pos++] = static_cast<char>(val);
       return pos;
     } else {
-      buffer[pos++] = static_cast<char>((val & BASE_128_MASK) | 0x80);
+      buffer[pos++] =
+          static_cast<char>((val & dwio::common::BASE_128_MASK) | 0x80);
       val >>= 7;
     }
   }

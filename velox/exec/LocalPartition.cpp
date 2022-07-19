@@ -21,7 +21,7 @@ namespace facebook::velox::exec {
 namespace {
 void notify(std::vector<ContinuePromise>& promises) {
   for (auto& promise : promises) {
-    promise.setValue(true);
+    promise.setValue();
   }
 }
 } // namespace
@@ -276,8 +276,9 @@ LocalPartition::LocalPartition(
           numPartitions_ == 1
               ? nullptr
               : planNode->partitionFunctionFactory()(numPartitions_)),
-      outputChannels_{calculateOutputChannels(
-          planNode->inputType(),
+      sourceOutputChannels_{calculateOutputChannels(
+          planNode->sources()[0]->outputType(),
+          planNode->inputTypeFromSource(),
           planNode->outputType())},
       blockingReasons_{numPartitions_} {
   VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
@@ -288,7 +289,7 @@ LocalPartition::LocalPartition(
 
   futures_.reserve(numPartitions_);
   for (auto i = 0; i < numPartitions_; i++) {
-    futures_.emplace_back(false);
+    futures_.emplace_back();
   }
 }
 
@@ -330,16 +331,16 @@ wrapChildren(const RowVectorPtr& input, vector_size_t size, BufferPtr indices) {
 } // namespace
 
 BlockingReason LocalPartition::enqueue(
-    int32_t source,
+    int32_t partition,
     RowVectorPtr data,
     ContinueFuture* future) {
   RowVectorPtr projectedData;
-  if (outputChannels_.empty() && outputType_->size() > 0) {
+  if (sourceOutputChannels_.empty() && outputType_->size() > 0) {
     projectedData = std::move(data);
   } else {
     std::vector<VectorPtr> outputColumns;
-    outputColumns.reserve(outputChannels_.size());
-    for (const auto& i : outputChannels_) {
+    outputColumns.reserve(sourceOutputChannels_.size());
+    for (const auto& i : sourceOutputChannels_) {
       outputColumns.push_back(data->childAt(i));
     }
 
@@ -347,7 +348,7 @@ BlockingReason LocalPartition::enqueue(
         data->pool(), outputType_, nullptr, data->size(), outputColumns);
   }
 
-  return queues_[source]->enqueue(projectedData, future);
+  return queues_[partition]->enqueue(projectedData, future);
 }
 
 void LocalPartition::addInput(RowVectorPtr input) {
@@ -390,7 +391,7 @@ void LocalPartition::addInput(RowVectorPtr input) {
       auto partitionData =
           wrapChildren(input_, partitionSize, std::move(indexBuffers[i]));
 
-      ContinueFuture future{false};
+      ContinueFuture future;
       auto reason = enqueue(i, partitionData, &future);
       if (reason != BlockingReason::kNotBlocked) {
         blockingReasons_[numBlockedPartitions_] = reason;

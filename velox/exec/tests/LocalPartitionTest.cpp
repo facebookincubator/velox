@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -132,19 +133,13 @@ TEST_F(LocalPartitionTest, gather) {
            .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
            .planNode();
 
-  int32_t fileIndex = 0;
-  task = ::assertQuery(
-      op,
-      [&](exec::Task* task) {
-        while (fileIndex < filePaths.size()) {
-          auto planNodeId = scanNodeIds[fileIndex];
-          addSplit(task, planNodeId, makeHiveSplit(filePaths[fileIndex]->path));
-          task->noMoreSplits(planNodeId);
-          ++fileIndex;
-        }
-      },
-      "SELECT 300, -71, 152",
-      duckDbQueryRunner_);
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  for (auto i = 0; i < filePaths.size(); ++i) {
+    queryBuilder.split(
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+  }
+
+  task = queryBuilder.assertResults("SELECT 300, -71, 152");
   verifyExchangeSourceOperatorStats(task, 300);
 }
 
@@ -183,23 +178,15 @@ TEST_F(LocalPartitionTest, partition) {
 
   createDuckDbTable(vectors);
 
-  CursorParameters params;
-  params.planNode = op;
-  params.maxDrivers = 2;
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  queryBuilder.maxDrivers(2);
+  for (auto i = 0; i < filePaths.size(); ++i) {
+    queryBuilder.split(
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+  }
 
-  uint32_t fileIndex = 0;
-  auto task = ::assertQuery(
-      params,
-      [&](exec::Task* task) {
-        while (fileIndex < filePaths.size()) {
-          auto planNodeId = scanNodeIds[fileIndex];
-          addSplit(task, planNodeId, makeHiveSplit(filePaths[fileIndex]->path));
-          task->noMoreSplits(planNodeId);
-          ++fileIndex;
-        }
-      },
-      "SELECT c0, count(1) FROM tmp GROUP BY 1",
-      duckDbQueryRunner_);
+  auto task =
+      queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
   verifyExchangeSourceOperatorStats(task, 300);
 }
 
@@ -230,20 +217,10 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
                 .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
                 .planNode();
 
-  CursorParameters params;
-  params.planNode = op;
-  params.queryCtx = core::QueryCtx::createForTest();
+  auto task = AssertQueryBuilder(op, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
+                  .assertResults("SELECT 2100, -71, 228");
 
-  // Set an artificially low buffer size limit to trigger blocking behavior.
-  params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryConfig::kMaxLocalExchangeBufferSize, "100"},
-  });
-
-  auto task = ::assertQuery(
-      params,
-      [&](exec::Task* /*task*/) {},
-      "SELECT 2100, -71, 228",
-      duckDbQueryRunner_);
   verifyExchangeSourceOperatorStats(task, 2100);
 }
 
@@ -281,44 +258,24 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
                 .partialAggregation({"c0"}, {"count(1)"})
                 .planNode();
 
-  CursorParameters params;
-  params.planNode = op;
-  params.maxDrivers = 2;
-  params.queryCtx = core::QueryCtx::createForTest();
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  queryBuilder.maxDrivers(2);
+  for (auto i = 0; i < filePaths.size(); ++i) {
+    queryBuilder.split(
+        scanNodeIds[i % 3], makeHiveConnectorSplit(filePaths[i]->path));
+  }
 
   // Set an artificially low buffer size limit to trigger blocking behavior.
-  params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryConfig::kMaxLocalExchangeBufferSize, "100"},
-  });
+  queryBuilder.config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100");
 
-  uint32_t fileIndex = 0;
-  auto addSplits = [&](exec::Task* task) {
-    while (fileIndex < filePaths.size()) {
-      auto planNodeId = scanNodeIds[fileIndex % 3];
-      addSplit(task, planNodeId, makeHiveSplit(filePaths[fileIndex]->path));
-      task->noMoreSplits(planNodeId);
-      ++fileIndex;
-    }
-  };
-
-  auto task = ::assertQuery(
-      params,
-      addSplits,
-      "SELECT c0, count(1) FROM tmp GROUP BY 1",
-      duckDbQueryRunner_);
+  auto task =
+      queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
   verifyExchangeSourceOperatorStats(task, 2100);
 
   // Re-run with higher memory limit (enough to hold ~10 vectors at a time).
-  params.queryCtx->setConfigOverridesUnsafe({
-      {core::QueryConfig::kMaxLocalExchangeBufferSize, "10240"},
-  });
+  queryBuilder.config(core::QueryConfig::kMaxLocalExchangeBufferSize, "10240");
 
-  fileIndex = 0;
-  task = ::assertQuery(
-      params,
-      addSplits,
-      "SELECT c0, count(1) FROM tmp GROUP BY 1",
-      duckDbQueryRunner_);
+  task = queryBuilder.assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
   verifyExchangeSourceOperatorStats(task, 2100);
 }
 
@@ -416,60 +373,61 @@ TEST_F(LocalPartitionTest, outputLayoutPartition) {
     return PlanBuilder(planNodeIdGenerator).values({vectors[index]}).planNode();
   };
 
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {"c0"},
-              {
-                  valuesNode(0),
-                  valuesNode(1),
-                  valuesNode(2),
-              },
-              // Change column order: (c0, c1) -> (c1, c0).
-              {"c1", "c0"})
-          .partialAggregation({}, {"count(1)", "min(c0)", "max(c1)"})
-          .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .localPartition(
+                      {"c0"},
+                      {
+                          valuesNode(0),
+                          valuesNode(1),
+                          valuesNode(2),
+                      },
+                      // Change column order: (c0, c1) -> (c1, c0).
+                      {"c1", "c0"})
+                  .partialAggregation({}, {"count(1)", "min(c0)", "max(c1)"})
+                  .planNode();
 
-  auto task = OperatorTestBase::assertQuery(
-      params, "VALUES (146, -71, 123), (154, -70, 123)");
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .maxDrivers(2)
+                  .assertResults("VALUES (146, -71, 123), (154, -70, 123)");
+
   verifyExchangeSourceOperatorStats(task, 300);
 
   planNodeIdGenerator->reset();
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {"c0"},
-              {
-                  valuesNode(0),
-                  valuesNode(1),
-                  valuesNode(2),
-              },
-              // Drop column: (c0, c1) -> (c1).
-              {"c1"})
-          .partialAggregation({}, {"count(1)", "min(c1)", "max(c1)"})
-          .planNode();
+  plan = PlanBuilder(planNodeIdGenerator)
+             .localPartition(
+                 {"c0"},
+                 {
+                     valuesNode(0),
+                     valuesNode(1),
+                     valuesNode(2),
+                 },
+                 // Drop column: (c0, c1) -> (c1).
+                 {"c1"})
+             .partialAggregation({}, {"count(1)", "min(c1)", "max(c1)"})
+             .planNode();
 
-  task = OperatorTestBase::assertQuery(
-      params, "VALUES (146, 123, 123), (154, 123, 123)");
+  task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+             .maxDrivers(2)
+             .assertResults("VALUES (146, 123, 123), (154, 123, 123)");
   verifyExchangeSourceOperatorStats(task, 300);
 
   planNodeIdGenerator->reset();
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .localPartition(
-                            {"c0"},
-                            {
-                                valuesNode(0),
-                                valuesNode(1),
-                                valuesNode(2),
-                            },
-                            // Drop all columns.
-                            {})
-                        .partialAggregation({}, {"count(1)"})
-                        .planNode();
+  plan = PlanBuilder(planNodeIdGenerator)
+             .localPartition(
+                 {"c0"},
+                 {
+                     valuesNode(0),
+                     valuesNode(1),
+                     valuesNode(2),
+                 },
+                 // Drop all columns.
+                 {})
+             .partialAggregation({}, {"count(1)"})
+             .planNode();
 
-  task = OperatorTestBase::assertQuery(params, "VALUES (146), (154)");
+  task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+             .maxDrivers(2)
+             .assertResults("VALUES (146), (154)");
   verifyExchangeSourceOperatorStats(task, 300);
 }
 
@@ -524,25 +482,16 @@ TEST_F(LocalPartitionTest, multipleExchanges) {
 
   createDuckDbTable(vectors);
 
-  CursorParameters params;
-  params.planNode = op;
-  params.maxDrivers = 2;
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  for (auto i = 0; i < filePaths.size(); ++i) {
+    queryBuilder.split(
+        scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->path));
+  }
 
-  uint32_t fileIndex = 0;
-  auto task = ::assertQuery(
-      params,
-      [&](exec::Task* task) {
-        while (fileIndex < filePaths.size()) {
-          auto planNodeId = scanNodeIds[fileIndex];
-          addSplit(task, planNodeId, makeHiveSplit(filePaths[fileIndex]->path));
-          task->noMoreSplits(planNodeId);
-          ++fileIndex;
-        }
-      },
+  queryBuilder.maxDrivers(2).assertResults(
       "SELECT c0, count(1), sum(cnt) FROM ("
       "   SELECT c0, c1, count(1) as cnt FROM tmp GROUP BY 1, 2"
-      ") t GROUP BY 1",
-      duckDbQueryRunner_);
+      ") t GROUP BY 1");
 }
 
 TEST_F(LocalPartitionTest, earlyCompletion) {
@@ -588,7 +537,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
 
   CursorParameters params;
   params.planNode = plan;
-  // Make sure results are queued one batch a a time.
+  // Make sure results are queued one batch at a time.
   params.bufferedBytes = 100;
 
   auto cursor = std::make_unique<TaskCursor>(params);
@@ -654,4 +603,56 @@ TEST_F(LocalPartitionTest, producerError) {
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
   assertTaskReferenceCount(task, 1);
+}
+
+TEST_F(LocalPartitionTest, unionAll) {
+  auto data1 = makeRowVector(
+      {"d0", "d1"},
+      {makeFlatVector<int32_t>({10, 11}),
+       makeFlatVector<StringView>({"x", "y"})});
+  auto data2 = makeRowVector(
+      {"e0", "e1"},
+      {makeFlatVector<int32_t>({20, 21}),
+       makeFlatVector<StringView>({"z", "w"})});
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  // For the partition node, use the 1st source's names to define the output
+  // layout and rename the output columns to be different from the sources'.
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartition(
+              {},
+              {PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+               PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+              {"d0 AS c0", "d1 AS c1"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "WITH T1 AS (VALUES (10, 'x'), (11, 'y')), "
+      "T2 AS (VALUES (20, 'z'), (21, 'w')) "
+      "SELECT * FROM T1 UNION ALL SELECT * FROM T2; ");
+}
+
+// Test that LocalExchange returns the data with the proper output type.
+TEST_F(LocalPartitionTest, unionAllLocalExchange) {
+  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
+  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .localPartitionRoundRobin(
+              {PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
+               PlanBuilder(planNodeIdGenerator).values({data2}).planNode()},
+              {"d0 AS g0"})
+          .project({"length(g0)"})
+          .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT length(c0) from ("
+      "SELECT * from (VALUES ('x')) as T1 (c0) UNION ALL "
+      "SELECT * from (VALUES ('y')) as T2 (c0)"
+      ");");
 }

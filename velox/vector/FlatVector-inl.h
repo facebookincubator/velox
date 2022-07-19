@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <immintrin.h>
-
 #include <folly/hash/Hash.h>
 
 #include <velox/vector/BaseVector.h>
@@ -160,7 +158,7 @@ void FlatVector<T>::copyValuesAndNulls(
     mutableRawValues();
   }
 
-  if (source->encoding() == VectorEncoding::Simple::FLAT) {
+  if (source->isFlatEncoding()) {
     auto flat = source->asUnchecked<FlatVector<T>>();
     auto* sourceValues =
         source->typeKind() != TypeKind::UNKNOWN ? flat->rawValues() : nullptr;
@@ -179,7 +177,7 @@ void FlatVector<T>::copyValuesAndNulls(
       }
     } else {
       VELOX_CHECK_GE(source->size(), rows.end());
-      while (iter.next(row)) {
+      rows.applyToSelected([&](vector_size_t row) {
         if (sourceValues) {
           rawValues_[row] = sourceValues[row];
         }
@@ -187,7 +185,7 @@ void FlatVector<T>::copyValuesAndNulls(
           bits::setNull(
               rawNulls, row, sourceNulls && bits::isBitNull(sourceNulls, row));
         }
-      }
+      });
     }
   } else if (source->isConstantEncoding()) {
     if (source->isNullAt(0)) {
@@ -196,12 +194,8 @@ void FlatVector<T>::copyValuesAndNulls(
     }
     auto constant = source->asUnchecked<ConstantVector<T>>();
     T value = constant->valueAt(0);
-    while (iter.next(row)) {
-      rawValues_[row] = value;
-    }
-    if (rawNulls) {
-      bits::orBits(rawNulls, rows.asRange().bits(), rows.begin(), rows.end());
-    }
+    rows.applyToSelected([&](int32_t row) { rawValues_[row] = value; });
+    rows.clearNulls(rawNulls);
   } else {
     auto sourceVector = source->typeKind() != TypeKind::UNKNOWN
         ? source->asUnchecked<SimpleVector<T>>()
@@ -245,7 +239,7 @@ void FlatVector<T>::copyValuesAndNulls(
     mutableRawValues();
   }
 
-  if (source->encoding() == VectorEncoding::Simple::FLAT) {
+  if (source->isFlatEncoding()) {
     auto flat = source->asUnchecked<FlatVector<T>>();
     if (!flat->values() || flat->values()->size() == 0) {
       // The vector must have all-null values.
@@ -337,8 +331,14 @@ template <typename T>
 void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
   auto newSize = std::max<vector_size_t>(rows.size(), BaseVector::length_);
   if (values_ && !values_->unique()) {
-    BufferPtr newValues =
-        AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
+    BufferPtr newValues;
+    if constexpr (std::is_same<T, StringView>::value) {
+      // Make sure to initialize StringView values so they can be safely
+      // accessed.
+      newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_, T());
+    } else {
+      newValues = AlignedBuffer::allocate<T>(newSize, BaseVector::pool_);
+    }
 
     auto rawNewValues = newValues->asMutable<T>();
     SelectivityVector rowsToCopy(BaseVector::length_);
@@ -346,7 +346,10 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
     rowsToCopy.applyToSelected(
         [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
 
-    // string buffers are append only, hence, safe to share
+    // Keep the string buffers even if multiply referenced. These are
+    // append-only and are written to in FlatVector::set which calls
+    // getBufferWithSpace which allocates a new buffer if existing buffers
+    // are multiply-referenced.
 
     // TODO Optimization: check and remove string buffers not referenced by
     // rowsToCopy
@@ -367,24 +370,6 @@ void FlatVector<T>::prepareForReuse() {
   if (values_ && !(values_->unique() && values_->isMutable())) {
     values_ = nullptr;
     rawValues_ = nullptr;
-  }
-
-  // Check string buffers. Keep at most one singly-referenced buffer if it is
-  // not too large.
-  if (!stringBuffers_.empty()) {
-    auto& firstBuffer = stringBuffers_.front();
-    if (firstBuffer->unique() && firstBuffer->isMutable() &&
-        firstBuffer->capacity() <= kMaxStringSizeForReuse) {
-      firstBuffer->setSize(0);
-      stringBuffers_.resize(1);
-    } else {
-      stringBuffers_.clear();
-    }
-  }
-
-  // Clear ASCII-ness.
-  if constexpr (std::is_same_v<T, StringView>) {
-    SimpleVector<StringView>::invalidateIsAscii();
   }
 }
 } // namespace velox

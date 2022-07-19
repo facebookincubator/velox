@@ -41,6 +41,9 @@ static void workAroundRegistrationMacro(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
+  // Spark and Presto map_filter function has the same definition:
+  //   function expression corresponds to body, arguments to signature
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
   // Complex types.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
@@ -104,6 +107,7 @@ void registerFunctions(const std::string& prefix) {
       prefix + "hash", hashSignatures(), makeHash);
   exec::registerStatefulVectorFunction(
       prefix + "murmur3hash", hashSignatures(), makeHash);
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
 
   // Register 'in' functions.
   registerIn(prefix);

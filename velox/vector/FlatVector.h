@@ -93,6 +93,7 @@ class FlatVector final : public SimpleVector<T> {
       : SimpleVector<T>(
             pool,
             type,
+            VectorEncoding::Simple::FLAT,
             std::move(nulls),
             length,
             stats,
@@ -128,10 +129,6 @@ class FlatVector final : public SimpleVector<T> {
 
   virtual ~FlatVector() override = default;
 
-  inline VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::FLAT;
-  }
-
   const T valueAtFast(vector_size_t idx) const;
 
   const T valueAt(vector_size_t idx) const override {
@@ -149,7 +146,7 @@ class FlatVector final : public SimpleVector<T> {
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
-  // dictionary vector makes internal use here for SIMD functions
+  // dictionary vector makes internal usehere for SIMD functions
   template <typename X>
   friend class DictionaryVector;
 
@@ -190,6 +187,11 @@ class FlatVector final : public SimpleVector<T> {
 
   const void* valuesAsVoid() const override {
     return rawValues_;
+  }
+
+  bool isRecyclable() const final {
+    return (!BaseVector::nulls_ || BaseVector::nulls_->unique()) &&
+        (values_ && values_->unique());
   }
 
   template <typename As>
@@ -260,7 +262,7 @@ class FlatVector final : public SimpleVector<T> {
       vector_size_t index,
       vector_size_t otherIndex,
       CompareFlags flags) const override {
-    if (other->encoding() == VectorEncoding::Simple::FLAT) {
+    if (other->isFlatEncoding()) {
       auto otherFlat = other->asUnchecked<FlatVector<T>>();
       bool otherNull = otherFlat->isNullAt(otherIndex);
       bool isNull = BaseVector::isNullAt(index);
@@ -399,6 +401,9 @@ void FlatVector<bool>::copyValuesAndNulls(
 
 template <>
 Buffer* FlatVector<StringView>::getBufferWithSpace(vector_size_t size);
+
+template <>
+void FlatVector<StringView>::prepareForReuse();
 
 template <typename T>
 using FlatVectorPtr = std::shared_ptr<FlatVector<T>>;

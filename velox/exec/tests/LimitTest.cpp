@@ -71,24 +71,19 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   auto file = TempFilePath::create();
   writeToFile(file->path, {data});
 
-  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId;
 
   CursorParameters params;
-  params.planNode =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {},
-              {PlanBuilder(planNodeIdGenerator)
-                   .tableScan(
-                       std::dynamic_pointer_cast<const RowType>(data->type()))
-                   .capturePlanNodeId(scanNodeId)
-                   .planNode()})
-          .limit(0, 20, true)
-          .planNode();
+  params.planNode = PlanBuilder()
+                        .tableScan(asRowType(data->type()))
+                        .capturePlanNodeId(scanNodeId)
+                        .localPartition({})
+                        .limit(0, 20, true)
+                        .planNode();
 
   TaskCursor cursor(params);
-  addSplit(cursor.task().get(), scanNodeId, makeHiveSplit(file->path));
+  cursor.task()->addSplit(
+      scanNodeId, exec::Split(makeHiveConnectorSplit(file->path)));
 
   int32_t numRead = 0;
   while (cursor.moveNext()) {

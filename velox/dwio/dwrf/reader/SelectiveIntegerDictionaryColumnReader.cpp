@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 using namespace dwio::common;
@@ -25,7 +26,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
     StripeStreams& stripe,
     common::ScanSpec* scanSpec,
     uint32_t numBytes)
-    : SelectiveColumnReader(
+    : SelectiveIntegerColumnReader(
           std::move(requestedType),
           stripe,
           scanSpec,
@@ -36,7 +37,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
   rleVersion_ = convertRleVersion(encoding.kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
-  dataReader_ = IntDecoder</* isSigned = */ false>::createRle(
+  dataReader_ = createRleDecoder</* isSigned = */ false>(
       stripe.getStream(data, true),
       rleVersion_,
       memoryPool_,
@@ -57,7 +58,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
 }
 
 uint64_t SelectiveIntegerDictionaryColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   dataReader_->skip(numValues);
   if (inDictionaryReader_) {
     inDictionaryReader_->skip(numValues);
@@ -96,30 +97,7 @@ void SelectiveIntegerDictionaryColumnReader::read(
 
   // lazy load dictionary only when it's needed
   ensureInitialized();
-
-  bool isDense = rows.back() == rows.size() - 1;
-  common::Filter* filter = scanSpec_->filter();
-  if (scanSpec_->keepValues()) {
-    if (scanSpec_->valueHook()) {
-      if (isDense) {
-        processValueHook<true>(rows, scanSpec_->valueHook());
-      } else {
-        processValueHook<false>(rows, scanSpec_->valueHook());
-      }
-      return;
-    }
-    if (isDense) {
-      processFilter<true>(filter, ExtractToReader(this), rows);
-    } else {
-      processFilter<false>(filter, ExtractToReader(this), rows);
-    }
-  } else {
-    if (isDense) {
-      processFilter<true>(filter, DropValues(), rows);
-    } else {
-      processFilter<false>(filter, DropValues(), rows);
-    }
-  }
+  readCommon<SelectiveIntegerDictionaryColumnReader>(rows);
 }
 
 void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {

@@ -51,13 +51,15 @@ class QueryCtx : public Context {
           connectorConfigs = {},
       memory::MappedMemory* FOLLY_NONNULL mappedMemory =
           memory::MappedMemory::getInstance(),
-      std::unique_ptr<memory::MemoryPool> pool = nullptr)
+      std::unique_ptr<memory::MemoryPool> pool = nullptr,
+      std::shared_ptr<folly::Executor> spillExecutor = nullptr)
       : Context{ContextScope::QUERY},
         pool_(std::move(pool)),
         mappedMemory_(mappedMemory),
         connectorConfigs_(connectorConfigs),
         executor_{std::move(executor)},
-        config_{this} {
+        config_{this},
+        spillExecutor_(std::move(spillExecutor)) {
     setConfigOverrides(config);
     if (!pool_) {
       initPool();
@@ -118,22 +120,16 @@ class QueryCtx : public Context {
     return it->second.get();
   }
 
-  // Multiple logical servers (hosts) can be colocated in one
-  // process. This returns the logical host on behalf of which the
-  // Task referencing this is running. This is used as a key to select
-  // the appropriate host-level singleton resource for different
-  // purposes, e.g. memory or outgoing exchange buffers.
-  std::string host() const {
-    static std::string local = "local";
-    return get<std::string>("host", local);
-  }
-
   // Overrides the previous configuration. Note that this function is NOT
   // thread-safe and should probably only be used in tests.
   void setConfigOverridesUnsafe(
       std::unordered_map<std::string, std::string>&& configOverrides) {
     setConfigOverrides(
         std::make_shared<const MemConfig>(std::move(configOverrides)));
+  }
+
+  folly::Executor* FOLLY_NULLABLE spillExecutor() const {
+    return spillExecutor_.get();
   }
 
  private:
@@ -160,6 +156,7 @@ class QueryCtx : public Context {
   std::shared_ptr<folly::Executor> executor_;
   folly::Executor::KeepAlive<> executorKeepalive_;
   QueryConfig config_;
+  std::shared_ptr<folly::Executor> spillExecutor_;
 };
 
 // Represents the state of one thread of query execution.
@@ -178,9 +175,9 @@ class ExecCtx : public Context {
     return queryCtx_;
   }
 
-  /// Returns a SelectivityVector from a pool. Allocates new one if none is
-  /// available. Make sure to call 'releaseSelectivityVector' when done using
-  /// the vector to allow for reuse.
+  /// Returns an uninitialized  SelectivityVector from a pool. Allocates new one
+  /// if none is available. Make sure to call 'releaseSelectivityVector' when
+  /// done using the vector to allow for reuse.
   ///
   /// Prefer using LocalSelectivityVector which takes care of returning the
   /// vector to the pool on destruction.
@@ -191,6 +188,18 @@ class ExecCtx : public Context {
     auto vector = std::move(selectivityVectorPool_.back());
     selectivityVectorPool_.pop_back();
     vector->resize(size);
+    return vector;
+  }
+
+  // Returns an arbitrary SelectivityVector with undefined
+  // content. The caller is responsible for setting the size and
+  // assigning the contents.
+  std::unique_ptr<SelectivityVector> getSelectivityVector() {
+    if (selectivityVectorPool_.empty()) {
+      return std::make_unique<SelectivityVector>();
+    }
+    auto vector = std::move(selectivityVectorPool_.back());
+    selectivityVectorPool_.pop_back();
     return vector;
   }
 

@@ -21,6 +21,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -53,7 +54,6 @@ class DictionaryVector : public SimpleVector<T> {
       BufferPtr nulls,
       size_t length,
       VectorPtr dictionaryValues,
-      TypeKind indexTypeKind,
       BufferPtr dictionaryIndexArray,
       const SimpleVectorStats<T>& stats = {},
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
@@ -63,10 +63,6 @@ class DictionaryVector : public SimpleVector<T> {
       std::optional<ByteCount> storageByteCount = std::nullopt);
 
   virtual ~DictionaryVector() override = default;
-
-  inline VectorEncoding::Simple encoding() const override {
-    return VectorEncoding::Simple::DICTIONARY;
-  }
 
   bool mayHaveNulls() const override {
     VELOX_DCHECK(initialized_);
@@ -107,19 +103,6 @@ class DictionaryVector : public SimpleVector<T> {
    * @return the vector of values starting at the given index
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
-
-  inline TypeKind getIndexType() const {
-    return indexType_;
-  }
-
-  /**
-   * @return stats for the internal dictionary value vector. They
-   * hold the min and max value in the dictionary.
-   */
-  // TODO (T61713241): Remove this later.
-  inline const SimpleVectorStats<T>& getDictionaryStats() const {
-    return dictionaryStats_;
-  }
 
   inline const BufferPtr& indices() const {
     return indices_;
@@ -165,11 +148,20 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BaseVector* loadedVector() override {
-    auto loaded = BaseVector::loadedVectorShared(dictionaryValues_);
-    if (loaded == dictionaryValues_) {
+    if (initialized_) {
       return this;
     }
-    dictionaryValues_ = loaded;
+
+    SelectivityVector rows(dictionaryValues_->size(), false);
+    for (vector_size_t i = 0; i < this->size(); i++) {
+      if (!BaseVector::isNullAt(i)) {
+        auto ind = getDictionaryIndex(i);
+        rows.setValid(ind, true);
+      }
+    }
+    rows.updateBounds();
+
+    LazyVector::ensureLoadedRows(dictionaryValues_, rows);
     setInternalState();
     return this;
   }
@@ -218,30 +210,29 @@ class DictionaryVector : public SimpleVector<T> {
 
   void setDictionaryValues(VectorPtr dictionaryValues) {
     dictionaryValues_ = dictionaryValues;
+    initialized_ = false;
     setInternalState();
+  }
+
+  /// Resizes the vector to be of size 'size'. If setNotNull is true
+  /// the newly added elements point to the value at the 0th index.
+  /// If setNotNull is false then the values and isNull is undefined.
+  void resize(vector_size_t size, bool setNotNull = true) override {
+    if (size > BaseVector::length_) {
+      BaseVector::resizeIndices(size, 0, &indices_, &rawIndices_);
+    }
+
+    BaseVector::resize(size, setNotNull);
   }
 
  private:
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
-    // This is always int32, so if is faster than switch.
-    if (indexType_ == TypeKind::INTEGER) {
-      return rawIndices_[idx];
-    }
-    if (indexType_ == TypeKind::SMALLINT) {
-      return reinterpret_cast<const uint16_t*>(rawIndices_)[idx];
-    }
-    return reinterpret_cast<const uint8_t*>(rawIndices_)[idx];
+    return rawIndices_[idx];
   }
 
   void setInternalState();
 
-  // stats over the contained vector data
-  SimpleVectorStats<T> dictionaryStats_;
-
-  // the dictionary indices of the vector can be variable types depending on the
-  // size of the dictionary - kept as original and typed
-  TypeKind indexType_;
   BufferPtr indices_;
   const vector_size_t* rawIndices_ = nullptr;
 

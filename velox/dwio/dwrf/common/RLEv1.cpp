@@ -64,19 +64,23 @@ template void RleEncoderV1<true>::writeValues();
 template void RleEncoderV1<false>::writeValues();
 
 template <bool isSigned>
-void RleDecoderV1<isSigned>::seekToRowGroup(PositionProvider& location) {
+void RleDecoderV1<isSigned>::seekToRowGroup(
+    dwio::common::PositionProvider& location) {
   // move the input stream
-  IntDecoder<isSigned>::inputStream->seekToPosition(location);
+  dwio::common::IntDecoder<isSigned>::inputStream->seekToPosition(location);
   // force a re-read from the stream
-  IntDecoder<isSigned>::bufferEnd = IntDecoder<isSigned>::bufferStart;
+  dwio::common::IntDecoder<isSigned>::bufferEnd =
+      dwio::common::IntDecoder<isSigned>::bufferStart;
   // force reading a new header
   remainingValues = 0;
   // skip ahead the given number of records
   skip(location.next());
 }
 
-template void RleDecoderV1<true>::seekToRowGroup(PositionProvider& location);
-template void RleDecoderV1<false>::seekToRowGroup(PositionProvider& location);
+template void RleDecoderV1<true>::seekToRowGroup(
+    dwio::common::PositionProvider& location);
+template void RleDecoderV1<false>::seekToRowGroup(
+    dwio::common::PositionProvider& location);
 
 template <bool isSigned>
 void RleDecoderV1<isSigned>::skip(uint64_t numValues) {
@@ -90,7 +94,7 @@ void RleDecoderV1<isSigned>::skip(uint64_t numValues) {
     if (repeating) {
       value += delta * static_cast<int64_t>(count);
     } else {
-      IntDecoder<isSigned>::skipLongs(count);
+      dwio::common::IntDecoder<isSigned>::skipLongs(count);
     }
   }
 }
@@ -139,10 +143,10 @@ void RleDecoderV1<isSigned>::next(
       int64_t* const datapEnd = datap + count;
       if (nulls) {
         int32_t idx = position;
-        if (!IntDecoder<isSigned>::useVInts) {
+        if (!dwio::common::IntDecoder<isSigned>::useVInts) {
           while (datap != datapEnd) {
             if (LIKELY(!bits::isBitNull(nulls, idx++))) {
-              *(datap++) = IntDecoder<isSigned>::readLongLE();
+              *(datap++) = dwio::common::IntDecoder<isSigned>::readLongLE();
               ++consumed;
             } else {
               *(datap++) = 0;
@@ -151,7 +155,7 @@ void RleDecoderV1<isSigned>::next(
         } else if constexpr (isSigned) {
           while (datap != datapEnd) {
             if (LIKELY(!bits::isBitNull(nulls, idx++))) {
-              *(datap++) = IntDecoder<isSigned>::readVsLong();
+              *(datap++) = dwio::common::IntDecoder<isSigned>::readVsLong();
               ++consumed;
             } else {
               *(datap++) = 0;
@@ -160,8 +164,8 @@ void RleDecoderV1<isSigned>::next(
         } else {
           while (datap != datapEnd) {
             if (LIKELY(!bits::isBitNull(nulls, idx++))) {
-              *(datap++) =
-                  static_cast<int64_t>(IntDecoder<isSigned>::readVuLong());
+              *(datap++) = static_cast<int64_t>(
+                  dwio::common::IntDecoder<isSigned>::readVuLong());
               ++consumed;
             } else {
               *(datap++) = 0;
@@ -169,18 +173,18 @@ void RleDecoderV1<isSigned>::next(
           }
         }
       } else {
-        if (!IntDecoder<isSigned>::useVInts) {
+        if (!dwio::common::IntDecoder<isSigned>::useVInts) {
           while (datap != datapEnd) {
-            *(datap++) = IntDecoder<isSigned>::readLongLE();
+            *(datap++) = dwio::common::IntDecoder<isSigned>::readLongLE();
           }
         } else if constexpr (isSigned) {
           while (datap != datapEnd) {
-            *(datap++) = IntDecoder<isSigned>::readVsLong();
+            *(datap++) = dwio::common::IntDecoder<isSigned>::readVsLong();
           }
         } else {
           while (datap != datapEnd) {
-            *(datap++) =
-                static_cast<int64_t>(IntDecoder<isSigned>::readVuLong());
+            *(datap++) = static_cast<int64_t>(
+                dwio::common::IntDecoder<isSigned>::readVuLong());
           }
         }
         consumed = count;
@@ -228,7 +232,7 @@ void RleDecoderV1<isSigned>::nextLengths(
       consumed = count;
       value += static_cast<int64_t>(consumed) * delta;
     } else {
-      IntDecoder<isSigned>::bulkRead(count, data + position);
+      dwio::common::IntDecoder<isSigned>::bulkRead(count, data + position);
       consumed = count;
     }
     remainingValues -= consumed;

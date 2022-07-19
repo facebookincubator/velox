@@ -37,19 +37,17 @@ const proto::StripeInformation& StripeReaderBase::loadStripe(
     preload = true;
   } else {
     stripeInput_ = reader_->bufferedInputFactory().create(
-        reader_->getStream(),
-        reader_->getMemoryPool(),
-        reader_->getDataCacheConfig());
+        reader_->getStream(), reader_->getMemoryPool(), reader_->getFileNum());
 
     if (preload) {
       // If metadata cache exists, adjust read position to avoid re-reading
       // metadata sections
       if (cache) {
-        if (cache->has(proto::StripeCacheMode::INDEX, index)) {
+        if (cache->has(StripeCacheMode::INDEX, index)) {
           offset += stripe.indexlength();
           length -= stripe.indexlength();
         }
-        if (cache->has(proto::StripeCacheMode::FOOTER, index)) {
+        if (cache->has(StripeCacheMode::FOOTER, index)) {
           length -= stripe.footerlength();
         }
       }
@@ -60,24 +58,16 @@ const proto::StripeInformation& StripeReaderBase::loadStripe(
   }
 
   // load stripe footer
-  std::unique_ptr<SeekableInputStream> stream;
+  std::unique_ptr<dwio::common::SeekableInputStream> stream;
   if (cache) {
-    stream = cache->get(proto::StripeCacheMode::FOOTER, index);
+    stream = cache->get(StripeCacheMode::FOOTER, index);
   }
 
   if (!stream) {
-    if (reader_->getDataCacheConfig()) {
-      stream = getStripeInput().enqueue(
-          {stripe.offset() + stripe.indexlength() + stripe.datalength(),
-           stripe.footerlength()});
-      // It will not load anything if we hit the cache while enqueuing
-      getStripeInput().load(LogType::STRIPE_FOOTER);
-    } else {
-      stream = getStripeInput().read(
-          stripe.offset() + stripe.indexlength() + stripe.datalength(),
-          stripe.footerlength(),
-          LogType::STRIPE_FOOTER);
-    }
+    stream = getStripeInput().read(
+        stripe.offset() + stripe.indexlength() + stripe.datalength(),
+        stripe.footerlength(),
+        LogType::STRIPE_FOOTER);
   }
 
   // Reuse footer_'s memory to avoid expensive destruction

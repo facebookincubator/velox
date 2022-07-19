@@ -23,7 +23,7 @@ namespace facebook::velox::exec {
 
 void deselectRowsWithNulls(
     const RowVector& input,
-    const std::vector<ChannelIndex>& channels,
+    const std::vector<column_index_t>& channels,
     SelectivityVector& rows,
     core::ExecCtx& execCtx) {
   bool anyChange = false;
@@ -35,7 +35,7 @@ void deselectRowsWithNulls(
     auto& child = const_cast<VectorPtr&>(input.childAt(channel));
     LazyVector::ensureLoadedRows(
         child, rows, scratchDecodedVector, scratchRows);
-    auto key = input.loadedChildAt(channel);
+    auto key = input.childAt(channel)->loadedVector();
     if (key->mayHaveNulls()) {
       auto nulls = key->flatRawNulls(rows);
       anyChange = true;
@@ -160,13 +160,6 @@ VectorPtr wrapChild(
     return child;
   }
 
-  if (child->encoding() == VectorEncoding::Simple::CONSTANT && !nulls) {
-    if (size == child->size()) {
-      return child;
-    }
-    return BaseVector::wrapInConstant(size, 0, child);
-  }
-
   return BaseVector::wrapInDictionary(nulls, mapping, size, child);
 }
 
@@ -191,7 +184,7 @@ wrap(vector_size_t size, BufferPtr mapping, const RowVectorPtr& vector) {
 }
 
 void loadColumns(const RowVectorPtr& input, core::ExecCtx& execCtx) {
-  LocalDecodedVector decodedHolder(&execCtx);
+  LocalDecodedVector decodedHolder(execCtx);
   LocalSelectivityVector baseRowsHolder(&execCtx);
   LocalSelectivityVector rowsHolder(&execCtx);
   SelectivityVector* rows = nullptr;

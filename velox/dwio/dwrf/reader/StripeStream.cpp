@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/StripeStream.h"
+#include <folly/ScopeGuard.h>
 
-#include "folly/ScopeGuard.h"
 #include "velox/common/base/BitSet.h"
 #include "velox/dwio/common/exception/Exception.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 #include "velox/dwio/dwrf/common/wrap/coded-stream-wrapper.h"
+#include "velox/dwio/dwrf/reader/StripeStream.h"
 
 namespace facebook::velox::dwrf {
 
@@ -92,7 +93,7 @@ static inline void ensureCapacity(
 
 template <typename T>
 BufferPtr readDict(
-    IntDecoder<true>* dictReader,
+    dwio::common::IntDecoder<true>* dictReader,
     int64_t dictionarySize,
     velox::memory::MemoryPool* pool) {
   BufferPtr dictionaryBuffer = AlignedBuffer::allocate<T>(dictionarySize, pool);
@@ -121,7 +122,7 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
   DWIO_ENSURE(dataStream.get());
   stripeDictionaryCache_->registerIntDictionary(
       localEk,
-      [dictReader = IntDecoder</* isSigned = */ true>::createDirect(
+      [dictReader = createDirectDecoder</* isSigned = */ true>(
            std::move(dataStream), dictVInts, elementWidth),
        dictionaryWidth,
        dictionarySize](velox::memory::MemoryPool* pool) mutable {
@@ -211,12 +212,12 @@ void StripeStreamsImpl::loadStreams() {
   }
 }
 
-std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getCompressedStream(
-    const StreamIdentifier& si) const {
+std::unique_ptr<dwio::common::SeekableInputStream>
+StripeStreamsImpl::getCompressedStream(const DwrfStreamIdentifier& si) const {
   const auto& info = getStreamInfo(si);
 
-  std::unique_ptr<SeekableInputStream> streamRead;
-  if (si.kind == StreamKind::StreamKind_ROW_INDEX) {
+  std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
+  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -245,19 +246,20 @@ StripeStreamsImpl::getEncodingKeys() const {
   return encodingKeys;
 }
 
-std::unordered_map<uint32_t, std::vector<StreamIdentifier>>
+std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
 StripeStreamsImpl::getStreamIdentifiers() const {
-  std::unordered_map<uint32_t, std::vector<StreamIdentifier>> nodeToStreamIdMap;
+  std::unordered_map<uint32_t, std::vector<DwrfStreamIdentifier>>
+      nodeToStreamIdMap;
 
   for (const auto& kv : streams_) {
-    nodeToStreamIdMap[kv.first.node].push_back(kv.first);
+    nodeToStreamIdMap[kv.first.encodingKey().node].push_back(kv.first);
   }
 
   return nodeToStreamIdMap;
 }
 
-std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getStream(
-    const StreamIdentifier& si,
+std::unique_ptr<dwio::common::SeekableInputStream> StripeStreamsImpl::getStream(
+    const DwrfStreamIdentifier& si,
     bool /* throwIfNotFound*/) const {
   // if not found, return an empty {}
   const auto& info = getStreamInfo(si, false /* throwIfNotFound */);
@@ -265,8 +267,8 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getStream(
     return {};
   }
 
-  std::unique_ptr<SeekableInputStream> streamRead;
-  if (si.kind == StreamKind::StreamKind_ROW_INDEX) {
+  std::unique_ptr<dwio::common::SeekableInputStream> streamRead;
+  if (si.kind() == StreamKind::StreamKind_ROW_INDEX) {
     streamRead = getIndexStreamFromCache(info);
   }
 
@@ -282,7 +284,9 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getStream(
   auto streamDebugInfo =
       fmt::format("Stripe {} Stream {}", stripeIndex_, si.toString());
   return reader_.getReader().createDecompressedStream(
-      std::move(streamRead), streamDebugInfo, getDecrypter(si.node));
+      std::move(streamRead),
+      streamDebugInfo,
+      getDecrypter(si.encodingKey().node));
 }
 
 uint32_t StripeStreamsImpl::visitStreamsOfNode(
@@ -290,7 +294,7 @@ uint32_t StripeStreamsImpl::visitStreamsOfNode(
     std::function<void(const StreamInformation&)> visitor) const {
   uint32_t count = 0;
   for (auto& item : streams_) {
-    if (item.first.node == node) {
+    if (item.first.encodingKey().node == node) {
       visitor(item.second);
       ++count;
     }
@@ -299,7 +303,7 @@ uint32_t StripeStreamsImpl::visitStreamsOfNode(
   return count;
 }
 
-bool StripeStreamsImpl::getUseVInts(const StreamIdentifier& si) const {
+bool StripeStreamsImpl::getUseVInts(const DwrfStreamIdentifier& si) const {
   const auto& info = getStreamInfo(si, false);
   if (!info.valid()) {
     return true;
@@ -308,14 +312,14 @@ bool StripeStreamsImpl::getUseVInts(const StreamIdentifier& si) const {
   return info.getUseVInts();
 }
 
-std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getIndexStreamFromCache(
+std::unique_ptr<dwio::common::SeekableInputStream>
+StripeStreamsImpl::getIndexStreamFromCache(
     const StreamInformation& info) const {
-  std::unique_ptr<SeekableInputStream> indexStream;
+  std::unique_ptr<dwio::common::SeekableInputStream> indexStream;
   auto& reader = reader_.getReader();
   auto& metadataCache = reader.getMetadataCache();
   if (metadataCache) {
-    auto indexBase =
-        metadataCache->get(proto::StripeCacheMode::INDEX, stripeIndex_);
+    auto indexBase = metadataCache->get(StripeCacheMode::INDEX, stripeIndex_);
     if (indexBase) {
       auto offset = info.getOffset();
       auto length = info.getLength();
@@ -323,7 +327,7 @@ std::unique_ptr<SeekableInputStream> StripeStreamsImpl::getIndexStreamFromCache(
       const void* start;
       int32_t ignored;
       DWIO_ENSURE(indexBase->Next(&start, &ignored), "failed to read index");
-      indexStream = std::make_unique<SeekableArrayInputStream>(
+      indexStream = std::make_unique<dwio::common::SeekableArrayInputStream>(
           static_cast<const char*>(start) + offset, length);
     }
   }

@@ -320,6 +320,11 @@ class RowContainer {
         stringAllocator_.freeSpace());
   }
 
+  // Returns a cap on  extra memory that may be needed when adding 'numRows'
+  // and variableLengthBytes of out-of-line variable length data.
+  int64_t sizeIncrement(vector_size_t numRows, int64_t variableLengthBytes)
+      const;
+
   // Resets the state to be as after construction. Frees memory for payload.
   void clear();
 
@@ -663,7 +668,8 @@ class RowContainer {
       char** rows) {
     int32_t count = 0;
     uint64_t totalBytes = 0;
-    auto numAllocations = rows_.numAllocations();
+    VELOX_CHECK_EQ(rows_.numLargeAllocations(), 0);
+    auto numAllocations = rows_.numSmallAllocations();
     if (iter->allocationIndex == 0 && iter->runIndex == 0 &&
         iter->rowOffset == 0) {
       iter->normalizedKeysLeft = numRowsWithNormalizedKey_;

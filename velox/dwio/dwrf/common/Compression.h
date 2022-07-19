@@ -16,12 +16,13 @@
 
 #pragma once
 
+#include "velox/dwio/common/Common.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/CompressionBufferPool.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/common/Decryption.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
-#include "velox/dwio/dwrf/common/InputStream.h"
 #include "velox/dwio/dwrf/common/OutputStream.h"
 
 namespace facebook::velox::dwrf {
@@ -71,9 +72,9 @@ class Decompressor {
  * @param bufferSize the maximum size of the buffer
  * @param pool the memory pool
  */
-std::unique_ptr<SeekableInputStream> createDecompressor(
-    CompressionKind kind,
-    std::unique_ptr<SeekableInputStream> input,
+std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
+    dwio::common::CompressionKind kind,
+    std::unique_ptr<dwio::common::SeekableInputStream> input,
     uint64_t bufferSize,
     memory::MemoryPool& pool,
     const std::string& streamDebugInfo,
@@ -88,7 +89,7 @@ std::unique_ptr<SeekableInputStream> createDecompressor(
  * @param level compression level
  */
 std::unique_ptr<BufferedOutputStream> createCompressor(
-    CompressionKind kind,
+    dwio::common::CompressionKind kind,
     CompressionBufferPool& bufferPool,
     DataBufferHolder& bufferHolder,
     const Config& config,

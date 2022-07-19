@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/type/Type.h"
-#include <gtest/gtest.h>
 #include <sstream>
+#include "velox/common/base/tests/GTestUtils.h"
 
 using namespace facebook;
 using namespace facebook::velox;
@@ -115,6 +115,21 @@ TEST(TypeTest, date) {
   EXPECT_EQ(date->kind(), TypeKind::DATE);
   EXPECT_STREQ(date->kindName(), "DATE");
   EXPECT_EQ(date->begin(), date->end());
+}
+
+TEST(TypeTest, intervalDayTime) {
+  auto interval = INTERVAL_DAY_TIME();
+  EXPECT_EQ(interval->toString(), "INTERVAL DAY TO SECOND");
+  EXPECT_EQ(interval->size(), 0);
+  EXPECT_THROW(interval->childAt(0), std::invalid_argument);
+  EXPECT_EQ(interval->kind(), TypeKind::INTERVAL_DAY_TIME);
+  EXPECT_STREQ(interval->kindName(), "INTERVAL DAY TO SECOND");
+  EXPECT_EQ(interval->begin(), interval->end());
+
+  IntervalDayTime dt(
+      kMillisInDay * 5 + kMillisInHour * 4 + kMillisInMinute * 6 +
+      kMillisInSecond * 7 + 98);
+  EXPECT_EQ("5 04:06:07.098", dt.toString());
 }
 
 TEST(TypeTest, shortDecimal) {
@@ -272,7 +287,8 @@ TEST(TypeTest, row) {
   EXPECT_THROW(row0->nameOf(4), std::out_of_range);
   EXPECT_THROW(row0->findChild("not_exist"), VeloxUserError);
   // todo: expected case behavior?:
-  EXPECT_THROW(row0->findChild("A"), VeloxUserError);
+  VELOX_ASSERT_THROW(
+      row0->findChild("A"), "Field not found: A. Available fields are: a, b.");
   EXPECT_EQ(row0->childAt(1)->toString(), "ROW<a:BIGINT>");
   EXPECT_EQ(row0->findChild("b")->toString(), "ROW<a:BIGINT>");
   EXPECT_EQ(row0->findChild("b")->asRow().findChild("a")->toString(), "BIGINT");
@@ -449,6 +465,11 @@ TEST(TypeTest, equality) {
   EXPECT_TRUE(*ARRAY(INTEGER()) == *ARRAY(INTEGER()));
   EXPECT_FALSE(*ARRAY(INTEGER()) == *ARRAY(REAL()));
   EXPECT_FALSE(*ARRAY(INTEGER()) == *ARRAY(ARRAY(INTEGER())));
+  EXPECT_TRUE(
+      *FIXED_SIZE_ARRAY(10, INTEGER()) == *FIXED_SIZE_ARRAY(10, INTEGER()));
+  EXPECT_FALSE(*FIXED_SIZE_ARRAY(10, INTEGER()) == *ARRAY(INTEGER()));
+  EXPECT_FALSE(
+      *FIXED_SIZE_ARRAY(10, INTEGER()) == *FIXED_SIZE_ARRAY(9, INTEGER()));
 
   // struct
   EXPECT_TRUE(
@@ -488,18 +509,35 @@ TEST(TypeTest, cpp2Type) {
   EXPECT_EQ(*CppToType<bool>::create(), *BOOLEAN());
   EXPECT_EQ(*CppToType<Timestamp>::create(), *TIMESTAMP());
   EXPECT_EQ(*CppToType<Date>::create(), *DATE());
+  EXPECT_EQ(*CppToType<IntervalDayTime>::create(), *INTERVAL_DAY_TIME());
   EXPECT_EQ(*CppToType<Array<int32_t>>::create(), *ARRAY(INTEGER()));
   auto type = CppToType<Map<int32_t, Map<int64_t, float>>>::create();
   EXPECT_EQ(*type, *MAP(INTEGER(), MAP(BIGINT(), REAL())));
 }
 
-TEST(TypeTest, kindHash) {
-  EXPECT_EQ(BIGINT()->hashKind(), BIGINT()->hashKind());
-  EXPECT_EQ(TIMESTAMP()->hashKind(), TIMESTAMP()->hashKind());
-  EXPECT_EQ(DATE()->hashKind(), DATE()->hashKind());
-  EXPECT_NE(BIGINT()->hashKind(), INTEGER()->hashKind());
-  EXPECT_EQ(
-      ROW({{"a", BIGINT()}})->hashKind(), ROW({{"b", BIGINT()}})->hashKind());
+TEST(TypeTest, equivalent) {
+  EXPECT_TRUE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"b", BIGINT()}})));
+  EXPECT_FALSE(ROW({{"a", BIGINT()}})->equivalent(*ROW({{"a", INTEGER()}})));
+  EXPECT_TRUE(MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), BIGINT())));
+  EXPECT_FALSE(
+      MAP(BIGINT(), BIGINT())->equivalent(*MAP(BIGINT(), ARRAY(BIGINT()))));
+  EXPECT_TRUE(ARRAY(BIGINT())->equivalent(*ARRAY(BIGINT())));
+  EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ARRAY(INTEGER())));
+  EXPECT_FALSE(ARRAY(BIGINT())->equivalent(*ROW({{"a", BIGINT()}})));
+  EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())->equivalent(*ARRAY(BIGINT())));
+  EXPECT_FALSE(FIXED_SIZE_ARRAY(10, BIGINT())
+                   ->equivalent(*FIXED_SIZE_ARRAY(9, BIGINT())));
+  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
+                  ->equivalent(*FIXED_SIZE_ARRAY(10, BIGINT())));
+  EXPECT_TRUE(SHORT_DECIMAL(10, 5)->equivalent(*SHORT_DECIMAL(10, 5)));
+  EXPECT_FALSE(SHORT_DECIMAL(10, 6)->equivalent(*SHORT_DECIMAL(10, 5)));
+  EXPECT_FALSE(SHORT_DECIMAL(11, 5)->equivalent(*SHORT_DECIMAL(10, 5)));
+  EXPECT_TRUE(LONG_DECIMAL(30, 5)->equivalent(*LONG_DECIMAL(30, 5)));
+  EXPECT_FALSE(LONG_DECIMAL(30, 6)->equivalent(*LONG_DECIMAL(30, 5)));
+  EXPECT_FALSE(LONG_DECIMAL(31, 5)->equivalent(*LONG_DECIMAL(30, 5)));
+}
+
+TEST(TypeTest, kindEquals) {
   EXPECT_TRUE(ROW({{"a", BIGINT()}})->kindEquals(ROW({{"b", BIGINT()}})));
   EXPECT_FALSE(ROW({{"a", BIGINT()}})->kindEquals(ROW({{"a", INTEGER()}})));
   EXPECT_TRUE(MAP(BIGINT(), BIGINT())->kindEquals(MAP(BIGINT(), BIGINT())));
@@ -508,7 +546,27 @@ TEST(TypeTest, kindHash) {
   EXPECT_TRUE(ARRAY(BIGINT())->kindEquals(ARRAY(BIGINT())));
   EXPECT_FALSE(ARRAY(BIGINT())->kindEquals(ARRAY(INTEGER())));
   EXPECT_FALSE(ARRAY(BIGINT())->kindEquals(ROW({{"a", BIGINT()}})));
+  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())->kindEquals(ARRAY(BIGINT())));
+  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
+                  ->kindEquals(FIXED_SIZE_ARRAY(9, BIGINT())));
+  EXPECT_TRUE(FIXED_SIZE_ARRAY(10, BIGINT())
+                  ->kindEquals(FIXED_SIZE_ARRAY(10, BIGINT())));
+  EXPECT_TRUE(SHORT_DECIMAL(10, 5)->kindEquals(SHORT_DECIMAL(10, 5)));
+  EXPECT_TRUE(SHORT_DECIMAL(10, 6)->kindEquals(SHORT_DECIMAL(10, 5)));
+  EXPECT_TRUE(SHORT_DECIMAL(11, 5)->kindEquals(SHORT_DECIMAL(10, 5)));
+  EXPECT_TRUE(LONG_DECIMAL(30, 5)->kindEquals(LONG_DECIMAL(30, 5)));
+  EXPECT_TRUE(LONG_DECIMAL(30, 6)->kindEquals(LONG_DECIMAL(30, 5)));
+  EXPECT_TRUE(LONG_DECIMAL(31, 5)->kindEquals(LONG_DECIMAL(30, 5)));
+}
 
+TEST(TypeTest, kindHash) {
+  EXPECT_EQ(BIGINT()->hashKind(), BIGINT()->hashKind());
+  EXPECT_EQ(TIMESTAMP()->hashKind(), TIMESTAMP()->hashKind());
+  EXPECT_EQ(DATE()->hashKind(), DATE()->hashKind());
+  EXPECT_EQ(INTERVAL_DAY_TIME()->hashKind(), INTERVAL_DAY_TIME()->hashKind());
+  EXPECT_NE(BIGINT()->hashKind(), INTEGER()->hashKind());
+  EXPECT_EQ(
+      ROW({{"a", BIGINT()}})->hashKind(), ROW({{"b", BIGINT()}})->hashKind());
   EXPECT_EQ(
       MAP(BIGINT(), BIGINT())->hashKind(), MAP(BIGINT(), BIGINT())->hashKind());
   EXPECT_NE(
@@ -562,6 +620,8 @@ TEST(TypeTest, follySformat) {
   EXPECT_EQ("VARBINARY", folly::sformat("{}", VARBINARY()));
   EXPECT_EQ("TIMESTAMP", folly::sformat("{}", TIMESTAMP()));
   EXPECT_EQ("DATE", folly::sformat("{}", DATE()));
+  EXPECT_EQ(
+      "INTERVAL DAY TO SECOND", folly::sformat("{}", INTERVAL_DAY_TIME()));
 
   EXPECT_EQ("ARRAY<VARCHAR>", folly::sformat("{}", ARRAY(VARCHAR())));
   EXPECT_EQ(

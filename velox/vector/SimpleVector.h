@@ -59,6 +59,7 @@ class SimpleVector : public BaseVector {
   SimpleVector(
       velox::memory::MemoryPool* pool,
       std::shared_ptr<const Type> type,
+      VectorEncoding::Simple encoding,
       BufferPtr nulls,
       size_t length,
       const SimpleVectorStats<T>& stats,
@@ -70,6 +71,7 @@ class SimpleVector : public BaseVector {
       : BaseVector(
             pool,
             std::move(type),
+            encoding,
             std::move(nulls),
             length,
             distinctValueCount,
@@ -83,6 +85,7 @@ class SimpleVector : public BaseVector {
   // Constructs SimpleVector inferring the type from T.
   SimpleVector(
       velox::memory::MemoryPool* pool,
+      VectorEncoding::Simple encoding,
       BufferPtr nulls,
       size_t length,
       const SimpleVectorStats<T>& stats,
@@ -94,6 +97,7 @@ class SimpleVector : public BaseVector {
       : SimpleVector(
             pool,
             CppToType<T>::create(),
+            encoding,
             std::move(nulls),
             length,
             stats,
@@ -168,13 +172,15 @@ class SimpleVector : public BaseVector {
     return false;
   }
 
+  using BaseVector::toString;
+
   std::string toString(vector_size_t index) const override {
     std::stringstream out;
     if (isNullAt(index)) {
       out << "null";
     } else {
       if constexpr (std::is_same<T, std::shared_ptr<void>>::value) {
-        VELOX_NYI("Can't serialize opaque objects yet");
+        out << "<opaque>";
       } else {
         out << velox::to<std::string>(valueAt(index));
       }

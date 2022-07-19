@@ -17,9 +17,14 @@
 #include "velox/expression/ExprCompiler.h"
 #include "velox/expression/CastExpr.h"
 #include "velox/expression/CoalesceExpr.h"
-#include "velox/expression/ControlExpr.h"
+#include "velox/expression/ConjunctExpr.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
+#include "velox/expression/LambdaExpr.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SwitchExpr.h"
+#include "velox/expression/TryExpr.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::exec {
@@ -28,6 +33,12 @@ namespace {
 
 using core::ITypedExpr;
 using core::TypedExprPtr;
+
+const char* const kAnd = "and";
+const char* const kOr = "or";
+const char* const kTry = "try";
+const char* const kSwitch = "switch";
+const char* const kIf = "if";
 
 struct ITypedExprHasher {
   size_t operator()(const ITypedExpr* expr) const {
@@ -277,7 +288,7 @@ ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
           execCtx, scope->exprSet, dynamic_cast<RowVector*>(row.get()));
       VectorPtr result;
       SelectivityVector rows(1);
-      expr->eval(rows, &context, &result);
+      expr->eval(rows, context, result);
       auto constantVector = BaseVector::wrapInConstant(1, 0, result);
 
       return std::make_shared<ConstantExpr>(constantVector);
@@ -401,7 +412,11 @@ ExprPtr compileExpression(
           dynamic_cast<const core::FieldAccessTypedExpr*>(expr.get())) {
     auto fieldReference = std::make_shared<FieldReference>(
         expr->type(), move(compiledInputs), access->name());
-    captureFieldReference(fieldReference.get(), expr.get(), scope);
+    if (access->isInputColumn()) {
+      // We only want to capture references to top level fields, not struct
+      // fields.
+      captureFieldReference(fieldReference.get(), expr.get(), scope);
+    }
     result = fieldReference;
   } else if (auto row = dynamic_cast<const core::InputTypedExpr*>(expr.get())) {
     VELOX_UNSUPPORTED("InputTypedExpr '{}' is not supported", row->toString());

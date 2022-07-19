@@ -32,8 +32,9 @@ TableScan::TableScan(
           "TableScan"),
       tableHandle_(tableScanNode->tableHandle()),
       columnHandles_(tableScanNode->assignments()),
-      driverCtx_(driverCtx),
-      blockingFuture_(false) {}
+      driverCtx_(driverCtx) {
+  connector_ = connector::getConnector(tableHandle_->connectorId());
+}
 
 RowVectorPtr TableScan::getOutput() {
   if (noMoreSplits_) {
@@ -43,9 +44,9 @@ RowVectorPtr TableScan::getOutput() {
   for (;;) {
     if (needNewSplit_) {
       exec::Split split;
-      auto reason = driverCtx_->task->getSplitOrFuture(
+      blockingReason_ = driverCtx_->task->getSplitOrFuture(
           driverCtx_->splitGroupId, planNodeId(), split, blockingFuture_);
-      if (reason != BlockingReason::kNotBlocked) {
+      if (blockingReason_ != BlockingReason::kNotBlocked) {
         return nullptr;
       }
 
@@ -70,8 +71,11 @@ RowVectorPtr TableScan::getOutput() {
       const auto& connectorSplit = split.connectorSplit;
       needNewSplit_ = false;
 
-      if (!connector_) {
-        connector_ = connector::getConnector(connectorSplit->connectorId);
+      VELOX_CHECK(
+          connector_->connectorId() == connectorSplit->connectorId,
+          "Got splits with different connector IDs");
+
+      if (!dataSource_) {
         connectorQueryCtx_ = operatorCtx_->createConnectorQueryCtx(
             connectorSplit->connectorId, planNodeId());
         dataSource_ = connector_->createDataSource(
@@ -83,10 +87,6 @@ RowVectorPtr TableScan::getOutput() {
           dataSource_->addDynamicFilter(entry.first, entry.second);
         }
         pendingDynamicFilters_.clear();
-      } else {
-        VELOX_CHECK(
-            connector_->connectorId() == connectorSplit->connectorId,
-            "Got splits with different connector IDs");
       }
 
       debugString_ = fmt::format(
@@ -105,7 +105,12 @@ RowVectorPtr TableScan::getOutput() {
          },
          &debugString_});
 
-    auto data = dataSource_->next(readBatchSize_);
+    auto dataOptional = dataSource_->next(readBatchSize_, blockingFuture_);
+    if (!dataOptional.has_value()) {
+      blockingReason_ = BlockingReason::kWaitForConnector;
+      return nullptr;
+    }
+
     stats().addRuntimeStat(
         "dataSourceWallNanos",
         RuntimeCounter(
@@ -113,6 +118,7 @@ RowVectorPtr TableScan::getOutput() {
             RuntimeCounter::Unit::kNanos));
     stats_.rawInputPositions = dataSource_->getCompletedRows();
     stats_.rawInputBytes = dataSource_->getCompletedBytes();
+    auto data = dataOptional.value();
     if (data) {
       if (data->size() > 0) {
         stats_.inputPositions += data->size();
@@ -146,7 +152,7 @@ void TableScan::setBatchSize() {
 }
 
 void TableScan::addDynamicFilter(
-    ChannelIndex outputChannel,
+    column_index_t outputChannel,
     const std::shared_ptr<common::Filter>& filter) {
   if (dataSource_) {
     dataSource_->addDynamicFilter(outputChannel, filter);

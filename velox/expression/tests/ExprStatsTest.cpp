@@ -16,17 +16,18 @@
 
 #include <gmock/gmock.h>
 #include "velox/core/Expressions.h"
+#include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/vector/tests/VectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 
-class ExprStatsTest : public testing::Test, public VectorTestBase {
+class ExprStatsTest : public functions::test::FunctionBaseTest {
  protected:
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
@@ -39,44 +40,6 @@ class ExprStatsTest : public testing::Test, public VectorTestBase {
         {core::QueryConfig::kExprTrackCpuUsage, "true"},
     });
   }
-
-  static RowTypePtr asRowType(const TypePtr& type) {
-    return std::dynamic_pointer_cast<const RowType>(type);
-  }
-
-  std::shared_ptr<const core::ITypedExpr> parseExpression(
-      const std::string& text,
-      const RowTypePtr& rowType) {
-    auto untyped = parse::parseExpr(text);
-    return core::Expressions::inferTypes(untyped, rowType, execCtx_->pool());
-  }
-
-  std::unique_ptr<exec::ExprSet> compileExpressions(
-      const std::vector<std::string>& exprs,
-      const RowTypePtr& rowType) {
-    std::vector<std::shared_ptr<const core::ITypedExpr>> expressions;
-    expressions.reserve(exprs.size());
-    for (const auto& expr : exprs) {
-      expressions.emplace_back(parseExpression(expr, rowType));
-    }
-    return std::make_unique<exec::ExprSet>(
-        std::move(expressions), execCtx_.get());
-  }
-
-  VectorPtr evaluate(exec::ExprSet& exprSet, const RowVectorPtr& input) {
-    exec::EvalCtx context(execCtx_.get(), &exprSet, input.get());
-
-    SelectivityVector rows(input->size());
-    std::vector<VectorPtr> result(1);
-    exprSet.eval(rows, &context, &result);
-    return result[0];
-  }
-
-  std::shared_ptr<core::QueryCtx> queryCtx_{core::QueryCtx::createForTest()};
-  std::unique_ptr<memory::MemoryPool> pool_{
-      memory::getDefaultScopedMemoryPool()};
-  std::unique_ptr<core::ExecCtx> execCtx_{
-      std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
 };
 
 TEST_F(ExprStatsTest, printWithStats) {
@@ -197,7 +160,10 @@ struct Event {
 
 class TestListener : public exec::ExprSetListener {
  public:
-  explicit TestListener(std::vector<Event>& events) : events_{events} {}
+  explicit TestListener(
+      std::vector<Event>& events,
+      std::vector<std::string>& exceptions)
+      : events_{events}, exceptions_{exceptions}, exceptionCount_{0} {}
 
   void onCompletion(
       const std::string& uuid,
@@ -205,8 +171,36 @@ class TestListener : public exec::ExprSetListener {
     events_.push_back({uuid, event.stats});
   }
 
+  void onError(
+      const SelectivityVector& rows,
+      const ::facebook::velox::exec::EvalCtx::ErrorVector& errors) override {
+    rows.applyToSelected([&](auto row) {
+      exceptionCount_++;
+
+      try {
+        auto exception =
+            *std::static_pointer_cast<std::exception_ptr>(errors.valueAt(row));
+        std::rethrow_exception(exception);
+      } catch (const std::exception& e) {
+        exceptions_.push_back(e.what());
+      }
+    });
+  }
+
+  int exceptionCount() const {
+    return exceptionCount_;
+  }
+
+  void reset() {
+    exceptionCount_ = 0;
+    events_.clear();
+    exceptions_.clear();
+  }
+
  private:
   std::vector<Event>& events_;
+  std::vector<std::string>& exceptions_;
+  int exceptionCount_;
 };
 
 TEST_F(ExprStatsTest, listener) {
@@ -214,7 +208,8 @@ TEST_F(ExprStatsTest, listener) {
 
   // Register a listener to receive stats on ExprSet destruction.
   std::vector<Event> events;
-  auto listener = std::make_shared<TestListener>(events);
+  std::vector<std::string> exceptions;
+  auto listener = std::make_shared<TestListener>(events, exceptions);
   ASSERT_TRUE(exec::registerExprSetListener(listener));
   ASSERT_FALSE(exec::registerExprSetListener(listener));
 
@@ -300,25 +295,67 @@ TEST_F(ExprStatsTest, listener) {
   ASSERT_EQ(3, events.size());
 }
 
-TEST_F(ExprStatsTest, memoryAllocations) {
-  std::mt19937 rng;
+TEST_F(ExprStatsTest, errorLog) {
+  // Register a listener to log exceptions.
+  std::vector<Event> events;
+  std::vector<std::string> exceptions;
+  auto listener = std::make_shared<TestListener>(events, exceptions);
+  ASSERT_TRUE(exec::registerExprSetListener(listener));
 
-  vector_size_t size = 256;
-  auto data = makeRowVector({
-      makeFlatVector<float>(
-          size, [&](auto /*row*/) { return folly::Random::randDouble01(rng); }),
-  });
+  auto data = makeRowVector(
+      {makeNullableFlatVector<StringView>(
+           {"12"_sv, "1a"_sv, "34"_sv, ""_sv, std::nullopt, " 1"_sv}),
+       makeNullableFlatVector<StringView>(
+           {"12.3a"_sv, "ab"_sv, "3.4"_sv, "5.6"_sv, std::nullopt, "1.1a"_sv}),
+       makeNullableFlatVector<StringView>(
+           {"12"_sv, "34"_sv, "0"_sv, "78"_sv, "0"_sv, "0"_sv})});
 
   auto rowType = asRowType(data->type());
-  auto exprSet =
-      compileExpressions({"(c0 - 0.5::REAL) * 2.0::REAL + 0.3::REAL"}, rowType);
-
-  auto prevAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
+  auto exprSet = compileExpressions({"try(cast(c0 as integer))"}, rowType);
 
   evaluate(*exprSet, data);
-  auto currAllocations = pool_->getMemoryUsageTracker()->getNumAllocs();
 
-  // Expect a single allocation for the result. Intermediate results should
-  // reuse memory.
-  ASSERT_EQ(1, currAllocations - prevAllocations);
+  // Expect errors at rows 2 and 4.
+  ASSERT_EQ(2, listener->exceptionCount());
+  ASSERT_EQ(2, exceptions.size());
+  for (const auto& exception : exceptions) {
+    ASSERT_TRUE(
+        exception.find("Context: cast((c0) as INTEGER)") != std::string::npos);
+    ASSERT_TRUE(
+        exception.find("Error Code: INVALID_ARGUMENT") != std::string::npos);
+    ASSERT_TRUE(exception.find("Stack trace:") != std::string::npos);
+  }
+
+  // Test with multiple try expressions. Expect errors at rows 1, 2, 4, and 6.
+  // The second row in c1 does not cause an additional error because the
+  // corresponding row in c0 already triggered an error first that caused this
+  // row to be nulled out.
+  listener->reset();
+  exprSet = compileExpressions(
+      {"try(cast(c0 as integer)) + try(cast(c1 as double))"}, rowType);
+
+  evaluate(*exprSet, data);
+  ASSERT_EQ(4, listener->exceptionCount());
+  ASSERT_EQ(4, exceptions.size());
+
+  // Test with nested try expressions. Expect errors at rows 2, 3, 4, and 6. Row
+  // 5 in c2 does not cause an error because the corresponding row in c0 is
+  // null, so this row is not evaluated for the division.
+  listener->reset();
+  exprSet = compileExpressions(
+      {"try(try(cast(c0 as integer)) / cast(c2 as integer))"}, rowType);
+
+  evaluate(*exprSet, data);
+  ASSERT_EQ(4, listener->exceptionCount());
+  ASSERT_EQ(4, exceptions.size());
+
+  // Test with no error.
+  listener->reset();
+  exprSet = compileExpressions({"try(cast(c2 as integer))"}, rowType);
+
+  evaluate(*exprSet, data);
+  ASSERT_EQ(0, listener->exceptionCount());
+  ASSERT_EQ(0, exceptions.size());
+
+  ASSERT_TRUE(exec::unregisterExprSetListener(listener));
 }

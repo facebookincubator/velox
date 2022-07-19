@@ -58,6 +58,14 @@ struct Converter<TypeKind::BOOLEAN> {
   static T cast(const std::string& v, bool& nullOutput) {
     return folly::to<T>(v);
   }
+
+  static T cast(const Date& d, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion of Date to Boolean is not supported");
+  }
+
+  static T cast(const Timestamp& d, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion of Timestamp to Boolean is not supported");
+  }
 };
 
 template <TypeKind KIND, bool TRUNCATE>
@@ -217,7 +225,7 @@ struct Converter<
       return LimitType::cast(v);
     } else {
       if (std::isnan(v)) {
-        throw std::invalid_argument("Cannot cast NaN to an integral value.");
+        VELOX_USER_FAIL("Cannot cast NaN to an integral value.");
       }
       return folly::to<T>(std::round(v));
     }
@@ -237,7 +245,7 @@ struct Converter<
       return LimitType::cast(v);
     } else {
       if (std::isnan(v)) {
-        throw std::invalid_argument("Cannot cast NaN to an integral value.");
+        VELOX_USER_FAIL("Cannot cast NaN to an integral value.");
       }
       return folly::to<T>(std::round(v));
     }
@@ -338,6 +346,15 @@ struct Converter<
   // might throw 'loss of precision' error.
   static T cast(const int64_t& v, bool& nullOutput) {
     return static_cast<T>(v);
+  }
+
+  static T cast(const Date& d, bool& nullOutput) {
+    VELOX_UNSUPPORTED("Conversion of Date to Real or Double is not supported");
+  }
+
+  static T cast(const Timestamp& d, bool& nullOutput) {
+    VELOX_UNSUPPORTED(
+        "Conversion of Timestamp to Real or Double is not supported");
   }
 };
 

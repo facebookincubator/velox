@@ -18,11 +18,11 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 
 using namespace facebook::velox::dwio::dwrf;
+using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox;
 using namespace facebook::velox::common;
 
-using dwio::common::MemoryInputStream;
 using dwio::common::MemorySink;
 
 class E2EFilterTest : public E2EFilterTestBase {
@@ -32,7 +32,7 @@ class E2EFilterTest : public E2EFilterTestBase {
       const std::vector<RowVectorPtr>& batches,
       bool forRowGroupSkip) override {
     auto config = std::make_shared<dwrf::Config>();
-    config->set(dwrf::Config::COMPRESSION, dwrf::CompressionKind_NONE);
+    config->set(dwrf::Config::COMPRESSION, CompressionKind_NONE);
     config->set(dwrf::Config::USE_VINTS, useVInts_);
     WriterOptions options;
     options.config = config;

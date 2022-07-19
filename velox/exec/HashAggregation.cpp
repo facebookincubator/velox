@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/HashAggregation.h"
+#include <optional>
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/Task.h"
 
@@ -51,7 +52,7 @@ HashAggregation::HashAggregation(
     hashers.push_back(VectorHasher::create(key->type(), channel));
   }
 
-  std::vector<ChannelIndex> preGroupedChannels;
+  std::vector<column_index_t> preGroupedChannels;
   preGroupedChannels.reserve(aggregationNode->preGroupedKeys().size());
   for (const auto& key : aggregationNode->preGroupedKeys()) {
     auto channel = exprToChannel(key.get(), inputType);
@@ -61,14 +62,16 @@ HashAggregation::HashAggregation(
   auto numAggregates = aggregationNode->aggregates().size();
   std::vector<std::unique_ptr<Aggregate>> aggregates;
   aggregates.reserve(numAggregates);
-  std::vector<std::optional<ChannelIndex>> aggrMaskChannels;
+  std::vector<std::optional<column_index_t>> aggrMaskChannels;
   aggrMaskChannels.reserve(numAggregates);
-  std::vector<std::vector<ChannelIndex>> args;
+  auto numMasks = aggregationNode->aggregateMasks().size();
+  std::vector<std::vector<column_index_t>> args;
   std::vector<std::vector<VectorPtr>> constantLists;
+  std::vector<TypePtr> intermediateTypes;
   for (auto i = 0; i < numAggregates; i++) {
     const auto& aggregate = aggregationNode->aggregates()[i];
 
-    std::vector<ChannelIndex> channels;
+    std::vector<column_index_t> channels;
     std::vector<VectorPtr> constants;
     std::vector<TypePtr> argTypes;
     for (auto& arg : aggregate->inputs()) {
@@ -82,15 +85,29 @@ HashAggregation::HashAggregation(
         constants.push_back(nullptr);
       }
     }
-
+    if (isRawInput(aggregationNode->step())) {
+      intermediateTypes.push_back(
+          Aggregate::intermediateType(aggregate->name(), argTypes));
+    } else {
+      assert(!argTypes.empty()); // lint
+      intermediateTypes.push_back(argTypes[0]);
+      VELOX_CHECK_EQ(
+          argTypes.size(),
+          1,
+          "Intermediate aggregates must have a single argument");
+    }
     // Setup aggregation mask: convert the Variable Reference name to the
     // channel (projection) index, if there is a mask.
-    const auto& aggrMask = aggregationNode->aggregateMasks()[i];
-    if (aggrMask == nullptr) {
-      aggrMaskChannels.emplace_back(std::optional<ChannelIndex>{});
+    if (i < numMasks) {
+      const auto& aggrMask = aggregationNode->aggregateMasks()[i];
+      if (aggrMask == nullptr) {
+        aggrMaskChannels.emplace_back(std::nullopt);
+      } else {
+        aggrMaskChannels.emplace_back(
+            inputType->asRow().getChildIdx(aggrMask->name()));
+      }
     } else {
-      aggrMaskChannels.emplace_back(
-          inputType->asRow().getChildIdx(aggrMask->name()));
+      aggrMaskChannels.emplace_back(std::nullopt);
     }
 
     const auto& resultType = outputType_->childAt(numHashers + i);
@@ -125,7 +142,9 @@ HashAggregation::HashAggregation(
       std::move(aggrMaskChannels),
       std::move(args),
       std::move(constantLists),
+      std::move(intermediateTypes),
       aggregationNode->ignoreNullKeys(),
+      isPartialOutput_,
       isRawInput(aggregationNode->step()),
       operatorCtx_.get());
 }
@@ -135,8 +154,11 @@ void HashAggregation::addInput(RowVectorPtr input) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
   }
-
   groupingSet_->addInput(input, mayPushdown_);
+  auto spilled = groupingSet_->spilledBytesAndRows();
+  stats_.spilledBytes = spilled.first;
+  stats_.spilledRows = spilled.second;
+
   if (isPartialOutput_ &&
       groupingSet_->allocatedBytes() > maxPartialAggregationMemoryUsage_) {
     partialFull_ = true;
@@ -160,6 +182,15 @@ void HashAggregation::prepareOutput(vector_size_t size) {
   } else {
     output_ = std::static_pointer_cast<RowVector>(
         BaseVector::create(outputType_, size, pool()));
+  }
+}
+
+void HashAggregation::flushPartialOutputIfNeed() {
+  if (partialFull_) {
+    stats().addRuntimeStat(
+        "flushRowCount", RuntimeCounter(groupingSet_->numRows()));
+    groupingSet_->resetPartial();
+    partialFull_ = false;
   }
 }
 
@@ -200,10 +231,7 @@ RowVectorPtr HashAggregation::getOutput() {
     // allow for memory reuse.
     input_ = nullptr;
 
-    if (partialFull_) {
-      groupingSet_->resetPartial();
-      partialFull_ = false;
-    }
+    flushPartialOutputIfNeed();
     return output;
   }
 
@@ -212,15 +240,11 @@ RowVectorPtr HashAggregation::getOutput() {
   // Reuse output vectors if possible.
   prepareOutput(batchSize);
 
-  bool hasData = groupingSet_->getOutput(
-      batchSize, isPartialOutput_, &resultIterator_, output_);
+  bool hasData = groupingSet_->getOutput(batchSize, resultIterator_, output_);
   if (!hasData) {
     resultIterator_.reset();
 
-    if (partialFull_) {
-      partialFull_ = false;
-      groupingSet_->resetPartial();
-    }
+    flushPartialOutputIfNeed();
 
     if (noMoreInput_) {
       finished_ = true;

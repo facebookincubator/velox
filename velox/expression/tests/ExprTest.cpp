@@ -20,7 +20,8 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/DataSink.h"
-#include "velox/expression/ControlExpr.h"
+#include "velox/expression/ConjunctExpr.h"
+#include "velox/expression/ConstantExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
@@ -358,21 +359,17 @@ class ExprTest : public testing::Test, public VectorTestBase {
       auto nullRow = nullIndices ? nullIndices[row] : row;
       if (value.has_value()) {
         if (nulls && bits::isBitNull(nulls, nullRow)) {
-          EXPECT_TRUE(false) << errorPrefix << ": expected non-null at " << row;
-          return false;
+          FAIL() << errorPrefix << ": expected non-null at " << row;
+          return;
         }
         if (value != base->valueAt(baseRow)) {
           EXPECT_EQ(value.value(), base->valueAt(baseRow))
               << errorPrefix << ": at " << row;
-          return false;
         }
       } else if (!(nulls && bits::isBitNull(nulls, nullRow))) {
-        EXPECT_TRUE(false) << errorPrefix
-                           << ": reference is null and tests is not null at "
-                           << row;
-        return false;
+        FAIL() << errorPrefix << ": reference is null and tests is not null at "
+               << row;
       }
-      return true;
     });
   }
 
@@ -495,6 +492,10 @@ class ExprTest : public testing::Test, public VectorTestBase {
     exec::EvalCtx context(execCtx_.get(), exprs_.get(), row.get());
     auto size = row->size();
 
+    SelectivityVector allRows(size);
+    *context.mutableIsFinalSelection() = false;
+    *context.mutableFinalSelection() = &allRows;
+
     vector_size_t begin = 0;
     vector_size_t end = size / 3 * 2;
     {
@@ -550,7 +551,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
   }
 
   static bool isAllNulls(const VectorPtr& vector) {
-    if (!vector->mayHaveNulls()) {
+    if (!vector->loadedVector()->mayHaveNulls()) {
       return false;
     }
     for (auto i = 0; i < vector->size(); ++i) {
@@ -697,17 +698,19 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return indicesBuffer;
   }
 
-  void assertErrorContext(
+  void assertError(
       const std::string& expression,
       const VectorPtr& input,
       const std::string& context,
-      const std::string& topLevelContext) {
+      const std::string& topLevelContext,
+      const std::string& message) {
     try {
       evaluate(expression, makeRowVector({input}));
       ASSERT_TRUE(false) << "Expected an error";
     } catch (VeloxException& e) {
       ASSERT_EQ(context, e.context());
       ASSERT_EQ(topLevelContext, e.topLevelContext());
+      ASSERT_EQ(message, e.message());
     }
   }
 
@@ -752,6 +755,7 @@ TEST_F(ExprTest, encodings) {
           },
           &testData_.bigint2);
       ++counter;
+
       run<int64_t>("2 * bigint1 + 3 * bigint2", [&](int32_t row) {
         if (IS_BIGINT1 && IS_BIGINT2) {
           return INT64V(2 * BIGINT1 + 3 * BIGINT2);
@@ -838,6 +842,7 @@ TEST_F(ExprTest, encodingsOverLazy) {
           &testData_.bigint2,
           true);
       ++counter;
+
       run<int64_t>("2 * bigint1 + 3 * bigint2", [&](int32_t row) {
         if (IS_BIGINT1 && IS_BIGINT2) {
           return INT64V(2 * BIGINT1 + 3 * BIGINT2);
@@ -2709,19 +2714,28 @@ TEST_F(ExprTest, tryWithConstantFailure) {
 }
 
 TEST_F(ExprTest, castExceptionContext) {
-  assertErrorContext(
+  assertError(
       "cast(c0 as bigint)",
-      makeFlatVector({"a"}),
+      makeFlatVector({"1a"}),
       "cast((c0) as BIGINT)",
-      "Same as context.");
+      "Same as context.",
+      "Failed to cast from VARCHAR to BIGINT: 1a. Non-whitespace character found after end of conversion: \"a\"");
+
+  assertError(
+      "cast(c0 as timestamp)",
+      makeFlatVector<int8_t>({1}),
+      "cast((c0) as TIMESTAMP)",
+      "Same as context.",
+      "Failed to cast from TINYINT to TIMESTAMP: 1. ");
 }
 
 TEST_F(ExprTest, switchExceptionContext) {
-  assertErrorContext(
+  assertError(
       "case c0 when 7 then c0 / 0 else 0 end",
       makeFlatVector<int64_t>({7}),
       "divide(c0, 0:BIGINT)",
-      "switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)");
+      "switch(eq(c0, 7:BIGINT), divide(c0, 0:BIGINT), 0:BIGINT)",
+      "division by zero");
 }
 
 TEST_F(ExprTest, conjunctExceptionContext) {
@@ -2740,6 +2754,7 @@ TEST_F(ExprTest, conjunctExceptionContext) {
     ASSERT_EQ(
         "switch(and(lt(mod(bigint1, 409:BIGINT), 300:BIGINT), lt(divide(bigint1, 0:BIGINT), 30:BIGINT)), 1:BIGINT, 2:BIGINT)",
         e.topLevelContext());
+    ASSERT_EQ("division by zero", e.message());
   }
 }
 
@@ -2747,17 +2762,30 @@ TEST_F(ExprTest, lambdaExceptionContext) {
   auto array = makeArrayVector<int64_t>(
       10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
   core::Expressions::registerLambda(
-      "lambda",
+      "lambda1",
       ROW({"x"}, {BIGINT()}),
       ROW({ARRAY(BIGINT())}),
       parse::parseExpr("x / 0 > 1"),
       execCtx_->pool());
-
-  assertErrorContext(
-      "filter(c0, function('lambda'))",
+  assertError(
+      "filter(c0, function('lambda1'))",
       array,
       "divide(x, 0:BIGINT)",
-      "filter(c0, lambda)");
+      "filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
+      "division by zero");
+
+  core::Expressions::registerLambda(
+      "lambda2",
+      ROW({"x"}, {BIGINT()}),
+      ROW({"c1"}, {INTEGER()}),
+      parse::parseExpr("x / c1 > 1"),
+      execCtx_->pool());
+  assertError(
+      "filter(c0, function('lambda2'))",
+      array,
+      "filter(c0, (x, c1) -> gt(divide(x, cast((c1) as BIGINT)), 1:BIGINT))",
+      "Same as context.",
+      "Field not found: c1. Available fields are: c0.");
 }
 
 /// Verify that null inputs result in exceptions, not crashes.
@@ -2777,4 +2805,26 @@ TEST_F(ExprTest, invalidInputs) {
   ASSERT_THROW(
       exec::EvalCtx(execCtx_.get(), exprSet.get(), input.get()),
       VeloxRuntimeError);
+}
+
+TEST_F(ExprTest, lambdaWithRowField) {
+  auto array = makeArrayVector<int64_t>(
+      10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
+  auto row = vectorMaker_->rowVector(
+      {"val"},
+      {makeFlatVector<int64_t>(10, [](vector_size_t row) { return row; })});
+  core::Expressions::registerLambda(
+      "lambda1",
+      ROW({"x"}, {BIGINT()}),
+      ROW({"c0", "c1"}, {ROW({"val"}, {BIGINT()}), ARRAY(BIGINT())}),
+      parse::parseExpr("x + c0.val >= 0"),
+      execCtx_->pool());
+
+  auto rowVector = vectorMaker_->rowVector({"c0", "c1"}, {row, array});
+
+  // We use strpos and c1 to ensure that the constant is peeled before calling
+  // always_throws, not before the try.
+  auto evalResult = evaluate("filter(c1, function('lambda1'))", rowVector);
+
+  assertEqualVectors(array, evalResult);
 }

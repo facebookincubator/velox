@@ -16,11 +16,11 @@
 
 #pragma once
 
-#include <gtest/gtest_prod.h>
+#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
-#include "velox/dwio/dwrf/common/Adaptor.h"
-#include "velox/dwio/dwrf/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/common/IntDecoder.h"
+#include "velox/dwio/common/Adaptor.h"
+#include "velox/dwio/common/DecoderUtil.h"
+#include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 
 #include <memory>
@@ -198,8 +198,8 @@ class RleEncoderV1 : public IntEncoder<isSigned> {
     }
   }
 
-  FRIEND_TEST(RleEncoderV1Test, encodeMinAndMax);
-  FRIEND_TEST(RleEncoderV1Test, encodeMinAndMaxint32);
+  VELOX_FRIEND_TEST(RleEncoderV1Test, encodeMinAndMax);
+  VELOX_FRIEND_TEST(RleEncoderV1Test, encodeMinAndMaxint32);
 };
 
 template <bool isSigned>
@@ -228,21 +228,23 @@ uint64_t RleEncoderV1<isSigned>::addImpl(
 struct DropValues;
 
 template <bool isSigned>
-class RleDecoderV1 : public IntDecoder<isSigned> {
+class RleDecoderV1 : public dwio::common::IntDecoder<isSigned> {
  public:
-  using super = IntDecoder<isSigned>;
+  using super = dwio::common::IntDecoder<isSigned>;
 
   RleDecoderV1(
-      std::unique_ptr<SeekableInputStream> input,
+      std::unique_ptr<dwio::common::SeekableInputStream> input,
       bool useVInts,
       uint32_t numBytes)
-      : IntDecoder<isSigned>{std::move(input), useVInts, numBytes},
+      : dwio::common::IntDecoder<
+            isSigned>{std::move(input), useVInts, numBytes},
         remainingValues(0),
         value(0),
         delta(0),
         repeating(false) {}
 
-  void seekToRowGroup(PositionProvider& positionProvider) override;
+  void seekToRowGroup(
+      dwio::common::PositionProvider& positionProvider) override;
 
   void skip(uint64_t numValues) override;
 
@@ -265,14 +267,14 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
       if (repeating) {
         value += delta * static_cast<int64_t>(count);
       } else {
-        IntDecoder<isSigned>::skipLongsFast(count);
+        dwio::common::IntDecoder<isSigned>::skipLongsFast(count);
       }
     }
   }
 
   template <bool hasNulls, typename Visitor>
   void readWithVisitor(const uint64_t* nulls, Visitor visitor) {
-    if (useFastPath<Visitor, hasNulls>(visitor)) {
+    if (dwio::common::useFastPath<Visitor, hasNulls>(visitor)) {
       fastPath<hasNulls>(nulls, visitor);
       return;
     }
@@ -303,7 +305,7 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
           toSkip = visitor.process(value, atEnd);
           value += delta;
         } else {
-          value = IntDecoder<isSigned>::readLong();
+          value = dwio::common::IntDecoder<isSigned>::readLong();
           toSkip = visitor.process(value, atEnd);
         }
         --remainingValues;
@@ -325,7 +327,7 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
     constexpr bool hasFilter =
         !std::is_same<typename Visitor::FilterType, common::AlwaysTrue>::value;
     constexpr bool hasHook =
-        !std::is_same<typename Visitor::HookType, NoHook>::value;
+        !std::is_same<typename Visitor::HookType, dwio::common::NoHook>::value;
     auto rows = visitor.rows();
     auto numRows = visitor.numRows();
     auto rowsAsRange = folly::Range<const int32_t*>(rows, numRows);
@@ -333,7 +335,7 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
       raw_vector<int32_t>* innerVector = nullptr;
       auto outerVector = &visitor.outerNonNullRows();
       if (Visitor::dense) {
-        nonNullRowsFromDense(nulls, numRows, *outerVector);
+        dwio::common::nonNullRowsFromDense(nulls, numRows, *outerVector);
         if (outerVector->empty()) {
           visitor.setAllNull(hasFilter ? 0 : numRows);
           return;
@@ -345,7 +347,7 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
       } else {
         innerVector = &visitor.innerNonNullRows();
         int32_t tailSkip = -1;
-        auto anyNulls = nonNullRowsFromSparse < hasFilter,
+        auto anyNulls = dwio::common::nonNullRowsFromSparse < hasFilter,
              !hasFilter &&
             !hasHook >
                 (nulls,
@@ -488,15 +490,15 @@ class RleDecoderV1 : public IntDecoder<isSigned> {
   }
 
   inline void readHeader() {
-    signed char ch = IntDecoder<isSigned>::readByte();
+    signed char ch = dwio::common::IntDecoder<isSigned>::readByte();
     if (ch < 0) {
       remainingValues = static_cast<uint64_t>(-ch);
       repeating = false;
     } else {
       remainingValues = static_cast<uint64_t>(ch) + RLE_MINIMUM_REPEAT;
       repeating = true;
-      delta = IntDecoder<isSigned>::readByte();
-      value = IntDecoder<isSigned>::readLong();
+      delta = dwio::common::IntDecoder<isSigned>::readByte();
+      value = dwio::common::IntDecoder<isSigned>::readLong();
     }
   }
 

@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/DwrfReaderShared.h"
 #include <exception>
 #include <optional>
+
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/dwio/dwrf/common/Statistics.h"
+#include "velox/dwio/dwrf/reader/DwrfReaderShared.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
 
 namespace facebook::velox::dwrf {
 
 using dwio::common::ColumnSelector;
+using dwio::common::FileFormat;
 using dwio::common::InputStream;
 using dwio::common::ReaderOptions;
 using dwio::common::RowReaderOptions;
@@ -85,11 +87,6 @@ DwrfRowReaderShared::DwrfRowReaderShared(
         getType()->toString());
     return exceptionMessageContext;
   };
-
-  if (options_.getScanSpec()) {
-    columnReaderFactory_ =
-        std::make_unique<SelectiveColumnReaderFactory>(options_.getScanSpec());
-  }
 
   CompatChecker::check(
       *getReader().getSchema(), *getType(), true, createExceptionContext);
@@ -202,8 +199,10 @@ DwrfReaderShared::DwrfReaderShared(
           options.getDecrypterFactory(),
           options.getBufferedInputFactory()
               ? options.getBufferedInputFactory()
-              : BufferedInputFactory::baseFactoryShared(),
-          options.getDataCacheConfig())),
+              : dwio::common::BufferedInputFactory::baseFactoryShared(),
+          options.getFileNum(),
+          options.getFileFormat() == FileFormat::ORC ? FileFormat::ORC
+                                                     : FileFormat::DWRF)),
       options_(options) {}
 
 std::unique_ptr<StripeInformation> DwrfReaderShared::getStripe(
@@ -355,7 +354,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
             nSelectedStreams * readerBase.getStream().getNaturalReadSize());
 
   // Do we need even more memory to read the footer or the metadata?
-  auto footerLength = readerBase.getPostScript().footerlength();
+  auto footerLength = readerBase.getPostScript().footerLength();
   if (memory < footerLength + DIRECTORY_SIZE_GUESS) {
     memory = footerLength + DIRECTORY_SIZE_GUESS;
   }
@@ -366,7 +365,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
   // Decompressors need buffers for each stream
   uint64_t decompressorMemory = 0;
   auto compression = readerBase.getCompressionKind();
-  if (compression != CompressionKind_NONE) {
+  if (compression != dwio::common::CompressionKind_NONE) {
     for (int32_t i = 0; i < footer.types_size(); i++) {
       if (cs.shouldReadNode(i)) {
         const proto::Type& type = footer.types(i);
@@ -374,7 +373,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
             maxStreamsForType(type) * readerBase.getCompressionBlockSize();
       }
     }
-    if (compression == CompressionKind_SNAPPY) {
+    if (compression == dwio::common::CompressionKind_SNAPPY) {
       decompressorMemory *= 2; // Snappy decompressor uses a second buffer
     }
   }

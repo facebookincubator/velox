@@ -54,15 +54,12 @@ class FlatVector;
  */
 class BaseVector {
  public:
-  static constexpr SelectivityVector* kPreserveAll = nullptr;
-
   static constexpr uint64_t kNullHash = 1;
-
-  enum SerializeOp { kWrite, kRead, kCompare };
 
   BaseVector(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<const Type> type,
+      TypePtr type,
+      VectorEncoding::Simple encoding,
       BufferPtr nulls,
       size_t length,
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
@@ -72,7 +69,9 @@ class BaseVector {
 
   virtual ~BaseVector() = default;
 
-  virtual VectorEncoding::Simple encoding() const = 0;
+  VectorEncoding::Simple encoding() const {
+    return encoding_;
+  }
 
   inline bool isLazy() const {
     return encoding() == VectorEncoding::Simple::LAZY;
@@ -160,7 +159,7 @@ class BaseVector {
     nullCount_ = newNullCount;
   }
 
-  const std::shared_ptr<const Type>& type() const {
+  const TypePtr& type() const {
     return type_;
   }
 
@@ -191,24 +190,6 @@ class BaseVector {
     return nulls_;
   }
 
-  /*
-   * Allocates or reallocates nulls_ with the given size if nulls_ hasn't
-   * been allocated yet or has been allocated with a smaller capacity.
-   */
-  void ensureNullsCapacity(vector_size_t size, bool setNotNull = false) {
-    if (nulls_ && nulls_->capacity() >= bits::nbytes(size)) {
-      return;
-    }
-    if (nulls_) {
-      AlignedBuffer::reallocate<bool>(
-          &nulls_, size, setNotNull ? bits::kNotNull : bits::kNull);
-    } else {
-      nulls_ = AlignedBuffer::allocate<bool>(
-          size, pool_, setNotNull ? bits::kNotNull : bits::kNull);
-    }
-    rawNulls_ = nulls_->as<uint64_t>();
-  }
-
   std::optional<vector_size_t> getDistinctValueCount() const {
     return distinctValueCount_;
   }
@@ -218,10 +199,6 @@ class BaseVector {
    */
   vector_size_t size() const {
     return length_;
-  }
-
-  void setSize(vector_size_t newSize) {
-    length_ = newSize;
   }
 
   virtual void append(const BaseVector* other) {
@@ -304,9 +281,14 @@ class BaseVector {
     return false;
   }
 
-  // Returns true if this vector is encoded as constant (ConstantVector).
-  virtual bool isConstantEncoding() const {
-    return false;
+  /// Returns true if this vector is encoded as flat (FlatVector).
+  bool isFlatEncoding() const {
+    return encoding_ == VectorEncoding::Simple::FLAT;
+  }
+
+  /// Returns true if this vector is encoded as constant (ConstantVector).
+  bool isConstantEncoding() const {
+    return encoding_ == VectorEncoding::Simple::CONSTANT;
   }
 
   // Returns true if this vector has a scalar type. If so, values are
@@ -414,7 +396,7 @@ class BaseVector {
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
       vector_size_t count) {
-    VELOX_NYI();
+    VELOX_UNSUPPORTED("Only flat vectors support copy operation");
   }
 
   // Returns a vector of the type of 'source' where 'indices' contains
@@ -503,7 +485,7 @@ class BaseVector {
   // virtual and defined here because we must be able to access this in type
   // agnostic code without a switch on all data types.
   virtual std::shared_ptr<BaseVector> valueVector() const {
-    throw std::runtime_error("Vector is not a wrapper");
+    VELOX_UNSUPPORTED("Vector is not a wrapper");
   }
 
   virtual BaseVector* loadedVector() {
@@ -518,11 +500,22 @@ class BaseVector {
       std::shared_ptr<BaseVector>);
 
   virtual const BufferPtr& values() const {
-    throw std::runtime_error("Only flat vectors have a values buffer");
+    VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
   }
 
   virtual const void* valuesAsVoid() const {
-    throw std::runtime_error("Only flat vectors have a values buffer");
+    VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
+  }
+
+  // Returns true for flat vectors with unique values buffer and no
+  // nulls or unique nulls buffer. If true, 'this' can be cached for
+  // reuse in ExprCtx.
+  virtual bool isRecyclable() const {
+    return false;
+  }
+
+  bool isFlatNonNull() const {
+    return encoding_ == VectorEncoding::Simple::FLAT && !rawNulls_;
   }
 
   // If 'this' is a wrapper, returns the wrap info, interpretation depends on
@@ -649,7 +642,11 @@ class BaseVector {
 
   virtual std::string toString(vector_size_t index) const;
 
-  std::string toString(vector_size_t from, vector_size_t to);
+  std::string toString(
+      vector_size_t from,
+      vector_size_t to,
+      const std::string& delimiter = "\n",
+      bool includeRowNumbers = true) const;
 
   void setCodegenOutput() {
     isCodegenOutput_ = true;
@@ -660,6 +657,24 @@ class BaseVector {
   }
 
  protected:
+  /*
+   * Allocates or reallocates nulls_ with the given size if nulls_ hasn't
+   * been allocated yet or has been allocated with a smaller capacity.
+   */
+  void ensureNullsCapacity(vector_size_t size, bool setNotNull = false) {
+    if (nulls_ && nulls_->capacity() >= bits::nbytes(size)) {
+      return;
+    }
+    if (nulls_) {
+      AlignedBuffer::reallocate<bool>(
+          &nulls_, size, setNotNull ? bits::kNotNull : bits::kNull);
+    } else {
+      nulls_ = AlignedBuffer::allocate<bool>(
+          size, pool_, setNotNull ? bits::kNotNull : bits::kNull);
+    }
+    rawNulls_ = nulls_->as<uint64_t>();
+  }
+
   FOLLY_ALWAYS_INLINE static std::optional<int32_t>
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
     DCHECK(thisNull || otherNull);
@@ -696,8 +711,9 @@ class BaseVector {
     nullCount_ = std::nullopt;
   }
 
-  std::shared_ptr<const Type> type_;
-  TypeKind typeKind_;
+  const TypePtr type_;
+  const TypeKind typeKind_;
+  const VectorEncoding::Simple encoding_;
   BufferPtr nulls_;
   // Caches raw pointer to 'nulls->as<uint64_t>().
   const uint64_t* rawNulls_ = nullptr;

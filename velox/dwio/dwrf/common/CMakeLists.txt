@@ -14,21 +14,14 @@
 
 add_library(
   velox_dwio_dwrf_common
-  BufferedInput.cpp
   ByteRLE.cpp
-  CachedBufferedInput.cpp
-  CacheInputStream.cpp
   Common.cpp
   Compression.cpp
   Config.cpp
   DataBufferHolder.cpp
-  DecoderUtil.cpp
   Decryption.cpp
-  DirectDecoder.cpp
   Encryption.cpp
   EncryptionSpecification.cpp
-  InputStream.cpp
-  IntDecoder.cpp
   IntEncoder.cpp
   OutputStream.cpp
   PagedInputStream.cpp
@@ -37,7 +30,8 @@ add_library(
   RLEv2.cpp
   Range.cpp
   Statistics.cpp
-  wrap/dwrf-proto-wrapper.cpp)
+  wrap/dwrf-proto-wrapper.cpp
+  wrap/orc-proto-wrapper.cpp)
 
 target_link_libraries(
   velox_dwio_dwrf_common velox_common_base velox_dwio_common

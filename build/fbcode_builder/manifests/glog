@@ -20,3 +20,6 @@ WITH_PKGCONFIG=ON
 [cmake.defines.os=freebsd]
 HAVE_TR1_UNORDERED_MAP=OFF
 HAVE_TR1_UNORDERED_SET=OFF
+
+[debs]
+libgoogle-glog-dev

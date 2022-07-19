@@ -11,6 +11,7 @@ from typing import List
 from .builder import (
     AutoconfBuilder,
     Boost,
+    CMakeBootStrapBuilder,
     CMakeBuilder,
     Iproute2Builder,
     MakeBuilder,
@@ -19,7 +20,6 @@ from .builder import (
     OpenNSABuilder,
     OpenSSLBuilder,
     SqliteBuilder,
-    CMakeBootStrapBuilder,
 )
 from .cargo import CargoBuilder
 from .expr import parse_expr
@@ -103,6 +103,8 @@ SCHEMA = {
     "shipit.pathmap": {"optional_section": True},
     "shipit.strip": {"optional_section": True},
     "install.files": {"optional_section": True},
+    # fb-only
+    "sandcastle": {"optional_section": True, "fields": {"run_tests": OPTIONAL}},
 }
 
 # These sections are allowed to vary for different platforms

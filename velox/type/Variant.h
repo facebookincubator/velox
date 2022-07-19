@@ -49,6 +49,9 @@ template <>
 struct VariantEquality<TypeKind::DATE>;
 
 template <>
+struct VariantEquality<TypeKind::INTERVAL_DAY_TIME>;
+
+template <>
 struct VariantEquality<TypeKind::ARRAY>;
 
 template <>
@@ -209,10 +212,13 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SMALLINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTEGER)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BIGINT)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SHORT_DECIMAL)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::LONG_DECIMAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::REAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DATE)
+  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTERVAL_DAY_TIME)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::TIMESTAMP)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::UNKNOWN)
   // On 64-bit platforms `int64_t` is declared as `long int`, not `long long
@@ -271,6 +277,13 @@ class variant {
         TypeKind::DATE,
         new
         typename detail::VariantTypeTraits<TypeKind::DATE>::stored_type{input}};
+  }
+
+  static variant intervalDayTime(const IntervalDayTime& input) {
+    return {
+        TypeKind::INTERVAL_DAY_TIME,
+        new typename detail::VariantTypeTraits<
+            TypeKind::INTERVAL_DAY_TIME>::stored_type{input}};
   }
 
   template <class T>
@@ -496,14 +509,22 @@ class variant {
   std::shared_ptr<const Type> inferType() const {
     switch (kind_) {
       case TypeKind::MAP: {
+        TypePtr keyType;
+        TypePtr valueType;
         auto& m = map();
         for (auto& pair : m) {
-          if (!pair.first.isNull() && !pair.second.isNull()) {
-            return MAP(pair.first.inferType(), pair.second.inferType());
+          if (keyType == nullptr && !pair.first.isNull()) {
+            keyType = pair.first.inferType();
+          }
+          if (valueType == nullptr && !pair.second.isNull()) {
+            valueType = pair.second.inferType();
+          }
+          if (keyType && valueType) {
+            break;
           }
         }
-        throw std::invalid_argument{
-            "map is empty or contains null values: cannot infer type"};
+        return MAP(
+            keyType ? keyType : UNKNOWN(), valueType ? valueType : UNKNOWN());
       }
       case TypeKind::ROW: {
         auto& r = row();
@@ -605,6 +626,7 @@ struct VariantConverter {
       case TypeKind::VARBINARY:
         return convert<TypeKind::VARBINARY, ToKind>(value);
       case TypeKind::DATE:
+      case TypeKind::INTERVAL_DAY_TIME:
       case TypeKind::TIMESTAMP:
         // Default date/timestamp conversion is prone to errors and implicit
         // assumptions. Block converting timestamp to integer, double and

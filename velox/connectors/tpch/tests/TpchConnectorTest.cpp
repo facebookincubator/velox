@@ -17,6 +17,7 @@
 #include "velox/connectors/tpch/TpchConnector.h"
 #include <folly/init/Init.h>
 #include "gtest/gtest.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -46,8 +47,18 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
     OperatorTestBase::TearDown();
   }
 
-  exec::Split makeTpchSplit() const {
-    return exec::Split(std::make_shared<TpchConnectorSplit>(kTpchConnectorId));
+  exec::Split makeTpchSplit(size_t totalParts = 1, size_t partNumber = 0)
+      const {
+    return exec::Split(std::make_shared<TpchConnectorSplit>(
+        kTpchConnectorId, totalParts, partNumber));
+  }
+
+  RowVectorPtr getResults(
+      const core::PlanNodePtr& planNode,
+      std::vector<exec::Split>&& splits) {
+    return exec::test::AssertQueryBuilder(planNode)
+        .splits(std::move(splits))
+        .copyResults(pool());
   }
 
   void runScaleFactorTest(size_t scaleFactor);
@@ -78,11 +89,11 @@ TEST_F(TpchConnectorTest, simple) {
       makeFlatVector<int64_t>({0, 1, 1, 1, 4}),
       // n_comment
       makeFlatVector<StringView>({
-          " haggle. carefully final deposits detect slyly agai",
-          "al foxes promise slyly according to the regular accounts. bold requests alon",
-          "y alongside of the pending deposits. carefully special packages are about the ironic forges. slyly special ",
-          "eas hang ironic, silent packages. slyly regular packages are furiously over the tithes. fluffily bold",
-          "y above the carefully unusual theodolites. final dugouts are quickly across the furiously regular d",
+          "furiously regular requests. platelets affix furious",
+          "instructions wake quickly. final deposits haggle. final, silent theodolites ",
+          "asymptotes use fluffily quickly bold instructions. slyly bold dependencies sleep carefully pending accounts",
+          "ss deposits wake across the pending foxes. packages after the carefully bold requests integrate caref",
+          "usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
       }),
   });
   test::assertEqualVectors(expected, output);
@@ -115,7 +126,8 @@ TEST_F(TpchConnectorTest, singleColumnWithAlias) {
       PlanBuilder()
           .tableScan(
               outputType,
-              std::make_shared<TpchTableHandle>(Table::TBL_NATION),
+              std::make_shared<TpchTableHandle>(
+                  kTpchConnectorId, Table::TBL_NATION),
               {
                   {aliasedName, std::make_shared<TpchColumnHandle>("n_name")},
                   {"other_name", std::make_shared<TpchColumnHandle>("n_name")},
@@ -140,7 +152,7 @@ void TpchConnectorTest::runScaleFactorTest(size_t scaleFactor) {
                   .tableScan(
                       ROW({}, {}),
                       std::make_shared<TpchTableHandle>(
-                          Table::TBL_SUPPLIER, scaleFactor),
+                          kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor),
                       {})
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
@@ -168,6 +180,75 @@ TEST_F(TpchConnectorTest, unknownColumn) {
             .planNode();
       },
       VeloxUserError);
+}
+
+// Ensures that splits broken down using different configurations return the
+// same dataset in the end.
+TEST_F(TpchConnectorTest, multipleSplits) {
+  auto plan = PlanBuilder()
+                  .tableScan(
+                      Table::TBL_NATION,
+                      {"n_nationkey", "n_name", "n_regionkey", "n_comment"})
+                  .planNode();
+
+  // Use a full read from a single split to use as the source of truth.
+  auto fullResult = getResults(plan, {makeTpchSplit()});
+  size_t nationRowCount = tpch::getRowCount(tpch::Table::TBL_NATION, 1);
+  EXPECT_EQ(nationRowCount, fullResult->size());
+
+  // Run query with different number of parts, up until `totalParts >
+  // nationRowCount` in which cases each split will return one or zero records.
+  for (size_t totalParts = 1; totalParts < (nationRowCount + 5); ++totalParts) {
+    std::vector<exec::Split> splits;
+    splits.reserve(totalParts);
+
+    for (size_t i = 0; i < totalParts; ++i) {
+      splits.emplace_back(makeTpchSplit(totalParts, i));
+    }
+
+    auto output = getResults(plan, std::move(splits));
+    test::assertEqualVectors(fullResult, output);
+  }
+}
+
+// Join nation and region.
+TEST_F(TpchConnectorTest, join) {
+  auto planNodeIdGenerator =
+      std::make_shared<exec::test::PlanNodeIdGenerator>();
+  core::PlanNodeId nationScanId;
+  core::PlanNodeId regionScanId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              tpch::Table::TBL_NATION, {"n_regionkey"}, 1 /*scaleFactor*/)
+          .capturePlanNodeId(nationScanId)
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      tpch::Table::TBL_REGION,
+                      {"r_regionkey", "r_name"},
+                      1 /*scaleFactor*/)
+                  .capturePlanNodeId(regionScanId)
+                  .planNode(),
+              "", // extra filter
+              {"r_name"})
+          .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
+          .orderBy({"r_name"}, false)
+          .planNode();
+
+  auto output = exec::test::AssertQueryBuilder(plan)
+                    .split(nationScanId, makeTpchSplit())
+                    .split(regionScanId, makeTpchSplit())
+                    .copyResults(pool());
+
+  auto expected = makeRowVector({
+      makeFlatVector<StringView>(
+          {"AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST"}),
+      makeConstant<int64_t>(5, 5),
+  });
+  test::assertEqualVectors(expected, output);
 }
 
 } // namespace

@@ -478,6 +478,7 @@ void testFlatMapConfig(
   auto config = std::make_shared<Config>();
   config->set(Config::FLATTEN_MAP, true);
   config->set<const std::vector<uint32_t>>(Config::MAP_FLAT_COLS, mapColumnIds);
+  config->set(Config::MAP_STATISTICS, true);
 
   auto sink = std::make_unique<MemorySink>(pool, 200 * 1024 * 1024);
   auto sinkPtr = sink.get();
@@ -1151,7 +1152,7 @@ TEST(E2EWriterTests, fuzzSimple) {
   VectorFuzzer noNulls(
       {
           .vectorSize = batchSize,
-          .nullChance = 0,
+          .nullRatio = 0,
           .stringLength = 20,
           .stringVariableLength = true,
       },
@@ -1161,7 +1162,7 @@ TEST(E2EWriterTests, fuzzSimple) {
   VectorFuzzer hasNulls{
       {
           .vectorSize = batchSize,
-          .nullChance = 20,
+          .nullRatio = 0.05,
           .stringLength = 10,
           .stringVariableLength = true,
       },
@@ -1171,8 +1172,10 @@ TEST(E2EWriterTests, fuzzSimple) {
   auto iterations = 20;
   auto batches = 20;
   for (auto i = 0; i < iterations; ++i) {
-    testWriter(pool, type, batches, [&]() { return noNulls.fuzzRow(type); });
-    testWriter(pool, type, batches, [&]() { return hasNulls.fuzzRow(type); });
+    testWriter(
+        pool, type, batches, [&]() { return noNulls.fuzzInputRow(type); });
+    testWriter(
+        pool, type, batches, [&]() { return hasNulls.fuzzInputRow(type); });
   }
 }
 
@@ -1202,7 +1205,7 @@ TEST(E2EWriterTests, fuzzComplex) {
   VectorFuzzer noNulls(
       {
           .vectorSize = batchSize,
-          .nullChance = 0,
+          .nullRatio = 0,
           .stringLength = 20,
           .stringVariableLength = true,
           .containerLength = 5,
@@ -1214,7 +1217,7 @@ TEST(E2EWriterTests, fuzzComplex) {
   VectorFuzzer hasNulls{
       {
           .vectorSize = batchSize,
-          .nullChance = 20,
+          .nullRatio = 0.05,
           .stringLength = 10,
           .stringVariableLength = true,
           .containerLength = 5,
@@ -1226,8 +1229,10 @@ TEST(E2EWriterTests, fuzzComplex) {
   auto iterations = 20;
   auto batches = 20;
   for (auto i = 0; i < iterations; ++i) {
-    testWriter(pool, type, batches, [&]() { return noNulls.fuzzRow(type); });
-    testWriter(pool, type, batches, [&]() { return hasNulls.fuzzRow(type); });
+    testWriter(
+        pool, type, batches, [&]() { return noNulls.fuzzInputRow(type); });
+    testWriter(
+        pool, type, batches, [&]() { return hasNulls.fuzzInputRow(type); });
   }
 }
 
@@ -1252,7 +1257,7 @@ TEST(E2EWriterTests, fuzzFlatmap) {
   VectorFuzzer fuzzer(
       {
           .vectorSize = batchSize,
-          .nullChance = 0,
+          .nullRatio = 0,
           .stringLength = 20,
           .stringVariableLength = true,
           .containerLength = 5,
@@ -1278,7 +1283,7 @@ TEST(E2EWriterTests, fuzzFlatmap) {
     VectorFuzzer valueFuzzer(
         {
             .vectorSize = static_cast<size_t>(childSize),
-            .nullChance = 0,
+            .nullRatio = 0,
             .stringLength = 20,
             .stringVariableLength = true,
             .containerLength = 5,

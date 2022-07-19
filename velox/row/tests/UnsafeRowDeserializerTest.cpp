@@ -888,11 +888,11 @@ TYPED_TEST(UnsafeRowVectorDeserializerTest, RowVector) {
 
   EXPECT_EQ(
       rowVectorPtr->toString(0),
-      "{ [child at 0]: 72340172838076673, null, 11259375, 1234, null, \
+      "{72340172838076673, null, 11259375, 1234, null, \
 Make time for civilization, for civilization wont make time.}");
   EXPECT_EQ(
       rowVectorPtr->toString(1),
-      "{ [child at 1]: 72340172838076673, null, 11259375, 1234, null, \
+      "{72340172838076673, null, 11259375, 1234, null, \
 Im a string with 30 characters}");
 }
 
@@ -985,7 +985,9 @@ TYPED_TEST(
 
 VectorFuzzer::Options fuzzerOptions() {
   return {
-      .nullChance = 10,
+      .nullRatio = 0.1,
+      .containerHasNulls = false,
+      .dictionaryHasNulls = false,
       .stringVariableLength = true,
       .containerVariableLength = true,
       .useMicrosecondPrecisionTimestamp = true,
@@ -1002,13 +1004,13 @@ TYPED_TEST(UnsafeRowComplexDeserializerTests, Fuzzer) {
   for (int i = 0; i < 100; ++i) {
     auto seed = i; // TODO: Switch to folly::Random::rand32().
     fuzzer.reSeed(seed);
-    const TypePtr type = fuzzer.randRowType();
+    const auto type = fuzzer.randRowType();
     LOG(INFO) << "i=" << i << " seed=" << seed << " type=" << type->toString();
-    const VectorPtr input = fuzzer.fuzz(type);
+    const VectorPtr input = fuzzer.fuzzRow(type);
     std::vector<std::string_view> rowData;
     char* data = &buffer[0];
-    for (int i = 0; i < input->size(); ++i) {
-      auto size = UnsafeRowDynamicSerializer::serialize(type, input, data, i);
+    for (int j = 0; j < input->size(); ++j) {
+      auto size = UnsafeRowDynamicSerializer::serialize(type, input, data, j);
       ASSERT_TRUE(size);
       rowData.emplace_back(data, *size);
       data += *size;

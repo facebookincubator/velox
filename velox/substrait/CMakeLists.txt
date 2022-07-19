@@ -33,7 +33,7 @@ get_filename_component(PROTO_DIR ${substrait_proto_directory}/, DIRECTORY)
 # Generate Substrait hearders
 add_custom_command(
   OUTPUT ${PROTO_OUTPUT_FILES}
-  COMMAND protoc --proto_path ${proto_directory}/ --cpp_out ${PROTO_OUTPUT_DIR}
+  COMMAND protoc --proto_path ${CMAKE_SOURCE_DIR}/ --cpp_out ${CMAKE_SOURCE_DIR}
           ${PROTO_FILES}
   DEPENDS ${PROTO_DIR}
   COMMENT "Running PROTO compiler"
@@ -41,8 +41,16 @@ add_custom_command(
 add_custom_target(substrait_proto ALL DEPENDS ${PROTO_OUTPUT_FILES})
 add_dependencies(substrait_proto protobuf::libprotobuf)
 
-set(SRCS ${PROTO_SRCS} SubstraitParser.cpp SubstraitToVeloxExpr.cpp
-         SubstraitToVeloxPlan.cpp TypeUtils.cpp)
+set(SRCS
+    ${PROTO_SRCS}
+    SubstraitParser.cpp
+    SubstraitToVeloxExpr.cpp
+    SubstraitToVeloxPlan.cpp
+    TypeUtils.cpp
+    VeloxToSubstraitExpr.cpp
+    VeloxToSubstraitPlan.cpp
+    VeloxToSubstraitType.cpp)
+
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
                            PUBLIC ${PROTO_OUTPUT_DIR})
