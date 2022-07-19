@@ -169,6 +169,9 @@ void SelectiveStringDictionaryColumnReader::processFilter(
       readHelper<common::NegatedBytesValues, isDense>(
           filter, rows, extractValues);
       break;
+    case common::FilterKind::kLengthRange:
+      readHelper<common::LengthRange, isDense>(filter, rows, extractValues);
+      break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);
       break;

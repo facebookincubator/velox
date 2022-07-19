@@ -20,6 +20,7 @@
 #include <memory>
 #include <typeinfo>
 
+#include <velox/type/StringView.h>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::dwio::dwrf {
@@ -130,6 +131,14 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
 }
 
 template <>
+void ColumnStats<StringView>::generateLengths() {
+  for (StringView s : values_) {
+    lengths_.push_back(s.size());
+  }
+  sort(lengths_.begin(), lengths_.end());
+}
+
+template <>
 std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     float startPct,
     float selectPct) {
@@ -137,11 +146,18 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     return std::make_unique<velox::common::IsNull>();
   }
 
+  if (lengths_.empty()) {
+    generateLengths();
+  }
+
   // used to determine if we can test a values filter reasonably
   int32_t lowerIndex;
   int32_t upperIndex;
   StringView lower = valueAtPct(startPct, &lowerIndex);
   StringView upper = valueAtPct(startPct + selectPct, &upperIndex);
+  return std::make_unique<velox::common::LengthRange>(
+    lengths_[lowerIndex], lengths_[upperIndex], selectPct > 25);
+
   if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
     std::vector<std::string> inRange;
     inRange.reserve(upperIndex - lowerIndex);
@@ -157,6 +173,12 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRangeFilter(
     }
     return std::make_unique<velox::common::BytesValues>(
         inRange, selectPct > 25);
+  }
+
+  if (counter_ % 10 == 9) {
+    // generate a length filter
+    return std::make_unique<velox::common::LengthRange>(
+        lengths_[lowerIndex], lengths_[upperIndex], selectPct > 25);
   }
 
   return std::make_unique<velox::common::BytesRange>(
