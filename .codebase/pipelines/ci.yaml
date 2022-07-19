@@ -46,7 +46,7 @@ jobs:
           - make NUM_THREADS=16 hdfstest
   debian-build:
     name: Debian Build
-    image: hub.byted.org/base/debian.stretch.base:ef646217b93c53a38972d08daf88e299
+    image: hub.byted.org/compile/velox.debian.compile:4eb2a2cade4697d0c4219a75956c0b5d
     steps:
       - name: Init Submodules
         commands:
