@@ -16,6 +16,7 @@
 
 #include "DecimalUtils.h"
 
+namespace facebook::velox {
 namespace {
 std::string formatDecimal(
     uint8_t scale,
@@ -50,8 +51,6 @@ std::string formatDecimal(
       "{}{}{}{}{}", sign, integralPart, decimal, leadingZeros, fractionStr);
 }
 } // namespace
-
-namespace facebook::velox {
 
 template <>
 std::string decimalToString<LongDecimal>(
