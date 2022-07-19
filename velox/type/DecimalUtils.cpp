@@ -34,3 +34,38 @@ std::string decimalToString<ShortDecimal>(
   return formatDecimal(decimalType.scale(), value.unscaledValue());
 }
 } // namespace facebook::velox
+
+namespace {
+std::string formatDecimal(
+    uint8_t scale,
+    facebook::velox::int128_t unscaledValue) {
+  VELOX_CHECK_LE(0, scale);
+  VELOX_CHECK_LT(
+      static_cast<size_t>(scale), sizeof(facebook::velox::POWERS_OF_TEN));
+  if (unscaledValue == 0)
+    return "0";
+  std::string sign = "";
+  if (unscaledValue < 0) {
+    sign = "-";
+    unscaledValue = ~unscaledValue + 1;
+  }
+  facebook::velox::int128_t integralPart =
+      unscaledValue / facebook::velox::POWERS_OF_TEN[scale];
+  facebook::velox::int128_t fractionPart =
+      unscaledValue % facebook::velox::POWERS_OF_TEN[scale];
+  std::string fractionStr = "";
+  if (fractionPart != 0) {
+    fractionStr = std::to_string(fractionPart);
+  }
+  std::string leadingZeros;
+  std::string decimal = "";
+  if (scale > 0) {
+    decimal = ".";
+    if (fractionStr.length() < scale) {
+      leadingZeros = std::string(scale - fractionStr.length(), '0');
+    }
+  }
+  return fmt::format(
+      "{}{}{}{}{}", sign, integralPart, decimal, leadingZeros, fractionStr);
+}
+} // namespace
