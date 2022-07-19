@@ -16,6 +16,7 @@
 
 #include "DecimalUtils.h"
 
+namespace {
 std::string formatDecimal(
     uint8_t scale,
     facebook::velox::int128_t unscaledValue) {
@@ -48,6 +49,7 @@ std::string formatDecimal(
   return fmt::format(
       "{}{}{}{}{}", sign, integralPart, decimal, leadingZeros, fractionStr);
 }
+} // namespace
 
 namespace facebook::velox {
 

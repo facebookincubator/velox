@@ -22,10 +22,6 @@
 #include "velox/type/ShortDecimal.h"
 #include "velox/type/Type.h"
 
-std::string formatDecimal(
-    uint8_t scale,
-    facebook::velox::int128_t unscaledValue);
-
 namespace facebook::velox {
 static const facebook::velox::int128_t POWERS_OF_TEN[]{
     1,
