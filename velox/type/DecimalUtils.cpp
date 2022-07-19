@@ -26,7 +26,7 @@ std::string formatDecimal(
       static_cast<size_t>(scale), sizeof(facebook::velox::POWERS_OF_TEN));
   if (unscaledValue == 0)
     return "0";
-  std::string sign = "";
+  std::string sign;
   if (unscaledValue < 0) {
     sign = "-";
     unscaledValue = ~unscaledValue + 1;
@@ -35,12 +35,12 @@ std::string formatDecimal(
       unscaledValue / facebook::velox::POWERS_OF_TEN[scale];
   facebook::velox::int128_t fractionPart =
       unscaledValue % facebook::velox::POWERS_OF_TEN[scale];
-  std::string fractionStr = "";
+  std::string fractionStr;
   if (fractionPart != 0) {
     fractionStr = std::to_string(fractionPart);
   }
   std::string leadingZeros;
-  std::string decimal = "";
+  std::string decimal;
   if (scale > 0) {
     decimal = ".";
     if (fractionStr.length() < scale) {
