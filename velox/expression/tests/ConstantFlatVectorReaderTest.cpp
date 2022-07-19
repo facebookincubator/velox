@@ -19,18 +19,15 @@
 
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec {
 
 class ConstantFlatVectorReaderTest : public functions::test::FunctionBaseTest {
 };
 
-TEST_F(ConstantFlatVectorReaderTest, flatContainsNoNulls) {
-  auto vector =
-      makeFlatVector<int32_t>(10, [](vector_size_t row) { return row * 2; });
-
-  ConstantFlatVectorReader<int32_t> reader(vector.get());
-
+template <typename T>
+void testFlatContainsNoNulls(const T& reader, const VectorPtr& vector) {
   ASSERT_FALSE(reader.mayHaveNulls());
   ASSERT_FALSE(reader.mayHaveNullsRecursive());
 
@@ -44,14 +41,19 @@ TEST_F(ConstantFlatVectorReaderTest, flatContainsNoNulls) {
   }
 }
 
-TEST_F(ConstantFlatVectorReaderTest, flatContainsNulls) {
-  auto vector = makeFlatVector<int32_t>(
-      10,
-      [](vector_size_t row) { return row * 2; },
-      [](vector_size_t row) { return row % 5 == 2; });
+TEST_F(ConstantFlatVectorReaderTest, flatContainsNoNulls) {
+  auto vector =
+      makeFlatVector<int32_t>(10, [](vector_size_t row) { return row * 2; });
 
-  ConstantFlatVectorReader<int32_t> reader(vector.get());
+  FlatVectorReader<int32_t> reader1(*vector);
+  ConstantFlatVectorReader<int32_t> reader2(vector);
 
+  testFlatContainsNoNulls(reader1, vector);
+  testFlatContainsNoNulls(reader2, vector);
+}
+
+template <typename T>
+void testFlatContainsNull(const T& reader, const VectorPtr& vector) {
   ASSERT_TRUE(reader.mayHaveNulls());
   ASSERT_TRUE(reader.mayHaveNullsRecursive());
 
@@ -80,12 +82,20 @@ TEST_F(ConstantFlatVectorReaderTest, flatContainsNulls) {
   }
 }
 
-TEST_F(ConstantFlatVectorReaderTest, constant) {
-  auto vector = makeConstant<int32_t>(5, 10);
+TEST_F(ConstantFlatVectorReaderTest, flatContainsNulls) {
+  auto vector = makeFlatVector<int32_t>(
+      10,
+      [](vector_size_t row) { return row * 2; },
+      [](vector_size_t row) { return row % 5 == 2; });
 
-  ConstantFlatVectorReader<int32_t> reader(
-      dynamic_cast<ConstantVector<int32_t>*>(vector.get()));
+  FlatVectorReader<int32_t> reader1(*vector);
+  ConstantFlatVectorReader<int32_t> reader2(vector);
+  testFlatContainsNull(reader1, vector);
+  testFlatContainsNull(reader2, vector);
+}
 
+template <typename T>
+void testConstant(const T& reader, const VectorPtr& vector) {
   ASSERT_FALSE(reader.mayHaveNulls());
   ASSERT_FALSE(reader.mayHaveNullsRecursive());
 
@@ -99,12 +109,17 @@ TEST_F(ConstantFlatVectorReaderTest, constant) {
   }
 }
 
-TEST_F(ConstantFlatVectorReaderTest, constantNull) {
-  auto vector = makeConstant<int32_t>(std::nullopt, 10);
+TEST_F(ConstantFlatVectorReaderTest, constant) {
+  auto vector = makeConstant<int32_t>(5, 10);
 
-  ConstantFlatVectorReader<int32_t> reader(
-      dynamic_cast<ConstantVector<int32_t>*>(vector.get()));
+  ConstantVectorReader<int32_t> reader1(*vector->as<ConstantVector<int32_t>>());
+  ConstantFlatVectorReader<int32_t> reader2(vector);
+  testConstant(reader1, vector);
+  testConstant(reader2, vector);
+}
 
+template <typename T>
+void testConstantNull(const T& reader, const VectorPtr& vector) {
   ASSERT_TRUE(reader.mayHaveNulls());
   ASSERT_TRUE(reader.mayHaveNullsRecursive());
 
@@ -116,5 +131,15 @@ TEST_F(ConstantFlatVectorReaderTest, constantNull) {
     }
     ASSERT_TRUE(reader.containsNull(i, vector->size()));
   }
+}
+
+TEST_F(ConstantFlatVectorReaderTest, constantNull) {
+  auto vector = makeConstant<int32_t>(std::nullopt, 10);
+
+  ConstantVectorReader<int32_t> reader1(*vector->as<ConstantVector<int32_t>>());
+  ConstantFlatVectorReader<int32_t> reader2(vector);
+
+  testConstantNull(reader1, vector);
+  testConstantNull(reader2, vector);
 }
 } // namespace facebook::velox::exec
