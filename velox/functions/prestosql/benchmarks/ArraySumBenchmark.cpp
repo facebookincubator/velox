@@ -15,19 +15,18 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/benchmarks/FunctionBenchmarkBase.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::functions;
 
 namespace {
-
 
 ///
 /// Implements the array_sum function.
@@ -161,7 +160,6 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
 
 // Register function.
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(udf_array_sum, signatures(), create);
-
 
 class ArraySumBenchmark : public functions::test::FunctionBenchmarkBase {
  public:
