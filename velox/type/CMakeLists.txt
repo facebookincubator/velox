@@ -19,6 +19,7 @@ add_subdirectory(tz)
 add_library(
   velox_type
   Date.cpp
+  DecimalUtils.cpp
   Filter.cpp
   IntervalDayTime.cpp
   LongDecimal.cpp
@@ -28,8 +29,7 @@ add_library(
   TimestampConversion.cpp
   Tokenizer.cpp
   Type.cpp
-  Variant.cpp
-  DecimalUtils.cpp)
+  Variant.cpp)
 
 target_link_libraries(
   velox_type

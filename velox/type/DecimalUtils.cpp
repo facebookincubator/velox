@@ -16,26 +16,6 @@
 
 #include "DecimalUtils.h"
 
-namespace facebook::velox {
-
-template <>
-std::string decimalToString<LongDecimal>(
-    const LongDecimal& value,
-    const TypePtr& type) {
-  auto decimalType = type->asLongDecimal();
-  return formatDecimal(decimalType.scale(), value.unscaledValue());
-}
-
-template <>
-std::string decimalToString<ShortDecimal>(
-    const ShortDecimal& value,
-    const TypePtr& type) {
-  auto decimalType = type->asShortDecimal();
-  return formatDecimal(decimalType.scale(), value.unscaledValue());
-}
-} // namespace facebook::velox
-
-namespace {
 std::string formatDecimal(
     uint8_t scale,
     facebook::velox::int128_t unscaledValue) {
@@ -68,4 +48,22 @@ std::string formatDecimal(
   return fmt::format(
       "{}{}{}{}{}", sign, integralPart, decimal, leadingZeros, fractionStr);
 }
-} // namespace
+
+namespace facebook::velox {
+
+template <>
+std::string decimalToString<LongDecimal>(
+    const LongDecimal& value,
+    const TypePtr& type) {
+  auto decimalType = type->asLongDecimal();
+  return formatDecimal(decimalType.scale(), value.unscaledValue());
+}
+
+template <>
+std::string decimalToString<ShortDecimal>(
+    const ShortDecimal& value,
+    const TypePtr& type) {
+  auto decimalType = type->asShortDecimal();
+  return formatDecimal(decimalType.scale(), value.unscaledValue());
+}
+} // namespace facebook::velox
