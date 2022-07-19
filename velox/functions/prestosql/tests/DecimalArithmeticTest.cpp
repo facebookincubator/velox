@@ -132,3 +132,45 @@ TEST_F(DecimalArithmeticTest, add) {
   testOpDictVectors<ShortDecimal>(
       "plus", resultShortFlat, {shortFlat, shortFlat});
 }
+
+TEST_F(DecimalArithmeticTest, decimalMulTest) {
+  auto shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(17, 3));
+  auto resultLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(34, 6));
+  // Multiply short and short, returning long.
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "multiply(c0, c1)", {shortFlat, shortFlat});
+  // Multiply short and long, returning long.
+  auto longFlat = makeLongDecimalFlatVector({1000, 2000}, DECIMAL(20, 3));
+  resultLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(37, 6));
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "multiply(c0, c1)", {shortFlat, longFlat});
+  // Multiply long and short, returning long.
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "multiply(c0, c1)", {longFlat, shortFlat});
+  // Multiply long and long, returning long.
+  resultLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(38, 6));
+  testDecimalExpr<LongDecimal>(
+      resultLongFlat, "multiply(c0, c1)", {longFlat, longFlat});
+
+  // Multiply short and short, returning short.
+  shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(6, 3));
+  auto resultShortFlat =
+      makeShortDecimalFlatVector({1000000, 4000000}, DECIMAL(12, 6));
+  testDecimalExpr<ShortDecimal>(
+      resultShortFlat, "c0 * c1", {shortFlat, shortFlat});
+
+  // Flat and Constant arguments.
+  auto resultConstantFlat =
+      makeShortDecimalFlatVector({1000000, 2000000}, DECIMAL(12, 6));
+  testOpFlatConstant<ShortDecimal>(
+      "multiply",
+      "'1.000'::decimal(6,3)",
+      shortFlat,
+      resultConstantFlat,
+      false);
+  testOpDictVectors<ShortDecimal>(
+      "multiply", resultShortFlat, {shortFlat, shortFlat});
+}
