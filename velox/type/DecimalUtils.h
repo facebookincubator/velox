@@ -24,60 +24,25 @@
 
 namespace facebook::velox {
 
-static const int128_t kPowersOfTen[]{
-    1,
-    10,
-    100,
-    1000,
-    10000,
-    100000,
-    1000000,
-    10000000,
-    100000000,
-    1000000000,
-    10000000000,
-    100000000000,
-    1000000000000,
-    10000000000000,
-    100000000000000,
-    1000000000000000,
-    10000000000000000,
-    100000000000000000,
-    1000000000000000000,
-    1000000000000000000 * (int128_t)10,
-    1000000000000000000 * (int128_t)100,
-    1000000000000000000 * (int128_t)1000,
-    1000000000000000000 * (int128_t)10000,
-    1000000000000000000 * (int128_t)100000,
-    1000000000000000000 * (int128_t)1000000,
-    1000000000000000000 * (int128_t)10000000,
-    1000000000000000000 * (int128_t)100000000,
-    1000000000000000000 * (int128_t)1000000000,
-    1000000000000000000 * (int128_t)10000000000,
-    1000000000000000000 * (int128_t)100000000000,
-    1000000000000000000 * (int128_t)1000000000000,
-    1000000000000000000 * (int128_t)10000000000000,
-    1000000000000000000 * (int128_t)100000000000000,
-    1000000000000000000 * (int128_t)1000000000000000,
-    1000000000000000000 * (int128_t)10000000000000000,
-    1000000000000000000 * (int128_t)100000000000000000,
-    1000000000000000000 * (int128_t)1000000000000000000,
-    1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10,
-    1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
+/// DecimalUtil is a static class that holds helper functions for Decimal Type.
+class DecimalUtil {
+ public:
+  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision];
 
-/// Helper function to convert a decimal value to string.
-template <typename T>
-std::string decimalToString(const T& value, const TypePtr& type) {
-  VELOX_UNSUPPORTED();
-}
+  /// Helper function to convert a decimal value to string.
+  template <typename T>
+  static std::string decimalToString(const T& value, const TypePtr& type) {
+    VELOX_UNSUPPORTED();
+  }
 
-template <>
-std::string decimalToString<LongDecimal>(
-    const LongDecimal& value,
-    const TypePtr& type);
+  template <>
+  static std::string decimalToString<LongDecimal>(
+      const LongDecimal& value,
+      const TypePtr& type);
 
-template <>
-std::string decimalToString<ShortDecimal>(
-    const ShortDecimal& value,
-    const TypePtr& type);
+  template <>
+  static std::string decimalToString<ShortDecimal>(
+      const ShortDecimal& value,
+      const TypePtr& type);
+};
 } // namespace facebook::velox

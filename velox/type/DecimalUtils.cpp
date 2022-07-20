@@ -20,7 +20,8 @@ namespace facebook::velox {
 namespace {
 std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   VELOX_DCHECK_GE(scale, 0);
-  VELOX_DCHECK_LT(static_cast<size_t>(scale), sizeof(kPowersOfTen));
+  VELOX_DCHECK_LT(
+      static_cast<size_t>(scale), sizeof(DecimalUtil::kPowersOfTen));
   if (unscaledValue == 0) {
     return "0";
   }
@@ -29,12 +30,13 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   if (isNegative) {
     unscaledValue = ~unscaledValue + 1;
   }
-  int128_t integralPart = unscaledValue / kPowersOfTen[scale];
+  int128_t integralPart = unscaledValue / DecimalUtil::kPowersOfTen[scale];
 
   bool isFraction = (scale > 0);
   std::string fractionString;
   if (isFraction) {
-    auto fraction = std::to_string(unscaledValue % kPowersOfTen[scale]);
+    auto fraction =
+        std::to_string(unscaledValue % DecimalUtil::kPowersOfTen[scale]);
     fractionString += ".";
     // Append leading zeros.
     fractionString += std::string(
@@ -48,8 +50,48 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
 }
 } // namespace
 
+const int128_t DecimalUtil::kPowersOfTen[]{
+    1,
+    10,
+    100,
+    1000,
+    10000,
+    100000,
+    1000000,
+    10000000,
+    100000000,
+    1000000000,
+    10000000000,
+    100000000000,
+    1000000000000,
+    10000000000000,
+    100000000000000,
+    1000000000000000,
+    10000000000000000,
+    100000000000000000,
+    1000000000000000000,
+    1000000000000000000 * (int128_t)10,
+    1000000000000000000 * (int128_t)100,
+    1000000000000000000 * (int128_t)1000,
+    1000000000000000000 * (int128_t)10000,
+    1000000000000000000 * (int128_t)100000,
+    1000000000000000000 * (int128_t)1000000,
+    1000000000000000000 * (int128_t)10000000,
+    1000000000000000000 * (int128_t)100000000,
+    1000000000000000000 * (int128_t)1000000000,
+    1000000000000000000 * (int128_t)10000000000,
+    1000000000000000000 * (int128_t)100000000000,
+    1000000000000000000 * (int128_t)1000000000000,
+    1000000000000000000 * (int128_t)10000000000000,
+    1000000000000000000 * (int128_t)100000000000000,
+    1000000000000000000 * (int128_t)1000000000000000,
+    1000000000000000000 * (int128_t)10000000000000000,
+    1000000000000000000 * (int128_t)100000000000000000,
+    1000000000000000000 * (int128_t)1000000000000000000,
+    1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10};
+
 template <>
-std::string decimalToString<LongDecimal>(
+std::string DecimalUtil::decimalToString<LongDecimal>(
     const LongDecimal& value,
     const TypePtr& type) {
   auto decimalType = type->asLongDecimal();
@@ -57,7 +99,7 @@ std::string decimalToString<LongDecimal>(
 }
 
 template <>
-std::string decimalToString<ShortDecimal>(
+std::string DecimalUtil::decimalToString<ShortDecimal>(
     const ShortDecimal& value,
     const TypePtr& type) {
   auto decimalType = type->asShortDecimal();
