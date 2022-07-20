@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/core/PlanNode.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/vector/BaseVector.h"
 

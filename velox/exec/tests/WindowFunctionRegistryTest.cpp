@@ -25,9 +25,9 @@ namespace {
 void registerWindowFunction(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder()
-          .argumentType("BIGINT")
-          .argumentType("DOUBLE")
-          .returnType("BIGINT")
+          .argumentType("bigint")
+          .argumentType("double")
+          .returnType("bigint")
           .build(),
       exec::FunctionSignatureBuilder()
           .typeVariable("T")
@@ -35,7 +35,7 @@ void registerWindowFunction(const std::string& name) {
           .argumentType("T")
           .returnType("T")
           .build(),
-      exec::FunctionSignatureBuilder().returnType("DATE").build(),
+      exec::FunctionSignatureBuilder().returnType("date").build(),
   };
   exec::registerWindowFunction(name, std::move(signatures), nullptr);
 }
@@ -57,10 +57,9 @@ class WindowFunctionRegistryTest : public testing::Test {
   }
 
   TypePtr resolveWindowFunction(
-      const std::string& functionName,
+      const std::string& name,
       const std::vector<TypePtr>& argTypes) {
-    if (auto windowFunctionSignatures =
-            getWindowFunctionSignatures(functionName)) {
+    if (auto windowFunctionSignatures = getWindowFunctionSignatures(name)) {
       for (const auto& signature : windowFunctionSignatures.value()) {
         SignatureBinder binder(*signature, argTypes);
         if (binder.tryBind()) {
@@ -73,15 +72,19 @@ class WindowFunctionRegistryTest : public testing::Test {
   }
 
   void testResolveWindowFunction(
-      const std::string& functionName,
+      const std::string& name,
       const std::vector<TypePtr>& argTypes,
-      const TypePtr& expectedReturn) {
-    auto result = resolveWindowFunction(functionName, argTypes);
-    checkEqual(result, expectedReturn);
+      const TypePtr& expectedType) {
+    auto actualType = resolveWindowFunction(name, argTypes);
+    if (expectedType) {
+      EXPECT_EQ(*actualType, *expectedType);
+    } else {
+      EXPECT_EQ(actualType, nullptr);
+    }
   }
 };
 
-TEST_F(WindowFunctionRegistryTest, hasWindowFunctionSignature) {
+TEST_F(WindowFunctionRegistryTest, basic) {
   testResolveWindowFunction("window_func", {BIGINT(), DOUBLE()}, BIGINT());
   testResolveWindowFunction("window_func", {DOUBLE(), DOUBLE()}, DOUBLE());
   testResolveWindowFunction(
@@ -89,7 +92,7 @@ TEST_F(WindowFunctionRegistryTest, hasWindowFunctionSignature) {
   testResolveWindowFunction("window_func", {}, DATE());
 }
 
-TEST_F(WindowFunctionRegistryTest, windowFunctionWrongName) {
+TEST_F(WindowFunctionRegistryTest, wrongName) {
   testResolveWindowFunction(
       "window_func_not_exist", {BIGINT(), DOUBLE()}, nullptr);
   testResolveWindowFunction(
@@ -99,14 +102,14 @@ TEST_F(WindowFunctionRegistryTest, windowFunctionWrongName) {
   testResolveWindowFunction("window_func_not_exist", {}, nullptr);
 }
 
-TEST_F(WindowFunctionRegistryTest, windowFunctionSignatureWrongArgType) {
+TEST_F(WindowFunctionRegistryTest, wrongSignature) {
   testResolveWindowFunction("window_func", {DOUBLE(), BIGINT()}, nullptr);
   testResolveWindowFunction("window_func", {BIGINT()}, nullptr);
   testResolveWindowFunction(
       "window_func", {BIGINT(), BIGINT(), BIGINT()}, nullptr);
 }
 
-TEST_F(WindowFunctionRegistryTest, windowFunctionNameMixedCase) {
+TEST_F(WindowFunctionRegistryTest, mixedCaseName) {
   testResolveWindowFunction("window_FUNC", {BIGINT(), DOUBLE()}, BIGINT());
   testResolveWindowFunction(
       "window_fUNC_alias", {BIGINT(), DOUBLE()}, BIGINT());
