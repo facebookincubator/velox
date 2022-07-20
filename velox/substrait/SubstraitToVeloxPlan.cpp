@@ -513,14 +513,15 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
         std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
 
     // In fact, only one RelRoot or Rel is expected here.
-    for (const auto& rel : substraitPlan.relations()) {
-      if (rel.has_root()) {
-        return toVeloxPlan(rel.root(), pool);
-      }
-      if (rel.has_rel()) {
-        return toVeloxPlan(rel.rel(), pool);
-      }
+    VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);
+    const auto& rel = substraitPlan.relations(0);
+    if (rel.has_root()) {
+      return toVeloxPlan(rel.root(), pool);
     }
+    if (rel.has_rel()) {
+      return toVeloxPlan(rel.rel(), pool);
+    }
+
     VELOX_FAIL("RelRoot or Rel is expected in Plan.");
   }
 }
@@ -721,9 +722,7 @@ bool SubstraitVeloxPlanConverter::checkTypeExtension(
     }
 
     // Only support UNKNOWN type in UserDefined type extension.
-    if (sExtension.extension_type().name() == "UNKNOWN") {
-      return true;
-    } else {
+    if (sExtension.extension_type().name() != "UNKNOWN") {
       return false;
     }
   }

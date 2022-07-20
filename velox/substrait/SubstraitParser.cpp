@@ -61,6 +61,8 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       break;
     }
     case ::substrait::Type::KindCase::kUserDefined: {
+      // We only support UNKNOWN type to handle the null literal whose type is
+      // not known.
       typeName = "UNKNOWN";
       nullability = substraitType.string().nullability();
       break;

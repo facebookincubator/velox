@@ -81,7 +81,7 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, project) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
   auto plan =
-      PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2 "}).planNode();
+      PlanBuilder().values(vectors).project({"c0 + c1", "c1 / c2"}).planNode();
   assertPlanConversion(plan, "SELECT c0 + c1, c1 / c2 FROM tmp");
 }
 
