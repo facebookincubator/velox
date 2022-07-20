@@ -48,14 +48,6 @@ class WindowFunctionRegistryTest : public testing::Test {
     registerWindowFunction("window_Func_Alias");
   }
 
-  void checkEqual(const TypePtr& actual, const TypePtr& expected) {
-    if (expected) {
-      EXPECT_EQ(*actual, *expected);
-    } else {
-      EXPECT_EQ(actual, nullptr);
-    }
-  }
-
   TypePtr resolveWindowFunction(
       const std::string& name,
       const std::vector<TypePtr>& argTypes) {
