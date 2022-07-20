@@ -92,6 +92,8 @@ class GroupingSet {
 
   void initializeGlobalAggregation();
 
+  void destroyGlobalAggregations();
+
   void addGlobalAggregationInput(const RowVectorPtr& input, bool mayPushdown);
 
   bool getGlobalAggregationOutput(
