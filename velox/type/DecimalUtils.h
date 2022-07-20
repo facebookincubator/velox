@@ -31,18 +31,6 @@ class DecimalUtil {
 
   /// Helper function to convert a decimal value to string.
   template <typename T>
-  static std::string decimalToString(const T& value, const TypePtr& type) {
-    VELOX_UNSUPPORTED();
-  }
-
-  template <>
-  static std::string decimalToString<LongDecimal>(
-      const LongDecimal& value,
-      const TypePtr& type);
-
-  template <>
-  static std::string decimalToString<ShortDecimal>(
-      const ShortDecimal& value,
-      const TypePtr& type);
+  static std::string decimalToString(const T& value, const TypePtr& type);
 };
 } // namespace facebook::velox

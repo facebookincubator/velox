@@ -65,8 +65,6 @@ TEST(DecimalTest, decimalToString) {
       "-0.001000",
       DecimalUtil::decimalToString(LongDecimal(-1000), DECIMAL(20, 6)));
   ASSERT_EQ("0", DecimalUtil::decimalToString(LongDecimal(0), DECIMAL(20, 9)));
-
-  ASSERT_THROW(DecimalUtil::decimalToString(10, INTEGER()), VeloxUserError);
 }
 } // namespace
 } // namespace facebook::velox
