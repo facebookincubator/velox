@@ -17,53 +17,11 @@
 #include "velox/type/DecimalUtils.h"
 
 namespace facebook::velox {
-
-static const int128_t POWERS_OF_TEN[]{
-    1,
-    10,
-    100,
-    1000,
-    10000,
-    100000,
-    1000000,
-    10000000,
-    100000000,
-    1000000000,
-    10000000000,
-    100000000000,
-    1000000000000,
-    10000000000000,
-    100000000000000,
-    1000000000000000,
-    10000000000000000,
-    100000000000000000,
-    1000000000000000000,
-    1000000000000000000 * (int128_t)10,
-    1000000000000000000 * (int128_t)100,
-    1000000000000000000 * (int128_t)1000,
-    1000000000000000000 * (int128_t)10000,
-    1000000000000000000 * (int128_t)100000,
-    1000000000000000000 * (int128_t)1000000,
-    1000000000000000000 * (int128_t)10000000,
-    1000000000000000000 * (int128_t)100000000,
-    1000000000000000000 * (int128_t)1000000000,
-    1000000000000000000 * (int128_t)10000000000,
-    1000000000000000000 * (int128_t)100000000000,
-    1000000000000000000 * (int128_t)1000000000000,
-    1000000000000000000 * (int128_t)10000000000000,
-    1000000000000000000 * (int128_t)100000000000000,
-    1000000000000000000 * (int128_t)1000000000000000,
-    1000000000000000000 * (int128_t)10000000000000000,
-    1000000000000000000 * (int128_t)100000000000000000,
-    1000000000000000000 * (int128_t)1000000000000000000,
-    1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10,
-    1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
-
 namespace {
 
 std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   VELOX_DCHECK_GE(scale, 0);
-  VELOX_DCHECK_LT(static_cast<size_t>(scale), sizeof(POWERS_OF_TEN));
+  VELOX_DCHECK_LT(static_cast<size_t>(scale), sizeof(kPowersOfTen));
   if (unscaledValue == 0) {
     return "0";
   }
@@ -72,13 +30,13 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   if (isNegative) {
     unscaledValue = ~unscaledValue + 1;
   }
-  int128_t integralPart = unscaledValue / POWERS_OF_TEN[scale];
+  int128_t integralPart = unscaledValue / kPowersOfTen[scale];
 
   bool isFraction = (scale > 0);
   std::string fractionString;
   if (isFraction) {
     // Calculate the string length of fractional part.
-    int128_t fractionPart = unscaledValue % POWERS_OF_TEN[scale];
+    int128_t fractionPart = unscaledValue % kPowersOfTen[scale];
     int fractionSize = 1;
     if (fractionPart > 0) {
       // Log can be used to count the number of digits of a positive number.
