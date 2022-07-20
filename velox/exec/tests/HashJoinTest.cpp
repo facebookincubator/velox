@@ -931,8 +931,31 @@ TEST_F(HashJoinTest, dynamicFilters) {
     EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
     EXPECT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
     EXPECT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-  }
 
+    // Right semi join.
+    op = PlanBuilder(planNodeIdGenerator)
+             .tableScan(probeType)
+             .capturePlanNodeId(leftScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c0", "c1"},
+                 core::JoinType::kRightSemi)
+             .project({"c0", "c1 + 1"})
+             .planNode();
+
+    task =
+        AssertQueryBuilder(op, duckDbQueryRunner_)
+            .splits(leftScanId, makeHiveConnectorSplits(leftFiles))
+            .assertResults(
+                "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)");
+    EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
+    EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
+    EXPECT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+    EXPECT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+  }
   // Basic push-down with column names projected out of the table scan having
   // different names than column names in the files.
   {
@@ -1081,6 +1104,30 @@ TEST_F(HashJoinTest, dynamicFilters) {
                  "",
                  {"c1"},
                  core::JoinType::kLeftSemi)
+             .project({"c1 + 1"})
+             .planNode();
+
+    task =
+        AssertQueryBuilder(op, duckDbQueryRunner_)
+            .splits(leftScanId, makeHiveConnectorSplits(leftFiles))
+            .assertResults(
+                "SELECT t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u) AND t.c0 < 200");
+    EXPECT_EQ(1, getFiltersProduced(task, 1).sum);
+    EXPECT_EQ(1, getFiltersAccepted(task, 0).sum);
+    EXPECT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
+    EXPECT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
+
+    // Right semi join.
+    op = PlanBuilder(planNodeIdGenerator)
+             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .capturePlanNodeId(leftScanId)
+             .hashJoin(
+                 {"c0"},
+                 {"u_c0"},
+                 buildSide,
+                 "",
+                 {"c1"},
+                 core::JoinType::kRightSemi)
              .project({"c1 + 1"})
              .planNode();
 
