@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "DecimalUtils.h"
+#include "velox/type/DecimalUtils.h"
 
 namespace facebook::velox {
 
-static const facebook::velox::int128_t POWERS_OF_TEN[]{
+static const int128_t POWERS_OF_TEN[]{
     1,
     10,
     100,
@@ -60,37 +60,38 @@ static const facebook::velox::int128_t POWERS_OF_TEN[]{
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
 
 namespace {
-std::string formatDecimal(
-    uint8_t scale,
-    facebook::velox::int128_t unscaledValue) {
-  VELOX_CHECK_LE(0, scale);
-  VELOX_CHECK_LT(
-      static_cast<size_t>(scale), sizeof(facebook::velox::POWERS_OF_TEN));
-  if (unscaledValue == 0)
+
+std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
+  VELOX_DCHECK_GE(scale, 0);
+  VELOX_DCHECK_LT(static_cast<size_t>(scale), sizeof(POWERS_OF_TEN));
+  if (unscaledValue == 0) {
     return "0";
-  std::string sign;
-  if (unscaledValue < 0) {
-    sign = "-";
+  }
+
+  bool isNegative = (unscaledValue < 0);
+  if (isNegative) {
     unscaledValue = ~unscaledValue + 1;
   }
-  facebook::velox::int128_t integralPart =
-      unscaledValue / facebook::velox::POWERS_OF_TEN[scale];
-  facebook::velox::int128_t fractionPart =
-      unscaledValue % facebook::velox::POWERS_OF_TEN[scale];
-  std::string fractionStr;
-  if (fractionPart != 0) {
-    fractionStr = std::to_string(fractionPart);
-  }
-  std::string leadingZeros;
-  std::string decimal;
-  if (scale > 0) {
-    decimal = ".";
-    if (fractionStr.length() < scale) {
-      leadingZeros = std::string(scale - fractionStr.length(), '0');
+  int128_t integralPart = unscaledValue / POWERS_OF_TEN[scale];
+
+  bool isFraction = (scale > 0);
+  std::string fractionString;
+  if (isFraction) {
+    // Calculate the string length of fractional part.
+    int128_t fractionPart = unscaledValue % POWERS_OF_TEN[scale];
+    int fractionSize = 1;
+    if (fractionPart > 0) {
+      // Log can be used to count the number of digits of a positive number.
+      // Log is likely an assembly instruction, so efficient to use.
+      fractionSize += log10(fractionPart);
     }
+    fractionString += ".";
+    fractionString += std::string(std::max(scale - fractionSize, 0), '0');
+    fractionString += std::to_string(fractionPart);
   }
+
   return fmt::format(
-      "{}{}{}{}{}", sign, integralPart, decimal, leadingZeros, fractionStr);
+      "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
 } // namespace
 
