@@ -57,6 +57,11 @@ class SortOrder {
   SortOrder(bool ascending, bool nullsFirst)
       : ascending_(ascending), nullsFirst_(nullsFirst) {}
 
+  SortOrder(const SortOrder& other) {
+    ascending_ = other.ascending_;
+    nullsFirst_ = other.nullsFirst_;
+  }
+
   bool isAscending() const {
     return ascending_;
   }
@@ -73,8 +78,8 @@ class SortOrder {
   }
 
  private:
-  const bool ascending_;
-  const bool nullsFirst_;
+  bool ascending_;
+  bool nullsFirst_;
 };
 
 extern const SortOrder kAscNullsFirst;
@@ -612,6 +617,83 @@ class GroupIdNode : public PlanNode {
   const std::map<std::string, FieldAccessTypedExprPtr> outputGroupingKeyNames_;
   const std::vector<FieldAccessTypedExprPtr> aggregationInputs_;
   const std::string groupIdName_;
+};
+
+class WindowNode : public PlanNode {
+ public:
+  enum class WindowType { kRange, kRows };
+
+  enum class BoundType {
+    kUnboundedPreceding,
+    kPreceding,
+    kCurrentRow,
+    kFollowing,
+    kUnboundedFollowing
+  };
+
+  struct Frame {
+    WindowType type;
+    BoundType startType;
+    FieldAccessTypedExprPtr startValue;
+    BoundType endType;
+    FieldAccessTypedExprPtr endValue;
+  };
+
+  struct Function {
+    CallTypedExprPtr functionCall;
+    Frame frame;
+    bool ignoreNulls;
+  };
+
+  WindowNode(
+      PlanNodeId id,
+      std::vector<FieldAccessTypedExprPtr> partitionKeys,
+      std::vector<FieldAccessTypedExprPtr> sortingKeys,
+      std::vector<SortOrder> sortingOrders,
+      std::vector<std::string> windowColumnNames,
+      std::vector<Function> windowFunctions,
+      PlanNodePtr source);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
+    return sortingKeys_;
+  }
+
+  const std::vector<SortOrder>& sortingOrders() const {
+    return sortingOrders_;
+  }
+
+  const std::vector<Function>& windowFunctions() const {
+    return windowFunctions_;
+  }
+
+  std::string_view name() const override {
+    return "Window";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::vector<FieldAccessTypedExprPtr> partitionKeys_;
+
+  const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
+  const std::vector<SortOrder> sortingOrders_;
+
+  const std::vector<Function> windowFunctions_;
+  const std::vector<PlanNodePtr> sources_;
+
+  const RowTypePtr outputType_;
 };
 
 class ExchangeNode : public PlanNode {
