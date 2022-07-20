@@ -57,7 +57,11 @@ int main(int argc, char** argv) {
       // cardinality passing a VARBINARY (since HLL's implementation uses an
       // alias to VARBINARY).
       "cardinality",
-  };
-  size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
-  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, initialSeed, skipFunctions);
+      // Decimal functions require variable bindings (tryBind) to be executed
+      // first and the return type is resolved based on the precision and scale
+      // extracted at the tryBind() step. For tryBind() to succeed, Fuzzer
+      // must also generate Decimal Types with precision and scale numbers.
+      // Refer: https://github.com/facebookincubator/velox/issues/1968
+      "plus"};
+  return FuzzerRunner::run(FLAGS_only, FLAGS_steps, FLAGS_seed, skipFunctions);
 }

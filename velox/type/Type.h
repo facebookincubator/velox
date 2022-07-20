@@ -547,6 +547,8 @@ class Type : public Tree<const std::shared_ptr<const Type>>,
 
 #undef VELOX_FLUENT_CAST
 
+using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
+using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 using TypePtr = std::shared_ptr<const Type>;
 
 template <TypeKind KIND>
@@ -665,9 +667,6 @@ class DecimalType : public ScalarType<KIND> {
   const uint8_t scale_;
 };
 
-using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
-using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
-
 inline bool isDecimalKind(TypeKind typeKind) {
   return (
       typeKind == TypeKind::SHORT_DECIMAL ||
@@ -678,7 +677,10 @@ inline bool isDecimalName(const std::string& typeName) {
   return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
 }
 
-void getDecimalPrecisionScale(const Type& type, int& precision, int& scale);
+void getDecimalPrecisionScale(
+    const TypePtr& type,
+    uint8_t& precision,
+    uint8_t& scale);
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
