@@ -34,20 +34,13 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   bool isFraction = (scale > 0);
   std::string fractionString;
   if (isFraction) {
-    int128_t fractionPart = unscaledValue % kPowersOfTen[scale];
-    // Calculate the string length of fractional part.
-    int fractionSize = 1;
-    if (fractionPart > 0) {
-      // Log can be used to count the number of digits of a positive number.
-      // Log is likely an assembly instruction, so efficient to use.
-      fractionSize += log10(fractionPart);
-    }
-
+    auto fraction = std::to_string(unscaledValue % kPowersOfTen[scale]);
     fractionString += ".";
     // Append leading zeros.
-    fractionString += std::string(std::max(scale - fractionSize, 0), '0');
+    fractionString += std::string(
+        std::max(scale - static_cast<int>(fraction.size()), 0), '0');
     // Append the fraction part.
-    fractionString += std::to_string(fractionPart);
+    fractionString += fraction;
   }
 
   return fmt::format(
