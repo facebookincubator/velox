@@ -43,7 +43,6 @@ const std::string kLoremIpsum =
 class GcsTestbench : public testing::Environment {
  public:
   GcsTestbench() : port_(kTestBenchPort) {
-    // port_ = std::to_string(GetListenPort());
     std::vector<std::string> names{"python3", "python"};
     // If the build script or application developer provides a value in the
     // PYTHON environment variable, then just use that.
