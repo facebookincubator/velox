@@ -117,7 +117,7 @@ TEST_F(ArraySumTest, invalidInputStringView) {
   auto expected = makeNullableFlatVector<double>({3, 3, 0, 1.0});
   EXPECT_THROW(
       testExpr<double>(expected, "array_sum(c0)", {arrayVector}),
-      std::invalid_argument);
+      facebook::velox::VeloxUserError);
 }
 
 TEST_F(ArraySumTest, invalidInputBool) {
@@ -131,5 +131,5 @@ TEST_F(ArraySumTest, invalidInputBool) {
   auto expected = makeNullableFlatVector<int64_t>({3, 3, 0, 1});
   EXPECT_THROW(
       testExpr<double>(expected, "array_sum(c0)", {arrayVector}),
-      std::invalid_argument);
+      facebook::velox::VeloxUserError);
 }

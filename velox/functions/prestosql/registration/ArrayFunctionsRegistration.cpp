@@ -94,11 +94,11 @@ void registerArrayFunctions() {
   registerArrayJoinFunctions<Timestamp>();
   registerArrayJoinFunctions<Date>();
 
-  registerArraySumFunction<int8_t, Array<int64_t>>();
-  registerArraySumFunction<int16_t, Array<int64_t>>();
-  registerArraySumFunction<int32_t, Array<int64_t>>();
+  registerArraySumFunction<int64_t, Array<int8_t>>();
+  registerArraySumFunction<int64_t, Array<int16_t>>();
+  registerArraySumFunction<int64_t, Array<int32_t>>();
   registerArraySumFunction<int64_t, Array<int64_t>>();
-  registerArraySumFunction<float, Array<double>>();
+  registerArraySumFunction<double, Array<float>>();
   registerArraySumFunction<double, Array<double>>();
 
   registerArrayCombinationsFunctions<int8_t>();
