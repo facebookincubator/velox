@@ -58,6 +58,13 @@ class QueryConfig {
   static constexpr const char* kExprTrackCpuUsage =
       "expression.track_cpu_usage";
 
+  // When this is set all top-level expressions in an ExprSet will be
+  // automatically wrapped in TRY(...), so expressions that implement exception
+  // handling return NULL instead of crashing the query. Trivial expressions,
+  // like Constants and FieldReferences, as well as Try expressions themselves
+  // will not be wrapped.
+  static constexpr const char* kExprWrapInTry = "expression.wrap_in_try";
+
   // Flags used to configure the CAST operator:
 
   // This flag makes the Row conversion to by applied
@@ -194,6 +201,10 @@ class QueryConfig {
 
   bool exprTrackCpuUsage() const {
     return get<bool>(kExprTrackCpuUsage, false);
+  }
+
+  bool exprWrapInTry() const {
+    return get<bool>(kExprWrapInTry, false);
   }
 
   template <typename T>
