@@ -39,32 +39,24 @@ TEST(DecimalTest, toString) {
 }
 
 TEST(DecimalTest, decimalToString) {
+  ASSERT_EQ("1000", DecimalUtil::toString(ShortDecimal(1000), DECIMAL(10, 0)));
+  ASSERT_EQ("1.000", DecimalUtil::toString(ShortDecimal(1000), DECIMAL(10, 3)));
   ASSERT_EQ(
-      "1000", DecimalUtil::decimalToString(ShortDecimal(1000), DECIMAL(10, 0)));
+      "0.001000", DecimalUtil::toString(ShortDecimal(1000), DECIMAL(10, 6)));
   ASSERT_EQ(
-      "1.000",
-      DecimalUtil::decimalToString(ShortDecimal(1000), DECIMAL(10, 3)));
-  ASSERT_EQ(
-      "0.001000",
-      DecimalUtil::decimalToString(ShortDecimal(1000), DECIMAL(10, 6)));
-  ASSERT_EQ(
-      "-0.001000",
-      DecimalUtil::decimalToString(ShortDecimal(-1000), DECIMAL(10, 6)));
+      "-0.001000", DecimalUtil::toString(ShortDecimal(-1000), DECIMAL(10, 6)));
   ASSERT_EQ(
       "-123.451000",
-      DecimalUtil::decimalToString(ShortDecimal(-123451000), DECIMAL(10, 6)));
+      DecimalUtil::toString(ShortDecimal(-123451000), DECIMAL(10, 6)));
 
-  ASSERT_EQ(
-      "1000", DecimalUtil::decimalToString(LongDecimal(1000), DECIMAL(20, 0)));
-  ASSERT_EQ(
-      "1.000", DecimalUtil::decimalToString(LongDecimal(1000), DECIMAL(20, 3)));
+  ASSERT_EQ("1000", DecimalUtil::toString(LongDecimal(1000), DECIMAL(20, 0)));
+  ASSERT_EQ("1.000", DecimalUtil::toString(LongDecimal(1000), DECIMAL(20, 3)));
   ASSERT_EQ(
       "0.0000001000",
-      DecimalUtil::decimalToString(LongDecimal(1000), DECIMAL(20, 10)));
+      DecimalUtil::toString(LongDecimal(1000), DECIMAL(20, 10)));
   ASSERT_EQ(
-      "-0.001000",
-      DecimalUtil::decimalToString(LongDecimal(-1000), DECIMAL(20, 6)));
-  ASSERT_EQ("0", DecimalUtil::decimalToString(LongDecimal(0), DECIMAL(20, 9)));
+      "-0.001000", DecimalUtil::toString(LongDecimal(-1000), DECIMAL(20, 6)));
+  ASSERT_EQ("0", DecimalUtil::toString(LongDecimal(0), DECIMAL(20, 9)));
 }
 } // namespace
 } // namespace facebook::velox

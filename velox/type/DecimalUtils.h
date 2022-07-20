@@ -24,13 +24,13 @@
 
 namespace facebook::velox {
 
-/// DecimalUtil is a static class that holds helper functions for Decimal Type.
+/// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
   static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision];
 
   /// Helper function to convert a decimal value to string.
   template <typename T>
-  static std::string decimalToString(const T& value, const TypePtr& type);
+  static std::string toString(const T& value, const TypePtr& type);
 };
 } // namespace facebook::velox
