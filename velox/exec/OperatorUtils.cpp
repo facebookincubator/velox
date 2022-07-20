@@ -23,7 +23,7 @@ namespace facebook::velox::exec {
 
 void deselectRowsWithNulls(
     const RowVector& input,
-    const std::vector<ChannelIndex>& channels,
+    const std::vector<column_index_t>& channels,
     SelectivityVector& rows,
     core::ExecCtx& execCtx) {
   bool anyChange = false;
@@ -35,7 +35,7 @@ void deselectRowsWithNulls(
     auto& child = const_cast<VectorPtr&>(input.childAt(channel));
     LazyVector::ensureLoadedRows(
         child, rows, scratchDecodedVector, scratchRows);
-    auto key = input.loadedChildAt(channel);
+    auto key = input.childAt(channel)->loadedVector();
     if (key->mayHaveNulls()) {
       auto nulls = key->flatRawNulls(rows);
       anyChange = true;

@@ -21,6 +21,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/base/SimdUtil.h"
+#include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
 
@@ -53,7 +54,6 @@ class DictionaryVector : public SimpleVector<T> {
       BufferPtr nulls,
       size_t length,
       VectorPtr dictionaryValues,
-      TypeKind indexTypeKind,
       BufferPtr dictionaryIndexArray,
       const SimpleVectorStats<T>& stats = {},
       std::optional<vector_size_t> distinctValueCount = std::nullopt,
@@ -104,10 +104,6 @@ class DictionaryVector : public SimpleVector<T> {
    */
   xsimd::batch<T> loadSIMDValueBufferAt(size_t index) const;
 
-  inline TypeKind getIndexType() const {
-    return indexType_;
-  }
-
   inline const BufferPtr& indices() const {
     return indices_;
   }
@@ -152,7 +148,20 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   BaseVector* loadedVector() override {
-    dictionaryValues_ = BaseVector::loadedVectorShared(dictionaryValues_);
+    if (initialized_) {
+      return this;
+    }
+
+    SelectivityVector rows(dictionaryValues_->size(), false);
+    for (vector_size_t i = 0; i < this->size(); i++) {
+      if (!BaseVector::isNullAt(i)) {
+        auto ind = getDictionaryIndex(i);
+        rows.setValid(ind, true);
+      }
+    }
+    rows.updateBounds();
+
+    LazyVector::ensureLoadedRows(dictionaryValues_, rows);
     setInternalState();
     return this;
   }
@@ -201,27 +210,29 @@ class DictionaryVector : public SimpleVector<T> {
 
   void setDictionaryValues(VectorPtr dictionaryValues) {
     dictionaryValues_ = dictionaryValues;
+    initialized_ = false;
     setInternalState();
+  }
+
+  /// Resizes the vector to be of size 'size'. If setNotNull is true
+  /// the newly added elements point to the value at the 0th index.
+  /// If setNotNull is false then the values and isNull is undefined.
+  void resize(vector_size_t size, bool setNotNull = true) override {
+    if (size > BaseVector::length_) {
+      BaseVector::resizeIndices(size, 0, &indices_, &rawIndices_);
+    }
+
+    BaseVector::resize(size, setNotNull);
   }
 
  private:
   // return the dictionary index for the specified vector index.
   inline vector_size_t getDictionaryIndex(vector_size_t idx) const {
-    // This is always int32, so if is faster than switch.
-    if (indexType_ == TypeKind::INTEGER) {
-      return rawIndices_[idx];
-    }
-    if (indexType_ == TypeKind::SMALLINT) {
-      return reinterpret_cast<const uint16_t*>(rawIndices_)[idx];
-    }
-    return reinterpret_cast<const uint8_t*>(rawIndices_)[idx];
+    return rawIndices_[idx];
   }
 
   void setInternalState();
 
-  // the dictionary indices of the vector can be variable types depending on the
-  // size of the dictionary - kept as original and typed
-  TypeKind indexType_;
   BufferPtr indices_;
   const vector_size_t* rawIndices_ = nullptr;
 

@@ -140,6 +140,7 @@ each measure for each combination of the grouping keys.
    * - ignoreNullKeys
      - A boolean flag indicating whether the aggregation should drop rows with nulls in any of the grouping keys. Used to avoid unnecessary processing for an aggregation followed by an inner join on the grouping keys.
 
+.. _group-id-node:
 GroupIdNode
 ~~~~~~~~~~~
 
@@ -186,7 +187,7 @@ and emitting results.
    * - Property
      - Description
    * - joinType
-     - Join type: inner, left, right, full, semi, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
+     - Join type: inner, left, right, full, left semi, anti. You can read about different join types in this `blog post <https://dataschool.com/how-to-teach-people-sql/sql-join-types-explained-visually/>`_.
    * - leftKeys
      - Columns from the left hand side input that are part of the equality condition. At least one must be specified.
    * - rightKeys

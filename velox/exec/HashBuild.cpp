@@ -72,7 +72,7 @@ HashBuild::HashBuild(
 
   auto numKeys = joinNode->rightKeys().size();
   keyChannels_.reserve(numKeys);
-  folly::F14FastSet<ChannelIndex> keyChannelSet;
+  folly::F14FastSet<column_index_t> keyChannelSet;
   keyChannelSet.reserve(numKeys);
   std::vector<std::unique_ptr<VectorHasher>> keyHashers;
   keyHashers.reserve(numKeys);
@@ -110,7 +110,7 @@ HashBuild::HashBuild(
     // Semi and anti join with no extra filter only needs to know whether there
     // is a match. Hence, no need to store entries with duplicate keys.
     const bool dropDuplicates = !joinNode->filter() &&
-        (joinNode->isSemiJoin() || joinNode->isAntiJoin());
+        (joinNode->isLeftSemiJoin() || joinNode->isAntiJoin());
 
     table_ = HashTable<true>::createForJoin(
         std::move(keyHashers),
@@ -156,15 +156,18 @@ void HashBuild::addInput(RowVectorPtr input) {
     // TODO: Load only for active rows, except if right/full outer join.
     if (analyzeKeys_) {
       hasher->computeValueIds(
-          *input->loadedChildAt(hasher->channel()), activeRows_, hashes_);
+          *input->childAt(hasher->channel())->loadedVector(),
+          activeRows_,
+          hashes_);
       analyzeKeys_ = hasher->mayUseValueIds();
     } else {
-      hasher->decode(*input->loadedChildAt(hasher->channel()), activeRows_);
+      hasher->decode(
+          *input->childAt(hasher->channel())->loadedVector(), activeRows_);
     }
   }
   for (auto i = 0; i < dependentChannels_.size(); ++i) {
     decoders_[i]->decode(
-        *input->loadedChildAt(dependentChannels_[i]), activeRows_);
+        *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
   }
   auto rows = table_->rows();
   auto nextOffset = rows->nextOffset();
@@ -223,7 +226,7 @@ void HashBuild::noMoreInput() {
   // the last to finish) can continue from the barrier and finish.
   peers.clear();
   for (auto& promise : promises) {
-    promise.setValue(true);
+    promise.setValue();
   }
 
   if (antiJoinHasNullKeys_) {

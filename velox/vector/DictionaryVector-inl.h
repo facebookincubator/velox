@@ -24,8 +24,33 @@ namespace velox {
 
 template <typename T>
 void DictionaryVector<T>::setInternalState() {
-  VELOX_CHECK(indexType_ == TypeKind::INTEGER);
   rawIndices_ = indices_->as<vector_size_t>();
+
+  // Sanity check indices for non-null positions. Enabled in debug mode only to
+  // avoid performance hit in production.
+#ifndef NDEBUG
+  for (auto i = 0; i < BaseVector::length_; ++i) {
+    const bool isNull =
+        BaseVector::rawNulls_ && bits::isBitNull(BaseVector::rawNulls_, i);
+    if (isNull) {
+      continue;
+    }
+
+    // Verify index for a non-null position. It must be >= 0 and < size of the
+    // base vector.
+    VELOX_DCHECK_GE(
+        rawIndices_[i],
+        0,
+        "Dictionary index must be greater than zero. Index: {}.",
+        i);
+    VELOX_DCHECK_LT(
+        rawIndices_[i],
+        dictionaryValues_->size(),
+        "Dictionary index must be less than base vector's size. Index: {}.",
+        i);
+  }
+#endif
+
   if (isLazyNotLoaded(*dictionaryValues_)) {
     // Do not load Lazy vector
     return;
@@ -34,7 +59,7 @@ void DictionaryVector<T>::setInternalState() {
   if (dictionaryValues_->isScalar()) {
     scalarDictionaryValues_ =
         reinterpret_cast<SimpleVector<T>*>(dictionaryValues_->loadedVector());
-    if (scalarDictionaryValues_->encoding() == VectorEncoding::Simple::FLAT &&
+    if (scalarDictionaryValues_->isFlatEncoding() &&
         !std::is_same<T, bool>::value) {
       rawDictionaryValues_ =
           reinterpret_cast<FlatVector<T>*>(scalarDictionaryValues_)
@@ -55,7 +80,6 @@ DictionaryVector<T>::DictionaryVector(
     BufferPtr nulls,
     size_t length,
     std::shared_ptr<BaseVector> dictionaryValues,
-    TypeKind indexType,
     BufferPtr dictionaryIndices,
     const SimpleVectorStats<T>& stats,
     std::optional<vector_size_t> distinctValueCount,
@@ -83,7 +107,6 @@ DictionaryVector<T>::DictionaryVector(
       length * sizeof(vector_size_t),
       "Malformed dictionary, index array is shorter than DictionaryVector");
   dictionaryValues_ = dictionaryValues;
-  indexType_ = indexType;
   indices_ = dictionaryIndices;
   setInternalState();
 }

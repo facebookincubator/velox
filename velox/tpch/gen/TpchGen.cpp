@@ -77,6 +77,10 @@ std::vector<VectorPtr> allocateVectors(
   return vectors;
 }
 
+double decimalToDouble(int64_t value) {
+  return (double)value * 0.01;
+}
+
 } // namespace
 
 std::string_view toTableName(Table table) {
@@ -99,6 +103,26 @@ std::string_view toTableName(Table table) {
       return "region";
   }
   return ""; // make gcc happy.
+}
+
+Table fromTableName(std::string_view tableName) {
+  static std::unordered_map<std::string_view, Table> map{
+      {"part", Table::TBL_PART},
+      {"supplier", Table::TBL_SUPPLIER},
+      {"partsupp", Table::TBL_PARTSUPP},
+      {"customer", Table::TBL_CUSTOMER},
+      {"orders", Table::TBL_ORDERS},
+      {"lineitem", Table::TBL_LINEITEM},
+      {"nation", Table::TBL_NATION},
+      {"region", Table::TBL_REGION},
+  };
+
+  auto it = map.find(tableName);
+  if (it != map.end()) {
+    return it->second;
+  }
+  throw std::invalid_argument(
+      fmt::format("Invalid TPC-H table name: '{}'", tableName));
 }
 
 size_t getRowCount(Table table, size_t scaleFactor) {
@@ -346,7 +370,7 @@ RowVectorPtr genTpchOrders(
   auto shipPriorityVector = children[7]->asFlatVector<int32_t>();
   auto commentVector = children[8]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initOrder(offset);
   order_t order;
 
@@ -358,7 +382,7 @@ RowVectorPtr genTpchOrders(
     orderKeyVector->set(i, order.okey);
     custKeyVector->set(i, order.custkey);
     orderStatusVector->set(i, StringView(&order.orderstatus, 1));
-    totalPriceVector->set(i, order.totalprice);
+    totalPriceVector->set(i, decimalToDouble(order.totalprice));
     orderDateVector->set(i, StringView(order.odate, strlen(order.odate)));
     orderPriorityVector->set(
         i, StringView(order.opriority, strlen(order.opriority)));
@@ -404,7 +428,7 @@ RowVectorPtr genTpchLineItem(
   auto shipModeVector = children[14]->asFlatVector<StringView>();
   auto commentVector = children[15]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initOrder(ordersOffset);
   order_t order;
 
@@ -425,10 +449,10 @@ RowVectorPtr genTpchLineItem(
 
       lineNumberVector->set(lineItemCount + l, line.lcnt);
 
-      quantityVector->set(lineItemCount + l, line.quantity);
-      extendedPriceVector->set(lineItemCount + l, line.eprice);
-      discountVector->set(lineItemCount + l, line.discount);
-      taxVector->set(lineItemCount + l, line.tax);
+      quantityVector->set(lineItemCount + l, decimalToDouble(line.quantity));
+      extendedPriceVector->set(lineItemCount + l, decimalToDouble(line.eprice));
+      discountVector->set(lineItemCount + l, decimalToDouble(line.discount));
+      taxVector->set(lineItemCount + l, decimalToDouble(line.tax));
 
       returnFlagVector->set(lineItemCount + l, StringView(line.rflag, 1));
       lineStatusVector->set(lineItemCount + l, StringView(line.lstatus, 1));
@@ -484,7 +508,7 @@ RowVectorPtr genTpchPart(
   auto retailPriceVector = children[7]->asFlatVector<double>();
   auto commentVector = children[8]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initPart(offset);
   part_t part;
 
@@ -500,7 +524,7 @@ RowVectorPtr genTpchPart(
     typeVector->set(i, StringView(part.type, part.tlen));
     sizeVector->set(i, part.size);
     containerVector->set(i, StringView(part.container, strlen(part.container)));
-    retailPriceVector->set(i, part.retailprice);
+    retailPriceVector->set(i, decimalToDouble(part.retailprice));
     commentVector->set(i, StringView(part.comment, part.clen));
   }
   return std::make_shared<RowVector>(
@@ -526,7 +550,7 @@ RowVectorPtr genTpchSupplier(
   auto acctbalVector = children[5]->asFlatVector<double>();
   auto commentVector = children[6]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initSupplier(offset);
   supplier_t supp;
 
@@ -540,7 +564,7 @@ RowVectorPtr genTpchSupplier(
     addressVector->set(i, StringView(supp.address, supp.alen));
     nationKeyVector->set(i, supp.nation_code);
     phoneVector->set(i, StringView(supp.phone, strlen(supp.phone)));
-    acctbalVector->set(i, supp.acctbal);
+    acctbalVector->set(i, decimalToDouble(supp.acctbal));
     commentVector->set(i, StringView(supp.comment, supp.clen));
   }
   return std::make_shared<RowVector>(
@@ -568,7 +592,7 @@ RowVectorPtr genTpchPartSupp(
   auto supplyCostVector = children[3]->asFlatVector<double>();
   auto commentVector = children[4]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   part_t part;
 
   // The iteration logic is a bit more complicated as partsupp records are
@@ -590,7 +614,7 @@ RowVectorPtr genTpchPartSupp(
       partKeyVector->set(partSuppCount, partSupp.partkey);
       suppKeyVector->set(partSuppCount, partSupp.suppkey);
       availQtyVector->set(partSuppCount, partSupp.qty);
-      supplyCostVector->set(partSuppCount, partSupp.scost);
+      supplyCostVector->set(partSuppCount, decimalToDouble(partSupp.scost));
       commentVector->set(
           partSuppCount, StringView(partSupp.comment, partSupp.clen));
 
@@ -631,7 +655,7 @@ RowVectorPtr genTpchCustomer(
   auto mktSegmentVector = children[6]->asFlatVector<StringView>();
   auto commentVector = children[7]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initCustomer(offset);
   customer_t cust;
 
@@ -645,7 +669,7 @@ RowVectorPtr genTpchCustomer(
     addressVector->set(i, StringView(cust.address, cust.alen));
     nationKeyVector->set(i, cust.nation_code);
     phoneVector->set(i, StringView(cust.phone, strlen(cust.phone)));
-    acctBalVector->set(i, cust.acctbal);
+    acctBalVector->set(i, decimalToDouble(cust.acctbal));
     mktSegmentVector->set(
         i, StringView(cust.mktsegment, strlen(cust.mktsegment)));
     commentVector->set(i, StringView(cust.comment, cust.clen));
@@ -674,7 +698,7 @@ RowVectorPtr genTpchNation(
   auto regionKeyVector = children[2]->asFlatVector<int64_t>();
   auto commentVector = children[3]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initNation(offset);
   code_t code;
 
@@ -707,7 +731,7 @@ RowVectorPtr genTpchRegion(
   auto nameVector = children[1]->asFlatVector<StringView>();
   auto commentVector = children[2]->asFlatVector<StringView>();
 
-  auto dbgenIt = DBGenIterator::create(scaleFactor);
+  DBGenIterator dbgenIt(scaleFactor);
   dbgenIt.initRegion(offset);
   code_t code;
 

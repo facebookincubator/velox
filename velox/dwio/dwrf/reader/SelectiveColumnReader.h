@@ -19,8 +19,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/common/ColumnSelector.h"
+#include "velox/dwio/common/FormatData.h"
 #include "velox/dwio/common/ScanSpec.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/type/Filter.h"
 
 namespace facebook::velox::dwrf {
@@ -98,36 +98,29 @@ struct ScanState {
   RawScanState rawState;
 };
 
-class SelectiveColumnReader : public ColumnReader {
+class SelectiveColumnReader {
  public:
   static constexpr uint64_t kStringBufferSize = 16 * 1024;
 
   SelectiveColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> requestedType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      const TypePtr& type,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
+      dwio::common::FormatParams& params,
+      common::ScanSpec& scanSpec,
+      const TypePtr& type);
+
+  virtual ~SelectiveColumnReader() = default;
 
   /**
    * Read the next group of values into a RowVector.
    * @param numValues the number of values to read
    * @param vector to read into
    */
-  void next(
+  virtual void next(
       uint64_t /*numValues*/,
       VectorPtr& /*result*/,
-      const uint64_t* /*incomingNulls*/) override {
+      const uint64_t* /*incomingNulls*/ = nullptr) {
     VELOX_UNSUPPORTED("next() is only defined in SelectiveStructColumnReader");
   }
-
-  // Creates a reader for the given stripe.
-  static std::unique_ptr<SelectiveColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext());
 
   // Called when filters in ScanSpec change, e.g. a new filter is pushed down
   // from a downstream operator.
@@ -141,6 +134,10 @@ class SelectiveColumnReader : public ColumnReader {
   // between this and the next call to read.
   virtual void
   read(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls) = 0;
+
+  virtual uint64_t skip(uint64_t numValues) {
+    return formatData_->skip(numValues);
+  }
 
   // Extracts the values at 'rows' into '*result'. May rewrite or
   // reallocate '*result'. 'rows' must be the same set or a subset of
@@ -160,6 +157,10 @@ class SelectiveColumnReader : public ColumnReader {
   // Advances to 'offset', so that the next item to be read is the
   // offset-th from the start of stripe.
   void seekTo(vector_size_t offset, bool readsNullsOnly);
+
+  // Positions this at the start of 'index'th row group. Interpretation of
+  // 'index' depends on format.
+  virtual void seekToRowGroup(uint32_t index) = 0;
 
   const TypePtr& type() const {
     return type_;
@@ -276,9 +277,9 @@ class SelectiveColumnReader : public ColumnReader {
     initTimeClocks_ = 0;
   }
 
-  std::vector<uint32_t> filterRowGroups(
+  virtual std::vector<uint32_t> filterRowGroups(
       uint64_t rowGroupSize,
-      const StatsContext& context) const override;
+      const dwio::common::StatsContext& context) const;
 
   raw_vector<int32_t>& innerNonNullRows() {
     return innerNonNullRows_;
@@ -325,6 +326,17 @@ class SelectiveColumnReader : public ColumnReader {
   template <typename T>
   void filterNulls(RowSet rows, bool isNull, bool extractValues);
 
+  // Reads nulls, if any. Sets '*nulls' to nullptr if void
+  // the reader has no nulls and there are no incoming
+  //          nulls.Takes 'nulls' from 'result' if '*result' is non -
+  //      null.Otherwise ensures that 'nulls' has a buffer of sufficient
+  //          size and uses this.
+  void readNulls(
+      vector_size_t numValues,
+      const uint64_t* incomingNulls,
+      VectorPtr* result,
+      BufferPtr& nulls);
+
   template <typename T>
   void
   prepareRead(vector_size_t offset, RowSet rows, const uint64_t* incomingNulls);
@@ -368,22 +380,18 @@ class SelectiveColumnReader : public ColumnReader {
   // copy.
   char* copyStringValue(folly::StringPiece value);
 
-  void ensureRowGroupIndex() const {
-    VELOX_CHECK(index_ || indexStream_, "Reader needs to have an index stream");
-    if (indexStream_) {
-      index_ = ProtoUtils::readProto<proto::RowIndex>(std::move(indexStream_));
-    }
-  }
+  memory::MemoryPool& memoryPool_;
+
+  std::shared_ptr<const dwio::common::TypeWithId> nodeType_;
+
+  // Format specific state and functions.
+  std::unique_ptr<dwio::common::FormatData> formatData_;
 
   // Specification of filters, value extraction, pruning etc. The
   // spec is assigned at construction and the contents may change at
   // run time based on adaptation. Owned by caller.
   common::ScanSpec* const scanSpec_;
   TypePtr type_;
-  mutable std::unique_ptr<dwio::common::SeekableInputStream> indexStream_;
-  mutable std::unique_ptr<proto::RowIndex> index_;
-  // Number of rows in a row group. Last row group may have fewer rows.
-  uint32_t rowsPerRowGroup_;
 
   // Row number after last read row, relative to stripe start.
   vector_size_t readOffset_ = 0;
@@ -478,34 +486,13 @@ inline void SelectiveColumnReader::addValue(const folly::StringPiece value) {
   addStringValue(value);
 }
 
-class SelectiveColumnReaderFactory : public ColumnReaderFactory {
- public:
-  explicit SelectiveColumnReaderFactory(
-      std::shared_ptr<common::ScanSpec> scanSpec)
-      : scanSpec_(scanSpec) {}
-  std::unique_ptr<ColumnReader> build(
-      const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
-      const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      FlatMapContext flatMapContext) override {
-    auto reader = SelectiveColumnReader::build(
-        requestedType,
-        dataType,
-        stripe,
-        scanSpec_.get(),
-        std::move(flatMapContext));
-    reader->setIsTopLevel();
-    return reader;
-  }
+} // namespace facebook::velox::dwrf
 
- private:
-  std::shared_ptr<common::ScanSpec> const scanSpec_;
-};
-
+namespace facebook::velox::dwio::common {
 // Template parameter to indicate no hook in fast scan path. This is
 // referenced in decoders, thus needs to be declared in a header.
 struct NoHook : public ValueHook {
   void addValue(vector_size_t /*row*/, const void* /*value*/) override {}
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

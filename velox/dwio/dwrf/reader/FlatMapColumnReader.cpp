@@ -456,12 +456,12 @@ void FlatMapColumnReader<T>::next(
   result = std::make_shared<MapVector>(
       &memoryPool_,
       mapType,
-      nulls,
+      std::move(nulls),
       numValues,
-      offsets,
-      lengths,
-      keysVector,
-      valuesVector,
+      std::move(offsets),
+      std::move(lengths),
+      std::move(keysVector),
+      std::move(valuesVector),
       nullCount);
 }
 

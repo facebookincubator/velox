@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/expression/ControlExpr.h"
+#include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
 

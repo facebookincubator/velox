@@ -15,38 +15,35 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDirectColumnReader.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 
 SelectiveStringDirectColumnReader::SelectiveStringDirectColumnReader(
     const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
-    StripeStreams& stripe,
-    common::ScanSpec* scanSpec,
-    FlatMapContext flatMapContext)
-    : SelectiveColumnReader(
-          nodeType,
-          stripe,
-          scanSpec,
-          nodeType->type,
-          std::move(flatMapContext)) {
-  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type) {
+  EncodingKey encodingKey{nodeType->id, params.flatMapContext().sequence};
+  auto& stripe = params.stripeStreams();
   RleVersion rleVersion =
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
   auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
-  lengthDecoder_ = IntDecoder</*isSigned*/ false>::createRle(
+  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, true),
       rleVersion,
       memoryPool_,
       lenVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
   blobStream_ =
       stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true);
 }
 
 uint64_t SelectiveStringDirectColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
-  detail::ensureCapacity<int64_t>(lengths_, numValues, &memoryPool_);
+  numValues = SelectiveColumnReader::skip(numValues);
+  dwio::common::ensureCapacity<int64_t>(lengths_, numValues, &memoryPool_);
   lengthDecoder_->nextLengths(lengths_->asMutable<int32_t>(), numValues);
   rawLengths_ = lengths_->as<uint32_t>();
   for (auto i = 0; i < numValues; ++i) {
@@ -207,7 +204,7 @@ inline bool SelectiveStringDirectColumnReader::try8Consecutive(
 void SelectiveStringDirectColumnReader::extractSparse(
     const int32_t* rows,
     int32_t numRows) {
-  rowLoop(
+  dwio::common::rowLoop(
       rows,
       0,
       numRows,
@@ -328,11 +325,12 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
     if (nullsInReadRange_) {
       if (TVisitor::dense) {
         returnReaderNulls_ = true;
-        nonNullRowsFromDense(nulls, rows.size(), outerNonNullRows_);
+        dwio::common::nonNullRowsFromDense(
+            nulls, rows.size(), outerNonNullRows_);
         extractSparse(rows.data(), outerNonNullRows_.size());
       } else {
         int32_t tailSkip = -1;
-        anyNulls_ = nonNullRowsFromSparse<false, true>(
+        anyNulls_ = dwio::common::nonNullRowsFromSparse<false, true>(
             nulls,
             rows,
             innerNonNullRows_,
@@ -402,6 +400,10 @@ void SelectiveStringDirectColumnReader::processFilter(
     case common::FilterKind::kBytesValues:
       readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
       break;
+    case common::FilterKind::kNegatedBytesValues:
+      readHelper<common::NegatedBytesValues, isDense>(
+          filter, rows, extractValues);
+      break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);
       break;
@@ -418,7 +420,7 @@ void SelectiveStringDirectColumnReader::read(
   auto end = rows.back() + 1;
   auto numNulls =
       nullsInReadRange_ ? BaseVector::countNulls(nullsInReadRange_, 0, end) : 0;
-  detail::ensureCapacity<int32_t>(lengths_, end - numNulls, &memoryPool_);
+  dwio::common::ensureCapacity<int32_t>(lengths_, end - numNulls, &memoryPool_);
   lengthDecoder_->nextLengths(lengths_->asMutable<int32_t>(), end - numNulls);
   rawLengths_ = lengths_->as<uint32_t>();
   lengthIndex_ = 0;

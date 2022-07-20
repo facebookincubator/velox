@@ -15,6 +15,7 @@
  */
 #include "velox/common/memory/MappedMemory.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MmapAllocator.h"
 
 #include <thread>
@@ -276,6 +277,43 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
   std::atomic<int32_t> sequence_ = {};
 };
 
+TEST_P(MappedMemoryTest, allocationPoolTest) {
+  const size_t kNumLargeAllocPages = instance_->largestSizeClass() * 2;
+  AllocationPool pool(instance_);
+
+  pool.allocateFixed(10);
+  EXPECT_EQ(pool.numTotalAllocations(), 1);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), 10);
+
+  pool.allocateFixed(kNumLargeAllocPages * MappedMemory::kPageSize);
+  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), 10);
+
+  pool.allocateFixed(20);
+  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), 30);
+
+  // Leaving 10 bytes room
+  pool.allocateFixed(128 * 4096 - 10);
+  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), 524278);
+
+  pool.allocateFixed(5);
+  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), (524278 + 5));
+
+  pool.allocateFixed(100);
+  EXPECT_EQ(pool.numTotalAllocations(), 4);
+  EXPECT_EQ(pool.currentRunIndex(), 0);
+  EXPECT_EQ(pool.currentOffset(), 100);
+  pool.clear();
+}
+
 TEST_P(MappedMemoryTest, allocationTest) {
   const int32_t kPageSize = MappedMemory::kPageSize;
   MappedMemory::Allocation allocation(instance_);
@@ -316,7 +354,8 @@ TEST_P(MappedMemoryTest, singleAllocationTest) {
   const std::vector<MachinePageCount>& sizes = instance_->sizeClasses();
   MachinePageCount capacity = kCapacity;
   std::vector<std::unique_ptr<MappedMemory::Allocation>> allocations;
-  for (auto& size : sizes) {
+  for (auto i = 0; i < sizes.size(); ++i) {
+    auto size = sizes[i];
     allocateMultiple(size, capacity / size + 10, allocations);
     EXPECT_EQ(allocations.size() - 1, capacity / size);
     EXPECT_TRUE(instance_->checkConsistency());
@@ -324,6 +363,12 @@ TEST_P(MappedMemoryTest, singleAllocationTest) {
 
     allocations.clear();
     EXPECT_EQ(instance_->numAllocated(), 0);
+
+    auto stats = instance_->stats();
+    EXPECT_LT(0, stats.sizes[i].clocks());
+    EXPECT_GE(stats.sizes[i].totalBytes, capacity * MappedMemory::kPageSize);
+    EXPECT_GE(stats.sizes[i].numAllocations, capacity / size);
+
     if (useMmap_) {
       EXPECT_EQ(instance_->numMapped(), kCapacity);
     }

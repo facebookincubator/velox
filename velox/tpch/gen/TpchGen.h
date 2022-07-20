@@ -49,6 +49,9 @@ enum class Table : uint8_t {
 /// Returns table name as a string.
 std::string_view toTableName(Table table);
 
+/// Returns the table enum value given a table name.
+Table fromTableName(std::string_view tableName);
+
 /// Returns the row count for a particular TPC-H table given a scale factor, as
 /// defined in the spec available at:
 ///
@@ -90,7 +93,7 @@ RowVectorPtr genTpchOrders(
 //
 /// In order to make this function reproducible and deterministic, the
 /// parameters (maxRows and offset) refer to orders, not lineitems, and thus the
-/// number of linteitem returned rows will be on average 4 * maxOrderRows.
+/// number of lineitem returned rows will be on average 4 * maxOrderRows.
 ///
 /// Returns a row vector containing on average `maxOrderRows * 4` (from
 /// `maxOrderRows` to `maxOrderRows * 7`) rows of the "lineitem" table. The

@@ -19,6 +19,7 @@
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/dwrf/common/Compression.h"
+#include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/IntegerDictionaryEncoder.h"
 #include "velox/dwio/dwrf/writer/RatioTracker.h"
@@ -126,7 +127,7 @@ class WriterContext : public CompressionBufferPool {
   }
 
   std::unique_ptr<BufferedOutputStream> newStream(
-      CompressionKind kind,
+      dwio::common::CompressionKind kind,
       DataBufferHolder& holder,
       const dwio::common::encryption::Encrypter* encrypter = nullptr) {
     return createCompressor(kind, *this, holder, *config_, encrypter);
@@ -145,7 +146,7 @@ class WriterContext : public CompressionBufferPool {
               dictionaryPool,
               generalPool,
               getConfig(Config::DICTIONARY_SORT_KEYS),
-              IntEncoder</* isSigned = */ true>::createDirect(
+              createDirectEncoder</* isSigned */ true>(
                   newStream(
                       {ek.node,
                        ek.sequence,
@@ -174,7 +175,8 @@ class WriterContext : public CompressionBufferPool {
   }
 
   bool isStreamPaged(uint32_t nodeId) const {
-    return (compression != CompressionKind::CompressionKind_NONE) ||
+    return (compression !=
+            dwio::common::CompressionKind::CompressionKind_NONE) ||
         handler_->isEncrypted(nodeId);
   }
 
@@ -486,7 +488,7 @@ class WriterContext : public CompressionBufferPool {
   uint64_t stripeRawSize = 0;
 
   // config
-  const CompressionKind compression;
+  const dwio::common::CompressionKind compression;
   const uint64_t compressionBlockSize;
   const bool isIndexEnabled;
   const uint32_t indexStride;

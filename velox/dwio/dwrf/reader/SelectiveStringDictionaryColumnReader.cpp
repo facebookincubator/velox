@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 
@@ -22,18 +24,13 @@ using namespace dwio::common;
 
 SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const std::shared_ptr<const TypeWithId>& nodeType,
-    StripeStreams& stripe,
-    common::ScanSpec* scanSpec,
-    FlatMapContext flatMapContext)
-    : SelectiveColumnReader(
-          nodeType,
-          stripe,
-          scanSpec,
-          nodeType->type,
-          std::move(flatMapContext)),
+    DwrfParams& params,
+    common::ScanSpec& scanSpec)
+    : SelectiveColumnReader(nodeType, params, scanSpec, nodeType->type),
       lastStrideIndex_(-1),
-      provider_(stripe.getStrideIndexProvider()) {
-  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+      provider_(params.stripeStreams().getStrideIndexProvider()) {
+  auto& stripe = params.stripeStreams();
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
   RleVersion rleVersion =
       convertRleVersion(stripe.getEncoding(encodingKey).kind());
   scanState_.dictionary.numValues =
@@ -41,21 +38,21 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
 
   const auto dataId = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dictVInts = stripe.getUseVInts(dataId);
-  dictIndex_ = IntDecoder</*isSigned*/ false>::createRle(
+  dictIndex_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(dataId, true),
       rleVersion,
       memoryPool_,
       dictVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
 
   const auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
   bool lenVInts = stripe.getUseVInts(lenId);
-  lengthDecoder_ = IntDecoder</*isSigned*/ false>::createRle(
+  lengthDecoder_ = createRleDecoder</*isSigned*/ false>(
       stripe.getStream(lenId, false),
       rleVersion,
       memoryPool_,
       lenVInts,
-      INT_BYTE_SIZE);
+      dwio::common::INT_BYTE_SIZE);
 
   blobStream_ = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_DICTIONARY_DATA), false);
@@ -64,7 +61,7 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
   std::unique_ptr<SeekableInputStream> inDictStream = stripe.getStream(
       encodingKey.forKind(proto::Stream_Kind_IN_DICTIONARY), false);
   if (inDictStream) {
-    DWIO_ENSURE_NOT_NULL(indexStream_, "String index is missing");
+    formatData_->as<DwrfData>().ensureRowGroupIndex();
 
     inDictionaryReader_ =
         createBooleanRleDecoder(std::move(inDictStream), encodingKey);
@@ -77,18 +74,18 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     const auto strideDictLenId =
         encodingKey.forKind(proto::Stream_Kind_STRIDE_DICTIONARY_LENGTH);
     bool strideLenVInt = stripe.getUseVInts(strideDictLenId);
-    strideDictLengthDecoder_ = IntDecoder</*isSigned*/ false>::createRle(
+    strideDictLengthDecoder_ = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(strideDictLenId, true),
         rleVersion,
         memoryPool_,
         strideLenVInt,
-        INT_BYTE_SIZE);
+        dwio::common::INT_BYTE_SIZE);
   }
   scanState_.updateRawState();
 }
 
 uint64_t SelectiveStringDictionaryColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   dictIndex_->skip(numValues);
   if (inDictionaryReader_) {
     inDictionaryReader_->skip(numValues);
@@ -101,7 +98,7 @@ void SelectiveStringDictionaryColumnReader::loadDictionary(
     IntDecoder</*isSigned*/ false>& lengthDecoder,
     DictionaryValues& values) {
   // read lengths from length reader
-  detail::ensureCapacity<StringView>(
+  dwio::common::ensureCapacity<StringView>(
       values.values, values.numValues, &memoryPool_);
   // The lengths are read in the low addresses of the string views array.
   int64_t* int64Values = values.values->asMutable<int64_t>();
@@ -134,7 +131,8 @@ void SelectiveStringDictionaryColumnReader::loadStrideDictionary() {
   }
 
   // get stride dictionary size and load it if needed
-  auto& positions = index_->entry(nextStride).positions();
+  auto& positions =
+      formatData_->as<DwrfData>().index().entry(nextStride).positions();
   scanState_.dictionary2.numValues = positions.Get(strideDictSizeOffset_);
   if (scanState_.dictionary2.numValues > 0) {
     // seek stride dictionary related streams
@@ -211,7 +209,7 @@ void SelectiveStringDictionaryColumnReader::read(
     int32_t numFlags = (isBulk && nullsInReadRange_)
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
-    detail::ensureCapacity<uint64_t>(
+    dwio::common::ensureCapacity<uint64_t>(
         scanState_.inDictionary, bits::nwords(numFlags), &memoryPool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.
@@ -270,7 +268,6 @@ void SelectiveStringDictionaryColumnReader::getValues(
                                : resultNulls_,
       numValues_,
       dictionaryValues_,
-      TypeKind::INTEGER,
       values_);
 
   if (scanSpec_->makeFlat()) {
@@ -296,13 +293,14 @@ void SelectiveStringDictionaryColumnReader::ensureInitialized() {
 
   // handle in dictionary stream
   if (inDictionaryReader_) {
-    ensureRowGroupIndex();
+    auto& dwrfData = formatData_->as<DwrfData>();
+    dwrfData.ensureRowGroupIndex();
     // load stride dictionary offsets
-    auto indexStartOffset = flatMapContext_.inMapDecoder
-        ? flatMapContext_.inMapDecoder->loadIndices(0)
+    auto indexStartOffset = dwrfData.flatMapContext().inMapDecoder
+        ? dwrfData.flatMapContext().inMapDecoder->loadIndices(0)
         : 0;
-    positionOffset_ = notNullDecoder_
-        ? notNullDecoder_->loadIndices(indexStartOffset)
+    positionOffset_ = dwrfData.notNullDecoder()
+        ? dwrfData.notNullDecoder()->loadIndices(indexStartOffset)
         : indexStartOffset;
     size_t offset = strideDictStream_->positionSize() + positionOffset_;
     strideDictSizeOffset_ = strideDictLengthDecoder_->loadIndices(offset);

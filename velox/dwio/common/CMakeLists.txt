@@ -21,14 +21,19 @@ endif()
 
 add_library(
   velox_dwio_common
+  BitConcatenation.cpp
   BufferedInput.cpp
   CachedBufferedInput.cpp
   CacheInputStream.cpp
   ColumnSelector.cpp
+  Common.cpp
   DataBuffer.cpp
   DataSink.cpp
+  DecoderUtil.cpp
+  DirectDecoder.cpp
   DwioMetricsLog.cpp
   InputStream.cpp
+  IntDecoder.cpp
   IoStatistics.cpp
   MemoryInputStream.cpp
   Options.cpp

@@ -22,7 +22,7 @@ namespace {
 bool checkAddIdentityProjection(
     const std::shared_ptr<const core::ITypedExpr>& projection,
     const std::shared_ptr<const RowType>& inputType,
-    ChannelIndex outputChannel,
+    column_index_t outputChannel,
     std::vector<IdentityProjection>& identityProjections) {
   if (auto field = std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
           projection)) {
@@ -58,7 +58,7 @@ FilterProject::FilterProject(
   }
   if (project) {
     auto inputType = project->sources()[0]->outputType();
-    for (ChannelIndex i = 0; i < project->projections().size(); i++) {
+    for (column_index_t i = 0; i < project->projections().size(); i++) {
       auto projection = project->projections()[i];
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
@@ -68,7 +68,7 @@ FilterProject::FilterProject(
       }
     }
   } else {
-    for (ChannelIndex i = 0; i < outputType_->size(); ++i) {
+    for (column_index_t i = 0; i < outputType_->size(); ++i) {
       identityProjections_.emplace_back(i, i);
     }
     isIdentityProjection_ = true;
@@ -83,8 +83,7 @@ void FilterProject::addInput(RowVectorPtr input) {
   if (!resultProjections_.empty()) {
     results_.resize(resultProjections_.back().inputChannel + 1);
     for (auto& result : results_) {
-      if (result && result.unique() &&
-          result->encoding() == VectorEncoding::Simple::FLAT) {
+      if (result && result.unique() && result->isFlatEncoding()) {
         BaseVector::prepareForReuse(result, 0);
       } else {
         result.reset();

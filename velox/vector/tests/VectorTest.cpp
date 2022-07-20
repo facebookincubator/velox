@@ -28,6 +28,7 @@
 #include "velox/vector/TypeAliases.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/tests/VectorMaker.h"
+#include "velox/vector/tests/VectorTestBase.h"
 
 using namespace facebook::velox;
 using facebook::velox::ComplexType;
@@ -36,7 +37,7 @@ using facebook::velox::ComplexType;
 // contract.
 class TestingLoader : public VectorLoader {
  public:
-  explicit TestingLoader(VectorPtr data) : data_(data) {}
+  explicit TestingLoader(VectorPtr data) : data_(data), rowCounter_(0) {}
 
   void loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) override {
     if (hook) {
@@ -45,6 +46,11 @@ class TestingLoader : public VectorLoader {
       return;
     }
     *result = data_;
+    rowCounter_ += rows.size();
+  }
+
+  int32_t rowCount() const {
+    return rowCounter_;
   }
 
  private:
@@ -66,6 +72,7 @@ class TestingLoader : public VectorLoader {
     }
   }
   VectorPtr data_;
+  int32_t rowCounter_;
 };
 
 struct NonPOD {
@@ -85,7 +92,7 @@ struct NonPOD {
 
 int NonPOD::alive = 0;
 
-class VectorTest : public testing::Test {
+class VectorTest : public testing::Test, public test::VectorTestBase {
  protected:
   void SetUp() override {
     pool_ = memory::getDefaultScopedMemoryPool();
@@ -868,6 +875,12 @@ TEST_F(VectorTest, createOther) {
 TEST_F(VectorTest, createDecimal) {
   testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
   testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
+  auto constVector =
+      BaseVector::createNullConstant(SHORT_DECIMAL(10, 5), 1, pool_.get());
+  ASSERT_TRUE(constVector->isNullAt(0));
+  constVector =
+      BaseVector::createNullConstant(LONG_DECIMAL(30, 5), 1, pool_.get());
+  ASSERT_TRUE(constVector->isNullAt(0));
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1670,4 +1683,87 @@ TEST_F(VectorTest, multipleDictionariesOverLazy) {
   for (auto i = 0; i < size; i++) {
     ASSERT_EQ(i, dict->as<SimpleVector<int32_t>>()->valueAt(i));
   }
+}
+
+/// Test lazy loading of nested dictionary vector
+TEST_F(VectorTest, selectiveLoadingOfLazyDictionaryNested) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+
+  vector_size_t size = 10;
+  auto indices =
+      makeIndices(size, [&](auto row) { return (row % 2 == 0) ? row : 0; });
+  auto data =
+      vectorMaker->flatVector<int32_t>(size, [](auto row) { return row; });
+
+  auto loader = std::make_unique<TestingLoader>(data);
+  auto loaderPtr = loader.get();
+  auto lazyVector = std::make_shared<LazyVector>(
+      pool_.get(), INTEGER(), size, std::move(loader));
+
+  auto indicesInner =
+      makeIndices(size, [&](auto row) { return (row % 2 == 0) ? row : 0; });
+  auto indicesOuter =
+      makeIndices(size, [&](auto row) { return (row % 4 == 0) ? row : 0; });
+
+  auto dict = BaseVector::wrapInDictionary(
+      nullptr,
+      indicesOuter,
+      size,
+      BaseVector::wrapInDictionary(nullptr, indicesInner, size, lazyVector));
+
+  dict->loadedVector();
+  ASSERT_EQ(loaderPtr->rowCount(), 1 + size / 4);
+
+  dict->loadedVector();
+  ASSERT_EQ(loaderPtr->rowCount(), 1 + size / 4);
+}
+
+TEST_F(VectorTest, dictionaryResize) {
+  auto vectorMaker = std::make_unique<test::VectorMaker>(pool_.get());
+  vector_size_t size = 10;
+  std::vector<int64_t> elements{0, 1, 2, 3, 4};
+  auto makeIndicesFn = [&]() {
+    return makeIndices(size, [&](auto row) { return row % elements.size(); });
+  };
+
+  auto indices = makeIndicesFn();
+  auto flatVector = makeFlatVector<int64_t>(elements);
+
+  // Create a simple dictionary.
+  auto dict = wrapInDictionary(std::move(indices), size, flatVector);
+
+  auto expectedValues = std::vector<int64_t>{0, 1, 2, 3, 4, 0, 1, 2, 3, 4};
+  auto expectedVector = makeFlatVector<int64_t>(expectedValues);
+  test::assertEqualVectors(expectedVector, dict);
+
+  // Double size.
+  dict->resize(size * 2);
+
+  // Check all the newly resized indices point to 0th value.
+  expectedVector = makeFlatVector<int64_t>(
+      {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+  test::assertEqualVectors(expectedVector, dict);
+
+  // Resize  a nested dictionary.
+  auto innerDict = wrapInDictionary(makeIndicesFn(), size, flatVector);
+  auto outerDict = wrapInDictionary(makeIndicesFn(), size, innerDict);
+
+  expectedVector = makeFlatVector<int64_t>(expectedValues);
+  test::assertEqualVectors(expectedVector, outerDict);
+  innerDict->resize(size * 2);
+  // Check that the outer dictionary remains unaffected.
+  test::assertEqualVectors(expectedVector, outerDict);
+
+  // Resize a shared nested dictionary with shared indices.
+  indices = makeIndicesFn();
+  dict = wrapInDictionary(
+      indices, size, wrapInDictionary(indices, size, flatVector));
+
+  ASSERT_TRUE(!indices->unique());
+  dict->resize(size * 2);
+  expectedVector = makeFlatVector<int64_t>(
+      {0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+  test::assertEqualVectors(expectedVector, dict);
+  // Check to ensure that indices has not changed.
+  ASSERT_EQ(indices->size(), size * sizeof(vector_size_t));
 }

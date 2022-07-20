@@ -15,28 +15,31 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveIntegerDictionaryColumnReader.h"
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::dwrf {
 using namespace dwio::common;
 
 SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
-    std::shared_ptr<const TypeWithId> requestedType,
+    const std::shared_ptr<const TypeWithId>& requestedType,
     const std::shared_ptr<const TypeWithId>& dataType,
-    StripeStreams& stripe,
-    common::ScanSpec* scanSpec,
+    DwrfParams& params,
+    common::ScanSpec& scanSpec,
     uint32_t numBytes)
-    : SelectiveColumnReader(
+    : SelectiveIntegerColumnReader(
           std::move(requestedType),
-          stripe,
+          params,
           scanSpec,
           dataType->type) {
-  EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+  EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+  auto& stripe = params.stripeStreams();
   auto encoding = stripe.getEncoding(encodingKey);
   scanState_.dictionary.numValues = encoding.dictionarysize();
   rleVersion_ = convertRleVersion(encoding.kind());
   auto data = encodingKey.forKind(proto::Stream_Kind_DATA);
   bool dataVInts = stripe.getUseVInts(data);
-  dataReader_ = IntDecoder</* isSigned = */ false>::createRle(
+  dataReader_ = createRleDecoder</* isSigned = */ false>(
       stripe.getStream(data, true),
       rleVersion_,
       memoryPool_,
@@ -57,7 +60,7 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
 }
 
 uint64_t SelectiveIntegerDictionaryColumnReader::skip(uint64_t numValues) {
-  numValues = ColumnReader::skip(numValues);
+  numValues = SelectiveColumnReader::skip(numValues);
   dataReader_->skip(numValues);
   if (inDictionaryReader_) {
     inDictionaryReader_->skip(numValues);
@@ -82,7 +85,7 @@ void SelectiveIntegerDictionaryColumnReader::read(
     int32_t numFlags = (isBulk && nullsInReadRange_)
         ? bits::countNonNulls(nullsInReadRange_->as<uint64_t>(), 0, end)
         : end;
-    detail::ensureCapacity<uint64_t>(
+    dwio::common::ensureCapacity<uint64_t>(
         scanState_.inDictionary, bits::nwords(numFlags), &memoryPool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.
@@ -96,30 +99,7 @@ void SelectiveIntegerDictionaryColumnReader::read(
 
   // lazy load dictionary only when it's needed
   ensureInitialized();
-
-  bool isDense = rows.back() == rows.size() - 1;
-  common::Filter* filter = scanSpec_->filter();
-  if (scanSpec_->keepValues()) {
-    if (scanSpec_->valueHook()) {
-      if (isDense) {
-        processValueHook<true>(rows, scanSpec_->valueHook());
-      } else {
-        processValueHook<false>(rows, scanSpec_->valueHook());
-      }
-      return;
-    }
-    if (isDense) {
-      processFilter<true>(filter, ExtractToReader(this), rows);
-    } else {
-      processFilter<false>(filter, ExtractToReader(this), rows);
-    }
-  } else {
-    if (isDense) {
-      processFilter<true>(filter, DropValues(), rows);
-    } else {
-      processFilter<false>(filter, DropValues(), rows);
-    }
-  }
+  readCommon<SelectiveIntegerDictionaryColumnReader>(rows);
 }
 
 void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {

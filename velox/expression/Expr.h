@@ -57,11 +57,13 @@ class Expr {
       TypePtr type,
       std::vector<std::shared_ptr<Expr>>&& inputs,
       std::string name,
+      bool specialForm,
       bool trackCpuUsage)
       : type_(std::move(type)),
         inputs_(std::move(inputs)),
         name_(std::move(name)),
         vectorFunction_(nullptr),
+        specialForm_{specialForm},
         trackCpuUsage_{trackCpuUsage} {}
 
   Expr(
@@ -74,6 +76,7 @@ class Expr {
         inputs_(std::move(inputs)),
         name_(std::move(name)),
         vectorFunction_(std::move(vectorFunction)),
+        specialForm_{false},
         trackCpuUsage_{trackCpuUsage} {}
 
   virtual ~Expr() = default;
@@ -136,8 +139,8 @@ class Expr {
     return type()->kind() == TypeKind::VARCHAR;
   }
 
-  virtual bool isSpecialForm() const {
-    return false;
+  bool isSpecialForm() const {
+    return specialForm_;
   }
 
   virtual bool isConditional() const {
@@ -308,7 +311,6 @@ class Expr {
   const std::vector<std::shared_ptr<Expr>> inputs_;
   const std::string name_;
   const std::shared_ptr<VectorFunction> vectorFunction_;
-  const bool trackCpuUsage_;
 
   // TODO make the following metadata const, e.g. call computeMetadata in the
   // constructor
@@ -317,6 +319,9 @@ class Expr {
   // subtrees. Empty if this is the same as 'distinctFields_' of
   // parent Expr.
   std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
+
+  const bool specialForm_;
+  const bool trackCpuUsage_;
 
   // True if a null in any of 'distinctFields_' causes 'this' to be
   // null for the row.

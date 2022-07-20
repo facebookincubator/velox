@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/reader/DwrfData.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
@@ -27,17 +28,16 @@ class SelectiveByteRleColumnReader : public SelectiveColumnReader {
   SelectiveByteRleColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      bool isBool,
-      FlatMapContext flatMapContext)
+      DwrfParams& params,
+      common::ScanSpec& scanSpec,
+      bool isBool)
       : SelectiveColumnReader(
             std::move(requestedType),
-            stripe,
+            params,
             scanSpec,
-            dataType->type,
-            std::move(flatMapContext)) {
-    EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+            dataType->type) {
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto& stripe = params.stripeStreams();
     if (isBool) {
       boolRle_ = createBooleanRleDecoder(
           stripe.getStream(encodingKey.forKind(proto::Stream_Kind_DATA), true),
@@ -50,14 +50,7 @@ class SelectiveByteRleColumnReader : public SelectiveColumnReader {
   }
 
   void seekToRowGroup(uint32_t index) override {
-    ensureRowGroupIndex();
-    auto positions = toPositions(index_->entry(index));
-    dwio::common::PositionProvider positionsProvider(positions);
-
-    if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
-    }
-
+    auto positionsProvider = formatData_->seekToRowGroup(index);
     if (boolRle_) {
       boolRle_->seekToRowGroup(positionsProvider);
     } else {
@@ -180,8 +173,16 @@ void SelectiveByteRleColumnReader::processFilter(
     case FilterKind::kBigintRange:
       readHelper<common::BigintRange, isDense>(filter, rows, extractValues);
       break;
+    case FilterKind::kNegatedBigintRange:
+      readHelper<common::NegatedBigintRange, isDense>(
+          filter, rows, extractValues);
+      break;
     case FilterKind::kBigintValuesUsingBitmask:
       readHelper<common::BigintValuesUsingBitmask, isDense>(
+          filter, rows, extractValues);
+      break;
+    case FilterKind::kNegatedBigintValuesUsingBitmask:
+      readHelper<common::NegatedBigintValuesUsingBitmask, isDense>(
           filter, rows, extractValues);
       break;
     default:

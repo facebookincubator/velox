@@ -11,10 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 add_executable(
   velox_dwio_common_test
+  BitConcatenationTest.cpp
   ChainedBufferTests.cpp
   DataBufferTests.cpp
+  DecoderUtilTest.cpp
   LoggedExceptionTest.cpp
   RetryTests.cpp
   TestBufferedInput.cpp
@@ -40,3 +43,8 @@ add_executable(velox_dwio_common_data_buffer_benchmark DataBufferBenchmark.cpp)
 target_link_libraries(
   velox_dwio_common_data_buffer_benchmark velox_dwio_common velox_memory
   velox_dwio_common_exception ${FOLLY} ${FOLLY_BENCHMARK})
+
+add_executable(velox_dwio_common_int_decoder_benchmark IntDecoderBenchmark.cpp)
+target_link_libraries(
+  velox_dwio_common_int_decoder_benchmark velox_dwio_common_exception
+  velox_exception velox_dwio_dwrf_common ${FOLLY} ${FOLLY_BENCHMARK})

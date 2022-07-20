@@ -43,7 +43,6 @@ class DwrfRowReaderShared : public StrideIndexProvider,
   uint64_t strideIndex_;
   std::shared_ptr<StripeDictionaryCache> stripeDictionaryCache_;
   dwio::common::RowReaderOptions options_;
-  std::unique_ptr<ColumnReaderFactory> columnReaderFactory_;
 
   // column selector
   std::shared_ptr<dwio::common::ColumnSelector> columnSelector_;
@@ -148,7 +147,7 @@ class DwrfReaderShared : public dwio::common::Reader {
 
   virtual ~DwrfReaderShared() = default;
 
-  CompressionKind getCompression() const {
+  dwio::common::CompressionKind getCompression() const {
     return readerBase_->getCompressionKind();
   }
 
@@ -205,7 +204,7 @@ class DwrfReaderShared : public dwio::common::Reader {
     return readerBase_->getSchemaWithId();
   }
 
-  const proto::PostScript& getPostscript() const {
+  const PostScript& getPostscript() const {
     return readerBase_->getPostScript();
   }
 

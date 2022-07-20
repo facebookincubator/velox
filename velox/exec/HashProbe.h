@@ -86,7 +86,7 @@ class HashProbe : public Operator {
   // 'rowNumberMapping_'. Returns the number of passing rows.
   vector_size_t evalFilter(vector_size_t numRows);
 
-  void ensureLoadedIfNotAtEnd(ChannelIndex channel);
+  void ensureLoadedIfNotAtEnd(column_index_t channel);
 
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const uint32_t outputBatchSize_;
@@ -96,7 +96,7 @@ class HashProbe : public Operator {
   std::unique_ptr<HashLookup> lookup_;
 
   // Channel of probe keys in 'input_'.
-  std::vector<ChannelIndex> keyChannels_;
+  std::vector<column_index_t> keyChannels_;
 
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};
@@ -182,9 +182,9 @@ class HashProbe : public Operator {
     bool currentRowPassed{false};
   };
 
-  // For semi join with extra filter, de-duplicates probe side rows with
+  // For left semi join with extra filter, de-duplicates probe side rows with
   // multiple matches.
-  class SemiJoinTracker {
+  class LeftSemiJoinTracker {
    public:
     // Called for each row that the filter passes. Expects that probe
     // side rows with multiple matches are next to each other. Calls onLastMatch
@@ -225,9 +225,9 @@ class HashProbe : public Operator {
   /// matches on the build side but didn't pass the filter.
   NoMatchDetector noMatchDetector_;
 
-  /// For semi join with filter, de-duplicates probe side rows with multiple
-  /// matches.
-  SemiJoinTracker semiJoinTracker_;
+  /// For left semi join with filter, de-duplicates probe side rows with
+  /// multiple matches.
+  LeftSemiJoinTracker leftSemiJoinTracker_;
 
   // Keeps track of returned results between successive batches of
   // output for a batch of input.

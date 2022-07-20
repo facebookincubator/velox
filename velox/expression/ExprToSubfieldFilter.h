@@ -50,6 +50,18 @@ inline std::unique_ptr<common::BigintRange> greaterThanOrEqual(
       min, std::numeric_limits<int64_t>::max(), nullAllowed);
 }
 
+inline std::unique_ptr<common::NegatedBigintRange> notEqual(
+    int64_t val,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBigintRange>(val, val, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBigintRange>
+notBetween(int64_t lower, int64_t upper, bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBigintRange>(
+      lower, upper, nullAllowed);
+}
+
 inline std::unique_ptr<common::DoubleRange> lessThanDouble(
     double max,
     bool nullAllowed = false) {
@@ -224,6 +236,22 @@ inline std::unique_ptr<common::BytesRange> betweenExclusive(
       min, false, true, max, false, true, nullAllowed);
 }
 
+inline std::unique_ptr<common::NegatedBytesRange> notBetween(
+    const std::string& min,
+    const std::string& max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesRange>(
+      min, false, false, max, false, false, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesRange> notBetweenExclusive(
+    const std::string& min,
+    const std::string& max,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesRange>(
+      min, false, true, max, false, true, nullAllowed);
+}
+
 inline std::unique_ptr<common::BytesRange> lessThanOrEqual(
     const std::string& max,
     bool nullAllowed = false) {
@@ -258,10 +286,22 @@ inline std::unique_ptr<common::Filter> in(
   return common::createBigintValues(values, nullAllowed);
 }
 
+inline std::unique_ptr<common::Filter> notIn(
+    const std::vector<int64_t>& values,
+    bool nullAllowed = false) {
+  return common::createNegatedBigintValues(values, nullAllowed);
+}
+
 inline std::unique_ptr<common::BytesValues> in(
     const std::vector<std::string>& values,
     bool nullAllowed = false) {
   return std::make_unique<common::BytesValues>(values, nullAllowed);
+}
+
+inline std::unique_ptr<common::NegatedBytesValues> notIn(
+    const std::vector<std::string>& values,
+    bool nullAllowed = false) {
+  return std::make_unique<common::NegatedBytesValues>(values, nullAllowed);
 }
 
 inline std::unique_ptr<common::BoolValue> boolEqual(

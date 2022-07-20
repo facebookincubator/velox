@@ -118,6 +118,24 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t maxDrivers,
       uint32_t concurrentSplitGroups = 1);
 
+  /// If this returns true, this Task supports the single-threaded execution API
+  /// next().
+  bool supportsSingleThreadedExecution() const;
+
+  /// Single-threaded execution API. Runs the query and returns results one
+  /// batch at a time. Returns nullptr if query evaluation is finished and no
+  /// more data will be produced. Throws an exception if query execution
+  /// failed.
+  ///
+  /// This API is available for query plans that do not use
+  /// PartitionedOutputNode and LocalPartitionNode plan nodes.
+  ///
+  /// The caller is required to add all the necessary splits and signal
+  /// no-more-splits before calling 'next' for the first time. The operators in
+  /// the pipeline are not allowed to block for external events, but can block
+  /// waiting for data to be produced by a different pipeline of the same task.
+  RowVectorPtr next();
+
   // Resumes execution of 'self' after a successful pause. All 'drivers_' must
   // be off-thread and there must be no 'exception_'
   static void resume(std::shared_ptr<Task> self);
@@ -188,6 +206,7 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
+    std::lock_guard<std::mutex> l(mutex_);
     return exception_;
   }
 
@@ -683,8 +702,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Thread counts and cancellation -related state.
   //
-  // Some of the variables below are declared atomic for tsan because they are
-  // sometimes tested outside of 'mutex_' for a value of 0/false,
+  // Some variables below are declared atomic for tsan because they are
+  // sometimes tested outside 'mutex_' for a value of 0/false,
   // which is safe to access without acquiring 'mutex_'.Thread counts
   // and promises are guarded by 'mutex_'
   std::atomic<bool> pauseRequested_{false};

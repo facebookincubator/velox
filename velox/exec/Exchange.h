@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <velox/common/memory/Memory.h>
 #include <memory>
 #include "velox/common/memory/ByteStream.h"
 #include "velox/exec/Operator.h"
@@ -27,10 +28,15 @@ class SerializedPage {
  public:
   static constexpr int kSerializedPageOwner = -11;
 
-  // Construct from IOBuf chain.
-  explicit SerializedPage(std::unique_ptr<folly::IOBuf> iobuf);
+  // Construct from IOBuf chain. The external memory usage of 'iobuf' will be
+  // tracked if 'pool' is not null.
+  //
+  // TODO: consider to enforce setting memory pool if possible.
+  explicit SerializedPage(
+      std::unique_ptr<folly::IOBuf> iobuf,
+      memory::MemoryPool* pool = nullptr);
 
-  ~SerializedPage() = default;
+  ~SerializedPage();
 
   // Returns the size of the serialized data in bytes.
   uint64_t size() const {
@@ -62,6 +68,7 @@ class SerializedPage {
 
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
+  memory::MemoryPool* pool_{nullptr};
 };
 
 // Queue of results retrieved from source. Owned by shared_ptr by
@@ -94,7 +101,7 @@ class ExchangeQueue {
     queue_.push_back(std::move(page));
     if (!promises_.empty()) {
       // Resume one of the waiting drivers.
-      promises_.back().setValue(true);
+      promises_.back().setValue();
       promises_.pop_back();
     }
   }
@@ -166,7 +173,7 @@ class ExchangeQueue {
 
   void clearAllPromises() {
     for (auto& promise : promises_) {
-      promise.setValue(true);
+      promise.setValue();
     }
     promises_.clear();
   }
@@ -245,6 +252,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   static std::vector<Factory>& factories();
 
+  void setMemoryPool(memory::MemoryPool* pool);
   // ID of the task producing data
   const std::string taskId_;
   // Destination number of 'this' on producer
@@ -253,6 +261,9 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   std::shared_ptr<ExchangeQueue> queue_;
   bool requestPending_ = false;
   bool atEnd_ = false;
+
+ protected:
+  memory::MemoryPool* pool_{nullptr};
 };
 
 struct RemoteConnectorSplit : public connector::ConnectorSplit {
@@ -279,6 +290,12 @@ class ExchangeClient {
 
   ~ExchangeClient();
 
+  memory::MemoryPool* pool() const {
+    return pool_;
+  }
+
+  void maybeSetMemoryPool(memory::MemoryPool* pool);
+
   void addRemoteTaskId(const std::string& taskId);
 
   void noMoreRemoteTasks();
@@ -296,6 +313,7 @@ class ExchangeClient {
   std::shared_ptr<ExchangeQueue> queue_;
   std::unordered_set<std::string> taskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
+  memory::MemoryPool* pool_{nullptr};
 };
 
 class Exchange : public SourceOperator {
@@ -312,7 +330,9 @@ class Exchange : public SourceOperator {
             exchangeNode->id(),
             "Exchange"),
         planNodeId_(exchangeNode->id()),
-        exchangeClient_(std::move(exchangeClient)) {}
+        exchangeClient_(std::move(exchangeClient)) {
+    exchangeClient_->maybeSetMemoryPool(operatorCtx_->pool());
+  }
 
   ~Exchange() override {
     close();

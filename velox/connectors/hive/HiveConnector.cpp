@@ -19,7 +19,7 @@
 
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
-#include "velox/expression/ControlExpr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
@@ -253,7 +253,7 @@ HiveDataSource::HiveDataSource(
     // Make sure to add these columns to scanSpec_.
 
     auto filterInputs = remainingFilterExprSet_->expr(0)->distinctFields();
-    ChannelIndex channel = outputType_->size();
+    column_index_t channel = outputType_->size();
     auto names = readerOutputType_->names();
     auto types = readerOutputType_->children();
     for (auto& input : filterInputs) {
@@ -360,7 +360,7 @@ velox::variant convertFromString(const std::optional<std::string>& value) {
 } // namespace
 
 void HiveDataSource::addDynamicFilter(
-    ChannelIndex outputChannel,
+    column_index_t outputChannel,
     const std::shared_ptr<common::Filter>& filter) {
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
   if (fieldSpec.filter()) {
@@ -498,7 +498,9 @@ void HiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       rowReaderOpts_.select(cs).range(split_->start, split_->length));
 }
 
-RowVectorPtr HiveDataSource::next(uint64_t size) {
+std::optional<RowVectorPtr> HiveDataSource::next(
+    uint64_t size,
+    velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   if (emptySplit_) {
     resetSplit();

@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include "velox/dwio/common/BufferUtil.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
+#include "velox/dwio/dwrf/reader/DwrfData.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
@@ -34,26 +37,21 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
 
   SelectiveRepeatedColumnReader(
       std::shared_ptr<const dwio::common::TypeWithId> nodeType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      const TypePtr& type,
-      FlatMapContext flatMapContext = FlatMapContext::nonFlatMapContext())
-      : SelectiveColumnReader(
-            std::move(nodeType),
-            stripe,
-            scanSpec,
-            type,
-            flatMapContext) {
-    EncodingKey encodingKey{nodeType_->id, flatMapContext_.sequence};
+      DwrfParams& params,
+      common::ScanSpec& scanSpec,
+      const TypePtr& type)
+      : SelectiveColumnReader(std::move(nodeType), params, scanSpec, type) {
+    EncodingKey encodingKey{nodeType_->id, params.flatMapContext().sequence};
+    auto& stripe = params.stripeStreams();
     auto rleVersion = convertRleVersion(stripe.getEncoding(encodingKey).kind());
     auto lenId = encodingKey.forKind(proto::Stream_Kind_LENGTH);
     bool lenVints = stripe.getUseVInts(lenId);
-    length_ = IntDecoder</*isSigned*/ false>::createRle(
+    length_ = createRleDecoder</*isSigned*/ false>(
         stripe.getStream(lenId, true),
         rleVersion,
         memoryPool_,
         lenVints,
-        INT_BYTE_SIZE);
+        dwio::common::INT_BYTE_SIZE);
   }
 
   void makeNestedRowSet(RowSet rows) {
@@ -64,8 +62,10 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
     // Reads the lengths, leaves an uninitialized gap for a null
     // map/list. Reading these checks the null nask.
     length_->next(allLengths_.data(), rows.back() + 1, nulls);
-    detail::ensureCapacity<vector_size_t>(offsets_, rows.size(), &memoryPool_);
-    detail::ensureCapacity<vector_size_t>(sizes_, rows.size(), &memoryPool_);
+    dwio::common::ensureCapacity<vector_size_t>(
+        offsets_, rows.size(), &memoryPool_);
+    dwio::common::ensureCapacity<vector_size_t>(
+        sizes_, rows.size(), &memoryPool_);
     auto rawOffsets = offsets_->asMutable<vector_size_t>();
     auto rawSizes = sizes_->asMutable<vector_size_t>();
     vector_size_t nestedLength = 0;
@@ -168,7 +168,7 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   // read up to the last position corresponding to
   // the last non-null parent.
   vector_size_t childTargetReadOffset_ = 0;
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> length_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> length_;
 };
 
 class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
@@ -176,24 +176,15 @@ class SelectiveListColumnReader : public SelectiveRepeatedColumnReader {
   SelectiveListColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext);
+      DwrfParams& params,
+      common::ScanSpec& scanSpec);
 
   void resetFilterCaches() override {
     child_->resetFilterCaches();
   }
 
   void seekToRowGroup(uint32_t index) override {
-    ensureRowGroupIndex();
-
-    auto positions = toPositions(index_->entry(index));
-    dwio::common::PositionProvider positionsProvider(positions);
-
-    if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
-    }
-
+    auto positionsProvider = formatData_->seekToRowGroup(index);
     length_->seekToRowGroup(positionsProvider);
 
     VELOX_CHECK(!positionsProvider.hasNext());
@@ -220,9 +211,8 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
   SelectiveMapColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& dataType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext);
+      DwrfParams& params,
+      common::ScanSpec& scanSpec);
 
   void resetFilterCaches() override {
     keyReader_->resetFilterCaches();
@@ -230,14 +220,7 @@ class SelectiveMapColumnReader : public SelectiveRepeatedColumnReader {
   }
 
   void seekToRowGroup(uint32_t index) override {
-    ensureRowGroupIndex();
-
-    auto positions = toPositions(index_->entry(index));
-    dwio::common::PositionProvider positionsProvider(positions);
-
-    if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
-    }
+    auto positionsProvider = formatData_->seekToRowGroup(index);
 
     length_->seekToRowGroup(positionsProvider);
 

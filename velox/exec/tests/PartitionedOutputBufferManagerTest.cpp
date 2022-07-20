@@ -86,7 +86,7 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
       int destination,
       std::shared_ptr<const RowType> rowType,
       vector_size_t size) {
-    ContinueFuture future(false);
+    ContinueFuture future;
     auto blockingReason = bufferManager_->enqueue(
         taskId, destination, makeSerializedPage(rowType, size), &future);
     ASSERT_EQ(blockingReason, BlockingReason::kNotBlocked);
@@ -109,14 +109,13 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
         maxBytes,
         sequence,
         [destination, sequence, expectedGroups, &receivedData](
-            std::vector<std::shared_ptr<SerializedPage>>& groups,
+            std::vector<std::unique_ptr<folly::IOBuf>> pages,
             int64_t inSequence) {
           EXPECT_FALSE(receivedData) << "for destination " << destination;
-          EXPECT_EQ(groups.size(), expectedGroups)
+          EXPECT_EQ(pages.size(), expectedGroups)
               << "for destination " << destination;
-          for (int i = 0; i < groups.size(); i++) {
-            EXPECT_TRUE(groups[i] != nullptr)
-                << "for destination " << destination;
+          for (const auto& page : pages) {
+            EXPECT_TRUE(page != nullptr) << "for destination " << destination;
           }
           EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
           receivedData = true;
@@ -146,11 +145,11 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
   DataAvailableCallback
   receiveEndMarker(int destination, int64_t sequence, bool& receivedEndMarker) {
     return [destination, sequence, &receivedEndMarker](
-               std::vector<std::shared_ptr<SerializedPage>>& groups,
+               std::vector<std::unique_ptr<folly::IOBuf>> pages,
                int64_t inSequence) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
-      EXPECT_EQ(groups.size(), 1) << "for destination " << destination;
-      EXPECT_TRUE(groups[0] == nullptr) << "for destination " << destination;
+      EXPECT_EQ(pages.size(), 1) << "for destination " << destination;
+      EXPECT_TRUE(pages[0] == nullptr) << "for destination " << destination;
       EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
       receivedEndMarker = true;
     };
@@ -195,13 +194,13 @@ class PartitionedOutputBufferManagerTest : public testing::Test {
       bool& receivedData) {
     receivedData = false;
     return [destination, sequence, expectedGroups, &receivedData](
-               std::vector<std::shared_ptr<SerializedPage>>& groups,
+               std::vector<std::unique_ptr<folly::IOBuf>> pages,
                int64_t inSequence) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
-      EXPECT_EQ(groups.size(), expectedGroups)
+      EXPECT_EQ(pages.size(), expectedGroups)
           << "for destination " << destination;
       for (int i = 0; i < expectedGroups; i++) {
-        EXPECT_TRUE(groups[i] != nullptr) << "for destination " << destination;
+        EXPECT_TRUE(pages[i] != nullptr) << "for destination " << destination;
       }
       EXPECT_EQ(inSequence, sequence) << "for destination " << destination;
       receivedData = true;
@@ -366,7 +365,23 @@ TEST_F(PartitionedOutputBufferManagerTest, errorInQueue) {
     std::lock_guard<std::mutex> l(queue->mutex());
     queue->setErrorLocked("error");
   }
-  ContinueFuture future(false);
+  ContinueFuture future;
   bool atEnd = false;
   EXPECT_THROW(auto page = queue->dequeue(&atEnd, &future), std::runtime_error);
+}
+
+TEST_F(PartitionedOutputBufferManagerTest, serializedPage) {
+  auto iobuf = folly::IOBuf::create(128);
+  std::string payload = "abcdefghijklmnopq";
+  size_t payloadSize = payload.size();
+  std::memcpy(iobuf->writableData(), payload.data(), payloadSize);
+  iobuf->append(payloadSize);
+
+  EXPECT_EQ(0, pool_->getCurrentBytes());
+  {
+    auto serializedPage =
+        std::make_shared<SerializedPage>(std::move(iobuf), pool_.get());
+    EXPECT_EQ(payloadSize, pool_->getCurrentBytes());
+  }
+  EXPECT_EQ(0, pool_->getCurrentBytes());
 }

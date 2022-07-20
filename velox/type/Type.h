@@ -1503,6 +1503,12 @@ struct isGenericType : public std::false_type {};
 template <typename T>
 struct isGenericType<Generic<T>> : public std::true_type {};
 
+template <typename>
+struct isOpaqueType : public std::false_type {};
+
+template <typename T>
+struct isOpaqueType<std::shared_ptr<T>> : public std::true_type {};
+
 template <typename KEY, typename VALUE>
 struct Map {
   using key_type = KEY;
@@ -1878,6 +1884,52 @@ struct MaterializeType<Varbinary> {
   using nullable_t = std::string;
   using null_free_t = std::string;
   static constexpr bool requiresMaterialization = false;
+};
+
+// Recursively check that T and vectorType associate to the same TypeKind.
+template <typename T>
+struct CastTypeChecker {
+  static_assert(
+      CppToType<T>::maxSubTypes == 0,
+      "Complex types should be checked separately.");
+
+  static bool check(const TypePtr& vectorType) {
+    return CppToType<T>::typeKind == vectorType->kind();
+  }
+};
+
+template <typename T>
+struct CastTypeChecker<Generic<T>> {
+  static bool check(const TypePtr&) {
+    return true;
+  }
+};
+
+template <typename T>
+struct CastTypeChecker<Array<T>> {
+  static bool check(const TypePtr& vectorType) {
+    return TypeKind::ARRAY == vectorType->kind() &&
+        CastTypeChecker<T>::check(vectorType->childAt(0));
+  }
+};
+
+template <typename K, typename V>
+struct CastTypeChecker<Map<K, V>> {
+  static bool check(const TypePtr& vectorType) {
+    return TypeKind::MAP == vectorType->kind() &&
+        CastTypeChecker<K>::check(vectorType->childAt(0)) &&
+        CastTypeChecker<V>::check(vectorType->childAt(1));
+  }
+};
+
+template <typename... T>
+struct CastTypeChecker<Row<T...>> {
+  static bool check(const TypePtr& vectorType) {
+    int index = 0;
+    return TypeKind::ROW == vectorType->kind() &&
+        (CastTypeChecker<T>::check(vectorType->childAt(index++)) && ... &&
+         true);
+  }
 };
 
 } // namespace facebook::velox

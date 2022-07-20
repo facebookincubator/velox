@@ -723,3 +723,280 @@ TEST_F(JsonCastTest, unsupportedTypes) {
               {"123"_sv, R"("abc")"_sv, ""_sv, std::nullopt}, JSON())})),
       VeloxException);
 }
+
+TEST_F(JsonCastTest, toVarchar) {
+  testCast<Json, StringView>(
+      JSON(),
+      VARCHAR(),
+      {R"("aaa")"_sv, R"("bbb")"_sv, R"("ccc")"_sv, R"("")"_sv},
+      {"aaa"_sv, "bbb"_sv, "ccc"_sv, ""_sv});
+  testCast<Json, StringView>(
+      JSON(),
+      VARCHAR(),
+      {"\"\""_sv,
+       std::nullopt,
+       R"("\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f\"\\ .")"_sv},
+      {""_sv,
+       std::nullopt,
+       "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\"\\ ."_sv});
+  testCast<Json, StringView>(
+      JSON(),
+      VARCHAR(),
+      {"123"_sv, "-12.3"_sv, "true"_sv, "false"_sv, "null"_sv},
+      {"123"_sv, "-12.3"_sv, "true"_sv, "false"_sv, std::nullopt});
+  testCast<Json, StringView>(
+      JSON(),
+      VARCHAR(),
+      {"null"_sv, std::nullopt},
+      {std::nullopt, std::nullopt});
+}
+
+TEST_F(JsonCastTest, toInteger) {
+  testCast<Json, int64_t>(
+      JSON(),
+      BIGINT(),
+      {"1"_sv,
+       "-3"_sv,
+       "0"_sv,
+       "9223372036854775807"_sv,
+       "-9223372036854775808"_sv,
+       std::nullopt},
+      {1, -3, 0, INT64_MAX, INT64_MIN, std::nullopt});
+  testCast<Json, int8_t>(
+      JSON(),
+      TINYINT(),
+      {"1"_sv,
+       "-3"_sv,
+       "0"_sv,
+       "127"_sv,
+       "-128"_sv,
+       "true"_sv,
+       "false"_sv,
+       "10.23"_sv,
+       "-10.23"_sv,
+       std::nullopt},
+      {1, -3, 0, INT8_MAX, INT8_MIN, 1, 0, 10, -10, std::nullopt});
+  testCast<Json, int32_t>(
+      JSON(),
+      INTEGER(),
+      {"null"_sv, std::nullopt},
+      {std::nullopt, std::nullopt});
+
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {"128"_sv});
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {"128.01"_sv});
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {"-1223456"_sv});
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {"Infinity"_sv});
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {"NaN"_sv});
+  testThrow<Json, int8_t>(JSON(), TINYINT(), {""_sv});
+}
+
+TEST_F(JsonCastTest, toDouble) {
+  testCast<Json, double>(
+      JSON(),
+      DOUBLE(),
+      {"1.1"_sv,
+       "2.0001"_sv,
+       "10"_sv,
+       "3.14e-2"_sv,
+       "123"_sv,
+       "true"_sv,
+       "false"_sv,
+       std::nullopt},
+      {1.1, 2.0001, 10.0, 0.0314, 123, 1, 0, std::nullopt});
+  testCast<Json, double>(
+      JSON(),
+      DOUBLE(),
+      {"null"_sv, std::nullopt},
+      {std::nullopt, std::nullopt});
+
+  testThrow<Json, float>(JSON(), REAL(), {"-1.7E+307"_sv});
+  testThrow<Json, float>(JSON(), REAL(), {"1.7E+307"_sv});
+  testThrow<Json, float>(JSON(), REAL(), {""_sv});
+}
+
+TEST_F(JsonCastTest, toBoolean) {
+  testCast<Json, bool>(
+      JSON(),
+      BOOLEAN(),
+      {"true"_sv,
+       "false"_sv,
+       R"("true")"_sv,
+       R"("false")"_sv,
+       "123"_sv,
+       "-123"_sv,
+       "0.56"_sv,
+       "-0.56"_sv,
+       "0"_sv,
+       "0.0"_sv,
+       std::nullopt},
+      {true,
+       false,
+       true,
+       false,
+       true,
+       true,
+       true,
+       true,
+       false,
+       false,
+       std::nullopt});
+  testCast<Json, bool>(
+      JSON(),
+      BOOLEAN(),
+      {"null"_sv, std::nullopt},
+      {std::nullopt, std::nullopt});
+
+  testThrow<Json, bool>(JSON(), BOOLEAN(), {R"("123")"_sv});
+  testThrow<Json, bool>(JSON(), BOOLEAN(), {R"("abc")"_sv});
+  testThrow<Json, bool>(JSON(), BOOLEAN(), {""_sv});
+}
+
+TEST_F(JsonCastTest, toArray) {
+  auto data = makeNullableFlatVector<Json>(
+      {R"(["red","blue"])"_sv,
+       R"([null,null,"purple"])"_sv,
+       "[]"_sv,
+       "null"_sv},
+      JSON());
+  auto expected = makeVectorWithNullArrays<StringView>(
+      {{{"red"_sv, "blue"_sv}},
+       {{std::nullopt, std::nullopt, "purple"_sv}},
+       {{}},
+       std::nullopt});
+
+  testCast<ComplexType>(JSON(), ARRAY(VARCHAR()), data, expected);
+
+  // Tests array that has null at every row.
+  data = makeNullableFlatVector<Json>(
+      {"null"_sv, "null"_sv, "null"_sv, "null"_sv, std::nullopt});
+  expected = makeVectorWithNullArrays<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  testCast<ComplexType>(JSON(), ARRAY(BIGINT()), data, expected);
+}
+
+TEST_F(JsonCastTest, toMap) {
+  auto data = makeNullableFlatVector<Json>(
+      {R"({"red":"1","blue":2.2})"_sv,
+       R"({"purple":null,"yellow":4})"_sv,
+       "{}"_sv,
+       "null"_sv},
+      JSON());
+  auto expected = makeNullableMapVector<StringView, StringView>(
+      {{{{"blue"_sv, "2.2"_sv}, {"red"_sv, "1"_sv}}},
+       {{{"purple"_sv, std::nullopt}, {"yellow"_sv, "4"_sv}}},
+       {{}},
+       std::nullopt});
+
+  testCast<ComplexType>(JSON(), MAP(VARCHAR(), VARCHAR()), data, expected);
+
+  // Tests map of non-string keys.
+  data = makeNullableFlatVector<Json>(
+      {R"({"102":"2","101":1.1})"_sv,
+       R"({"103":null,"104":4})"_sv,
+       "{}"_sv,
+       "null"_sv},
+      JSON());
+  expected = makeNullableMapVector<int64_t, double>(
+      {{{{101, 1.1}, {102, 2.0}}},
+       {{{103, std::nullopt}, {104, 4.0}}},
+       {{}},
+       std::nullopt});
+
+  testCast<ComplexType>(JSON(), MAP(BIGINT(), DOUBLE()), data, expected);
+
+  // Tests map that has null at every row.
+  data = makeNullableFlatVector<Json>(
+      {"null"_sv, "null"_sv, "null"_sv, "null"_sv, std::nullopt});
+  expected = makeNullableMapVector<StringView, int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  testCast<ComplexType>(JSON(), MAP(VARCHAR(), BIGINT()), data, expected);
+}
+
+TEST_F(JsonCastTest, toNested) {
+  auto array = makeNullableFlatVector<Json>(
+      {R"([[1,2],[3]])"_sv, R"([[null,null,4]])"_sv, "[[]]"_sv, "[]"_sv},
+      JSON());
+  auto arrayExpected = makeNestedArrayVector<StringView>(
+      {{{{"1"_sv, "2"_sv}}, {{"3"_sv}}},
+       {{{std::nullopt, std::nullopt, "4"_sv}}},
+       {{{}}},
+       {}});
+
+  testCast<ComplexType>(JSON(), ARRAY(ARRAY(VARCHAR())), array, arrayExpected);
+
+  auto map = makeNullableFlatVector<Json>(
+      {R"({"1":[1.1,1.2],"2":[2,2.1]})"_sv, R"({"3":null,"4":[4.1,4.2]})"_sv});
+  auto keys =
+      makeNullableFlatVector<StringView>({"1"_sv, "2"_sv, "3"_sv, "4"_sv});
+  auto innerArray = makeVectorWithNullArrays<double>(
+      {{{1.1, 1.2}}, {{2.0, 2.1}}, std::nullopt, {{4.1, 4.2}}});
+
+  auto offsets = AlignedBuffer::allocate<vector_size_t>(2, pool());
+  auto sizes = AlignedBuffer::allocate<vector_size_t>(2, pool());
+  makeOffsetsAndSizes(4, 2, offsets, sizes);
+
+  auto mapExpected = std::make_shared<MapVector>(
+      pool(),
+      MAP(VARCHAR(), ARRAY(DOUBLE())),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      keys,
+      innerArray,
+      0);
+  testCast<ComplexType>(
+      JSON(), MAP(VARCHAR(), ARRAY(DOUBLE())), map, mapExpected);
+}
+
+TEST_F(JsonCastTest, toArrayAndMapOfJson) {
+  // Test casting to array of JSON.
+  auto array = makeNullableFlatVector<Json>(
+      {R"([[1,2],[null],null,"3"])"_sv, "[[]]"_sv, "[]"_sv}, JSON());
+  auto arrayExpected = makeNullableArrayVector<StringView>(
+      {{"[1,2]"_sv, "[null]"_sv, "null"_sv, "\"3\""_sv}, {"[]"_sv}, {}},
+      ARRAY(JSON()));
+
+  testCast<ComplexType>(JSON(), ARRAY(JSON()), array, arrayExpected);
+
+  // Test casting to map of JSON values.
+  auto map = makeNullableFlatVector<Json>(
+      {R"({"k1":[1,23],"k2":456,"k3":null,"k4":"a"})"_sv,
+       R"({"k5":{}})"_sv,
+       "{}"_sv},
+      JSON());
+  auto mapExpected = makeMapVector<StringView, StringView>(
+      {{{"k1"_sv, "[1,23]"_sv},
+        {"k2"_sv, "456"_sv},
+        {"k3"_sv, "null"_sv},
+        {"k4"_sv, "\"a\""_sv}},
+       {{"k5"_sv, "{}"_sv}},
+       {}},
+      MAP(VARCHAR(), JSON()));
+
+  testCast<ComplexType>(JSON(), MAP(VARCHAR(), JSON()), map, mapExpected);
+
+  // The type of map keys is not allowed to be JSON.
+  testThrow<Json, ComplexType>(
+      JSON(), MAP(JSON(), BIGINT()), {R"({"k1":1})"_sv});
+}
+
+TEST_F(JsonCastTest, toInvalid) {
+  testThrow<Json, Timestamp>(JSON(), TIMESTAMP(), {"null"_sv});
+  testThrow<Json, Date>(JSON(), DATE(), {"null"_sv});
+
+  // Map keys cannot be NULL.
+  testThrow<Json, ComplexType>(
+      JSON(),
+      MAP(VARCHAR(), DOUBLE()),
+      {R"({"red":1.1,"blue":2.2})"_sv, R"({null:3.3,"yellow":4.4})"_sv});
+
+  // Casting to ROW type is not supported yet.
+  testThrow<Json, ComplexType>(
+      JSON(),
+      ROW({VARCHAR(), DOUBLE()}),
+      {R"(["red",1.1])"_sv, R"(["blue",2.2])"_sv});
+  testThrow<Json, ComplexType>(JSON(), ARRAY(ROW({DOUBLE()})), {"null"_sv});
+}

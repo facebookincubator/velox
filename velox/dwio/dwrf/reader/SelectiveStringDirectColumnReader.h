@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/reader/DwrfData.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
@@ -25,20 +26,11 @@ class SelectiveStringDirectColumnReader : public SelectiveColumnReader {
   using ValueType = StringView;
   SelectiveStringDirectColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext);
+      DwrfParams& params,
+      common::ScanSpec& scanSpec);
 
   void seekToRowGroup(uint32_t index) override {
-    ensureRowGroupIndex();
-
-    auto positions = toPositions(index_->entry(index));
-    dwio::common::PositionProvider positionsProvider(positions);
-
-    if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
-    }
-
+    auto positionsProvider = formatData_->seekToRowGroup(index);
     blobStream_->seekToPosition(positionsProvider);
     lengthDecoder_->seekToRowGroup(positionsProvider);
 
@@ -100,7 +92,7 @@ class SelectiveStringDirectColumnReader : public SelectiveColumnReader {
   template <bool scatter, bool skip>
   bool try8Consecutive(int32_t start, const int32_t* rows, int32_t row);
 
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> lengthDecoder_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;
   const char* bufferStart_ = nullptr;
   const char* bufferEnd_ = nullptr;

@@ -203,14 +203,20 @@ class VectorTestBase {
   //   std::vector<std::optional<int64_t>> a {1, 2, 3};
   //   std::vector<std::optional<int64_t>> b {4, 5};
   //   std::vector<std::optional<int64_t>> c {6, 7, 8};
-  //   auto O = [](const std::vector<std::optional<int64_t>>& data) {
-  //     return std::make_optional(data);
-  //   };
-  //   auto arrayVector = makeNestedArrayVector<int64_t>(
-  //      {{O(a), O(b)},
-  //       {O(a), O(c)},
-  //       {O({})},
-  //       {O({std::nullopt})}});
+  //   auto arrayVector = makeNestedArrayVector<int64_t>({
+  //    {
+  //        {a}, {b}
+  //    },
+  //    {
+  //        {a}, {c}
+  //    },
+  //    {
+  //        {{}}
+  //    },
+  //    {
+  //        {{std::nullopt}}
+  //    }
+  //   });
   //
   //   EXPECT_EQ(4, arrayVector->size());
   template <typename T>
@@ -292,6 +298,46 @@ class VectorTestBase {
 
     // Create the underlying map vector.
     auto baseVector = makeMapVector<TKey, TValue>(flattenedData);
+
+    // Build and return a second-level of array vector on top of baseVector.
+    return std::make_shared<ArrayVector>(
+        pool(),
+        ARRAY(MAP(CppToType<TKey>::create(), CppToType<TValue>::create())),
+        BufferPtr(nullptr),
+        size,
+        offsets,
+        sizes,
+        baseVector,
+        0);
+  }
+
+  template <typename TKey, typename TValue>
+  ArrayVectorPtr makeArrayOfMapVector(
+      const std::vector<std::vector<
+          std::optional<std::vector<std::pair<TKey, std::optional<TValue>>>>>>&
+          data) {
+    vector_size_t size = data.size();
+    BufferPtr offsets = AlignedBuffer::allocate<vector_size_t>(size, pool());
+    BufferPtr sizes = AlignedBuffer::allocate<vector_size_t>(size, pool());
+
+    auto rawOffsets = offsets->asMutable<vector_size_t>();
+    auto rawSizes = sizes->asMutable<vector_size_t>();
+
+    // Flatten the outermost std::vector of the input and populate the sizes and
+    // offsets for the top-level array vector.
+    std::vector<
+        std::optional<std::vector<std::pair<TKey, std::optional<TValue>>>>>
+        flattenedData;
+    vector_size_t i = 0;
+    for (const auto& vector : data) {
+      flattenedData.insert(flattenedData.end(), vector.begin(), vector.end());
+      rawSizes[i] = vector.size();
+      rawOffsets[i] = (i == 0) ? 0 : rawOffsets[i - 1] + rawSizes[i - 1];
+      ++i;
+    }
+
+    // Create the underlying map vector.
+    auto baseVector = makeNullableMapVector<TKey, TValue>(flattenedData);
 
     // Build and return a second-level of array vector on top of baseVector.
     return std::make_shared<ArrayVector>(

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/dwio/dwrf/reader/DwrfData.h"
 #include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
 
 namespace facebook::velox::dwrf {
@@ -26,24 +27,11 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
 
   SelectiveStringDictionaryColumnReader(
       const std::shared_ptr<const dwio::common::TypeWithId>& nodeType,
-      StripeStreams& stripe,
-      common::ScanSpec* scanSpec,
-      FlatMapContext flatMapContext);
+      DwrfParams& params,
+      common::ScanSpec& scanSpec);
 
   void seekToRowGroup(uint32_t index) override {
-    ensureRowGroupIndex();
-
-    auto positions = toPositions(index_->entry(index));
-    dwio::common::PositionProvider positionsProvider(positions);
-
-    if (flatMapContext_.inMapDecoder) {
-      flatMapContext_.inMapDecoder->seekToRowGroup(positionsProvider);
-    }
-
-    if (notNullDecoder_) {
-      notNullDecoder_->seekToRowGroup(positionsProvider);
-    }
-
+    auto positionsProvider = formatData_->as<DwrfData>().seekToRowGroup(index);
     if (strideDictStream_) {
       strideDictStream_->seekToPosition(positionsProvider);
       strideDictLengthDecoder_->seekToRowGroup(positionsProvider);
@@ -87,13 +75,14 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   // values is in 'values.numValues'.
   void loadDictionary(
       dwio::common::SeekableInputStream& data,
-      IntDecoder</*isSigned*/ false>& lengthDecoder,
+      dwio::common::IntDecoder</*isSigned*/ false>& lengthDecoder,
       DictionaryValues& values);
   void ensureInitialized();
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> dictIndex_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> dictIndex_;
   std::unique_ptr<ByteRleDecoder> inDictionaryReader_;
   std::unique_ptr<dwio::common::SeekableInputStream> strideDictStream_;
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> strideDictLengthDecoder_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>>
+      strideDictLengthDecoder_;
 
   FlatVectorPtr<StringView> dictionaryValues_;
 
@@ -104,7 +93,7 @@ class SelectiveStringDictionaryColumnReader : public SelectiveColumnReader {
   const StrideIndexProvider& provider_;
 
   // lazy load the dictionary
-  std::unique_ptr<IntDecoder</*isSigned*/ false>> lengthDecoder_;
+  std::unique_ptr<dwio::common::IntDecoder</*isSigned*/ false>> lengthDecoder_;
   std::unique_ptr<dwio::common::SeekableInputStream> blobStream_;
   bool initialized_{false};
 };
@@ -163,6 +152,10 @@ void SelectiveStringDictionaryColumnReader::processFilter(
       break;
     case common::FilterKind::kBytesValues:
       readHelper<common::BytesValues, isDense>(filter, rows, extractValues);
+      break;
+    case common::FilterKind::kNegatedBytesValues:
+      readHelper<common::NegatedBytesValues, isDense>(
+          filter, rows, extractValues);
       break;
     default:
       readHelper<common::Filter, isDense>(filter, rows, extractValues);

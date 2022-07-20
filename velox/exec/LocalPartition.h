@@ -145,7 +145,7 @@ class LocalExchange : public SourceOperator {
  private:
   const int partition_;
   const std::shared_ptr<LocalExchangeQueue> queue_{nullptr};
-  ContinueFuture future_{false};
+  ContinueFuture future_;
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 };
 
@@ -197,7 +197,7 @@ class LocalPartition : public Operator {
   /// Mapping of sources' output columns to our output columns.
   /// One for all sources.
   /// Empty if column order in the output is exactly the same as in input.
-  std::vector<ChannelIndex> sourceOutputChannels_;
+  std::vector<column_index_t> sourceOutputChannels_;
 
   uint32_t numBlockedPartitions_{0};
   std::vector<BlockingReason> blockingReasons_;

@@ -816,11 +816,12 @@ if __name__ == "__main__":
             # better signals for flaky tests.
             retry = 0
 
-        testpilot = path_search(env, "testpilot")
         tpx = path_search(env, "tpx")
-        if (tpx or testpilot) and not no_testpilot:
+        if tpx and not no_testpilot:
             buck_test_info = list_tests()
             import os
+
+            from .facebook.testinfra import start_run
 
             buck_test_info_name = os.path.join(self.build_dir, ".buck-test-info.json")
             with open(buck_test_info_name, "w") as f:
@@ -831,27 +832,7 @@ if __name__ == "__main__":
             runs = []
             from sys import platform
 
-            if platform == "win32":
-                machine_suffix = self.build_opts.host_type.as_tuple_string()
-                testpilot_args = [
-                    "parexec-testinfra.exe",
-                    "C:/tools/testpilot/sc_testpilot.par",
-                    # Need to force the repo type otherwise testpilot on windows
-                    # can be confused (presumably sparse profile related)
-                    "--force-repo",
-                    "fbcode",
-                    "--force-repo-root",
-                    self.build_opts.fbsource_dir,
-                    "--buck-test-info",
-                    buck_test_info_name,
-                    "--retry=%d" % retry,
-                    "-j=%s" % str(self.num_jobs),
-                    "--test-config",
-                    "platform=%s" % machine_suffix,
-                    "buildsystem=getdeps",
-                    "--return-nonzero-on-failures",
-                ]
-            else:
+            with start_run(env["FBSOURCE_HASH"]) as run_id:
                 testpilot_args = [
                     tpx,
                     "--force-local-execution",
@@ -862,61 +843,65 @@ if __name__ == "__main__":
                     "--print-long-results",
                 ]
 
-            if owner:
-                testpilot_args += ["--contacts", owner]
+                if owner:
+                    testpilot_args += ["--contacts", owner]
 
-            if tpx and env:
-                testpilot_args.append("--env")
-                testpilot_args.extend(f"{key}={val}" for key, val in env.items())
+                if env:
+                    testpilot_args.append("--env")
+                    testpilot_args.extend(f"{key}={val}" for key, val in env.items())
 
-            if test_filter:
-                testpilot_args += ["--", test_filter]
+                testpilot_args += ["--run-id", str(run_id)]
 
-            if schedule_type == "continuous":
-                runs.append(
-                    [
-                        "--tag-new-tests",
-                        "--collection",
-                        "oss-continuous",
-                        "--purpose",
-                        "continuous",
-                    ]
-                )
-            elif schedule_type == "testwarden":
-                # One run to assess new tests
-                runs.append(
-                    [
-                        "--tag-new-tests",
-                        "--collection",
-                        "oss-new-test-stress",
-                        "--stress-runs",
-                        "10",
-                        "--purpose",
-                        "stress-run-new-test",
-                    ]
-                )
-                # And another for existing tests
-                runs.append(
-                    [
-                        "--tag-new-tests",
-                        "--collection",
-                        "oss-existing-test-stress",
-                        "--stress-runs",
-                        "10",
-                        "--purpose",
-                        "stress-run",
-                    ]
-                )
-            else:
-                runs.append(["--collection", "oss-diff", "--purpose", "diff"])
+                if test_filter:
+                    testpilot_args += ["--", test_filter]
 
-            for run in runs:
-                self._run_cmd(
-                    testpilot_args + run,
-                    cwd=self.build_opts.fbcode_builder_dir,
-                    env=env,
-                    use_cmd_prefix=use_cmd_prefix,
-                )
+                if schedule_type == "diff":
+                    runs.append(["--collection", "oss-diff", "--purpose", "diff"])
+                elif schedule_type == "continuous":
+                    runs.append(
+                        [
+                            "--tag-new-tests",
+                            "--collection",
+                            "oss-continuous",
+                            "--purpose",
+                            "continuous",
+                        ]
+                    )
+                elif schedule_type == "testwarden":
+                    # One run to assess new tests
+                    runs.append(
+                        [
+                            "--tag-new-tests",
+                            "--collection",
+                            "oss-new-test-stress",
+                            "--stress-runs",
+                            "10",
+                            "--purpose",
+                            "stress-run-new-test",
+                        ]
+                    )
+                    # And another for existing tests
+                    runs.append(
+                        [
+                            "--tag-new-tests",
+                            "--collection",
+                            "oss-existing-test-stress",
+                            "--stress-runs",
+                            "10",
+                            "--purpose",
+                            "stress-run",
+                        ]
+                    )
+                else:
+                    runs.append([])
+
+                for run in runs:
+                    self._run_cmd(
+                        testpilot_args + run,
+                        cwd=self.build_opts.fbcode_builder_dir,
+                        env=env,
+                        use_cmd_prefix=use_cmd_prefix,
+                    )
         else:
             args = [
                 require_command(ctest, "ctest"),
@@ -990,7 +975,11 @@ class OpenSSLBuilder(BuilderBase):
         elif self.build_opts.is_darwin():
             make = "make"
             make_j_args = ["-j%s" % self.num_jobs]
-            args = ["darwin64-x86_64-cc"]
+            args = (
+                ["darwin64-x86_64-cc"]
+                if not self.build_opts.is_arm()
+                else ["darwin64-arm64-cc"]
+            )
         elif self.build_opts.is_linux():
             make = "make"
             make_j_args = ["-j%s" % self.num_jobs]
