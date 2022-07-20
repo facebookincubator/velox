@@ -586,6 +586,132 @@ TEST_F(HashJoinTest, leftSemiJoinWithFilter) {
       "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND t1 <> u1)");
 }
 
+TEST_F(HashJoinTest, rightSemiJoin) {
+  // leftVector size is greater than rightVector size.
+  auto leftVectors = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int32_t>(
+              1'234, [](auto row) { return row % 11; }, nullEvery(13)),
+          makeFlatVector<int32_t>(1'234, [](auto row) { return row; }),
+      });
+
+  auto rightVectors = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int32_t>(
+              123, [](auto row) { return row % 5; }, nullEvery(7)),
+          makeFlatVector<int32_t>(123, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {rightVectors});
+  createDuckDbTable("u", {leftVectors});
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto op = PlanBuilder(planNodeIdGenerator)
+                .values({leftVectors})
+                .hashJoin(
+                    {"u0"},
+                    {"t0"},
+                    PlanBuilder(planNodeIdGenerator)
+                        .values({rightVectors})
+                        .planNode(),
+                    "",
+                    {"t1"},
+                    core::JoinType::kRightSemi)
+                .planNode();
+
+  assertQuery(op, "SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u)");
+
+  // Make build side larger to test all rows are returned.
+  op =
+      PlanBuilder(planNodeIdGenerator)
+          .values({rightVectors})
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({leftVectors}).planNode(),
+              "",
+              {"u1"},
+              core::JoinType::kRightSemi)
+          .planNode();
+
+  assertQuery(op, "SELECT u.u1 FROM u WHERE u.u0 IN (SELECT t0 FROM t)");
+
+  // Empty build side.
+  planNodeIdGenerator->reset();
+  op = PlanBuilder(planNodeIdGenerator)
+           .values({leftVectors})
+           .hashJoin(
+               {"u0"},
+               {"t0"},
+               PlanBuilder(planNodeIdGenerator)
+                   .values({rightVectors})
+                   .filter("t0 < 0")
+                   .planNode(),
+               "",
+               {"t1"},
+               core::JoinType::kRightSemi)
+           .planNode();
+
+  auto task = assertQuery(
+      op, "SELECT t.t1 FROM t WHERE t.t0 IN (SELECT u0 FROM u) AND t.t0 < 0");
+  EXPECT_EQ(getInputPositions(task, 1), 0);
+}
+
+TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
+  auto rightVectors = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+      });
+
+  auto leftVectors = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int32_t>(1'234, [](auto row) { return row % 5; }),
+          makeFlatVector<int32_t>(1'234, [](auto row) { return row; }),
+      });
+
+  createDuckDbTable("t", {rightVectors});
+  createDuckDbTable("u", {leftVectors});
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  auto op = PlanBuilder(planNodeIdGenerator)
+                .values({leftVectors})
+                .hashJoin(
+                    {"u0"},
+                    {"t0"},
+                    PlanBuilder(planNodeIdGenerator)
+                        .values({rightVectors})
+                        .planNode(),
+                    "",
+                    {"t0", "t1"},
+                    core::JoinType::kRightSemi)
+                .planNode();
+
+  assertQuery(
+      op, "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0)");
+
+  op = PlanBuilder(planNodeIdGenerator)
+           .values({leftVectors})
+           .hashJoin(
+               {"u0"},
+               {"t0"},
+               PlanBuilder(planNodeIdGenerator)
+                   .values({rightVectors})
+                   .planNode(),
+               "t1 != u1",
+               {"t0", "t1"},
+               core::JoinType::kRightSemi)
+           .planNode();
+
+  assertQuery(
+      op,
+      "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND t1 <> u1)");
+}
+
 TEST_F(HashJoinTest, antiJoin) {
   auto leftVectors = makeRowVector({
       makeFlatVector<int32_t>(
