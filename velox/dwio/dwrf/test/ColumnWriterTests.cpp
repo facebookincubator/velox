@@ -33,6 +33,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/tests/VectorMaker.h"
+
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwrf;
