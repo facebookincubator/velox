@@ -138,14 +138,30 @@ variant duckValueToVariant(const Value& val) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL: {
-      if (val.type().InternalType() == ::duckdb::PhysicalType::INT128) {
-        auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
-        return variant(
-            LongDecimal(buildInt128(unscaledValue.upper, unscaledValue.lower)));
-      } else {
-        return variant(ShortDecimal(val.GetValueUnsafe<int64_t>()));
+      switch (val.type().InternalType()) {
+        case ::duckdb::PhysicalType::INT8: {
+          auto unscaledValue = val.GetValueUnsafe<int8_t>();
+          return variant(ShortDecimal(unscaledValue));
+        }
+        case ::duckdb::PhysicalType::INT16: {
+          auto unscaledValue = val.GetValueUnsafe<int16_t>();
+          return variant(ShortDecimal(unscaledValue));
+        }
+        case ::duckdb::PhysicalType::INT32: {
+          auto unscaledValue = val.GetValueUnsafe<int32_t>();
+          return variant(ShortDecimal(unscaledValue));
+        }
+        case ::duckdb::PhysicalType::INT64: {
+          return variant(ShortDecimal(val.GetValueUnsafe<int64_t>()));
+        }
+        case ::duckdb::PhysicalType::INT128: {
+          auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
+          return variant(LongDecimal(
+              buildInt128(unscaledValue.upper, unscaledValue.lower)));
+        }
+        default:
+          VELOX_UNSUPPORTED();
       }
-      VELOX_UNSUPPORTED();
     }
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
