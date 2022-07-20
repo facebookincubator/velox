@@ -27,7 +27,6 @@
 #include <google/cloud/storage/client.h>
 
 namespace facebook::velox {
-namespace filesystems {
 namespace {
 namespace gcs = ::google::cloud::storage;
 namespace gc = ::google::cloud;
@@ -201,6 +200,8 @@ class GCSWriteFile final : public WriteFile {
   bool closed_{false};
 };
 } // namespace
+
+namespace filesystems {
 
 class GCSConfig {
  private:
