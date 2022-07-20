@@ -502,28 +502,26 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     const ::substrait::Plan& substraitPlan,
     memory::MemoryPool* pool) {
-  if (!checkTypeExtension(substraitPlan)) {
-    VELOX_FAIL("Only Support UNKNOWN type in UserDefined type extension");
-  } else {
-    // Construct the function map based on the Substrait representation.
-    constructFunctionMap(substraitPlan);
+  VELOX_CHECK(
+      checkTypeExtension(substraitPlan),
+      "The type extension only have unknown type.")
+  // Construct the function map based on the Substrait representation.
+  constructFunctionMap(substraitPlan);
 
-    // Construct the expression converter.
-    exprConverter_ =
-        std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
+  // Construct the expression converter.
+  exprConverter_ = std::make_shared<SubstraitVeloxExprConverter>(functionMap_);
 
-    // In fact, only one RelRoot or Rel is expected here.
-    VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);
-    const auto& rel = substraitPlan.relations(0);
-    if (rel.has_root()) {
-      return toVeloxPlan(rel.root(), pool);
-    }
-    if (rel.has_rel()) {
-      return toVeloxPlan(rel.rel(), pool);
-    }
-
-    VELOX_FAIL("RelRoot or Rel is expected in Plan.");
+  // In fact, only one RelRoot or Rel is expected here.
+  VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);
+  const auto& rel = substraitPlan.relations(0);
+  if (rel.has_root()) {
+    return toVeloxPlan(rel.root(), pool);
   }
+  if (rel.has_rel()) {
+    return toVeloxPlan(rel.rel(), pool);
+  }
+
+  VELOX_FAIL("RelRoot or Rel is expected in Plan.");
 }
 
 std::string SubstraitVeloxPlanConverter::nextPlanNodeId() {
