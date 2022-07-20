@@ -271,6 +271,21 @@ std::shared_ptr<Expr> compileLambda(
       config.exprTrackCpuUsage());
 }
 
+ExprPtr wrapInTry(ExprPtr expr) {
+  if (dynamic_cast<ConstantExpr*>(expr.get()) ||
+      dynamic_cast<FieldReference*>(expr.get()) ||
+      dynamic_cast<LambdaExpr*>(expr.get()) ||
+      dynamic_cast<TryExpr*>(expr.get())) {
+    // Constant and Field Reference are trivial, and Lambda expressions only
+    // declare a lambda, so they don't have exception handling themselves, so no
+    // need to wrap them.  Wrapping a Try expression would be redundant.
+    return expr;
+  }
+
+  auto type = expr->type();
+  return std::make_shared<TryExpr>(type, std::move(expr));
+}
+
 ExprPtr tryFoldIfConstant(const ExprPtr& expr, Scope* scope) {
   if (expr->isDeterministic() && !expr->inputs().empty() &&
       scope->exprSet->execCtx()) {
@@ -440,8 +455,9 @@ ExprPtr compileExpression(
 
   auto folded =
       enableConstantFolding ? tryFoldIfConstant(result, scope) : result;
-  scope->visited[expr.get()] = folded;
-  return folded;
+  auto wrappedInTry = config.exprWrapInTry() ? wrapInTry(folded) : folded;
+  scope->visited[expr.get()] = wrappedInTry;
+  return wrappedInTry;
 }
 
 } // namespace

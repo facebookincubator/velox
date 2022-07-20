@@ -2828,3 +2828,200 @@ TEST_F(ExprTest, lambdaWithRowField) {
 
   assertEqualVectors(array, evalResult);
 }
+
+TEST_F(ExprTest, wrapInTryConcat) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto concatExpr = std::make_shared<const core::ConcatTypedExpr>(
+      std::vector<std::string>{"a", "b"},
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1"),
+          std::make_shared<const core::FieldAccessTypedExpr>(REAL(), "col2")});
+
+  exec::ExprSet exprs({concatExpr}, execCtx_.get());
+
+  // Concat gets turned into a function call which gets wrapped with TRY.
+  ASSERT_EQ("try(row(col1, col2))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryCast) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto castExpr = std::make_shared<const core::CastTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(REAL(), "col1")},
+      false);
+
+  exec::ExprSet exprs({castExpr}, execCtx_.get());
+
+  // The cast should get wrapped with TRY.
+  ASSERT_EQ("try(cast((col1) as BIGINT))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTrySwitch) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto switchExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BOOLEAN(), "col1"),
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col2")},
+      "switch");
+
+  exec::ExprSet exprs({switchExpr}, execCtx_.get());
+
+  // The switch should get wrapped with TRY.
+  ASSERT_EQ("try(switch(col1, col2))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryConjunct) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto conjunctExpr = std::make_shared<const core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BOOLEAN(), "col1"),
+          std::make_shared<const core::FieldAccessTypedExpr>(
+              BOOLEAN(), "col2")},
+      "and");
+
+  exec::ExprSet exprs({conjunctExpr}, execCtx_.get());
+
+  // The and should get wrapped with TRY.
+  ASSERT_EQ("try(and(col1, col2))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryCoalesce) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto coalesceExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1")},
+      "coalesce");
+
+  exec::ExprSet exprs({coalesceExpr}, execCtx_.get());
+
+  // The coalesce should get wrapped with TRY.
+  ASSERT_EQ("try(coalesce(col1))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryTry) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto tryExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1")},
+      "try");
+
+  exec::ExprSet exprs({tryExpr}, execCtx_.get());
+
+  // The TRY should not be wrapped with another TRY.
+  ASSERT_EQ("try(col1)", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryFunctionCall) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto plusExpr = std::make_shared<const core::CallTypedExpr>(
+      BIGINT(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1"),
+          std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col2")},
+      "plus");
+
+  exec::ExprSet exprs({plusExpr}, execCtx_.get());
+
+  // The function call should get wrapped with TRY.
+  ASSERT_EQ("try(plus(col1, col2))", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryFieldAccess) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto fieldAccessExpr =
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1");
+
+  exec::ExprSet exprs({fieldAccessExpr}, execCtx_.get());
+
+  // Field accesses should not get wrapped in TRY.
+  ASSERT_EQ("col1", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryConstant) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto constantExpr = std::make_shared<const core::ConstantTypedExpr>(1);
+
+  exec::ExprSet exprs({constantExpr}, execCtx_.get());
+
+  // Constants should not get wrapped in TRY.
+  ASSERT_EQ("1:INTEGER", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryLambda) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto lambdaExpr = std::make_shared<const core::LambdaTypedExpr>(
+      ROW({"col1"}, {BIGINT()}),
+      std::make_shared<const core::FieldAccessTypedExpr>(BIGINT(), "col1"));
+
+  exec::ExprSet exprs({lambdaExpr}, execCtx_.get());
+
+  // Lambdas should not get wrapped in TRY.
+  ASSERT_EQ("(col1) -> col1", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryConstantFolding) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto plusExpr = std::make_shared<const core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::ConstantTypedExpr>(1),
+          std::make_shared<const core::ConstantTypedExpr>(2)},
+      "plus");
+
+  exec::ExprSet exprs({plusExpr}, execCtx_.get());
+
+  // Since constant folding was applied, the resulting constant shouldn't be
+  // wrapped in a TRY.
+  ASSERT_EQ("3:INTEGER", exprs.toString(true));
+}
+
+TEST_F(ExprTest, wrapInTryNestedExpressions) {
+  queryCtx_->setConfigOverridesUnsafe(
+      {{core::QueryConfig::kExprWrapInTry, "true"}});
+
+  auto plusExpr = std::make_shared<const core::CallTypedExpr>(
+      INTEGER(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<const core::FieldAccessTypedExpr>(INTEGER(), "col1"),
+          std::make_shared<const core::CallTypedExpr>(
+              INTEGER(),
+              std::vector<core::TypedExprPtr>{
+                  std::make_shared<const core::FieldAccessTypedExpr>(
+                      INTEGER(), "col2"),
+                  std::make_shared<const core::FieldAccessTypedExpr>(
+                      INTEGER(), "col3")},
+              "plus")},
+      "plus");
+
+  exec::ExprSet exprs({plusExpr}, execCtx_.get());
+
+  // The nested expressions should both be wrapped in TRY.
+  ASSERT_EQ("try(plus(col1, try(plus(col2, col3))))", exprs.toString(true));
+}
