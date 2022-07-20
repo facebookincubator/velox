@@ -121,19 +121,16 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
-void getDecimalPrecisionScale(
-    const TypePtr& type,
-    uint8_t& precision,
-    uint8_t& scale) {
+const std::pair<uint8_t, uint8_t> getDecimalPrecisionScale(
+    const TypePtr& type) {
   VELOX_CHECK(isDecimalKind(type->kind()));
+  std::pair<uint8_t, uint8_t> precisionScale;
   if (type->kind() == TypeKind::SHORT_DECIMAL) {
     auto& decimalType = type->asShortDecimal();
-    precision = decimalType.precision();
-    scale = decimalType.scale();
+    return {decimalType.precision(), decimalType.scale()};
   } else {
     auto& decimalType = type->asLongDecimal();
-    precision = decimalType.precision();
-    scale = decimalType.scale();
+    return {decimalType.precision(), decimalType.scale()};
   }
 }
 

@@ -46,8 +46,8 @@ class DecimalArithmeticTest : public FunctionBaseTest {
     auto shortConstant = BaseVector::wrapInConstant(
         1, 0, makeDecimalFlatVector<ShortDecimal>({ShortDecimal(1000)}, 10, 3));
     std::vector<VectorPtr> input({flatVector});
-    RowVectorPtr rowVector = makeRowVector(input);
-    auto rowType = std::dynamic_pointer_cast<const RowType>(rowVector->type());
+    auto rowVector = makeRowVector(input);
+    auto rowType = asRowType(rowVector->type());
     core::TypedExprPtr typedExpr;
     std::vector<core::TypedExprPtr> params;
     auto fieldTypedExpr =
@@ -97,7 +97,7 @@ class DecimalArithmeticTest : public FunctionBaseTest {
 };
 } // namespace facebook::velox
 
-TEST_F(DecimalArithmeticTest, decimalAddTest) {
+TEST_F(DecimalArithmeticTest, add) {
   auto resultLongFlat = makeDecimalFlatVector<LongDecimal>(
       {LongDecimal(2000), LongDecimal(4000)}, 19, 3);
   auto shortFlat = makeDecimalFlatVector<ShortDecimal>(

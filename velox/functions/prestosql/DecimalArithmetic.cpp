@@ -150,22 +150,22 @@ class Addition {
     return std::max(0, toScale - fromScale);
   }
 
-  inline static void computeResultPrecisionScale(
+  inline static const std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       uint8_t aPrecision,
       uint8_t aScale,
       uint8_t bPrecision,
-      uint8_t bScale,
-      uint8_t& rPrecision,
-      uint8_t& rScale) {
-    rPrecision = std::min(
-        38,
-        std::max(aPrecision - aScale, bPrecision - bScale) +
-            std::max(aScale, bScale) + 1);
-    rScale = std::max(aScale, bScale);
+      uint8_t bScale) {
+    return {
+        std::min(
+            38,
+            std::max(aPrecision - aScale, bPrecision - bScale) +
+                std::max(aScale, bScale) + 1),
+        std::max(aScale, bScale)};
   }
 };
 
-std::vector<std::shared_ptr<exec::FunctionSignature>> decimalAddSubSignature() {
+std::vector<std::shared_ptr<exec::FunctionSignature>>
+decimalAddSubtractSignature() {
   return {
       exec::FunctionSignatureBuilder()
           .returnType("DECIMAL(r_precision, r_scale)")
@@ -184,16 +184,10 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   auto aType = inputArgs[0].type;
   auto bType = inputArgs[1].type;
-  uint8_t aScale;
-  uint8_t bScale;
-  uint8_t aPrecision;
-  uint8_t bPrecision;
-  uint8_t rScale;
-  uint8_t rPrecision;
-  getDecimalPrecisionScale(aType, aPrecision, aScale);
-  getDecimalPrecisionScale(bType, bPrecision, bScale);
-  Operation::computeResultPrecisionScale(
-      aPrecision, aScale, bPrecision, bScale, rPrecision, rScale);
+  auto [aPrecision, aScale] = getDecimalPrecisionScale(aType);
+  auto [bPrecision, bScale] = getDecimalPrecisionScale(bType);
+  auto [rPrecision, rScale] = Operation::computeResultPrecisionScale(
+      aPrecision, aScale, bPrecision, bScale);
   uint8_t aRescale = Operation::computeRescaleFactor(aScale, bScale, rScale);
   uint8_t bRescale = Operation::computeRescaleFactor(bScale, aScale, rScale);
   if (aType->kind() == TypeKind::SHORT_DECIMAL) {
@@ -244,6 +238,6 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
 
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_add,
-    decimalAddSubSignature(),
+    decimalAddSubtractSignature(),
     createDecimalFunction<Addition>);
 }; // namespace facebook::velox::functions
