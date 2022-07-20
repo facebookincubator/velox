@@ -18,7 +18,6 @@
 
 namespace facebook::velox {
 namespace {
-
 std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   VELOX_DCHECK_GE(scale, 0);
   VELOX_DCHECK_LT(static_cast<size_t>(scale), sizeof(kPowersOfTen));
@@ -35,16 +34,19 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   bool isFraction = (scale > 0);
   std::string fractionString;
   if (isFraction) {
-    // Calculate the string length of fractional part.
     int128_t fractionPart = unscaledValue % kPowersOfTen[scale];
+    // Calculate the string length of fractional part.
     int fractionSize = 1;
     if (fractionPart > 0) {
       // Log can be used to count the number of digits of a positive number.
       // Log is likely an assembly instruction, so efficient to use.
       fractionSize += log10(fractionPart);
     }
+
     fractionString += ".";
+    // Append leading zeros.
     fractionString += std::string(std::max(scale - fractionSize, 0), '0');
+    // Append the fraction part.
     fractionString += std::to_string(fractionPart);
   }
 
