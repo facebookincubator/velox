@@ -288,6 +288,11 @@ inline std::unique_ptr<common::NegatedBytesValues> notIn(
   return std::make_unique<common::NegatedBytesValues>(values, nullAllowed);
 }
 
+inline std::unique_ptr<common::LengthRange>
+lengthBetween(int min, int max, bool nullAllowed = false) {
+  return std::make_unique<common::LengthRange>(min, max, nullAllowed);
+}
+
 inline std::unique_ptr<common::BoolValue> boolEqual(
     bool value,
     bool nullAllowed = false) {

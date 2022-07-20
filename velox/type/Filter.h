@@ -49,6 +49,7 @@ enum class FilterKind {
   kNegatedBytesValues,
   kBigintMultiRange,
   kMultiRange,
+  kLengthRange,
 };
 
 /**
@@ -1565,6 +1566,65 @@ class MultiRange final : public Filter {
  private:
   const std::vector<std::unique_ptr<Filter>> filters_;
   const bool nanAllowed_;
+};
+
+class LengthRange final : public Filter {
+ public:
+  // Represents an inclusive length range that accepts strings with length
+  // anywhere between lower_ and upper_.
+  LengthRange(int64_t lower, int64_t upper, bool nullAllowed)
+      : Filter(true, nullAllowed, FilterKind::kLengthRange),
+        lower_(lower),
+        upper_(upper) {}
+
+  std::unique_ptr<Filter> clone(
+      std::optional<bool> nullAllowed = std::nullopt) const final {
+    if (nullAllowed) {
+      return std::make_unique<LengthRange>(
+          this->lower_, this->upper_, nullAllowed.value());
+    } else {
+      return std::make_unique<LengthRange>(*this);
+    }
+  }
+
+  bool hasTestLength() const override {
+    return true;
+  }
+
+  bool testLength(int32_t length) const override {
+    return lower_ <= length && length <= upper_;
+  }
+
+  bool testBytes(const char* /* unused */, int32_t length) const override {
+    return lower_ <= length && length <= upper_;
+  }
+
+  bool testBytesRange(
+      std::optional<std::string_view> min,
+      std::optional<std::string_view> max,
+      bool hasNull) const override;
+
+  std::string toString() const final {
+    return fmt::format(
+        "LengthRange: [{}, {}] {}",
+        lower_,
+        upper_,
+        nullAllowed_ ? "with nulls" : "no nulls");
+  }
+
+  int64_t lower() const {
+    return lower_;
+  }
+
+  int64_t upper() const {
+    return upper_;
+  }
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
+ private:
+  const int64_t lower_;
+  const int64_t upper_;
 };
 
 // Helper for applying filters to different types
