@@ -649,6 +649,49 @@ class PlanBuilder {
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt);
 
+  // Structure for a WindowFrame. It specifies :
+  // i)   The windowType (ROWS or RANGE)
+  // ii)  The starting and ending bounds PRECEDING (could be UNBOUNDED)
+  //      FOLLOWING (could be UNBOUNDED) or CURRENT_ROW
+  // iii) The start(or end) BoundString could be a constant or field reference.
+  struct WindowFrame {
+    const core::WindowNode::WindowType type;
+    const core::WindowNode::BoundType startType;
+    const std::optional<std::string> startValue;
+    const core::WindowNode::BoundType endType;
+    const std::optional<std::string> endValue;
+  };
+
+  /// Add a WindowNode using the specified partition keys, order by clauses
+  /// and window functions.
+  /// @partitionKeys : A list of columns for the window partition. Can be empty
+  /// for a global window.
+  /// @orderByKeys : A list of ORDER BY clauses. Can be empty for a
+  /// non-deterministic ordering of partition rows.
+  /// @windowFunctions : A list of window functions. Window functions are
+  /// specified as function calls over unmodified input columns,
+  /// e.g. sum(a). SQL statement AS can be used to specify names
+  /// for the window function result columns. In the absence of AS statement,
+  /// result columns are named a0, a1, a2, etc.
+  /// This list cannot be empty.
+  /// @windowFrames : Each window function operates over a window frame. The
+  /// windowFrames in this list are bound to the function at the same
+  /// position in the windowFunctions list. If a windowFunction doesn't have a
+  /// windowFrame, then the default frame of RANGE UNBOUNDED PRECEDING
+  /// CURRENT ROW is assumed.
+  /// @ignoreNulls : Some window functions have an option to specify how null
+  /// values should be treated. Nulls can be ignored (IGNORE NULLS) or
+  /// respected (RESPECT NULLS -- the default).
+  /// The values in the ignoreNulls list are bound to the function at the
+  /// same position in the windowFunctions list. If there
+  /// is corresponding value, then the default of RESPECT NULLS is assumed.
+  PlanBuilder& window(
+      const std::vector<std::string>& partitionKeys,
+      const std::vector<std::string>& orderByKeys,
+      const std::vector<std::string>& windowFunctions,
+      const std::vector<WindowFrame>& windowFrames = {},
+      const std::vector<bool>& ignoreNulls = {});
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.
@@ -717,12 +760,12 @@ class PlanBuilder {
   std::shared_ptr<const core::ITypedExpr> inferTypes(
       const std::shared_ptr<const core::IExpr>& untypedExpr);
 
-  struct AggregateExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> aggregates;
+  struct ExpressionsAndNames {
+    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
   };
 
-  AggregateExpressionsAndNames createAggregateExpressionsAndNames(
+  ExpressionsAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
@@ -731,6 +774,12 @@ class PlanBuilder {
   createAggregateMasks(
       size_t numAggregates,
       const std::vector<std::string>& masks);
+
+  ExpressionsAndNames createWindowExpressionsAndNames(
+      const std::vector<std::string>& windowFunctions,
+      const std::vector<TypePtr>& resultTypes);
+
+  const core::WindowNode::Frame createWindowFrame(const WindowFrame& input);
 
   std::shared_ptr<PlanNodeIdGenerator> planNodeIdGenerator_;
   core::PlanNodePtr planNode_;
