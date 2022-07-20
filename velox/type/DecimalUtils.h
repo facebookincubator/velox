@@ -65,6 +65,7 @@ static const int128_t kPowersOfTen[]{
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10,
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)100};
 
+/// Helper function to convert a decimal value to string.
 template <typename T>
 std::string decimalToString(const T& value, const TypePtr& type) {
   VELOX_UNSUPPORTED();

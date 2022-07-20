@@ -39,35 +39,21 @@ TEST(DecimalTest, toString) {
 }
 
 TEST(DecimalTest, decimalToString) {
+  ASSERT_EQ("1000", decimalToString(ShortDecimal(1000), DECIMAL(10, 0)));
+  ASSERT_EQ("1.000", decimalToString(ShortDecimal(1000), DECIMAL(10, 3)));
+  ASSERT_EQ("0.001000", decimalToString(ShortDecimal(1000), DECIMAL(10, 6)));
+  ASSERT_EQ("-0.001000", decimalToString(ShortDecimal(-1000), DECIMAL(10, 6)));
   ASSERT_EQ(
-      "1000",
-      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 0)));
-  ASSERT_EQ(
-      "1.000",
-      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 3)));
-  ASSERT_EQ(
-      "0.001000",
-      decimalToString<ShortDecimal>(ShortDecimal(1000), DECIMAL(10, 6)));
-  ASSERT_EQ(
-      "-0.001000",
-      decimalToString<ShortDecimal>(ShortDecimal(-1000), DECIMAL(10, 6)));
-  ASSERT_EQ(
-      "-123.451000",
-      decimalToString<ShortDecimal>(ShortDecimal(-123451000), DECIMAL(10, 6)));
+      "-123.451000", decimalToString(ShortDecimal(-123451000), DECIMAL(10, 6)));
 
+  ASSERT_EQ("1000", decimalToString(LongDecimal(1000), DECIMAL(20, 0)));
+  ASSERT_EQ("1.000", decimalToString(LongDecimal(1000), DECIMAL(20, 3)));
   ASSERT_EQ(
-      "1000", decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 0)));
-  ASSERT_EQ(
-      "1.000", decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 3)));
-  ASSERT_EQ(
-      "0.0000001000",
-      decimalToString<LongDecimal>(LongDecimal(1000), DECIMAL(20, 10)));
-  ASSERT_EQ(
-      "-0.001000",
-      decimalToString<LongDecimal>(LongDecimal(-1000), DECIMAL(20, 6)));
-  ASSERT_EQ("0", decimalToString<LongDecimal>(LongDecimal(0), DECIMAL(20, 9)));
+      "0.0000001000", decimalToString(LongDecimal(1000), DECIMAL(20, 10)));
+  ASSERT_EQ("-0.001000", decimalToString(LongDecimal(-1000), DECIMAL(20, 6)));
+  ASSERT_EQ("0", decimalToString(LongDecimal(0), DECIMAL(20, 9)));
 
-  ASSERT_THROW(decimalToString<int32_t>(10, INTEGER()), VeloxUserError);
+  ASSERT_THROW(decimalToString(10, INTEGER()), VeloxUserError);
 }
 } // namespace
 } // namespace facebook::velox
