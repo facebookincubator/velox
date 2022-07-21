@@ -24,6 +24,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtils.h"
+#include "velox/type/LongDecimal.h"
+#include "velox/type/ShortDecimal.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -40,17 +43,31 @@ struct VariantConverter;
 class variant;
 
 struct DecimalVariantValue {
+  DecimalVariantValue(int128_t val, uint8_t precision, uint8_t scale)
+      : precision(precision), scale(scale), unscaledValue(val) {}
   uint8_t precision;
   uint8_t scale;
   int128_t unscaledValue;
 
-  // 123456789
   std::string toString() const {
+    auto type = DECIMAL(precision, scale);
     if (precision <= 18) {
-      return formatDecimal(
-          scale, (int64_t)unscaledValue);
+      return DecimalUtil::toString<ShortDecimal>(
+          ShortDecimal(unscaledValue), type);
     }
-    return formatDecimal(scale, unscaledValue);
+    return DecimalUtil::toString<LongDecimal>(LongDecimal(unscaledValue), type);
+  }
+
+  bool operator==(const DecimalVariantValue& rhs) const {
+    if (this->scale != rhs.scale) {
+      return false;
+    }
+    return this->unscaledValue == rhs.unscaledValue;
+  }
+
+  bool operator<(const DecimalVariantValue& rhs) const {
+    // Implementation required to support lessThan template.
+    VELOX_UNSUPPORTED();
   }
 };
 
@@ -121,6 +138,19 @@ struct VariantTypeTraits<TypeKind::MAP> {
 template <>
 struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::SHORT_DECIMAL> {
+  // Native type is used in velox ctor parameter.
+  using native_type = DecimalVariantValue;
+  using stored_type = DecimalVariantValue;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::LONG_DECIMAL> {
+  using native_type = DecimalVariantValue;
+  using stored_type = DecimalVariantValue;
 };
 
 struct OpaqueCapsule {
@@ -228,7 +258,7 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTEGER)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BIGINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SHORT_DECIMAL)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::LONG_DECIMAL)
+  // VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::LONG_DECIMAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::REAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
@@ -564,6 +594,11 @@ class variant {
       }
       case TypeKind::UNKNOWN: {
         return UNKNOWN();
+      }
+      case TypeKind::SHORT_DECIMAL:
+      case TypeKind::LONG_DECIMAL: {
+        auto val = value<TypeKind::SHORT_DECIMAL>();
+        return DECIMAL(val.precision, val.scale);
       }
       default:
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(kind2type, kind_);

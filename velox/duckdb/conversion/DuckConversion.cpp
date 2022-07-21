@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/duckdb/conversion/DuckConversion.h"
+#include "velox/type/DecimalUtils.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::duckdb {
@@ -138,26 +139,36 @@ variant duckValueToVariant(const Value& val) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL: {
+      uint8_t width;
+      uint8_t scale;
+      val.type().GetDecimalProperties(width, scale);
       switch (val.type().InternalType()) {
         case ::duckdb::PhysicalType::INT8: {
           auto unscaledValue = val.GetValueUnsafe<int8_t>();
-          return variant(ShortDecimal(unscaledValue));
+          return variant(
+              DecimalVariantValue((int128_t)unscaledValue, width, scale));
         }
         case ::duckdb::PhysicalType::INT16: {
           auto unscaledValue = val.GetValueUnsafe<int16_t>();
-          return variant(ShortDecimal(unscaledValue));
+          return variant(
+              DecimalVariantValue((int128_t)unscaledValue, width, scale));
         }
         case ::duckdb::PhysicalType::INT32: {
           auto unscaledValue = val.GetValueUnsafe<int32_t>();
-          return variant(ShortDecimal(unscaledValue));
+          return variant(
+              DecimalVariantValue((int128_t)unscaledValue, width, scale));
         }
         case ::duckdb::PhysicalType::INT64: {
-          return variant(ShortDecimal(val.GetValueUnsafe<int64_t>()));
+          auto unscaledValue = val.GetValueUnsafe<int64_t>();
+          return variant(
+              DecimalVariantValue((int128_t)unscaledValue, width, scale));
         }
         case ::duckdb::PhysicalType::INT128: {
           auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
-          return variant(LongDecimal(
-              buildInt128(unscaledValue.upper, unscaledValue.lower)));
+          return variant(DecimalVariantValue(
+              buildInt128(unscaledValue.upper, unscaledValue.lower),
+              width,
+              scale));
         }
         default:
           VELOX_UNSUPPORTED();

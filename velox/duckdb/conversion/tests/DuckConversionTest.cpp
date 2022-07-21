@@ -66,10 +66,11 @@ TEST(DuckConversionTest, duckValueToVariant) {
   // Decimals.
   for (int64_t i : {111, 200, 300}) {
     EXPECT_EQ(
-        variant(LongDecimal(buildInt128(0, i))),
+        variant(DecimalVariantValue(i, 20, 2)),
         duckValueToVariant(Value::DECIMAL(::duckdb::hugeint_t(i), 20, 2)));
     EXPECT_EQ(
-        variant(ShortDecimal(i)), duckValueToVariant(Value::DECIMAL(i, 10, 2)));
+        variant(DecimalVariantValue(i, 10, 2)),
+        duckValueToVariant(Value::DECIMAL(i, 10, 2)));
   }
 
   // Strings.
