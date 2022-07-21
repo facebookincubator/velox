@@ -353,7 +353,9 @@ TEST_F(GCSFileSystemTest, credentialsConfig) {
     gcfs.openFileForRead(gcsFile);
     FAIL() << "Expected VeloxException";
   } catch (VeloxException const& err) {
-    EXPECT_THAT(err.message(), testing::HasSubstr("gs://test1-gcs/test-object-name"));
-    EXPECT_THAT(err.message(), testing::HasSubstr("Invalid ServiceAccountCredentials"));
+    EXPECT_THAT(
+        err.message(), testing::HasSubstr("gs://test1-gcs/test-object-name"));
+    EXPECT_THAT(
+        err.message(), testing::HasSubstr("Invalid ServiceAccountCredentials"));
   }
 }
