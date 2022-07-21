@@ -203,14 +203,13 @@ TEST_F(VectorMakerTest, nullableFlatVectorBool) {
   }
 }
 
-class DecimalVectorMakerTest : public VectorMakerTest {
+class DecimalVectorMakerTest {
  public:
   template <typename T, typename P>
   static void verifyStats(
       const std::shared_ptr<FlatVector<T>>& flatVector,
       const std::vector<P>& data) {
     // No VectorMakerStats for DECIMAL flat vectors.
-    EXPECT_EQ(data.size(), flatVector->size());
     EXPECT_FALSE(flatVector->getNullCount().has_value());
     EXPECT_FALSE(flatVector->isSorted().has_value());
     EXPECT_FALSE(flatVector->getDistinctValueCount().has_value());
@@ -222,6 +221,7 @@ class DecimalVectorMakerTest : public VectorMakerTest {
   static void verify(
       const std::shared_ptr<FlatVector<T>>& flatVector,
       const std::vector<P>& data) {
+    EXPECT_EQ(data.size(), flatVector->size());
     verifyStats(flatVector, data);
     for (vector_size_t i = 0; i < data.size(); i++) {
       EXPECT_FALSE(flatVector->isNullAt(i));
@@ -233,6 +233,7 @@ class DecimalVectorMakerTest : public VectorMakerTest {
   static void verifyNullable(
       const std::shared_ptr<FlatVector<T>>& flatVector,
       const std::vector<std::optional<P>>& data) {
+    EXPECT_EQ(data.size(), flatVector->size());
     verifyStats(flatVector, data);
     for (vector_size_t i = 0; i < data.size(); i++) {
       if (data[i] == std::nullopt) {
