@@ -101,12 +101,8 @@ TEST_F(VectorToStringTest, opaque) {
 }
 
 TEST_F(VectorToStringTest, decimals) {
-  std::vector<std::optional<ShortDecimal>> shortValues = {
-      ShortDecimal(1000265),
-      ShortDecimal(35610),
-      ShortDecimal(-314159),
-      ShortDecimal(7),
-      std::nullopt};
+  std::vector<std::optional<int64_t>> shortValues = {
+      1000265, 35610, -314159, 7, std::nullopt};
   auto shortDecimal = makeDecimalFlatVectorNullable(shortValues, 10, 3);
   ASSERT_EQ(
       shortDecimal->toString(),
@@ -119,12 +115,8 @@ TEST_F(VectorToStringTest, decimals) {
       "3: 0.007\n"
       "4: null");
 
-  std::vector<std::optional<LongDecimal>> longValues = {
-      LongDecimal(1000265),
-      LongDecimal(35610),
-      LongDecimal(-314159),
-      LongDecimal(7),
-      std::nullopt};
+  std::vector<std::optional<int128_t>> longValues = {
+      1000265, 35610, -314159, 7, std::nullopt};
   auto longDecimal = makeDecimalFlatVectorNullable(longValues, 20, 4);
   ASSERT_EQ(
       longDecimal->toString(),

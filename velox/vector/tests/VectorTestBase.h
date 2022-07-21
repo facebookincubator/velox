@@ -166,12 +166,20 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, type);
   }
 
-  template <typename T>
-  FlatVectorPtr<T> makeDecimalFlatVectorNullable(
-      const std::vector<std::optional<T>>& values,
+  FlatVectorPtr<ShortDecimal> makeDecimalFlatVectorNullable(
+      const std::vector<std::optional<int64_t>>& unscaledValues,
       uint8_t precision,
       uint8_t scale) {
-    return vectorMaker_.decimalFlatVectorNullable<T>(values, precision, scale);
+    return vectorMaker_.decimalFlatVectorNullable(
+        unscaledValues, precision, scale);
+  }
+
+  FlatVectorPtr<LongDecimal> makeDecimalFlatVectorNullable(
+      const std::vector<std::optional<int128_t>>& unscaledValues,
+      uint8_t precision,
+      uint8_t scale) {
+    return vectorMaker_.decimalFlatVectorNullable(
+        unscaledValues, precision, scale);
   }
 
   // Convenience function to create arrayVectors (vector of arrays) based on

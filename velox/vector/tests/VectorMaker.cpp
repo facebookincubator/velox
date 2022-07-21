@@ -159,16 +159,17 @@ void setNotNullValue(
   }
 }
 
-template <typename T>
+template <typename T, typename P>
 FlatVectorPtr<T> makeDecimalFlatVectorNullable(
-    const std::vector<std::optional<T>>& data,
+    const std::vector<std::optional<P>>& data,
     const TypePtr& type,
     memory::MemoryPool* pool) {
   VectorPtr base = BaseVector::create(type, data.size(), pool);
   auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(base);
+  using EvalType = typename CppToType<T>::NativeType;
   for (auto i = 0; i < data.size(); ++i) {
     if (data[i].has_value()) {
-      flatVector->set(i, data[i].value());
+      flatVector->set(i, EvalType(data[i].value()));
     } else {
       flatVector->setNull(i, true);
     }
@@ -177,21 +178,22 @@ FlatVectorPtr<T> makeDecimalFlatVectorNullable(
 }
 } // namespace
 
-template <>
 FlatVectorPtr<ShortDecimal> VectorMaker::decimalFlatVectorNullable(
-    const std::vector<std::optional<ShortDecimal>>& data,
+    const std::vector<std::optional<int64_t>>& data,
     uint8_t precision,
     uint8_t scale) {
   auto type = SHORT_DECIMAL(precision, scale);
-  return makeDecimalFlatVectorNullable(data, type, pool_);
+  return makeDecimalFlatVectorNullable<ShortDecimal, int64_t>(
+      data, type, pool_);
 }
-template <>
+
 FlatVectorPtr<LongDecimal> VectorMaker::decimalFlatVectorNullable(
-    const std::vector<std::optional<LongDecimal>>& data,
+    const std::vector<std::optional<int128_t>>& data,
     uint8_t precision,
     uint8_t scale) {
   auto type = LONG_DECIMAL(precision, scale);
-  return makeDecimalFlatVectorNullable(data, type, pool_);
+  return makeDecimalFlatVectorNullable<LongDecimal, int128_t>(
+      data, type, pool_);
 }
 
 ArrayVectorPtr VectorMaker::arrayOfRowVector(

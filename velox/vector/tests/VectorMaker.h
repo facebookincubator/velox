@@ -198,11 +198,14 @@ class VectorMaker {
   /// Elements are nullable.
   ///
   /// Examples:
-  ///   auto flatVector = decimalFlatVectorNullable({ShortDecimal(1),
-  ///   std::nullopt, ShortDecimal(3)}, 10, 1);
-  template <typename T>
-  FlatVectorPtr<EvalType<T>> decimalFlatVectorNullable(
-      const std::vector<std::optional<T>>& data,
+  ///  auto flatVector = decimalFlatVectorNullable({1, std::nullopt, 3}, 8, 1);
+  FlatVectorPtr<ShortDecimal> decimalFlatVectorNullable(
+      const std::vector<std::optional<int64_t>>& data,
+      uint8_t precision,
+      uint8_t scale);
+
+  FlatVectorPtr<LongDecimal> decimalFlatVectorNullable(
+      const std::vector<std::optional<int128_t>>& data,
       uint8_t precision,
       uint8_t scale);
 
