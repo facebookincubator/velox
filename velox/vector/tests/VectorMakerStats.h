@@ -19,7 +19,6 @@
 #include <optional>
 #include <unordered_set>
 
-#include "velox/type/ShortDecimal.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::test {
