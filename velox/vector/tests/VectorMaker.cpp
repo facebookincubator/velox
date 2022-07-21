@@ -158,6 +158,24 @@ void setNotNullValue(
     vector->asFlatVector<T>()->set(index, value.value<T>());
   }
 }
+template <typename T>
+FlatVectorPtr<T> decimalVector(
+    const std::vector<std::optional<T>>& values,
+    uint8_t precision,
+    uint8_t scale,
+    memory::MemoryPool* pool) {
+  auto type = DECIMAL(precision, scale);
+  VectorPtr base = BaseVector::create(type, values.size(), pool);
+  auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(base);
+  for (auto i = 0; i < values.size(); ++i) {
+    if (values[i].has_value()) {
+      flatVector->set(i, values[i].value());
+    } else {
+      flatVector->setNull(i, true);
+    }
+  }
+  return flatVector;
+}
 } // namespace
 
 ArrayVectorPtr VectorMaker::arrayOfRowVector(
@@ -299,6 +317,21 @@ MapVectorPtr VectorMaker::mapVector(
       sizesBuffer,
       keys,
       values);
+}
+
+template <>
+FlatVectorPtr<ShortDecimal> VectorMaker::decimalFlatVector(
+    const std::vector<std::optional<ShortDecimal>>& values,
+    uint8_t precision,
+    uint8_t scale) {
+  return decimalVector<ShortDecimal>(values, precision, scale, pool_);
+}
+template <>
+FlatVectorPtr<LongDecimal> VectorMaker::decimalFlatVector(
+    const std::vector<std::optional<LongDecimal>>& values,
+    uint8_t precision,
+    uint8_t scale) {
+  return decimalVector<LongDecimal>(values, precision, scale, pool_);
 }
 
 // static

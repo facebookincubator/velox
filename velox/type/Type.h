@@ -668,10 +668,16 @@ class DecimalType : public ScalarType<KIND> {
 using ShortDecimalType = DecimalType<TypeKind::SHORT_DECIMAL>;
 using LongDecimalType = DecimalType<TypeKind::LONG_DECIMAL>;
 
+inline bool isShortDecimalKind(TypeKind typeKind) {
+  return typeKind == TypeKind::SHORT_DECIMAL;
+}
+
+inline bool isLongDecimalKind(TypeKind typeKind) {
+  return typeKind == TypeKind::LONG_DECIMAL;
+}
+
 inline bool isDecimalKind(TypeKind typeKind) {
-  return (
-      typeKind == TypeKind::SHORT_DECIMAL ||
-      typeKind == TypeKind::LONG_DECIMAL);
+  return isShortDecimalKind(typeKind) || isLongDecimalKind(typeKind);
 }
 
 inline bool isDecimalName(const std::string& typeName) {
