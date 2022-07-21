@@ -166,20 +166,28 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, type);
   }
 
-  FlatVectorPtr<ShortDecimal> makeDecimalFlatVectorNullable(
-      const std::vector<std::optional<int64_t>>& unscaledValues,
-      uint8_t precision,
-      uint8_t scale) {
-    return vectorMaker_.decimalFlatVectorNullable(
-        unscaledValues, precision, scale);
+  FlatVectorPtr<ShortDecimal> makeShortDecimalFlatVector(
+      const std::vector<int64_t>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.shortDecimalFlatVector(unscaledValues, type);
   }
 
-  FlatVectorPtr<LongDecimal> makeDecimalFlatVectorNullable(
+  FlatVectorPtr<LongDecimal> makeLongDecimalFlatVector(
+      const std::vector<int128_t>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.longDecimalFlatVector(unscaledValues, type);
+  }
+
+  FlatVectorPtr<ShortDecimal> makeNullableShortDecimalFlatVector(
+      const std::vector<std::optional<int64_t>>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.shortDecimalFlatVectorNullable(unscaledValues, type);
+  }
+
+  FlatVectorPtr<LongDecimal> makeNullableLongDecimalFlatVector(
       const std::vector<std::optional<int128_t>>& unscaledValues,
-      uint8_t precision,
-      uint8_t scale) {
-    return vectorMaker_.decimalFlatVectorNullable(
-        unscaledValues, precision, scale);
+      const TypePtr& type) {
+    return vectorMaker_.longDecimalFlatVectorNullable(unscaledValues, type);
   }
 
   // Convenience function to create arrayVectors (vector of arrays) based on

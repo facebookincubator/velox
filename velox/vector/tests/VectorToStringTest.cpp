@@ -101,28 +101,54 @@ TEST_F(VectorToStringTest, opaque) {
 }
 
 TEST_F(VectorToStringTest, decimals) {
-  std::vector<std::optional<int64_t>> shortValues = {
-      1000265, 35610, -314159, 7, std::nullopt};
-  auto shortDecimal = makeDecimalFlatVectorNullable(shortValues, 10, 3);
+  auto shortDecimalFlatVector = makeShortDecimalFlatVector(
+      {1000265, 35610, -314159, 7, 0}, DECIMAL(10, 3));
   ASSERT_EQ(
-      shortDecimal->toString(),
+      shortDecimalFlatVector->toString(),
+      "[FLAT SHORT_DECIMAL(10,3): 5 elements, no nulls]");
+  ASSERT_EQ(
+      shortDecimalFlatVector->toString(0, 5),
+      "0: 1000.265\n"
+      "1: 35.610\n"
+      "2: -314.159\n"
+      "3: 0.007\n"
+      "4: 0");
+
+  auto longDecimalFlatVector = makeLongDecimalFlatVector(
+      {1000265, 35610, -314159, 7, 0}, DECIMAL(20, 4));
+  ASSERT_EQ(
+      longDecimalFlatVector->toString(),
+      "[FLAT LONG_DECIMAL(20,4): 5 elements, no nulls]");
+  ASSERT_EQ(
+      longDecimalFlatVector->toString(0, 5),
+      "0: 100.0265\n"
+      "1: 3.5610\n"
+      "2: -31.4159\n"
+      "3: 0.0007\n"
+      "4: 0");
+}
+
+TEST_F(VectorToStringTest, nullableDecimals) {
+  auto shortDecimalFlatVector = makeNullableShortDecimalFlatVector(
+      {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(10, 3));
+  ASSERT_EQ(
+      shortDecimalFlatVector->toString(),
       "[FLAT SHORT_DECIMAL(10,3): 5 elements, 1 nulls]");
   ASSERT_EQ(
-      shortDecimal->toString(0, 5),
+      shortDecimalFlatVector->toString(0, 5),
       "0: 1000.265\n"
       "1: 35.610\n"
       "2: -314.159\n"
       "3: 0.007\n"
       "4: null");
 
-  std::vector<std::optional<int128_t>> longValues = {
-      1000265, 35610, -314159, 7, std::nullopt};
-  auto longDecimal = makeDecimalFlatVectorNullable(longValues, 20, 4);
+  auto longDecimalFlatVector = makeNullableLongDecimalFlatVector(
+      {1000265, 35610, -314159, 7, std::nullopt}, DECIMAL(20, 4));
   ASSERT_EQ(
-      longDecimal->toString(),
+      longDecimalFlatVector->toString(),
       "[FLAT LONG_DECIMAL(20,4): 5 elements, 1 nulls]");
   ASSERT_EQ(
-      longDecimal->toString(0, 5),
+      longDecimalFlatVector->toString(0, 5),
       "0: 100.0265\n"
       "1: 3.5610\n"
       "2: -31.4159\n"
