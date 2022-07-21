@@ -346,19 +346,14 @@ TEST_F(GCSFileSystemTest, credentialsConfig) {
 
   filesystems::GCSFileSystem gcfs(conf);
 
+  gcfs.initializeClient();
   try {
-    gcfs.initializeClient();
     const std::string gcsFile =
         gcsURI(PreexistingBucketName(), PreexistingObjectName());
     gcfs.openFileForRead(gcsFile);
     FAIL() << "Expected VeloxException";
   } catch (VeloxException const& err) {
-    EXPECT_EQ(
-        err.message(),
-        std::string(
-            "Failed to get metadata for GCS object due to: Path:'gs://test1-gcs/test-object-name', "
-            "SDK Error Type:, GCS Status Code:Unknown error,  Message:"
-            "'Permanent error in GetObjectMetadata: Invalid "
-            "ServiceAccountCredentials,parsing failed on data loaded from memory'"));
+    EXPECT_THAT(err.message(), testing::HasSubstr("gs://test1-gcs/test-object-name"));
+    EXPECT_THAT(err.message(), testing::HasSubstr("Invalid ServiceAccountCredentials"));
   }
 }
