@@ -156,6 +156,45 @@ struct ArrayJoinFunction {
   }
 };
 
+template <typename T>
+struct udf_array_sum {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+  template <typename OT, typename IT>
+  FOLLY_ALWAYS_INLINE bool call(OT& out, const IT& array) {
+    if (array.mayHaveNulls()) {
+      bool allNulls = true;
+      OT sum = 0;
+      for (const auto& item : array) {
+        if (item.has_value()) {
+          allNulls = false;
+          sum += *item;
+        }
+      }
+      out = sum;
+      return true;
+    }
+
+    // Not nulls path
+    OT sum = 0;
+    for (const auto& item : array) {
+      sum += *item;
+    }
+    out = sum;
+    return true;
+  }
+
+  template <typename OT, typename IT>
+  FOLLY_ALWAYS_INLINE bool callNullFree(OT& out, const IT& array) {
+    // Not nulls path
+    OT sum = 0;
+    for (const auto& item : array) {
+      sum += item;
+    }
+    out = sum;
+    return true;
+  }
+};
+
 /// Function Signature: combinations(array(T), n) -> array(array(T))
 /// Returns n-element combinations of the input array. If the input array has no
 /// duplicates, combinations returns n-element subsets. Order of subgroup is

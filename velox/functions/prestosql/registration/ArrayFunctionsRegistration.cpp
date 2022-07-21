@@ -25,6 +25,11 @@ inline void registerArrayMinMaxFunctions() {
   registerFunction<ArrayMaxFunction, T, Array<T>>({"array_max"});
 }
 
+template <typename OT, typename IT>
+inline void registerArraySumFunction() {
+  registerFunction<udf_array_sum, OT, IT>({"array_sum"});
+}
+
 template <typename T>
 inline void registerArrayJoinFunctions() {
   registerFunction<
@@ -88,6 +93,13 @@ void registerArrayFunctions() {
   registerArrayJoinFunctions<Varchar>();
   registerArrayJoinFunctions<Timestamp>();
   registerArrayJoinFunctions<Date>();
+
+  registerArraySumFunction<int64_t, Array<int8_t>>();
+  registerArraySumFunction<int64_t, Array<int16_t>>();
+  registerArraySumFunction<int64_t, Array<int32_t>>();
+  registerArraySumFunction<int64_t, Array<int64_t>>();
+  registerArraySumFunction<double, Array<float>>();
+  registerArraySumFunction<double, Array<double>>();
 
   registerArrayCombinationsFunctions<int8_t>();
   registerArrayCombinationsFunctions<int16_t>();
