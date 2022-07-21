@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "velox/dwio/dwrf/reader/SelectiveStructColumnReader.h"
+#include "velox/dwio/common/SelectiveStructColumnReader.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 class ColumnLoader : public velox::VectorLoader {
  public:
