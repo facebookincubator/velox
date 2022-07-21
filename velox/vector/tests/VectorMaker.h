@@ -654,7 +654,7 @@ class VectorMaker {
       const VectorPtr& values,
       const std::vector<vector_size_t>& nulls = {});
 
-  /// Create a Decimal Flat Vector from decimal values, precision, scale.
+  /// Create a DecimalFlatVector from native decimal values, precision, scale.
   template <typename T>
   FlatVectorPtr<T> decimalFlatVector(
       const std::vector<std::optional<T>>& values,

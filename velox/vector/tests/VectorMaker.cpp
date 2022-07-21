@@ -159,7 +159,7 @@ void setNotNullValue(
   }
 }
 template <typename T>
-FlatVectorPtr<T> decimalVector(
+FlatVectorPtr<T> makeDecimalVector(
     const std::vector<std::optional<T>>& values,
     uint8_t precision,
     uint8_t scale,
@@ -324,14 +324,14 @@ FlatVectorPtr<ShortDecimal> VectorMaker::decimalFlatVector(
     const std::vector<std::optional<ShortDecimal>>& values,
     uint8_t precision,
     uint8_t scale) {
-  return decimalVector<ShortDecimal>(values, precision, scale, pool_);
+  return makeDecimalVector<ShortDecimal>(values, precision, scale, pool_);
 }
 template <>
 FlatVectorPtr<LongDecimal> VectorMaker::decimalFlatVector(
     const std::vector<std::optional<LongDecimal>>& values,
     uint8_t precision,
     uint8_t scale) {
-  return decimalVector<LongDecimal>(values, precision, scale, pool_);
+  return makeDecimalVector<LongDecimal>(values, precision, scale, pool_);
 }
 
 // static
