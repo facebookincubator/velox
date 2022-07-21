@@ -27,6 +27,7 @@
 #include <glog/logging.h>
 
 #include "velox/functions/lib/string/StringCore.h"
+#include "velox/type/DecimalUtils.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -181,6 +182,8 @@ class SimpleVector : public BaseVector {
     } else {
       if constexpr (std::is_same<T, std::shared_ptr<void>>::value) {
         out << "<opaque>";
+      } else if (isDecimalKind(this->typeKind())) {
+        out << DecimalUtil::toString<T>(valueAt(index), type());
       } else {
         out << velox::to<std::string>(valueAt(index));
       }

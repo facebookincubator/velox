@@ -99,4 +99,13 @@ TEST_F(VectorToStringTest, opaque) {
       "1: <opaque>\n"
       "2: <opaque>");
 }
+
+TEST_F(VectorToStringTest, decimal) {
+  std::vector<std::optional<ShortDecimal>> vals =
+      {ShortDecimal(1000.265), ShortDecimal(356.10),
+       ShortDecimal(-3.14159), ShortDecimal(7)};
+  auto decimal = makeDecimalFlatVector(vals, 10, 3);
+  ASSERT_EQ(decimal->toString(), "[Something]");
+}
+
 } // namespace facebook::velox::test
