@@ -158,7 +158,41 @@ void setNotNullValue(
     vector->asFlatVector<T>()->set(index, value.value<T>());
   }
 }
+
+template <typename T>
+FlatVectorPtr<T> makeDecimalFlatVectorNullable(
+    const std::vector<std::optional<T>>& data,
+    const TypePtr& type,
+    memory::MemoryPool* pool) {
+  VectorPtr base = BaseVector::create(type, data.size(), pool);
+  auto flatVector = std::dynamic_pointer_cast<FlatVector<T>>(base);
+  for (auto i = 0; i < data.size(); ++i) {
+    if (data[i].has_value()) {
+      flatVector->set(i, data[i].value());
+    } else {
+      flatVector->setNull(i, true);
+    }
+  }
+  return flatVector;
+}
 } // namespace
+
+template <>
+FlatVectorPtr<ShortDecimal> VectorMaker::decimalFlatVectorNullable(
+    const std::vector<std::optional<ShortDecimal>>& data,
+    uint8_t precision,
+    uint8_t scale) {
+  auto type = SHORT_DECIMAL(precision, scale);
+  return makeDecimalFlatVectorNullable(data, type, pool_);
+}
+template <>
+FlatVectorPtr<LongDecimal> VectorMaker::decimalFlatVectorNullable(
+    const std::vector<std::optional<LongDecimal>>& data,
+    uint8_t precision,
+    uint8_t scale) {
+  auto type = LONG_DECIMAL(precision, scale);
+  return makeDecimalFlatVectorNullable(data, type, pool_);
+}
 
 ArrayVectorPtr VectorMaker::arrayOfRowVector(
     const RowTypePtr& rowType,

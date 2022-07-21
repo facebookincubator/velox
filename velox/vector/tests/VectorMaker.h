@@ -193,6 +193,19 @@ class VectorMaker {
     return flatVector;
   }
 
+  /// Create a DECIMAL FlatVector from native DECIMAL values, precision, scale.
+  ///
+  /// Elements are nullable.
+  ///
+  /// Examples:
+  ///   auto flatVector = decimalFlatVectorNullable({ShortDecimal(1),
+  ///   std::nullopt, ShortDecimal(3)}, 10, 1);
+  template <typename T>
+  FlatVectorPtr<EvalType<T>> decimalFlatVectorNullable(
+      const std::vector<std::optional<T>>& data,
+      uint8_t precision,
+      uint8_t scale);
+
   /// Create a BiasVector<T>
   /// creates a BiasVector (vector encoded using bias encoding) based on a flat
   /// input from an std::vector.

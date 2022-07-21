@@ -203,6 +203,33 @@ TEST_F(VectorMakerTest, nullableFlatVectorBool) {
   }
 }
 
+TEST_F(VectorMakerTest, nullableDecimalFlatVector) {
+  std::vector<std::optional<ShortDecimal>> data = {
+      ShortDecimal(1000265),
+      ShortDecimal(35610),
+      ShortDecimal(-314159),
+      ShortDecimal(7),
+      std::nullopt};
+  auto flatVector = maker_.decimalFlatVectorNullable(data, 10, 7);
+  // No VectorMakerStats for DECIMAL flat vectors.
+  EXPECT_EQ(data.size(), flatVector->size());
+  EXPECT_TRUE(flatVector->mayHaveNulls());
+  EXPECT_FALSE(flatVector->getNullCount().has_value());
+  EXPECT_FALSE(flatVector->isSorted().has_value());
+  EXPECT_FALSE(flatVector->getDistinctValueCount().has_value());
+  EXPECT_FALSE(flatVector->getMin().has_value());
+  EXPECT_FALSE(flatVector->getMax().has_value());
+
+  for (vector_size_t i = 0; i < data.size(); i++) {
+    if (data[i] == std::nullopt) {
+      EXPECT_TRUE(flatVector->isNullAt(i));
+    } else {
+      EXPECT_FALSE(flatVector->isNullAt(i));
+      EXPECT_EQ(*data[i], flatVector->valueAt(i));
+    }
+  }
+}
+
 TEST_F(VectorMakerTest, arrayVector) {
   std::vector<std::vector<int64_t>> data = {
       {0, 0},

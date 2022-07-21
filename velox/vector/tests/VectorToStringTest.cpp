@@ -100,12 +100,42 @@ TEST_F(VectorToStringTest, opaque) {
       "2: <opaque>");
 }
 
-TEST_F(VectorToStringTest, decimal) {
-  std::vector<std::optional<ShortDecimal>> vals =
-      {ShortDecimal(1000.265), ShortDecimal(356.10),
-       ShortDecimal(-3.14159), ShortDecimal(7)};
-  auto decimal = makeDecimalFlatVector(vals, 10, 3);
-  ASSERT_EQ(decimal->toString(), "[Something]");
+TEST_F(VectorToStringTest, decimals) {
+  std::vector<std::optional<ShortDecimal>> shortValues = {
+      ShortDecimal(1000265),
+      ShortDecimal(35610),
+      ShortDecimal(-314159),
+      ShortDecimal(7),
+      std::nullopt};
+  auto shortDecimal = makeDecimalFlatVectorNullable(shortValues, 10, 3);
+  ASSERT_EQ(
+      shortDecimal->toString(),
+      "[FLAT SHORT_DECIMAL(10,3): 5 elements, 1 nulls]");
+  ASSERT_EQ(
+      shortDecimal->toString(0, 5),
+      "0: 1000.265\n"
+      "1: 35.610\n"
+      "2: -314.159\n"
+      "3: 0.007\n"
+      "4: null");
+
+  std::vector<std::optional<LongDecimal>> longValues = {
+      LongDecimal(1000265),
+      LongDecimal(35610),
+      LongDecimal(-314159),
+      LongDecimal(7),
+      std::nullopt};
+  auto longDecimal = makeDecimalFlatVectorNullable(longValues, 20, 4);
+  ASSERT_EQ(
+      longDecimal->toString(),
+      "[FLAT LONG_DECIMAL(20,4): 5 elements, 1 nulls]");
+  ASSERT_EQ(
+      longDecimal->toString(0, 5),
+      "0: 100.0265\n"
+      "1: 3.5610\n"
+      "2: -31.4159\n"
+      "3: 0.0007\n"
+      "4: null");
 }
 
 } // namespace facebook::velox::test
