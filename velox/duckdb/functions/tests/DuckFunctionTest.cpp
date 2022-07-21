@@ -379,7 +379,7 @@ TEST_F(BaseDuckTest, mod) {
 
   runDuckTest<double, double>(
       DOUBLE(),
-      "duckdb_mod(c0, CAST(3.1 AS DOUBLE))",
+      "duckdb_mod(c0, CAST('3.1' AS DOUBLE))",
       {0, 1.0, 4.2},
       {0, 1.0, 1.1});
 }
@@ -441,7 +441,7 @@ TEST_F(BaseDuckTest, bigMix) {
   runDuckTestBinary<double, double, double>(
       DOUBLE(),
       DOUBLE(),
-      "duckdb_floor(duckdb_mod(cast(ceil(c0) as integer), cast(floor(c1) as integer)) + 0.5)",
+      "duckdb_floor(duckdb_mod(cast(ceil(c0) as integer), cast(floor(c1) as integer)) + '0.5'::double)",
       {1.2, 4.7, 39.8, 88, 300},
       {1.2, 2.1, 7.3, 23.22, 101.77},
       {0, 1, 5, 19, 98});
