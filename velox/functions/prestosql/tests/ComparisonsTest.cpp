@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -290,4 +292,130 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
         evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector({row1, row2}));
     ASSERT_EQ(result->isNullAt(0), true);
   }
+}
+
+template <typename Type>
+class SimdComparisonsTest : public functions::test::FunctionBaseTest {
+ public:
+  using T = typename Type::NativeType::NativeType;
+
+  auto checkConstantComparison(
+      const std::string& fn,
+      const std::vector<T>& data,
+      T constVal,
+      bool constantRhs = true) {
+    auto vector1 = makeFlatVector<T>(data);
+    auto vector2 = makeConstant<T>(constVal, vector1->size());
+    auto rowVector = constantRhs ? makeRowVector({vector1, vector2})
+                                 : makeRowVector({vector2, vector1});
+    return evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", fn), rowVector);
+  }
+
+  auto checkVectorComparison(
+      const std::string& fn,
+      const std::vector<T>& lhs,
+      const std::vector<T>& rhs) {
+    auto vector1 = makeFlatVector<T>(lhs);
+    auto vector2 = makeFlatVector<T>(rhs);
+    auto rowVector = makeRowVector({vector1, vector2});
+    return evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", fn), rowVector);
+  }
+
+  auto checkVectorComparison(
+      const std::string& fn,
+      const VectorPtr lhs,
+      const VectorPtr rhs) {
+    auto rowVector = makeRowVector({lhs, rhs});
+    return evaluate<SimpleVector<bool>>(
+        fmt::format("{}(c0, c1)", fn), rowVector);
+  }
+
+  void testConstantEq(uint32_t vectorLength, T constVal) {
+    auto data = std::vector<T>(vectorLength);
+    for (int i = 0; i < vectorLength; i++) {
+      data[i] = i;
+    }
+
+    auto result = checkConstantComparison("eq", data, constVal);
+    ASSERT_EQ(result->size(), vectorLength);
+
+    for (int i = 0; i < vectorLength; i++) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_EQ(result->valueAt(i), ((T)i) == constVal)
+          << "Values not matching at " << i;
+    }
+
+    // Now check converse
+    result = checkConstantComparison("eq", data, constVal, false);
+    ASSERT_EQ(result->size(), vectorLength);
+
+    for (int i = 0; i < vectorLength; i++) {
+      ASSERT_FALSE(result->isNullAt(i));
+      ASSERT_EQ(result->valueAt(i), ((T)i) == constVal)
+          << "Values not matching at " << i;
+    }
+  }
+
+  void testFlatEq() {
+    // basic equality test
+    auto result = checkVectorComparison(
+        "eq", {1, 2, 3, 4, 5, 6, 7}, {1, 2, 3, 7, 8, 9, 0});
+    test::assertEqualVectors(
+        result,
+        makeFlatVector<bool>({true, true, true, false, false, false, false}));
+
+    // test some large vectors
+    auto vector1 = std::vector<T>(2047);
+    std::fill(vector1.begin(), vector1.end(), 5);
+    vector1[13] = 7;
+    vector1[257] = 7;
+
+    auto vector2 = std::vector<T>(2047);
+    std::fill(vector2.begin(), vector2.end(), 7);
+
+    auto expected = std::vector<bool>(2047);
+    expected[13] = true;
+    expected[257] = true;
+
+    result = checkVectorComparison("eq", vector1, vector2);
+    test::assertEqualVectors(result, makeFlatVector<bool>(expected));
+  }
+
+  void testDictionaryEq() {
+    // Identity mapping, however this will result in non-simd path.
+    auto makeDictionary = [&](const std::vector<T>& data) {
+      auto base = makeFlatVector(data);
+      auto indices = makeIndices(data.size(), [](auto row) { return row; });
+      return wrapInDictionary(indices, data.size(), base);
+    };
+
+    auto vectorLhs = makeDictionary({1, 2, 3, 4, 5});
+    auto vectorRhs = makeDictionary({1, 0, 0, 0, 5});
+
+    auto result = checkVectorComparison("eq", vectorLhs, vectorRhs);
+    test::assertEqualVectors(
+        result, makeFlatVector<bool>({true, false, false, false, true}));
+  }
+};
+
+TYPED_TEST_SUITE(
+    SimdComparisonsTest,
+    functions::test::FunctionBaseTest::FloatingPointAndIntegralTypes,
+    functions::test::FunctionBaseTest::TypeNames);
+
+TYPED_TEST(SimdComparisonsTest, constantEquality) {
+  this->testConstantEq(35, 17);
+  this->testConstantEq(1024, 53);
+  this->testConstantEq(99, 7);
+  this->testConstantEq(1027, 13);
+}
+
+TYPED_TEST(SimdComparisonsTest, flatEq) {
+  this->testFlatEq();
+}
+
+TYPED_TEST(SimdComparisonsTest, dictionaryEq) {
+  this->testDictionaryEq();
 }
