@@ -44,7 +44,7 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       const VectorPtr& result,
       bool isLeftConstant) {
     auto shortConstant = BaseVector::wrapInConstant(
-        1, 0, makeDecimalFlatVector<ShortDecimal>({ShortDecimal(1000)}, 10, 3));
+        1, 0, makeShortDecimalFlatVector({1000}, DECIMAL(10, 3)));
     std::vector<VectorPtr> input({flatVector});
     auto rowVector = makeRowVector(input);
     auto rowType = asRowType(rowVector->type());
@@ -98,18 +98,14 @@ class DecimalArithmeticTest : public FunctionBaseTest {
 } // namespace facebook::velox
 
 TEST_F(DecimalArithmeticTest, add) {
-  auto resultLongFlat = makeDecimalFlatVector<LongDecimal>(
-      {LongDecimal(2000), LongDecimal(4000)}, 19, 3);
-  auto shortFlat = makeDecimalFlatVector<ShortDecimal>(
-      {ShortDecimal(1000), ShortDecimal(2000)}, 18, 3);
+  auto resultLongFlat = makeLongDecimalFlatVector({2000, 4000}, DECIMAL(19, 3));
+  auto shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(18, 3));
   // Add short and short, returning long.
   testDecimalExpr<LongDecimal>(
       resultLongFlat, "plus(c0, c1)", {shortFlat, shortFlat});
   // Add short and long, returning long.
-  auto longFlat = makeDecimalFlatVector<LongDecimal>(
-      {LongDecimal(1000), LongDecimal(2000)}, 19, 3);
-  resultLongFlat = makeDecimalFlatVector<LongDecimal>(
-      {LongDecimal(2000), LongDecimal(4000)}, 20, 3);
+  auto longFlat = makeLongDecimalFlatVector({1000, 2000}, DECIMAL(19, 3));
+  resultLongFlat = makeLongDecimalFlatVector({2000, 4000}, DECIMAL(20, 3));
   testDecimalExpr<LongDecimal>(
       resultLongFlat, "plus(c0, c1)", {shortFlat, longFlat});
   // Add short and long, returning long.
@@ -119,15 +115,14 @@ TEST_F(DecimalArithmeticTest, add) {
   // Add long and long, returning long.
   testDecimalExpr<LongDecimal>(resultLongFlat, "c0 + c1", {longFlat, longFlat});
   // Add short and short, returning short.
-  shortFlat = makeDecimalFlatVector<ShortDecimal>(
-      {ShortDecimal(1000), ShortDecimal(2000)}, 10, 3);
-  auto resultShortFlat = makeDecimalFlatVector<ShortDecimal>(
-      {ShortDecimal(2000), ShortDecimal(4000)}, 11, 3);
+  shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(10, 3));
+  auto resultShortFlat =
+      makeShortDecimalFlatVector({2000, 4000}, DECIMAL(11, 3));
   testDecimalExpr<ShortDecimal>(
       resultShortFlat, "c0 + c1", {shortFlat, shortFlat});
 
-  auto resultConstantFlat = makeDecimalFlatVector<ShortDecimal>(
-      {ShortDecimal(2000), ShortDecimal(3000)}, 11, 3);
+  auto resultConstantFlat =
+      makeShortDecimalFlatVector({2000, 3000}, DECIMAL(11, 3));
   // Constant and Flat arguments.
   testOpFlatConstant<ShortDecimal>(
       "plus", "'1.000'::decimal(10,3)", shortFlat, resultConstantFlat, true);

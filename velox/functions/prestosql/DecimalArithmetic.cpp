@@ -141,8 +141,8 @@ class Addition {
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
     r.setUnscaledValue(
-        a.unscaledValue() * kPowersOfTen[aRescale] +
-        b.unscaledValue() * kPowersOfTen[bRescale]);
+        a.unscaledValue() * DecimalUtil::kPowersOfTen[aRescale] +
+        b.unscaledValue() * DecimalUtil::kPowersOfTen[bRescale]);
   }
 
   inline static uint8_t
