@@ -77,10 +77,9 @@ bool SignatureBinder::tryBind(
     if (isDecimalKind(actualType->kind()) && isCommonDecimalName(typeName)) {
       const auto& variables = typeSignature.variables();
       VELOX_CHECK_EQ(variables.size(), 2);
-      int precision, scale;
-      getDecimalPrecisionScale(*actualType.get(), precision, scale);
-      variables_.emplace(variables[0], precision);
-      variables_.emplace(variables[1], scale);
+      auto precisionScale = getDecimalPrecisionScale(actualType);
+      variables_.emplace(variables[0], precisionScale.first);
+      variables_.emplace(variables[1], precisionScale.second);
       return true;
     }
 

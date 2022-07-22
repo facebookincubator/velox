@@ -105,4 +105,9 @@ std::string DecimalUtil::toString<ShortDecimal>(
   auto decimalType = type->asShortDecimal();
   return formatDecimal(decimalType.scale(), value.unscaledValue());
 }
+
+template <typename T>
+std::string DecimalUtil::toString(const T& value, const TypePtr& type) {
+  VELOX_UNSUPPORTED();
+}
 } // namespace facebook::velox
