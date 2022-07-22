@@ -155,7 +155,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     });
   }
 
-  void destroy(folly::Range<char**> groups) override {
+  void  destroy(folly::Range<char**> groups) override {
     for (auto group : groups) {
       value<ArrayAccumulator>(group)->elements.free(allocator_);
     }
