@@ -939,6 +939,40 @@ TEST_F(ExprTest, selectiveLazyLoadingOr) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(ExprTest, lazyVectorAccessTwiceWithDifferentRows) {
+  const vector_size_t size = 4;
+
+  // [1, 1, 1, null]
+  auto inputC0 = makeNullableFlatVector<int64_t>({1, 1, 1, std::nullopt});
+  // [0, 1, 2, 3] if fully loaded
+  std::vector<vector_size_t> loadedRows;
+  auto valueAt = [](auto row) { return row; };
+  VectorPtr inputC1 = std::make_shared<LazyVector>(
+      pool_.get(),
+      BIGINT(),
+      size,
+      std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
+        for (auto row : rows) {
+          loadedRows.push_back(row);
+        }
+        return makeFlatVector<int64_t>(rows.back() + 1, valueAt);
+      }));
+
+  // isFinalSelection_ == true
+  auto result = evaluate(
+      "row_constructor(c0 + c1, if (c1 >= 0, c1, 0))",
+      makeRowVector({inputC0, inputC1}));
+
+  // [1, 2, 3, null]
+  auto outputCol0 = makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt});
+  // [0, 1, 2, 3]
+  auto outputCol1 = makeNullableFlatVector<int64_t>({0, 1, 2, 3});
+  // [(1, 0), (2, 1), (3, 2), (null, 3)]
+  auto expected = ExprTest::makeRowVector({outputCol0, outputCol1});
+
+  assertEqualVectors(expected, result);
+}
+
 TEST_F(ExprTest, selectiveLazyLoadingIf) {
   const vector_size_t size = 1'000;
 

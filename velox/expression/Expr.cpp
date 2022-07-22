@@ -811,6 +811,8 @@ void Expr::evalWithNulls(
       if (removeSureNulls(rows, context, nonNullHolder)) {
         VarSetter noMoreNulls(context.mutableNullsPruned(), true);
         if (nonNullHolder.get()->hasSelections()) {
+          // No need fix finalSelection here, LazyVector already loaded due to
+          // removeSureNulls method
           evalAll(*nonNullHolder.get(), context, result);
         }
         auto rawNonNulls = nonNullHolder.get()->asRange().bits();
@@ -1029,6 +1031,14 @@ void Expr::evalAll(
   bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
   inputValues_.resize(inputs_.size());
   for (int32_t i = 0; i < inputs_.size(); ++i) {
+    // Fix finalSelection at "rows" if missingRows is a strict subset.
+    // "rows" may be used to evaluate exprs outside of current expr node.
+    bool updateFinalSelection = context.isFinalSelection() &&
+        (remainingRows->countSelected() < rows.countSelected());
+    VarSetter isFinalSelection(
+        context.mutableIsFinalSelection(), false, updateFinalSelection);
+    VarSetter finalSelection(
+        context.mutableFinalSelection(), &rows, updateFinalSelection);
     inputs_[i]->eval(*remainingRows, context, inputValues_[i]);
     tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
     if (defaultNulls && inputValues_[i]->mayHaveNulls()) {
