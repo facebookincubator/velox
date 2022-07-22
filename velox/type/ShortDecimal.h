@@ -33,6 +33,10 @@ struct ShortDecimal {
     return unscaledValue_;
   }
 
+  void setUnscaledValue(const int64_t unscaledValue) {
+    unscaledValue_ = unscaledValue;
+  }
+
   bool operator==(const ShortDecimal& other) const {
     return unscaledValue_ == other.unscaledValue_;
   }
@@ -60,6 +64,12 @@ struct ShortDecimal {
  private:
   int64_t unscaledValue_;
 };
+
+template <typename T>
+void toAppend(const ::facebook::velox::ShortDecimal& value, T* result) {
+  VELOX_UNSUPPORTED();
+}
+
 } // namespace facebook::velox
 
 namespace folly {
