@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -e
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 <storage-testbench version>"
+  exit 1
+fi
+
+if [ "$(uname -m)" != "x86_64" ]; then
+  echo "GCS testbench won't install on non-x86 architecture"
+  exit 0
+fi
+
+version=$1
+if [[ "${version}" -eq "default" ]]; then
+  version="v0.16.0"
+fi
+
+#dnf or apt based on linux distro
+dist=`grep "^ID=" /etc/os-release | awk -F '=' '{print $2}'| sed 's/"//g'`
+case "$dist" in
+  ubuntu) echo 'This is Ubuntu Linux' ; cmd="apt install -y";;
+       *) echo 'This is Fedora' ; cmd="dnf install -y -q --setopt=install_weak_deps=False";;
+esac
+user=`whoami`
+case "$user" in
+  root) echo 'Running as root' ; sudocmd="";;
+     *) echo 'Running as other user than root' ; sudocmd="sudo";;
+esac
+echo "Running $sudocmd $cmd python3-devel"
+$sudocmd $cmd python3-devel
+
+${PYTHON:-python3} -m pip install \
+  "https://github.com/googleapis/storage-testbench/archive/${version}.tar.gz"
