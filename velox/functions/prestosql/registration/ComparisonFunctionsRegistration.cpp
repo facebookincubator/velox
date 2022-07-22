@@ -22,6 +22,7 @@ namespace facebook::velox::functions {
 
 void registerComparisonFunctions() {
   registerBinaryScalar<EqFunction, bool>({"eq"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_simd_comparison_eq, "eq");
   registerFunction<EqFunction, bool, Generic<T1>, Generic<T1>>({"eq"});
 
   registerBinaryScalar<NeqFunction, bool>({"neq"});
