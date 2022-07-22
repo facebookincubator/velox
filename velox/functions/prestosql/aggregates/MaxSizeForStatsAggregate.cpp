@@ -21,8 +21,16 @@
 #include "velox/functions/prestosql/aggregates/SimpleNumericAggregate.h"
 #include "velox/functions/prestosql/aggregates/SingleValueAccumulator.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/serializers/PrestoSerializer.h"
 
 namespace facebook::velox::aggregate {
+
+namespace {
+std::unique_ptr<VectorSerde>& getVectorSerde() {
+  static std::unique_ptr<VectorSerde> serde = std::make_unique<serializer::presto::PrestoVectorSerde>();
+  return serde;
+}
+} // namespace
 
 namespace {
 
@@ -34,6 +42,7 @@ class MaxSizeForStatsAggregate
   using BaseAggregate =
       SimpleNumericAggregate<TMaxDataSize, TMaxDataSize, TMaxDataSize>;
 
+//  static std::unique_ptr<VectorSerde> serde_ = ;
  public:
   explicit MaxSizeForStatsAggregate(TypePtr resultType)
       : BaseAggregate(resultType) {}
@@ -135,6 +144,22 @@ class MaxSizeForStatsAggregate
     cur = std::max(cur, (TMaxDataSize)size_out);
   }
 
+  void upsertOneAccumulatorNew(
+      char* const group,
+      const BaseVector& inputVector,
+      std::vector<vector_size_t>& rowSizes,
+      vector_size_t idx) {
+    if (inputVector.isNullAt(idx)) {
+      return;
+    }
+
+    // Clear null
+    clearNull(group);
+    // Set max(current, this)
+    TMaxDataSize& cur = *value<TMaxDataSize>(group);
+    cur = std::max(cur, (TMaxDataSize)rowSizes[idx]);
+  }
+
   void
   doUpdate(char** groups, const SelectivityVector& rows, const VectorPtr& arg) {
     DecodedVector decoded(*arg, rows, true);
@@ -147,8 +172,20 @@ class MaxSizeForStatsAggregate
       return;
     }
 
+    auto numRows = arg->size();
+    std::vector<vector_size_t> elementSizes (numRows,0);
+    std::vector<vector_size_t*> elementSizePtrs(numRows);
+    std::vector<IndexRange> elementIndices(numRows);
+
+    for (int i = 0; i < numRows; i++) {
+      elementIndices[i] = IndexRange{i, 1};
+      elementSizePtrs[i] = &elementSizes[i];
+    }
+
+    getVectorSerde()->estimateSerializedSize(arg, folly::Range(elementIndices.data(), numRows), elementSizePtrs.data());
+
     rows.applyToSelected([&](vector_size_t i) {
-      upsertOneAccumulator(groups[i], *baseVector, indices[i]);
+      upsertOneAccumulatorNew(groups[i], *baseVector,elementSizes, indices[i]);
     });
   }
 
@@ -160,17 +197,29 @@ class MaxSizeForStatsAggregate
     auto indices = decoded.indices();
     auto baseVector = decoded.base();
 
+    auto numRows = baseVector->size();
+    std::vector<vector_size_t> elementSizes (numRows,0);
+    std::vector<vector_size_t*> elementSizePtrs(numRows);
+    std::vector<IndexRange> elementIndices(numRows);
+
+    for (int i = 0; i < numRows; i++) {
+      elementIndices[i] = IndexRange{i, 1};
+      elementSizePtrs[i] = &elementSizes[i];
+    }
+
+    getVectorSerde()->estimateSerializedSize(arg, folly::Range(elementIndices.data(), numRows), elementSizePtrs.data());
+
     if (decoded.isConstantMapping()) {
       if (decoded.isNullAt(0)) {
         // nothing to do; all values are nulls
         return;
       }
-      upsertOneAccumulator(group, *baseVector, 0);
+      upsertOneAccumulatorNew(group, *baseVector, elementSizes,0);
       return;
     }
 
     rows.applyToSelected(
-        [&](vector_size_t i) { upsertOneAccumulator(group, *baseVector, i); });
+        [&](vector_size_t i) { upsertOneAccumulatorNew(group, *baseVector, elementSizes,i); });
   }
 };
 

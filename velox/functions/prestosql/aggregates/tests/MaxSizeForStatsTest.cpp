@@ -188,7 +188,7 @@ TEST_F(MaxSizeForStatsTest, allScalarTypesGroupBy) {
             makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
             makeFlatVector<int64_t>(std::vector<int64_t>{1, 1}),
             makeFlatVector<int64_t>(std::vector<int64_t>{4, 4}),
-            makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
+            makeFlatVector<int64_t>(std::vector<int64_t>{16, 16}),
         }));
   }
 }
@@ -246,7 +246,7 @@ TEST_F(MaxSizeForStatsTest, allScalarTypesGroupByWithIntermediate) {
             makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
             makeFlatVector<int64_t>(std::vector<int64_t>{1, 1}),
             makeFlatVector<int64_t>(std::vector<int64_t>{4, 4}),
-            makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
+            makeFlatVector<int64_t>(std::vector<int64_t>{16, 16}),
         }));
   }
 }
@@ -302,7 +302,7 @@ TEST_F(MaxSizeForStatsTest, allScalarTypesGroupSingleAggregate) {
             makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
             makeFlatVector<int64_t>(std::vector<int64_t>{1, 1}),
             makeFlatVector<int64_t>(std::vector<int64_t>{4, 4}),
-            makeFlatVector<int64_t>(std::vector<int64_t>{8, 8}),
+            makeFlatVector<int64_t>(std::vector<int64_t>{16, 16}),
         }));
   }
 }
