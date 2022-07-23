@@ -18,7 +18,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/vector/tests/VectorMaker.h"
 
 namespace facebook::velox::dwio::parquet {

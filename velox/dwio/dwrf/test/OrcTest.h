@@ -18,9 +18,9 @@
 
 #include <google/protobuf/wire_format_lite.h>
 #include "velox/dwio/common/IntCodecCommon.h"
+#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/reader/StripeStream.h"
-#include "velox/dwio/dwrf/test/utils/DataFiles.h"
 #include "velox/dwio/dwrf/writer/IndexBuilder.h"
 #include "velox/dwio/dwrf/writer/WriterBase.h"
 

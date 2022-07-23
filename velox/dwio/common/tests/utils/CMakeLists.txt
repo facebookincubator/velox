@@ -12,27 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_tpch_benchmark TpchBenchmark.cpp)
+add_library(velox_dwio_common_test_utils BatchMaker.cpp DataFiles.cpp
+                                         FilterGenerator.cpp)
 
 target_link_libraries(
-  velox_tpch_benchmark
-  velox_aggregates
-  velox_exec
-  velox_exec_test_util
+  velox_dwio_common_test_utils
+  ${FOLLY_WITH_DEPENDENCIES}
   velox_dwio_common
   velox_dwio_common_exception
-  velox_dwio_parquet_reader
-  velox_dwio_type_fbhive
-  velox_dwio_common_test_utils
-  velox_hive_connector
   velox_exception
   velox_memory
-  velox_process
-  velox_serialization
-  velox_encode
   velox_type
-  velox_caching
-  velox_vector
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${FOLLY_BENCHMARK}
-  ${FMT})
+  velox_vector)
+
+# older versions of GCC need it to allow std::filesystem
+if(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+  target_link_libraries(velox_dwio_common_test_utils stdc++fs)
+endif()
