@@ -86,6 +86,7 @@ class TpchQueryBuilder {
   TpchPlan getQ14Plan() const;
   TpchPlan getQ18Plan() const;
   TpchPlan getQ19Plan() const;
+  TpchPlan getQ20Plan() const;
 
   const std::vector<std::string>& getTableFilePaths(
       const std::string& tableName) const {
@@ -118,6 +119,7 @@ class TpchQueryBuilder {
   static constexpr const char* kRegion = "region";
   static constexpr const char* kPart = "part";
   static constexpr const char* kSupplier = "supplier";
+  static constexpr const char* kPartsupp = "partsupp";
   std::unique_ptr<memory::ScopedMemoryPool> pool_ =
       memory::getDefaultScopedMemoryPool();
 };
