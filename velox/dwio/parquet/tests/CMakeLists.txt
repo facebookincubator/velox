@@ -16,7 +16,7 @@
 include_directories(${CMAKE_BINARY_DIR})
 
 set(TEST_LINK_LIBS
-    velox_dwrf_test_utils
+    velox_dwio_common_test_utils
     velox_vector_test_lib
     gtest
     gtest_main
