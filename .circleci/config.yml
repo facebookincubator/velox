@@ -23,6 +23,7 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
+      - linux-fuzzer-run
 
   # Daily documentation update
   nightly:
@@ -410,6 +411,45 @@ jobs:
             export PATH=~/adapter-deps/install/bin:~/adapter-deps/install/hadoop-2.10.1/bin:${PATH}
             cd _build/release && ctest -j 16 -VV --output-on-failure
           no_output_timeout: 1h
+
+  linux-fuzzer-run:
+    executor: build
+    steps:
+      - checkout
+      - run:
+          name: "Update submodules"
+          command: |
+            git submodule sync --recursive
+            git submodule update --init --recursive
+      - run:
+          name: "Calculate merge-base date for CCache"
+          command: git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+      - restore_cache:
+          name: "Restore CCache cache"
+          keys:
+            - velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
+      - run:
+          name: Build
+          command: |
+            mkdir -p .ccache
+            export CCACHE_DIR=$(realpath .ccache)
+            ccache -sz -M 5Gi
+            source /opt/rh/gcc-toolset-9/enable
+            make debug NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8 EXTRA_CMAKE_FLAGS="-DVELOX_ENABLE_ARROW=ON"
+            ccache -s
+          no_output_timeout: 1h
+      - store_artifacts:
+          path: '_build/debug/.ninja_log'
+      - save_cache:
+          name: "Save CCache cache"
+          key: velox-ccache-debug-{{ arch }}-{{ checksum "merge-base-date" }}
+          paths:
+            - .ccache/
+      - run:
+          name: "Run Fuzzer Tests"
+          command: |
+            make fuzzertest FUZZER_DURATION_SEC=600 FUZZER_SEED=${RANDOM}
+          no_output_timeout: 20m
 
   format-check:
     executor: check
