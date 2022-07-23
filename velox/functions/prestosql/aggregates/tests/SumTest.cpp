@@ -13,17 +13,59 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/AggregationHook.h"
+#include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 
 using facebook::velox::exec::test::PlanBuilder;
+using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::aggregate::test {
 
 namespace {
 
-class SumTest : public AggregationTestBase {};
+class SumTest : public AggregationTestBase {
+ protected:
+  template <typename InputType, typename ResultType>
+  void testInputTypeLimits(bool expectOverflow = false) {
+    std::vector<std::vector<InputType>> inputs = {
+        {std::numeric_limits<InputType>::min(),
+         std::numeric_limits<InputType>::min() + 1},
+        {std::numeric_limits<InputType>::max(),
+         std::numeric_limits<InputType>::max() - 1}};
+    for (auto& input : inputs) {
+      std::vector<RowVectorPtr> data;
+      data.push_back(makeRowVector({makeFlatVector<InputType>(input)}));
+
+      // Testing these two steps provides enough coverage. Adding kfinal
+      // involves more elaborate multi-fragment setup which would be an
+      // overkill.
+      for (auto& step :
+           {core::AggregationNode::Step::kPartial,
+            core::AggregationNode::Step::kSingle}) {
+        auto plan = PlanBuilder()
+                        .values(data)
+                        .aggregation({}, {}, {"sum(c0)"}, {}, step, false, {})
+                        .planNode();
+        CursorParameters params;
+        params.planNode = plan;
+        if (expectOverflow) {
+          VELOX_ASSERT_THROW(
+              readCursor(params, [](auto /*task*/) {}), "overflow");
+        } else {
+          ResultType expectedOutput = static_cast<ResultType>(input[0]) +
+              static_cast<ResultType>(input[1]);
+          auto expectedVector = makeFlatVector<ResultType>(
+              std::vector<ResultType>(1, expectedOutput));
+          assertQuery(plan, makeRowVector({expectedVector}));
+        }
+      }
+    }
+  }
+};
 
 TEST_F(SumTest, sumTinyint) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), TINYINT()});
@@ -267,6 +309,22 @@ TEST_F(SumTest, hook) {
   EXPECT_EQ(0, sumRow.nulls);
   EXPECT_EQ(0, numNulls);
   EXPECT_EQ(value, sumRow.sum);
+}
+
+TEST_F(SumTest, inputTypeLimits) {
+  // Verify sum aggregate function checks and throws an overflow error when
+  // appropriate. Since all integer types have output types as int64, overflow
+  // only occurs if the sum exceeds the max int64 value. For floating points, an
+  // overflow results in an infinite result but does not throw. Results are
+  // manually compared instead of comparing with duckDB as it throws an error
+  // instead when floating points go over limit.
+  testInputTypeLimits<int8_t, int64_t>();
+  testInputTypeLimits<int16_t, int64_t>();
+  testInputTypeLimits<int32_t, int64_t>();
+  testInputTypeLimits<int64_t, int64_t>(true);
+  // TODO: enable this test once Issue #2079 is fixed
+  // testInputTypeLimits<float, float>();
+  testInputTypeLimits<double, double>();
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
