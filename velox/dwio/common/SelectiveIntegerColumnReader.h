@@ -35,6 +35,17 @@ class SelectiveIntegerColumnReader : public SelectiveColumnReader {
             scanSpec,
             type) {}
 
+  SelectiveIntegerColumnReader(
+      std::shared_ptr<const dwio::common::TypeWithId> requestedType,
+      dwio::common::FormatParams& formatParams,
+      velox::common::ScanSpec* scanSpec,
+      const TypePtr& type)
+      : SelectiveColumnReader(
+            std::move(requestedType),
+            formatParams,
+            *scanSpec,
+            type) {}
+
   void getValues(RowSet rows, VectorPtr* result) override {
     getIntValues(rows, nodeType_->type.get(), result);
   }

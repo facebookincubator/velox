@@ -16,6 +16,7 @@ add_subdirectory(duckdb_reader)
 
 if(VELOX_ENABLE_ARROW)
   add_subdirectory(writer)
+  add_subdirectory(reader)
 endif()
 
 if(${VELOX_BUILD_TESTING})

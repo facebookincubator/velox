@@ -256,6 +256,7 @@ class ColumnSelector {
     return schema_;
   }
 
+  // TODO: move the logic TypeWithId::create() out. Parquet doesn't use it.
   const std::shared_ptr<const TypeWithId>& getSchemaWithId() const {
     if (!schemaWithId_) {
       schemaWithId_ = TypeWithId::create(schema_);

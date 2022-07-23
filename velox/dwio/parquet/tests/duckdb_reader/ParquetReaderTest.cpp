@@ -26,6 +26,7 @@
 using namespace ::testing;
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;
+
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet::duckdb_reader;
 

@@ -72,7 +72,7 @@ void CacheInputStream::BackUp(int32_t count) {
   DWIO_ENSURE_GE(count, 0, "can't backup negative distances");
 
   uint64_t unsignedCount = static_cast<uint64_t>(count);
-  DWIO_ENSURE(unsignedCount <= offsetInRun_, "Can't backup that much!");
+  VELOX_CHECK_LE(unsignedCount, position_, "Can't backup that much!");
   position_ -= unsignedCount;
 }
 
