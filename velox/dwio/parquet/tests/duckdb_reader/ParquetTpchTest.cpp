@@ -200,6 +200,10 @@ TEST_F(ParquetTpchTest, Q14) {
   assertQuery(14);
 }
 
+TEST_F(ParquetTpchTest, Q17) {
+  assertQuery(17);
+}
+
 TEST_F(ParquetTpchTest, Q18) {
   assertQuery(18);
 }

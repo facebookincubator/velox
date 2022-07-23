@@ -123,6 +123,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
       return getQ13Plan();
     case 14:
       return getQ14Plan();
+    case 17:
+      return getQ17Plan();
     case 18:
       return getQ18Plan();
     case 19:
@@ -746,6 +748,73 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[partScanNodeId] = getTableFilePaths(kPart);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ17Plan() const {
+  std::vector<std::string> lineitemColumns = {
+      "l_partkey", "l_extendedprice", "l_quantity"};
+  std::vector<std::string> partColumns = {
+      "p_partkey", "p_brand", "p_container"};
+
+  auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
+  const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
+  auto partSelectedRowType = getRowType(kPart, partColumns);
+  const auto& partFileColumns = getFileColumnNames(kPart);
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId lineitemScanNodeId;
+  core::PlanNodeId lineitemScanNodeIdSubQuery;
+  core::PlanNodeId partScanNodeId;
+
+  auto part = PlanBuilder(planNodeIdGenerator)
+                  .tableScan(
+                      kPart,
+                      partSelectedRowType,
+                      partFileColumns,
+                      {"p_brand = 'Brand#23'", "p_container = 'MED BOX'"})
+                  .capturePlanNodeId(partScanNodeId)
+                  .planNode();
+
+  auto lineitemJoinPart =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .capturePlanNodeId(lineitemScanNodeId)
+          .hashJoin(
+              {"l_partkey"},
+              {"p_partkey"},
+              part,
+              "",
+              {"l_quantity", "p_partkey", "l_extendedprice"})
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
+          .capturePlanNodeId(lineitemScanNodeIdSubQuery)
+          .partialAggregation({"l_partkey"}, {"avg(l_quantity) as avg_"})
+          .localPartition({})
+          .finalAggregation()
+          .hashJoin(
+              {"l_partkey"},
+              {"p_partkey"},
+              lineitemJoinPart,
+              "",
+              {"l_extendedprice", "l_quantity", "avg_"},
+              core::JoinType::kRight)
+          .filter("l_quantity < 0.2 * avg_")
+          .partialAggregation({}, {"sum(l_extendedprice) as partial_sum"})
+          .localPartition({})
+          .finalAggregation()
+          .project({"(partial_sum / 7.0) as avg_yearly"})
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[lineitemScanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFiles[lineitemScanNodeIdSubQuery] = getTableFilePaths(kLineitem);
   context.dataFiles[partScanNodeId] = getTableFilePaths(kPart);
   context.dataFileFormat = format_;
   return context;
