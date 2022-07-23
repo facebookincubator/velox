@@ -109,6 +109,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
   switch (queryId) {
     case 1:
       return getQ1Plan();
+    case 2:
+      return getQ2Plan();
     case 3:
       return getQ3Plan();
     case 5:
@@ -181,6 +183,244 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ2Plan() const {
+  std::vector<std::string> supplierColumnsSubQuery = {
+      "s_suppkey", "s_nationkey"};
+  std::vector<std::string> partsuppColumnsSubQuery = {
+      "ps_partkey", "ps_suppkey", "ps_supplycost"};
+  std::vector<std::string> nationColumnsSubQuery = {
+      "n_nationkey", "n_regionkey"};
+  std::vector<std::string> regionColumnsSubQuery = {"r_regionkey", "r_name"};
+  std::vector<std::string> partColumns = {
+      "p_partkey", "p_size", "p_type", "p_mfgr"};
+  std::vector<std::string> supplierColumns = {
+      "s_suppkey",
+      "s_nationkey",
+      "s_acctbal",
+      "s_name",
+      "s_address",
+      "s_phone",
+      "s_comment"};
+  std::vector<std::string> partsuppColumns = {
+      "ps_partkey", "ps_suppkey", "ps_supplycost"};
+  std::vector<std::string> nationColumns = {
+      "n_nationkey", "n_regionkey", "n_name"};
+  std::vector<std::string> regionColumns = {"r_regionkey", "r_name"};
+
+  auto supplierSelectedRowTypeSubQuery =
+      getRowType(kSupplier, supplierColumnsSubQuery);
+  const auto& supplierFileColumnsSubQuery = getFileColumnNames(kSupplier);
+  auto partsuppSelectedRowTypeSubQuery =
+      getRowType(kPartsupp, partsuppColumnsSubQuery);
+  const auto& partsuppFileColumnsSubQuery = getFileColumnNames(kPartsupp);
+  auto nationSelectedRowTypeSubQuery =
+      getRowType(kNation, nationColumnsSubQuery);
+  const auto& nationFileColumnsSubQuery = getFileColumnNames(kNation);
+  auto regionSelectedRowTypeSubQuery =
+      getRowType(kRegion, regionColumnsSubQuery);
+  const auto& regionFileColumnsSubQuery = getFileColumnNames(kRegion);
+  auto partSelectedRowType = getRowType(kPart, partColumns);
+  const auto& partFileColumns = getFileColumnNames(kPart);
+  auto supplierSelectedRowType = getRowType(kSupplier, supplierColumns);
+  const auto& supplierFileColumns = getFileColumnNames(kSupplier);
+  auto partsuppSelectedRowType = getRowType(kPartsupp, partsuppColumns);
+  const auto& partsuppFileColumns = getFileColumnNames(kPartsupp);
+  auto nationSelectedRowType = getRowType(kNation, nationColumns);
+  const auto& nationFileColumns = getFileColumnNames(kNation);
+  auto regionSelectedRowType = getRowType(kRegion, regionColumns);
+  const auto& regionFileColumns = getFileColumnNames(kRegion);
+
+  std::string regionNameFilter = "r_name = 'EUROPE'";
+  std::string partTypeFilter = "p_type like '%BRASS'";
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId supplierScanNodeIdSubQuery;
+  core::PlanNodeId partsuppScanNodeIdSubQuery;
+  core::PlanNodeId nationScanNodeIdSubQuery;
+  core::PlanNodeId regionScanNodeIdSubQuery;
+  core::PlanNodeId partScanNodeId;
+  core::PlanNodeId supplierScanNodeId;
+  core::PlanNodeId partsuppScanNodeId;
+  core::PlanNodeId nationScanNodeId;
+  core::PlanNodeId regionScanNodeId;
+
+  auto supplierSubQuery = PlanBuilder(planNodeIdGenerator)
+                              .tableScan(
+                                  kSupplier,
+                                  supplierSelectedRowTypeSubQuery,
+                                  supplierFileColumnsSubQuery)
+                              .capturePlanNodeId(supplierScanNodeIdSubQuery)
+                              .planNode();
+
+  auto nationSubQuery =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kNation, nationSelectedRowTypeSubQuery, nationFileColumnsSubQuery)
+          .capturePlanNodeId(nationScanNodeIdSubQuery)
+          .planNode();
+
+  auto regionSubQuery = PlanBuilder(planNodeIdGenerator)
+                            .tableScan(
+                                kRegion,
+                                regionSelectedRowTypeSubQuery,
+                                regionFileColumnsSubQuery,
+                                {regionNameFilter})
+                            .capturePlanNodeId(regionScanNodeIdSubQuery)
+                            .planNode();
+
+  auto subqueryPlan = PlanBuilder(planNodeIdGenerator)
+                          .tableScan(
+                              kPartsupp,
+                              partsuppSelectedRowTypeSubQuery,
+                              partsuppFileColumnsSubQuery)
+                          .capturePlanNodeId(partsuppScanNodeIdSubQuery)
+                          .hashJoin(
+                              {"ps_suppkey"},
+                              {"s_suppkey"},
+                              supplierSubQuery,
+                              "",
+                              {"s_nationkey", "ps_supplycost"})
+                          .hashJoin(
+                              {"s_nationkey"},
+                              {"n_nationkey"},
+                              nationSubQuery,
+                              "",
+                              {"n_regionkey", "ps_supplycost"})
+                          .hashJoin(
+                              {"n_regionkey"},
+                              {"r_regionkey"},
+                              regionSubQuery,
+                              "",
+                              {"ps_supplycost"})
+                          .localPartition({})
+                          .orderBy({"ps_supplycost"}, false)
+                          .limit(0, 1, false)
+                          .project({"ps_supplycost AS min_supplycost"})
+                          .planNode();
+
+  auto part =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kPart, partSelectedRowType, partFileColumns, {}, partTypeFilter)
+          .capturePlanNodeId(partScanNodeId)
+          .planNode();
+
+  auto supplier =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
+          .capturePlanNodeId(supplierScanNodeId)
+          .planNode();
+
+  auto region = PlanBuilder(planNodeIdGenerator)
+                    .tableScan(
+                        kRegion,
+                        regionSelectedRowType,
+                        regionFileColumns,
+                        {regionNameFilter})
+                    .capturePlanNodeId(regionScanNodeId)
+                    .planNode();
+
+  auto regionKeyJoinNode =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kNation, nationSelectedRowType, nationFileColumns)
+          .capturePlanNodeId(nationScanNodeId)
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              region,
+              "",
+              {"n_nationkey", "n_name"})
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
+          .capturePlanNodeId(partsuppScanNodeId)
+          .project({"ps_partkey", "ps_suppkey", "ps_supplycost"})
+          .hashJoin(
+              {"ps_suppkey"},
+              {"s_suppkey"},
+              supplier,
+              "",
+              {"s_nationkey",
+               "s_acctbal",
+               "s_name",
+               "s_address",
+               "s_phone",
+               "s_comment",
+               "ps_supplycost",
+               "ps_partkey"})
+          .hashJoin(
+              {"s_nationkey"},
+              {"n_nationkey"},
+              regionKeyJoinNode,
+              "",
+              {"s_acctbal",
+               "s_name",
+               "s_address",
+               "s_phone",
+               "s_comment",
+               "ps_supplycost",
+               "ps_partkey",
+               "n_name"})
+          .hashJoin(
+              {"ps_partkey"},
+              {"p_partkey"},
+              part,
+              "",
+              {"s_acctbal",
+               "s_name",
+               "s_address",
+               "s_phone",
+               "s_comment",
+               "ps_supplycost",
+               "ps_partkey",
+               "p_partkey",
+               "p_mfgr",
+               "n_name"})
+          .hashJoin(
+              {"ps_supplycost"},
+              {"min_supplycost"},
+              subqueryPlan,
+              "",
+              {"s_acctbal",
+               "s_name",
+               "s_address",
+               "s_phone",
+               "s_comment",
+               "ps_supplycost",
+               "ps_partkey",
+               "p_partkey",
+               "p_mfgr",
+               "n_name"})
+          .localPartition({})
+          .orderBy({"s_acctbal DESC", "n_name", "s_name", "p_partkey"}, false)
+          .project(
+              {"s_acctbal",
+               "s_name",
+               "n_name",
+               "p_partkey",
+               "p_mfgr",
+               "s_address",
+               "s_phone",
+               "s_comment"})
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[partScanNodeId] = getTableFilePaths(kPart);
+  context.dataFiles[supplierScanNodeId] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanNodeId] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanNodeId] = getTableFilePaths(kNation);
+  context.dataFiles[regionScanNodeId] = getTableFilePaths(kRegion);
+  context.dataFiles[supplierScanNodeIdSubQuery] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanNodeIdSubQuery] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanNodeIdSubQuery] = getTableFilePaths(kNation);
+  context.dataFiles[regionScanNodeIdSubQuery] = getTableFilePaths(kRegion);
   context.dataFileFormat = format_;
   return context;
 }
@@ -901,8 +1141,15 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
   return context;
 }
 
-const std::vector<std::string> TpchQueryBuilder::kTableNames_ =
-    {kLineitem, kOrders, kCustomer, kNation, kRegion, kPart, kSupplier};
+const std::vector<std::string> TpchQueryBuilder::kTableNames_ = {
+    kLineitem,
+    kOrders,
+    kCustomer,
+    kNation,
+    kRegion,
+    kPart,
+    kSupplier,
+    kPartsupp};
 
 const std::unordered_map<std::string, std::vector<std::string>>
     TpchQueryBuilder::kTables_ = {
@@ -926,6 +1173,10 @@ const std::unordered_map<std::string, std::vector<std::string>>
             tpch::getTableSchema(tpch::Table::TBL_PART)->names()),
         std::make_pair(
             "supplier",
-            tpch::getTableSchema(tpch::Table::TBL_SUPPLIER)->names())};
+            tpch::getTableSchema(tpch::Table::TBL_SUPPLIER)->names()),
+        std::make_pair(
+            "partsupp",
+            tpch::getTableSchema(tpch::Table::TBL_PARTSUPP)->names()),
+};
 
 } // namespace facebook::velox::exec::test
