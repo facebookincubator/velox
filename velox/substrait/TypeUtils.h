@@ -15,6 +15,7 @@
  */
 
 #include "velox/type/Type.h"
+#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::substrait {
 
@@ -26,5 +27,7 @@ int64_t bytesOfType(const TypePtr& type);
 
 /// Return the Velox type according to the typename.
 TypePtr toVeloxType(const std::string& typeName);
+
+exec::TypeSignature typeToTypeSignature(const TypePtr& type);
 
 } // namespace facebook::velox::substrait

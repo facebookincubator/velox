@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include <boost/algorithm/string.hpp>
+#include <algorithm>
+#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
@@ -59,6 +62,19 @@ TypePtr toVeloxType(const std::string& typeName) {
     default:
       VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }
+}
+
+exec::TypeSignature typeToTypeSignature(const TypePtr& type) {
+  std::vector<exec::TypeSignature> children;
+  if (type->size()) {
+    children.reserve(type->size());
+    for (auto i = 0; i < type->size(); i++) {
+      children.emplace_back(typeToTypeSignature(type->childAt(i)));
+    }
+  }
+  const std::string& kindName = type->kindName();
+  return exec::TypeSignature(
+      boost::algorithm::to_lower_copy(kindName), std::move(children));
 }
 
 } // namespace facebook::velox::substrait

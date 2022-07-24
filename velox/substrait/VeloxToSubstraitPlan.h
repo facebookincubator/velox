@@ -24,6 +24,7 @@
 #include "velox/type/Type.h"
 
 #include "velox/substrait/VeloxToSubstraitExpr.h"
+#include "velox/substrait/VeloxToSubstraitFunctionCollector.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
 
@@ -72,9 +73,6 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const core::AggregationNode>& aggregateNode,
       ::substrait::AggregateRel* aggregateRel);
 
-  /// Construct the function map between the Velox function name and index.
-  void constructFunctionMap();
-
   ///  Fetch all functions from Velox's registry and create Substrait extensions
   ///  for these.
   ::substrait::Plan& addExtensionFunc(google::protobuf::Arena& arena);
@@ -85,8 +83,6 @@ class VeloxToSubstraitPlanConvertor {
 
   std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
 
-  /// The map storing the relations between the function name and the function
-  /// id. Will be constructed based on the Velox representation.
-  std::unordered_map<std::string, uint64_t> functionMap_;
+  std::shared_ptr<VeloxToSubstraitFunctionCollector> functionCollector_;
 };
 } // namespace facebook::velox::substrait

@@ -15,6 +15,7 @@
  */
 
 #include "velox/substrait/VeloxToSubstraitExpr.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::substrait {
@@ -53,7 +54,7 @@ void convertVectorValue(
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const core::TypedExprPtr& expr,
-    const RowTypePtr& inputType) {
+    const RowTypePtr& inputType) const {
   ::substrait::Expression* substraitExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
   if (auto constExpr =
@@ -89,7 +90,7 @@ const ::substrait::Expression_Cast&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CastTypedExpr>& castExpr,
-    const RowTypePtr& inputType) {
+    const RowTypePtr& inputType) const {
   ::substrait::Expression_Cast* substraitCastExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Cast>(
           &arena);
@@ -109,7 +110,7 @@ const ::substrait::Expression_FieldReference&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::FieldAccessTypedExpr>& fieldExpr,
-    const RowTypePtr& inputType) {
+    const RowTypePtr& inputType) const {
   ::substrait::Expression_FieldReference* substraitFieldExpr =
       google::protobuf::Arena::CreateMessage<
           ::substrait::Expression_FieldReference>(&arena);
@@ -127,42 +128,21 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
-    const RowTypePtr& inputType) {
-  ::substrait::Expression* substraitExpr =
-      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
-
-  auto inputs = callTypeExpr->inputs();
-  auto& functionName = callTypeExpr->name();
-
-  // The processing is different for different function names.
-  // TODO add support for if Expr and switch Expr
-  if (functionName != "if" && functionName != "switch") {
-    ::substrait::Expression_ScalarFunction* scalarExpr =
-        substraitExpr->mutable_scalar_function();
-
-    // TODO need to change yaml file to register function, now is dummy.
-
-    scalarExpr->set_function_reference(functionMap_[functionName]);
-
-    for (auto& arg : inputs) {
-      scalarExpr->add_args()->MergeFrom(toSubstraitExpr(arena, arg, inputType));
+    const RowTypePtr& inputType) const {
+  for (const auto& cc : callConverters_) {
+    auto expressionOption = cc->convert(callTypeExpr, arena, inputType);
+    if (expressionOption.has_value()) {
+      return *expressionOption.value();
     }
-
-    scalarExpr->mutable_output_type()->MergeFrom(
-        typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
-
-  } else {
-    VELOX_NYI("Unsupported function name '{}'", functionName);
   }
-
-  return *substraitExpr;
+  VELOX_NYI("Unsupported function name '{}'", callTypeExpr->name());
 }
 
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::ConstantTypedExpr>& constExpr,
-    ::substrait::Expression_Literal_Struct* litValue) {
+    ::substrait::Expression_Literal_Struct* litValue) const {
   if (constExpr->hasValueVector()) {
     return toSubstraitLiteral(arena, constExpr->valueVector(), litValue);
   } else {
@@ -173,7 +153,7 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
-    const velox::variant& variantValue) {
+    const velox::variant& variantValue) const {
   ::substrait::Expression_Literal* literalExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
@@ -207,7 +187,7 @@ const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
     const velox::VectorPtr& vectorValue,
-    ::substrait::Expression_Literal_Struct* litValue) {
+    ::substrait::Expression_Literal_Struct* litValue) const {
   ::substrait::Expression_Literal* substraitField =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
@@ -225,7 +205,7 @@ VeloxToSubstraitExprConvertor::toSubstraitLiteral(
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& type) {
+    const velox::TypePtr& type) const {
   ::substrait::Expression_Literal* substraitField =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);

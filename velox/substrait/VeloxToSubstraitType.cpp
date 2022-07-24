@@ -22,7 +22,7 @@ namespace facebook::velox::substrait {
 
 const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& type) {
+    const velox::TypePtr& type) const {
   ::substrait::Type* substraitType =
       google::protobuf::Arena::CreateMessage<::substrait::Type>(&arena);
   switch (type->kind()) {
@@ -123,7 +123,7 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
 const ::substrait::NamedStruct&
 VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     google::protobuf::Arena& arena,
-    const velox::RowTypePtr& rowType) {
+    const velox::RowTypePtr& rowType) const {
   ::substrait::NamedStruct* substraitNamedStruct =
       google::protobuf::Arena::CreateMessage<::substrait::NamedStruct>(&arena);
 

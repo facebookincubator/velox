@@ -17,7 +17,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
-
+#include "velox/substrait/VeloxToSubstraitCallConverter.h"
 #include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 
@@ -28,8 +28,8 @@ class VeloxToSubstraitExprConvertor {
   /// @param functionMap: A pre-constructed map
   /// storing the relations between the function name and the function id.
   explicit VeloxToSubstraitExprConvertor(
-      const std::unordered_map<std::string, uint64_t>& functionMap)
-      : functionMap_(functionMap) {}
+      const std::vector<VeloxToSubstraitCallConverterPtr>& callConverters)
+      : callConverters_(callConverters) {}
 
   /// Convert Velox Expression to Substrait Expression.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -41,7 +41,7 @@ class VeloxToSubstraitExprConvertor {
   const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const core::TypedExprPtr& expr,
-      const RowTypePtr& inputType);
+      const RowTypePtr& inputType) const;
 
   /// Convert Velox Constant Expression to Substrait
   /// Literal Expression.
@@ -55,48 +55,49 @@ class VeloxToSubstraitExprConvertor {
   const ::substrait::Expression_Literal& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::ConstantTypedExpr>& constExpr,
-      ::substrait::Expression_Literal_Struct* litValue = nullptr);
+      ::substrait::Expression_Literal_Struct* litValue = nullptr) const;
 
   /// Convert Velox null literal to Substrait null literal.
   const ::substrait::Expression_Literal& toSubstraitNullLiteral(
       google::protobuf::Arena& arena,
-      const velox::TypePtr& type);
+      const velox::TypePtr& type) const;
 
   /// Convert Velox variant to Substrait Literal Expression.
   const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
-      const velox::variant& variantValue);
+      const velox::variant& variantValue) const;
 
  private:
   /// Convert Velox Cast Expression to Substrait Cast Expression.
   const ::substrait::Expression_Cast& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::CastTypedExpr>& castExpr,
-      const RowTypePtr& inputType);
+      const RowTypePtr& inputType) const;
 
   /// Convert Velox FieldAccessTypedExpr to Substrait FieldReference Expression.
   const ::substrait::Expression_FieldReference& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::FieldAccessTypedExpr>& fieldExpr,
-      const RowTypePtr& inputType);
+      const RowTypePtr& inputType) const;
 
   /// Convert Velox CallTypedExpr Expression to Substrait Expression.
   const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
-      const RowTypePtr& inputType);
+      const RowTypePtr& inputType) const;
 
   /// Convert Velox vector to Substrait literal.
   const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
       const velox::VectorPtr& vectorValue,
-      ::substrait::Expression_Literal_Struct* litValue);
+      ::substrait::Expression_Literal_Struct* litValue) const;
 
-  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
+  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
-  /// The map storing the relations between the function name and the function
-  /// id.
-  std::unordered_map<std::string, uint64_t> functionMap_;
+  std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
 };
+
+using VeloxToSubstraitExprConvertorPtr =
+    std::shared_ptr<VeloxToSubstraitExprConvertor>;
 
 } // namespace facebook::velox::substrait

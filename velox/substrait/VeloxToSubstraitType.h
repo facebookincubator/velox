@@ -28,12 +28,14 @@ class VeloxToSubstraitTypeConvertor {
   /// Convert Velox RowType to Substrait NamedStruct.
   const ::substrait::NamedStruct& toSubstraitNamedStruct(
       google::protobuf::Arena& arena,
-      const velox::RowTypePtr& rowType);
+      const velox::RowTypePtr& rowType) const;
 
   /// Convert Velox Type to Substrait Type.
   const ::substrait::Type& toSubstraitType(
       google::protobuf::Arena& arena,
-      const velox::TypePtr& type);
+      const velox::TypePtr& type) const;
 };
+
+using VeloxToSubstraitTypeConvertorPtr = std::shared_ptr<const VeloxToSubstraitTypeConvertor>;
 
 } // namespace facebook::velox::substrait

@@ -15,6 +15,8 @@
  */
 
 #include "velox/substrait/VeloxToSubstraitPlan.h"
+#include "velox/functions/FunctionRegistry.h"
+#include "velox/substrait/VeloxToSubstraitFunctionConverter.h"
 
 namespace facebook::velox::substrait {
 
@@ -48,12 +50,17 @@ namespace {
     const core::PlanNodePtr& plan) {
   // Assume only accepts a single plan fragment.
 
-  // Construct the function map based on the Velox plan.
-  constructFunctionMap();
+  const auto& functionSignatures = getFunctionSignatures();
+  auto scalarFunctionConverter =
+      std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
+          functionSignatures);
 
+  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
+  callConvertors.push_back(scalarFunctionConverter);
   // Construct the expression converter.
   exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(functionMap_);
+      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
+  scalarFunctionConverter->setExprConverter(exprConvertor_);
 
   // TODO add root_rel
   ::substrait::Plan* substraitPlan =
@@ -277,11 +284,8 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     }
 
     // Set substrait aggregate Function reference and output type.
-    if (functionMap_.find(funName) != functionMap_.end()) {
-      aggFunction->set_function_reference(functionMap_[funName]);
-    } else {
-      VELOX_NYI("Couldn't find the aggregate function '{}' ", funName);
-    }
+    aggFunction->set_function_reference(
+        functionCollector_->getFunctionReference(aggregatesExpr));
 
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
@@ -292,19 +296,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   // Direct output.
   aggregateRel->mutable_common()->mutable_direct();
-}
-
-void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
-  // TODO: Fetch all functions from velox's registry.
-
-  functionMap_["plus"] = 0;
-  functionMap_["multiply"] = 1;
-  functionMap_["lt"] = 2;
-  functionMap_["divide"] = 3;
-  functionMap_["count"] = 4;
-  functionMap_["sum"] = 5;
-  functionMap_["mod"] = 6;
-  functionMap_["eq"] = 7;
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
