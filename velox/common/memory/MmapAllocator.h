@@ -78,7 +78,7 @@ class MmapAllocator : public MappedMemory {
 
   void freeContiguous(ContiguousAllocation& allocation) override {
     stats_.recordFree(
-        allocation.size(), [&]() { freeContiguousImpl(allocation); });
+        allocation.byteSize(), [&]() { freeContiguousImpl(allocation); });
   }
 
   // Checks internal consistency of allocation data

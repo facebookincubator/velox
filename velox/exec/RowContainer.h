@@ -668,8 +668,7 @@ class RowContainer {
       char** rows) {
     int32_t count = 0;
     uint64_t totalBytes = 0;
-    VELOX_CHECK_EQ(rows_.numLargeAllocations(), 0);
-    auto numAllocations = rows_.numSmallAllocations();
+    auto numAllocations = rows_.numAllocations();
     if (iter->allocationIndex == 0 && iter->runIndex == 0 &&
         iter->rowOffset == 0) {
       iter->normalizedKeysLeft = numRowsWithNormalizedKey_;
