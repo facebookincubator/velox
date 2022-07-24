@@ -37,8 +37,9 @@ char* AllocationPool::allocateFixed(uint64_t bytes) {
   // Use contiguous allocations from mapped memory if allocation size is large
   if (numPages > mappedMemory_->largestSizeClass()) {
     auto largeAlloc =
-        std::make_unique<memory::MappedMemory::ContiguousAllocation>();
-    largeAlloc->reset(mappedMemory_, nullptr, 0);
+        std::make_unique<memory::MappedMemory::ContiguousAllocation>(
+            mappedMemory_);
+    largeAlloc->reset(nullptr, 0);
     if (!mappedMemory_->allocateContiguous(numPages, nullptr, *largeAlloc)) {
       throw std::bad_alloc();
     }

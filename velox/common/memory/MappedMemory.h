@@ -170,33 +170,23 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   // Represents a number of consecutive pages of kPageSize bytes.
   class PageRun {
    public:
-    static constexpr uint8_t kPointerSignificantBits = 48;
-    static constexpr uint64_t kPointerMask = 0xffffffffffff;
-    static constexpr uint32_t kMaxPagesInRun =
-        (1UL << (64U - kPointerSignificantBits)) - 1;
-
     PageRun(void* FOLLY_NONNULL address, MachinePageCount numPages) {
-      auto word = reinterpret_cast<uint64_t>(address); // NOLINT
+      data_ = reinterpret_cast<uint64_t>(address); // NOLINT
       if (!FLAGS_velox_use_malloc) {
         VELOX_CHECK(
-            (word & (kPageSize - 1)) == 0,
+            (data_ & (kPageSize - 1)) == 0,
             "Address is not page-aligned for PageRun");
       }
-      VELOX_CHECK(numPages <= kMaxPagesInRun);
-      VELOX_CHECK(
-          (word & ~kPointerMask) == 0,
-          "A pointer must have its 16 high bits 0");
-      data_ =
-          word | (static_cast<uint64_t>(numPages) << kPointerSignificantBits);
+      numPages_ = numPages;
     }
 
     template <typename T = uint8_t>
     T* FOLLY_NONNULL data() const {
-      return reinterpret_cast<T*>(data_ & kPointerMask); // NOLINT
+      return reinterpret_cast<T*>(data_); // NOLINT
     }
 
     MachinePageCount numPages() const {
-      return data_ >> kPointerSignificantBits;
+      return numPages_;
     }
 
     uint64_t numBytes() const {
@@ -205,6 +195,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
 
    private:
     uint64_t data_;
+    MachinePageCount numPages_;
   };
 
   // Represents a set of PageRuns that are allocated together.
@@ -215,8 +206,10 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
       VELOX_CHECK(mappedMemory);
     }
 
-    ~Allocation() {
-      mappedMemory_->free(*this);
+    virtual ~Allocation() {
+      if (!runs_.empty()) {
+        mappedMemory_->free(*this);
+      }
     }
 
     Allocation(const Allocation& other) = delete;
@@ -235,6 +228,10 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
       runs_ = std::move(other.runs_);
       numPages_ = other.numPages_;
       other.numPages_ = 0;
+    }
+
+    MappedMemory* FOLLY_NONNULL mappedMemory() const {
+      return mappedMemory_;
     }
 
     MachinePageCount numPages() const {
@@ -267,7 +264,7 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
         int32_t* FOLLY_NONNULL index,
         int32_t* FOLLY_NONNULL offsetInRun);
 
-   private:
+   protected:
     MappedMemory* FOLLY_NONNULL mappedMemory_;
     std::vector<PageRun> runs_;
     int32_t numPages_ = 0;
@@ -276,53 +273,46 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
   // Represents a mmap'd run of contiguous pages that do not belong to
   // any size class but are still accounted by the owning
   // MappedMemory.
-  class ContiguousAllocation {
+  class ContiguousAllocation : public Allocation {
    public:
-    ContiguousAllocation() = default;
-    ~ContiguousAllocation() {
-      if (data_ && mappedMemory_) {
+    explicit ContiguousAllocation(MappedMemory* FOLLY_NONNULL mappedMemory)
+        : Allocation(mappedMemory) {}
+    virtual ~ContiguousAllocation() {
+      if (!runs_.empty()) {
+        VELOX_CHECK_EQ(runs_.size(), 1);
         mappedMemory_->freeContiguous(*this);
       }
-      data_ = nullptr;
+      runs_.clear();
     }
 
-    ContiguousAllocation(ContiguousAllocation&& other) noexcept {
-      mappedMemory_ = other.mappedMemory_;
-      data_ = other.data_;
-      size_ = other.size_;
-      other.data_ = nullptr;
-      other.size_ = 0;
-    }
-
-    MappedMemory* FOLLY_NULLABLE mappedMemory() const {
-      return mappedMemory_;
-    }
-
-    MachinePageCount numPages() const;
+    ContiguousAllocation(ContiguousAllocation&& other) noexcept
+        : Allocation(std::move(other)) {}
 
     template <typename T = uint8_t>
     T* FOLLY_NULLABLE data() const {
-      return reinterpret_cast<T*>(data_);
+      VELOX_CHECK_LE(runs_.size(), 1);
+      if (runs_.empty()) {
+        return nullptr;
+      }
+      return runs_[0].data<T>();
     }
 
-    // size in bytes.
-    uint64_t size() const {
-      return size_;
+    void reset(void* FOLLY_NULLABLE data, uint64_t size) {
+      clear();
+      if (data != nullptr) {
+        append(
+            reinterpret_cast<uint8_t*>(data),
+            bits::roundUp(size, kPageSize) / kPageSize);
+      }
     }
 
     void reset(
-        MappedMemory* FOLLY_NULLABLE mappedMemory,
+        MappedMemory* FOLLY_NONNULL mappedMemory,
         void* FOLLY_NULLABLE data,
         uint64_t size) {
       mappedMemory_ = mappedMemory;
-      data_ = data;
-      size_ = size;
+      reset(data, size);
     }
-
-   private:
-    MappedMemory* FOLLY_NULLABLE mappedMemory_{nullptr};
-    void* FOLLY_NULLABLE data_{nullptr};
-    uint64_t size_{0};
   };
 
   // Stats on memory allocated by allocateBytes().
@@ -545,7 +535,7 @@ class ScopedMappedMemory final : public MappedMemory {
       std::function<void(int64_t)> beforeAllocCB = nullptr) override;
 
   void freeContiguous(ContiguousAllocation& allocation) override {
-    int64_t size = allocation.size();
+    int64_t size = allocation.byteSize();
     parent_->freeContiguous(allocation);
     if (tracker_) {
       tracker_->update(-size);

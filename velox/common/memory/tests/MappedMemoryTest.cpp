@@ -112,7 +112,7 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
     long sequence = sequence_.fetch_add(1);
     bool first = true;
     void** ptr = reinterpret_cast<void**>(alloc.data());
-    int numWords = alloc.size() / sizeof(void*);
+    int numWords = alloc.byteSize() / sizeof(void*);
     for (int offset = 0; offset < numWords; offset++) {
       if (first) {
         ptr[offset] = reinterpret_cast<void*>(sequence);
@@ -127,7 +127,7 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
     bool first = true;
     long sequence;
     void** ptr = reinterpret_cast<void**>(alloc.data());
-    int numWords = alloc.size() / sizeof(void*);
+    int numWords = alloc.byteSize() / sizeof(void*);
     for (int offset = 0; offset < numWords; offset++) {
       if (first) {
         sequence = reinterpret_cast<long>(ptr[offset]);
@@ -161,7 +161,7 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
         // Try large allocations after half the capacity is used.
         if (available <= kCapacity / 2 && !largeTested) {
           largeTested = true;
-          MappedMemory::ContiguousAllocation large;
+          MappedMemory::ContiguousAllocation large(instance_);
           if (!allocateContiguous(available / 2, nullptr, large)) {
             FAIL() << "Could not allocate half the available";
             return;
@@ -510,7 +510,9 @@ TEST_P(MappedMemoryTest, externalAdvise) {
   EXPECT_TRUE(instance->checkConsistency());
   EXPECT_EQ(instance->numMapped(), numAllocs * kSmallSize);
   EXPECT_EQ(instance->numAllocated(), numAllocs / 2 * kSmallSize);
-  std::vector<MappedMemory::ContiguousAllocation> large(2);
+  std::vector<MappedMemory::ContiguousAllocation> large;
+  large.emplace_back(instance);
+  large.emplace_back(instance);
   EXPECT_TRUE(instance->allocateContiguous(kLargeSize, nullptr, large[0]));
   // The same number are mapped but some got advised away to back the large
   // allocation. One kSmallSize got advised away but not fully used because
@@ -555,7 +557,7 @@ TEST_P(MappedMemoryTest, allocContiguousFail) {
   EXPECT_TRUE(instance->checkConsistency());
   EXPECT_EQ(instance->numMapped(), numAllocs * kSmallSize);
   EXPECT_EQ(instance->numAllocated(), numAllocs / 2 * kSmallSize);
-  MappedMemory::ContiguousAllocation large;
+  MappedMemory::ContiguousAllocation large(instance);
   EXPECT_TRUE(instance->allocateContiguous(
       kLargeSize / 2, nullptr, large, trackCallback));
   EXPECT_TRUE(instance->checkConsistency());
