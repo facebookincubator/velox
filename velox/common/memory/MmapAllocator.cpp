@@ -177,11 +177,11 @@ bool MmapAllocator::allocateContiguousImpl(
   }
   int64_t numLargeCollateralPages = allocation.numPages();
   if (numLargeCollateralPages) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
+    if (munmap(allocation.data(), allocation.byteSize()) < 0) {
       LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+                 << ", " << allocation.byteSize();
     }
-    allocation.reset(nullptr, nullptr, 0);
+    allocation.reset(nullptr, 0);
   }
   auto totalCollateralPages = numCollateralPages + numLargeCollateralPages;
   auto numCollateralUnmap = numLargeCollateralPages;
@@ -269,15 +269,15 @@ bool MmapAllocator::allocateContiguousImpl(
 }
 
 void MmapAllocator::freeContiguousImpl(ContiguousAllocation& allocation) {
-  if (allocation.data() && allocation.size()) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
+  if (allocation.data() && allocation.byteSize()) {
+    if (munmap(allocation.data(), allocation.byteSize()) < 0) {
       LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+                 << ", " << allocation.byteSize();
     }
     numMapped_ -= allocation.numPages();
     numExternalMapped_ -= allocation.numPages();
     numAllocated_ -= allocation.numPages();
-    allocation.reset(nullptr, nullptr, 0);
+    allocation.reset(nullptr, 0);
   }
 }
 

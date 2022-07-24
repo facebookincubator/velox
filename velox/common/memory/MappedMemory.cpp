@@ -31,13 +31,12 @@ void MappedMemory::Allocation::append(uint8_t* address, int32_t numPages) {
     return;
   }
   PageRun last = runs_.back();
-  if (address == last.data()) {
-    VELOX_CHECK(false, "Appending a duplicate address into a PageRun");
-  }
+  VELOX_CHECK_NE(
+      reinterpret_cast<uint64_t>(address),
+      reinterpret_cast<uint64_t>(last.data()),
+      "Appending a duplicate address into a PageRun");
   // Increment page count if new data starts at end of the last run
-  // and the combined page count is within limits.
-  if (address == last.data() + last.numPages() * kPageSize &&
-      last.numPages() + numPages <= PageRun::kMaxPagesInRun) {
+  if (address == last.data() + last.numPages() * kPageSize) {
     runs_.back() = PageRun(last.data(), last.numPages() + numPages);
   } else {
     runs_.emplace_back(address, numPages);
@@ -59,10 +58,6 @@ void MappedMemory::Allocation::findRun(
     skipped += size;
   }
   VELOX_CHECK(false, "Seeking to an out of range offset in Allocation");
-}
-
-MachinePageCount MappedMemory::ContiguousAllocation::numPages() const {
-  return bits::roundUp(size_, kPageSize) / kPageSize;
 }
 
 // static
@@ -144,7 +139,7 @@ class MappedMemoryImpl : public MappedMemory {
 
   void freeContiguous(ContiguousAllocation& allocation) override {
     stats_.recordFree(
-        allocation.size(), [&]() { freeContiguousImpl(allocation); });
+        allocation.byteSize(), [&]() { freeContiguousImpl(allocation); });
   }
 
   MachinePageCount numAllocated() const override {
@@ -257,11 +252,11 @@ bool MappedMemoryImpl::allocateContiguousImpl(
   }
   auto numContiguousCollateralPages = allocation.numPages();
   if (numContiguousCollateralPages) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
+    if (munmap(allocation.data(), allocation.byteSize()) < 0) {
       LOG(ERROR) << "munmap got " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+                 << ", " << allocation.byteSize();
     }
-    allocation.reset(nullptr, nullptr, 0);
+    allocation.reset(nullptr, 0);
   }
   int64_t numNeededPages =
       numPages - numCollateralPages - numContiguousCollateralPages;
@@ -321,14 +316,14 @@ int64_t MappedMemoryImpl::free(Allocation& allocation) {
 }
 
 void MappedMemoryImpl::freeContiguousImpl(ContiguousAllocation& allocation) {
-  if (allocation.data() && allocation.size()) {
-    if (munmap(allocation.data(), allocation.size()) < 0) {
+  if (allocation.data() && allocation.byteSize()) {
+    if (munmap(allocation.data(), allocation.byteSize()) < 0) {
       LOG(ERROR) << "munmap returned " << errno << "for " << allocation.data()
-                 << ", " << allocation.size();
+                 << ", " << allocation.byteSize();
     }
     numMapped_.fetch_sub(allocation.numPages());
     numAllocated_.fetch_sub(allocation.numPages());
-    allocation.reset(nullptr, nullptr, 0);
+    allocation.reset(nullptr, 0);
   }
 }
 
@@ -413,11 +408,11 @@ MappedMemory::allocateBytes(uint64_t bytes, uint64_t maxMallocSize) {
     }
     return nullptr;
   }
-  ContiguousAllocation allocation;
+  ContiguousAllocation allocation(this);
   auto numPages = bits::roundUp(bytes, kPageSize) / kPageSize;
   if (allocateContiguous(numPages, nullptr, allocation)) {
     char* data = allocation.data<char>();
-    allocation.reset(nullptr, nullptr, 0);
+    allocation.reset(nullptr, 0);
     totalLargeAllocateBytes_ += numPages * kPageSize;
     return data;
   }
@@ -438,8 +433,8 @@ void MappedMemory::freeBytes(
     free(allocation);
     totalSizeClassAllocateBytes_ -= numPages * kPageSize;
   } else {
-    ContiguousAllocation allocation;
-    allocation.reset(this, p, bytes);
+    ContiguousAllocation allocation(this);
+    allocation.reset(p, bytes);
     freeContiguous(allocation);
     totalLargeAllocateBytes_ -= bits::roundUp(bytes, kPageSize);
   }
@@ -485,7 +480,7 @@ bool ScopedMappedMemory::allocateContiguous(
         }
       });
   if (success) {
-    allocation.reset(this, allocation.data(), allocation.size());
+    allocation.reset(this, allocation.data(), allocation.byteSize());
   }
   return success;
 }
