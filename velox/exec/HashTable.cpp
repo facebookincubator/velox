@@ -43,7 +43,8 @@ HashTable<ignoreNullKeys>::HashTable(
     memory::MappedMemory* mappedMemory)
     : BaseHashTable(std::move(hashers)),
       aggregates_(aggregates),
-      isJoinBuild_(isJoinBuild) {
+      isJoinBuild_(isJoinBuild),
+      tableAllocation_(mappedMemory) {
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -1015,10 +1016,10 @@ template <bool ignoreNullKeys>
 std::string HashTable<ignoreNullKeys>::toString() {
   std::stringstream out;
   int32_t occupied = 0;
-  if (table_ && tableAllocation_.data() && tableAllocation_.size()) {
+  if (table_ && tableAllocation_.data() && tableAllocation_.byteSize()) {
     // 'size_' and 'table_' may not be set if initializing.
     uint64_t size =
-        std::min<uint64_t>(tableAllocation_.size() / sizeof(char*), size_);
+        std::min<uint64_t>(tableAllocation_.byteSize() / sizeof(char*), size_);
     for (int32_t i = 0; i < size; ++i) {
       occupied += table_[i] != nullptr;
     }

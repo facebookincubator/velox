@@ -43,7 +43,7 @@ struct Block {
   size_t size = 0;
   char* data = nullptr;
   std::shared_ptr<MappedMemory::Allocation> allocation;
-  MmapAllocator::ContiguousAllocation contiguous;
+  std::shared_ptr<MmapAllocator::ContiguousAllocation> contiguous;
 };
 
 class FragmentationTest {
@@ -101,13 +101,15 @@ class FragmentationTest {
           }
         }
       } else {
+        block->contiguous =
+            std::make_shared<MappedMemory::ContiguousAllocation>(memory_.get());
         if (!memory_->allocateContiguous(
-                size / 4096, nullptr, block->contiguous)) {
+                size / 4096, nullptr, *block->contiguous)) {
           VELOX_FAIL();
         }
-        for (auto offset = 0; offset < block->contiguous.numPages() * 4096;
+        for (auto offset = 0; offset < block->contiguous->numPages() * 4096;
              offset += 4096) {
-          block->contiguous.data()[offset] = 1;
+          block->contiguous->data()[offset] = 1;
         }
       }
     } else {
