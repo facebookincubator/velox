@@ -89,3 +89,24 @@ TEST(Variant, opaque) {
     EXPECT_NE(v1, vint);
   }
 }
+
+TEST(Variant, decimal) {
+  {
+    auto shortDecimalType = DECIMAL(10, 4);
+    variant v = variant::shortDecimal(100, shortDecimalType);
+    EXPECT_TRUE(v.isSet());
+    EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
+    EXPECT_EQ(100, v.value<TypeKind::SHORT_DECIMAL>().value.unscaledValue());
+    EXPECT_EQ(*v.inferType(), *shortDecimalType);
+    EXPECT_EQ(v.toJson(), "0.0100");
+  }
+  {
+    auto longDecimalType = DECIMAL(20, 4);
+    variant v = variant::longDecimal(10000, longDecimalType);
+    EXPECT_TRUE(v.isSet());
+    EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
+    EXPECT_EQ(10000, v.value<TypeKind::LONG_DECIMAL>().value.unscaledValue());
+    EXPECT_EQ(*v.inferType(), *longDecimalType);
+    EXPECT_EQ(v.toJson(), "1.0000");
+  }
+}
