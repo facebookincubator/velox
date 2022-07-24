@@ -22,34 +22,16 @@ namespace facebook::velox {
 
 void AllocationPool::clear() {
   // Trigger Allocation's destructor to free allocated memory
-  auto copy = std::move(allocation_);
+  if (allocation_ != nullptr) {
+    auto copy = std::move(allocation_);
+  }
   allocations_.clear();
-  auto copyLarge = std::move(largeAllocations_);
-  largeAllocations_.clear();
 }
 
 char* AllocationPool::allocateFixed(uint64_t bytes) {
   VELOX_CHECK_GT(bytes, 0, "Cannot allocate zero bytes");
-
   auto numPages = bits::roundUp(bytes, memory::MappedMemory::kPageSize) /
       memory::MappedMemory::kPageSize;
-
-  // Use contiguous allocations from mapped memory if allocation size is large
-  if (numPages > mappedMemory_->largestSizeClass()) {
-    auto largeAlloc =
-        std::make_unique<memory::MappedMemory::ContiguousAllocation>(
-            mappedMemory_);
-    largeAlloc->reset(nullptr, 0);
-    if (!mappedMemory_->allocateContiguous(numPages, nullptr, *largeAlloc)) {
-      throw std::bad_alloc();
-    }
-    largeAllocations_.emplace_back(std::move(largeAlloc));
-    auto res = largeAllocations_.back()->data<char>();
-    VELOX_CHECK_NOT_NULL(
-        res, "Unexpected nullptr for large contiguous allocation");
-    return res;
-  }
-
   if (availableInRun() < bytes) {
     newRunImpl(numPages);
   }
@@ -62,18 +44,36 @@ char* AllocationPool::allocateFixed(uint64_t bytes) {
 
 void AllocationPool::newRunImpl(memory::MachinePageCount numPages) {
   ++currentRun_;
-  if (currentRun_ >= allocation_.numRuns()) {
-    if (allocation_.numRuns()) {
-      allocations_.push_back(std::make_unique<memory::MappedMemory::Allocation>(
-          std::move(allocation_)));
+  // If we don't have another run in the current allocation or we have but the
+  // run's size is not enough, we do a new allocation
+  if (allocation_ == nullptr || currentRun_ >= allocation_->numRuns() ||
+      currentRun().numPages() < numPages) {
+    if (allocation_ != nullptr) {
+      VELOX_CHECK_GE(allocation_->numRuns(), 1);
+      allocations_.push_back(std::move(allocation_));
     }
-    if (!mappedMemory_->allocate(
-            std::max<int32_t>(kMinPages, numPages),
-            owner_,
-            allocation_,
-            nullptr,
-            numPages)) {
-      throw std::bad_alloc();
+
+    // Use contiguous allocations from mapped memory if allocation size is large
+    if (numPages > mappedMemory_->largestSizeClass()) {
+      auto largeAlloc =
+          std::make_unique<memory::MappedMemory::ContiguousAllocation>(
+              mappedMemory_);
+      largeAlloc->reset(nullptr, 0);
+      if (!mappedMemory_->allocateContiguous(numPages, nullptr, *largeAlloc)) {
+        throw std::bad_alloc();
+      }
+      allocation_ = std::move(largeAlloc);
+    } else {
+      allocation_ =
+          std::make_unique<memory::MappedMemory::Allocation>(mappedMemory_);
+      if (!mappedMemory_->allocate(
+              std::max<int32_t>(kMinPages, numPages),
+              owner_,
+              *allocation_,
+              nullptr,
+              numPages)) {
+        throw std::bad_alloc();
+      }
     }
     currentRun_ = 0;
   }

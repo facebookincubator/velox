@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <velox/common/base/Exceptions.h>
 #include "velox/common/memory/MappedMemory.h"
 
 namespace facebook::velox {
@@ -33,7 +34,7 @@ class AllocationPool {
   explicit AllocationPool(
       memory::MappedMemory* mappedMemory,
       int32_t owner = kHashTableOwner)
-      : mappedMemory_(mappedMemory), allocation_(mappedMemory), owner_(owner) {}
+      : mappedMemory_(mappedMemory), owner_(owner) {}
 
   ~AllocationPool() = default;
 
@@ -45,26 +46,13 @@ class AllocationPool {
   // is at least one machine page. Throws std::bad_alloc if no space.
   void newRun(int32_t preferredSize);
 
-  int32_t numTotalAllocations() const {
-    return numSmallAllocations() + numLargeAllocations();
-  }
-
-  int32_t numSmallAllocations() const {
-    return 1 + allocations_.size();
-  }
-
-  int32_t numLargeAllocations() const {
-    return largeAllocations_.size();
+  int32_t numAllocations() const {
+    return (allocation_ == nullptr ? 0 : 1) + allocations_.size();
   }
 
   const memory::MappedMemory::Allocation* allocationAt(int32_t index) const {
-    return index == allocations_.size() ? &allocation_
+    return index == allocations_.size() ? allocation_.get()
                                         : allocations_[index].get();
-  }
-
-  const memory::MappedMemory::ContiguousAllocation* largeAllocationAt(
-      int32_t index) const {
-    return largeAllocations_[index].get();
   }
 
   int32_t currentRunIndex() const {
@@ -76,19 +64,19 @@ class AllocationPool {
   }
 
   int64_t allocatedBytes() const {
-    int32_t totalPages = allocation_.numPages();
+    int32_t totalPages = 0;
+    if (allocation_ != nullptr) {
+      totalPages += allocation_->numPages();
+    }
     for (auto& allocation : allocations_) {
       totalPages += allocation->numPages();
-    }
-    for (auto& largeAllocation : largeAllocations_) {
-      totalPages += largeAllocation->numPages();
     }
     return totalPages * memory::MappedMemory::kPageSize;
   }
 
   // Returns number of bytes left at the end of the current run.
   int32_t availableInRun() const {
-    if (!allocation_.numRuns()) {
+    if (allocation_ == nullptr || allocation_->numRuns() == 0) {
       return 0;
     }
     return currentRun().numBytes() - currentOffset_;
@@ -116,16 +104,15 @@ class AllocationPool {
 
  private:
   memory::MappedMemory::PageRun currentRun() const {
-    return allocation_.runAt(currentRun_);
+    VELOX_CHECK_NOT_NULL(allocation_);
+    return allocation_->runAt(currentRun_);
   }
 
   void newRunImpl(memory::MachinePageCount numPages);
 
   memory::MappedMemory* mappedMemory_;
   std::vector<std::unique_ptr<memory::MappedMemory::Allocation>> allocations_;
-  std::vector<std::unique_ptr<memory::MappedMemory::ContiguousAllocation>>
-      largeAllocations_;
-  memory::MappedMemory::Allocation allocation_;
+  std::unique_ptr<memory::MappedMemory::Allocation> allocation_;
   int32_t currentRun_ = 0;
   int32_t currentOffset_ = 0;
   const int32_t owner_;

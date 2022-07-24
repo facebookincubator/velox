@@ -279,39 +279,65 @@ class MappedMemoryTest : public testing::TestWithParam<bool> {
 
 TEST_P(MappedMemoryTest, allocationPoolTest) {
   const size_t kNumLargeAllocPages = instance_->largestSizeClass() * 2;
+  const size_t kMinAllocBytes =
+      AllocationPool::kMinPages * MappedMemory::kPageSize;
   AllocationPool pool(instance_);
+  uint64_t allocatedBytes = 0;
 
   pool.allocateFixed(10);
-  EXPECT_EQ(pool.numTotalAllocations(), 1);
+  allocatedBytes += kMinAllocBytes;
+  EXPECT_EQ(pool.numAllocations(), 1);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 10);
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), kMinAllocBytes - 10);
 
   pool.allocateFixed(kNumLargeAllocPages * MappedMemory::kPageSize);
-  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  allocatedBytes += kNumLargeAllocPages * MappedMemory::kPageSize;
+  EXPECT_EQ(pool.numAllocations(), 2);
   EXPECT_EQ(pool.currentRunIndex(), 0);
-  EXPECT_EQ(pool.currentOffset(), 10);
+  EXPECT_EQ(
+      pool.currentOffset(), kNumLargeAllocPages * MappedMemory::kPageSize);
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), 0);
 
   pool.allocateFixed(20);
-  EXPECT_EQ(pool.numTotalAllocations(), 2);
+  allocatedBytes += kMinAllocBytes;
+  EXPECT_EQ(pool.numAllocations(), 3);
   EXPECT_EQ(pool.currentRunIndex(), 0);
-  EXPECT_EQ(pool.currentOffset(), 30);
+  EXPECT_EQ(pool.currentOffset(), 20);
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), kMinAllocBytes - 20);
 
   // Leaving 10 bytes room
-  pool.allocateFixed(128 * 4096 - 10);
-  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  pool.allocateFixed(128 * MappedMemory::kPageSize - 10);
+  allocatedBytes += 128 * MappedMemory::kPageSize;
+  EXPECT_EQ(pool.numAllocations(), 4);
   EXPECT_EQ(pool.currentRunIndex(), 0);
-  EXPECT_EQ(pool.currentOffset(), 524278);
+  EXPECT_EQ(pool.currentOffset(), 128 * MappedMemory::kPageSize - 10);
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), 10);
 
   pool.allocateFixed(5);
-  EXPECT_EQ(pool.numTotalAllocations(), 3);
+  EXPECT_EQ(pool.numAllocations(), 4);
   EXPECT_EQ(pool.currentRunIndex(), 0);
-  EXPECT_EQ(pool.currentOffset(), (524278 + 5));
+  EXPECT_EQ(pool.currentOffset(), (128 * MappedMemory::kPageSize - 5));
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), 5);
 
   pool.allocateFixed(100);
-  EXPECT_EQ(pool.numTotalAllocations(), 4);
+  allocatedBytes += kMinAllocBytes;
+  EXPECT_EQ(pool.numAllocations(), 5);
   EXPECT_EQ(pool.currentRunIndex(), 0);
   EXPECT_EQ(pool.currentOffset(), 100);
+  EXPECT_EQ(pool.allocatedBytes(), allocatedBytes);
+  EXPECT_EQ(pool.availableInRun(), kMinAllocBytes - 100);
+
   pool.clear();
+
+  EXPECT_EQ(pool.numAllocations(), 0);
+  EXPECT_EQ(pool.allocatedBytes(), 0);
+  EXPECT_EQ(pool.availableInRun(), 0);
 }
 
 TEST_P(MappedMemoryTest, allocationTest) {
