@@ -1943,6 +1943,12 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
     std::function<void(IndexBuilder&)> onRecordPosition) {
   const auto flatMapEnabled = context.getConfig(Config::FLATTEN_MAP);
   const auto& flatMapCols = context.getConfig(Config::MAP_FLAT_COLS);
+  const bool flatMapStructCols = context.getConfig(Config::MAP_FLAT_STRUCT_COLS)
+                                     .find(std::to_string(type.column)) !=
+      context.getConfig(Config::MAP_FLAT_STRUCT_COLS).items().end();
+
+  // folly::convertTo<std::map<std::string,
+  // std::vector<>>(context.getConfig(Config::MAP_FLAT_STRUCT_COLS));
 
   // When flat map is enabled, all columns provided in the MAP_FLAT_COLS config,
   // must be of MAP type. We only check top level columns (columns which are
@@ -1957,6 +1963,17 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
         type.column,
         mapTypeKindToName(type.type->kind())));
   }
+  // if (flatMapEnabled) {
+  //   for (auto const& [col, keys]] : flatMapStructCols) {
+  //     if (flatMapCols.find(std::stoul(col)) == flatMapCols.end()) {
+  //       // trying to input struct encoding for non-flatmap writing
+  //       DWIO_RAISE(fmt::format(
+  //           "MAP_FLAT_STRUCT_COLS contains column {}, but it is not in "
+  //           "MAP_FLAT_COLS. Struct input must be written as Flatmap",
+  //           std::stoul(col)));
+  //     }
+  //   }
+  // }
 
   switch (type.type->kind()) {
     case TypeKind::BOOLEAN:
@@ -2008,8 +2025,16 @@ std::unique_ptr<BaseColumnWriter> BaseColumnWriter::create(
           std::find(flatMapCols.begin(), flatMapCols.end(), type.column) !=
               flatMapCols.end()) {
         DWIO_ENSURE(!onRecordPosition, "unexpected flat map nesting");
-        return FlatMapColumnWriter<TypeKind::INVALID>::create(
-            context, type, sequence);
+        if (flatMapStructCols) {
+          return FlatMapColumnWriter<TypeKind::INVALID>::create(
+              context, type, sequence);
+          // return
+          // FlatMapStructEncodingColumnWriter<TypeKind::INVALID>::create(
+          //   context, type, sequence);
+        } else {
+          return FlatMapColumnWriter<TypeKind::INVALID>::create(
+              context, type, sequence);
+        }
       }
       auto ret = std::make_unique<MapColumnWriter>(
           context, type, sequence, onRecordPosition);
