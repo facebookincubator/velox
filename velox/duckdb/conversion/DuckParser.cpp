@@ -17,9 +17,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/duckdb/conversion/DuckConversion.h"
-#include "velox/expression/CastExpr.h"
 #include "velox/external/duckdb/duckdb.hpp"
 #include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::duckdb {
@@ -45,7 +45,9 @@ using ::duckdb::Value;
 
 namespace {
 
-std::shared_ptr<const core::IExpr> parseExpr(ParsedExpression& expr);
+std::shared_ptr<const core::IExpr> parseExpr(
+    ParsedExpression& expr,
+    const parse::ParseOptions* options = nullptr);
 
 std::string normalizeFuncName(std::string input) {
   static std::map<std::string, std::string> kLookup{
@@ -118,7 +120,9 @@ std::shared_ptr<const core::CallExpr> callExpr(
 }
 
 // Parse a constant (1, 99.8, "string", etc).
-std::shared_ptr<const core::IExpr> parseConstantExpr(ParsedExpression& expr) {
+std::shared_ptr<const core::IExpr> parseConstantExpr(
+    ParsedExpression& expr,
+    const parse::ParseOptions* options) {
   auto& constantExpr = dynamic_cast<ConstantExpression&>(expr);
   auto& value = constantExpr.value;
 
@@ -129,7 +133,8 @@ std::shared_ptr<const core::IExpr> parseConstantExpr(ParsedExpression& expr) {
     value = Value::BIGINT(value.GetValue<int32_t>());
   }
   return std::make_shared<const core::ConstantExpr>(
-      duckValueToVariant(constantExpr.value), getAlias(expr));
+      duckValueToVariant(constantExpr.value, options->handleDecimalAsDouble),
+      getAlias(expr));
 }
 
 // Parse a column reference (col1, "col2", tbl.col, etc).
@@ -366,10 +371,12 @@ std::shared_ptr<const core::IExpr> parseCastExpr(ParsedExpression& expr) {
       targetType, params[0], nullOnFailure, getAlias(expr));
 }
 
-std::shared_ptr<const core::IExpr> parseExpr(ParsedExpression& expr) {
+std::shared_ptr<const core::IExpr> parseExpr(
+    ParsedExpression& expr,
+    const parse::ParseOptions* options) {
   switch (expr.GetExpressionClass()) {
     case ExpressionClass::CONSTANT:
-      return parseConstantExpr(expr);
+      return parseConstantExpr(expr, options);
 
     case ExpressionClass::COLUMN_REF:
       return parseColumnRefExpr(expr);
@@ -415,7 +422,9 @@ std::vector<std::unique_ptr<::duckdb::ParsedExpression>> parseExpression(
 }
 } // namespace
 
-std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
+std::shared_ptr<const core::IExpr> parseExpr(
+    const std::string& exprString,
+    const parse::ParseOptions* options) {
   auto parsedExpressions = parseExpression(exprString);
   if (parsedExpressions.size() != 1) {
     throw std::invalid_argument(folly::sformat(
@@ -423,7 +432,7 @@ std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
         parsedExpressions.size()));
   }
 
-  return parseExpr(*parsedExpressions.front());
+  return parseExpr(*parsedExpressions.front(), options);
 }
 
 namespace {

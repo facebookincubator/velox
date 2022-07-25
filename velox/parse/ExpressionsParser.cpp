@@ -20,8 +20,10 @@ namespace facebook {
 namespace velox {
 namespace parse {
 
-std::shared_ptr<const core::IExpr> parseExpr(const std::string& strExpr) {
-  return facebook::velox::duckdb::parseExpr(strExpr);
+std::shared_ptr<const core::IExpr> parseExpr(
+    const std::string& strExpr,
+    const ParseOptions& options) {
+  return facebook::velox::duckdb::parseExpr(strExpr, &options);
 }
 
 } // namespace parse

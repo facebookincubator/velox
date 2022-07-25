@@ -23,7 +23,15 @@ namespace facebook {
 namespace velox {
 namespace parse {
 
-std::shared_ptr<const core::IExpr> parseExpr(const std::string& expr);
+/// Hold parsing options.
+struct ParseOptions {
+  // Retain legacy behavior by default.
+  bool handleDecimalAsDouble = true;
+};
+
+std::shared_ptr<const core::IExpr> parseExpr(
+    const std::string& expr,
+    const ParseOptions& options = {});
 
 } // namespace parse
 } // namespace velox
