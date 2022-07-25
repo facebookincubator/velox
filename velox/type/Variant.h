@@ -120,26 +120,34 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
 /// value to store the unscaled value, precision, scale, and null information.
 template <typename T>
 struct DecimalCapsule {
-  T value;
+  std::optional<T> unscaledValue;
   int precision;
   int scale;
-  bool isNull = false;
+
+  T value() const {
+    return unscaledValue.value();
+  }
+
+  bool has_value() const {
+    return unscaledValue.has_value();
+  }
 
   bool operator==(const DecimalCapsule& other) const {
-    VELOX_CHECK(!(isNull || other.isNull));
-    return value == other.value && precision == other.precision &&
+    VELOX_CHECK(has_value() && other.has_value());
+    return value() == other.value() && precision == other.precision &&
         scale == other.scale;
   }
 
   bool operator<(const DecimalCapsule& other) const {
-    VELOX_CHECK(!(isNull || other.isNull));
+    VELOX_CHECK(has_value() && other.has_value());
     auto lhsIntegral =
-        (value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
+        (value().unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
     auto rhsIntegral =
-        (other.value.unscaledValue() / DecimalUtil::kPowersOfTen[other.scale]);
+        (other.value().unscaledValue() /
+         DecimalUtil::kPowersOfTen[other.scale]);
     if (lhsIntegral == rhsIntegral) {
-      return (value.unscaledValue() % DecimalUtil::kPowersOfTen[scale]) <
-          (other.value.unscaledValue() %
+      return (value().unscaledValue() % DecimalUtil::kPowersOfTen[scale]) <
+          (other.value().unscaledValue() %
            DecimalUtil::kPowersOfTen[other.scale]);
     }
     return lhsIntegral < rhsIntegral;
@@ -243,7 +251,7 @@ class variant {
 
   [[noreturn]] void throwCheckIsKindError(TypeKind kind) const;
 
-  [[noreturn]] void throwCheckNotNullError() const;
+  [[noreturn]] void throwCheckPtrError() const;
 
  public:
   struct Hasher {
@@ -358,10 +366,9 @@ class variant {
     return {
         TypeKind::SHORT_DECIMAL,
         new detail::ShortDecimalCapsule{
-            ShortDecimal(input.value_or(0)),
+            std::optional<ShortDecimal>(input),
             decimalType.precision(),
-            decimalType.scale(),
-            !input.has_value()}};
+            decimalType.scale()}};
   }
 
   static variant longDecimal(
@@ -372,10 +379,9 @@ class variant {
     return {
         TypeKind::LONG_DECIMAL,
         new detail::LongDecimalCapsule{
-            LongDecimal(input.value_or(0)),
+            std::optional<LongDecimal>(input),
             decimalType.precision(),
-            decimalType.scale(),
-            !input.has_value()}};
+            decimalType.scale()}};
   }
 
   static variant array(const std::vector<variant>& inputs) {
@@ -510,10 +516,10 @@ class variant {
     return !isNull();
   }
 
-  void checkNotNull() const {
-    if (isNull()) {
+  void checkPtr() const {
+    if (ptr_ == nullptr) {
       // Error path outlined to encourage inlining of the branch.
-      throwCheckNotNullError();
+      throwCheckPtrError();
     }
   }
 
@@ -531,7 +537,8 @@ class variant {
   template <TypeKind KIND>
   const auto& value() const {
     checkIsKind(KIND);
-    checkNotNull();
+    checkPtr();
+
     return *static_cast<
         const typename detail::VariantTypeTraits<KIND>::stored_type*>(ptr_);
   }
@@ -543,9 +550,9 @@ class variant {
 
   bool isNull() const {
     if (kind_ == TypeKind::SHORT_DECIMAL) {
-      return value<TypeKind::SHORT_DECIMAL>().isNull;
+      return !value<TypeKind::SHORT_DECIMAL>().has_value();
     } else if (kind_ == TypeKind::LONG_DECIMAL) {
-      return value<TypeKind::LONG_DECIMAL>().isNull;
+      return !value<TypeKind::LONG_DECIMAL>().has_value();
     }
     return ptr_ == nullptr;
   }

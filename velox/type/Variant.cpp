@@ -191,8 +191,8 @@ void variant::throwCheckIsKindError(TypeKind kind) const {
       mapTypeKindToName(kind))};
 }
 
-void variant::throwCheckNotNullError() const {
-  throw std::invalid_argument{"it's null!"};
+void variant::throwCheckPtrError() const {
+  throw std::invalid_argument{"missing variant value"};
 }
 
 std::string variant::toJson() const {
@@ -312,11 +312,11 @@ std::string variant::toJson() const {
     }
     case TypeKind::SHORT_DECIMAL: {
       return DecimalUtil::toString(
-          value<TypeKind::SHORT_DECIMAL>().value, inferType());
+          value<TypeKind::SHORT_DECIMAL>().value(), inferType());
     }
     case TypeKind::LONG_DECIMAL: {
       return DecimalUtil::toString(
-          value<TypeKind::LONG_DECIMAL>().value, inferType());
+          value<TypeKind::LONG_DECIMAL>().value(), inferType());
     }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:

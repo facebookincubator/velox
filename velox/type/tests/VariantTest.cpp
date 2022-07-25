@@ -95,7 +95,7 @@ TEST(Variant, shortDecimal) {
   variant v = variant::shortDecimal(1234, shortDecimalType);
   EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
-  EXPECT_EQ(1234, v.value<TypeKind::SHORT_DECIMAL>().value.unscaledValue());
+  EXPECT_EQ(1234, v.value<TypeKind::SHORT_DECIMAL>().value().unscaledValue());
   EXPECT_EQ(10, v.value<TypeKind::SHORT_DECIMAL>().precision);
   EXPECT_EQ(3, v.value<TypeKind::SHORT_DECIMAL>().scale);
   EXPECT_EQ(*v.inferType(), *shortDecimalType);
@@ -122,7 +122,7 @@ TEST(Variant, longDecimal) {
   variant v = variant::longDecimal(12345, longDecimalType);
   EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
-  EXPECT_EQ(12345, v.value<TypeKind::LONG_DECIMAL>().value.unscaledValue());
+  EXPECT_EQ(12345, v.value<TypeKind::LONG_DECIMAL>().value().unscaledValue());
   EXPECT_EQ(20, v.value<TypeKind::LONG_DECIMAL>().precision);
   EXPECT_EQ(3, v.value<TypeKind::LONG_DECIMAL>().scale);
   EXPECT_EQ(*v.inferType(), *longDecimalType);
