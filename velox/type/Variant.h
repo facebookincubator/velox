@@ -506,16 +506,12 @@ class variant {
 
   static variant create(const folly::dynamic&);
 
-  bool isSet() const {
-    return ptr_ != nullptr;
-  }
-
   bool hasValue() const {
-    return ptr_ != nullptr;
+    return !isNull();
   }
 
   void checkNotNull() const {
-    if (ptr_ == nullptr) {
+    if (isNull()) {
       // Error path outlined to encourage inlining of the branch.
       throwCheckNotNullError();
     }

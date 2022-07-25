@@ -60,7 +60,7 @@ TEST(Variant, opaque) {
   auto bar = std::make_shared<Bar>();
   {
     variant v = variant::opaque(foo);
-    EXPECT_TRUE(v.isSet());
+    EXPECT_TRUE(v.hasValue());
     EXPECT_EQ(TypeKind::OPAQUE, v.kind());
     EXPECT_EQ(foo, v.opaque<Foo>());
     EXPECT_THROW(v.opaque<Bar>(), std::exception);
@@ -93,7 +93,7 @@ TEST(Variant, opaque) {
 TEST(Variant, shortDecimal) {
   auto shortDecimalType = DECIMAL(10, 3);
   variant v = variant::shortDecimal(1234, shortDecimalType);
-  EXPECT_TRUE(v.isSet());
+  EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
   EXPECT_EQ(1234, v.value<TypeKind::SHORT_DECIMAL>().value.unscaledValue());
   EXPECT_EQ(10, v.value<TypeKind::SHORT_DECIMAL>().precision);
@@ -120,7 +120,7 @@ TEST(Variant, shortDecimal) {
 TEST(Variant, longDecimal) {
   auto longDecimalType = DECIMAL(20, 3);
   variant v = variant::longDecimal(12345, longDecimalType);
-  EXPECT_TRUE(v.isSet());
+  EXPECT_TRUE(v.hasValue());
   EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
   EXPECT_EQ(12345, v.value<TypeKind::LONG_DECIMAL>().value.unscaledValue());
   EXPECT_EQ(20, v.value<TypeKind::LONG_DECIMAL>().precision);
