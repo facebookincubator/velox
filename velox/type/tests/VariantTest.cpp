@@ -131,8 +131,8 @@ TEST(Variant, longDecimal) {
   EXPECT_TRUE(
       u1.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
   // 12.3456
-  variant u2 = variant::longDecimal(123456, DECIMAL(20, 3));
-  // 12.456 > 12.345
+  variant u2 = variant::longDecimal(123456, DECIMAL(20, 4));
+  // 12.3456 > 12.345
   EXPECT_FALSE(
       u2.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
   variant null = variant::longDecimal(std::nullopt, DECIMAL(20, 5));
