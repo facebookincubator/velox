@@ -117,7 +117,7 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
 
 /// Variants contain a TypeKind and a value.
 /// DECIMAL type variants use TypeKind to store the kind, and this struct as the
-/// value to store the precision, scale, and the unscaled value.
+/// value to store the unscaled value, precision, scale, and null information.
 template <typename T>
 struct DecimalCapsule {
   T value;
@@ -126,11 +126,13 @@ struct DecimalCapsule {
   bool isNull = false;
 
   bool operator==(const DecimalCapsule& other) const {
+    VELOX_CHECK(!(isNull || other.isNull));
     return value == other.value && precision == other.precision &&
         scale == other.scale;
   }
 
   bool operator<(const DecimalCapsule& other) const {
+    VELOX_CHECK(!(isNull || other.isNull));
     auto lhsIntegral =
         (value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
     auto rhsIntegral =
