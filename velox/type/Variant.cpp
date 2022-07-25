@@ -310,8 +310,14 @@ std::string variant::toJson() const {
       // debugging only. Variant::serialize should actually serialize the data.
       return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
     }
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
+    case TypeKind::SHORT_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::SHORT_DECIMAL>().value, inferType());
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::LONG_DECIMAL>().value, inferType());
+    }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
     case TypeKind::INVALID:
