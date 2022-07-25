@@ -117,7 +117,7 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
 
 /// Variants contain a TypeKind and a value.
 /// DECIMAL type variants use TypeKind to store the kind, and this struct as the
-/// value to store the unscaled value, precision, scale, and null information.
+/// value to store the optional unscaled value, precision, scale.
 template <typename T>
 struct DecimalCapsule {
   std::optional<T> unscaledValue;
