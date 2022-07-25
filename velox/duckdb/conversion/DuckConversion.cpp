@@ -119,7 +119,7 @@ TypePtr toVeloxType(LogicalType type) {
   }
 }
 
-variant duckValueToVariant(const Value& val) {
+variant duckValueToVariant(const Value& val, bool handleDecimalAsDouble) {
   switch (val.type().id()) {
     case LogicalTypeId::SQLNULL:
       return variant(TypeKind::UNKNOWN);
@@ -138,7 +138,41 @@ variant duckValueToVariant(const Value& val) {
     case LogicalTypeId::DOUBLE:
       return variant(val.GetValue<double>());
     case LogicalTypeId::DECIMAL:
-      return variant(val.GetValue<double>());
+      if (handleDecimalAsDouble) {
+        return variant(val.GetValue<double>());
+      } else {
+        uint8_t precision;
+        uint8_t scale;
+        int64_t unscaledValue;
+        val.type().GetDecimalProperties(precision, scale);
+        switch (val.type().InternalType()) {
+          case ::duckdb::PhysicalType::INT128: {
+            auto unscaledValue = val.GetValueUnsafe<::duckdb::hugeint_t>();
+            return variant::longDecimal(
+                buildInt128(unscaledValue.upper, unscaledValue.lower),
+                DECIMAL(precision, scale));
+          }
+          case ::duckdb::PhysicalType::INT8: {
+            unscaledValue = val.GetValueUnsafe<int8_t>();
+            break;
+          }
+          case ::duckdb::PhysicalType::INT16: {
+            unscaledValue = val.GetValueUnsafe<int16_t>();
+            break;
+          }
+          case ::duckdb::PhysicalType::INT32: {
+            unscaledValue = val.GetValueUnsafe<int32_t>();
+            break;
+          }
+          case ::duckdb::PhysicalType::INT64: {
+            unscaledValue = val.GetValueUnsafe<int64_t>();
+            break;
+          }
+          default:
+            VELOX_UNSUPPORTED();
+        }
+        return variant::shortDecimal(unscaledValue, DECIMAL(precision, scale));
+      }
     case LogicalTypeId::VARCHAR:
       return variant(val.GetValue<std::string>());
     case LogicalTypeId::BLOB:

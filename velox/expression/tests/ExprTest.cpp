@@ -103,6 +103,8 @@ struct TestData {
 
 class ExprTest : public testing::Test, public VectorTestBase {
  protected:
+  parse::ParseOptions options;
+
   void SetUp() override {
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();
@@ -172,7 +174,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
   std::shared_ptr<const core::ITypedExpr> parseExpression(
       const std::string& text,
       const RowTypePtr& rowType = nullptr) {
-    auto untyped = parse::parseExpr(text);
+    auto untyped = parse::parseExpr(text, options);
     return core::Expressions::inferTypes(
         untyped, rowType ? rowType : testDataType_, execCtx_->pool());
   }
@@ -2923,4 +2925,10 @@ TEST_F(ExprTest, flatNoNullsFastPath) {
   ASSERT_EQ(1, exprSet->exprs().size());
   ASSERT_FALSE(exprSet->exprs()[0]->supportsFlatNoNullsFastPath())
       << exprSet->toString();
+}
+
+TEST_F(ExprTest, parseDecimalConstant) {
+  options.handleDecimalAsDouble = false;
+  auto constant = parseExpression("1.234");
+  ASSERT_EQ(*constant->type(), *DECIMAL(4, 3));
 }

@@ -68,6 +68,18 @@ TEST(DuckConversionTest, duckValueToVariant) {
   for (const auto& i : vec) {
     EXPECT_EQ(variant(i), duckValueToVariant(Value(i)));
   }
+
+  // Decimal type inference.
+  EXPECT_EQ(
+      *DECIMAL(20, 2),
+      *duckValueToVariant(
+           Value::DECIMAL(::duckdb::hugeint_t(100), 20, 2), false)
+           .inferType());
+  EXPECT_EQ(
+      *DECIMAL(17, 2),
+      *duckValueToVariant(
+           Value::DECIMAL(static_cast<int64_t>(123), 17, 2), false)
+           .inferType());
 }
 
 TEST(DuckConversionTest, duckValueToVariantUnsupported) {

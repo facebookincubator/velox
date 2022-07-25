@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -59,6 +60,12 @@ struct VariantEquality<TypeKind::ROW>;
 
 template <>
 struct VariantEquality<TypeKind::MAP>;
+
+template <>
+struct VariantEquality<TypeKind::SHORT_DECIMAL>;
+
+template <>
+struct VariantEquality<TypeKind::LONG_DECIMAL>;
 
 bool dispatchDynamicVariantEquality(
     const variant& a,
@@ -106,6 +113,44 @@ struct VariantTypeTraits<TypeKind::MAP> {
 template <>
 struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
+};
+
+template <typename T>
+struct DecimalCapsule {
+  T value;
+  int precision;
+  int scale;
+
+  bool operator==(const DecimalCapsule& other) const {
+    return value == other.value && precision == other.precision &&
+        scale == other.scale;
+  }
+
+  bool operator<(const DecimalCapsule& other) const {
+    VELOX_CHECK_GE(scale, 0);
+    auto lhsIntegral =
+        (value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
+    auto rhsIntegral =
+        (other.value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
+    if (lhsIntegral == rhsIntegral) {
+      return (value.unscaledValue() % DecimalUtil::kPowersOfTen[scale]) <
+          (other.value.unscaledValue() % DecimalUtil::kPowersOfTen[scale]);
+    }
+    return lhsIntegral < rhsIntegral;
+  }
+};
+
+using ShortDecimalCapsule = DecimalCapsule<ShortDecimal>;
+using LongDecimalCapsule = DecimalCapsule<LongDecimal>;
+
+template <>
+struct VariantTypeTraits<TypeKind::SHORT_DECIMAL> {
+  using stored_type = ShortDecimalCapsule;
+};
+
+template <>
+struct VariantTypeTraits<TypeKind::LONG_DECIMAL> {
+  using stored_type = LongDecimalCapsule;
 };
 
 struct OpaqueCapsule {
@@ -212,8 +257,6 @@ class variant {
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SMALLINT)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::INTEGER)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::BIGINT)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::SHORT_DECIMAL)
-  VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::LONG_DECIMAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::REAL)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::DOUBLE)
   VELOX_VARIANT_SCALAR_MEMBERS(TypeKind::VARCHAR)
@@ -299,6 +342,24 @@ class variant {
       const std::shared_ptr<const OpaqueType>& type) {
     VELOX_CHECK(input.get(), "Can't create a variant of nullptr opaque type");
     return {TypeKind::OPAQUE, new detail::OpaqueCapsule{type, input}};
+  }
+
+  static variant shortDecimal(const int64_t input, const TypePtr& type) {
+    VELOX_CHECK(type->isShortDecimal(), "Not a ShortDecimal type");
+    auto decimalType = type->asShortDecimal();
+    return {
+        TypeKind::SHORT_DECIMAL,
+        new detail::ShortDecimalCapsule{
+            ShortDecimal(input), decimalType.precision(), decimalType.scale()}};
+  }
+
+  static variant longDecimal(const int128_t input, const TypePtr& type) {
+    VELOX_CHECK(type->isLongDecimal(), "Not a LongDecimal type");
+    auto decimalType = type->asLongDecimal();
+    return {
+        TypeKind::LONG_DECIMAL,
+        new detail::LongDecimalCapsule{
+            LongDecimal(input), decimalType.precision(), decimalType.scale()}};
   }
 
   static variant array(const std::vector<variant>& inputs) {
@@ -543,6 +604,14 @@ class variant {
           }
         }
         return ARRAY(elementType);
+      }
+      case TypeKind::SHORT_DECIMAL: {
+        auto val = value<TypeKind::SHORT_DECIMAL>();
+        return DECIMAL(val.precision, val.scale);
+      }
+      case TypeKind::LONG_DECIMAL: {
+        auto val = value<TypeKind::LONG_DECIMAL>();
+        return DECIMAL(val.precision, val.scale);
       }
       case TypeKind::OPAQUE: {
         return value<TypeKind::OPAQUE>().type;
