@@ -474,8 +474,8 @@ TEST_F(PlanNodeToStringTest, tableScan) {
                     .tableScan(
                         rowType,
                         {"shipdate between '1994-01-01' and '1994-12-31'",
-                         "discount between 0.05 and 0.07",
-                         "quantity < 24.0::DOUBLE"},
+                         "discount between '0.05'::double and '0.07'::double",
+                         "quantity < '24.0'::DOUBLE"},
                         "comment NOT LIKE '%special%request%'")
                     .planNode();
 

@@ -202,10 +202,11 @@ TEST_F(FilterProjectTest, projectOverLazy) {
 
   createDuckDbTable({vectors});
 
-  auto plan = PlanBuilder()
-                  .values({lazyVectors})
-                  .project({"c0 > 0 AND c1 > 0.0", "c1 + 5.2"})
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values({lazyVectors})
+          .project({"c0 > 0 AND c1 > '0.0'::double", "c1 + '5.2'::double"})
+          .planNode();
   assertQuery(plan, "SELECT c0 > 0 AND c1 > 0, c1 + 5.2 FROM tmp");
 }
 
