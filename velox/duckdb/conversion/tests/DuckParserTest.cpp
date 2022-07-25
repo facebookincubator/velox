@@ -16,10 +16,19 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include "velox/external/duckdb/duckdb.hpp"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
+using ::duckdb::ParserOptions;
+
+namespace {
+std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
+  ParserOptions options;
+  return ::parseExpr(exprString, options);
+}
+} // namespace
 
 TEST(DuckParserTest, constants) {
   // Integers.
@@ -439,4 +448,16 @@ TEST(DuckParserTest, invalidExpression) {
   VELOX_ASSERT_THROW(
       parseExpr("func(a b)"),
       "Cannot parse expression: func(a b). Parser Error: syntax error at or near \"b\"");
+}
+
+TEST(DuckParserTest, parseDecimalConstant) {
+  ParserOptions options;
+  options.parse_decimal_as_double = false;
+  auto expr = parseExpr("1.234", options);
+  if (auto constant =
+          std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
+    ASSERT_EQ(*constant->type(), *DECIMAL(4, 3));
+  } else {
+    FAIL() << expr->toString() << " is not a constant";
+  }
 }

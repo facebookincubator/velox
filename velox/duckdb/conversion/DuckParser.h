@@ -24,6 +24,10 @@ class IExpr;
 class SortOrder;
 } // namespace facebook::velox::core
 
+namespace duckdb {
+struct ParserOptions;
+} // namespace duckdb
+
 namespace facebook::velox::duckdb {
 
 // Parses an input expression using DuckDB's internal postgresql-based parser,
@@ -33,7 +37,9 @@ namespace facebook::velox::duckdb {
 // are lower-cased, what prevents you to use functions and column names
 // containing upper case letters (e.g: "concatRow" will be parsed as
 // "concatrow").
-std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString);
+std::shared_ptr<const core::IExpr> parseExpr(
+    const std::string& exprString,
+    const ::duckdb::ParserOptions& options);
 
 // Parses an ORDER BY clause using DuckDB's internal postgresql-based parser,
 // converting it to a pair of an IExpr tree and a core::SortOrder. Uses ASC
