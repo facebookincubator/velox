@@ -90,23 +90,52 @@ TEST(Variant, opaque) {
   }
 }
 
-TEST(Variant, decimal) {
-  {
-    auto shortDecimalType = DECIMAL(10, 4);
-    variant v = variant::shortDecimal(100, shortDecimalType);
-    EXPECT_TRUE(v.isSet());
-    EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
-    EXPECT_EQ(100, v.value<TypeKind::SHORT_DECIMAL>().value.unscaledValue());
-    EXPECT_EQ(*v.inferType(), *shortDecimalType);
-    EXPECT_EQ(v.toJson(), "0.0100");
-  }
-  {
-    auto longDecimalType = DECIMAL(20, 4);
-    variant v = variant::longDecimal(10000, longDecimalType);
-    EXPECT_TRUE(v.isSet());
-    EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
-    EXPECT_EQ(10000, v.value<TypeKind::LONG_DECIMAL>().value.unscaledValue());
-    EXPECT_EQ(*v.inferType(), *longDecimalType);
-    EXPECT_EQ(v.toJson(), "1.0000");
-  }
+TEST(Variant, shortDecimal) {
+  auto shortDecimalType = DECIMAL(10, 3);
+  variant v = variant::shortDecimal(1234, shortDecimalType);
+  EXPECT_TRUE(v.isSet());
+  EXPECT_EQ(TypeKind::SHORT_DECIMAL, v.kind());
+  EXPECT_EQ(1234, v.value<TypeKind::SHORT_DECIMAL>().value.unscaledValue());
+  EXPECT_EQ(10, v.value<TypeKind::SHORT_DECIMAL>().precision);
+  EXPECT_EQ(3, v.value<TypeKind::SHORT_DECIMAL>().scale);
+  EXPECT_EQ(*v.inferType(), *shortDecimalType);
+  EXPECT_EQ(v.toJson(), "1.234");
+  // 1.2345
+  variant u1 = variant::shortDecimal(12345, DECIMAL(10, 4));
+  // 1.2345 > 1.234
+  EXPECT_FALSE(
+      u1.value<TypeKind::SHORT_DECIMAL>() < v.value<TypeKind::SHORT_DECIMAL>());
+  // 0.1234
+  variant u2 = variant::shortDecimal(1234, DECIMAL(10, 4));
+  // 0.1234 < 1.234
+  EXPECT_TRUE(
+      u2.value<TypeKind::SHORT_DECIMAL>() < v.value<TypeKind::SHORT_DECIMAL>());
+  variant null = variant::shortDecimal(std::nullopt, DECIMAL(10, 5));
+  EXPECT_TRUE(null.isNull());
+  EXPECT_EQ(null.toJson(), "null");
+}
+
+TEST(Variant, longDecimal) {
+  auto longDecimalType = DECIMAL(20, 3);
+  variant v = variant::longDecimal(12345, longDecimalType);
+  EXPECT_TRUE(v.isSet());
+  EXPECT_EQ(TypeKind::LONG_DECIMAL, v.kind());
+  EXPECT_EQ(12345, v.value<TypeKind::LONG_DECIMAL>().value.unscaledValue());
+  EXPECT_EQ(20, v.value<TypeKind::LONG_DECIMAL>().precision);
+  EXPECT_EQ(3, v.value<TypeKind::LONG_DECIMAL>().scale);
+  EXPECT_EQ(*v.inferType(), *longDecimalType);
+  EXPECT_EQ(v.toJson(), "12.345");
+  // 1.2345
+  variant u1 = variant::longDecimal(12345, DECIMAL(20, 4));
+  // 1.2345 < 12.345
+  EXPECT_TRUE(
+      u1.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
+  // 12.3456
+  variant u2 = variant::longDecimal(123456, DECIMAL(20, 3));
+  // 12.456 > 12.345
+  EXPECT_FALSE(
+      u2.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
+  variant null = variant::longDecimal(std::nullopt, DECIMAL(20, 5));
+  EXPECT_TRUE(null.isNull());
+  EXPECT_EQ(null.toJson(), "null");
 }

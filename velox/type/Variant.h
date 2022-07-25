@@ -115,6 +115,9 @@ struct VariantTypeTraits<TypeKind::ARRAY> {
   using stored_type = std::vector<variant>;
 };
 
+/// Variants contain a TypeKind and a value.
+/// DECIMAL type variants use TypeKind to store the kind, and this struct as the
+/// value to store the precision, scale, and the unscaled value.
 template <typename T>
 struct DecimalCapsule {
   T value;
@@ -127,14 +130,14 @@ struct DecimalCapsule {
   }
 
   bool operator<(const DecimalCapsule& other) const {
-    VELOX_CHECK_GE(scale, 0);
     auto lhsIntegral =
         (value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
     auto rhsIntegral =
-        (other.value.unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
+        (other.value.unscaledValue() / DecimalUtil::kPowersOfTen[other.scale]);
     if (lhsIntegral == rhsIntegral) {
       return (value.unscaledValue() % DecimalUtil::kPowersOfTen[scale]) <
-          (other.value.unscaledValue() % DecimalUtil::kPowersOfTen[scale]);
+          (other.value.unscaledValue() %
+           DecimalUtil::kPowersOfTen[other.scale]);
     }
     return lhsIntegral < rhsIntegral;
   }
@@ -344,22 +347,38 @@ class variant {
     return {TypeKind::OPAQUE, new detail::OpaqueCapsule{type, input}};
   }
 
-  static variant shortDecimal(const int64_t input, const TypePtr& type) {
+  static variant shortDecimal(
+      const std::optional<int64_t> input,
+      const TypePtr& type) {
     VELOX_CHECK(type->isShortDecimal(), "Not a ShortDecimal type");
     auto decimalType = type->asShortDecimal();
-    return {
-        TypeKind::SHORT_DECIMAL,
-        new detail::ShortDecimalCapsule{
-            ShortDecimal(input), decimalType.precision(), decimalType.scale()}};
+    if (input.has_value()) {
+      return {
+          TypeKind::SHORT_DECIMAL,
+          new detail::ShortDecimalCapsule{
+              ShortDecimal(input.value()),
+              decimalType.precision(),
+              decimalType.scale()}};
+    } else {
+      return {TypeKind::SHORT_DECIMAL, nullptr};
+    }
   }
 
-  static variant longDecimal(const int128_t input, const TypePtr& type) {
+  static variant longDecimal(
+      const std::optional<int128_t> input,
+      const TypePtr& type) {
     VELOX_CHECK(type->isLongDecimal(), "Not a LongDecimal type");
     auto decimalType = type->asLongDecimal();
-    return {
-        TypeKind::LONG_DECIMAL,
-        new detail::LongDecimalCapsule{
-            LongDecimal(input), decimalType.precision(), decimalType.scale()}};
+    if (input.has_value()) {
+      return {
+          TypeKind::LONG_DECIMAL,
+          new detail::LongDecimalCapsule{
+              LongDecimal(input.value()),
+              decimalType.precision(),
+              decimalType.scale()}};
+    } else {
+      return {TypeKind::LONG_DECIMAL, nullptr};
+    }
   }
 
   static variant array(const std::vector<variant>& inputs) {
