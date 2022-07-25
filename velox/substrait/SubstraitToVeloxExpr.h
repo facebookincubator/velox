@@ -47,6 +47,11 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::Cast& castExpr,
       const RowTypePtr& inputType);
 
+  /// Create expression for row_constructor.
+  core::TypedExprPtr toRowConstructorExpr(
+      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
+      const std::string& typeName);
+
   /// Convert Substrait Literal into Velox Expression.
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
       const ::substrait::Expression::Literal& substraitLit);
@@ -66,4 +71,6 @@ class SubstraitVeloxExprConverter {
   std::unordered_map<uint64_t, std::string> functionMap_;
 };
 
+enum VeloxFunName { RowConstructor };
+const std::string VeloxFunNameStrings[] = {"row_constructor"};
 } // namespace facebook::velox::substrait

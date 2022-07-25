@@ -46,13 +46,18 @@ std::shared_ptr<SubstraitParser::SubstraitType> SubstraitParser::parseType(
       break;
     }
     case ::substrait::Type::KindCase::kStruct: {
-      // TODO: Support for Struct is not fully added.
-      typeName = "STRUCT";
-      const auto& substraitStruct = substraitType.struct_();
-      const auto& substraitTypes = substraitStruct.types();
-      for (const auto& type : substraitTypes) {
-        parseType(type);
+      // The type name of struct is in the format of:
+      // STRUCT:type0_type1...typen.
+      typeName = "STRUCT:";
+      const auto& sStruct = substraitType.struct_();
+      const auto& substraitTypes = sStruct.types();
+      for (int i = 0; i < substraitTypes.size(); i++) {
+        if (i > 0) {
+          typeName += "_";
+        }
+        typeName += parseType(substraitTypes[i])->type;
       }
+      nullability = substraitType.struct_().nullability();
       break;
     }
     case ::substrait::Type::KindCase::kString: {
