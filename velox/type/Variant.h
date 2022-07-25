@@ -123,6 +123,7 @@ struct DecimalCapsule {
   T value;
   int precision;
   int scale;
+  bool isNull = false;
 
   bool operator==(const DecimalCapsule& other) const {
     return value == other.value && precision == other.precision &&
@@ -352,16 +353,13 @@ class variant {
       const TypePtr& type) {
     VELOX_CHECK(type->isShortDecimal(), "Not a ShortDecimal type");
     auto decimalType = type->asShortDecimal();
-    if (input.has_value()) {
-      return {
-          TypeKind::SHORT_DECIMAL,
-          new detail::ShortDecimalCapsule{
-              ShortDecimal(input.value()),
-              decimalType.precision(),
-              decimalType.scale()}};
-    } else {
-      return {TypeKind::SHORT_DECIMAL, nullptr};
-    }
+    return {
+        TypeKind::SHORT_DECIMAL,
+        new detail::ShortDecimalCapsule{
+            ShortDecimal(input.value_or(0)),
+            decimalType.precision(),
+            decimalType.scale(),
+            !input.has_value()}};
   }
 
   static variant longDecimal(
@@ -369,16 +367,13 @@ class variant {
       const TypePtr& type) {
     VELOX_CHECK(type->isLongDecimal(), "Not a LongDecimal type");
     auto decimalType = type->asLongDecimal();
-    if (input.has_value()) {
-      return {
-          TypeKind::LONG_DECIMAL,
-          new detail::LongDecimalCapsule{
-              LongDecimal(input.value()),
-              decimalType.precision(),
-              decimalType.scale()}};
-    } else {
-      return {TypeKind::LONG_DECIMAL, nullptr};
-    }
+    return {
+        TypeKind::LONG_DECIMAL,
+        new detail::LongDecimalCapsule{
+            LongDecimal(input.value_or(0)),
+            decimalType.precision(),
+            decimalType.scale(),
+            !input.has_value()}};
   }
 
   static variant array(const std::vector<variant>& inputs) {
@@ -432,6 +427,9 @@ class variant {
   }
 
   static variant null(TypeKind kind) {
+    VELOX_CHECK(
+        !isDecimalKind(kind),
+        "Use smallDecimal() or longDecimal() for DECIMAL null values.")
     return variant{kind};
   }
 
@@ -506,10 +504,6 @@ class variant {
 
   static variant create(const folly::dynamic&);
 
-  bool isNull() const {
-    return ptr_ == nullptr;
-  }
-
   bool isSet() const {
     return ptr_ != nullptr;
   }
@@ -547,6 +541,15 @@ class variant {
   template <typename T>
   const auto& value() const {
     return value<CppToType<T>::typeKind>();
+  }
+
+  bool isNull() const {
+    if (kind_ == TypeKind::SHORT_DECIMAL) {
+      return value<TypeKind::SHORT_DECIMAL>().isNull;
+    } else if (kind_ == TypeKind::LONG_DECIMAL) {
+      return value<TypeKind::LONG_DECIMAL>().isNull;
+    }
+    return ptr_ == nullptr;
   }
 
   uint64_t hash() const;

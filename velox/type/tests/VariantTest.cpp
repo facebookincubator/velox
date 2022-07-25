@@ -103,16 +103,18 @@ TEST(Variant, shortDecimal) {
   // 1.2345
   variant u1 = variant::shortDecimal(12345, DECIMAL(10, 4));
   // 1.2345 > 1.234
-  EXPECT_FALSE(
-      u1.value<TypeKind::SHORT_DECIMAL>() < v.value<TypeKind::SHORT_DECIMAL>());
+  EXPECT_LT(
+      v.value<TypeKind::SHORT_DECIMAL>(), u1.value<TypeKind::SHORT_DECIMAL>());
   // 0.1234
   variant u2 = variant::shortDecimal(1234, DECIMAL(10, 4));
   // 0.1234 < 1.234
-  EXPECT_TRUE(
-      u2.value<TypeKind::SHORT_DECIMAL>() < v.value<TypeKind::SHORT_DECIMAL>());
+  EXPECT_LT(
+      u2.value<TypeKind::SHORT_DECIMAL>(), v.value<TypeKind::SHORT_DECIMAL>());
   variant null = variant::shortDecimal(std::nullopt, DECIMAL(10, 5));
   EXPECT_TRUE(null.isNull());
   EXPECT_EQ(null.toJson(), "null");
+  EXPECT_EQ(*null.inferType(), *DECIMAL(10, 5));
+  EXPECT_THROW(variant::null(TypeKind::SHORT_DECIMAL), VeloxException);
 }
 
 TEST(Variant, longDecimal) {
@@ -128,14 +130,16 @@ TEST(Variant, longDecimal) {
   // 1.2345
   variant u1 = variant::longDecimal(12345, DECIMAL(20, 4));
   // 1.2345 < 12.345
-  EXPECT_TRUE(
-      u1.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
+  EXPECT_LT(
+      u1.value<TypeKind::LONG_DECIMAL>(), v.value<TypeKind::LONG_DECIMAL>());
   // 12.3456
   variant u2 = variant::longDecimal(123456, DECIMAL(20, 4));
   // 12.3456 > 12.345
-  EXPECT_FALSE(
-      u2.value<TypeKind::LONG_DECIMAL>() < v.value<TypeKind::LONG_DECIMAL>());
+  EXPECT_LT(
+      v.value<TypeKind::LONG_DECIMAL>(), u2.value<TypeKind::LONG_DECIMAL>());
   variant null = variant::longDecimal(std::nullopt, DECIMAL(20, 5));
   EXPECT_TRUE(null.isNull());
   EXPECT_EQ(null.toJson(), "null");
+  EXPECT_EQ(*null.inferType(), *DECIMAL(20, 5));
+  EXPECT_THROW(variant::null(TypeKind::LONG_DECIMAL), VeloxException);
 }
