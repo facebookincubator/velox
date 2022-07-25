@@ -24,7 +24,9 @@ add_library(
   OperatorTestBase.cpp
   PlanBuilder.cpp
   QueryAssertions.cpp
-  TpchQueryBuilder.cpp)
+  TpchQueryBuilder.cpp
+  MockExchangeSource.cpp
+  MockExchangeSource.h)
 
 target_link_libraries(
   velox_exec_test_util

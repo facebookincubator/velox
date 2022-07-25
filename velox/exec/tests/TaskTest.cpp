@@ -16,8 +16,10 @@
 #include "velox/exec/Task.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/Exchange.h"
 #include "velox/exec/tests/utils/Cursor.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/MockExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
@@ -26,6 +28,11 @@ using namespace facebook::velox;
 namespace facebook::velox::exec::test {
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  static void SetUpTestCase() {
+    facebook::velox::exec::ExchangeSource::registerFactory(
+        MockExchangeSource::createExchangeSource);
+  }
+
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSingleThreaded(
       core::PlanFragment plan,
@@ -59,6 +66,15 @@ class TaskTest : public HiveConnectorTestBase {
     VELOX_CHECK(waitForTaskCompletion(task.get()));
 
     return {task, results};
+  }
+
+  std::shared_ptr<exec::Task> makeTask(
+      const std::string& taskId,
+      const core::PlanFragment planFragment,
+      int destination) {
+    auto queryCtx = core::QueryCtx::createForTest();
+    return std::make_shared<exec::Task>(
+        taskId, planFragment, destination, queryCtx);
   }
 };
 
@@ -595,5 +611,47 @@ TEST_F(TaskTest, supportsSingleThreadedExecution) {
   // PartitionedOutput does not support single threaded execution, therefore the
   // task doesn't support it either.
   ASSERT_FALSE(task->supportsSingleThreadedExecution());
+}
+
+// Check if a downstream task can elegantly close all related upstream tasks
+// once the downstream task completes/aborts.
+TEST_F(TaskTest, checkExchangeSourceClosedAfterAbort) {
+  // Create and start a "remote" task
+  std::string remoteTaskId = "mock://task-0";
+  auto remoteTaskPlan =
+      exec::test::PlanBuilder()
+          .tableScan(ROW({"c0", "c1"}, {INTEGER(), VARCHAR()}))
+          .partitionedOutput({}, 1)
+          .planFragment();
+  auto remoteTask = makeTask(remoteTaskId, remoteTaskPlan, 0);
+  remoteTask->start(remoteTask, 1, 5);
+
+  // Create and start a new task consuming the output of the remote task
+  auto plan = exec::test::PlanBuilder()
+                  .exchange(remoteTaskPlan.planNode->outputType())
+                  .partitionedOutput({}, 1)
+                  .planFragment();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  auto task = makeTask("task-1", plan, 0);
+  task->start(task, 1, 5);
+
+  // Create a remote source split and add it the new task
+  MockExchangeSource::resetClosedTasks();
+  task->addSplitWithSequence(
+      "0",
+      exec::Split(
+          std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
+              remoteTaskId),
+          0),
+      0);
+
+  // Check if the task has closed exchangeSource for the remote task after
+  // aborting the task.
+  auto future = task->requestAbort();
+  future.wait();
+  usleep(100); // Wait for 100ms; close of remote exchange source may not happen
+               // instantly after exchangeClients_ is cleared during the
+               // termination of the task.
+  EXPECT_TRUE(MockExchangeSource::isTaskClosed(remoteTaskId));
 }
 } // namespace facebook::velox::exec::test
