@@ -522,6 +522,7 @@ BoundType parseBoundType(WindowBoundary boundary) {
     case WindowBoundary::INVALID:
       VELOX_UNREACHABLE();
   }
+  VELOX_UNREACHABLE();
 }
 
 } // namespace
