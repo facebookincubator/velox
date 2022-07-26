@@ -649,6 +649,16 @@ class PlanBuilder {
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt);
 
+  /// Add a WindowNode to execute a list of windowFunctions.
+  /// @param windowFunctions A list of window function SQL like strings to be
+  /// executed by this windowNode.
+  /// A window function SQL string looks like :
+  /// "windowFunction(parameters) OVER (PARTITION BY columns_list ORDER BY
+  /// columns_list [ROWS|RANGE] BETWEEN [UNBOUNDED PRECEDING | x PRECEDING |
+  /// CURRENT ROW] AND [UNBOUNDED FOLLOWING | x FOLLOWING | CURRENT ROW] AS
+  /// columnName"
+  PlanBuilder& window(const std::vector<std::string>& windowFunctions);
+
   /// Stores the latest plan node ID into the specified variable. Useful for
   /// capturing IDs of the leaf plan nodes (table scans, exchanges, etc.) to use
   /// when adding splits at runtime.
@@ -717,12 +727,12 @@ class PlanBuilder {
   std::shared_ptr<const core::ITypedExpr> inferTypes(
       const std::shared_ptr<const core::IExpr>& untypedExpr);
 
-  struct AggregateExpressionsAndNames {
-    std::vector<std::shared_ptr<const core::CallTypedExpr>> aggregates;
+  struct ExpressionsAndNames {
+    std::vector<std::shared_ptr<const core::CallTypedExpr>> expressions;
     std::vector<std::string> names;
   };
 
-  AggregateExpressionsAndNames createAggregateExpressionsAndNames(
+  ExpressionsAndNames createAggregateExpressionsAndNames(
       const std::vector<std::string>& aggregates,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& resultTypes);
