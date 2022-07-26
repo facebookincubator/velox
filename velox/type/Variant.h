@@ -398,11 +398,7 @@ class variant {
             std::move(inputs)}};
   }
 
-  variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {
-    VELOX_CHECK(
-        !isDecimalKind(kind_),
-        "Use smallDecimal() or longDecimal() for DECIMAL values.");
-  }
+  variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {}
 
   variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {
     VELOX_CHECK(
