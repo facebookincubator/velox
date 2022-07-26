@@ -110,6 +110,9 @@ TEST(Variant, shortDecimal) {
   // 0.1234 < 1.234
   EXPECT_LT(
       u2.value<TypeKind::SHORT_DECIMAL>(), v.value<TypeKind::SHORT_DECIMAL>());
+}
+
+TEST(Variant, shortDecimalNull) {
   variant null = variant::shortDecimal(std::nullopt, DECIMAL(10, 5));
   EXPECT_TRUE(null.isNull());
   EXPECT_EQ(null.toJson(), "null");
@@ -137,6 +140,9 @@ TEST(Variant, longDecimal) {
   // 12.3456 > 12.345
   EXPECT_LT(
       v.value<TypeKind::LONG_DECIMAL>(), u2.value<TypeKind::LONG_DECIMAL>());
+}
+
+TEST(Variant, longDecimalNull) {
   variant null = variant::longDecimal(std::nullopt, DECIMAL(20, 5));
   EXPECT_TRUE(null.isNull());
   EXPECT_EQ(null.toJson(), "null");

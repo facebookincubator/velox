@@ -128,18 +128,18 @@ struct DecimalCapsule {
     return unscaledValue.value();
   }
 
-  bool has_value() const {
+  bool hasValue() const {
     return unscaledValue.has_value();
   }
 
   bool operator==(const DecimalCapsule& other) const {
-    VELOX_CHECK(has_value() && other.has_value());
+    VELOX_CHECK(hasValue() && other.hasValue());
     return value() == other.value() && precision == other.precision &&
         scale == other.scale;
   }
 
   bool operator<(const DecimalCapsule& other) const {
-    VELOX_CHECK(has_value() && other.has_value());
+    VELOX_CHECK(hasValue() && other.hasValue());
     auto lhsIntegral =
         (value().unscaledValue() / DecimalUtil::kPowersOfTen[scale]);
     auto rhsIntegral =
@@ -201,7 +201,11 @@ struct VariantTypeTraits<TypeKind::OPAQUE> {
 
 class variant {
  private:
-  variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {}
+  variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {
+    VELOX_CHECK(
+        !isDecimalKind(kind),
+        "Use smallDecimal() or longDecimal() for DECIMAL null values.")
+  }
 
   template <TypeKind KIND>
   bool lessThan(const variant& a, const variant& b) const {
@@ -398,9 +402,17 @@ class variant {
             std::move(inputs)}};
   }
 
-  variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {}
+  variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {
+    VELOX_CHECK(
+        !isDecimalKind(kind_),
+        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
+  }
 
-  variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {}
+  variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {
+    VELOX_CHECK(
+        !isDecimalKind(kind),
+        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
+  }
 
   variant(const variant& other) : kind_{other.kind_}, ptr_{nullptr} {
     auto op = other.ptr_;
@@ -437,7 +449,7 @@ class variant {
   static variant null(TypeKind kind) {
     VELOX_CHECK(
         !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL null values.")
+        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
     return variant{kind};
   }
 
@@ -550,9 +562,9 @@ class variant {
 
   bool isNull() const {
     if (kind_ == TypeKind::SHORT_DECIMAL) {
-      return !value<TypeKind::SHORT_DECIMAL>().has_value();
+      return !value<TypeKind::SHORT_DECIMAL>().hasValue();
     } else if (kind_ == TypeKind::LONG_DECIMAL) {
-      return !value<TypeKind::LONG_DECIMAL>().has_value();
+      return !value<TypeKind::LONG_DECIMAL>().hasValue();
     }
     return ptr_ == nullptr;
   }
