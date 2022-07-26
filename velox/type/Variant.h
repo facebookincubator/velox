@@ -528,6 +528,11 @@ class variant {
     return !isNull();
   }
 
+  /// Similar to hasValue(). Legacy.
+  bool isSet() const {
+    return hasValue();
+  }
+
   void checkPtr() const {
     if (ptr_ == nullptr) {
       // Error path outlined to encourage inlining of the branch.
