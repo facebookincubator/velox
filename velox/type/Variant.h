@@ -204,7 +204,7 @@ class variant {
   variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {
     VELOX_CHECK(
         !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL null values.")
+        "Use smallDecimal() or longDecimal() for DECIMAL values.");
   }
 
   template <TypeKind KIND>
@@ -405,13 +405,13 @@ class variant {
   variant() : kind_{TypeKind::INVALID}, ptr_{nullptr} {
     VELOX_CHECK(
         !isDecimalKind(kind_),
-        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
+        "Use smallDecimal() or longDecimal() for DECIMAL values.");
   }
 
   variant(TypeKind kind) : kind_{kind}, ptr_{nullptr} {
     VELOX_CHECK(
         !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL null values.");
+        "Use smallDecimal() or longDecimal() for DECIMAL values.");
   }
 
   variant(const variant& other) : kind_{other.kind_}, ptr_{nullptr} {
