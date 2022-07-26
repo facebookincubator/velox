@@ -201,11 +201,7 @@ struct VariantTypeTraits<TypeKind::OPAQUE> {
 
 class variant {
  private:
-  variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {
-    VELOX_CHECK(
-        !isDecimalKind(kind),
-        "Use smallDecimal() or longDecimal() for DECIMAL values.");
-  }
+  variant(TypeKind kind, void* ptr) : kind_{kind}, ptr_{ptr} {}
 
   template <TypeKind KIND>
   bool lessThan(const variant& a, const variant& b) const {
