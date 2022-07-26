@@ -20,6 +20,7 @@
 using namespace facebook::velox;
 
 std::vector<std::string> MockExchangeSource::closedTasks_;
+std::mutex MockExchangeSource::mutex_;
 
 bool MockExchangeSource::shouldRequestLocked() {
   if (atEnd_) {
@@ -33,14 +34,17 @@ bool MockExchangeSource::shouldRequestLocked() {
 void MockExchangeSource::request() {}
 
 void MockExchangeSource::close() {
+  const std::lock_guard<std::mutex> lock(mutex_);
   closedTasks_.push_back(this->taskId_);
 }
 
 void MockExchangeSource::resetClosedTasks() {
+  const std::lock_guard<std::mutex> lock(mutex_);
   closedTasks_.clear();
 }
 
 bool MockExchangeSource::isTaskClosed(std::string taskId) {
+  const std::lock_guard<std::mutex> lock(mutex_);
   return std::find(closedTasks_.begin(), closedTasks_.end(), taskId) !=
       closedTasks_.end();
 }

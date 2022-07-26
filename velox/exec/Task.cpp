@@ -939,6 +939,11 @@ bool Task::isFinished() const {
   return (state_ == TaskState::kFinished);
 }
 
+bool Task::isAborted() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return (state_ == TaskState::kAborted);
+}
+
 bool Task::isRunningLocked() const {
   return (state_ == TaskState::kRunning);
 }

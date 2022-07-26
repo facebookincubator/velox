@@ -119,6 +119,8 @@ bool waitForTaskCompletion(
     exec::Task* task,
     uint64_t maxWaitMicros = 1'000'000);
 
+bool waitForTaskAbort(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
+
 std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
     const std::string& duckDbSql,

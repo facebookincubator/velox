@@ -745,6 +745,17 @@ bool waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
   return task->isFinished();
 }
 
+bool waitForTaskAbort(exec::Task* task, uint64_t maxWaitMicros) {
+  // Wait for task to transition to finished state.
+  if (not task->isAborted()) {
+    auto& executor = folly::QueuedImmediateExecutor::instance();
+    auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
+    future.wait();
+  }
+
+  return task->isAborted();
+}
+
 std::shared_ptr<Task> assertQuery(
     const std::shared_ptr<const core::PlanNode>& plan,
     std::function<void(exec::Task*)> addSplits,

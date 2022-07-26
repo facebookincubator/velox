@@ -39,4 +39,5 @@ class MockExchangeSource : public exec::ExchangeSource {
   void request() override;
   void close() override;
   static std::vector<std::string> closedTasks_;
+  static std::mutex mutex_;
 };

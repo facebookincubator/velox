@@ -631,7 +631,6 @@ TEST_F(TaskTest, checkExchangeSourceClosedAfterAbort) {
                   .exchange(remoteTaskPlan.planNode->outputType())
                   .partitionedOutput({}, 1)
                   .planFragment();
-  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
   auto task = makeTask("task-1", plan, 0);
   task->start(task, 1, 5);
 
@@ -639,16 +638,14 @@ TEST_F(TaskTest, checkExchangeSourceClosedAfterAbort) {
   MockExchangeSource::resetClosedTasks();
   task->addSplitWithSequence(
       "0",
-      exec::Split(
-          std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
-              remoteTaskId),
-          0),
+      exec::Split(std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
+          remoteTaskId)),
       0);
 
   // Check if the task has closed exchangeSource for the remote task after
   // aborting the task.
   auto future = task->requestAbort();
-  future.wait();
+  ASSERT_TRUE(waitForTaskAbort(task.get()));
   usleep(100); // Wait for 100ms; close of remote exchange source may not happen
                // instantly after exchangeClients_ is cleared during the
                // termination of the task.

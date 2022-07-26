@@ -191,6 +191,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns true if state is 'finished'.
   bool isFinished() const;
 
+  /// Returns true if state is 'aborted'.
+  bool isAborted() const;
+
   /// Returns current state of execution.
   TaskState state() const {
     std::lock_guard<std::mutex> l(mutex_);
