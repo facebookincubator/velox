@@ -102,6 +102,12 @@ bool hasConditionals(Expr* expr) {
   return false;
 }
 
+void deselectErrors(const EvalCtx& context, SelectivityVector& rows) {
+  auto errors = context.errors();
+  // A non-null in errors resets the row. AND with the errors null mask.
+  rows.deselectNonNulls(
+      errors->rawNulls(), rows.begin(), std::min(errors->size(), rows.end()));
+}
 } // namespace
 
 Expr::Expr(
@@ -282,6 +288,21 @@ void Expr::evalSimplifiedImpl(
     }
 
     // All rows are null, return a null constant.
+    if (!remainingRows.hasSelections()) {
+      inputValues_.clear();
+      result =
+          BaseVector::createNullConstant(type(), rows.size(), context.pool());
+      return;
+    }
+  }
+
+  // If any errors occurred evaluating the arguments, it's possible (even
+  // likely) that the values for those arguments were not defined which could
+  // lead to undefined behavior if we try to evaluate the current function on
+  // them.  It's safe to skip evaluating them since the value for this branch
+  // of the expression tree will be NULL for those rows anyway.
+  if (context.errors()) {
+    deselectErrors(context, remainingRows);
     if (!remainingRows.hasSelections()) {
       inputValues_.clear();
       result =
@@ -785,18 +806,6 @@ void Expr::evalWithNulls(
   evalAll(rows, context, result);
 }
 
-namespace {
-void deselectErrors(EvalCtx& context, SelectivityVector& rows) {
-  auto errors = context.errors();
-  if (!errors) {
-    return;
-  }
-  // A non-null in errors resets the row. AND with the errors null mask.
-  rows.deselectNonNulls(
-      errors->rawNulls(), rows.begin(), std::min(errors->size(), rows.end()));
-}
-} // namespace
-
 void Expr::evalWithMemo(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -833,7 +842,9 @@ void Expr::evalWithMemo(
           context.mutableIsFinalSelection(), false, updateFinalSelection);
 
       evalWithNulls(*uncached, context, result);
-      deselectErrors(context, *uncached);
+      if (context.errors()) {
+        deselectErrors(context, *uncached);
+      }
       context.exprSet()->addToMemo(this);
       auto newCacheSize = uncached->end();
 
@@ -871,7 +882,9 @@ void Expr::evalWithMemo(
         context.execCtx()->getSelectivityVector(rows.end());
   }
   *cachedDictionaryIndices_ = rows;
-  deselectErrors(context, *cachedDictionaryIndices_);
+  if (context.errors()) {
+    deselectErrors(context, *cachedDictionaryIndices_);
+  }
 }
 
 void Expr::setAllNulls(

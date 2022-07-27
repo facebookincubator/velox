@@ -195,4 +195,35 @@ TEST_F(TryExprTest, evalSimplified) {
 
   assertEqualVectors(makeNullableFlatVector(expected), result);
 }
+
+TEST_F(TryExprTest, skipExecutionEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>(
+      {"count_calls"}, BIGINT());
+
+  // Test that when a subset of the inputs to a function wrapped in a TRY throw
+  // exceptions, that function is only evaluated on the inputs that did not
+  // throw exceptions.
+  std::vector<std::optional<int64_t>> expected{
+      0, std::nullopt, 1, std::nullopt, 2};
+  auto flatVector = makeFlatVector<StringView>({"1", "a", "1", "a", "1"});
+  auto result = evaluateSimplified<FlatVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  assertEqualVectors(makeNullableFlatVector(expected), result);
+}
+
+TEST_F(TryExprTest, skipExecutionWholeBatchEvalSimplified) {
+  registerFunction<CountCallsFunction, int64_t, int64_t>(
+      {"count_calls"}, BIGINT());
+
+  // Test that when all the inputs to a function wrapped in a TRY throw
+  // exceptions, that function isn't evaluated and a NULL constant is returned
+  // directly.
+  std::vector<std::optional<int64_t>> expected(3, std::nullopt);
+  auto flatVector = makeFlatVector<StringView>({"a", "b", "c"});
+  auto result = evaluateSimplified<ConstantVector<int64_t>>(
+      "try(count_calls(cast(c0 as integer)))", makeRowVector({flatVector}));
+
+  assertEqualVectors(makeNullableFlatVector(expected), result);
+}
 } // namespace facebook::velox
