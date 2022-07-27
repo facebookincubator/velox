@@ -112,7 +112,7 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
   VELOX_CHECK_NOT_NULL(
       PlanBuilder()
           .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
-          .window({"window1(c) over (partition by a order by b)"})
+          .window({"window1(c) over ()"})
           .planNode());
 
   VELOX_ASSERT_THROW(
