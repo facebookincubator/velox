@@ -19,6 +19,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
+#include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"

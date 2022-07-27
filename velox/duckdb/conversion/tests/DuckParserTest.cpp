@@ -21,11 +21,10 @@
 
 using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
-using ::duckdb::ParserOptions;
 
 namespace {
 std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
-  ParserOptions options;
+  ::duckdb::ParserOptions options;
   return ::parseExpr(exprString, options);
 }
 } // namespace
@@ -339,27 +338,27 @@ TEST(DuckParserTest, orderBy) {
 }
 
 namespace {
-const std::string windowTypeString(duckdb::WindowType w) {
+const std::string windowTypeString(WindowType w) {
   switch (w) {
-    case duckdb::WindowType::kRange:
+    case WindowType::kRange:
       return "RANGE";
-    case duckdb::WindowType::kRows:
+    case WindowType::kRows:
       return "ROWS";
   }
   VELOX_UNREACHABLE();
 }
 
-const std::string boundTypeString(duckdb::BoundType b) {
+const std::string boundTypeString(BoundType b) {
   switch (b) {
-    case duckdb::BoundType::kUnboundedPreceding:
+    case BoundType::kUnboundedPreceding:
       return "UNBOUNDED PRECEDING";
-    case duckdb::BoundType::kUnboundedFollowing:
+    case BoundType::kUnboundedFollowing:
       return "UNBOUNDED FOLLOWING";
-    case duckdb::BoundType::kPreceding:
+    case BoundType::kPreceding:
       return "PRECEDING";
-    case duckdb::BoundType::kFollowing:
+    case BoundType::kFollowing:
       return "FOLLOWING";
-    case duckdb::BoundType::kCurrentRow:
+    case BoundType::kCurrentRow:
       return "CURRENT ROW";
   }
   VELOX_UNREACHABLE();
@@ -451,7 +450,7 @@ TEST(DuckParserTest, invalidExpression) {
 }
 
 TEST(DuckParserTest, parseDecimalConstant) {
-  ParserOptions options;
+  ::duckdb::ParserOptions options;
   options.parse_decimal_as_double = false;
   auto expr = parseExpr("1.234", options);
   if (auto constant =

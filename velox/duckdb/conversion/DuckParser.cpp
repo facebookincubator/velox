@@ -553,6 +553,7 @@ BoundType parseBoundType(WindowBoundary boundary) {
 } // namespace
 
 const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
+  ParserOptions options;
   auto parsedExpressions = parseExpression(windowString);
   if (parsedExpressions.size() != 1) {
     throw std::invalid_argument(folly::sformat(
@@ -570,21 +571,21 @@ const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
   auto& windowExpr = dynamic_cast<WindowExpression&>(parsedExpr);
   for (int i = 0; i < windowExpr.partitions.size(); i++) {
     windowIExpr.partitionBy.push_back(
-        parseExpr(*(windowExpr.partitions[i].get())));
+        parseExpr(*(windowExpr.partitions[i].get()), options));
   }
 
   for (const auto& orderByNode : windowExpr.orders) {
     const bool ascending = isAscending(orderByNode.type, windowString);
     const bool nullsFirst = isNullsFirst(orderByNode.null_order, windowString);
     windowIExpr.orderBy.emplace_back(
-        parseExpr(*orderByNode.expression),
+        parseExpr(*orderByNode.expression, options),
         core::SortOrder(ascending, nullsFirst));
   }
 
   std::vector<std::shared_ptr<const core::IExpr>> params;
   params.reserve(windowExpr.children.size());
   for (const auto& c : windowExpr.children) {
-    params.emplace_back(parseExpr(*c));
+    params.emplace_back(parseExpr(*c, options));
   }
   auto func = normalizeFuncName(windowExpr.function_name);
   windowIExpr.functionCall =
@@ -595,12 +596,13 @@ const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
   windowIExpr.frame.type = parseWindowType(windowExpr);
   windowIExpr.frame.startType = parseBoundType(windowExpr.start);
   if (windowExpr.start_expr) {
-    windowIExpr.frame.startValue = parseExpr(*windowExpr.start_expr.get());
+    windowIExpr.frame.startValue =
+        parseExpr(*windowExpr.start_expr.get(), options);
   }
 
   windowIExpr.frame.endType = parseBoundType(windowExpr.end);
   if (windowExpr.end_expr) {
-    windowIExpr.frame.endValue = parseExpr(*windowExpr.end_expr.get());
+    windowIExpr.frame.endValue = parseExpr(*windowExpr.end_expr.get(), options);
   }
   return windowIExpr;
 }
