@@ -145,8 +145,6 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 TEST_F(PlanBuilderTest, windowFrame) {
   registerWindowFunction();
 
-  // TODO: Change these tests to validate the results of the parsing when
-  // WindowNode::toString() is implemented.
   VELOX_CHECK_EQ(
       PlanBuilder()
           .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
