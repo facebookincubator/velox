@@ -649,7 +649,7 @@ class PlanBuilder {
       const std::vector<std::string>& unnestColumns,
       const std::optional<std::string>& ordinalColumn = std::nullopt);
 
-  /// Add a WindowNode to execute a list of windowFunctions.
+  /// Add a WindowNode to compute one or more windowFunctions.
   /// @param windowFunctions A list of one or more window function SQL like
   /// strings to be computed by this windowNode.
   /// A window function SQL string looks like :
@@ -657,6 +657,18 @@ class PlanBuilder {
   /// sorting_keys [ROWS|RANGE BETWEEN [UNBOUNDED PRECEDING | x PRECEDING |
   /// CURRENT ROW] AND [UNBOUNDED FOLLOWING | x FOLLOWING | CURRENT ROW]] AS
   /// columnName"
+  /// The PARTITION BY and ORDER BY clauses are optional. An empty PARTITION
+  /// list means all the table rows are in a single partition.
+  /// An empty ORDER BY list means the window functions will be computed over
+  /// all the rows in the partition in a random order. Also, the default frame
+  /// if unspecified is RANGE OVER UNBOUNDED PRECEDING AND CURRENT ROW.
+  /// Some examples of window function strings are as follows:
+  /// "first_value(c) over (partition by a order by b) as d"
+  /// "first_value(c) over (partition by a) as d"
+  /// "first_value(c) over ()"
+  /// "row_number() over (order by b) as a"
+  /// "row_number() over (partition by a order by b
+  ///  rows between a + 10 preceding and 10 following)"
   PlanBuilder& window(const std::vector<std::string>& windowFunctions);
 
   /// Stores the latest plan node ID into the specified variable. Useful for
