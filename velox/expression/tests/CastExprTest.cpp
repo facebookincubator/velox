@@ -656,3 +656,9 @@ TEST_F(CastExprTest, toString) {
   ASSERT_EQ("cast((a) as BIGINT)", exprSet.exprs()[0]->toString());
   ASSERT_EQ("cast((a) as ARRAY<VARCHAR>)", exprSet.exprs()[1]->toString());
 }
+
+TEST_F(CastExprTest, stringToDecimal) {
+  auto shortFlatVector = makeShortDecimalFlatVector({-150}, DECIMAL(3, 2));
+  auto input = makeFlatVector<std::string>({"-1.5"});
+  testComplexCast("c0", input, shortFlatVector);
+}

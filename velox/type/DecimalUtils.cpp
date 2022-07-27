@@ -48,6 +48,43 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   return fmt::format(
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
+
+int128_t toInt128(
+    const char* data,
+    size_t size,
+    const uint8_t precision,
+    const uint8_t scale) {
+  if (size == 0) {
+    return 0;
+  }
+  bool isNegative = (data[0] == '-');
+  int32_t start = (isNegative || data[0] == '+') ? 1 : 0;
+  int32_t pos = start;
+  int128_t result = 0;
+  size_t integerLen = 0;
+  size_t fractionLen = 0;
+  while (pos < size) {
+    char c = data[pos++];
+    if (c == '.') {
+      integerLen = pos - start;
+      while (pos < size) {
+        char digit = data[pos++];
+        VELOX_DCHECK(isdigit(digit));
+        result = result * 10 + (digit - '0');
+        ++fractionLen;
+      }
+    } else if (isdigit(c)) {
+      result = result * 10 + (c - '0');
+    } else {
+      VELOX_DCHECK(false, "Invalid character at pos {}", pos)
+    }
+  }
+  VELOX_DCHECK((integerLen + fractionLen) <= precision);
+  VELOX_DCHECK(fractionLen <= scale);
+  result = result * DecimalUtil::kPowersOfTen[scale - fractionLen];
+  return (isNegative) ? result * -1 : result;
+}
+
 } // namespace
 
 const int128_t DecimalUtil::kPowersOfTen[]{
@@ -90,6 +127,14 @@ const int128_t DecimalUtil::kPowersOfTen[]{
     1000000000000000000 * (int128_t)1000000000000000000,
     1000000000000000000 * (int128_t)1000000000000000000 * (int128_t)10};
 
+template <typename T>
+T DecimalUtil::stringToDecimal(
+    const char* data,
+    const size_t size,
+    const TypePtr& type) {
+  return nullptr;
+}
+
 template <>
 std::string DecimalUtil::toString<LongDecimal>(
     const LongDecimal& value,
@@ -109,5 +154,15 @@ std::string DecimalUtil::toString<ShortDecimal>(
 template <typename T>
 std::string DecimalUtil::toString(const T& value, const TypePtr& type) {
   VELOX_UNSUPPORTED();
+}
+
+template <>
+ShortDecimal DecimalUtil::stringToDecimal(
+    const char* data,
+    const size_t size,
+    const TypePtr& toType) {
+  auto [precision, scale] = getDecimalPrecisionScale(toType);
+  int128_t unscaledValue = toInt128(data, size, precision, scale);
+  return ShortDecimal(unscaledValue);
 }
 } // namespace facebook::velox

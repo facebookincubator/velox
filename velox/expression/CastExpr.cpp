@@ -62,6 +62,16 @@ void applyCastKernel(
       }
       writer.finalize();
     }
+  } else if (CppToType<To>::typeKind == TypeKind::SHORT_DECIMAL) {
+    auto output =
+        util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
+            input.valueAt<From>(row), nullOutput, resultFlatVector->type());
+    if (nullOutput) {
+      resultFlatVector->setNull(row, true);
+    } else {
+      resultFlatVector->set(row, output);
+    }
+
   } else {
     auto result =
         util::Converter<CppToType<To>::typeKind, void, Truncate>::cast(
@@ -598,6 +608,8 @@ void CastExpr::apply(
               fromType->asRow(),
               toType->asRow());
           break;
+        case TypeKind::SHORT_DECIMAL:
+          break;
         default: {
           VELOX_UNREACHABLE();
         }
@@ -611,16 +623,21 @@ void CastExpr::apply(
     } else {
       // Handling primitive type conversions
       BaseVector::ensureWritable(rows, toType, context.pool(), &result);
-      // Unwrapping toType pointer. VERY IMPORTANT: dynamic type pointer and
-      // static type templates in each cast must match exactly
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          applyCast,
-          toType->kind(),
-          fromType->kind(),
-          *nonNullRows,
-          context,
-          *decoded,
-          result);
+      if (toType->isShortDecimal()) {
+        applyCast<TypeKind::SHORT_DECIMAL>(
+            fromType->kind(), *nonNullRows, context, *decoded, result);
+      } else {
+        // Unwrapping toType pointer. VERY IMPORTANT: dynamic type pointer and
+        // static type templates in each cast must match exactly
+        VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+            applyCast,
+            toType->kind(),
+            fromType->kind(),
+            *nonNullRows,
+            context,
+            *decoded,
+            result);
+      }
     }
   }
 

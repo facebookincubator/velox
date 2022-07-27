@@ -21,6 +21,7 @@
 #include <string>
 #include <type_traits>
 #include "velox/common/base/Exceptions.h"
+#include "velox/type/DecimalUtils.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 
@@ -36,11 +37,22 @@ struct Converter {
   static typename TypeTraits<KIND>::NativeType cast(T val, bool& nullOutput) {
     VELOX_NYI();
   }
+
+  template <typename T>
+  static typename TypeTraits<KIND>::NativeType
+  cast(T val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
 };
 
 template <>
 struct Converter<TypeKind::BOOLEAN> {
   using T = bool;
+
+  template <typename From>
+  static T cast(const From& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
 
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
@@ -83,7 +95,10 @@ struct Converter<
   static T cast(const From& v, bool& nullOutput) {
     VELOX_NYI();
   }
-
+  template <typename From>
+  static T cast(const From& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
   static T convertStringToInt(const folly::StringPiece& v, bool& nullOutput) {
     // Handling boolean target case fist because it is in this scope
     if constexpr (std::is_same_v<T, bool>) {
@@ -290,7 +305,10 @@ struct Converter<
     std::enable_if_t<KIND == TypeKind::REAL || KIND == TypeKind::DOUBLE, void>,
     TRUNCATE> {
   using T = typename TypeTraits<KIND>::NativeType;
-
+  template <typename From>
+  static T cast(const From& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
   template <typename From>
   static T cast(const From& v, bool& nullOutput) {
     try {
@@ -373,7 +391,11 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
     }
     return folly::to<std::string>(val);
   }
-
+  template <typename T>
+  static std::string
+  cast(const T& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
   static std::string cast(const bool& val, bool& nullOutput) {
     return val ? "true" : "false";
   }
@@ -383,7 +405,10 @@ struct Converter<TypeKind::VARCHAR, void, TRUNCATE> {
 template <>
 struct Converter<TypeKind::TIMESTAMP> {
   using T = typename TypeTraits<TypeKind::TIMESTAMP>::NativeType;
-
+  template <typename From>
+  static T cast(const From& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
   template <typename From>
   static T cast(const From& /* v */, bool& nullOutput) {
     VELOX_NYI();
@@ -415,7 +440,10 @@ struct Converter<TypeKind::DATE> {
   static T cast(const From& /* v */, bool& nullOutput) {
     VELOX_NYI();
   }
-
+  template <typename From>
+  static T cast(const From& val, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
   static T cast(folly::StringPiece v, bool& nullOutput) {
     return fromDateString(v.data(), v.size());
   }
@@ -434,4 +462,30 @@ struct Converter<TypeKind::DATE> {
   }
 };
 
+template <>
+struct Converter<TypeKind::SHORT_DECIMAL> {
+  using T = typename TypeTraits<TypeKind::SHORT_DECIMAL>::NativeType;
+
+  template <typename From>
+  static T cast(const From& /* v */, bool& nullOutput) {
+    VELOX_NYI();
+  }
+
+  template <typename From>
+  static T cast(const From& /* v */, bool& nullOutput, const TypePtr& toType) {
+    VELOX_NYI();
+  }
+
+  static T cast(folly::StringPiece v, bool& nullOutput, const TypePtr& toType) {
+    return DecimalUtil::stringToDecimal<T>(v.data(), v.size(), toType);
+  }
+
+  static T cast(const StringView& v, bool& nullOutput, const TypePtr& toType) {
+    return DecimalUtil::stringToDecimal<T>(v.data(), v.size(), toType);
+  }
+
+  static T cast(const std::string& v, bool& nullOutput, const TypePtr& toType) {
+    return DecimalUtil::stringToDecimal<T>(v.data(), v.size(), toType);
+  }
+};
 } // namespace facebook::velox::util

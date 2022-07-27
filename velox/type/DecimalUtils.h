@@ -32,5 +32,9 @@ class DecimalUtil {
   /// Helper function to convert a decimal value to string.
   template <typename T>
   static std::string toString(const T& value, const TypePtr& type);
+
+  template <typename T>
+  static T
+  stringToDecimal(const char* data, const size_t size, const TypePtr& type);
 };
 } // namespace facebook::velox
