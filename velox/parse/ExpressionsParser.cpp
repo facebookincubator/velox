@@ -16,18 +16,15 @@
 
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/duckdb/conversion/DuckParser.h"
-#include "velox/external/duckdb/duckdb.hpp"
 
 namespace facebook::velox::parse {
 
 std::shared_ptr<const core::IExpr> parseExpr(
     const std::string& expr,
     const ParseOptions& options) {
-  ::duckdb::ParserOptions duckdbOptions;
-  duckdbOptions.parse_decimal_as_double = options.parseDecimalAsDouble;
-  duckdbOptions.preserve_identifier_case = options.preserveIdentifierCase;
-  duckdbOptions.max_expression_depth = options.maxExpressionDepth;
-  return facebook::velox::duckdb::parseExpr(expr, duckdbOptions);
+  facebook::velox::duckdb::ParseOptions duckConversionOptions;
+  duckConversionOptions.parseDecimalAsDouble = options.parseDecimalAsDouble;
+  return facebook::velox::duckdb::parseExpr(expr, duckConversionOptions);
 }
 
 std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(

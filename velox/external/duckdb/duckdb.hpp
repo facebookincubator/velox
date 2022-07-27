@@ -22112,7 +22112,6 @@ class ParserExtension;
 
 struct ParserOptions {
 	bool preserve_identifier_case = true;
-	bool parse_decimal_as_double = true;
 	idx_t max_expression_depth = 1000;
 	vector<ParserExtension> *extensions = nullptr;
 };

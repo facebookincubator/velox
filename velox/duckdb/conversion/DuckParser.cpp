@@ -48,7 +48,7 @@ namespace {
 
 std::shared_ptr<const core::IExpr> parseExpr(
     ParsedExpression& expr,
-    const ParserOptions& options);
+    const ParseOptions& options);
 
 std::string normalizeFuncName(std::string input) {
   static std::map<std::string, std::string> kLookup{
@@ -123,7 +123,7 @@ std::shared_ptr<const core::CallExpr> callExpr(
 // Parse a constant (1, 99.8, "string", etc).
 std::shared_ptr<const core::IExpr> parseConstantExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   auto& constantExpr = dynamic_cast<ConstantExpression&>(expr);
   auto& value = constantExpr.value;
 
@@ -135,14 +135,14 @@ std::shared_ptr<const core::IExpr> parseConstantExpr(
   }
 
   return std::make_shared<const core::ConstantExpr>(
-      duckValueToVariant(constantExpr.value, options.parse_decimal_as_double),
+      duckValueToVariant(constantExpr.value, options.parseDecimalAsDouble),
       getAlias(expr));
 }
 
 // Parse a column reference (col1, "col2", tbl.col, etc).
 std::shared_ptr<const core::IExpr> parseColumnRefExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& colRefExpr = dynamic_cast<ColumnRefExpression&>(expr);
   if (!colRefExpr.IsQualified()) {
     return std::make_shared<const core::FieldAccessExpr>(
@@ -160,7 +160,7 @@ std::shared_ptr<const core::IExpr> parseColumnRefExpr(
 // Arithmetic operators also follow this path (a + b, a * b, etc).
 std::shared_ptr<const core::IExpr> parseFunctionExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& functionExpr = dynamic_cast<FunctionExpression&>(expr);
   std::vector<std::shared_ptr<const core::IExpr>> params;
   params.reserve(functionExpr.children.size());
@@ -183,7 +183,7 @@ std::shared_ptr<const core::IExpr> parseFunctionExpr(
 // Parse a comparison (a > b, a = b, etc).
 std::shared_ptr<const core::IExpr> parseComparisonExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& compExpr = dynamic_cast<ComparisonExpression&>(expr);
   std::vector<std::shared_ptr<const core::IExpr>> params{
       parseExpr(*compExpr.left, options), parseExpr(*compExpr.right, options)};
@@ -196,7 +196,7 @@ std::shared_ptr<const core::IExpr> parseComparisonExpr(
 // Parse x between lower and upper
 std::shared_ptr<const core::IExpr> parseBetweenExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& betweenExpr = dynamic_cast<BetweenExpression&>(expr);
   return callExpr(
       "between",
@@ -209,7 +209,7 @@ std::shared_ptr<const core::IExpr> parseBetweenExpr(
 // Parse a conjunction (AND or OR).
 std::shared_ptr<const core::IExpr> parseConjunctionExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& conjExpr = dynamic_cast<ConjunctionExpression&>(expr);
   std::string conjName =
       StringUtil::Lower(ExpressionTypeToOperator(expr.GetExpressionType()));
@@ -245,7 +245,7 @@ std::shared_ptr<const core::IExpr> parseConjunctionExpr(
 // Parse an "operator", like NOT.
 std::shared_ptr<const core::IExpr> parseOperatorExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& operExpr = dynamic_cast<OperatorExpression&>(expr);
 
   // Code for array literal parsing (e.g. "ARRAY[1, 2, 3]")
@@ -256,7 +256,7 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
     for (const auto& c : operExpr.children) {
       if (auto constantExpr = dynamic_cast<ConstantExpression*>(c.get())) {
         arrayElements.emplace_back(duckValueToVariant(
-            constantExpr->value, options.parse_decimal_as_double));
+            constantExpr->value, options.parseDecimalAsDouble));
       } else {
         VELOX_UNSUPPORTED("Array literal elements need to be constant");
       }
@@ -276,7 +276,7 @@ std::shared_ptr<const core::IExpr> parseOperatorExpr(
       if (auto constantExpr = dynamic_cast<ConstantExpression*>(
               operExpr.children[i + 1].get())) {
         values.emplace_back(duckValueToVariant(
-            constantExpr->value, options.parse_decimal_as_double));
+            constantExpr->value, options.parseDecimalAsDouble));
       } else {
         VELOX_UNSUPPORTED("IN list values need to be constant");
       }
@@ -344,7 +344,7 @@ bool isNullConstant(const std::shared_ptr<const core::IExpr>& expr) {
 // Parse an IF()/CASE expression.
 std::shared_ptr<const core::IExpr> parseCaseExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& caseExpr = dynamic_cast<CaseExpression&>(expr);
   const auto& checks = caseExpr.case_checks;
 
@@ -377,7 +377,7 @@ std::shared_ptr<const core::IExpr> parseCaseExpr(
 // Parse an CAST expression.
 std::shared_ptr<const core::IExpr> parseCastExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   const auto& castExpr = dynamic_cast<CastExpression&>(expr);
   std::vector<std::shared_ptr<const core::IExpr>> params{
       parseExpr(*castExpr.child, options)};
@@ -392,7 +392,7 @@ std::shared_ptr<const core::IExpr> parseCastExpr(
 
 std::shared_ptr<const core::IExpr> parseExpr(
     ParsedExpression& expr,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   switch (expr.GetExpressionClass()) {
     case ExpressionClass::CONSTANT:
       return parseConstantExpr(expr, options);
@@ -443,7 +443,7 @@ std::vector<std::unique_ptr<::duckdb::ParsedExpression>> parseExpression(
 
 std::shared_ptr<const core::IExpr> parseExpr(
     const std::string& exprString,
-    const ParserOptions& options) {
+    const ParseOptions& options) {
   auto parsedExpressions = parseExpression(exprString);
   if (parsedExpressions.size() != 1) {
     throw std::invalid_argument(folly::sformat(
@@ -492,6 +492,7 @@ bool isNullsFirst(
 std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
     const std::string& exprString) {
   ParserOptions options;
+  ParseOptions parseOptions;
   options.preserve_identifier_case = false;
   auto orderByNodes = Parser::ParseOrderList(exprString, options);
   if (orderByNodes.size() != 1) {
@@ -506,7 +507,7 @@ std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
   const bool nullsFirst = isNullsFirst(orderByNode.null_order, exprString);
 
   return {
-      parseExpr(*orderByNode.expression, options),
+      parseExpr(*orderByNode.expression, parseOptions),
       core::SortOrder(ascending, nullsFirst)};
 }
 
@@ -553,7 +554,7 @@ BoundType parseBoundType(WindowBoundary boundary) {
 } // namespace
 
 const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
-  ParserOptions options;
+  ParseOptions options;
   auto parsedExpressions = parseExpression(windowString);
   if (parsedExpressions.size() != 1) {
     throw std::invalid_argument(folly::sformat(

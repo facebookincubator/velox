@@ -25,9 +25,7 @@ namespace facebook::velox::parse {
 /// Hold parsing options.
 struct ParseOptions {
   // Retain legacy behavior by default.
-  bool preserveIdentifierCase = true;
   bool parseDecimalAsDouble = true;
-  int maxExpressionDepth = 1000;
 };
 
 std::shared_ptr<const core::IExpr> parseExpr(

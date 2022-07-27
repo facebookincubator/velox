@@ -24,8 +24,8 @@ using namespace facebook::velox::duckdb;
 
 namespace {
 std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
-  ::duckdb::ParserOptions options;
-  return ::parseExpr(exprString, options);
+  ParseOptions options;
+  return parseExpr(exprString, options);
 }
 } // namespace
 
@@ -450,8 +450,8 @@ TEST(DuckParserTest, invalidExpression) {
 }
 
 TEST(DuckParserTest, parseDecimalConstant) {
-  ::duckdb::ParserOptions options;
-  options.parse_decimal_as_double = false;
+  ParseOptions options;
+  options.parseDecimalAsDouble = false;
   auto expr = parseExpr("1.234", options);
   if (auto constant =
           std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
