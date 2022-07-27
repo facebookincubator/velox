@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/duckdb/conversion/DuckParser.h"
 
