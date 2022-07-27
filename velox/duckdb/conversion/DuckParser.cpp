@@ -571,15 +571,11 @@ const IExprWindowFunction parseWindowExpr(const std::string& windowString) {
   windowIExpr.frame.startType = parseBoundType(windowExpr.start);
   if (windowExpr.start_expr) {
     windowIExpr.frame.startValue = parseExpr(*windowExpr.start_expr.get());
-  } else {
-    windowIExpr.frame.startValue = nullptr;
   }
 
   windowIExpr.frame.endType = parseBoundType(windowExpr.end);
   if (windowExpr.end_expr) {
     windowIExpr.frame.endValue = parseExpr(*windowExpr.end_expr.get());
-  } else {
-    windowIExpr.frame.endValue = nullptr;
   }
   return windowIExpr;
 }

@@ -1017,14 +1017,7 @@ PlanBuilder& PlanBuilder::unnest(
 
 namespace {
 std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
-  std::stringstream out;
-  for (auto i = 0; i < signatures.size(); ++i) {
-    if (i > 0) {
-      out << ", ";
-    }
-    out << signatures[i]->toString();
-  }
-  return out.str();
+  return fmt::format("{}", fmt::join(signatures, ","));
 }
 
 std::string throwWindowFunctionDoesntExist(const std::string& name) {
@@ -1151,7 +1144,7 @@ const core::WindowNode::Frame createWindowFrame(
   return frame;
 }
 
-const std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
+std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
     const duckdb::IExprWindowFunction& windowExpr,
     const std::string& windowString,
     const TypePtr& inputRow,
@@ -1171,7 +1164,7 @@ const std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
   return partitionKeys;
 }
 
-const std::pair<
+std::pair<
     std::vector<core::FieldAccessTypedExprPtr>,
     std::vector<core::SortOrder>>
 parseOrderByKeys(
@@ -1196,26 +1189,26 @@ parseOrderByKeys(
   return {sortingKeys, sortingOrders};
 }
 
-inline bool fieldAccessTypedExprPtrListEquals(
-    const std::vector<core::FieldAccessTypedExprPtr>& list1,
-    const std::vector<core::FieldAccessTypedExprPtr>& list2) {
+bool equalFieldAccessTypedExprPtrList(
+    const std::vector<core::FieldAccessTypedExprPtr>& lhs,
+    const std::vector<core::FieldAccessTypedExprPtr>& rhs) {
   return std::equal(
-      list1.begin(),
-      list1.end(),
-      list2.begin(),
-      [](const core::FieldAccessTypedExprPtr e1,
-         const core::FieldAccessTypedExprPtr e2) {
+      lhs.begin(),
+      lhs.end(),
+      rhs.begin(),
+      [](const core::FieldAccessTypedExprPtr& e1,
+         const core::FieldAccessTypedExprPtr& e2) {
         return e1->name() == e2->name();
       });
 }
 
-inline bool sortOrderListEquals(
-    const std::vector<core::SortOrder>& list1,
-    const std::vector<core::SortOrder>& list2) {
+bool equalSortOrderList(
+    const std::vector<core::SortOrder>& lhs,
+    const std::vector<core::SortOrder>& rhs) {
   return std::equal(
-      list1.begin(),
-      list1.end(),
-      list2.begin(),
+      lhs.begin(),
+      lhs.end(),
+      rhs.begin(),
       [](const core::SortOrder& s1, const core::SortOrder& s2) {
         return s1.isAscending() == s2.isAscending() &&
             s1.isNullsFirst() == s2.isNullsFirst();
@@ -1237,10 +1230,20 @@ PlanBuilder& PlanBuilder::window(
   std::vector<core::WindowNode::Function> windowNodeFunctions;
   std::vector<std::string> windowNames;
 
-  WindowTypeResolver windowResolver;
   bool first = true;
   auto inputType = planNode_->outputType();
+  int i = 0;
 
+  auto errorOnMismatch = [&](const std::string& windowString,
+                             const std::string& mismatchTypeString) -> void {
+    std::stringstream error;
+    error << "Window function invocations " << windowString << " and "
+          << windowFunctions[0] << " do not match " << mismatchTypeString
+          << " clauses.";
+    VELOX_USER_FAIL(error.str());
+  };
+
+  WindowTypeResolver windowResolver;
   for (const auto& windowString : windowFunctions) {
     const auto& windowExpr = duckdb::parseWindowExpr(windowString);
     // All window function SQL strings in the list are expected to have the same
@@ -1248,25 +1251,28 @@ PlanBuilder& PlanBuilder::window(
     if (first) {
       partitionKeys =
           parsePartitionKeys(windowExpr, windowString, inputType, pool_);
-      const auto& sortPair =
+      auto sortPair =
           parseOrderByKeys(windowExpr, windowString, inputType, pool_);
       sortingKeys = sortPair.first;
       sortingOrders = sortPair.second;
       first = false;
     } else {
-      const auto& latestPartitionKeys =
+      auto latestPartitionKeys =
           parsePartitionKeys(windowExpr, windowString, inputType, pool_);
-      const auto& [latestSortingKeys, latestSortingOrders] =
+      auto [latestSortingKeys, latestSortingOrders] =
           parseOrderByKeys(windowExpr, windowString, inputType, pool_);
-      if (!fieldAccessTypedExprPtrListEquals(
-              partitionKeys, latestPartitionKeys) ||
-          !fieldAccessTypedExprPtrListEquals(sortingKeys, latestSortingKeys) ||
-          !sortOrderListEquals(sortingOrders, latestSortingOrders)) {
-        std::stringstream error;
-        error << "Window function invocations " << windowString << " and "
-              << windowFunctions[0]
-              << " do not match PARTITION and ORDER BY clauses.";
-        VELOX_USER_FAIL(error.str());
+
+      if (!equalFieldAccessTypedExprPtrList(
+              partitionKeys, latestPartitionKeys)) {
+        errorOnMismatch(windowString, "PARTITION BY");
+      }
+
+      if (!equalFieldAccessTypedExprPtrList(sortingKeys, latestSortingKeys)) {
+        errorOnMismatch(windowString, "ORDER BY");
+      }
+
+      if (!equalSortOrderList(sortingOrders, latestSortingOrders)) {
+        errorOnMismatch(windowString, "ORDER BY");
       }
     }
 
@@ -1275,13 +1281,12 @@ PlanBuilder& PlanBuilder::window(
             windowExpr.functionCall, planNode_->outputType(), pool_));
     windowNodeFunctions.push_back(
         {std::move(windowCall),
-         std::move(createWindowFrame(
-             windowExpr.frame, planNode_->outputType(), pool_)),
+         createWindowFrame(windowExpr.frame, planNode_->outputType(), pool_),
          windowExpr.ignoreNulls});
     if (windowExpr.functionCall->alias().has_value()) {
       windowNames.push_back(windowExpr.functionCall->alias().value());
     } else {
-      windowNames.push_back(fmt::format("w{}", 0));
+      windowNames.push_back(fmt::format("w{}", i++));
     }
   }
 

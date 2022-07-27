@@ -650,12 +650,12 @@ class PlanBuilder {
       const std::optional<std::string>& ordinalColumn = std::nullopt);
 
   /// Add a WindowNode to execute a list of windowFunctions.
-  /// @param windowFunctions A list of window function SQL like strings to be
-  /// executed by this windowNode.
+  /// @param windowFunctions A list of one or more window function SQL like
+  /// strings to be computed by this windowNode.
   /// A window function SQL string looks like :
-  /// "windowFunction(parameters) OVER (PARTITION BY columns_list ORDER BY
-  /// columns_list [ROWS|RANGE] BETWEEN [UNBOUNDED PRECEDING | x PRECEDING |
-  /// CURRENT ROW] AND [UNBOUNDED FOLLOWING | x FOLLOWING | CURRENT ROW] AS
+  /// "name(parameters) OVER (PARTITION BY partition_keys ORDER BY
+  /// sorting_keys [ROWS|RANGE BETWEEN [UNBOUNDED PRECEDING | x PRECEDING |
+  /// CURRENT ROW] AND [UNBOUNDED FOLLOWING | x FOLLOWING | CURRENT ROW]] AS
   /// columnName"
   PlanBuilder& window(const std::vector<std::string>& windowFunctions);
 

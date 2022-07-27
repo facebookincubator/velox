@@ -103,6 +103,18 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
           .window({"window1(c) over (partition by a order by b) as d"})
           .planNode());
 
+  VELOX_CHECK_NOT_NULL(
+      PlanBuilder()
+          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window({"window1(c) over (partition by a) as d"})
+          .planNode());
+
+  VELOX_CHECK_NOT_NULL(
+      PlanBuilder()
+          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window({"window1(c) over (partition by a order by b)"})
+          .planNode());
+
   VELOX_ASSERT_THROW(
       PlanBuilder()
           .tableScan(ROW({"a", "b"}, {VARCHAR(), BIGINT()}))
@@ -121,6 +133,8 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 TEST_F(PlanBuilderTest, windowFrame) {
   registerWindowFunction();
 
+  // TODO: Change these tests to validate the results of the parsing when
+  // WindowNode::toString() is implemented.
   VELOX_CHECK_NOT_NULL(
       PlanBuilder()
           .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
@@ -145,6 +159,24 @@ TEST_F(PlanBuilderTest, windowFrame) {
                "window1(c) over (partition by a order by b range between b preceding and current row) as d2",
                "window1(c) over (partition by b order by a rows between b preceding and current row) as d3"})
           .planNode(),
-      "do not match PARTITION and ORDER BY clauses.");
+      "do not match PARTITION BY clauses.");
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window(
+              {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
+               "window1(c) over (partition by a order by c rows between b preceding and current row) as d2"})
+          .planNode(),
+      "do not match ORDER BY clauses.");
+
+  VELOX_ASSERT_THROW(
+      PlanBuilder()
+          .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
+          .window(
+              {"window1(c) over (partition by a order by b rows between b preceding and current row) as d1",
+               "window1(c) over (partition by a order by b desc rows between b preceding and current row) as d2"})
+          .planNode(),
+      "do not match ORDER BY clauses.");
 }
 } // namespace facebook::velox::exec::test
