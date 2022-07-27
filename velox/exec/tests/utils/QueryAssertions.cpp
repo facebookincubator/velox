@@ -746,7 +746,7 @@ bool waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
 }
 
 bool waitForTaskAbort(exec::Task* task, uint64_t maxWaitMicros) {
-  // Wait for task to transition to finished state.
+  // Wait for task to transition to aborted state.
   if (not task->isAborted()) {
     auto& executor = folly::QueuedImmediateExecutor::instance();
     auto future = task->stateChangeFuture(maxWaitMicros).via(&executor);
