@@ -518,6 +518,7 @@ TEST_F(PlanNodeToStringTest, window) {
           .window({"window1(c) over (partition by a order by b "
                    "range between 10 preceding and unbounded following) AS d"})
           .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [b ASC NULLS LAST] "
       "d := window1(ROW[\"c\"]) RANGE between 10 PRECEDING and UNBOUNDED FOLLOWING] "
@@ -529,6 +530,7 @@ TEST_F(PlanNodeToStringTest, window) {
              .window({"window1(c) over (partition by a "
                       "range between current row and b following)"})
              .planNode();
+  ASSERT_EQ("-- Window\n", plan->toString());
   ASSERT_EQ(
       "-- Window[partition by [a] order by [] "
       "w0 := window1(ROW[\"c\"]) RANGE between CURRENT ROW and b FOLLOWING] "
