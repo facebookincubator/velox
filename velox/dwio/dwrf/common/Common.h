@@ -365,6 +365,10 @@ class Footer {
     return dwrfFooter_;
   }
 
+  const proto::orc::Footer* getOrcFooter() const {
+    return orcFooter_;
+  }
+
   bool hasHeaderLength() const {
     return true;
   }
@@ -388,6 +392,7 @@ class Footer {
 
   const ::facebook::velox::dwrf::proto::StripeInformation& stripes(
       int index) const {
+    DWIO_ENSURE(dwrfFooter_);
     return dwrfFooter_->stripes(index);
   }
 
@@ -519,8 +524,9 @@ class Footer {
   proto::orc::CalendarKind calendarKind_;
   std::string softwareVersion_;
 
-  // temporary pointer to footers to handle unimplemented attributes
+  // pointers to format-specific footers
   proto::Footer* dwrfFooter_ = nullptr;
+  proto::orc::Footer* orcFooter_ = nullptr;
 };
 
 enum RleVersion { RleVersion_1, RleVersion_2 };
