@@ -693,9 +693,17 @@ void FlatMapStructEncodingColumnReader<T>::next(
     result->setSize(numValues);
     result->setNullCount(nullCount);
   } else {
+    std::vector<std::string> keyNames;
+    keyNames.reserve(keyNodes_.size());
+    std::ranges::transform(
+        keyNodes_, std::back_inserter(keyNames), [](const auto& keyNode) {
+          return keyNode ? folly::to<std::string>(keyNode->getKey().get())
+                         : std::string();
+        });
+
     result = std::make_shared<RowVector>(
         &memoryPool_,
-        ROW(std::vector<std::string>(keyNodes_.size()),
+        ROW(std::move(keyNames),
             std::vector<std::shared_ptr<const Type>>(
                 keyNodes_.size(), requestedType_->type->asMap().valueType())),
         nulls,

@@ -34,6 +34,7 @@
 
 #include <fmt/core.h>
 #include <array>
+#include <memory>
 #include <numeric>
 
 using namespace ::testing;
@@ -479,6 +480,23 @@ void verifyMapColumnEqual(
     int32_t key,
     vector_size_t childOffset) {
   const auto& key1ValueVector = rowVector->childAt(childOffset);
+  auto rowVectorType =
+      std::dynamic_pointer_cast<const RowType>(rowVector->type());
+  EXPECT_TRUE(rowVectorType);
+  if (rowVectorType) {
+    // If the entire column is null it means that the key wasn't found and the
+    // reader filled it with null and gave an empty name to it.
+    const auto& name = rowVectorType->nameOf(childOffset);
+    if (name.empty()) {
+      // TODO: There is a bug here. We sometimes have 300 nulls and 100
+      // elements. Working to fix it
+      /*EXPECT_TRUE(
+          key1ValueVector->getNullCount().has_value() &&
+          key1ValueVector->getNullCount() == key1ValueVector->size());*/
+    } else {
+      EXPECT_EQ(name, folly::to<std::string>(key));
+    }
+  }
   const auto& keyVector = mapVector->mapKeys()->as<SimpleVector<int32_t>>();
   const auto& valueVector = mapVector->mapValues();
   for (uint64_t i = 0; i < mapVector->size(); ++i) {
