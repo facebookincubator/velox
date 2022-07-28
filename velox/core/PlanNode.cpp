@@ -470,12 +470,12 @@ void addWindowFunction(
     const WindowNode::Function& windowFunction) {
   stream << windowFunction.functionCall->toString() << " ";
   auto frame = windowFunction.frame;
-  stream << windowTypeString(frame.type) << " BETWEEN ";
+  stream << windowTypeString(frame.type) << " between ";
   if (frame.startValue) {
     addKeys(stream, {frame.startValue});
     stream << " ";
   }
-  stream << frameBoundString(frame.startType) << " AND ";
+  stream << frameBoundString(frame.startType) << " and ";
   if (frame.endValue) {
     addKeys(stream, {frame.endValue});
     stream << " ";
@@ -598,13 +598,13 @@ void OrderByNode::addDetails(std::stringstream& stream) const {
 }
 
 void WindowNode::addDetails(std::stringstream& stream) const {
-  stream << "partition by: [";
+  stream << "partition by [";
   if (!partitionKeys_.empty()) {
     addFields(stream, partitionKeys_);
   }
   stream << "] ";
 
-  stream << "order by: [";
+  stream << "order by [";
   addSortingKeys(stream, sortingKeys_, sortingOrders_);
   stream << "] ";
 
