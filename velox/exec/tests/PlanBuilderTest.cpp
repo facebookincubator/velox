@@ -145,8 +145,8 @@ TEST_F(PlanBuilderTest, windowFunctionCall) {
 TEST_F(PlanBuilderTest, windowFrame) {
   registerWindowFunction();
 
-  // Validating that function invocations with different frames but the same partitioning and order can be
-  // executed in the same node.
+  // Validating that function invocations with different frames but the same
+  // partitioning and order can be executed in the same node.
   VELOX_CHECK_EQ(
       PlanBuilder()
           .tableScan(ROW({"a", "b", "c"}, {VARCHAR(), BIGINT(), BIGINT()}))
