@@ -24,6 +24,59 @@ namespace {
 bool isAny(const TypeSignature& typeSignature) {
   return typeSignature.baseType() == "any";
 }
+
+bool isNumber(const std::string& str) {
+  return !str.empty() &&
+      std::find_if(str.begin(), str.end(), [](unsigned char c) {
+        return !std::isdigit(c);
+      }) == str.end();
+}
+
+std::string buildCalculation(
+    const std::string& variable,
+    const std::string& calculation) {
+  return fmt::format("{}={}", variable, calculation);
+}
+
+TypePtr inferDecimalType(
+    const exec::TypeSignature& typeSignature,
+    std::unordered_map<std::string, int>& variables,
+    const std::unordered_map<std::string, std::string>& constraints) {
+  const auto& precisionVar = typeSignature.variables()[0];
+  const auto& scaleVar = typeSignature.variables()[1];
+  // check for constraints, else set defaults.
+  const auto& precisionConstraint = constraints.find(precisionVar);
+  const auto& scaleConstraint = constraints.find(scaleVar);
+
+  int precision = 0;
+  int scale = 0;
+  // Determine precision.
+  // Handle constant.
+  if (isNumber(precisionVar)) {
+    precision = atoi(precisionVar.c_str());
+  } else {
+    if (precisionConstraint == constraints.end()) {
+      VELOX_FAIL("Missing constraint for variable {}", precisionVar);
+    }
+    auto precisionCalculation =
+        buildCalculation(precisionVar, precisionConstraint->second);
+    expression::calculation::evaluate(precisionCalculation, variables);
+    precision = variables[precisionVar];
+  }
+  // Determine scale.
+  // Handle constant.
+  if (isNumber(scaleVar)) {
+    scale = atoi(scaleVar.c_str());
+  } else {
+    if (scaleConstraint == constraints.end()) {
+      VELOX_FAIL("Missing constraint for variable {}", scaleVar);
+    }
+    auto scaleCalculation = buildCalculation(scaleVar, scaleConstraint->second);
+    expression::calculation::evaluate(scaleCalculation, variables);
+    scale = variables[scaleVar];
+  }
+  return DECIMAL(precision, scale);
+}
 } // namespace
 
 bool SignatureBinder::tryBind() {
@@ -120,12 +173,6 @@ TypePtr SignatureBinder::tryResolveType(
   return tryResolveType(typeSignature, bindings_, variables_, constraints_);
 }
 
-std::string buildCalculation(
-    const std::string& variable,
-    const std::string& calculation) {
-  return fmt::format("{}={}", variable, calculation);
-}
-
 // static
 TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
@@ -150,28 +197,7 @@ TypePtr SignatureBinder::tryResolveType(
     auto typeName = boost::algorithm::to_upper_copy(typeSignature.baseType());
 
     if (isCommonDecimalName(typeName)) {
-      const auto& precisionVar = typeSignature.variables()[0];
-      const auto& scaleVar = typeSignature.variables()[1];
-      // check for constraints, else set defaults.
-      const auto& precisionConstraint = constraints.find(precisionVar);
-      const auto& scaleConstraint = constraints.find(scaleVar);
-
-      if (precisionConstraint == constraints.end()) {
-        VELOX_FAIL("Missing constraint for variable {}", precisionVar);
-      }
-      if (scaleConstraint == constraints.end()) {
-        VELOX_FAIL("Missing constraint for variable {}", scaleVar);
-      }
-
-      auto precisionCalculation =
-          buildCalculation(precisionVar, precisionConstraint->second);
-      expression::calculation::evaluate(precisionCalculation, variables);
-
-      auto scaleCalculation =
-          buildCalculation(scaleVar, scaleConstraint->second);
-      expression::calculation::evaluate(scaleCalculation, variables);
-
-      return DECIMAL(variables[precisionVar], variables[scaleVar]);
+      return inferDecimalType(typeSignature, variables, constraints);
     }
 
     if (auto type = getType(typeName, children)) {
