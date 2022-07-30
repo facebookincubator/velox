@@ -43,6 +43,80 @@
             
   <section id="json-functions">
 <h1>JSON Functions<a class="headerlink" href="#json-functions" title="Permalink to this headline">¶</a></h1>
+<section id="json-format">
+<h2>JSON Format<a class="headerlink" href="#json-format" title="Permalink to this headline">¶</a></h2>
+<p>JSON is a language-independent data format that represents data as
+human-readable text. A JSON text can represent a number, a boolean, a
+string, an array, an object, or a null, with slightly different grammar.
+For instance, a JSON text representing a string must escape all characters
+and enclose the string in double quotes, such as <code class="docutils literal notranslate"><span class="pre">&quot;123\n&quot;</span></code>, whereas a JSON
+text representing a number does not need to, such as <code class="docutils literal notranslate"><span class="pre">123</span></code>. A JSON text
+representing an array must enclose the array elements in square brackets,
+such as <code class="docutils literal notranslate"><span class="pre">[1,2,3]</span></code>. More detailed grammar can be found in
+<a class="reference external" href="https://www.json.org">this JSON introduction</a>.</p>
+</section>
+<section id="cast-to-json">
+<h2>Cast to JSON<a class="headerlink" href="#cast-to-json" title="Permalink to this headline">¶</a></h2>
+<p>Casting a value from a supported type to JSON returns a JSON text that
+represents this value. Casting from BOOLEAN, TINYINT, SMALLINT, INTEGER,
+BIGINT, REAL, DOUBLE, DATE, TIMESTAMP, or VARCHAR is supported. Casting
+from ARRAY or ROW is supported when the element type of the array is one
+of the supported types, or when every field type of the row is one of the
+supported types. Casting from MAP is supported when the key type of the map
+is BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, or VARCHAR
+and value type of the map is one of the supported types. Additionally,
+element types of ARRAY and MAP and field types of ROW are also allowed to
+be JSON. Behaviors of the casts are shown with the examples below:</p>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(NULL</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">NULL</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(1</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'1'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(9223372036854775807</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'9223372036854775807'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST('abc'</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'&quot;abc&quot;'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(true</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'true'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(1.234</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'1.234'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(ARRAY[1,</span> <span class="pre">23,</span> <span class="pre">456]</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'[1,23,456]'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(ARRAY[1,</span> <span class="pre">NULL,</span> <span class="pre">456]</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'[1,null,456]'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(ARRAY[ARRAY[1,</span> <span class="pre">23],</span> <span class="pre">ARRAY[456]]</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'[[1,23],[456]]'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(MAP_FROM_ENTRIES(ARRAY[('k1',</span> <span class="pre">1),</span> <span class="pre">('k2',</span> <span class="pre">23),</span> <span class="pre">('k3',</span> <span class="pre">456)])</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'{&quot;k1&quot;:1,&quot;k2&quot;:23,&quot;k3&quot;:456}'</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(CAST(ROW(123,</span> <span class="pre">'abc',</span> <span class="pre">true,</span> <span class="pre">JSON</span> <span class="pre">'[&quot;a&quot;]')</span> <span class="pre">AS</span> <span class="pre">ROW(v1</span> <span class="pre">BIGINT,</span> <span class="pre">v2</span> <span class="pre">VARCHAR,</span> <span class="pre">v3</span> <span class="pre">BOOLEAN,</span> <span class="pre">v4</span> <span class="pre">JSON))</span> <span class="pre">AS</span> <span class="pre">JSON);</span> <span class="pre">--</span> <span class="pre">JSON</span> <span class="pre">'[123,&quot;abc&quot;,true,[&quot;a&quot;]]'</span></code></p>
+<p>Notice that casting from NULL to JSON is not straightforward. Casting from
+a standalone NULL will produce a SQL NULL instead of JSON ‘null’. However,
+when casting from arrays or map containing NULLs, the produced JSON will
+have nulls in it.</p>
+<p>Another thing to be aware of is that when casting from ROW to JSON, the
+result is a JSON array rather than a JSON object. This is because positions
+are more important than names for rows in SQL.</p>
+<p>Finally, keep in mind that casting a VARCHAR string to JSON does not directly
+turn the original string into JSON type. Instead, it creates a JSON text
+representing the original string. This JSON text is different from the original
+string since it has special characters escaped and extra double quotes added.</p>
+</section>
+<section id="cast-from-json">
+<h2>Cast from JSON<a class="headerlink" href="#cast-from-json" title="Permalink to this headline">¶</a></h2>
+<p>Casting a JSON text to a supported type returns the value represented by this
+JSON text. The JSON text must represent a valid value of the type it is casted
+to, or an error will be thrown. Casting to BOOLEAN, TINYINT, SMALLINT, INTEGER,
+BIGINT, REAL, DOUBLE or VARCHAR is supported. Casting to ARRAY and MAP is
+supported when the element type of the array is one of the supported types, or
+when the key type of the map is BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
+REAL, DOUBLE, or VARCHAR and value type of the map is one of the supported types.
+Behaviors of the casts are shown with the examples below:</p>
+<p><code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'null'</span> <span class="pre">AS</span> <span class="pre">VARCHAR);</span> <span class="pre">--</span> <span class="pre">NULL</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'1'</span> <span class="pre">AS</span> <span class="pre">INTEGER);</span> <span class="pre">--</span> <span class="pre">1</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'9223372036854775807'</span> <span class="pre">AS</span> <span class="pre">BIGINT);</span> <span class="pre">--</span> <span class="pre">9223372036854775807</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'&quot;abc&quot;'</span> <span class="pre">AS</span> <span class="pre">VARCHAR);</span> <span class="pre">--</span> <span class="pre">abc</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'true'</span> <span class="pre">AS</span> <span class="pre">BOOLEAN);</span> <span class="pre">--</span> <span class="pre">true</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'1.234'</span> <span class="pre">AS</span> <span class="pre">DOUBLE);</span> <span class="pre">--</span> <span class="pre">1.234</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'[1,23,456]'</span> <span class="pre">AS</span> <span class="pre">ARRAY(INTEGER));</span> <span class="pre">--</span> <span class="pre">[1,</span> <span class="pre">23,</span> <span class="pre">456]</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'[1,null,456]'</span> <span class="pre">AS</span> <span class="pre">ARRAY(INTEGER));</span> <span class="pre">--</span> <span class="pre">[1,</span> <span class="pre">NULL,</span> <span class="pre">456]</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'[[1,23],[456]]'</span> <span class="pre">AS</span> <span class="pre">ARRAY(ARRAY(INTEGER)));</span> <span class="pre">--</span> <span class="pre">[[1,</span> <span class="pre">23],</span> <span class="pre">[456]]</span></code>
+<code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">CAST(JSON</span> <span class="pre">'{&quot;k1&quot;:1,&quot;k2&quot;:23,&quot;k3&quot;:456}'</span> <span class="pre">AS</span> <span class="pre">MAP(VARCHAR,</span> <span class="pre">INTEGER));</span> <span class="pre">--</span> <span class="pre">{k1=1,</span> <span class="pre">k2=23,</span> <span class="pre">k3=456}</span></code></p>
+<p>Notice that casting a JSON text to VARCHAR does not turn the JSON text into
+a plain string as is. Instead, it returns the VARCHAR string represented by
+the JSON text. This string is different from the JSON text because it has
+special characters unescaped and double quotes removed.</p>
+</section>
+<section id="id1">
+<h2>JSON Functions<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="json_extract_scalar">
 <span class="sig-name descname"><span class="pre">json_extract_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_path</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varchar</span></span></span><a class="headerlink" href="#json_extract_scalar" title="Permalink to this definition">¶</a></dt>
@@ -57,6 +131,19 @@ or string):</p>
 </dd></dl>
 
 </section>
+</section>
+<section id="json-vectors">
+<h1>JSON Vectors<a class="headerlink" href="#json-vectors" title="Permalink to this headline">¶</a></h1>
+<p>There are a number of Presto JSON functions expecting JSON-typed inputs or
+returning JSON-typed outputs. Hence, developers who use the Velox library may
+need to work with JSON-typed vectors. In the Velox internal implementation,
+the JSON type inherits the VARCHAR type, so the manipulations of these vectors
+are similar. To create a JSON-typed vector, one can use
+<code class="docutils literal notranslate"><span class="pre">BaseVector::create(JSON(),</span> <span class="pre">size,</span> <span class="pre">pool)</span></code> that creates a flat vector of
+StringViews, i.e. FlatVector&lt;StringView&gt;. Reading and writing to a JSON-typed
+vector are the same as those for VARCHAR vectors, e.g., via
+VectorReader&lt;StringView&gt; and StringWriter&lt;&gt;.</p>
+</section>
 
 
             <div class="clearer"></div>
@@ -65,6 +152,20 @@ or string):</p>
       </div>
       <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
         <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">JSON Functions</a><ul>
+<li><a class="reference internal" href="#json-format">JSON Format</a></li>
+<li><a class="reference internal" href="#cast-to-json">Cast to JSON</a></li>
+<li><a class="reference internal" href="#cast-from-json">Cast from JSON</a></li>
+<li><a class="reference internal" href="#id1">JSON Functions</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#json-vectors">JSON Vectors</a></li>
+</ul>
+
+  </div>
   <div>
     <h4>Previous topic</h4>
     <p class="topless"><a href="binary.html"
