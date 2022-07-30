@@ -15,10 +15,8 @@
  */
 
 #include "velox/exec/Spiller.h"
-
-#include "velox/common/base/AsyncSource.h"
-
 #include <folly/ScopeGuard.h>
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/testutil/TestValue.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -183,6 +181,7 @@ std::unique_ptr<Spiller::SpillStatus> Spiller::writeSpill(
 
 void Spiller::advanceSpill(uint64_t maxBytes) {
   std::vector<std::shared_ptr<AsyncSource<SpillStatus>>> writes;
+  std::vector<folly::Promise<bool>> pendingSpillings;
   for (auto partition = 0; partition < spillRuns_.size(); ++partition) {
     if (pendingSpillPartitions_.find(partition) ==
         pendingSpillPartitions_.end()) {
@@ -193,10 +192,23 @@ void Spiller::advanceSpill(uint64_t maxBytes) {
           return writeSpill(
               partition, maxBytes / pendingSpillPartitions_.size());
         }));
-    if (executor_) {
-      executor_->add([source = writes.back()]() { source->prepare(); });
+    if (executor_ != nullptr) {
+      pendingSpillings.emplace_back();
+      executor_->add([source = writes.back(),
+                      pendingSpilling = &pendingSpillings.back()]() {
+        source->prepare();
+        pendingSpilling->setValue(true);
+      });
     }
   }
+
+  // Wait until all the spilling ios get processed by 'executor_' if it has been
+  // configured. This ensures the synchronous ios are processed in parallel in
+  // that case.
+  for (auto& pendingSpilling : pendingSpillings) {
+    pendingSpilling.getSemiFuture().wait();
+  }
+
   auto sync = folly::makeGuard([&]() {
     for (auto& write : writes) {
       // We consume the result for the pending writes. This is a
