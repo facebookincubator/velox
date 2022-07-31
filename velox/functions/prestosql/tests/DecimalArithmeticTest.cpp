@@ -34,8 +34,10 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       const VectorPtr& expected,
       const std::string& expression,
       const std::vector<VectorPtr>& input) {
-    auto result = evaluate<SimpleVector<T>>(expression, makeRowVector(input));
+    VectorPtr result =
+        evaluate<SimpleVector<T>>(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+    ASSERT_TRUE(expected->type()->equivalent(*result->type().get()));
   }
 
   template <typename T>
