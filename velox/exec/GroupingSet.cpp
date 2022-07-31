@@ -278,7 +278,7 @@ void GroupingSet::initializeGlobalAggregation() {
 
   // Row layout is:
   //  - null flags - one bit per aggregate,
-  // - uint32_t row size,
+  //  - uint32_t row size,
   //  - fixed-width accumulators - one per aggregate
   //
   // Here we always make space for a row size since we only have one
@@ -289,6 +289,8 @@ void GroupingSet::initializeGlobalAggregation() {
 
   for (auto& aggregate : aggregates_) {
     aggregate->setAllocator(&stringAllocator_);
+    // Accumulators must be byte-aligned by their fixed width size.
+    offset = bits::roundUp(offset, aggregate->accumulatorFixedWidthSize());
     aggregate->setOffsets(
         offset,
         RowContainer::nullByte(nullOffset),

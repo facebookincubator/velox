@@ -87,7 +87,7 @@ class SumAggregate
         &updateSingleValue<TAccumulator>,
         &updateDuplicateValues<TAccumulator>,
         mayPushdown,
-        0);
+        TInput(0));
   }
 
   void addSingleGroupIntermediateResults(
@@ -102,7 +102,7 @@ class SumAggregate
         &updateSingleValue<ResultType>,
         &updateDuplicateValues<ResultType>,
         mayPushdown,
-        0);
+        TInput(0));
   }
 
  protected:
@@ -152,7 +152,7 @@ class SumAggregate
       result += n * value;
     } else {
       result = functions::checkedPlus<TData>(
-          result, functions::checkedMultiply<TData>(n, value));
+          result, functions::checkedMultiply<TData>(TData(n), value));
     }
   }
 };
@@ -196,6 +196,12 @@ bool registerSumAggregate(const std::string& name) {
           .intermediateType("double")
           .argumentType("double")
           .build(),
+      exec::AggregateFunctionSignatureBuilder()
+          .argumentType("DECIMAL(a_precision, a_scale)")
+          .intermediateType("DECIMAL(38, r_scale)")
+          .variableConstraint("r_scale", "a_scale")
+          .returnType("DECIMAL(38, r_scale)")
+          .build(),
   };
 
   for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
@@ -234,6 +240,16 @@ bool registerSumAggregate(const std::string& name) {
               return std::make_unique<T<double, double, float>>(resultType);
             }
             return std::make_unique<T<double, double, double>>(DOUBLE());
+          case TypeKind::SHORT_DECIMAL:
+            return std::make_unique<
+                T<UnscaledShortDecimal,
+                  UnscaledLongDecimal,
+                  UnscaledLongDecimal>>(resultType);
+          case TypeKind::LONG_DECIMAL:
+            return std::make_unique<
+                T<UnscaledLongDecimal,
+                  UnscaledLongDecimal,
+                  UnscaledLongDecimal>>(resultType);
           default:
             VELOX_CHECK(
                 false,
