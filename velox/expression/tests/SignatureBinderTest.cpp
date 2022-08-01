@@ -111,13 +111,13 @@ TEST(SignatureBinderTest, decimals) {
         {SHORT_DECIMAL(11, 5), SHORT_DECIMAL(10, 6)},
         DECIMAL(10, 6));
   }
-  // Aggregate Sum
+  // Aggregate Sum.
   {
     auto signature = exec::AggregateFunctionSignatureBuilder()
                          .argumentType("DECIMAL(a_precision, a_scale)")
-                         .intermediateType("DECIMAL(32, i_scale)")
+                         .intermediateType("DECIMAL(38, i_scale)")
                          .variableConstraint("i_scale", "a_scale")
-                         .returnType("DECIMAL(32, r_scale)")
+                         .returnType("DECIMAL(38, r_scale)")
                          .variableConstraint("r_scale", "a_scale")
                          .build();
 
@@ -128,10 +128,10 @@ TEST(SignatureBinderTest, decimals) {
     auto intermediateType =
         binder.tryResolveType(signature->intermediateType());
     ASSERT_TRUE(intermediateType != nullptr);
-    ASSERT_TRUE(DECIMAL(32, 4)->equivalent(*intermediateType));
+    ASSERT_TRUE(DECIMAL(38, 4)->equivalent(*intermediateType));
     auto returnType = binder.tryResolveReturnType();
     ASSERT_TRUE(returnType != nullptr);
-    ASSERT_TRUE(DECIMAL(32, 4)->equivalent(*returnType));
+    ASSERT_TRUE(DECIMAL(38, 4)->equivalent(*returnType));
   }
   // Error: missing constraint
   {

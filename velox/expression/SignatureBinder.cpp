@@ -25,7 +25,8 @@ bool isAny(const TypeSignature& typeSignature) {
   return typeSignature.baseType() == "any";
 }
 
-bool isNumber(const std::string& str) {
+/// Returns true only if 'str' contains digits.
+bool isPositiveInteger(const std::string& str) {
   return !str.empty() &&
       std::find_if(str.begin(), str.end(), [](unsigned char c) {
         return !std::isdigit(c);
@@ -52,12 +53,13 @@ TypePtr inferDecimalType(
   int scale = 0;
   // Determine precision.
   // Handle constant.
-  if (isNumber(precisionVar)) {
+  if (isPositiveInteger(precisionVar)) {
     precision = atoi(precisionVar.c_str());
   } else {
-    if (precisionConstraint == constraints.end()) {
-      VELOX_FAIL("Missing constraint for variable {}", precisionVar);
-    }
+    VELOX_CHECK(
+        precisionConstraint != constraints.end(),
+        "Missing constraint for variable {}",
+        precisionVar);
     auto precisionCalculation =
         buildCalculation(precisionVar, precisionConstraint->second);
     expression::calculation::evaluate(precisionCalculation, variables);
@@ -65,12 +67,13 @@ TypePtr inferDecimalType(
   }
   // Determine scale.
   // Handle constant.
-  if (isNumber(scaleVar)) {
+  if (isPositiveInteger(scaleVar)) {
     scale = atoi(scaleVar.c_str());
   } else {
-    if (scaleConstraint == constraints.end()) {
-      VELOX_FAIL("Missing constraint for variable {}", scaleVar);
-    }
+    VELOX_CHECK(
+        scaleConstraint != constraints.end(),
+        "Missing constraint for variable {}",
+        scaleVar);
     auto scaleCalculation = buildCalculation(scaleVar, scaleConstraint->second);
     expression::calculation::evaluate(scaleCalculation, variables);
     scale = variables[scaleVar];
