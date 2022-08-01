@@ -29,7 +29,6 @@ add_library(
 target_link_libraries(
   velox_exec_test_util
   velox_temp_path
-  duckdb
   velox_core
   velox_exception
   velox_expression
@@ -39,7 +38,7 @@ target_link_libraries(
   velox_dwio_type_fbhive
   velox_dwio_dwrf_reader
   velox_dwio_dwrf_writer
-  velox_dwrf_test_utils
+  velox_dwio_common_test_utils
   velox_hive_connector
   velox_tpch_connector
   velox_presto_serializer

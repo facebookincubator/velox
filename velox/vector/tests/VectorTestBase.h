@@ -166,6 +166,35 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, type);
   }
 
+  template <typename T>
+  FlatVectorPtr<T> makeAllNullFlatVector(vector_size_t size) {
+    return vectorMaker_.allNullFlatVector<T>(size);
+  }
+
+  FlatVectorPtr<ShortDecimal> makeShortDecimalFlatVector(
+      const std::vector<int64_t>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.shortDecimalFlatVector(unscaledValues, type);
+  }
+
+  FlatVectorPtr<LongDecimal> makeLongDecimalFlatVector(
+      const std::vector<int128_t>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.longDecimalFlatVector(unscaledValues, type);
+  }
+
+  FlatVectorPtr<ShortDecimal> makeNullableShortDecimalFlatVector(
+      const std::vector<std::optional<int64_t>>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.shortDecimalFlatVectorNullable(unscaledValues, type);
+  }
+
+  FlatVectorPtr<LongDecimal> makeNullableLongDecimalFlatVector(
+      const std::vector<std::optional<int128_t>>& unscaledValues,
+      const TypePtr& type) {
+    return vectorMaker_.longDecimalFlatVectorNullable(unscaledValues, type);
+  }
+
   // Convenience function to create arrayVectors (vector of arrays) based on
   // input values from nested std::vectors. The underlying elements are
   // non-nullable.
@@ -563,7 +592,9 @@ class VectorTestBase {
 
   BufferPtr makeIndices(
       vector_size_t size,
-      std::function<vector_size_t(vector_size_t)> indexAt);
+      std::function<vector_size_t(vector_size_t)> indexAt) const;
+
+  BufferPtr makeIndices(const std::vector<vector_size_t>& indices) const;
 
   BufferPtr makeOddIndices(vector_size_t size);
 

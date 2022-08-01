@@ -96,7 +96,7 @@ class SimpleFunctionAdapter : public VectorFunction {
       // is unique, as is nulls.  We also know the size of the vector is
       // at least as large as the size of rows.
       if (!isResultReused) {
-        BaseVector::ensureWritable(*rows, outputType, context->pool(), _result);
+        context->ensureWritable(*rows, outputType, *_result);
       }
       result = reinterpret_cast<result_vector_t*>((*_result).get());
       resultWriter.init(*result);
@@ -396,6 +396,10 @@ class SimpleFunctionAdapter : public VectorFunction {
 
   bool isDefaultNullBehavior() const override {
     return fn_->is_default_null_behavior;
+  }
+
+  bool supportsFlatNoNullsFastPath() const override {
+    return !FUNC::can_produce_null_output;
   }
 
   bool ensureStringEncodingSetAtAllInputs() const override {

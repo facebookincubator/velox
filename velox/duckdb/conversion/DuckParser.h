@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace facebook::velox::core {
 class IExpr;
@@ -24,6 +25,11 @@ class SortOrder;
 } // namespace facebook::velox::core
 
 namespace facebook::velox::duckdb {
+/// Hold parsing options.
+struct ParseOptions {
+  // Retain legacy behavior by default.
+  bool parseDecimalAsDouble = true;
+};
 
 // Parses an input expression using DuckDB's internal postgresql-based parser,
 // converting it to an IExpr tree. Takes a single expression as input.
@@ -32,12 +38,49 @@ namespace facebook::velox::duckdb {
 // are lower-cased, what prevents you to use functions and column names
 // containing upper case letters (e.g: "concatRow" will be parsed as
 // "concatrow").
-std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString);
+std::shared_ptr<const core::IExpr> parseExpr(
+    const std::string& exprString,
+    const ParseOptions& options);
 
 // Parses an ORDER BY clause using DuckDB's internal postgresql-based parser,
 // converting it to a pair of an IExpr tree and a core::SortOrder. Uses ASC
 // NULLS LAST as the default sort order.
 std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder> parseOrderByExpr(
     const std::string& exprString);
+
+// Parses a WINDOW function SQL string using DuckDB's internal postgresql-based
+// parser. Window Functions are executed by Velox Window PlanNodes and not the
+// expression evaluation. So we cannot use an IExpr based API. The structures
+// below capture all the metadata needed from the window function SQL string
+// for usage in the WindowNode plan node.
+enum class WindowType { kRows, kRange };
+
+enum class BoundType {
+  kCurrentRow,
+  kUnboundedPreceding,
+  kUnboundedFollowing,
+  kPreceding,
+  kFollowing
+};
+
+struct IExprWindowFrame {
+  WindowType type;
+  BoundType startType;
+  std::shared_ptr<const core::IExpr> startValue;
+  BoundType endType;
+  std::shared_ptr<const core::IExpr> endValue;
+};
+
+struct IExprWindowFunction {
+  std::shared_ptr<const core::IExpr> functionCall;
+  IExprWindowFrame frame;
+  bool ignoreNulls;
+
+  std::vector<std::shared_ptr<const core::IExpr>> partitionBy;
+  std::vector<std::pair<std::shared_ptr<const core::IExpr>, core::SortOrder>>
+      orderBy;
+};
+
+const IExprWindowFunction parseWindowExpr(const std::string& windowString);
 
 } // namespace facebook::velox::duckdb

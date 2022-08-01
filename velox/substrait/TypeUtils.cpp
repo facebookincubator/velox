@@ -59,6 +59,8 @@ TypePtr toVeloxType(const std::string& typeName) {
       return INTEGER();
     case TypeKind::BIGINT:
       return BIGINT();
+    case TypeKind::UNKNOWN:
+      return UNKNOWN();
     default:
       VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }

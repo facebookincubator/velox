@@ -16,7 +16,6 @@
 
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include <velox/core/ITypedExpr.h>
-#include <velox/type/Filter.h>
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/tpch/TpchConnector.h"
@@ -24,9 +23,11 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/WindowFunction.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/parse/Expressions.h"
+#include "velox/parse/ExpressionsParser.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
@@ -42,8 +43,9 @@ static const std::string kTpchConnectorId = "test-tpch";
 core::TypedExprPtr parseExpr(
     const std::string& text,
     const RowTypePtr& rowType,
+    const parse::ParseOptions& options,
     memory::MemoryPool* pool) {
-  auto untyped = duckdb::parseExpr(text);
+  auto untyped = parse::parseExpr(text, options);
   return core::Expressions::inferTypes(untyped, rowType, pool);
 }
 
@@ -89,7 +91,7 @@ PlanBuilder& PlanBuilder::tableScan(
   SubfieldFilters filters;
   filters.reserve(subfieldFilters.size());
   for (const auto& filter : subfieldFilters) {
-    auto filterExpr = parseExpr(filter, outputType, pool_);
+    auto filterExpr = parseExpr(filter, outputType, options_, pool_);
     auto [subfield, subfieldFilter] = exec::toSubfieldFilter(filterExpr);
 
     auto it = columnAliases.find(subfield.toString());
@@ -108,8 +110,9 @@ PlanBuilder& PlanBuilder::tableScan(
 
   core::TypedExprPtr remainingFilterExpr;
   if (!remainingFilter.empty()) {
-    remainingFilterExpr = parseExpr(remainingFilter, outputType, pool_)
-                              ->rewriteInputNames(columnAliases);
+    remainingFilterExpr =
+        parseExpr(remainingFilter, outputType, options_, pool_)
+            ->rewriteInputNames(columnAliases);
   }
 
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -184,7 +187,7 @@ parseOrderByClauses(
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> sortingKeys;
   std::vector<core::SortOrder> sortingOrders;
   for (const auto& key : keys) {
-    auto [untypedExpr, sortOrder] = duckdb::parseOrderByExpr(key);
+    auto [untypedExpr, sortOrder] = parse::parseOrderByExpr(key);
     auto typedExpr =
         core::Expressions::inferTypes(untypedExpr, inputType, pool);
 
@@ -218,7 +221,7 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
   std::vector<core::TypedExprPtr> expressions;
   std::vector<std::string> projectNames;
   for (auto i = 0; i < projections.size(); ++i) {
-    auto untypedExpr = duckdb::parseExpr(projections[i]);
+    auto untypedExpr = parse::parseExpr(projections[i], options_);
     expressions.push_back(inferTypes(untypedExpr));
     if (untypedExpr->alias().has_value()) {
       projectNames.push_back(untypedExpr->alias().value());
@@ -241,7 +244,7 @@ PlanBuilder& PlanBuilder::project(const std::vector<std::string>& projections) {
 PlanBuilder& PlanBuilder::filter(const std::string& filter) {
   planNode_ = std::make_shared<core::FilterNode>(
       nextPlanNodeId(),
-      parseExpr(filter, planNode_->outputType(), pool_),
+      parseExpr(filter, planNode_->outputType(), options_, pool_),
       planNode_);
   return *this;
 }
@@ -507,7 +510,7 @@ PlanBuilder& PlanBuilder::finalAggregation() {
   return *this;
 }
 
-PlanBuilder::AggregateExpressionsAndNames
+PlanBuilder::ExpressionsAndNames
 PlanBuilder::createAggregateExpressionsAndNames(
     const std::vector<std::string>& aggregates,
     core::AggregationNode::Step step,
@@ -523,7 +526,7 @@ PlanBuilder::createAggregateExpressionsAndNames(
       resolver.setResultType(resultTypes[i]);
     }
 
-    auto untypedExpr = duckdb::parseExpr(agg);
+    auto untypedExpr = parse::parseExpr(agg, options_);
 
     auto expr = std::dynamic_pointer_cast<const core::CallTypedExpr>(
         inferTypes(untypedExpr));
@@ -576,7 +579,7 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(groupingKeys),
       fields(preGroupedKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -599,7 +602,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       fields(groupingKeys),
       fields(groupingKeys),
       aggregatesAndNames.names,
-      aggregatesAndNames.aggregates,
+      aggregatesAndNames.expressions,
       createAggregateMasks(numAggregates, masks),
       ignoreNullKeys,
       planNode_);
@@ -763,7 +766,8 @@ struct LocalPartitionTypes {
 
 LocalPartitionTypes genLocalPartitionTypes(
     const std::vector<core::PlanNodePtr>& sources,
-    const std::vector<std::string>& outputLayout) {
+    const std::vector<std::string>& outputLayout,
+    const parse::ParseOptions& options) {
   LocalPartitionTypes ret;
   auto inputType = sources[0]->outputType();
 
@@ -772,7 +776,7 @@ LocalPartitionTypes genLocalPartitionTypes(
   std::vector<std::string> outputNames;
   std::vector<std::string> outputAliases;
   for (const auto& output : outputLayout) {
-    auto untypedExpr = duckdb::parseExpr(output);
+    auto untypedExpr = parse::parseExpr(output, options);
     auto fieldExpr =
         dynamic_cast<const core::FieldAccessExpr*>(untypedExpr.get());
     VELOX_CHECK_NOT_NULL(
@@ -802,8 +806,9 @@ core::PlanNodePtr createLocalPartitionNode(
     const core::PlanNodeId& planNodeId,
     const std::vector<std::string>& keys,
     const std::vector<core::PlanNodePtr>& sources,
-    const std::vector<std::string>& outputLayout) {
-  auto types = genLocalPartitionTypes(sources, outputLayout);
+    const std::vector<std::string>& outputLayout,
+    const parse::ParseOptions& options) {
+  auto types = genLocalPartitionTypes(sources, outputLayout, options);
 
   auto partitionFunctionFactory =
       createPartitionFunctionFactory(sources[0]->outputType(), keys);
@@ -862,8 +867,8 @@ PlanBuilder& PlanBuilder::localPartition(
     const std::vector<core::PlanNodePtr>& sources,
     const std::vector<std::string>& outputLayout) {
   VELOX_CHECK_NULL(planNode_, "localPartition() must be the first call");
-  planNode_ =
-      createLocalPartitionNode(nextPlanNodeId(), keys, sources, outputLayout);
+  planNode_ = createLocalPartitionNode(
+      nextPlanNodeId(), keys, sources, outputLayout, options_);
   return *this;
 }
 
@@ -871,29 +876,47 @@ PlanBuilder& PlanBuilder::localPartition(
     const std::vector<std::string>& keys,
     const std::vector<std::string>& outputLayout) {
   planNode_ = createLocalPartitionNode(
-      nextPlanNodeId(), keys, {planNode_}, outputLayout);
+      nextPlanNodeId(), keys, {planNode_}, outputLayout, options_);
   return *this;
 }
+
+namespace {
+core::PlanNodePtr createLocalPartitionRoundRobinNode(
+    const core::PlanNodeId& planNodeId,
+    const std::vector<core::PlanNodePtr>& sources,
+    const std::vector<std::string>& outputLayout,
+    const parse::ParseOptions& options) {
+  auto types = genLocalPartitionTypes(sources, outputLayout, options);
+
+  auto partitionFunctionFactory = [](auto numPartitions) {
+    return std::make_unique<velox::exec::RoundRobinPartitionFunction>(
+        numPartitions);
+  };
+
+  return std::make_shared<core::LocalPartitionNode>(
+      planNodeId,
+      core::LocalPartitionNode::Type::kRepartition,
+      partitionFunctionFactory,
+      types.outputType,
+      sources,
+      types.inputTypeFromSource);
+}
+} // namespace
 
 PlanBuilder& PlanBuilder::localPartitionRoundRobin(
     const std::vector<core::PlanNodePtr>& sources,
     const std::vector<std::string>& outputLayout) {
   VELOX_CHECK_NULL(
       planNode_, "localPartitionRoundRobin() must be the first call");
+  planNode_ = createLocalPartitionRoundRobinNode(
+      nextPlanNodeId(), sources, outputLayout, options_);
+  return *this;
+}
 
-  auto types = genLocalPartitionTypes(sources, outputLayout);
-
-  auto partitionFunctionFactory = [](auto numPartitions) {
-    return std::make_unique<velox::exec::RoundRobinPartitionFunction>(
-        numPartitions);
-  };
-  planNode_ = std::make_shared<core::LocalPartitionNode>(
-      nextPlanNodeId(),
-      core::LocalPartitionNode::Type::kRepartition,
-      partitionFunctionFactory,
-      types.outputType,
-      sources,
-      types.inputTypeFromSource);
+PlanBuilder& PlanBuilder::localPartitionRoundRobin(
+    const std::vector<std::string>& outputLayout) {
+  planNode_ = createLocalPartitionRoundRobinNode(
+      nextPlanNodeId(), {planNode_}, outputLayout, options_);
   return *this;
 }
 
@@ -911,7 +934,7 @@ PlanBuilder& PlanBuilder::hashJoin(
   auto resultType = concat(leftType, rightType);
   core::TypedExprPtr filterExpr;
   if (!filter.empty()) {
-    filterExpr = parseExpr(filter, resultType, pool_);
+    filterExpr = parseExpr(filter, resultType, options_, pool_);
   }
   auto outputType = extract(resultType, outputLayout);
   auto leftKeyFields = fields(leftType, leftKeys);
@@ -943,7 +966,7 @@ PlanBuilder& PlanBuilder::mergeJoin(
   auto resultType = concat(leftType, rightType);
   core::TypedExprPtr filterExpr;
   if (!filter.empty()) {
-    filterExpr = parseExpr(filter, resultType, pool_);
+    filterExpr = parseExpr(filter, resultType, options_, pool_);
   }
   auto outputType = extract(resultType, outputLayout);
   auto leftKeyFields = fields(leftType, leftKeys);
@@ -1010,6 +1033,292 @@ PlanBuilder& PlanBuilder::unnest(
       unnestFields,
       unnestNames,
       ordinalColumn,
+      planNode_);
+  return *this;
+}
+
+namespace {
+std::string toString(const std::vector<FunctionSignaturePtr>& signatures) {
+  return fmt::format("{}", fmt::join(signatures, ","));
+}
+
+std::string throwWindowFunctionDoesntExist(const std::string& name) {
+  std::stringstream error;
+  error << "Window function doesn't exist: " << name << ".";
+  if (exec::windowFunctions().empty()) {
+    error << " Registry of window functions is empty. "
+             "Make sure to register some window functions.";
+  }
+  VELOX_USER_FAIL(error.str());
+}
+
+std::string throwWindowFunctionSignatureNotSupported(
+    const std::string& name,
+    const std::vector<TypePtr>& types,
+    const std::vector<FunctionSignaturePtr>& signatures) {
+  std::stringstream error;
+  error << "Window function signature is not supported: "
+        << toString(name, types)
+        << ". Supported signatures: " << toString(signatures) << ".";
+  VELOX_USER_FAIL(error.str());
+}
+
+TypePtr resolveWindowType(
+    const std::string& windowFunctionName,
+    const std::vector<TypePtr>& inputTypes,
+    bool nullOnFailure) {
+  if (auto signatures = exec::getWindowFunctionSignatures(windowFunctionName)) {
+    for (const auto& signature : signatures.value()) {
+      exec::SignatureBinder binder(*signature, inputTypes);
+      if (binder.tryBind()) {
+        return binder.tryResolveType(signature->returnType());
+      }
+    }
+
+    if (nullOnFailure) {
+      return nullptr;
+    }
+    throwWindowFunctionSignatureNotSupported(
+        windowFunctionName, inputTypes, signatures.value());
+  }
+
+  if (nullOnFailure) {
+    return nullptr;
+  }
+  throwWindowFunctionDoesntExist(windowFunctionName);
+  return nullptr;
+}
+
+class WindowTypeResolver {
+ public:
+  explicit WindowTypeResolver()
+      : previousHook_(core::Expressions::getResolverHook()) {
+    core::Expressions::setTypeResolverHook(
+        [&](const auto& inputs, const auto& expr, bool nullOnFailure) {
+          return resolveType(inputs, expr, nullOnFailure);
+        });
+  }
+
+  ~WindowTypeResolver() {
+    core::Expressions::setTypeResolverHook(previousHook_);
+  }
+
+  void setResultType(const TypePtr& type) {
+    resultType_ = type;
+  }
+
+ private:
+  TypePtr resolveType(
+      const std::vector<core::TypedExprPtr>& inputs,
+      const std::shared_ptr<const core::CallExpr>& expr,
+      bool nullOnFailure) const {
+    if (resultType_) {
+      return resultType_;
+    }
+
+    std::vector<TypePtr> types;
+    for (auto& input : inputs) {
+      types.push_back(input->type());
+    }
+
+    auto functionName = expr->getFunctionName();
+
+    return resolveWindowType(functionName, types, nullOnFailure);
+  }
+
+  const core::Expressions::TypeResolverHook previousHook_;
+  TypePtr resultType_;
+};
+
+const core::WindowNode::Frame createWindowFrame(
+    const duckdb::IExprWindowFrame& windowFrame,
+    const TypePtr& inputRow,
+    memory::MemoryPool* pool) {
+  core::WindowNode::Frame frame;
+  frame.type = (windowFrame.type == duckdb::WindowType::kRows)
+      ? core::WindowNode::WindowType::kRows
+      : core::WindowNode::WindowType::kRange;
+
+  auto boundTypeConversion =
+      [](duckdb::BoundType boundType) -> core::WindowNode::BoundType {
+    switch (boundType) {
+      case duckdb::BoundType::kCurrentRow:
+        return core::WindowNode::BoundType::kCurrentRow;
+      case duckdb::BoundType::kFollowing:
+        return core::WindowNode::BoundType::kFollowing;
+      case duckdb::BoundType::kPreceding:
+        return core::WindowNode::BoundType::kPreceding;
+      case duckdb::BoundType::kUnboundedFollowing:
+        return core::WindowNode::BoundType::kUnboundedFollowing;
+      case duckdb::BoundType::kUnboundedPreceding:
+        return core::WindowNode::BoundType::kUnboundedPreceding;
+    }
+    VELOX_UNREACHABLE();
+  };
+  frame.startType = boundTypeConversion(windowFrame.startType);
+  frame.startValue = windowFrame.startValue
+      ? core::Expressions::inferTypes(windowFrame.startValue, inputRow, pool)
+      : nullptr;
+  frame.endType = boundTypeConversion(windowFrame.endType);
+  frame.endValue = windowFrame.endValue
+      ? core::Expressions::inferTypes(windowFrame.endValue, inputRow, pool)
+      : nullptr;
+  return frame;
+}
+
+std::vector<core::FieldAccessTypedExprPtr> parsePartitionKeys(
+    const duckdb::IExprWindowFunction& windowExpr,
+    const std::string& windowString,
+    const TypePtr& inputRow,
+    memory::MemoryPool* pool) {
+  std::vector<core::FieldAccessTypedExprPtr> partitionKeys;
+  for (const auto& partitionKey : windowExpr.partitionBy) {
+    auto typedExpr =
+        core::Expressions::inferTypes(partitionKey, inputRow, pool);
+    auto typedPartitionKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        typedPartitionKey,
+        "PARTITION BY clause must use a column name, not an expression: {}",
+        windowString);
+    partitionKeys.emplace_back(typedPartitionKey);
+  }
+  return partitionKeys;
+}
+
+std::pair<
+    std::vector<core::FieldAccessTypedExprPtr>,
+    std::vector<core::SortOrder>>
+parseOrderByKeys(
+    const duckdb::IExprWindowFunction& windowExpr,
+    const std::string& windowString,
+    const TypePtr& inputRow,
+    memory::MemoryPool* pool) {
+  std::vector<core::FieldAccessTypedExprPtr> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+
+  for (const auto& [untypedExpr, sortOrder] : windowExpr.orderBy) {
+    auto typedExpr = core::Expressions::inferTypes(untypedExpr, inputRow, pool);
+    auto sortingKey =
+        std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(typedExpr);
+    VELOX_CHECK_NOT_NULL(
+        sortingKey,
+        "ORDER BY clause must use a column name, not an expression: {}",
+        windowString);
+    sortingKeys.emplace_back(sortingKey);
+    sortingOrders.emplace_back(sortOrder);
+  }
+  return {sortingKeys, sortingOrders};
+}
+
+bool equalFieldAccessTypedExprPtrList(
+    const std::vector<core::FieldAccessTypedExprPtr>& lhs,
+    const std::vector<core::FieldAccessTypedExprPtr>& rhs) {
+  return std::equal(
+      lhs.begin(),
+      lhs.end(),
+      rhs.begin(),
+      [](const core::FieldAccessTypedExprPtr& e1,
+         const core::FieldAccessTypedExprPtr& e2) {
+        return e1->name() == e2->name();
+      });
+}
+
+bool equalSortOrderList(
+    const std::vector<core::SortOrder>& lhs,
+    const std::vector<core::SortOrder>& rhs) {
+  return std::equal(
+      lhs.begin(),
+      lhs.end(),
+      rhs.begin(),
+      [](const core::SortOrder& s1, const core::SortOrder& s2) {
+        return s1.isAscending() == s2.isAscending() &&
+            s1.isNullsFirst() == s2.isNullsFirst();
+      });
+}
+
+} // namespace
+
+PlanBuilder& PlanBuilder::window(
+    const std::vector<std::string>& windowFunctions) {
+  VELOX_CHECK_GT(
+      windowFunctions.size(),
+      0,
+      "Window Node requires at least one window function.");
+
+  std::vector<core::FieldAccessTypedExprPtr> partitionKeys;
+  std::vector<core::FieldAccessTypedExprPtr> sortingKeys;
+  std::vector<core::SortOrder> sortingOrders;
+  std::vector<core::WindowNode::Function> windowNodeFunctions;
+  std::vector<std::string> windowNames;
+
+  bool first = true;
+  auto inputType = planNode_->outputType();
+  int i = 0;
+
+  auto errorOnMismatch = [&](const std::string& windowString,
+                             const std::string& mismatchTypeString) -> void {
+    std::stringstream error;
+    error << "Window function invocations " << windowString << " and "
+          << windowFunctions[0] << " do not match " << mismatchTypeString
+          << " clauses.";
+    VELOX_USER_FAIL(error.str());
+  };
+
+  WindowTypeResolver windowResolver;
+  for (const auto& windowString : windowFunctions) {
+    const auto& windowExpr = duckdb::parseWindowExpr(windowString);
+    // All window function SQL strings in the list are expected to have the same
+    // PARTITION BY and ORDER BY clauses. Validate this assumption.
+    if (first) {
+      partitionKeys =
+          parsePartitionKeys(windowExpr, windowString, inputType, pool_);
+      auto sortPair =
+          parseOrderByKeys(windowExpr, windowString, inputType, pool_);
+      sortingKeys = sortPair.first;
+      sortingOrders = sortPair.second;
+      first = false;
+    } else {
+      auto latestPartitionKeys =
+          parsePartitionKeys(windowExpr, windowString, inputType, pool_);
+      auto [latestSortingKeys, latestSortingOrders] =
+          parseOrderByKeys(windowExpr, windowString, inputType, pool_);
+
+      if (!equalFieldAccessTypedExprPtrList(
+              partitionKeys, latestPartitionKeys)) {
+        errorOnMismatch(windowString, "PARTITION BY");
+      }
+
+      if (!equalFieldAccessTypedExprPtrList(sortingKeys, latestSortingKeys)) {
+        errorOnMismatch(windowString, "ORDER BY");
+      }
+
+      if (!equalSortOrderList(sortingOrders, latestSortingOrders)) {
+        errorOnMismatch(windowString, "ORDER BY");
+      }
+    }
+
+    auto windowCall = std::dynamic_pointer_cast<const core::CallTypedExpr>(
+        core::Expressions::inferTypes(
+            windowExpr.functionCall, planNode_->outputType(), pool_));
+    windowNodeFunctions.push_back(
+        {std::move(windowCall),
+         createWindowFrame(windowExpr.frame, planNode_->outputType(), pool_),
+         windowExpr.ignoreNulls});
+    if (windowExpr.functionCall->alias().has_value()) {
+      windowNames.push_back(windowExpr.functionCall->alias().value());
+    } else {
+      windowNames.push_back(fmt::format("w{}", i++));
+    }
+  }
+
+  planNode_ = std::make_shared<core::WindowNode>(
+      nextPlanNodeId(),
+      partitionKeys,
+      sortingKeys,
+      sortingOrders,
+      windowNames,
+      windowNodeFunctions,
       planNode_);
   return *this;
 }

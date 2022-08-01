@@ -16,10 +16,18 @@
 #include "velox/duckdb/conversion/DuckParser.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
+#include "velox/external/duckdb/duckdb.hpp"
 #include "velox/parse/Expressions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::duckdb;
+
+namespace {
+std::shared_ptr<const core::IExpr> parseExpr(const std::string& exprString) {
+  ParseOptions options;
+  return parseExpr(exprString, options);
+}
+} // namespace
 
 TEST(DuckParserTest, constants) {
   // Integers.
@@ -329,8 +337,126 @@ TEST(DuckParserTest, orderBy) {
   EXPECT_EQ("\"c1\" DESC NULLS LAST", parse("c1 DESC NULLS LAST"));
 }
 
+namespace {
+const std::string windowTypeString(WindowType w) {
+  switch (w) {
+    case WindowType::kRange:
+      return "RANGE";
+    case WindowType::kRows:
+      return "ROWS";
+  }
+  VELOX_UNREACHABLE();
+}
+
+const std::string boundTypeString(BoundType b) {
+  switch (b) {
+    case BoundType::kUnboundedPreceding:
+      return "UNBOUNDED PRECEDING";
+    case BoundType::kUnboundedFollowing:
+      return "UNBOUNDED FOLLOWING";
+    case BoundType::kPreceding:
+      return "PRECEDING";
+    case BoundType::kFollowing:
+      return "FOLLOWING";
+    case BoundType::kCurrentRow:
+      return "CURRENT ROW";
+  }
+  VELOX_UNREACHABLE();
+}
+
+const std::string parseWindow(const std::string& expr) {
+  auto windowExpr = parseWindowExpr(expr);
+  std::string concatPartitions = "";
+  int i = 0;
+  for (const auto& partition : windowExpr.partitionBy) {
+    concatPartitions += partition->toString();
+    if (i > 0) {
+      concatPartitions += " , ";
+    }
+    i++;
+  }
+  auto partitionString = windowExpr.partitionBy.empty()
+      ? ""
+      : fmt::format("PARTITION BY {}", concatPartitions);
+
+  std::string concatOrderBys = "";
+  i = 0;
+  for (const auto& orderBy : windowExpr.orderBy) {
+    concatOrderBys += fmt::format(
+        " {} {}", orderBy.first->toString(), orderBy.second.toString());
+    if (i > 0) {
+      concatOrderBys += " , ";
+    }
+    i++;
+  }
+  auto orderByString = windowExpr.orderBy.empty()
+      ? ""
+      : fmt::format("ORDER BY {}", concatOrderBys);
+
+  auto frameString = fmt::format(
+      "{} BETWEEN {}{} AND{} {}",
+      windowTypeString(windowExpr.frame.type),
+      (windowExpr.frame.startValue
+           ? windowExpr.frame.startValue->toString() + " "
+           : ""),
+      boundTypeString(windowExpr.frame.startType),
+      (windowExpr.frame.endValue ? " " + windowExpr.frame.endValue->toString()
+                                 : ""),
+      boundTypeString(windowExpr.frame.endType));
+
+  return fmt::format(
+      "{} OVER ({} {} {})",
+      windowExpr.functionCall->toString(),
+      partitionString,
+      orderByString,
+      frameString);
+}
+} // namespace
+
+TEST(DuckParserTest, window) {
+  EXPECT_EQ(
+      "row_number() AS c OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST"
+      " RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over (partition by a order by b) as c"));
+  EXPECT_EQ(
+      "row_number() AS a OVER (  RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over () as a"));
+  EXPECT_EQ(
+      "row_number() AS a OVER ( ORDER BY  \"b\" ASC NULLS LAST "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow("row_number() over (order by b) as a"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\"  ROWS BETWEEN "
+      "UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parseWindow(
+          "row_number() over (partition by a rows between unbounded preceding and current row)"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" ASC NULLS LAST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow("row_number() over (partition by a order by b "
+                  "rows between a + 10 preceding and 10 following)"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY  \"b\" DESC NULLS FIRST "
+      "ROWS BETWEEN plus(\"a\",10) PRECEDING AND 10 FOLLOWING)",
+      parseWindow(
+          "row_number() over (partition by a order by b desc nulls first "
+          "rows between a + 10 preceding and 10 following)"));
+}
+
 TEST(DuckParserTest, invalidExpression) {
   VELOX_ASSERT_THROW(
       parseExpr("func(a b)"),
       "Cannot parse expression: func(a b). Parser Error: syntax error at or near \"b\"");
+}
+
+TEST(DuckParserTest, parseDecimalConstant) {
+  ParseOptions options;
+  options.parseDecimalAsDouble = false;
+  auto expr = parseExpr("1.234", options);
+  if (auto constant =
+          std::dynamic_pointer_cast<const core::ConstantExpr>(expr)) {
+    ASSERT_EQ(*constant->type(), *DECIMAL(4, 3));
+  } else {
+    FAIL() << expr->toString() << " is not a constant";
+  }
 }

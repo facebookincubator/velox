@@ -14,18 +14,15 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/dwrf/reader/SelectiveColumnReaderInternal.h"
+#include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 using dwio::common::TypeWithId;
 using dwio::common::typeutils::CompatChecker;
 
-// Buffer size for reading length stream
-constexpr uint64_t BUFFER_SIZE = 1024;
-
-common::AlwaysTrue& alwaysTrue() {
-  static common::AlwaysTrue alwaysTrue;
+velox::common::AlwaysTrue& alwaysTrue() {
+  static velox::common::AlwaysTrue alwaysTrue;
   return alwaysTrue;
 }
 
@@ -48,7 +45,7 @@ void ScanState::updateRawState() {
 SelectiveColumnReader::SelectiveColumnReader(
     std::shared_ptr<const dwio::common::TypeWithId> requestedType,
     dwio::common::FormatParams& params,
-    common::ScanSpec& scanSpec,
+    velox::common::ScanSpec& scanSpec,
     const TypePtr& type)
     : memoryPool_(params.pool()),
       nodeType_(requestedType),
@@ -78,12 +75,15 @@ void SelectiveColumnReader::seekTo(vector_size_t offset, bool readsNullsOnly) {
   }
 }
 
-void SelectiveColumnReader::prepareNulls(RowSet rows, bool hasNulls) {
+void SelectiveColumnReader::prepareNulls(
+    RowSet rows,
+    bool hasNulls,
+    int32_t extraRows) {
   if (!hasNulls) {
     anyNulls_ = false;
     return;
   }
-  auto numRows = rows.size();
+  auto numRows = rows.size() + extraRows;
   if (useBulkPath()) {
     bool isDense = rows.back() == rows.size() - 1;
     if (!scanSpec_->filter()) {
@@ -293,6 +293,27 @@ void SelectiveColumnReader::addStringValue(folly::StringPiece value) {
       StringView(copy, value.size());
 }
 
+bool SelectiveColumnReader::readsNullsOnly() const {
+  auto filter = scanSpec_->filter();
+  if (filter) {
+    auto kind = filter->kind();
+    return kind == velox::common::FilterKind::kIsNull ||
+        (!scanSpec_->keepValues() &&
+         kind == velox::common::FilterKind::kIsNotNull);
+  }
+  return false;
+}
+
+void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
+  resultNulls_ = resultNulls;
+  rawResultNulls_ = resultNulls ? resultNulls->asMutable<uint64_t>() : nullptr;
+  anyNulls_ = rawResultNulls_ &&
+      !bits::isAllSet(rawResultNulls_, 0, numValues_, bits::kNotNull);
+  allNull_ =
+      anyNulls_ && bits::isAllSet(rawResultNulls_, 0, numValues_, bits::kNull);
+  returnReaderNulls_ = false;
+}
+
 void SelectiveColumnReader::resetFilterCaches() {
   if (!scanState_.filterCache.empty()) {
     simd::memset(
@@ -302,4 +323,4 @@ void SelectiveColumnReader::resetFilterCaches() {
   }
 }
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

@@ -15,6 +15,7 @@
  */
 
 #include "velox/type/Variant.h"
+#include <cfloat>
 #include "common/encode/Base64.h"
 #include "folly/json.h"
 
@@ -191,8 +192,8 @@ void variant::throwCheckIsKindError(TypeKind kind) const {
       mapTypeKindToName(kind))};
 }
 
-void variant::throwCheckNotNullError() const {
-  throw std::invalid_argument{"it's null!"};
+void variant::throwCheckPtrError() const {
+  throw std::invalid_argument{"missing variant value"};
 }
 
 std::string variant::toJson() const {
@@ -310,8 +311,14 @@ std::string variant::toJson() const {
       // debugging only. Variant::serialize should actually serialize the data.
       return "\"Opaque<" + value<TypeKind::OPAQUE>().type->toString() + ">\"";
     }
-    case TypeKind::SHORT_DECIMAL:
-    case TypeKind::LONG_DECIMAL:
+    case TypeKind::SHORT_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::SHORT_DECIMAL>().value(), inferType());
+    }
+    case TypeKind::LONG_DECIMAL: {
+      return DecimalUtil::toString(
+          value<TypeKind::LONG_DECIMAL>().value(), inferType());
+    }
     case TypeKind::FUNCTION:
     case TypeKind::UNKNOWN:
     case TypeKind::INVALID:
@@ -571,19 +578,41 @@ uint64_t variant::hash() const {
   }
 }
 
-/*static*/ bool variant::equalsFloatingPointWithEpsilon(
-    const variant& a,
-    const variant& b) {
+namespace {
+
+// Compare floating point numbers using relative epsilon comparison.
+// See
+// https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
+// for details.
+template <TypeKind KIND, typename TFloat>
+bool equalsFloatingPointWithEpsilonTyped(const variant& a, const variant& b) {
+  TFloat f1 = a.value<KIND>();
+  TFloat f2 = b.value<KIND>();
+
+  // Check if the numbers are really close -- needed
+  // when comparing numbers near zero.
+  if (fabs(f1 - f2) < kEpsilon) {
+    return true;
+  }
+
+  TFloat largest = std::max(abs(f1), abs(f2));
+
+  return fabs(f1 - f2) <= largest * 2 * FLT_EPSILON;
+}
+
+bool equalsFloatingPointWithEpsilon(const variant& a, const variant& b) {
   if (a.isNull() or b.isNull()) {
     return false;
   }
-  if (a.kind_ == TypeKind::REAL) {
-    return fabs(a.value<TypeKind::REAL>() - b.value<TypeKind::REAL>()) <
-        kEpsilon;
+
+  if (a.kind() == TypeKind::REAL) {
+    return equalsFloatingPointWithEpsilonTyped<TypeKind::REAL, float>(a, b);
+  } else {
+    VELOX_CHECK_EQ(a.kind(), TypeKind::DOUBLE);
+    return equalsFloatingPointWithEpsilonTyped<TypeKind::DOUBLE, double>(a, b);
   }
-  return fabs(a.value<TypeKind::DOUBLE>() - b.value<TypeKind::DOUBLE>()) <
-      kEpsilon;
 }
+} // namespace
 
 bool variant::lessThanWithEpsilon(const variant& other) const {
   if (other.kind_ != this->kind_) {

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include "velox/common/file/FileSystems.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 
 namespace facebook::velox::aggregate::test {
@@ -22,8 +21,10 @@ namespace {
 
 template <typename T>
 struct ApproxMostFrequentTest : AggregationTestBase {
-  ApproxMostFrequentTest() {
-    noSpill_ = true;
+ protected:
+  void SetUp() override {
+    AggregationTestBase::SetUp();
+    allowInputShuffle();
   }
 
   std::shared_ptr<FlatVector<int>> makeGroupKeys() {
@@ -128,29 +129,6 @@ TYPED_TEST(ApproxMostFrequentTest, emptyGroup) {
       {"c0"},
       {"approx_most_frequent(3, c1, 11)"},
       {this->makeRowVector({groupKeys, expected})});
-}
-
-struct ApproxMostFrequentTest2 : ApproxMostFrequentTest<int> {
-  ApproxMostFrequentTest2() {
-    filesystems::registerLocalFileSystem();
-    noSpill_ = false;
-  }
-};
-
-TEST_F(ApproxMostFrequentTest2, spill) {
-  auto values = makeValues();
-  auto keys = makeKeys();
-  auto input = makeRowVector({keys, values});
-  auto groupKeys = makeGroupKeys();
-  auto expected = makeMapVector<int, int64_t>(
-      {{{24, 98}, {27, 110}, {30, 122}},
-       {{22, 90}, {25, 102}, {28, 114}},
-       {{23, 94}, {26, 106}, {29, 118}}});
-  testAggregations(
-      {input, input},
-      {"c0"},
-      {"approx_most_frequent(3, c1, 11)"},
-      {makeRowVector({groupKeys, expected})});
 }
 
 } // namespace

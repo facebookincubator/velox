@@ -19,6 +19,32 @@
 
 namespace facebook::velox::exec {
 
+namespace {
+bool hasElseClause(const std::vector<ExprPtr>& inputs) {
+  return inputs.size() % 2 == 1;
+}
+} // namespace
+
+SwitchExpr::SwitchExpr(
+    TypePtr type,
+    const std::vector<ExprPtr>& inputs,
+    bool inputsSupportFlatNoNullsFastPath)
+    : SpecialForm(
+          std::move(type),
+          inputs,
+          "switch",
+          hasElseClause(inputs) && inputsSupportFlatNoNullsFastPath,
+          false /* trackCpuUsage */),
+      numCases_{inputs_.size() / 2},
+      hasElseClause_{hasElseClause(inputs_)} {
+  VELOX_CHECK_GT(numCases_, 0);
+
+  for (auto i = 0; i < numCases_; i++) {
+    auto& condition = inputs_[i * 2];
+    VELOX_CHECK_EQ(condition->type()->kind(), TypeKind::BOOLEAN);
+  }
+}
+
 void SwitchExpr::evalSpecialForm(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -69,11 +95,6 @@ void SwitchExpr::evalSpecialForm(
         thenRows.get()->updateBounds();
 
         if (thenRows.get()->hasSelections()) {
-          if (result) {
-            BaseVector::ensureWritable(
-                *thenRows.get(), result->type(), context.pool(), &result);
-          }
-
           inputs_[2 * i + 1]->eval(*thenRows.get(), context, result);
           remainingRows.get()->deselect(*thenRows.get());
         }
@@ -83,15 +104,13 @@ void SwitchExpr::evalSpecialForm(
 
   // Evaluate the "else" clause.
   if (remainingRows.get()->hasSelections()) {
-    if (result) {
-      BaseVector::ensureWritable(
-          *remainingRows.get(), result->type(), context.pool(), &result);
-    }
-
     if (hasElseClause_) {
       inputs_.back()->eval(*remainingRows.get(), context, result);
 
     } else {
+      BaseVector::ensureWritable(
+          *remainingRows.get(), type(), context.pool(), &result);
+
       // fill in nulls for remainingRows
       remainingRows.get()->applyToSelected(
           [&](auto row) { result->setNull(row, true); });

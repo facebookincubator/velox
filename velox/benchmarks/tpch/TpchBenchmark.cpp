@@ -22,6 +22,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Split.h"
@@ -183,6 +184,11 @@ BENCHMARK(q18) {
 
 BENCHMARK(q19) {
   const auto planContext = queryBuilder->getQueryPlan(19);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q22) {
+  const auto planContext = queryBuilder->getQueryPlan(22);
   benchmark.run(planContext);
 }
 

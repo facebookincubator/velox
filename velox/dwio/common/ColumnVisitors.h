@@ -19,9 +19,9 @@
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/common/DecoderUtil.h"
-#include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
+#include "velox/dwio/common/SelectiveColumnReader.h"
 
-namespace facebook::velox::dwrf {
+namespace facebook::velox::dwio::common {
 
 // structs for extractValues in ColumnVisitor.
 
@@ -303,7 +303,7 @@ class ColumnVisitor {
   FOLLY_ALWAYS_INLINE vector_size_t process(T value, bool& atEnd) {
     if (!TFilter::deterministic) {
       auto previous = currentRow();
-      if (common::applyFilter(filter_, value)) {
+      if (velox::common::applyFilter(filter_, value)) {
         filterPassed(value);
       } else {
         filterFailed();
@@ -315,7 +315,7 @@ class ColumnVisitor {
       return currentRow() - previous - 1;
     }
     // The filter passes or fails and we go to the next row if any.
-    if (common::applyFilter(filter_, value)) {
+    if (velox::common::applyFilter(filter_, value)) {
       filterPassed(value);
     } else {
       filterFailed();
@@ -335,6 +335,14 @@ class ColumnVisitor {
   // the result.
   inline T* mutableValues(int32_t size) {
     return reader_->mutableValues<T>(size);
+  }
+
+  int32_t numRows() const {
+    return reader_->numRows();
+  }
+
+  SelectiveColumnReader& reader() const {
+    return *reader_;
   }
 
   inline vector_size_t rowAt(vector_size_t index) {
@@ -365,14 +373,14 @@ class ColumnVisitor {
 
   void filterPassed(T value) {
     addResult(value);
-    if (!std::is_same<TFilter, common::AlwaysTrue>::value) {
+    if (!std::is_same<TFilter, velox::common::AlwaysTrue>::value) {
       addOutputRow(currentRow());
     }
   }
 
   inline void filterPassedForNull() {
     addNull();
-    if (!std::is_same<TFilter, common::AlwaysTrue>::value) {
+    if (!std::is_same<TFilter, velox::common::AlwaysTrue>::value) {
       addOutputRow(currentRow());
     }
   }
@@ -390,10 +398,14 @@ class ColumnVisitor {
     return reader_->mutableOutputRows(size);
   }
 
+  void setNumValuesBias(int32_t bias) {
+    numValuesBias_ = bias;
+  }
+
   void setNumValues(int32_t size) {
-    reader_->setNumValues(size);
-    if (!std::is_same<TFilter, common::AlwaysTrue>::value) {
-      reader_->setNumRows(size);
+    reader_->setNumValues(numValuesBias_ + size);
+    if (!std::is_same<TFilter, velox::common::AlwaysTrue>::value) {
+      reader_->setNumRows(numValuesBias_ + size);
     }
   }
 
@@ -414,7 +426,7 @@ class ColumnVisitor {
   }
 
   void setAllNull(int32_t numValues) {
-    reader_->setNumValues(numValues);
+    setNumValues(numValues);
     reader_->setAllNull();
   }
 
@@ -426,8 +438,19 @@ class ColumnVisitor {
     return reader_->outerNonNullRows();
   }
 
+  raw_vector<vector_size_t>& rowsCopy() const {
+    return reader_->scanState().rowsCopy;
+  }
+
   DictionaryColumnVisitor<T, TFilter, ExtractValues, isDense>
   toDictionaryColumnVisitor();
+
+  // Use for replacing *coall rows with non-null rows for fast path with
+  // processRun and processRle.
+  void setRows(folly::Range<const int32_t*> newRows) {
+    rows_ = newRows.data();
+    numRows_ = newRows.size();
+  }
 
  protected:
   TFilter& filter_;
@@ -436,6 +459,7 @@ class ColumnVisitor {
   const vector_size_t* rows_;
   vector_size_t numRows_;
   vector_size_t rowIndex_;
+  int32_t numValuesBias_{0};
   ExtractValues values_;
 };
 
@@ -667,7 +691,7 @@ class DictionaryColumnVisitor
         isDense && TFilter::deterministic ? 0 : super::currentRow();
     std::make_unsigned_t<T> index = value;
     T valueInDictionary = dict()[index];
-    if (std::is_same<TFilter, common::AlwaysTrue>::value) {
+    if (std::is_same<TFilter, velox::common::AlwaysTrue>::value) {
       super::filterPassed(valueInDictionary);
     } else {
       // check the dictionary cache
@@ -702,13 +726,6 @@ class DictionaryColumnVisitor
       return 0;
     }
     return super::currentRow() - previous - 1;
-  }
-
-  // Use for replacing all rows with non-null rows for fast path with
-  // processRun and processRle.
-  void setRows(folly::Range<const int32_t*> newRows) {
-    super::rows_ = newRows.data();
-    super::numRows_ = newRows.size();
   }
 
   // Processes 'numInput' dictionary indices in 'input'. Sets 'values'
@@ -820,7 +837,7 @@ class DictionaryColumnVisitor
             if (i + index >= numInput) {
               break;
             }
-            if (common::applyFilter(super::filter_, input[i + index])) {
+            if (velox::common::applyFilter(super::filter_, input[i + index])) {
               passed |= 1 << index;
             }
           }
@@ -1013,8 +1030,6 @@ ColumnVisitor<T, TFilter, ExtractValues, isDense>::toDictionaryColumnVisitor() {
       filter_, reader_, RowSet(rows_ + rowIndex_, numRows_), values_);
 }
 
-class SelectiveStringDictionaryColumnReader;
-
 template <typename TFilter, typename ExtractValues, bool isDense>
 class StringDictionaryColumnVisitor
     : public DictionaryColumnVisitor<int32_t, TFilter, ExtractValues, isDense> {
@@ -1025,7 +1040,7 @@ class StringDictionaryColumnVisitor
  public:
   StringDictionaryColumnVisitor(
       TFilter& filter,
-      SelectiveStringDictionaryColumnReader* reader,
+      SelectiveColumnReader* reader,
       RowSet rows,
       ExtractValues values)
       : DictionaryColumnVisitor<int32_t, TFilter, ExtractValues, isDense>(
@@ -1042,7 +1057,7 @@ class StringDictionaryColumnVisitor
     }
     vector_size_t previous =
         isDense && TFilter::deterministic ? 0 : super::currentRow();
-    if (std::is_same<TFilter, common::AlwaysTrue>::value) {
+    if (std::is_same<TFilter, velox::common::AlwaysTrue>::value) {
       super::filterPassed(index);
     } else {
       // check the dictionary cache
@@ -1054,7 +1069,7 @@ class StringDictionaryColumnVisitor
           DictSuper::filterCache()[index] == FilterResult::kFailure) {
         super::filterFailed();
       } else {
-        if (common::applyFilter(
+        if (velox::common::applyFilter(
                 super::filter_, valueInDictionary(value, inStrideDict))) {
           super::filterPassed(index);
           if (TFilter::deterministic) {
@@ -1396,4 +1411,4 @@ class DirectRleColumnVisitor
   }
 };
 
-} // namespace facebook::velox::dwrf
+} // namespace facebook::velox::dwio::common

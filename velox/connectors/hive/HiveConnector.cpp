@@ -13,16 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "velox/connectors/hive/HiveConnector.h"
 
-#include <memory>
-
 #include "velox/dwio/common/InputStream.h"
-#include "velox/dwio/dwrf/reader/SelectiveColumnReader.h"
+#include "velox/dwio/common/ReaderFactory.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
+
+#include <memory>
 
 using namespace facebook::velox::dwrf;
 using WriterConfig = facebook::velox::dwrf::Config;
@@ -296,7 +297,8 @@ bool testFilters(
       } else {
         const auto& typeWithId = fileTypeWithId->childByName(name);
         auto columnStats = reader->columnStatistics(typeWithId->id);
-        if (!testFilter(
+        if (columnStats != nullptr &&
+            !testFilter(
                 child->filter(),
                 columnStats.get(),
                 totalRows.value(),
