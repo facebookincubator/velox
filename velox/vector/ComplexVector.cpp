@@ -446,8 +446,6 @@ void ArrayVector::copy(
   VELOX_CHECK_EQ(sourceValue->encoding(), VectorEncoding::Simple::ARRAY);
   auto sourceArray = sourceValue->asUnchecked<ArrayVector>();
   VELOX_DCHECK(BaseVector::length_ >= targetIndex + count);
-  BaseVector::ensureWritable(
-      SelectivityVector::empty(), elements_->type(), pool(), &elements_);
   auto setNotNulls = mayHaveNulls() || source->mayHaveNulls();
   auto wantWidth = type()->isFixedWidth() ? type()->fixedElementsWidth() : 0;
   auto* mutableOffsets = offsets_->asMutable<vector_size_t>();
@@ -724,8 +722,6 @@ void MapVector::copy(
   VELOX_CHECK_EQ(sourceValue->encoding(), VectorEncoding::Simple::MAP);
   VELOX_DCHECK(BaseVector::length_ >= targetIndex + count);
   auto sourceMap = sourceValue->asUnchecked<MapVector>();
-  BaseVector::ensureWritable(
-      SelectivityVector::empty(), keys_->type(), pool(), &keys_);
   auto setNotNulls = mayHaveNulls() || source->mayHaveNulls();
   auto* mutableOffsets = offsets_->asMutable<vector_size_t>();
   auto* mutableSizes = sizes_->asMutable<vector_size_t>();
