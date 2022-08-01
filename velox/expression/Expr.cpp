@@ -103,6 +103,18 @@ bool hasConditionals(Expr* expr) {
   return false;
 }
 
+void findMultiRefFields(
+    std::set<FieldReference*>& allFields,
+    std::set<FieldReference*>& multiRefFields,
+    const std::vector<FieldReference*>& moreFields) {
+  for (auto* newField : moreFields) {
+    if (allFields.find(newField) != allFields.end()) {
+      multiRefFields.insert(newField);
+    }
+    allFields.insert(newField);
+  }
+}
+
 } // namespace
 
 Expr::Expr(
@@ -185,11 +197,15 @@ void Expr::computeMetadata() {
     propagatesNulls_ = vectorFunction_->isDefaultNullBehavior();
     deterministic_ = vectorFunction_->isDeterministic();
   }
+
+  std::set<FieldReference*> allFields;
   for (auto& input : inputs_) {
     input->computeMetadata();
     deterministic_ &= input->deterministic_;
     propagatesNulls_ &= input->propagatesNulls_;
     mergeFields(distinctFields_, input->distinctFields_);
+    // find the fields referenced by multiple inputs
+    findMultiRefFields(allFields, multiRefFields_, input->distinctFields_);
   }
   if (isSpecialForm()) {
     propagatesNulls_ = propagatesNulls();
@@ -368,15 +384,25 @@ void Expr::eval(
   // all the time. Therefore, we should delay loading lazy vectors until we
   // know the minimum subset of rows needed to be loaded.
   //
+  // Load fields multiple referenced by inputs unconditionally. It's hard to
+  // know the superset of rows the multiple inputs need to load.
+  //
   // If there is only one field, load it unconditionally. The very first IF,
   // AND or OR will have to load it anyway. Pre-loading enables peeling of
   // encodings at a higher level in the expression tree and avoids repeated
   // peeling and wrapping in the sub-nodes.
   //
-  // TODO: Re-work the logic of deciding when to load which field.
+  // TODO: only pre-loading lazy vectors that is not flat encoding,
+  // regardless of hasConditionals_.
   if (!hasConditionals_ || distinctFields_.size() == 1) {
     // Load lazy vectors if any.
     for (const auto& field : distinctFields_) {
+      context.ensureFieldLoaded(field->index(context), rows);
+    }
+  } else {
+    // Multiple referenced fields, load at common parent expr with "rows".
+    // delay loading fields that are not in multiRefFields_.
+    for (const auto& field : multiRefFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
   }
@@ -811,8 +837,6 @@ void Expr::evalWithNulls(
       if (removeSureNulls(rows, context, nonNullHolder)) {
         VarSetter noMoreNulls(context.mutableNullsPruned(), true);
         if (nonNullHolder.get()->hasSelections()) {
-          // No need fix finalSelection here, LazyVector already loaded due to
-          // removeSureNulls method
           evalAll(*nonNullHolder.get(), context, result);
         }
         auto rawNonNulls = nonNullHolder.get()->asRange().bits();
@@ -1031,14 +1055,6 @@ void Expr::evalAll(
   bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
   inputValues_.resize(inputs_.size());
   for (int32_t i = 0; i < inputs_.size(); ++i) {
-    // Fix finalSelection at "rows" if missingRows is a strict subset.
-    // "rows" may be used to evaluate exprs outside of current expr node.
-    bool updateFinalSelection = context.isFinalSelection() &&
-        (remainingRows->countSelected() < rows.countSelected());
-    VarSetter isFinalSelection(
-        context.mutableIsFinalSelection(), false, updateFinalSelection);
-    VarSetter finalSelection(
-        context.mutableFinalSelection(), &rows, updateFinalSelection);
     inputs_[i]->eval(*remainingRows, context, inputValues_[i]);
     tryPeelArgs = tryPeelArgs && isPeelable(inputValues_[i]->encoding());
     if (defaultNulls && inputValues_[i]->mayHaveNulls()) {
@@ -1317,6 +1333,11 @@ ExprSet::ExprSet(
     : execCtx_(execCtx) {
   exprs_ = compileExpressions(
       std::move(sources), execCtx, this, enableConstantFolding);
+  std::set<FieldReference*> allFields;
+  for (auto& expr : exprs_) {
+    // Find the fields referenced by multiple expressions
+    findMultiRefFields(allFields, multiRefFields_, expr->distinctFields());
+  }
 }
 
 namespace {
@@ -1391,6 +1412,18 @@ void ExprSet::eval(
   if (initialize) {
     clearSharedSubexprs();
   }
+
+  // Make sure LazyVectors, referenced by multiple expressions, are loaded
+  // for all the "rows".
+  //
+  // Consider projection with 2 expressions: f(a) AND g(b), h(b)
+  // If b is a LazyVector and f(a) AND g(b) expression is evaluated first, it
+  // will load b only for rows where f(a) is true. However, h(b) projection
+  // needs all rows for "b".
+  for (const auto& field : multiRefFields_) {
+    context->ensureFieldLoaded(field->index(*context), rows);
+  }
+
   for (int32_t i = begin; i < end; ++i) {
     exprs_[i]->eval(rows, context, result[i]);
   }
@@ -1407,6 +1440,7 @@ void ExprSet::clear() {
   for (auto* memo : memoizingExprs_) {
     memo->clearMemo();
   }
+  multiRefFields_.clear();
 }
 
 void ExprSetSimplified::eval(

@@ -336,6 +336,10 @@ class Expr {
   // parent Expr.
   std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
 
+  // Fields referenced by multiple inputs, which is subset of distinctFields_.
+  // used to determine pre-loading of lazy vectors at current expr
+  std::set<FieldReference * FOLLY_NONNULL> multiRefFields_;
+
   // True if a null in any of 'distinctFields_' causes 'this' to be
   // null for the row.
   bool propagatesNulls_ = false;
@@ -442,6 +446,8 @@ class ExprSet {
   void clearSharedSubexprs();
 
   std::vector<std::shared_ptr<Expr>> exprs_;
+
+  std::set<FieldReference * FOLLY_NONNULL> multiRefFields_;
 
   // Distinct Exprs reachable from 'exprs_' for which reset() needs to
   // be called at the start of eval().
