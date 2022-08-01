@@ -64,7 +64,6 @@ struct ShortDecimal {
  private:
   int64_t unscaledValue_;
 };
-
 } // namespace facebook::velox
 
 namespace folly {

@@ -34,10 +34,8 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       const VectorPtr& expected,
       const std::string& expression,
       const std::vector<VectorPtr>& input) {
-    VectorPtr result =
-        evaluate<SimpleVector<T>>(expression, makeRowVector(input));
+    auto result = evaluate<SimpleVector<T>>(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
-    ASSERT_TRUE(expected->type()->equivalent(*result->type().get()));
   }
 
   template <typename T>
@@ -46,7 +44,7 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       const VectorPtr& result,
       const std::vector<VectorPtr>& flatVector) {
     // Dictionary vectors as arguments.
-    vector_size_t newSize = flatVector[0]->size() * 2;
+    auto newSize = flatVector[0]->size() * 2;
     auto indices1 = makeIndices(newSize, [&](int row) { return row / 2; });
     auto indices2 = makeIndices(newSize, [&](int row) { return row / 2; });
     auto shortDictA =
@@ -68,14 +66,17 @@ TEST_F(DecimalArithmeticTest, add) {
   auto expectedLongFlat =
       makeLongDecimalFlatVector({2000, 4000}, DECIMAL(19, 3));
   auto shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(18, 3));
+
   // Add short and short, returning long.
   testDecimalExpr<LongDecimal>(
       expectedLongFlat, "plus(c0, c1)", {shortFlat, shortFlat});
+
   // Add short and long, returning long.
   auto longFlat = makeLongDecimalFlatVector({1000, 2000}, DECIMAL(19, 3));
   expectedLongFlat = makeLongDecimalFlatVector({2000, 4000}, DECIMAL(20, 3));
   testDecimalExpr<LongDecimal>(
       expectedLongFlat, "plus(c0, c1)", {shortFlat, longFlat});
+
   // Add short and long, returning long.
   testDecimalExpr<LongDecimal>(
       expectedLongFlat, "plus(c0, c1)", {longFlat, shortFlat});
@@ -83,6 +84,7 @@ TEST_F(DecimalArithmeticTest, add) {
   // Add long and long, returning long.
   testDecimalExpr<LongDecimal>(
       expectedLongFlat, "c0 + c1", {longFlat, longFlat});
+
   // Add short and short, returning short.
   shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(10, 3));
   auto expectedShortFlat =
@@ -92,17 +94,20 @@ TEST_F(DecimalArithmeticTest, add) {
 
   auto resultConstantFlat =
       makeShortDecimalFlatVector({2000, 3000}, DECIMAL(11, 3));
+
   // Constant and Flat arguments.
   testDecimalExpr<ShortDecimal>(
       resultConstantFlat,
       fmt::format("{}({}, c0)", "plus", "1.00"),
       {shortFlat});
+
   // Flat and Constant arguments.
   testDecimalExpr<ShortDecimal>(
       resultConstantFlat,
       fmt::format("{}(c0,{})", "plus", "1.00"),
       {shortFlat});
-  // Tow dictionary vectors as arguments.
+
+  // Two dictionary vectors as arguments.
   testOpDictVectors<ShortDecimal>(
       "plus", expectedShortFlat, {shortFlat, shortFlat});
 }
