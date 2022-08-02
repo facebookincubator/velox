@@ -217,8 +217,8 @@ class Window : public Operator {
   // When traversing input partition rows, the peers are the rows
   // with the same values for the ORDER BY clause. These rows
   // are equal in some ways and affect the results of ranking functions.
-  // All rows between the peerStartRow_ and peerEndRow_ have the same
-  // values for peerStartRow_ and peerEndRow_. So we needn't compute
+  // Since all rows between the peerStartRow_ and peerEndRow_ have the same
+  // values for peerStartRow_ and peerEndRow_, we needn't compute
   // them for each row independently. Since these rows might
   // cross getOutput boundaries they are saved in the operator.
   vector_size_t peerStartRow_ = 0;

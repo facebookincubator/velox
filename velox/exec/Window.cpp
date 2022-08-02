@@ -89,8 +89,8 @@ Window::Window(
   for (int i = 0; i < inputType->children().size(); i++) {
     inputColumns.push_back(data_->columnAt(i));
   }
-  // The WindowPartition is structured over all the input columns.
-  // Individual functions access all its input argument columns from it.
+  // The WindowPartition is structured over all the input columns data.
+  // Individual functions access its input argument columns from it.
   // The RowColumns are copied by the WindowPartition, so its fine to use
   // a local variable here.
   windowPartition_ = std::make_unique<WindowPartition>(
@@ -219,9 +219,8 @@ void Window::createPeerAndFrameBuffers() {
   }
 }
 
-// Find the starting row number for each partition (in the order they
-// are in sortedRows_). Having this array handy makes the getOutput
-// logic simpler.
+// This function computes the auxiliary structure partitionStartRows_
+// which stores the starting row for each input partition in the data.
 void Window::computePartitionStartRows() {
   // Randomly assuming that max 10000 partitions are in the data.
   partitionStartRows_.reserve(10000);
@@ -235,8 +234,7 @@ void Window::computePartitionStartRows() {
   // ii) If we use a Hashtable instead of a full sort then the count
   // of rows in the partition can be directly used.
   partitionStartRows_.push_back(0);
-  // The invoker of this function has a fast-path if there are no
-  // rows. So we should have atleast one input row at this point.
+
   VELOX_CHECK_GT(sortedRows_.size(), 0);
   for (auto i = 1; i < sortedRows_.size(); i++) {
     if (partitionCompare(sortedRows_[i - 1], sortedRows_[i])) {
@@ -269,8 +267,6 @@ void Window::sortPartitions() {
         return compareRowsWithKeys(leftRow, rightRow, allKeyInfo_);
       });
 
-  // Compute an array of the start rows of each partition. This is used to
-  // simplify further computations.
   computePartitionStartRows();
 
   currentPartition_ = 0;
@@ -352,6 +348,7 @@ void Window::callApplyForPartitionRows(
     allFuncsFrameEndBuffer_[w]->setSize(numRows);
   }
 
+  // Setup values in the peer and frame buffers.
   auto firstPartitionRow = partitionStartRows_[currentPartition_];
   auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
   for (auto i = startRow, j = 0; i < endRow; i++, j++) {
@@ -363,9 +360,8 @@ void Window::callApplyForPartitionRows(
     // So we can compute them just once and reuse across the rows in that peer
     // interval.
 
-    // This logic computes the next values of peerStart and peerEnd rows.
-    // This needs to happen for the  first row of the partition or
-    // if we are past the previous peerGroup.
+    // Compute peerStart and peerEnd rows for the first row of the partition or
+    // when past the previous peerGroup.
     if (i == firstPartitionRow || i >= peerEndRow_) {
       peerStartRow_ = i;
       peerEndRow_ = i;
@@ -378,9 +374,9 @@ void Window::callApplyForPartitionRows(
     }
 
     // The peer and frame values set in the WindowFunction::apply buffers
-    // are the offsets within the current partition, so offset all row
-    // indexes correctly. This is required since peerStartRow_ and
-    // peerEndRow_ are computed wrt the start of all input rows.
+    // are the offsets within the current partition, whereas all the row
+    // numbers in the logic are wrt sortedRows_ ordering. So we need to
+    // adjust for the first row of the partition.
     rawPeerStartBuffer_[j] = peerStartRow_ - firstPartitionRow;
     rawPeerEndBuffer_[j] = peerEndRow_ - 1 - firstPartitionRow;
 
