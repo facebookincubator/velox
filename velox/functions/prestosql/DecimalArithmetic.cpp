@@ -29,6 +29,7 @@ class DecimalBaseFunction : public exec::VectorFunction {
  public:
   DecimalBaseFunction(uint8_t aRescale, uint8_t bRescale)
       : aRescale_(aRescale), bRescale_(bRescale) {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -46,6 +47,7 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rawResults[row], constant, rawValues[row], aRescale_, bRescale_);
       });
     } else if (args[0]->isFlatEncoding() && args[1]->isConstantEncoding()) {
+      // Fast path for (flat, const).
       auto flatValues = args[0]->asUnchecked<FlatVector<A>>();
       auto constant = args[1]->asUnchecked<SimpleVector<B>>()->valueAt(0);
       auto rawValues = flatValues->mutableRawValues();
@@ -54,6 +56,7 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rawResults[row], rawValues[row], constant, aRescale_, bRescale_);
       });
     } else if (args[0]->isFlatEncoding() && args[1]->isFlatEncoding()) {
+      // Fast path for (flat, flat).
       auto flatA = args[0]->asUnchecked<FlatVector<A>>();
       auto rawA = flatA->mutableRawValues();
       auto flatB = args[1]->asUnchecked<FlatVector<B>>();
@@ -63,6 +66,7 @@ class DecimalBaseFunction : public exec::VectorFunction {
             rawResults[row], rawA[row], rawB[row], aRescale_, bRescale_);
       });
     } else {
+      // Fast path if one or more arguments are encoded.
       exec::DecodedArgs decodedArgs(rows, args, context);
       auto a = decodedArgs.at(0);
       auto b = decodedArgs.at(1);
@@ -83,7 +87,7 @@ class DecimalBaseFunction : public exec::VectorFunction {
       const TypePtr& resultType,
       exec::EvalCtx* context,
       VectorPtr* result) const {
-    BaseVector::ensureWritable(rows, resultType, context->pool(), result);
+    context->ensureWritable(rows, resultType, *result);
     (*result)->clearNulls(rows);
     return (*result)->asUnchecked<FlatVector<R>>()->mutableRawValues();
   }
@@ -141,8 +145,8 @@ std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::vector<exec::VectorFunctionArg>& inputArgs) {
   auto aType = inputArgs[0].type;
   auto bType = inputArgs[1].type;
-  auto [aPrecision, aScale] = getDecimalPrecisionScale(aType);
-  auto [bPrecision, bScale] = getDecimalPrecisionScale(bType);
+  auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
+  auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
   auto [rPrecision, rScale] = Operation::computeResultPrecisionScale(
       aPrecision, aScale, bPrecision, bScale);
   uint8_t aRescale = Operation::computeRescaleFactor(aScale, bScale, rScale);

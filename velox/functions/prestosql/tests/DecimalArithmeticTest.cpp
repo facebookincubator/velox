@@ -36,28 +36,28 @@ class DecimalArithmeticTest : public FunctionBaseTest {
       const std::vector<VectorPtr>& input) {
     auto result = evaluate<SimpleVector<T>>(expression, makeRowVector(input));
     assertEqualVectors(expected, result);
+    testOpDictVectors<T>(expression, expected, input);
   }
 
   template <typename T>
   void testOpDictVectors(
       const std::string& operation,
-      const VectorPtr& result,
+      const VectorPtr& expected,
       const std::vector<VectorPtr>& flatVector) {
     // Dictionary vectors as arguments.
     auto newSize = flatVector[0]->size() * 2;
-    auto indices1 = makeIndices(newSize, [&](int row) { return row / 2; });
-    auto indices2 = makeIndices(newSize, [&](int row) { return row / 2; });
-    auto shortDictA =
-        VectorTestBase::wrapInDictionary(indices1, newSize, flatVector[0]);
-    auto shortDictB =
-        VectorTestBase::wrapInDictionary(indices2, newSize, flatVector[1]);
+    std::vector<VectorPtr> dictVectors;
+    for (auto i = 0; i < flatVector.size(); ++i) {
+      auto indices = makeIndices(newSize, [&](int row) { return row / 2; });
+      dictVectors.push_back(
+          VectorTestBase::wrapInDictionary(indices, newSize, flatVector[i]));
+    }
+    auto resultIndices = makeIndices(newSize, [&](int row) { return row / 2; });
     auto expectedResultDictionary =
-        VectorTestBase::wrapInDictionary(indices1, newSize, result);
-
-    testDecimalExpr<T>(
-        expectedResultDictionary,
-        fmt::format("{}(c0,c1)", operation),
-        {shortDictA, shortDictB});
+        VectorTestBase::wrapInDictionary(resultIndices, newSize, expected);
+    auto actual =
+        evaluate<SimpleVector<T>>(operation, makeRowVector(dictVectors));
+    assertEqualVectors(expectedResultDictionary, actual);
   }
 };
 } // namespace facebook::velox
@@ -97,17 +97,9 @@ TEST_F(DecimalArithmeticTest, add) {
 
   // Constant and Flat arguments.
   testDecimalExpr<ShortDecimal>(
-      resultConstantFlat,
-      fmt::format("{}({}, c0)", "plus", "1.00"),
-      {shortFlat});
+      resultConstantFlat, "plus(1.00, c0)", {shortFlat});
 
   // Flat and Constant arguments.
   testDecimalExpr<ShortDecimal>(
-      resultConstantFlat,
-      fmt::format("{}(c0,{})", "plus", "1.00"),
-      {shortFlat});
-
-  // Two dictionary vectors as arguments.
-  testOpDictVectors<ShortDecimal>(
-      "plus", expectedShortFlat, {shortFlat, shortFlat});
+      resultConstantFlat, "plus(c0,1.00)", {shortFlat});
 }
