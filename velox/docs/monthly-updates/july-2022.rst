@@ -1,0 +1,58 @@
+****************
+July 2022 Update
+****************
+
+Documentation
+=============
+
+* Add documentation for Presto related :doc:`/functions/json`.
+
+Core Library
+============
+
+* Add `ApproxMostFrequentStreamSummary` that approximately computes the top frequent values from a large stream.
+* Add support for cast from a JSON type value to ARRAYS or MAPS of JSON type values.
+* Add Parquet writer implemented over Apache Arrow Parquet writer.
+* Add NegatedBytesRange filter.
+* Add PlanNode, PlanBuilder, registry support for Window operators.
+* Add support for DECIMAL type Variant values.
+* Improve performance of MmapAllocator::allocate.
+
+Presto Functions
+================
+
+* Add :func:`array_sort`, :func:`combinations` functions.
+* Add :func:`approx_most_frequent` aggregate function.
+* Extend aggregate functions :func:`min_by`, :func:`max_by` to support VARCHAR.
+
+Hive Connector
+==============
+
+* Add NegatedBigintRange filters support to DWRF reader.
+
+Performance and Correctness
+===========================
+
+* Add q5, q10, q12, q14, q19, q22 to TPC-H benchmark.
+* Optimize KLL sketch memory usage by allocating memory based on the number of elements retained.
+* Optimize arithmetic operations that check for overflow by enabling a fast execution path.
+* Optimize :func:`row_constructor` Presto function by removing redundant copy.
+* Add benchmarks for NegatedBigintRange, NegatedBytesRange filters.
+* Improve test coverage for various aggregate functions.
+* Create nightly fuzzer run.
+
+Debugging Experience
+====================
+
+* Add WindowNode::addDetails implementation.
+
+Credits
+=======
+
+Aditi Pandit, Amit Dutta, Andrew Gallagher, Bikramjeet Vig, Chad Austin, Connor Devlin,
+Daniel Ng, David Greenberg, Deepak Majeti, Ge Gao, Huameng Jiang, Ivan Morett,
+Jialiang Tan, Jie1 Zhang, Jimmy Lu, Jonathan Mendoza, Karteek Murthy, Kevin Wilfong,
+Kimberly Yang, Krishna Pai, Laith Sakka, Masha Basmanova, Michael Shang, Naresh Kumar,
+Orri Erling, Orvid King, Pedro Eugenio Rocha Pedreira, PenghuiJiao, Pramod, Prasoon Telang,
+Scott Wolchok, Victor Zverovich, Wei He, Xavier Deguillard, Xiaoxuan Meng, Yoav Helfman,
+Zeyi (Rice) Fan, Zhenyuan Zhao, usurai, yingsu00
