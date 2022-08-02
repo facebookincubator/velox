@@ -23,26 +23,38 @@ namespace facebook::velox::exec {
 
 SerializedPage::SerializedPage(
     std::unique_ptr<folly::IOBuf> iobuf,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    std::function<void()> onClearCb)
     : iobuf_(std::move(iobuf)),
       iobufBytes_(chainBytes(*iobuf_.get())),
-      pool_(pool) {
-  VELOX_CHECK_NOT_NULL(iobuf_);
-  if (pool_ != nullptr) {
-    pool_->reserve(iobufBytes_);
-  }
-  for (auto& buf : *iobuf_) {
-    int32_t bufSize = buf.size();
-    ranges_.push_back(ByteRange{
-        const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
-        bufSize,
-        0});
+      pool_(pool),
+      onClearCb_(onClearCb) {
+  try {
+    VELOX_CHECK_NOT_NULL(iobuf_);
+    if (pool_ != nullptr) {
+      pool_->reserve(iobufBytes_);
+    }
+    for (auto& buf : *iobuf_) {
+      int32_t bufSize = buf.size();
+      ranges_.push_back(ByteRange{
+          const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(buf.data())),
+          bufSize,
+          0});
+    }
+  } catch (...) {
+    if (onClearCb_) {
+      onClearCb_;
+    }
+    throw;
   }
 }
 
 SerializedPage::~SerializedPage() {
   if (pool_ != nullptr) {
     pool_->release(iobufBytes_);
+  }
+  if (onClearCb_) {
+    onClearCb_();
   }
 }
 

@@ -34,7 +34,8 @@ class SerializedPage {
   // TODO: consider to enforce setting memory pool if possible.
   explicit SerializedPage(
       std::unique_ptr<folly::IOBuf> iobuf,
-      memory::MemoryPool* pool = nullptr);
+      memory::MemoryPool* pool = nullptr,
+      std::function<void()> onClearCb = nullptr);
 
   ~SerializedPage();
 
@@ -69,6 +70,7 @@ class SerializedPage {
   // Number of payload bytes in 'iobuf_'.
   const int64_t iobufBytes_;
   memory::MemoryPool* pool_{nullptr};
+  std::function<void()> onClearCb_{nullptr};
 };
 
 // Queue of results retrieved from source. Owned by shared_ptr by
