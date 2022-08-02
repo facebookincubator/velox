@@ -103,15 +103,14 @@ bool hasConditionals(Expr* expr) {
   return false;
 }
 
-void updateAllAndMultiplyReferencedFields(
-    std::set<FieldReference*>& allFields,
+void updateMultiplyReferencedFields(
+    const std::vector<FieldReference*>& allFields,
     std::set<FieldReference*>& multiRefFields,
     const std::vector<FieldReference*>& fieldsToAdd) {
   for (auto* newField : fieldsToAdd) {
-    if (allFields.find(newField) != allFields.end()) {
+    if (isMember(allFields, *newField)) {
       multiRefFields.insert(newField);
     }
-    allFields.insert(newField);
   }
 }
 
@@ -198,14 +197,13 @@ void Expr::computeMetadata() {
     deterministic_ = vectorFunction_->isDeterministic();
   }
 
-  std::set<FieldReference*> allFields;
   for (auto& input : inputs_) {
     input->computeMetadata();
     deterministic_ &= input->deterministic_;
     propagatesNulls_ &= input->propagatesNulls_;
+    updateMultiplyReferencedFields(
+        distinctFields_, multiRefFields_, input->distinctFields_);
     mergeFields(distinctFields_, input->distinctFields_);
-    updateAllAndMultiplyReferencedFields(
-        allFields, multiRefFields_, input->distinctFields_);
   }
   if (isSpecialForm()) {
     propagatesNulls_ = propagatesNulls();
@@ -1333,10 +1331,11 @@ ExprSet::ExprSet(
     : execCtx_(execCtx) {
   exprs_ = compileExpressions(
       std::move(sources), execCtx, this, enableConstantFolding);
-  std::set<FieldReference*> allFields;
+  std::vector<FieldReference*> allFields;
   for (auto& expr : exprs_) {
-    updateAllAndMultiplyReferencedFields(
+    updateMultiplyReferencedFields(
         allFields, multiRefFields_, expr->distinctFields());
+    mergeFields(allFields, expr->distinctFields());
   }
 }
 
