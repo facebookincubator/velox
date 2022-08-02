@@ -154,10 +154,8 @@ struct DecimalCapsule {
   }
 
   size_t hash() const {
-    VELOX_CHECK(
-        unscaledValue.has_value(), "Unscaled value must be initialized");
     auto hasher = folly::Hash{};
-    auto unscaledValHash = hasher(unscaledValue.value());
+    auto unscaledValHash = hasValue() ? hasher(value()) : 0;
     auto precisionHash = hasher(precision);
     auto scaleHash = hasher(scale);
     auto combinedPrecisionScaleHash =

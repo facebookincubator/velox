@@ -502,6 +502,12 @@ variant variant::create(const folly::dynamic& variantobj) {
 uint64_t variant::hash() const {
   uint64_t hash = 0;
   if (isNull()) {
+    if (kind_ == TypeKind::SHORT_DECIMAL) {
+      return value<TypeKind::SHORT_DECIMAL>().hash();
+    }
+    if (kind_ == TypeKind::LONG_DECIMAL) {
+      return value<TypeKind::LONG_DECIMAL>().hash();
+    }
     return folly::Hash{}(static_cast<int32_t>(kind_));
   }
 
