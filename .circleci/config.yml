@@ -287,6 +287,52 @@ jobs:
           paths:
             - .ccache/
 
+  linux-benchmarks-conbench:
+    executor: build
+    steps:
+      - checkout
+      - run:
+          name: "Update submodules"
+          command: |
+            git submodule sync --recursive
+            git submodule update --init --recursive
+      - run:
+          name: "Calculate merge-base date for CCache"
+          command: |
+            git show -s --format=%cd --date="format:%Y%m%d" $(git merge-base origin/main HEAD) | tee merge-base-date
+      - restore_cache:
+          name: "Restore CCache cache"
+          keys:
+            - velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
+      - run:
+          name: "Install conbench and veloxbench"
+          command: |
+            pip install conbench
+            pip install scripts/veloxbench
+      - run:
+          name: "Build Benchmarks"
+          command: |
+            git checkout -
+            mkdir -p .ccache
+            export CCACHE_DIR=$(realpath .ccache)
+            ccache -sz -M 5Gi
+            source /opt/rh/gcc-toolset-9/enable
+            make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
+            ccache -s
+      - run:
+          name: "Run Benchmarks - Target"
+          command: |
+            # get to the directory with benchmarks
+            cd scripts/veloxbench/veloxbench
+            conbench cpp-micro
+      - store_artifacts:
+          path: '_build/debug/.ninja_log'
+      - save_cache:
+          name: "Save CCache cache"
+          key: velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
+          paths:
+            - .ccache/
+
   # Build with different options
   linux-build-options:
     executor: build
