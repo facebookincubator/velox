@@ -10,11 +10,7 @@ Documentation
 Core Library
 ============
 
-* Add `ApproxMostFrequentStreamSummary` that approximately computes the top frequent values from a large stream.
-* Add support for cast from a JSON type value to ARRAYS or MAPS of JSON type values.
-* Add Parquet writer implemented over Apache Arrow Parquet writer.
-* Add NegatedBytesRange filter.
-* Add PlanNode, PlanBuilder, registry support for Window operators.
+* Add WindowNode to describe window functions computations. Window operator implementation is still in development.
 * Add support for DECIMAL type Variant values.
 
 Presto Functions
@@ -22,12 +18,15 @@ Presto Functions
 
 * Add :func:`array_sort`, :func:`combinations` functions.
 * Add :func:`approx_most_frequent` aggregate function.
-* Extend aggregate functions :func:`min_by`, :func:`max_by` to support VARCHAR.
+* Extend aggregate functions :func:`min_by`, :func:`max_by` to support VARCHAR inputs.
+* Add support for cast from a JSON type value to ARRAYS or MAPS of JSON type values.
 
 Hive Connector
 ==============
 
-* Add NegatedBigintRange filters support to DWRF reader.
+* Add NegatedBytesRange filter to optimize `NOT IN` filters on string columns pushed down into DWRF reader.
+* Add Parquet writer implemented over Apache Arrow Parquet writer.
+
 
 Performance and Correctness
 ===========================
@@ -39,7 +38,9 @@ Performance and Correctness
 * Add benchmarks for NegatedBigintRange, NegatedBytesRange filters.
 * Improve test coverage for various aggregate functions.
 * Improve performance of MmapAllocator::allocate.
-* Create nightly fuzzer run.
+* Create nightly fuzzer `CI run`_.
+
+.. _CI run: https://app.circleci.com/insights/github/facebookincubator/velox/workflows/nightly/jobs?branch=main
 
 Debugging Experience
 ====================
