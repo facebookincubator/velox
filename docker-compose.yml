@@ -1,0 +1,19 @@
+version: '3.5'
+
+services:  
+  ubuntu-cpp:
+    # Usage:
+    #   docker-compose build ubuntu-cpp
+    #   docker-compose run --rm ubuntu-cpp
+    # Parameters:
+    #   ARCH: amd64, arm64v8, s390x, ...
+    #   UBUNTU: 18.04, 20.04
+    image: facebookincubator/velox:amd64-ubuntu-22.04-cpp
+    build:
+      context: .
+      dockerfile: scripts/ubuntu-22.04-cpp.dockerfile
+    volumes:
+      - .:/velox:delegated
+    command: &cpp-command >
+      /bin/bash -c "
+        make && cd _build/release && ctest -j 16 -VV --output-on-failure"
