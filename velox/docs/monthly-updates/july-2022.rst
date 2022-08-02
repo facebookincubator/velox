@@ -27,7 +27,6 @@ Hive Connector
 * Add NegatedBytesRange filter to optimize `NOT IN` filters on string columns pushed down into DWRF reader.
 * Add Parquet writer implemented over Apache Arrow Parquet writer.
 
-
 Performance and Correctness
 ===========================
 
