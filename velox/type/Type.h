@@ -678,7 +678,7 @@ inline bool isDecimalName(const std::string& typeName) {
   return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
 }
 
-const std::pair<int, int> getDecimalPrecisionScale(const Type& type);
+std::pair<int, int> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:

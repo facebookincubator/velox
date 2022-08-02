@@ -121,7 +121,7 @@ std::string mapTypeKindToName(const TypeKind& typeKind) {
   return found->second;
 }
 
-const std::pair<int, int> getDecimalPrecisionScale(const Type& type) {
+std::pair<int, int> getDecimalPrecisionScale(const Type& type) {
   VELOX_CHECK(type.isShortDecimal() || type.isLongDecimal());
   if (type.isShortDecimal()) {
     const auto& decimalType = type.asShortDecimal();
