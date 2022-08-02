@@ -41,7 +41,7 @@ def get_run_command(filename, options):
         filename,
     ]
 
-    # TODO: extend cpp micro benchmarks to allow for iteractions
+    # TODO: extend cpp micro benchmarks to allow for iterations
     iterations = options.get("iterations", None)
     if iterations:
         raise NotImplementedError()
@@ -50,7 +50,7 @@ def get_run_command(filename, options):
 
 
 def _parse_benchmark_name(full_name):
-    # TODO: Do we need something more camplicated?
+    # TODO: Do we need something more complicated?
     # https://github.com/ursacomputing/benchmarks/blob/033eee0951adbf41931a2de95caccbac887da6ff/benchmarks/cpp_micro_benchmarks.py#L86-L103
     return {"name": full_name}
 
