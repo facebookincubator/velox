@@ -140,6 +140,11 @@ void HashBuild::addInput(RowVectorPtr input) {
     }
   }
 
+  if (!activeRows_.hasSelections()) {
+    // All join keys are null. No further processing is needed.
+    return;
+  }
+
   if (analyzeKeys_ && hashes_.size() < activeRows_.size()) {
     hashes_.resize(activeRows_.size());
   }
