@@ -16,7 +16,6 @@ Core Library
 * Add NegatedBytesRange filter.
 * Add PlanNode, PlanBuilder, registry support for Window operators.
 * Add support for DECIMAL type Variant values.
-* Improve performance of MmapAllocator::allocate.
 
 Presto Functions
 ================
@@ -39,6 +38,7 @@ Performance and Correctness
 * Optimize :func:`row_constructor` Presto function by removing redundant copy.
 * Add benchmarks for NegatedBigintRange, NegatedBytesRange filters.
 * Improve test coverage for various aggregate functions.
+* Improve performance of MmapAllocator::allocate.
 * Create nightly fuzzer run.
 
 Debugging Experience
