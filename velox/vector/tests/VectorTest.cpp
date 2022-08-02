@@ -1271,7 +1271,7 @@ class VectorCreateConstantTest : public VectorTest {
   template <TypeKind KIND>
   void testPrimitiveConstant(
       typename TypeTraits<KIND>::NativeType val,
-      const TypePtr& type = {}) {
+      const TypePtr& type = Type::create<KIND>()) {
     using TCpp = typename TypeTraits<KIND>::NativeType;
     variant var;
     if constexpr (std::is_same_v<TCpp, ShortDecimal>) {
@@ -1306,7 +1306,7 @@ class VectorCreateConstantTest : public VectorTest {
 
     auto expectedStr = fmt::format(
         "[CONSTANT {}: {} value, {} size]",
-        type ? type->toString() : Type::create<KIND>()->toString(),
+        type->toString(),
         baseVector->toString(0),
         size_);
     EXPECT_EQ(expectedStr, baseVector->toString());
