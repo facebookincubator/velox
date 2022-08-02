@@ -973,6 +973,46 @@ TEST_F(ExprTest, lazyVectorAccessTwiceWithDifferentRows) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(ExprTest, lazyVectorAccessTwiceInDifferentExpressions) {
+  const vector_size_t size = 1'000;
+
+  // Fields referenced by multiple expressions.
+  // load lazy vector immediately in ExprSet::eval().
+  auto isNullAtColA = [](auto row) { return row % 2 == 0; };
+  auto isNullAtColC = [](auto row) { return row % 4 == 0; };
+
+  auto a = makeLazyFlatVector<int64_t>(
+      size,
+      [](auto row) { return row; },
+      isNullAtColA,
+      size,
+      [](auto row) { return row; });
+  auto b = makeLazyFlatVector<int64_t>(
+      size,
+      [](auto row) { return row * 2; },
+      nullptr,
+      size,
+      [](auto row) { return row; });
+  auto c = makeLazyFlatVector<int64_t>(
+      size,
+      [](auto row) { return row; },
+      isNullAtColC,
+      size,
+      [](auto row) { return row; });
+
+  auto result = evaluateMultiple(
+      {"if(c0 is not null, c0, c1)", "if (c2 is not null, c2, c1)"},
+      makeRowVector({a, b, c}));
+
+  auto expected = makeFlatVector<int64_t>(
+      size, [](auto row) { return row % 2 == 0 ? row * 2 : row; });
+  assertEqualVectors(expected, result[0]);
+
+  expected = makeFlatVector<int64_t>(
+      size, [](auto row) { return row % 4 == 0 ? row * 2 : row; });
+  assertEqualVectors(expected, result[1]);
+}
+
 TEST_F(ExprTest, selectiveLazyLoadingIf) {
   const vector_size_t size = 1'000;
 

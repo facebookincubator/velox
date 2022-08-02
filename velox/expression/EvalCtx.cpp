@@ -217,11 +217,6 @@ VectorPtr EvalCtx::ensureFieldLoaded(
     const SelectivityVector& rows) {
   auto field = getField(index);
   if (isLazyNotLoaded(*field)) {
-    // Remain the usage of "finalSelection_". if ExprSet::eval invoked with
-    // partial rows more than once, LazyVector need to load for all
-    // the *finalSelection_. you can see the example usage in
-    // ExprEncodingsTest::run. ExprSet::eval invoked with the first 2/3 rows,
-    // and then invoked with the last 2/3 rows.
     const auto& rowsToLoad = isFinalSelection_ ? rows : *finalSelection_;
 
     LocalDecodedVector holder(*this);

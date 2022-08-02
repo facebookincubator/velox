@@ -103,11 +103,11 @@ bool hasConditionals(Expr* expr) {
   return false;
 }
 
-void findMultiRefFields(
+void updateAllAndMultiplyReferencedFields(
     std::set<FieldReference*>& allFields,
     std::set<FieldReference*>& multiRefFields,
-    const std::vector<FieldReference*>& moreFields) {
-  for (auto* newField : moreFields) {
+    const std::vector<FieldReference*>& fieldsToAdd) {
+  for (auto* newField : fieldsToAdd) {
     if (allFields.find(newField) != allFields.end()) {
       multiRefFields.insert(newField);
     }
@@ -204,8 +204,8 @@ void Expr::computeMetadata() {
     deterministic_ &= input->deterministic_;
     propagatesNulls_ &= input->propagatesNulls_;
     mergeFields(distinctFields_, input->distinctFields_);
-    // find the fields referenced by multiple inputs
-    findMultiRefFields(allFields, multiRefFields_, input->distinctFields_);
+    updateAllAndMultiplyReferencedFields(
+        allFields, multiRefFields_, input->distinctFields_);
   }
   if (isSpecialForm()) {
     propagatesNulls_ = propagatesNulls();
@@ -399,7 +399,7 @@ void Expr::eval(
     for (const auto& field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
-  } else {
+  } else if (!propagatesNulls_) {
     // Multiple referenced fields, load at common parent expr with "rows".
     // delay loading fields that are not in multiRefFields_.
     for (const auto& field : multiRefFields_) {
@@ -1335,8 +1335,8 @@ ExprSet::ExprSet(
       std::move(sources), execCtx, this, enableConstantFolding);
   std::set<FieldReference*> allFields;
   for (auto& expr : exprs_) {
-    // Find the fields referenced by multiple expressions
-    findMultiRefFields(allFields, multiRefFields_, expr->distinctFields());
+    updateAllAndMultiplyReferencedFields(
+        allFields, multiRefFields_, expr->distinctFields());
   }
 }
 
