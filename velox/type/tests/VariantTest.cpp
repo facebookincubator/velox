@@ -115,12 +115,11 @@ TEST(VariantTest, shortDecimal) {
   // Hash test.
   auto vValue = v.value<TypeKind::SHORT_DECIMAL>();
   auto vHash = v.hash();
-  auto u2Hash = u2.hash();
   // u2 and v differ in only precision.
-  EXPECT_NE(vHash, u2Hash);
+  EXPECT_NE(vHash, u2.hash());
 
   // v2 and v differ only in scale.
-  variant v2 =
+  auto v2 =
       variant::shortDecimal(vValue.value().unscaledValue(), DECIMAL(10, 4));
   EXPECT_NE(v2.hash(), vHash);
 
@@ -140,17 +139,18 @@ TEST(VariantTest, shortDecimalNull) {
   EXPECT_EQ(*n1.inferType(), *DECIMAL(10, 5));
   EXPECT_THROW(variant::null(TypeKind::SHORT_DECIMAL), VeloxException);
 
+  auto n1Hash = n1.hash();
   // n1 and n2 differ only in scale.
-  variant n2 = variant::shortDecimal(std::nullopt, DECIMAL(10, 4));
-  EXPECT_NE(n1.hash(), n2.hash());
+  auto n2 = variant::shortDecimal(std::nullopt, DECIMAL(10, 4));
+  EXPECT_NE(n1Hash, n2.hash());
 
   // n1 and n2 differ only in precision.
   n2 = variant::shortDecimal(std::nullopt, DECIMAL(11, 5));
-  EXPECT_NE(n1.hash(), n2.hash());
+  EXPECT_NE(n1Hash, n2.hash());
 
   // n1 and n2 have same precision and scale.
   n2 = variant::shortDecimal(std::nullopt, n1.inferType());
-  EXPECT_EQ(n1.hash(), n2.hash());
+  EXPECT_EQ(n1Hash, n2.hash());
 }
 
 TEST(VariantTest, longDecimal) {
@@ -181,7 +181,7 @@ TEST(VariantTest, longDecimal) {
   EXPECT_NE(vHash, u1.hash());
 
   // v2 and v differ only in scale.
-  variant v2 =
+  auto v2 =
       variant::longDecimal(vValue.value().unscaledValue(), DECIMAL(20, 4));
   EXPECT_NE(v2.hash(), vHash);
 
@@ -202,16 +202,17 @@ TEST(VariantTest, longDecimalNull) {
   EXPECT_THROW(variant::null(TypeKind::LONG_DECIMAL), VeloxException);
 
   // n1 and n2 differ only in scale.
-  variant n2 = variant::longDecimal(std::nullopt, DECIMAL(20, 4));
-  EXPECT_NE(n1.hash(), n2.hash());
+  auto n1Hash = n1.hash();
+  auto n2 = variant::longDecimal(std::nullopt, DECIMAL(20, 4));
+  EXPECT_NE(n1Hash, n2.hash());
 
   // n1 and n2 differ only in precision.
   n2 = variant::longDecimal(std::nullopt, DECIMAL(21, 5));
-  EXPECT_NE(n1.hash(), n2.hash());
+  EXPECT_NE(n1Hash, n2.hash());
 
   // n1 and n2 have same precision and scale.
   n2 = variant::longDecimal(std::nullopt, n1.inferType());
-  EXPECT_EQ(n1.hash(), n2.hash());
+  EXPECT_EQ(n1Hash, n2.hash());
 }
 
 /// Test variant::equalsWithEpsilon by summing up large 64-bit integers (> 15
