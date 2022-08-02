@@ -147,6 +147,19 @@ class MappedMemoryImpl : public MappedMemory {
         allocation.size(), [&]() { freeContiguousImpl(allocation); });
   }
 
+  bool externalReserve(MachinePageCount numPages) override {
+    numAllocated_ += numPages;
+    numMapped_ += numPages;
+    return true;
+  }
+
+  void externalRelease(MachinePageCount numPages) override {
+    VELOX_CHECK_GE(numAllocated_, numPages);
+    VELOX_CHECK_GE(numMapped_, numPages);
+    numAllocated_ -= numPages;
+    numMapped_ -= numPages;
+  }
+
   MachinePageCount numAllocated() const override {
     return numAllocated_;
   }

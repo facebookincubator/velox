@@ -81,6 +81,10 @@ class MmapAllocator : public MappedMemory {
         allocation.size(), [&]() { freeContiguousImpl(allocation); });
   }
 
+  bool externalReserve(MachinePageCount numPages) override;
+
+  void externalRelease(MachinePageCount numPages) override;
+
   // Checks internal consistency of allocation data
   // structures. Returns true if OK. May return false if there are
   // concurrent alocations and frees during the consistency check. This
@@ -319,7 +323,7 @@ class MmapAllocator : public MappedMemory {
   std::atomic<MachinePageCount> numMapped_;
 
   // Number of pages allocated and explicitly mmap'd by the
-  // application via allocateContiguous, outside of
+  // application via allocateContiguous, or externalReserve outside of
   // 'sizeClasses'. These pages are counted in 'numAllocated_' and
   // 'numMapped_'. Allocation requests are decided against
   // 'numAllocated_' and 'numMapped_'. This counter is informational

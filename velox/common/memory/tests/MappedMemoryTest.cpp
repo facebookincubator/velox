@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/memory/MappedMemory.h"
+#include <velox/common/base/VeloxException.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MmapAllocator.h"
@@ -429,6 +430,22 @@ TEST_P(MappedMemoryTest, increasingSizeWithThreadsTest) {
 
 TEST_P(MappedMemoryTest, scopedMemoryUsageTracking) {
   const int32_t numPages = 32;
+  const int32_t numReservedPages = 32;
+
+  {
+    // Test reserving exceeding tracker limit.
+    auto tracker = MemoryUsageTracker::create(
+        {MappedMemory::kPageSize,
+         MappedMemory::kPageSize,
+         MappedMemory::kPageSize});
+    auto mappedMemory = instance_->addChild(tracker);
+    EXPECT_THROW(
+        mappedMemory->externalReserve(numReservedPages), VeloxException);
+    EXPECT_EQ(mappedMemory->numAllocated(), 0);
+    EXPECT_EQ(mappedMemory->numMapped(), 0);
+    EXPECT_EQ(0, tracker->getCurrentUserBytes());
+  }
+
   {
     auto tracker = MemoryUsageTracker::create();
     auto mappedMemory = instance_->addChild(tracker);
@@ -437,11 +454,18 @@ TEST_P(MappedMemoryTest, scopedMemoryUsageTracking) {
 
     mappedMemory->allocate(numPages, 0, result);
     EXPECT_GE(result.numPages(), numPages);
+    EXPECT_EQ(mappedMemory->numAllocated(), result.numPages());
+
+    EXPECT_TRUE(mappedMemory->externalReserve(numReservedPages));
     EXPECT_EQ(
-        result.numPages() * MappedMemory::kPageSize,
+        mappedMemory->numAllocated(), result.numPages() + numReservedPages);
+    EXPECT_EQ(
+        (result.numPages() + numReservedPages) * MappedMemory::kPageSize,
         tracker->getCurrentUserBytes());
     mappedMemory->free(result);
+    mappedMemory->externalRelease(numReservedPages);
     EXPECT_EQ(0, tracker->getCurrentUserBytes());
+    EXPECT_EQ(mappedMemory->numAllocated(), 0);
   }
 
   auto tracker = MemoryUsageTracker::create();
@@ -488,6 +512,41 @@ TEST_P(MappedMemoryTest, minSizeClass) {
       tracker->getCurrentUserBytes());
   mappedMemory->free(result);
   EXPECT_EQ(0, tracker->getCurrentUserBytes());
+}
+
+TEST_P(MappedMemoryTest, externalReserve) {
+  constexpr int32_t kReserveSizeUnit = 16;
+  constexpr int32_t kNumReserves = 100;
+  EXPECT_TRUE(instance_->checkConsistency());
+
+  uint64_t totalReserved = 0;
+  uint64_t counter = 0;
+  for (int i = 1; i <= kNumReserves; i++) {
+    auto toReserve = kReserveSizeUnit * i;
+    if (totalReserved + toReserve > kCapacity) {
+      if (useMmap_) {
+        // Reserving exceeding capacity, resulting in reservation failure.
+        EXPECT_FALSE(instance_->externalReserve(toReserve));
+        break;
+      }
+    }
+    EXPECT_TRUE(instance_->externalReserve(toReserve));
+    counter++;
+    totalReserved += toReserve;
+    EXPECT_EQ(instance_->numMapped(), totalReserved);
+    EXPECT_EQ(instance_->numAllocated(), totalReserved);
+    EXPECT_TRUE(instance_->checkConsistency());
+  }
+
+  for (int i = 1; i <= counter; i++) {
+    auto toReserve = kReserveSizeUnit * i;
+    EXPECT_NO_THROW(instance_->externalRelease(toReserve));
+    totalReserved -= toReserve;
+    EXPECT_EQ(instance_->numMapped(), totalReserved);
+    EXPECT_EQ(instance_->numAllocated(), totalReserved);
+    EXPECT_TRUE(instance_->checkConsistency());
+  }
+  EXPECT_THROW(instance_->externalRelease(kReserveSizeUnit), VeloxException);
 }
 
 TEST_P(MappedMemoryTest, externalAdvise) {

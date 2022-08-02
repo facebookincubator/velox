@@ -603,6 +603,10 @@ class AsyncDataCache : public memory::MappedMemory {
   // Returns true if there is an entry for 'key'. Updates access time.
   bool exists(RawFileCacheKey key) const;
 
+  bool externalReserve(memory::MachinePageCount numPages) override;
+
+  void externalRelease(memory::MachinePageCount numPages) override;
+
   bool allocate(
       memory::MachinePageCount numPages,
       int32_t owner,
