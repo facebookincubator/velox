@@ -555,7 +555,14 @@ uint64_t variant::hash() const {
       return folly::Hash{}(
           timestampValue.getSeconds(), timestampValue.getNanos());
     }
-
+    case TypeKind::SHORT_DECIMAL: {
+      auto shortDecimalCapsule = value<TypeKind::SHORT_DECIMAL>();
+      return shortDecimalCapsule.hash();
+    }
+    case TypeKind::LONG_DECIMAL: {
+      auto longDecimalCapsule = value<TypeKind::LONG_DECIMAL>();
+      return longDecimalCapsule.hash();
+    }
     case TypeKind::MAP: {
       auto hasher = folly::Hash{};
       auto& mapVariant = value<TypeKind::MAP>();

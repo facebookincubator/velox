@@ -111,6 +111,26 @@ TEST(VariantTest, shortDecimal) {
   // 0.1234 < 1.234
   EXPECT_LT(
       u2.value<TypeKind::SHORT_DECIMAL>(), v.value<TypeKind::SHORT_DECIMAL>());
+
+  // Hash test.
+  auto vValue = v.value<TypeKind::SHORT_DECIMAL>();
+  auto vHash = vValue.hash();
+  auto u2Hash = u2.value<TypeKind::SHORT_DECIMAL>().hash();
+  // u2 and v differ in only precision.
+  EXPECT_NE(vHash, u2Hash);
+
+  // v2 and v differ only in scale.
+  variant v2 =
+      variant::shortDecimal(vValue.value().unscaledValue(), DECIMAL(10, 4));
+  EXPECT_NE(v2.value<TypeKind::SHORT_DECIMAL>().hash(), vHash);
+
+  // v2 and v differ only in value.
+  v2 = variant::shortDecimal(123456, shortDecimalType);
+  EXPECT_NE(v2.value<TypeKind::SHORT_DECIMAL>().hash(), vHash);
+
+  // v2 and v are exactly same.
+  v2 = variant::shortDecimal(vValue.value().unscaledValue(), shortDecimalType);
+  EXPECT_EQ(v2.value<TypeKind::SHORT_DECIMAL>().hash(), vHash);
 }
 
 TEST(VariantTest, shortDecimalNull) {
@@ -119,6 +139,7 @@ TEST(VariantTest, shortDecimalNull) {
   EXPECT_EQ(null.toJson(), "null");
   EXPECT_EQ(*null.inferType(), *DECIMAL(10, 5));
   EXPECT_THROW(variant::null(TypeKind::SHORT_DECIMAL), VeloxException);
+  EXPECT_THROW(null.value<TypeKind::SHORT_DECIMAL>().hash(), VeloxException);
 }
 
 TEST(VariantTest, longDecimal) {
@@ -141,6 +162,25 @@ TEST(VariantTest, longDecimal) {
   // 12.3456 > 12.345
   EXPECT_LT(
       v.value<TypeKind::LONG_DECIMAL>(), u2.value<TypeKind::LONG_DECIMAL>());
+
+  // Hash test.
+  auto vValue = v.value<TypeKind::LONG_DECIMAL>();
+  auto vHash = vValue.hash();
+  // u1 and v differ in only precision.
+  EXPECT_NE(vHash, u1.value<TypeKind::LONG_DECIMAL>().hash());
+
+  // v2 and v differ only in scale.
+  variant v2 =
+      variant::longDecimal(vValue.value().unscaledValue(), DECIMAL(20, 4));
+  EXPECT_NE(v2.value<TypeKind::LONG_DECIMAL>().hash(), vHash);
+
+  // v2 and v differ only in value.
+  v2 = variant::longDecimal(123456, longDecimalType);
+  EXPECT_NE(v2.value<TypeKind::LONG_DECIMAL>().hash(), vHash);
+
+  // v2 and v are exactly same.
+  v2 = variant::longDecimal(vValue.value().unscaledValue(), longDecimalType);
+  EXPECT_EQ(v2.value<TypeKind::LONG_DECIMAL>().hash(), vHash);
 }
 
 TEST(VariantTest, longDecimalNull) {
@@ -149,6 +189,7 @@ TEST(VariantTest, longDecimalNull) {
   EXPECT_EQ(null.toJson(), "null");
   EXPECT_EQ(*null.inferType(), *DECIMAL(20, 5));
   EXPECT_THROW(variant::null(TypeKind::LONG_DECIMAL), VeloxException);
+  EXPECT_THROW(null.value<TypeKind::LONG_DECIMAL>().hash(), VeloxException);
 }
 
 /// Test variant::equalsWithEpsilon by summing up large 64-bit integers (> 15

@@ -152,6 +152,19 @@ struct DecimalCapsule {
     }
     return lhsIntegral < rhsIntegral;
   }
+
+  size_t hash() const {
+    VELOX_CHECK(
+        unscaledValue.has_value(), "Unscaled value must be initialized");
+    auto hasher = folly::Hash{};
+    auto unscaledValHash = hasher(unscaledValue.value());
+    auto precisionHash = hasher(precision);
+    auto scaleHash = hasher(scale);
+    auto combinedPrecisionScaleHash =
+        folly::hash::hash_combine_generic(hasher, precisionHash, scaleHash);
+    return folly::hash::hash_combine_generic(
+        hasher, unscaledValHash, combinedPrecisionScaleHash);
+  }
 };
 
 using ShortDecimalCapsule = DecimalCapsule<ShortDecimal>;
