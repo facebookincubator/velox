@@ -340,7 +340,7 @@ jobs:
             echo "url: https://velox-conbench.voltrondata.run/" >> .conbench
             echo "email: $CONBENCH_EMAIL" >> .conbench
             echo "password: $CONBENCH_PASSWORD" >> .conbench
-            echo "hostname: CricleCI-runner" >> .conbench
+            echo "host_name: CricleCI-runner" >> .conbench
 
             conbench cpp-micro
       - store_artifacts:
