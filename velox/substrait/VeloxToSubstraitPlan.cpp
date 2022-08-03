@@ -46,6 +46,33 @@ namespace {
 
 } // namespace
 
+VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor() {
+  // Construct the substrait extension
+  substraitExtension_ = SubstraitExtension::load();
+  // Construct the function collector
+  functionCollector_ = std::make_shared<SubstraitFunctionCollector>();
+
+  // Construct the aggregate function lookup
+  auto scalarFunctionLookup = std::make_shared<SubstraitScalarFunctionLookup>(
+      substraitExtension_->scalarFunctions());
+
+  // Construct the scalar function converter.
+  auto scalaFunctionConverter =
+      std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
+          scalarFunctionLookup, functionCollector_);
+
+  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
+  callConvertors.push_back(scalaFunctionConverter);
+
+  // Construct the expression converter.
+  exprConvertor_ =
+      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
+
+  // Construct the aggregate function lookup
+  aggregateFunctionLookup_ = std::make_shared<SubstraitAggregateFunctionLookup>(
+      substraitExtension_->aggregateFunctions());
+}
+
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
@@ -320,31 +347,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
   functionCollector_->addFunctionToPlan(*substraitPlan);
   return *substraitPlan;
-}
-
-VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor() {
-  // Construct the substrait extension
-  substraitExtension_ = SubstraitExtension::load();
-
-  // Construct the scalar function converter.
-  auto scalaFunctionConverter =
-      std::make_shared<SubstraitScalarFunctionConverter>(
-          substraitExtension_->scalarFunctions(), functionCollector_);
-
-  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
-  callConvertors.push_back(scalaFunctionConverter);
-
-  // Construct the expression converter.
-  exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
-
-  // Construct the aggregate function converter
-  aggregateFunctionLookup_ =
-      std::make_shared<const SubstraitAggregateFunctionLookup>(
-          substraitExtension_->aggregateFunctions(), functionCollector_);
-
-  // Construct the function collector
-  functionCollector_ = std::make_shared<SubstraitFunctionCollector>();
 }
 
 } // namespace facebook::velox::substrait

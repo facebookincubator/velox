@@ -130,18 +130,22 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
     const RowTypePtr& inputType) {
+  ::substrait::Expression* substraitExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+
   SubstraitExprConverter topLevelConverter =
       [&](const core::TypedExprPtr& typeExpr) {
         return this->toSubstraitExpr(arena, typeExpr, inputType);
       };
   for (const auto& cc : callConverters_) {
     auto expressionOption =
-        cc->convert(callTypeExpr, arena, inputType, topLevelConverter);
+        cc->convert(callTypeExpr, arena, topLevelConverter);
     if (expressionOption.has_value()) {
-      return expressionOption.value();
+      return *expressionOption.value();
     }
   }
-  VELOX_NYI("Unable to convert call for function '{}'", callTypeExpr->name());
+
+  VELOX_NYI("Unsupported function name '{}'", callTypeExpr->name());
 }
 
 const ::substrait::Expression_Literal&

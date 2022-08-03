@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitParser.h"
 

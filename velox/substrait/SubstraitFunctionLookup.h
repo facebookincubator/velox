@@ -16,16 +16,11 @@
 
 #pragma once
 
-#include "VeloxToSubstraitCallConverter.h"
-#include "VeloxToSubstraitExpr.h"
 #include "iostream"
 #include "unordered_map"
 #include "velox/expression/Expr.h"
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/substrait/SubstraitFunction.h"
-#include "velox/substrait/SubstraitFunctionCollector.h"
 #include "velox/substrait/SubstraitFunctionMappings.h"
-#include "velox/substrait/VeloxToSubstraitExpr.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 
 namespace facebook::velox::substrait {
@@ -43,9 +38,7 @@ class SubstraitFunctionLookup {
       std::shared_ptr<const SubstraitFunctionFinder>&>;
 
  public:
-  SubstraitFunctionLookup(
-      const std::vector<SubstraitFunctionPtr>& functions,
-      const SubstraitFunctionCollectorPtr& functionCollector);
+  SubstraitFunctionLookup(const std::vector<SubstraitFunctionPtr>& functions);
 
   const std::optional<SubstraitFunctionPtr> lookupFunction(
       const core::CallTypedExprPtr& callTypeExpr) const;
@@ -53,26 +46,15 @@ class SubstraitFunctionLookup {
  protected:
   virtual const FunctionMappingMap& getFunctionMappings() const = 0;
 
-  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
-  SubstraitFunctionCollectorPtr functionCollector_;
-
  private:
   const FunctionSignatures functionSignatures_;
 };
 
-class SubstraitScalarFunctionConverter : public SubstraitFunctionLookup,
-                                         public VeloxToSubstraitCallConverter {
+class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
  public:
-  explicit SubstraitScalarFunctionConverter(
-      const std::vector<SubstraitFunctionPtr>& functions,
-      const SubstraitFunctionCollectorPtr& functionCollector)
-      : SubstraitFunctionLookup(functions, functionCollector) {}
-
-  const std::optional<::substrait::Expression> convert(
-      const core::CallTypedExprPtr& callTypeExpr,
-      google::protobuf::Arena& arena,
-      const RowTypePtr& inputType,
-      SubstraitExprConverter& topLevelConverter) const override;
+  explicit SubstraitScalarFunctionLookup(
+      const std::vector<SubstraitFunctionPtr>& functions)
+      : SubstraitFunctionLookup(functions) {}
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {
@@ -80,15 +62,14 @@ class SubstraitScalarFunctionConverter : public SubstraitFunctionLookup,
   }
 };
 
-using SubstraitScalarFunctionConverterPtr =
-    std::shared_ptr<const SubstraitScalarFunctionConverter>;
+using SubstraitScalarFunctionLookupPtr =
+    std::shared_ptr<const SubstraitScalarFunctionLookup>;
 
 class SubstraitAggregateFunctionLookup : public SubstraitFunctionLookup {
  public:
   SubstraitAggregateFunctionLookup(
-      const std::vector<SubstraitFunctionPtr>& functions,
-      const SubstraitFunctionCollectorPtr& functionCollector)
-      : SubstraitFunctionLookup(functions, functionCollector) {}
+      const std::vector<SubstraitFunctionPtr>& functions)
+      : SubstraitFunctionLookup(functions) {}
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {

@@ -23,8 +23,7 @@
 namespace facebook::velox::substrait {
 
 SubstraitFunctionLookup::SubstraitFunctionLookup(
-    const std::vector<SubstraitFunctionPtr>& functions,
-    const SubstraitFunctionCollectorPtr& functionCollector) {
+    const std::vector<SubstraitFunctionPtr>& functions) {
   // TODO creaate signatures_ based on functions
 }
 
@@ -50,35 +49,6 @@ const std::optional<SubstraitFunctionPtr>
 SubstraitFunctionLookup::SubstraitFunctionFinder::lookupFunction(
     const core::TypedExprPtr& exprPtr) const {
   return std::nullopt;
-}
-
-const std::optional<::substrait::Expression>
-SubstraitScalarFunctionConverter::convert(
-    const core::CallTypedExprPtr& callTypeExpr,
-    google::protobuf::Arena& arena,
-    const RowTypePtr& inputType,
-    SubstraitExprConverter& topLevelConverter) const {
-  auto& scalarFunctionOption = lookupFunction(callTypeExpr);
-
-  if (!scalarFunctionOption.has_value()) {
-    return std::nullopt;
-  }
-
-  auto* exprMessage =
-      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
-  auto substraitExpr = std::make_shared<::substrait::Expression>(*exprMessage);
-
-  auto scalarExpr = substraitExpr->mutable_scalar_function();
-  scalarExpr->set_function_reference(
-      functionCollector_->getFunctionReference(scalarFunctionOption.value()));
-
-  for (auto& arg : callTypeExpr->inputs()) {
-    scalarExpr->add_args()->MergeFrom(topLevelConverter(arg));
-  }
-  scalarExpr->mutable_output_type()->MergeFrom(
-      typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
-
-  return std::make_optional(*substraitExpr);
 }
 
 } // namespace facebook::velox::substrait

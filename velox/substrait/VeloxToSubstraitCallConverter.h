@@ -21,6 +21,9 @@
 
 #include "optional"
 #include "velox/expression/Expr.h"
+#include "velox/substrait/SubstraitFunctionCollector.h"
+#include "velox/substrait/SubstraitFunctionLookup.h"
+#include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 
 namespace facebook::velox::substrait {
@@ -39,14 +42,33 @@ class VeloxToSubstraitCallConverter {
    * @param inputType
    * @return an optional of substrait expression
    */
-  virtual const std::optional<::substrait::Expression> convert(
+  virtual const std::optional<::substrait::Expression*> convert(
       const core::CallTypedExprPtr& callTypeExpr,
       google::protobuf::Arena& arena,
-      const RowTypePtr& inputType,
       SubstraitExprConverter& topLevelConverter) const = 0;
 };
 
 using VeloxToSubstraitCallConverterPtr =
     std::shared_ptr<const VeloxToSubstraitCallConverter>;
+
+class VeloxToSubstraitScalarFunctionConverter
+    : public VeloxToSubstraitCallConverter {
+ public:
+  VeloxToSubstraitScalarFunctionConverter(
+      const SubstraitScalarFunctionLookupPtr functionLookup,
+      const SubstraitFunctionCollectorPtr functionCollector)
+      : functionLookup_(functionLookup),
+        functionCollector_(functionCollector) {}
+
+  const std::optional<::substrait::Expression*> convert(
+      const core::CallTypedExprPtr& callTypeExpr,
+      google::protobuf::Arena& arena,
+      SubstraitExprConverter& topLevelConverter) const override;
+
+ private:
+  const SubstraitFunctionCollectorPtr functionCollector_;
+  const SubstraitScalarFunctionLookupPtr functionLookup_;
+  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
+};
 
 } // namespace facebook::velox::substrait

@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "SubstraitFunction.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitFunction.h"
 
 namespace facebook::velox::substrait {
 
-
+//class used to deserialize substrait YAML extension files.
 class SubstraitExtension {
  public:
   SubstraitExtension() {}
 
+  //
   static std::shared_ptr<SubstraitExtension> load() {
     static SubstraitExtension substraitExtension;
     return std::make_shared<SubstraitExtension>(substraitExtension);
