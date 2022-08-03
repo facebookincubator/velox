@@ -562,12 +562,10 @@ uint64_t variant::hash() const {
           timestampValue.getSeconds(), timestampValue.getNanos());
     }
     case TypeKind::SHORT_DECIMAL: {
-      auto& shortDecimalCapsule = value<TypeKind::SHORT_DECIMAL>();
-      return shortDecimalCapsule.hash();
+      return value<TypeKind::SHORT_DECIMAL>().hash();
     }
     case TypeKind::LONG_DECIMAL: {
-      auto& longDecimalCapsule = value<TypeKind::LONG_DECIMAL>();
-      return longDecimalCapsule.hash();
+      return value<TypeKind::LONG_DECIMAL>().hash();
     }
     case TypeKind::MAP: {
       auto hasher = folly::Hash{};

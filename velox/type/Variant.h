@@ -155,13 +155,13 @@ struct DecimalCapsule {
 
   size_t hash() const {
     auto hasher = folly::Hash{};
-    auto unscaledValHash = hasValue() ? hasher(value()) : 0;
-    auto precisionHash = hasher(precision);
-    auto scaleHash = hasher(scale);
-    auto combinedPrecisionScaleHash =
-        folly::hash::hash_combine_generic(hasher, precisionHash, scaleHash);
-    return folly::hash::hash_combine_generic(
-        hasher, unscaledValHash, combinedPrecisionScaleHash);
+    auto hash = folly::hash::hash_combine_generic(
+        hasher, hasher(precision), hasher(scale));
+    if (hasValue()) {
+      hash = folly::hash::hash_combine_generic(hasher, hasher(value()), hash);
+    }
+    return hash;
+    ;
   }
 };
 
