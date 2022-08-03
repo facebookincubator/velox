@@ -306,13 +306,6 @@ jobs:
           keys:
             - velox-ccache-release-{{ arch }}-{{ checksum "merge-base-date" }}
       - run:
-          name: "Install conbench and veloxbench"
-          command: |
-            # install pip
-            python -m ensurepip --upgrade
-            pip install conbench
-            pip install scripts/veloxbench
-      - run:
           name: "Build Benchmarks"
           command: |
             git checkout -
@@ -323,7 +316,12 @@ jobs:
             make benchmarks-basic-build NUM_THREADS=16 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=8
             ccache -s
       - run:
-          name: "Run Benchmarks - Target"
+          name: "Install conbench and veloxbench"
+          command: |
+            pip3 install conbench
+            pip3 install scripts/veloxbench
+      - run:
+          name: "Run Benchmarks"
           command: |
             # get to the directory with benchmarks
             cd scripts/veloxbench/veloxbench
