@@ -325,7 +325,7 @@ jobs:
           name: "Run Benchmarks"
           command: |
             # get to the directory with benchmarks
-            cd velox/scripts/veloxbench/veloxbench
+            cd scripts/veloxbench/veloxbench
             conbench cpp-micro
       - store_artifacts:
           path: '_build/debug/.ninja_log'
