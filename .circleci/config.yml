@@ -321,12 +321,12 @@ jobs:
             # upgrade python to 3.8 for this job
             yum install -y python38
             pip3.8 install conbench
-            pip3.8 install scripts/veloxbench
+            pip3.8 install velox/scripts/veloxbench
       - run:
           name: "Run Benchmarks"
           command: |
             # get to the directory with benchmarks
-            cd scripts/veloxbench/veloxbench
+            cd velox/scripts/veloxbench/veloxbench
             conbench cpp-micro
       - store_artifacts:
           path: '_build/debug/.ninja_log'
