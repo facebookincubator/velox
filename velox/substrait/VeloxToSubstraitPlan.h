@@ -23,8 +23,10 @@
 #include "velox/core/PlanNode.h"
 #include "velox/type/Type.h"
 
+#include "velox/substrait/SubstraitExtension.h"
+#include "velox/substrait/SubstraitFunctionCollector.h"
+#include "velox/substrait/SubstraitFunctionLookup.h"
 #include "velox/substrait/VeloxToSubstraitExpr.h"
-#include "velox/substrait/VeloxToSubstraitFunctionCollector.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
 
@@ -33,6 +35,7 @@ namespace facebook::velox::substrait {
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
+  VeloxToSubstraitPlanConvertor();
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -79,10 +82,14 @@ class VeloxToSubstraitPlanConvertor {
 
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.
-  std::shared_ptr<VeloxToSubstraitExprConvertor> exprConvertor_;
+  VeloxToSubstraitExprConvertorPtr exprConvertor_;
 
-  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
+  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
-  std::shared_ptr<VeloxToSubstraitFunctionCollector> functionCollector_;
+  SubstraitFunctionCollectorPtr functionCollector_;
+
+  SubstraitExtensionPtr substraitExtension_;
+
+  SubstraitAggregateFunctionLookupPtr aggregateFunctionLookup_;
 };
 } // namespace facebook::velox::substrait

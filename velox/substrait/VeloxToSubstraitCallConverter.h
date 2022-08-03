@@ -25,6 +25,9 @@
 
 namespace facebook::velox::substrait {
 
+using SubstraitExprConverter =
+    std::function<::substrait::Expression(const core::TypedExprPtr&)>;
+
 // This class is used to convert the velox CallTypedExpr into substrait scalar
 // function expression.
 class VeloxToSubstraitCallConverter {
@@ -36,10 +39,11 @@ class VeloxToSubstraitCallConverter {
    * @param inputType
    * @return an optional of substrait expression
    */
-  virtual const std::optional<std::shared_ptr<::substrait::Expression>> convert(
+  virtual const std::optional<::substrait::Expression> convert(
       const core::CallTypedExprPtr& callTypeExpr,
       google::protobuf::Arena& arena,
-      const RowTypePtr& inputType) const = 0;
+      const RowTypePtr& inputType,
+      SubstraitExprConverter& topLevelConverter) const = 0;
 };
 
 using VeloxToSubstraitCallConverterPtr =

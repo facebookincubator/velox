@@ -16,7 +16,8 @@
 
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 #include "velox/functions/FunctionRegistry.h"
-#include "velox/substrait/VeloxToSubstraitFunctionConverter.h"
+#include "velox/substrait/SubstraitExtension.h"
+#include "velox/substrait/SubstraitFunctionLookup.h"
 
 namespace facebook::velox::substrait {
 
@@ -49,19 +50,6 @@ namespace {
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
   // Assume only accepts a single plan fragment.
-
-  const auto& functionSignatures = getFunctionSignatures();
-  auto scalarFunctionConverter =
-      std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
-          functionSignatures);
-
-  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
-  callConvertors.push_back(scalarFunctionConverter);
-  // Construct the expression converter.
-  exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
-  scalarFunctionConverter->setExprConverter(exprConvertor_);
-
   ::substrait::Plan* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
 
@@ -296,9 +284,24 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
+    SubstraitExprConverter topLevelConverter =
+        [&](const core::TypedExprPtr& typeExpr) {
+          return exprConvertor_->toSubstraitExpr(arena, typeExpr, inputType);
+        };
+
+    auto aggregateFunctionOption =
+        aggregateFunctionLookup_->lookupFunction(aggregatesExpr);
+
+    if (!aggregateFunctionOption.has_value()) {
+      VELOX_NYI(
+          "Fail to lookup function signature for aggregate function {}",
+          funName);
+    }
+
     // Set substrait aggregate Function reference and output type.
     aggFunction->set_function_reference(
-        functionCollector_->getFunctionReference(aggregatesExpr));
+        functionCollector_->getFunctionReference(
+            aggregateFunctionOption.value()));
 
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
@@ -313,63 +316,35 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
     google::protobuf::Arena& arena) {
-  // TODO: Fetch all functions from velox's registry and add them into substrait
-  // extensions.
-  // Now we just work around this part and add one function as dummy version to
-  // pass filter and project round-trip test.
   auto substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-
-  auto extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(0);
-  extensionFunction->set_name("add:opt_i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(1);
-  extensionFunction->set_name("multiply:opt_i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(1);
-  extensionFunction->set_function_anchor(2);
-  extensionFunction->set_name("lt:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(3);
-  extensionFunction->set_name("divide:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(4);
-  extensionFunction->set_name("count:opt_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(5);
-  extensionFunction->set_name("sum:opt_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(6);
-  extensionFunction->set_name("modulus:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(7);
-  extensionFunction->set_name("equal:i64_i64");
-
+  functionCollector_->addFunctionToPlan(*substraitPlan);
   return *substraitPlan;
+}
+
+VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor() {
+  // Construct the substrait extension
+  substraitExtension_ = SubstraitExtension::load();
+
+  // Construct the scalar function converter.
+  auto scalaFunctionConverter =
+      std::make_shared<SubstraitScalarFunctionConverter>(
+          substraitExtension_->scalarFunctions(), functionCollector_);
+
+  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
+  callConvertors.push_back(scalaFunctionConverter);
+
+  // Construct the expression converter.
+  exprConvertor_ =
+      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
+
+  // Construct the aggregate function converter
+  aggregateFunctionLookup_ =
+      std::make_shared<const SubstraitAggregateFunctionLookup>(
+          substraitExtension_->aggregateFunctions(), functionCollector_);
+
+  // Construct the function collector
+  functionCollector_ = std::make_shared<SubstraitFunctionCollector>();
 }
 
 } // namespace facebook::velox::substrait

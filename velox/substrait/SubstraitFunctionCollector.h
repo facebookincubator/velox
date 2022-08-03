@@ -17,18 +17,25 @@
  * under the License.
  */
 
-#include "VeloxToSubstraitFunctionCollector.h"
+#pragma once
+
+#include <substrait/proto/substrait/algebra.pb.h>
+#include <substrait/proto/substrait/plan.pb.h>
+#include <optional>
+#include "velox/core/Expressions.h"
+#include "velox/functions/FunctionRegistry.h"
+#include "velox/substrait/SubstraitFunction.h"
 
 namespace facebook::velox::substrait {
 
-const int VeloxToSubstraitFunctionCollector::getFunctionReference(
-    const core::CallTypedExprPtr& callTypedExpr) const {
-  return 0;
-}
+class SubstraitFunctionCollector {
+ public:
+  const int getFunctionReference(const SubstraitFunctionPtr& callTypedExpr);
 
-const void VeloxToSubstraitFunctionCollector::addFunctionToPlan(
-    const ::substrait::Plan& plan) const {
+  const void addFunctionToPlan(::substrait::Plan& plan) const;
+};
 
-}
+using SubstraitFunctionCollectorPtr =
+    std::shared_ptr<SubstraitFunctionCollector>;
 
 } // namespace facebook::velox::substrait

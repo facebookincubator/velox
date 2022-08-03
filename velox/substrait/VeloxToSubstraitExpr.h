@@ -41,7 +41,7 @@ class VeloxToSubstraitExprConvertor {
   const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const core::TypedExprPtr& expr,
-      const RowTypePtr& inputType) const;
+      const RowTypePtr& inputType);
 
   /// Convert Velox Constant Expression to Substrait
   /// Literal Expression.
@@ -53,42 +53,42 @@ class VeloxToSubstraitExprConvertor {
   const ::substrait::Expression_Literal& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::ConstantTypedExpr>& constExpr,
-      ::substrait::Expression_Literal_Struct* litValue = nullptr) const;
+      ::substrait::Expression_Literal_Struct* litValue = nullptr);
 
   /// Convert Velox null value to Substrait null literal.
   const ::substrait::Expression_Literal& toSubstraitNullLiteral(
       google::protobuf::Arena& arena,
-      const velox::TypePtr& type) const;
+      const velox::TypeKind& typeKind);
 
   /// Convert Velox not null variant to Substrait Literal Expression.
   const ::substrait::Expression_Literal& toSubstraitNotNullLiteral(
       google::protobuf::Arena& arena,
-      const velox::variant& variantValue) const;
+      const velox::variant& variantValue);
 
  private:
   /// Convert Velox Cast Expression to Substrait Cast Expression.
   const ::substrait::Expression_Cast& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::CastTypedExpr>& castExpr,
-      const RowTypePtr& inputType) const;
+      const RowTypePtr& inputType);
 
   /// Convert Velox FieldAccessTypedExpr to Substrait FieldReference Expression.
   const ::substrait::Expression_FieldReference& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::FieldAccessTypedExpr>& fieldExpr,
-      const RowTypePtr& inputType) const;
+      const RowTypePtr& inputType);
 
   /// Convert Velox CallTypedExpr Expression to Substrait Expression.
   const ::substrait::Expression& toSubstraitExpr(
       google::protobuf::Arena& arena,
       const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
-      const RowTypePtr& inputType) const;
+      const RowTypePtr& inputType);
 
   /// Convert Velox vector to Substrait literal.
   const ::substrait::Expression_Literal& toSubstraitLiteral(
       google::protobuf::Arena& arena,
       const velox::VectorPtr& vectorValue,
-      ::substrait::Expression_Literal_Struct* litValue) const;
+      ::substrait::Expression_Literal_Struct* litValue);
 
   /// Convert Velox variant to Substrait Literal Expression.
   const ::substrait::Expression_Literal& toSubstraitLiteral(
@@ -97,7 +97,7 @@ class VeloxToSubstraitExprConvertor {
 
   std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
 
-  std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
+  const std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
 };
 
 using VeloxToSubstraitExprConvertorPtr =

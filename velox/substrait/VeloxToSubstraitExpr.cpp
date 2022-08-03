@@ -55,7 +55,7 @@ void convertVectorValue(
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const core::TypedExprPtr& expr,
-    const RowTypePtr& inputType) const {
+    const RowTypePtr& inputType) {
   ::substrait::Expression* substraitExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
   if (auto constExpr =
@@ -91,7 +91,7 @@ const ::substrait::Expression_Cast&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CastTypedExpr>& castExpr,
-    const RowTypePtr& inputType) const {
+    const RowTypePtr& inputType) {
   ::substrait::Expression_Cast* substraitCastExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Cast>(
           &arena);
@@ -111,7 +111,7 @@ const ::substrait::Expression_FieldReference&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::FieldAccessTypedExpr>& fieldExpr,
-    const RowTypePtr& inputType) const {
+    const RowTypePtr& inputType) {
   ::substrait::Expression_FieldReference* substraitFieldExpr =
       google::protobuf::Arena::CreateMessage<
           ::substrait::Expression_FieldReference>(&arena);
@@ -129,21 +129,26 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
 const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
-    const RowTypePtr& inputType) const {
+    const RowTypePtr& inputType) {
+  SubstraitExprConverter topLevelConverter =
+      [&](const core::TypedExprPtr& typeExpr) {
+        return this->toSubstraitExpr(arena, typeExpr, inputType);
+      };
   for (const auto& cc : callConverters_) {
-    auto expressionOption = cc->convert(callTypeExpr, arena, inputType);
+    auto expressionOption =
+        cc->convert(callTypeExpr, arena, inputType, topLevelConverter);
     if (expressionOption.has_value()) {
-      return *expressionOption.value();
+      return expressionOption.value();
     }
   }
-  VELOX_NYI("Unsupported function name '{}'", callTypeExpr->name());
+  VELOX_NYI("Unable to convert call for function '{}'", callTypeExpr->name());
 }
 
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::ConstantTypedExpr>& constExpr,
-    ::substrait::Expression_Literal_Struct* litValue) const {
+    ::substrait::Expression_Literal_Struct* litValue) {
   if (constExpr->hasValueVector()) {
     return toSubstraitLiteral(arena, constExpr->valueVector(), litValue);
   } else {
@@ -154,7 +159,7 @@ VeloxToSubstraitExprConvertor::toSubstraitExpr(
 const ::substrait::Expression_Literal&
 VeloxToSubstraitExprConvertor::toSubstraitLiteral(
     google::protobuf::Arena& arena,
-    const velox::variant& variantValue) const {
+    const velox::variant& variantValue) {
   ::substrait::Expression_Literal* literalExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression_Literal>(
           &arena);
@@ -299,10 +304,22 @@ VeloxToSubstraitExprConvertor::toSubstraitNullLiteral(
       substraitField->mutable_null()->set_allocated_fp64(nullValue);
       break;
     }
+    case velox::TypeKind::UNKNOWN: {
+      ::substrait::Type_UserDefined* nullValue =
+          google::protobuf::Arena::CreateMessage<::substrait::Type_UserDefined>(
+              &arena);
+      nullValue->set_nullability(
+          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
+      nullValue->set_type_reference(0);
+      substraitField->mutable_null()->set_allocated_user_defined(nullValue);
+
+      break;
+    }
     default: {
-      VELOX_UNSUPPORTED("Unsupported type '{}'", std::string(type->kindName()));
+      VELOX_UNSUPPORTED("Unsupported type '{}'", mapTypeKindToName(typeKind));
     }
   }
+  substraitField->set_nullable(true);
   return *substraitField;
 }
 
