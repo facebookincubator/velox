@@ -41,7 +41,7 @@ def velox_info() -> Dict[str, Any]:
     # TODO: undo the hard coding with ways to get the values from velox
     # c.f. https://github.com/ursacomputing/benchmarks/blob/033eee0951adbf41931a2de95caccbac887da6ff/benchmarks/_benchmark.py#L30-L48
     return {
-        "velox_version": "fake-version-0.0.1",
+        "velox_version": "0.0.1",
         "velox_compiler_id": None,
         "velox_compiler_version": None,
         "velox_compiler_flags": None,
