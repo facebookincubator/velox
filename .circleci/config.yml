@@ -23,7 +23,15 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
-      - linux-benchmarks-conbench
+
+  # Store benchmarks to conbench on main
+  benchmark-conbench:
+    jobs:
+      - linux-benchmarks-conbench:
+          filters:
+            branches:
+              only:
+                - main
 
   # Daily documentation update
   nightly:
@@ -290,10 +298,6 @@ jobs:
 
   linux-benchmarks-conbench:
     executor: build
-    filters:
-      branches:
-        only:
-          - main
     steps:
       - checkout
       - run:
