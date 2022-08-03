@@ -15,6 +15,8 @@
  */
 
 #include "velox/common/memory/MmapAllocator.h"
+#include <velox/common/memory/MappedMemory.h>
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
 
 #include <sys/mman.h>
@@ -32,6 +34,24 @@ MmapAllocator::MmapAllocator(const MmapAllocatorOptions& options)
   for (int size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
   }
+}
+
+bool MmapAllocator::externalReserve(MachinePageCount numPages) {
+  if (ensureEnoughMappedPages(numPages)) {
+    numAllocated_.fetch_add(numPages);
+    numExternalMapped_.fetch_add(numPages);
+    return true;
+  }
+  return false;
+}
+
+void MmapAllocator::externalRelease(MachinePageCount numPages) {
+  VELOX_CHECK_GE(numMapped_, numPages);
+  VELOX_CHECK_GE(numAllocated_, numPages);
+  VELOX_CHECK_GE(numExternalMapped_, numPages);
+  numMapped_.fetch_sub(numPages);
+  numAllocated_.fetch_sub(numPages);
+  numExternalMapped_.fetch_sub(numPages);
 }
 
 bool MmapAllocator::allocate(
@@ -123,6 +143,7 @@ int64_t MmapAllocator::free(Allocation& allocation) {
   numAllocated_.fetch_sub(numFreed);
   return numFreed * kPageSize;
 }
+
 MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
   if (allocation.numRuns() == 0) {
     return 0;

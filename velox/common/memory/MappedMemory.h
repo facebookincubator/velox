@@ -419,6 +419,16 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
       uint64_t size,
       uint64_t maxMallocSize = kMaxMallocBytes) noexcept;
 
+  // Reserves memory in page unit that is allocated externally. No actual
+  // allocations will be performed. Only the internal memory usage counters are
+  // increased according to the reservation request to indicate memory
+  // consumption so that additional reservations/allocations will respect this
+  // "taken" resource. Returns true if reservation is successful.
+  virtual bool externalReserve(MachinePageCount numPages) = 0;
+
+  // Paired with externalReserve() to release the reserved memory.
+  virtual void externalRelease(MachinePageCount numPages) = 0;
+
   // Checks internal consistency of allocation data
   // structures. Returns true if OK.
   virtual bool checkConsistency() const = 0;
@@ -550,6 +560,28 @@ class ScopedMappedMemory final : public MappedMemory {
     parent_->freeContiguous(allocation);
     if (tracker_) {
       tracker_->update(-size);
+    }
+  }
+
+  bool externalReserve(MachinePageCount numPages) override {
+    if (parent_->externalReserve(numPages)) {
+      if (tracker_) {
+        try {
+          tracker_->update(numPages * kPageSize);
+        } catch (const std::exception& e) {
+          parent_->externalRelease(numPages);
+          std::rethrow_exception(std::current_exception());
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  void externalRelease(MachinePageCount numPages) override {
+    parent_->externalRelease(numPages);
+    if (tracker_) {
+      tracker_->update(-numPages * kPageSize);
     }
   }
 

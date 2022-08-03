@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/caching/AsyncDataCache.h"
+#include <velox/common/memory/MappedMemory.h>
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 
@@ -498,6 +499,15 @@ CachePin AsyncDataCache::findOrCreate(
 bool AsyncDataCache::exists(RawFileCacheKey key) const {
   int shard = std::hash<RawFileCacheKey>()(key) & (kShardMask);
   return shards_[shard]->exists(key);
+}
+
+bool AsyncDataCache::externalReserve(MachinePageCount numPages) {
+  return makeSpace(
+      numPages, [&]() { return mappedMemory_->externalReserve(numPages); });
+}
+
+void AsyncDataCache::externalRelease(MachinePageCount numPages) {
+  mappedMemory_->externalRelease(numPages);
 }
 
 bool AsyncDataCache::makeSpace(
