@@ -27,7 +27,7 @@ workflows:
   # Store benchmarks to conbench on main
   benchmark-conbench:
     jobs:
-      - linux-benchmarks-conbench
+      - linux-benchmarks-conbench:
         filters:
           branches:
             only:
