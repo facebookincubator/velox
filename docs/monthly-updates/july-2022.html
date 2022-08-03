@@ -1,0 +1,182 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>July 2022 Update &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/nature.css" />
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="June 2022 Update" href="june-2022.html" />
+    <link rel="prev" title="Monthly Updates" href="../monthly-updates.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="june-2022.html" title="June 2022 Update"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" accesskey="U">Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2022 Update</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="july-2022-update">
+<h1>July 2022 Update<a class="headerlink" href="#july-2022-update" title="Permalink to this headline">¶</a></h1>
+<section id="documentation">
+<h2>Documentation<a class="headerlink" href="#documentation" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add documentation for Presto related <a class="reference internal" href="../functions/json.html"><span class="doc">JSON Functions</span></a>.</p></li>
+</ul>
+</section>
+<section id="core-library">
+<h2>Core Library<a class="headerlink" href="#core-library" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add WindowNode to describe window functions computations. Window operator implementation is still in development.</p></li>
+<li><p>Add support for DECIMAL type Variant values.</p></li>
+</ul>
+</section>
+<section id="presto-functions">
+<h2>Presto Functions<a class="headerlink" href="#presto-functions" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add <code class="xref py py-func docutils literal notranslate"><span class="pre">array_sort()</span></code>, <code class="xref py py-func docutils literal notranslate"><span class="pre">combinations()</span></code> functions.</p></li>
+<li><p>Add <a class="reference internal" href="../functions/aggregate.html#approx_most_frequent" title="approx_most_frequent"><code class="xref py py-func docutils literal notranslate"><span class="pre">approx_most_frequent()</span></code></a> aggregate function.</p></li>
+<li><p>Extend aggregate functions <a class="reference internal" href="../functions/aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a> to support VARCHAR inputs.</p></li>
+<li><p>Add support for cast from a JSON type value to ARRAYS or MAPS of JSON type values.</p></li>
+</ul>
+</section>
+<section id="hive-connector">
+<h2>Hive Connector<a class="headerlink" href="#hive-connector" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add NegatedBytesRange filter to optimize <cite>NOT IN</cite> filters on string columns pushed down into DWRF reader.</p></li>
+<li><p>Add Parquet writer implemented over Apache Arrow Parquet writer.</p></li>
+</ul>
+</section>
+<section id="performance-and-correctness">
+<h2>Performance and Correctness<a class="headerlink" href="#performance-and-correctness" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add q5, q10, q12, q14, q19, q22 to TPC-H benchmark.</p></li>
+<li><p>Optimize KLL sketch memory usage by allocating memory based on the number of elements retained.</p></li>
+<li><p>Optimize arithmetic operations that check for overflow by enabling a fast execution path.</p></li>
+<li><p>Optimize <code class="xref py py-func docutils literal notranslate"><span class="pre">row_constructor()</span></code> Presto function by removing redundant copy.</p></li>
+<li><p>Add benchmarks for NegatedBigintRange, NegatedBytesRange filters.</p></li>
+<li><p>Improve test coverage for various aggregate functions.</p></li>
+<li><p>Improve performance of MmapAllocator::allocate.</p></li>
+<li><p>Create nightly fuzzer <a class="reference external" href="https://app.circleci.com/insights/github/facebookincubator/velox/workflows/nightly/jobs?branch=main">CI run</a>.</p></li>
+</ul>
+</section>
+<section id="debugging-experience">
+<h2>Debugging Experience<a class="headerlink" href="#debugging-experience" title="Permalink to this headline">¶</a></h2>
+<ul class="simple">
+<li><p>Add WindowNode::addDetails implementation.</p></li>
+</ul>
+</section>
+<section id="credits">
+<h2>Credits<a class="headerlink" href="#credits" title="Permalink to this headline">¶</a></h2>
+<p>Aditi Pandit, Amit Dutta, Andrew Gallagher, Bikramjeet Vig, Chad Austin, Connor Devlin,
+Daniel Ng, David Greenberg, Deepak Majeti, Ge Gao, Huameng Jiang, Ivan Morett,
+Jialiang Tan, Jie1 Zhang, Jimmy Lu, Jonathan Mendoza, Karteek Murthy, Kevin Wilfong,
+Kimberly Yang, Krishna Pai, Laith Sakka, Masha Basmanova, Michael Shang, Naresh Kumar,
+Orri Erling, Orvid King, Pedro Eugenio Rocha Pedreira, PenghuiJiao, Pramod, Prasoon Telang,
+Scott Wolchok, Victor Zverovich, Wei He, Xavier Deguillard, Xiaoxuan Meng, Yoav Helfman,
+Zeyi (Rice) Fan, Zhenyuan Zhao, usurai, yingsu00</p>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">July 2022 Update</a><ul>
+<li><a class="reference internal" href="#documentation">Documentation</a></li>
+<li><a class="reference internal" href="#core-library">Core Library</a></li>
+<li><a class="reference internal" href="#presto-functions">Presto Functions</a></li>
+<li><a class="reference internal" href="#hive-connector">Hive Connector</a></li>
+<li><a class="reference internal" href="#performance-and-correctness">Performance and Correctness</a></li>
+<li><a class="reference internal" href="#debugging-experience">Debugging Experience</a></li>
+<li><a class="reference internal" href="#credits">Credits</a></li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="../monthly-updates.html"
+                          title="previous chapter">Monthly Updates</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="june-2022.html"
+                          title="next chapter">June 2022 Update</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../_sources/monthly-updates/july-2022.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="june-2022.html" title="June 2022 Update"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="../monthly-updates.html" title="Monthly Updates"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../monthly-updates.html" >Monthly Updates</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">July 2022 Update</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
