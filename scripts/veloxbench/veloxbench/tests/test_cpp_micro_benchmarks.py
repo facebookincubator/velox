@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cpp_micro_benchmarks
+from .. import cpp_micro_benchmarks
 
 
 def test_parse_benchmark_name_no_params():
@@ -30,9 +30,9 @@ def test_get_values():
     actual = benchmark._get_values(result)
     assert actual == {
         "data": [20.99487392089844],
-        "time_unit": "s",
+        "time_unit": "ns",
         "times": [20.99487392089844],
-        "unit": "s",
+        "unit": "ns",
     }
 
 

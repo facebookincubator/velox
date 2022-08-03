@@ -90,7 +90,7 @@ class RecordCppMicroBenchmarks(_benchmark.Benchmark):
             # iterate through files to make the suites
             with os.scandir(result_dir) as result_files:
                 for result_file in result_files:
-                    suite = result_file.name.removesuffix(".json")
+                    suite = result_file.name.replace(".json", "", 1)
                     with open(result_file.path, "r") as f:
                         results = json.load(f)
                     self.conbench.mark_new_batch()
