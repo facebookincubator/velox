@@ -79,11 +79,14 @@ bool isMember(
 }
 
 void mergeFields(
-    std::vector<FieldReference*>& fields,
+    std::vector<FieldReference*>& distinctFields,
+    std::unordered_set<FieldReference*>& multiRefFields,
     const std::vector<FieldReference*>& moreFields) {
   for (auto* newField : moreFields) {
-    if (!isMember(fields, *newField)) {
-      fields.emplace_back(newField);
+    if (isMember(distinctFields, *newField)) {
+      multiRefFields.insert(newField);
+    } else {
+      distinctFields.emplace_back(newField);
     }
   }
 }
@@ -101,17 +104,6 @@ bool hasConditionals(Expr* expr) {
   }
 
   return false;
-}
-
-void updateMultiplyReferencedFields(
-    const std::vector<FieldReference*>& allFields,
-    std::set<FieldReference*>& multiRefFields,
-    const std::vector<FieldReference*>& fieldsToAdd) {
-  for (auto* newField : fieldsToAdd) {
-    if (isMember(allFields, *newField)) {
-      multiRefFields.insert(newField);
-    }
-  }
 }
 
 } // namespace
@@ -201,9 +193,7 @@ void Expr::computeMetadata() {
     input->computeMetadata();
     deterministic_ &= input->deterministic_;
     propagatesNulls_ &= input->propagatesNulls_;
-    updateMultiplyReferencedFields(
-        distinctFields_, multiRefFields_, input->distinctFields_);
-    mergeFields(distinctFields_, input->distinctFields_);
+    mergeFields(distinctFields_, multiRefFields_, input->distinctFields_);
   }
   if (isSpecialForm()) {
     propagatesNulls_ = propagatesNulls();
@@ -382,7 +372,7 @@ void Expr::eval(
   // all the time. Therefore, we should delay loading lazy vectors until we
   // know the minimum subset of rows needed to be loaded.
   //
-  // Load fields multiple referenced by inputs unconditionally. It's hard to
+  // Load fields multiply referenced by inputs unconditionally. It's hard to
   // know the superset of rows the multiple inputs need to load.
   //
   // If there is only one field, load it unconditionally. The very first IF,
@@ -390,16 +380,15 @@ void Expr::eval(
   // encodings at a higher level in the expression tree and avoids repeated
   // peeling and wrapping in the sub-nodes.
   //
-  // TODO: only pre-loading lazy vectors that is not flat encoding,
-  // regardless of hasConditionals_.
+  // TODO: Re-work the logic of deciding when to load which field.
   if (!hasConditionals_ || distinctFields_.size() == 1) {
     // Load lazy vectors if any.
     for (const auto& field : distinctFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
   } else if (!propagatesNulls_) {
-    // Multiple referenced fields, load at common parent expr with "rows".
-    // delay loading fields that are not in multiRefFields_.
+    // Load multiply-referenced fields at common parent expr with "rows".
+    // Delay loading fields that are not in multiRefFields_.
     for (const auto& field : multiRefFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
@@ -1331,11 +1320,9 @@ ExprSet::ExprSet(
     : execCtx_(execCtx) {
   exprs_ = compileExpressions(
       std::move(sources), execCtx, this, enableConstantFolding);
-  std::vector<FieldReference*> allFields;
+  std::vector<FieldReference*> allDistinctFields;
   for (auto& expr : exprs_) {
-    updateMultiplyReferencedFields(
-        allFields, multiRefFields_, expr->distinctFields());
-    mergeFields(allFields, expr->distinctFields());
+    mergeFields(allDistinctFields, multiRefFields_, expr->distinctFields());
   }
 }
 

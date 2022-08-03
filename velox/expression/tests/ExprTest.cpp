@@ -970,8 +970,8 @@ TEST_F(ExprTest, lazyVectorAccessTwiceWithDifferentRows) {
 TEST_F(ExprTest, lazyVectorAccessTwiceInDifferentExpressions) {
   const vector_size_t size = 1'000;
 
-  // Fields referenced by multiple expressions.
-  // load lazy vector immediately in ExprSet::eval().
+  // Fields referenced by multiple expressions will load lazy vector
+  // immediately in ExprSet::eval().
   auto isNullAtColA = [](auto row) { return row % 2 == 0; };
   auto isNullAtColC = [](auto row) { return row % 4 == 0; };
 
