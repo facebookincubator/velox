@@ -1,3 +1,17 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import datetime
 import functools
 import json
@@ -66,7 +80,7 @@ class Benchmark(conbench.runner.Benchmark):
     ):
         cpu_count = options.get("cpu_count", None)
         if cpu_count is not None:
-            # TODO: how to set multithreading?
+            # TODO: how to set multithreading? Not needed for cpp micro, but might be for macrobenchmarks
             raise NotImplementedError()
         tags, info, context = self._get_tags_info_context(case, extra_tags)
         try:
@@ -114,17 +128,13 @@ class Benchmark(conbench.runner.Benchmark):
         )
         return benchmark, output
 
-    def execute_command(self, command, capture_output=True):
+    def execute_command(self, command):
         try:
             print(command)
-            result = subprocess.run(command, capture_output=capture_output, check=True)
+            result = subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
             print(e.stderr.decode("utf-8"))
             raise e
-        # Some benchmarks (e.g., java-micro) produce 12GB+ of stdout that can't be loaded into memory
-        # on benchmark machines with 16GB of RAM and without Swap
-        if capture_output:
-            return result.stdout.decode("utf-8"), result.stderr.decode("utf-8")
 
     def version_case(self, case: tuple) -> Optional[int]:
         """

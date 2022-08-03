@@ -1,3 +1,17 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import copy
 import json
 import os
@@ -28,7 +42,7 @@ COMMON_OPTIONS = {
 }
 
 
-def get_run_command(filename, options):
+def get_run_command(output_dir, options):
     # TODO: we'll probably want to unify these runner scripts
     # Must run `make benchmarks-basic-build` before this
     # TODO: deal with the paths better (especially to benchmarks/basic)
@@ -38,7 +52,7 @@ def get_run_command(filename, options):
         "--path",
         "../../../_build/release/velox/benchmarks/basic/",
         "--dump-path",
-        filename,
+        output_dir,
     ]
 
     # TODO: extend cpp micro benchmarks to allow for iterations
@@ -72,6 +86,7 @@ class RecordCppMicroBenchmarks(_benchmark.Benchmark):
         with tempfile.TemporaryDirectory() as result_dir:
             run_command = get_run_command(result_dir, kwargs)
             self.execute_command(run_command)
+
             # iterate through files to make the suites
             with os.scandir(result_dir) as result_files:
                 for result_file in result_files:
@@ -104,13 +119,11 @@ class RecordCppMicroBenchmarks(_benchmark.Benchmark):
 
     def _get_values(self, result):
         return {
+            # Folly always returns in ns, so use that. All benchmarks are times, none are throughput so both data and times have the same unit
             "data": [result[2]],
-            # TODO: should we get units from the results?
-            "unit": self._format_unit("s"),
-            # TODO: can we get iteration times here?
+            "unit": self._format_unit("ns"),
             "times": [result[2]],
-            # TODO: should we get time units from the results?
-            "time_unit": "s",
+            "time_unit": "ns",
         }
 
     def _format_unit(self, x):

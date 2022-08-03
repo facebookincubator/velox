@@ -23,6 +23,7 @@ workflows:
       - format-check
       - header-check
       - linux-benchmarks-basic
+      - linux-benchmarks-conbench
 
   # Daily documentation update
   nightly:
