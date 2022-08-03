@@ -331,7 +331,7 @@ jobs:
             touch .conbench
             echo "url: https://velox-conbench.voltrondata.run/" >> .conbench
             echo "email: $CONBENCH_EMAIL" >> .conbench
-            echo "password: $CONBENCH_PASSWOD" >> .conbench
+            echo "password: $CONBENCH_PASSWORD" >> .conbench
             echo "hostname: CricleCI-runner" >> .conbench
 
             conbench cpp-micro
