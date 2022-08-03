@@ -161,7 +161,6 @@ struct DecimalCapsule {
       hash = folly::hash::hash_combine_generic(hasher, hasher(value()), hash);
     }
     return hash;
-    ;
   }
 };
 
