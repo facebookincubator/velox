@@ -326,6 +326,14 @@ jobs:
           command: |
             # get to the directory with benchmarks
             cd scripts/veloxbench/veloxbench
+
+            # setup .conbench file
+            touch .conbench
+            echo "url: https://velox-conbench.voltrondata.run/" >> .conbench
+            echo "email: $CONBENCH_EMAIL" >> .conbench
+            echo "password: $CONBENCH_PASSWOD" >> .conbench
+            echo "hostname: CricleCI-runner" >> .conbench
+
             conbench cpp-micro
       - store_artifacts:
           path: '_build/debug/.ninja_log'
