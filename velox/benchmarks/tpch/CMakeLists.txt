@@ -29,7 +29,6 @@ target_link_libraries(
   velox_memory
   velox_process
   velox_serialization
-  velox_encode
   velox_type
   velox_caching
   velox_vector

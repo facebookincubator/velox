@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "velox/common/encode/Base64.h"
+#include <folly/base64.h>
 #include "velox/dwio/common/encryption/Encryption.h"
 #include "velox/dwio/common/exception/Exception.h"
 
@@ -39,7 +39,7 @@ class TestEncryption {
 
   std::unique_ptr<folly::IOBuf> encrypt(folly::StringPiece input) const {
     ++count_;
-    auto encoded = velox::encoding::Base64::encode_url(input);
+    auto encoded = folly::base64URLEncode(input);
     return folly::IOBuf::copyBuffer(key_ + encoded);
   }
 
@@ -47,7 +47,7 @@ class TestEncryption {
     ++count_;
     std::string key{input.begin(), key_.size()};
     DWIO_ENSURE_EQ(key_, key);
-    auto decoded = velox::encoding::Base64::decode_url(folly::StringPiece{
+    auto decoded = folly::base64URLDecode(folly::StringPiece{
         input.begin() + key_.size(), input.size() - key_.size()});
     return folly::IOBuf::copyBuffer(decoded);
   }

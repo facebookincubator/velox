@@ -23,11 +23,10 @@
 #define XXH_INLINE_ALL
 #include <xxhash.h>
 
-#include "velox/common/encode/Base64.h"
+#include <folly/base64.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::aggregate::hll;
-using namespace facebook::velox::encoding;
 
 template <typename T>
 uint64_t hashOne(T value) {
@@ -174,7 +173,7 @@ TEST_P(DenseHllTest, canDeserialize) {
       "AwkLD8BYTA9BXyg="};
 
   for (folly::StringPiece& invalidString : invalidStrings) {
-    auto invalidHll = Base64::decode(invalidString);
+    auto invalidHll = folly::base64Decode(invalidString);
     EXPECT_TRUE(DenseHll::canDeserialize(invalidHll.c_str()));
     EXPECT_FALSE(
         DenseHll::canDeserialize(invalidHll.c_str(), invalidHll.length()));
@@ -185,7 +184,7 @@ TEST_P(DenseHllTest, canDeserialize) {
   };
 
   for (folly::StringPiece& validString : validStrings) {
-    auto validHll = Base64::decode(validString);
+    auto validHll = folly::base64Decode(validString);
     EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str()));
     EXPECT_TRUE(DenseHll::canDeserialize(validHll.c_str(), validHll.length()));
   }

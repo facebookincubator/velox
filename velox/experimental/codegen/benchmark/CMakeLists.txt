@@ -77,8 +77,6 @@ add_compile_definitions(velox_codegen_test
 add_compile_definitions(velox_codegen_test
                         VELOX_MEMORY="$<TARGET_LINKER_FILE:velox_memory>")
 add_compile_definitions(velox_codegen_test
-                        VELOX_ENCODE="$<TARGET_LINKER_FILE:velox_encode>")
-add_compile_definitions(velox_codegen_test
                         VELOX_CACHING="$<TARGET_LINKER_FILE:velox_caching>")
 
 add_compile_definitions(velox_codegen_test GFLAGS_LI="${GFLAGS_INCLUDES}")

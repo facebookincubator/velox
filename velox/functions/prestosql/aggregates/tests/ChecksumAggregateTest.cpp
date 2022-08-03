@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <boost/algorithm/string/join.hpp>
-#include "velox/common/encode/Base64.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"

@@ -25,8 +25,8 @@ add_library(
   VectorPool.cpp
   VectorStream.cpp)
 
-target_link_libraries(velox_vector velox_encode velox_memory velox_time
-                      velox_type velox_buffer)
+target_link_libraries(velox_vector velox_memory velox_time velox_type
+                      velox_buffer)
 
 add_subdirectory(arrow)
 add_subdirectory(fuzzer)

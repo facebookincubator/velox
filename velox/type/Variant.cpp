@@ -15,8 +15,8 @@
  */
 
 #include "velox/type/Variant.h"
+#include <folly/base64.h>
 #include <cfloat>
-#include "common/encode/Base64.h"
 #include "folly/json.h"
 
 namespace facebook::velox {
@@ -257,7 +257,7 @@ std::string variant::toJson() const {
     }
     case TypeKind::VARBINARY: {
       auto& str = value<TypeKind::VARBINARY>();
-      auto encoded = encoding::Base64::encode(str);
+      auto encoded = folly::base64Encode(str);
       return '"' + encoded + '"';
     }
     case TypeKind::VARCHAR: {
@@ -365,7 +365,7 @@ folly::dynamic variant::serialize() const {
     }
     case TypeKind::VARBINARY: {
       auto& str = value<TypeKind::VARBINARY>();
-      objValue = encoding::Base64::encode(str);
+      objValue = folly::base64Encode(str);
       break;
     }
 
@@ -454,7 +454,7 @@ variant variant::create(const folly::dynamic& variantobj) {
 
     case TypeKind::VARBINARY: {
       auto str = obj.asString();
-      auto result = encoding::Base64::decode(str);
+      auto result = folly::base64Decode(str);
       return variant::binary(std::move(result));
     }
     case TypeKind::VARCHAR:

@@ -13,7 +13,6 @@
 # limitations under the License.
 add_subdirectory(base)
 add_subdirectory(caching)
-add_subdirectory(encode)
 add_subdirectory(file)
 add_subdirectory(memory)
 add_subdirectory(process)

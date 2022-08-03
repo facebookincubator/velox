@@ -16,7 +16,6 @@ set(VELOX_LINK_LIBS
     velox_dwio_common
     velox_dwio_common_exception
     velox_dwio_type_fbhive
-    velox_encode
     velox_exception
     velox_memory
     velox_process

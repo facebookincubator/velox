@@ -27,9 +27,9 @@
 #include <vector>
 #include "folly/CPortability.h"
 #include "folly/Likely.h"
+#include "folly/base64.h"
 #include "folly/ssl/OpenSSLHash.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/encode/Base64.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/type/StringView.h"
@@ -366,8 +366,9 @@ FOLLY_ALWAYS_INLINE bool fromHex(TOutString& output, const TInString& input) {
 
 template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool toBase64(TOutString& output, const TInString& input) {
-  output.resize(encoding::Base64::calculateEncodedSize(input.size()));
-  encoding::Base64::encode(input.data(), input.size(), output.data());
+  output.resize(folly::base64EncodedSize(input.size()));
+  std::string_view inputStr{input.data(), input.size()};
+  folly::base64Encode(inputStr, output.data());
   return true;
 }
 
@@ -375,14 +376,13 @@ template <typename TOutString, typename TInString>
 FOLLY_ALWAYS_INLINE bool fromBase64(
     TOutString& output,
     const TInString& input) {
-  try {
-    auto inputSize = input.size();
-    output.resize(
-        encoding::Base64::calculateDecodedSize(input.data(), inputSize));
-    encoding::Base64::decode(input.data(), input.size(), output.data());
-  } catch (const encoding::Base64Exception& e) {
-    VELOX_USER_FAIL(e.what());
+  std::string_view inputStr{input.data(), input.size()};
+  output.resize(folly::base64DecodedSize(inputStr));
+
+  if (!folly::base64Decode(inputStr, output.data()).is_success) {
+    VELOX_USER_FAIL("Base64::decode failed");
   }
+
   return true;
 }
 
