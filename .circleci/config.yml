@@ -308,7 +308,6 @@ jobs:
       - run:
           name: "Build Benchmarks"
           command: |
-            git checkout -
             mkdir -p .ccache
             export CCACHE_DIR=$(realpath .ccache)
             ccache -sz -M 5Gi
@@ -321,7 +320,7 @@ jobs:
             # upgrade python to 3.8 for this job
             yum install -y python38
             pip3.8 install conbench
-            pip3.8 install velox/scripts/veloxbench
+            pip3.8 install scripts/veloxbench
       - run:
           name: "Run Benchmarks"
           command: |
