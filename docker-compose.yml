@@ -18,9 +18,6 @@ services:
     # Usage:
     #   docker-compose build ubuntu-cpp
     #   docker-compose run --rm ubuntu-cpp
-    # Parameters:
-    #   ARCH: amd64, arm64v8, s390x, ...
-    #   UBUNTU: 18.04, 20.04
     image: facebookincubator/velox:amd64-ubuntu-22.04-cpp
     build:
       context: .
