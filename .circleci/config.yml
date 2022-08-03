@@ -318,8 +318,10 @@ jobs:
       - run:
           name: "Install conbench and veloxbench"
           command: |
-            pip3 install conbench
-            pip3 install scripts/veloxbench
+            # upgrade python to 3.8 for this job
+            yum install -y python38
+            pip3.8 install conbench
+            pip3.8 install scripts/veloxbench
       - run:
           name: "Run Benchmarks"
           command: |
