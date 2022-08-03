@@ -311,11 +311,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
-    SubstraitExprConverter topLevelConverter =
-        [&](const core::TypedExprPtr& typeExpr) {
-          return exprConvertor_->toSubstraitExpr(arena, typeExpr, inputType);
-        };
-
     auto aggregateFunctionOption =
         aggregateFunctionLookup_->lookupFunction(aggregatesExpr);
 

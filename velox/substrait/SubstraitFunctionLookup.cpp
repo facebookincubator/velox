@@ -22,12 +22,38 @@
 
 namespace facebook::velox::substrait {
 
+SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
+    const std::string name,
+    const std::vector<SubstraitFunctionPtr>& functions)
+    : name_(name) {
+  for (const auto& function : functions) {
+    const std::string& functionKey = SubstraitFunction::constructKey(
+        function->name, function->requireArguments());
+
+    directMap_.insert({functionKey,function});
+  }
+}
+
 SubstraitFunctionLookup::SubstraitFunctionLookup(
     const std::vector<SubstraitFunctionPtr>& functions) {
   // TODO creaate signatures_ based on functions
+  std::unordered_map<std::string, std::vector<SubstraitFunctionPtr>&>
+      signatures;
+
+  for (const auto& function : functions) {
+    if (signatures.find(function->name) != signatures.end()) {
+      std::vector<SubstraitFunctionPtr> nameFunctions;
+      nameFunctions.emplace_back(function);
+      signatures.insert({function->name, nameFunctions});
+    } else {
+      auto nameFunctions = signatures.at(function->name);
+      nameFunctions.emplace_back(function);
+    }
+  }
 }
 
-const std::optional<SubstraitFunctionPtr> SubstraitFunctionLookup::lookupFunction(
+const std::optional<SubstraitFunctionPtr>
+SubstraitFunctionLookup::lookupFunction(
     const core::CallTypedExprPtr& callTypeExpr) const {
   auto& veloxFunctionName = callTypeExpr->name();
   auto& functionMappings = getFunctionMappings();
@@ -48,6 +74,8 @@ const std::optional<SubstraitFunctionPtr> SubstraitFunctionLookup::lookupFunctio
 const std::optional<SubstraitFunctionPtr>
 SubstraitFunctionLookup::SubstraitFunctionFinder::lookupFunction(
     const core::TypedExprPtr& exprPtr) const {
+
+
   return std::nullopt;
 }
 

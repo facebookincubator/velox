@@ -28,11 +28,36 @@
 
 namespace facebook::velox::substrait {
 
+// Maintains a mapping between function anchors and function references.
+// Generates references for new anchors.
 class SubstraitFunctionCollector {
- public:
-  const int getFunctionReference(const SubstraitFunctionPtr& callTypedExpr);
+ private:
+  // A bi-direction hash map to keep the relation between reference number and
+  // function
+  class BidiMap {
+   public:
+    void put(int reference, SubstraitFunctionPtr function);
+    std::unordered_map<int, SubstraitFunctionPtr> forwardMap_;
+    std::unordered_map<SubstraitFunctionPtr, int> reverseMap_;
+  };
 
+ public:
+  /**
+   * get function reference number by given Substrait function
+   * @param function substrait extension function
+   * @return reference number of a Substrait extension function
+   */
+  const int getFunctionReference(const SubstraitFunctionPtr& function);
+
+  /**
+   * add extension functions referenced in a Substrait plan
+   * @param plan Substrait plan
+   */
   const void addFunctionToPlan(::substrait::Plan& plan) const;
+
+ private:
+  int counter_ = -1;
+  std::shared_ptr<BidiMap> funcMap_;
 };
 
 using SubstraitFunctionCollectorPtr =

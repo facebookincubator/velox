@@ -19,65 +19,53 @@
 
 #include "SubstraitFunctionCollector.h"
 #include "velox/substrait/SubstraitFunction.h"
+#include "velox/substrait/proto/substrait/extensions/extensions.pb.h"
 
 namespace facebook::velox::substrait {
 
 const void SubstraitFunctionCollector::addFunctionToPlan(
     ::substrait::Plan& substraitPlan) const {
-  // TODO    iterate reverseMap and establish the extension function
-  auto extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
+  int uriPos = 1;
 
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(0);
-  extensionFunction->set_name("add:opt_i32_i32");
+  auto uris = std::unordered_map<
+      std::string,
+      ::substrait::extensions::SimpleExtensionURI*>{};
 
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(1);
-  extensionFunction->set_name("multiply:opt_i32_i32");
+  for (auto& [referenceNum, function] : funcMap_->forwardMap_) {
+    ::substrait::extensions::SimpleExtensionURI* extensionUri;
+    if (uris.find(function->uri) == uris.end()) {
+      extensionUri = substraitPlan.add_extension_uris();
+      extensionUri->set_extension_uri_anchor(++uriPos);
+      extensionUri->set_uri(function->uri);
+      uris[function->uri] = extensionUri;
+    } else {
+      extensionUri = uris.at(function->uri);
+    }
 
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(1);
-  extensionFunction->set_function_anchor(2);
-  extensionFunction->set_name("lt:i32_i32");
-
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(3);
-  extensionFunction->set_name("divide:i32_i32");
-
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(4);
-  extensionFunction->set_name("count:opt_i32");
-
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(5);
-  extensionFunction->set_name("sum:opt_i32");
-
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(6);
-  extensionFunction->set_name("modulus:i32_i32");
-
-  extensionFunction =
-      substraitPlan.add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(7);
-  extensionFunction->set_name("equal:i64_i64");
+    auto extensionFunction =
+        substraitPlan.add_extensions()->mutable_extension_function();
+    extensionFunction->set_extension_uri_reference(
+        extensionUri->extension_uri_anchor());
+    extensionFunction->set_function_anchor(referenceNum);
+    extensionFunction->set_name(function->key());
+  }
 }
 
 const int SubstraitFunctionCollector::getFunctionReference(
-    const SubstraitFunctionPtr& callTypedExpr) {
-  return 0;
+    const SubstraitFunctionPtr& function) {
+  if (funcMap_->reverseMap_.end() != funcMap_->reverseMap_.end()) {
+    return funcMap_->reverseMap_.at(function);
+  }
+
+  ++counter_;
+  funcMap_->put(counter_, function);
+  return counter_;
 }
 
+void SubstraitFunctionCollector::BidiMap::put(
+    int reference,
+    SubstraitFunctionPtr function) {
+  forwardMap_[reference] = function;
+  reverseMap_[function] = reference;
+}
 } // namespace facebook::velox::substrait

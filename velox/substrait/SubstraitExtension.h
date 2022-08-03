@@ -22,7 +22,7 @@
 
 namespace facebook::velox::substrait {
 
-//class used to deserialize substrait YAML extension files.
+// class used to deserialize substrait YAML extension files.
 class SubstraitExtension {
  public:
   SubstraitExtension() {}

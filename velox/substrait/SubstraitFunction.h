@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "sstream"
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitParser.h"
 
@@ -25,6 +26,9 @@ struct SubstraitFunctionArgument {
   virtual bool isRequired() const = 0;
   virtual std::shared_ptr<std::string> toTypeString() const = 0;
 };
+
+using SubstraitFunctionArgumentPtr =
+    std::shared_ptr<const SubstraitFunctionArgument>;
 
 struct SubstraitEnumFunctionArgument : public SubstraitFunctionArgument {
   std::vector<std::string> options;
@@ -73,28 +77,57 @@ struct Variadic {
   int max;
 };
 
-struct SubstraitFunction {
+class SubstraitFunction {
+ public:
   std::string name;
   std::string uri;
   Variadic variadic;
   std::string description;
-  std::vector<std::shared_ptr<SubstraitFunctionArgument>> args;
+  std::vector<SubstraitFunctionArgumentPtr> args;
   Nullability nullability;
   std::string returnType;
+
+  static const std::string constructKey(
+      const std::string& name,
+      const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
+
+    std::stringstream ss;
+    ss << name << ":";
+    for (auto argument : arguments) {
+      ss << "_" << argument->toTypeString();
+    }
+    return ss.str();
+  }
+
+  std::string key() const {
+    return SubstraitFunction::constructKey(name, args);
+  }
+
+  const std::vector<SubstraitFunctionArgumentPtr> requireArguments() const {
+    std::vector<SubstraitFunctionArgumentPtr> res;
+    for (const auto& arg : args) {
+      if (arg->isRequired()) {
+        res.emplace_back(arg);
+      }
+    }
+    res;
+  }
 };
 
 using SubstraitFunctionPtr = std::shared_ptr<const SubstraitFunction>;
 
 struct SubstraitScalarFunction : public SubstraitFunction {};
 
-using SubstraitScalarFunctionPtr = std::shared_ptr<const SubstraitScalarFunction>;
+using SubstraitScalarFunctionPtr =
+    std::shared_ptr<const SubstraitScalarFunction>;
 
 struct SubstraitAggregateFunction : public SubstraitFunction {
   Decomposability decomposability;
   std::string intermediate;
 };
 
-using SubstraitAggregateFunctionPtr = std::shared_ptr<const SubstraitAggregateFunction>;
+using SubstraitAggregateFunctionPtr =
+    std::shared_ptr<const SubstraitAggregateFunction>;
 
 enum class WindowType { PARTITION, STREAMING };
 
@@ -102,6 +135,7 @@ struct SubstraitWindowFunction : public SubstraitFunction {
   WindowType windowType;
 };
 
-using SubstraitWindowFunctionPtr = std::shared_ptr<const SubstraitWindowFunction>;
+using SubstraitWindowFunctionPtr =
+    std::shared_ptr<const SubstraitWindowFunction>;
 
 } // namespace facebook::velox::substrait

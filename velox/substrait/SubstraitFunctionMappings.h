@@ -14,17 +14,38 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitParser.h"
 
 namespace facebook::velox::substrait {
 
+// A map maintain function names in difference between Velox and Substrait
+// key: velox function name
+// value: substrait function
 using FunctionMappingMap = std::unordered_map<std::string, std::string>;
 
-struct FunctionMappings {
-  static const FunctionMappingMap scalarMappings(){};
-  static const FunctionMappingMap aggregateMappings() {}
-  static const FunctionMappingMap windowMappings() {}
+
+struct SubstraitFunctionMappings {
+  //scalar function names in difference between velox and Substrait
+  static const FunctionMappingMap scalarMappings() {
+   static FunctionMappingMap scalarMappings;
+   return scalarMappings;
+  };
+
+  //aggregate function names in difference between velox and Substrait
+  static const FunctionMappingMap aggregateMappings() {
+    static FunctionMappingMap aggregateMappings;
+    return aggregateMappings;
+  }
+
+  //window function names in difference between velox and Substrait
+  static const FunctionMappingMap windowMappings() {
+    static FunctionMappingMap windowMappings;
+    return windowMappings;
+  }
+
 };
 
 } // namespace facebook::velox::substrait

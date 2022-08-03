@@ -26,17 +26,6 @@
 namespace facebook::velox::substrait {
 
 class SubstraitFunctionLookup {
- private:
-  class SubstraitFunctionFinder {
-   public:
-    const std::optional<SubstraitFunctionPtr> lookupFunction(
-        const core::TypedExprPtr& exprPtr) const;
-  };
-
-  using FunctionSignatures = std::unordered_map<
-      std::string,
-      std::shared_ptr<const SubstraitFunctionFinder>&>;
-
  public:
   SubstraitFunctionLookup(const std::vector<SubstraitFunctionPtr>& functions);
 
@@ -47,7 +36,25 @@ class SubstraitFunctionLookup {
   virtual const FunctionMappingMap& getFunctionMappings() const = 0;
 
  private:
-  const FunctionSignatures functionSignatures_;
+  class SubstraitFunctionFinder {
+   public:
+    SubstraitFunctionFinder(
+        const std::string name,
+        const std::vector<SubstraitFunctionPtr>& functions);
+
+    const std::optional<SubstraitFunctionPtr> lookupFunction(
+        const core::TypedExprPtr& exprPtr) const;
+
+   private:
+    const std::string name_;
+    std::unordered_map<std::string ,SubstraitFunctionPtr > directMap_;
+  };
+
+  using SubstraitFunctionFinderPtr =
+      std::shared_ptr<const SubstraitFunctionFinder>;
+
+  const std::unordered_map<std::string, SubstraitFunctionFinderPtr>
+      functionSignatures_;
 };
 
 class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
@@ -58,7 +65,7 @@ class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {
-    return FunctionMappings::scalarMappings();
+    return SubstraitFunctionMappings::scalarMappings();
   }
 };
 
@@ -73,7 +80,7 @@ class SubstraitAggregateFunctionLookup : public SubstraitFunctionLookup {
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {
-    return FunctionMappings::aggregateMappings();
+    return SubstraitFunctionMappings::aggregateMappings();
   }
 };
 
