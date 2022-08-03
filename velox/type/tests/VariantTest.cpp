@@ -139,7 +139,7 @@ TEST(VariantTest, shortDecimalHash) {
 }
 
 TEST(VariantTest, shortDecimalNull) {
-  variant n = variant::shortDecimal(std::nullopt, DECIMAL(10, 5));
+  auto n = variant::shortDecimal(std::nullopt, DECIMAL(10, 5));
   EXPECT_TRUE(n.isNull());
   EXPECT_EQ(n.toJson(), "null");
   EXPECT_EQ(*n.inferType(), *DECIMAL(10, 5));
@@ -214,11 +214,11 @@ TEST(VariantTest, longDecimalNull) {
   EXPECT_THROW(variant::null(TypeKind::LONG_DECIMAL), VeloxException);
   auto nHash = n.hash();
 
-  // n and n1 differ only in precision.
+  // n and n1 differ in precision.
   auto n1 = variant::longDecimal(std::nullopt, DECIMAL(21, 5));
   EXPECT_NE(nHash, n1.hash());
 
-  // n and n2 differ only in scale.
+  // n and n2 differ in scale.
   auto n2 = variant::longDecimal(std::nullopt, DECIMAL(20, 4));
   EXPECT_NE(nHash, n2.hash());
 
