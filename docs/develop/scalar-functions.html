@@ -1086,6 +1086,9 @@ specifies whether to overwrite a function if a function with the specified
 name already exists.</p>
 <p>Use exec::registerStatefulVectorFunction to register a stateful vector
 function.</p>
+<p>Note: A vector function will be given precedence over a simple function during resolution time.
+This is because in certain cases it makes sense to write an optimized vector function, and thus more precedence is given
+to a vector function over an equivalent simple function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerStatefulVectorFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">FunctionSignaturePtr</span><span class="o">&gt;</span><span class="w"> </span><span class="n">signatures</span><span class="p">,</span><span class="w"></span>
@@ -1260,6 +1263,30 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.</p>
 </section>
+<section id="function-resolution-order">
+<h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Permalink to this headline">¶</a></h2>
+<p>Vector functions have precedence over simple functions during function resolution. If a function <cite>foo</cite> has
+multiple implementations, then the order in which function resolution will proceed is as follows:</p>
+<blockquote>
+<div><ol class="arabic simple">
+<li><p>Vector Function</p></li>
+<li><p>Simple Function which are generic free and variadic free</p></li>
+<li><p>Simple Function has variadic but generic free</p></li>
+<li><p>Simple Function has generic but no variadic of generic</p></li>
+<li><p>Simple function has variadic of generic</p></li>
+</ol>
+</div></blockquote>
+<p>The available function with lowest rank is picked during function resolution.
+If there is more than one function with the same lowest rank, we count the number of concrete types in the signature
+and return the signature with highest concrete types count. (a concrete type is any type other variadic or generic).</p>
+<p>For example: consider the two signatures bellow which are both of type 4.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">bool</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="o">&amp;</span><span class="w"> </span><span class="n">Variadic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="p">)</span><span class="w">    </span><span class="c1">// concrete types = 2</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">call</span><span class="p">(</span><span class="kt">bool</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="w"> </span><span class="p">,</span><span class="k">const</span><span class="w"> </span><span class="n">Any</span><span class="o">&amp;</span><span class="p">)</span><span class="w">               </span><span class="c1">// concrete types = 1</span>
+</pre></div>
+</div>
+<p>When both of them are valid for a given input, the first one will be picked  since it has more concrete types.
+When number of concrete types are the same, the call is ambiguous, and it’s undefined which function is called.</p>
+</section>
 <section id="benchmarking">
 <h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Permalink to this headline">¶</a></h2>
 <p>Add a benchmark using folly::Benchmark framework and FunctionBenchmarkBase
@@ -1321,6 +1348,7 @@ functions are listed in alphabetical order.</p>
 </li>
 <li><a class="reference internal" href="#testing">Testing</a></li>
 <li><a class="reference internal" href="#function-names">Function names</a></li>
+<li><a class="reference internal" href="#function-resolution-order">Function Resolution order</a></li>
 <li><a class="reference internal" href="#benchmarking">Benchmarking</a></li>
 <li><a class="reference internal" href="#documenting">Documenting</a></li>
 </ul>

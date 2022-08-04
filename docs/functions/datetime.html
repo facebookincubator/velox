@@ -304,7 +304,8 @@ The following table, based on the MySQL manual, describes the format specifiers:
 <h2>Java Date Functions<a class="headerlink" href="#java-date-functions" title="Permalink to this headline">¶</a></h2>
 <p>The functions in this section leverage a native cpp implementation that follows
 a format string compatible with JodaTime’s <a class="reference external" href="http://joda-time.sourceforge.net/apidocs/org/joda/time/format/DateTimeFormat.html">DateTimeFormat</a>
-pattern format.</p>
+pattern format. The symbols currently supported are <code class="docutils literal notranslate"><span class="pre">y</span></code>, <code class="docutils literal notranslate"><span class="pre">Y</span></code>, <code class="docutils literal notranslate"><span class="pre">M</span></code> , <code class="docutils literal notranslate"><span class="pre">d</span></code>,
+<code class="docutils literal notranslate"><span class="pre">H</span></code>, <code class="docutils literal notranslate"><span class="pre">m</span></code>, <code class="docutils literal notranslate"><span class="pre">s</span></code>, <code class="docutils literal notranslate"><span class="pre">S</span></code>, and <code class="docutils literal notranslate"><span class="pre">Z</span></code>.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="parse_datetime">
 <span class="sig-name descname"><span class="pre">parse_datetime</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#parse_datetime" title="Permalink to this definition">¶</a></dt>
