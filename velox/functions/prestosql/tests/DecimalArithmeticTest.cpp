@@ -92,14 +92,25 @@ TEST_F(DecimalArithmeticTest, add) {
   testDecimalExpr<ShortDecimal>(
       expectedShortFlat, "c0 + c1", {shortFlat, shortFlat});
 
-  auto resultConstantFlat =
+  auto expectedConstantFlat =
       makeShortDecimalFlatVector({2000, 3000}, DECIMAL(11, 3));
 
   // Constant and Flat arguments.
   testDecimalExpr<ShortDecimal>(
-      resultConstantFlat, "plus(1.00, c0)", {shortFlat});
+      expectedConstantFlat, "plus(1.00, c0)", {shortFlat});
 
   // Flat and Constant arguments.
   testDecimalExpr<ShortDecimal>(
-      resultConstantFlat, "plus(c0,1.00)", {shortFlat});
+      expectedConstantFlat, "plus(c0,1.00)", {shortFlat});
+
+  auto shortWithNullsA = makeNullableShortDecimalFlatVector(
+      {1, 2, std::nullopt, 6, std::nullopt}, DECIMAL(10, 3));
+  auto shortWithNullsB = makeNullableShortDecimalFlatVector(
+      {1, 2, 5, std::nullopt, std::nullopt}, DECIMAL(10, 3));
+  auto expectedShortWithNulls = makeNullableShortDecimalFlatVector(
+      {2, 4, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(11, 3));
+  testDecimalExpr<ShortDecimal>(
+      expectedShortWithNulls,
+      "plus(c0, c1)",
+      {shortWithNullsA, shortWithNullsB});
 }
