@@ -16,7 +16,6 @@
 #pragma once
 
 #include "velox/common/base/Range.h"
-#include "velox/functions/prestosql/CheckedArithmeticImpl.h"
 #include "velox/vector/LazyVector.h"
 
 namespace facebook::velox::aggregate {
@@ -104,7 +103,11 @@ inline void updateSingleValue(TOutput& result, TInput value) {
       std::is_same<TOutput, float>::value) {
     result += value;
   } else {
-    result = functions::checkedPlus<TOutput>(result, value);
+    auto input = result;
+    bool overflow = __builtin_add_overflow(result, value, &result);
+    if (UNLIKELY(overflow)) {
+      VELOX_ARITHMETIC_ERROR("integer overflow: {} + {}", input, value);
+    }
   }
 }
 } // namespace

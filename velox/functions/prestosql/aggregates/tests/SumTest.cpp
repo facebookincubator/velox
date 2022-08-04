@@ -34,7 +34,7 @@ class SumTest : public AggregationTestBase {
     allowInputShuffle();
   }
 
-  template <typename InputType>
+  template <typename InputType, typename ResultType>
   void testInputTypeLimits(bool expectOverflow = false) {
     std::vector<InputType> underflowTestCase = {
         std::numeric_limits<InputType>::min(),
@@ -383,13 +383,13 @@ TEST_F(SumTest, inputTypeLimits) {
   // overflow results in an infinite result but does not throw. Results are
   // manually compared instead of comparing with duckDB as it throws an error
   // instead when floating points go over limit.
-  testInputTypeLimits<int8_t>();
-  testInputTypeLimits<int16_t>();
-  testInputTypeLimits<int32_t>();
-  testInputTypeLimits<int64_t>(true);
+  testInputTypeLimits<int8_t, int64_t>();
+  testInputTypeLimits<int16_t, int64_t>();
+  testInputTypeLimits<int32_t, int64_t>();
+  testInputTypeLimits<int64_t, int64_t>(true);
   // TODO: enable this test once Issue #2079 is fixed
-  // testInputTypeLimits<float>();
-  testInputTypeLimits<double>();
+  // testInputTypeLimits<float, float>();
+  testInputTypeLimits<double, double>();
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
