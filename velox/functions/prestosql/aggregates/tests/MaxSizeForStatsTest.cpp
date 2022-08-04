@@ -26,7 +26,7 @@ class MaxSizeForStatsTest : public AggregationTestBase {
  public:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disableSpill();
+    allowInputShuffle();
   }
 };
 
@@ -47,16 +47,16 @@ TEST_F(MaxSizeForStatsTest, nullValues) {
   testAggregations(
       vectors,
       {},
-      {"\"$internal$max_data_size_for_stats\"(c0)",
-       "\"$internal$max_data_size_for_stats\"(c1)",
-       "\"$internal$max_data_size_for_stats\"(c2)",
-       "\"$internal$max_data_size_for_stats\"(c3)",
-       "\"$internal$max_data_size_for_stats\"(c4)",
-       "\"$internal$max_data_size_for_stats\"(c5)",
-       "\"$internal$max_data_size_for_stats\"(c6)",
-       "\"$internal$max_data_size_for_stats\"(c7)",
-       "\"$internal$max_data_size_for_stats\"(c8)",
-       "\"$internal$max_data_size_for_stats\"(c9)"},
+      {"\"max_data_size_for_stats\"(c0)",
+       "\"max_data_size_for_stats\"(c1)",
+       "\"max_data_size_for_stats\"(c2)",
+       "\"max_data_size_for_stats\"(c3)",
+       "\"max_data_size_for_stats\"(c4)",
+       "\"max_data_size_for_stats\"(c5)",
+       "\"max_data_size_for_stats\"(c6)",
+       "\"max_data_size_for_stats\"(c7)",
+       "\"max_data_size_for_stats\"(c8)",
+       "\"max_data_size_for_stats\"(c9)"},
       "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
 }
 
@@ -77,16 +77,16 @@ TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
   testAggregations(
       vectors,
       {},
-      {"\"$internal$max_data_size_for_stats\"(c0)",
-       "\"$internal$max_data_size_for_stats\"(c1)",
-       "\"$internal$max_data_size_for_stats\"(c2)",
-       "\"$internal$max_data_size_for_stats\"(c3)",
-       "\"$internal$max_data_size_for_stats\"(c4)",
-       "\"$internal$max_data_size_for_stats\"(c5)",
-       "\"$internal$max_data_size_for_stats\"(c6)",
-       "\"$internal$max_data_size_for_stats\"(c7)",
-       "\"$internal$max_data_size_for_stats\"(c8)",
-       "\"$internal$max_data_size_for_stats\"(c9)"},
+      {"\"max_data_size_for_stats\"(c0)",
+       "\"max_data_size_for_stats\"(c1)",
+       "\"max_data_size_for_stats\"(c2)",
+       "\"max_data_size_for_stats\"(c3)",
+       "\"max_data_size_for_stats\"(c4)",
+       "\"max_data_size_for_stats\"(c5)",
+       "\"max_data_size_for_stats\"(c6)",
+       "\"max_data_size_for_stats\"(c7)",
+       "\"max_data_size_for_stats\"(c8)",
+       "\"max_data_size_for_stats\"(c9)"},
       "SELECT 1, 2, 4, 8, 4, 8, 1, 4, 16, 16");
 }
 
@@ -115,30 +115,30 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
   testAggregations(
       vectors,
       {"c0"},
-      {"\"$internal$max_data_size_for_stats\"(c1)",
-       "\"$internal$max_data_size_for_stats\"(c2)",
-       "\"$internal$max_data_size_for_stats\"(c3)",
-       "\"$internal$max_data_size_for_stats\"(c4)",
-       "\"$internal$max_data_size_for_stats\"(c5)",
-       "\"$internal$max_data_size_for_stats\"(c6)",
-       "\"$internal$max_data_size_for_stats\"(c7)",
-       "\"$internal$max_data_size_for_stats\"(c8)",
-       "\"$internal$max_data_size_for_stats\"(c9)"},
+      {"\"max_data_size_for_stats\"(c1)",
+       "\"max_data_size_for_stats\"(c2)",
+       "\"max_data_size_for_stats\"(c3)",
+       "\"max_data_size_for_stats\"(c4)",
+       "\"max_data_size_for_stats\"(c5)",
+       "\"max_data_size_for_stats\"(c6)",
+       "\"max_data_size_for_stats\"(c7)",
+       "\"max_data_size_for_stats\"(c8)",
+       "\"max_data_size_for_stats\"(c9)"},
       "VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16)");
 
   // Without grouping keys.
   testAggregations(
       vectors,
       {},
-      {"\"$internal$max_data_size_for_stats\"(c1)",
-       "\"$internal$max_data_size_for_stats\"(c2)",
-       "\"$internal$max_data_size_for_stats\"(c3)",
-       "\"$internal$max_data_size_for_stats\"(c4)",
-       "\"$internal$max_data_size_for_stats\"(c5)",
-       "\"$internal$max_data_size_for_stats\"(c6)",
-       "\"$internal$max_data_size_for_stats\"(c7)",
-       "\"$internal$max_data_size_for_stats\"(c8)",
-       "\"$internal$max_data_size_for_stats\"(c9)"},
+      {"\"max_data_size_for_stats\"(c1)",
+       "\"max_data_size_for_stats\"(c2)",
+       "\"max_data_size_for_stats\"(c3)",
+       "\"max_data_size_for_stats\"(c4)",
+       "\"max_data_size_for_stats\"(c5)",
+       "\"max_data_size_for_stats\"(c6)",
+       "\"max_data_size_for_stats\"(c7)",
+       "\"max_data_size_for_stats\"(c8)",
+       "\"max_data_size_for_stats\"(c9)"},
       "VALUES (1,2,4,8,4,8,1,4,16)");
 }
 
@@ -149,7 +149,7 @@ TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {
       {1, 2, 3},
   })})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 44");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 44");
 }
 
 TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
@@ -158,7 +158,7 @@ TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
        {},
        {{1, 1}, {1, 1}, {1, 1}}})})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 29");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 29");
 }
 
 TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
@@ -173,7 +173,7 @@ TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
             {},
             {{1, 1}, {1, 1}, {1, 1}}})})})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 77");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 77");
 }
 
 TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
@@ -188,7 +188,7 @@ TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
 
   auto vectors = {makeRowVector({varbinaryVector})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 18");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 18");
 }
 
 TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
@@ -198,7 +198,7 @@ TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
       "{1, 2, 3}",
   })})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 19");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 19");
 }
 
 TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
@@ -214,11 +214,11 @@ TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
             {{std::nullopt, {{7, 8, 9}}}}})})})};
 
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 50");
+      vectors, {}, {"\"max_data_size_for_stats\"(c0)"}, "SELECT 50");
 }
 
 TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
-  auto columnOne = makeFlatVector<int64_t>({1, 2, 3});
+  auto columnOne = makeFlatVector<int64_t>({1, 2, 1});
   auto columnTwo = makeRowVector(
       {makeFlatVector<StringView>({
            "{1, 2, 3, 4, 5}",
@@ -234,17 +234,17 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c1)"}, "SELECT 36");
+      vectors, {}, {"\"max_data_size_for_stats\"(c1)"}, "SELECT 36");
 
   testAggregations(
       vectors,
       {"c0"},
-      {"\"$internal$max_data_size_for_stats\"(c1)"},
-      "VALUES (1,36),(2,36),(3,36)");
+      {"\"max_data_size_for_stats\"(c1)"},
+      "VALUES (1,36),(2,36)");
 }
 
 TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
-  auto columnOne = makeFlatVector<int64_t>({1, 2, 3});
+  auto columnOne = makeFlatVector<int64_t>({1, 2, 1});
   auto columnTwo = makeRowVector(
       {makeFlatVector<StringView>({
            "{1, 2, 3, 4, 5}",
@@ -266,13 +266,13 @@ TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c1)"}, "SELECT 50");
+      vectors, {}, {"\"max_data_size_for_stats\"(c1)"}, "SELECT 50");
 
   testAggregations(
       vectors,
       {"c0"},
-      {"\"$internal$max_data_size_for_stats\"(c1)"},
-      "VALUES (1,32),(2,36),(3,50)");
+      {"\"max_data_size_for_stats\"(c1)"},
+      "VALUES (1,50),(2,36)");
 }
 
 } // namespace
