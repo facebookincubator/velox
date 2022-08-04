@@ -972,8 +972,8 @@ TEST_F(ExprTest, lazyVectorAccessTwiceInDifferentExpressions) {
 
   // Fields referenced by multiple expressions will load lazy vector
   // immediately in ExprSet::eval().
-  auto isNullAtColA = [](auto row) { return row % 2 == 0; };
-  auto isNullAtColC = [](auto row) { return row % 4 == 0; };
+  auto isNullAtColA = [](auto row) { return row % 4 == 0; };
+  auto isNullAtColC = [](auto row) { return row % 2 == 0; };
 
   auto a = makeLazyFlatVector<int64_t>(
       size,
@@ -999,11 +999,11 @@ TEST_F(ExprTest, lazyVectorAccessTwiceInDifferentExpressions) {
       makeRowVector({a, b, c}));
 
   auto expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row % 2 == 0 ? row * 2 : row; });
+      size, [](auto row) { return row % 4 == 0 ? row * 2 : row; });
   assertEqualVectors(expected, result[0]);
 
   expected = makeFlatVector<int64_t>(
-      size, [](auto row) { return row % 4 == 0 ? row * 2 : row; });
+      size, [](auto row) { return row % 2 == 0 ? row * 2 : row; });
   assertEqualVectors(expected, result[1]);
 }
 
