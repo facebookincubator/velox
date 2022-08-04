@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Range.h"
 #include "velox/vector/LazyVector.h"
 
@@ -103,11 +104,7 @@ inline void updateSingleValue(TOutput& result, TInput value) {
       std::is_same<TOutput, float>::value) {
     result += value;
   } else {
-    auto input = result;
-    bool overflow = __builtin_add_overflow(result, value, &result);
-    if (UNLIKELY(overflow)) {
-      VELOX_ARITHMETIC_ERROR("integer overflow: {} + {}", input, value);
-    }
+    result = checkedPlus<TOutput>(result, value);
   }
 }
 } // namespace
