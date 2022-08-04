@@ -88,7 +88,7 @@ General Aggregate Functions
 
 .. function:: max_data_size_for_stats(x) -> bigint
 
-    Returns the maximum size of all input values.
+    Returns the maximum in-memory size in bytes of ``x``.
 
 Bitwise Aggregate Functions
 ---------------------------

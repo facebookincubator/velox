@@ -39,7 +39,6 @@ class MaxSizeForStatsAggregate
 
  private:
   std::vector<vector_size_t> elementSizes_;
-  std::vector<vector_size_t> selectToElementSizesIndexMap_;
   std::vector<vector_size_t*> elementSizePtrs_;
   std::vector<IndexRange> elementIndices_;
   DecodedVector decoded_;
@@ -158,9 +157,9 @@ class MaxSizeForStatsAggregate
       });
     } else {
       estimateSerializedSizes(arg, rows, rows.countSelected());
+      vector_size_t sizeIndex = 0;
       rows.applyToSelected([&](vector_size_t i) {
-        updateOneAccumulator(
-            groups[i], elementSizes_, selectToElementSizesIndexMap_[i]);
+        updateOneAccumulator(groups[i], elementSizes_, sizeIndex++);
       });
     }
   }
@@ -172,14 +171,12 @@ class MaxSizeForStatsAggregate
       vector_size_t numToProcess) {
     elementSizes_.resize(numToProcess);
     std::fill(elementSizes_.begin(), elementSizes_.end(), 0);
-    selectToElementSizesIndexMap_.resize(rows.end() + 1);
     elementIndices_.resize(numToProcess);
     elementSizePtrs_.resize(numToProcess);
     vector_size_t selectedIndex = 0;
     auto selectivityIterator = SelectivityIterator(rows);
     for (int i = 0; i < numToProcess; i++) {
       selectivityIterator.next(selectedIndex);
-      selectToElementSizesIndexMap_[selectedIndex] = i;
       elementIndices_[i] = IndexRange{selectedIndex, 1};
       elementSizePtrs_[i] = &elementSizes_[i];
     }
@@ -208,9 +205,9 @@ class MaxSizeForStatsAggregate
     }
 
     estimateSerializedSizes(arg, rows, rows.countSelected());
+    vector_size_t sizeIndex = 0;
     rows.applyToSelected([&](vector_size_t i) {
-      updateOneAccumulator(
-          group, elementSizes_, selectToElementSizesIndexMap_[i]);
+      updateOneAccumulator(group, elementSizes_, sizeIndex++);
     });
   }
 };
