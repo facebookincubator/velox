@@ -48,6 +48,34 @@ std::string formatDecimal(uint8_t scale, int128_t unscaledValue) {
   return fmt::format(
       "{}{}{}", isNegative ? "-" : "", integralPart, fractionString);
 }
+
+int128_t rescale(
+    const int128_t& unscaledValue,
+    const uint8_t fromScale,
+    const std::pair<uint8_t, uint8_t>& toPrecisionScale) {
+  auto rescaledValue = unscaledValue;
+  auto rf = toPrecisionScale.second - fromScale;
+  if (rf >= 0) {
+    rescaledValue = unscaledValue * DecimalUtil::kPowersOfTen[rf];
+  } else {
+    rf = -1 * rf;
+    rescaledValue = unscaledValue / DecimalUtil::kPowersOfTen[rf];
+    int128_t remainder = unscaledValue % DecimalUtil::kPowersOfTen[rf];
+    if (unscaledValue >= 0) {
+      if (remainder > DecimalUtil::kPowersOfTen[rf] / 2) {
+        rescaledValue++;
+      }
+    } else {
+      if (remainder < -DecimalUtil::kPowersOfTen[rf] / 2) {
+        rescaledValue--;
+      }
+    }
+  }
+  // Check overflowing
+  VELOX_CHECK_LE(
+      rescaledValue, DecimalUtil::kPowersOfTen[toPrecisionScale.first]);
+  return rescaledValue;
+}
 } // namespace
 
 const int128_t DecimalUtil::kPowersOfTen[]{
@@ -104,5 +132,23 @@ std::string DecimalUtil::toString<ShortDecimal>(
     const TypePtr& type) {
   auto decimalType = type->asShortDecimal();
   return formatDecimal(decimalType.scale(), value.unscaledValue());
+}
+
+template <>
+void DecimalUtil::rescaleWithRoundUp(
+    ShortDecimal& output,
+    const int128_t& unscaledValue,
+    const uint8_t fromScale,
+    const std::pair<uint8_t, uint8_t>& toPrecisionScale) {
+  output.setUnscaledValue(rescale(unscaledValue, fromScale, toPrecisionScale));
+}
+
+template <>
+void DecimalUtil::rescaleWithRoundUp(
+    LongDecimal& output,
+    const int128_t& unscaledValue,
+    const uint8_t fromScale,
+    const std::pair<uint8_t, uint8_t>& toPrecisionScale) {
+  output.setUnscaledValue(rescale(unscaledValue, fromScale, toPrecisionScale));
 }
 } // namespace facebook::velox

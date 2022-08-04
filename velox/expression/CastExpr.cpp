@@ -452,6 +452,62 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
+template <typename FROM, typename T>
+void applyDecimalCastKernel(
+    const SelectivityVector& rows,
+    DecodedVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType,
+    VectorPtr castResult) {
+  auto sourceVector = input.base()->as<SimpleVector<FROM>>();
+  T* castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<T>>()->mutableRawValues();
+  const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
+  const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
+  context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+    try {
+      DecimalUtil::rescaleWithRoundUp<T>(
+          castResultRawBuffer[row],
+          sourceVector->valueAt(row).unscaledValue(),
+          fromPrecisionScale.second,
+          toPrecisionScale);
+    } catch (VeloxRuntimeError& ex) {
+      castResult->setNull(row, true);
+    }
+  });
+}
+
+template <typename T>
+VectorPtr CastExpr::applyDecimal(
+    const SelectivityVector& rows,
+    DecodedVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType) {
+  VectorPtr castResult;
+  context.ensureWritable(rows, toType, castResult);
+  (*castResult).clearNulls(rows);
+  switch (fromType->kind()) {
+    case TypeKind::SHORT_DECIMAL: {
+      auto sourceVector = input.base()->asFlatVector<ShortDecimal>();
+      applyDecimalCastKernel<ShortDecimal, T>(
+          rows, input, context, fromType, toType, castResult);
+      break;
+    }
+    case TypeKind::LONG_DECIMAL: {
+      auto sourceVector = input.base()->asFlatVector<LongDecimal>();
+      applyDecimalCastKernel<LongDecimal, T>(
+          rows, input, context, fromType, toType, castResult);
+      break;
+    }
+    default:
+      VELOX_UNSUPPORTED(
+          "Cast from {} to DECIMAL is not supported", fromType->toString());
+  }
+  return castResult;
+}
+
 /// Apply casting between a custom type and another type.
 /// @param castTo The boolean indicating whether to cast an input to the custom
 /// type or from the custom type
@@ -559,7 +615,9 @@ void CastExpr::apply(
         nullOnFailure_,
         result);
   } else {
-    if (toType->isArray() || toType->isMap() || toType->isRow()) {
+    LocalDecodedVector decoded(context, *input, rows);
+    if (toType->isArray() || toType->isMap() || toType->isRow() ||
+        isDecimalKind(toType->kind())) {
       LocalSelectivityVector translatedRows(
           *context.execCtx(), decoded->base()->size());
       translatedRows->clearAll();
@@ -595,6 +653,14 @@ void CastExpr::apply(
               context,
               fromType->asRow(),
               toType->asRow());
+          break;
+        case TypeKind::SHORT_DECIMAL:
+          localResult = applyDecimal<ShortDecimal>(
+              *translatedRows, *decoded, context, fromType, toType);
+          break;
+        case TypeKind::LONG_DECIMAL:
+          localResult = applyDecimal<LongDecimal>(
+              *translatedRows, *decoded, context, fromType, toType);
           break;
         default: {
           VELOX_UNREACHABLE();
