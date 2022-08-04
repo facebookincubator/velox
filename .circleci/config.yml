@@ -342,7 +342,7 @@ jobs:
             echo "password: $CONBENCH_PASSWORD" >> .conbench
             echo "host_name: CircleCI-runner" >> .conbench
 
-            conbench cpp-micro
+            conbench cpp-micro --run-name="commit: $(git rev-parse HEAD)" --run-reason="commit"
       - store_artifacts:
           path: '_build/debug/.ninja_log'
       - save_cache:
