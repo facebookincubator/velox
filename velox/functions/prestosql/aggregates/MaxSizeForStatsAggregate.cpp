@@ -39,6 +39,7 @@ class MaxSizeForStatsAggregate
 
  private:
   std::vector<vector_size_t> elementSizes_;
+  std::vector<vector_size_t> selectToElementSizesIndexMap_;
   std::vector<vector_size_t*> elementSizePtrs_;
   std::vector<IndexRange> elementIndices_;
   DecodedVector decoded_;
@@ -151,33 +152,44 @@ class MaxSizeForStatsAggregate
     }
 
     if (decoded_.isConstantMapping()) {
-      estimateSerializedSizes(arg, 1);
-      std::fill(elementSizes_.begin(), elementSizes_.end(), elementSizes_[0]);
+      estimateSerializedSizes(arg, rows, 1);
+      rows.applyToSelected([&](vector_size_t i) {
+        upsertOneAccumulatorNew(groups[i], elementSizes_, 0);
+      });
     } else {
-      estimateSerializedSizes(arg, arg->size());
+      estimateSerializedSizes(arg, rows, rows.countSelected());
+      rows.applyToSelected([&](vector_size_t i) {
+        upsertOneAccumulatorNew(
+            groups[i], elementSizes_, selectToElementSizesIndexMap_[i]);
+      });
     }
-    rows.applyToSelected([&](vector_size_t i) {
-      upsertOneAccumulatorNew(groups[i], elementSizes_, i);
-    });
   }
 
-  // Estimate the sizes of first numRows elements in vector.
-  void estimateSerializedSizes(VectorPtr vector, vector_size_t numRows) {
-    elementSizes_.resize(numRows);
+  // Estimate the sizes of first numToProcess selected elements in vector.
+  void estimateSerializedSizes(
+      VectorPtr vector,
+      const SelectivityVector& rows,
+      vector_size_t numToProcess) {
+    elementSizes_.resize(numToProcess);
     std::fill(elementSizes_.begin(), elementSizes_.end(), 0);
-    elementSizePtrs_.resize(numRows);
-    elementIndices_.resize(numRows);
-
-    for (int i = 0; i < numRows; i++) {
-      elementIndices_[i] = IndexRange{i, 1};
+    selectToElementSizesIndexMap_.resize(rows.end() + 1);
+    elementIndices_.resize(numToProcess);
+    elementSizePtrs_.resize(numToProcess);
+    vector_size_t selectedIndex = 0;
+    auto selectivityIterator = SelectivityIterator(rows);
+    for (int i = 0; i < numToProcess; i++) {
+      selectivityIterator.next(selectedIndex);
+      selectToElementSizesIndexMap_[selectedIndex] = i;
+      elementIndices_[i] = IndexRange{selectedIndex, 1};
       elementSizePtrs_[i] = &elementSizes_[i];
     }
 
     getVectorSerde()->estimateSerializedSize(
         vector,
-        folly::Range(elementIndices_.data(), numRows),
+        folly::Range(elementIndices_.data(), elementIndices_.size()),
         elementSizePtrs_.data());
   }
+
   void doUpdateSingleGroup(
       char* group,
       const SelectivityVector& rows,
@@ -190,13 +202,15 @@ class MaxSizeForStatsAggregate
         return;
       }
       // Estimate first element because it is constant mapping.
-      estimateSerializedSizes(arg, 1);
+      estimateSerializedSizes(arg, rows, 1);
       upsertOneAccumulatorNew(group, elementSizes_, 0);
+      return;
     }
 
-    estimateSerializedSizes(arg, arg->size());
+    estimateSerializedSizes(arg, rows, rows.countSelected());
     rows.applyToSelected([&](vector_size_t i) {
-      upsertOneAccumulatorNew(group, elementSizes_, i);
+      upsertOneAccumulatorNew(
+          group, elementSizes_, selectToElementSizesIndexMap_[i]);
     });
   }
 };

@@ -86,6 +86,10 @@ General Aggregate Functions
 
     Returns the sum of all input values.
 
+.. function:: max_data_size_for_stats(x) -> bigint
+
+    Returns the maximum size of all input values.
+
 Bitwise Aggregate Functions
 ---------------------------
 

@@ -197,20 +197,20 @@ TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
 // query:
 // select aggr(c0)
 // output:
-// 9
+// 18
 TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
-  VectorPtr varbinary_vector = BaseVector::create(VARBINARY(), 3, pool());
-  auto flat_vector = varbinary_vector->asFlatVector<StringView>();
-  StringView sv1{"buf"};
-  StringView sv2{""};
-  StringView sv3{"henlo"};
-  flat_vector->set(0, sv1);
-  flat_vector->set(1, sv2);
-  flat_vector->set(2, sv3);
+  VectorPtr varbinaryVector = BaseVector::create(VARBINARY(), 3, pool());
+  auto flatVector = varbinaryVector->asFlatVector<StringView>();
+  StringView buf_sv{"buf"};
+  StringView _sv{""};
+  StringView hello_sv{"hello, world !"};
+  flatVector->set(0, buf_sv);
+  flatVector->set(1, _sv);
+  flatVector->set(2, hello_sv);
 
-  auto vectors = {makeRowVector({varbinary_vector})};
+  auto vectors = {makeRowVector({varbinaryVector})};
   testAggregations(
-      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 9");
+      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 18");
 }
 
 // Input:
@@ -255,6 +255,64 @@ TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
 
   testAggregations(
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 50");
+}
+
+TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
+  auto columnOne = makeFlatVector<int64_t>({1, 2, 3});
+  auto columnTwo = makeRowVector(
+      {makeFlatVector<StringView>({
+           "{1, 2, 3, 4, 5}",
+           "{}",
+           "{1, 2, 3}",
+       }),
+       createMapOfArraysVector<int8_t, int64_t>(
+           {{{1, std::nullopt}},
+            {{2, {{4, 5, std::nullopt}}}},
+            {{std::nullopt, {{7, 8, 9}}}}})});
+  auto columnTwoConstantEncoded = BaseVector::wrapInConstant(3, 1, columnTwo);
+
+  auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
+
+  testAggregations(
+      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c1)"}, "SELECT 36");
+
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"\"$internal$max_data_size_for_stats\"(c1)"},
+      "SELECT * FROM (VALUES (1,36),(2,36),(3,36))");
+}
+
+TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
+  auto columnOne = makeFlatVector<int64_t>({1, 2, 3});
+  auto columnTwo = makeRowVector(
+      {makeFlatVector<StringView>({
+           "{1, 2, 3, 4, 5}",
+           "{}",
+           "{1, 2, 3}",
+       }),
+       createMapOfArraysVector<int8_t, int64_t>(
+           {{{1, std::nullopt}},
+            {{2, {{4, 5, std::nullopt}}}},
+            {{std::nullopt, {{7, 8, 9}}}}})});
+  vector_size_t size = 3;
+  auto indices = AlignedBuffer::allocate<vector_size_t>(size, pool());
+  auto rawIndices = indices->asMutable<vector_size_t>();
+  for (auto i = 0; i < size; ++i) {
+    rawIndices[i] = i;
+  }
+  auto columnTwoDictionaryEncoded =
+      BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
+  auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
+
+  testAggregations(
+      vectors, {}, {"\"$internal$max_data_size_for_stats\"(c1)"}, "SELECT 50");
+
+  testAggregations(
+      vectors,
+      {"c0"},
+      {"\"$internal$max_data_size_for_stats\"(c1)"},
+      "SELECT * FROM (VALUES (1,32),(2,36),(3,50))");
 }
 
 } // namespace
