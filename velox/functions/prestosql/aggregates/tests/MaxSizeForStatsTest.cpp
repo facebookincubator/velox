@@ -30,72 +30,86 @@ class MaxSizeForStatsTest : public AggregationTestBase {
   }
 };
 
-// Input:
-// c0(bigint)|c1(tinyint)
-// null|null
-// Query:
-// select aggr(c0),aggr(c1)
-// Output
-// null|null
 TEST_F(MaxSizeForStatsTest, nullValues) {
   auto vectors = {makeRowVector({
-      makeNullableFlatVector(std::vector<std::optional<int64_t>>{std::nullopt}),
-      makeNullableFlatVector(std::vector<std::optional<int8_t>>{std::nullopt}),
+      makeNullableFlatVector<int8_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int16_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<float>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<bool>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<Date>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<Timestamp>({std::nullopt, std::nullopt}),
+      makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}),
   })};
 
   testAggregations(
       vectors,
       {},
       {"\"$internal$max_data_size_for_stats\"(c0)",
-       "\"$internal$max_data_size_for_stats\"(c1)"},
-      "SELECT NULL, NULL");
+       "\"$internal$max_data_size_for_stats\"(c1)",
+       "\"$internal$max_data_size_for_stats\"(c2)",
+       "\"$internal$max_data_size_for_stats\"(c3)",
+       "\"$internal$max_data_size_for_stats\"(c4)",
+       "\"$internal$max_data_size_for_stats\"(c5)",
+       "\"$internal$max_data_size_for_stats\"(c6)",
+       "\"$internal$max_data_size_for_stats\"(c7)",
+       "\"$internal$max_data_size_for_stats\"(c8)",
+       "\"$internal$max_data_size_for_stats\"(c9)"},
+      "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
 }
 
-// Input:
-// c0(bigint)|c1(tinyint)
-// null|null
-// 0 | 0
-// Query:
-// select aggr(c0),aggr(c1)
-// Output
-// 8|1
 TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
   auto vectors = {makeRowVector({
-      makeNullableFlatVector<int64_t>({std::nullopt, 0}),
       makeNullableFlatVector<int8_t>({std::nullopt, 0}),
+      makeNullableFlatVector<int16_t>({std::nullopt, 0}),
+      makeNullableFlatVector<int32_t>({std::nullopt, 0}),
+      makeNullableFlatVector<int64_t>({std::nullopt, 0}),
+      makeNullableFlatVector<float>({std::nullopt, 0}),
+      makeNullableFlatVector<double>({std::nullopt, 0}),
+      makeNullableFlatVector<bool>({std::nullopt, 0}),
+      makeNullableFlatVector<Date>({std::nullopt, 0}),
+      makeNullableFlatVector<Timestamp>({std::nullopt, Timestamp(0, 0)}),
+      makeNullableFlatVector<StringView>({std::nullopt, "std::nullopt"}),
   })};
 
   testAggregations(
       vectors,
       {},
       {"\"$internal$max_data_size_for_stats\"(c0)",
-       "\"$internal$max_data_size_for_stats\"(c1)"},
-      "SELECT 8, 1");
+       "\"$internal$max_data_size_for_stats\"(c1)",
+       "\"$internal$max_data_size_for_stats\"(c2)",
+       "\"$internal$max_data_size_for_stats\"(c3)",
+       "\"$internal$max_data_size_for_stats\"(c4)",
+       "\"$internal$max_data_size_for_stats\"(c5)",
+       "\"$internal$max_data_size_for_stats\"(c6)",
+       "\"$internal$max_data_size_for_stats\"(c7)",
+       "\"$internal$max_data_size_for_stats\"(c8)",
+       "\"$internal$max_data_size_for_stats\"(c9)"},
+      "SELECT 1, 2, 4, 8, 4, 8, 1, 4, 16, 16");
 }
 
-// Input:
-// c0(bigint)|c1(tinyint)|c2(smallint)|c3(integer)|c4(bigint)|c5(real)|c6(double)
-// 1|rand()|rand()|rand()|rand()|rand()|rand()
-// 2|rand()|rand()|rand()|rand()|rand()|rand()
-// 1|rand()|rand()|rand()|rand()|rand()|rand()
-// 2|rand()|rand()|rand()|rand()|rand()|rand()
-// Query:
-// select aggr(c1),aggr(c2),aggr(c3),aggr(c4),aggr(c5),aggr(c6) group by c0;
-// Output
-// 1|1|2|4|8|4|8
-// 2|1|2|4|8|4|8
+template <class T>
+T generator(vector_size_t i) {
+  return T(i);
+}
+template <>
+Timestamp generator<Timestamp>(vector_size_t i) {
+  return Timestamp(i, i);
+}
 TEST_F(MaxSizeForStatsTest, allScalarTypes) {
   auto vectors = {makeRowVector(
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 1, 2}),
-       makeFlatVector<int8_t>(4),
-       makeFlatVector<int16_t>(4),
-       makeFlatVector<int32_t>(4),
-       makeFlatVector<int64_t>(4),
-       makeFlatVector<float>(4),
-       makeFlatVector<double>(4),
-       makeFlatVector<bool>(4),
-       makeFlatVector<Date>(4),
-       makeFlatVector<Timestamp>(4)})};
+      {makeFlatVector<int64_t>({1, 2, 1, 2}),
+       makeFlatVector<int8_t>(4, generator<int8_t>),
+       makeFlatVector<int16_t>(4, generator<int16_t>),
+       makeFlatVector<int32_t>(4, generator<int32_t>),
+       makeFlatVector<int64_t>(4, generator<int64_t>),
+       makeFlatVector<float>(4, generator<float>),
+       makeFlatVector<double>(4, generator<double>),
+       makeFlatVector<bool>(4, generator<bool>),
+       makeFlatVector<Date>(4, generator<Date>),
+       makeFlatVector<Timestamp>(4, generator<Timestamp>)})};
 
   // With grouping keys.
   testAggregations(
@@ -110,7 +124,7 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        "\"$internal$max_data_size_for_stats\"(c7)",
        "\"$internal$max_data_size_for_stats\"(c8)",
        "\"$internal$max_data_size_for_stats\"(c9)"},
-      "SELECT * FROM (VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16))");
+      "VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16)");
 
   // Without grouping keys.
   testAggregations(
@@ -125,18 +139,9 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        "\"$internal$max_data_size_for_stats\"(c7)",
        "\"$internal$max_data_size_for_stats\"(c8)",
        "\"$internal$max_data_size_for_stats\"(c9)"},
-      "SELECT * FROM (VALUES (1,2,4,8,4,8,1,4,16))");
+      "VALUES (1,2,4,8,4,8,1,4,16)");
 }
 
-// Input:
-// c0(array(bigint))
-// [1,2,3,4,5]
-// []
-// [1,2,3]
-// Query:
-// select aggr(c0)
-// Output
-// 44
 TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {
   auto vectors = {makeRowVector({makeArrayVector<int64_t>({
       {1, 2, 3, 4, 5},
@@ -147,15 +152,6 @@ TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 44");
 }
 
-// Input:
-// c0(map(tinyint,integer))
-// map(array(1,1,1,1,1),array(1,1,1,1,1))
-// map()
-// map(array(1,1,1), array(1,1,1))
-// Query:
-// select aggr(c0)
-// Output
-// 29
 TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
   auto vectors = {makeRowVector({makeMapVector<int8_t, int32_t>(
       {{{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}},
@@ -165,15 +161,6 @@ TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 29");
 }
 
-// Input:
-// c0( row(array(bigint), map(tinyint,integer))
-// row(aray[1,2,3,4,5], map(array(1,1,1,1,1),array(1,1,1,1,1)))
-// row(array[], map())
-// row(array[1,2,3], map(array(1,1,1), array(1,1,1)))
-// Query:
-// select aggr(c0)
-// Output
-// 77
 TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
   auto vectors = {makeRowVector({makeRowVector(
       {makeArrayVector<int64_t>({
@@ -189,15 +176,6 @@ TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 77");
 }
 
-// Input:
-// c0(varbinary)
-// "buf"
-// ""
-// "hello"
-// query:
-// select aggr(c0)
-// output:
-// 18
 TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
   VectorPtr varbinaryVector = BaseVector::create(VARBINARY(), 3, pool());
   auto flatVector = varbinaryVector->asFlatVector<StringView>();
@@ -213,15 +191,6 @@ TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 18");
 }
 
-// Input:
-// c0(varchar)
-// "{1, 2, 3, 4, 5}"
-// "{}"
-// "{1, 2, 3}"
-// query:
-// select aggr(c0)
-// output:
-// 19
 TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
   auto vectors = {makeRowVector({makeFlatVector<StringView>({
       "{1, 2, 3, 4, 5}",
@@ -232,15 +201,6 @@ TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
       vectors, {}, {"\"$internal$max_data_size_for_stats\"(c0)"}, "SELECT 19");
 }
 
-// Input (3 rows of recursive complex data):
-// c0(row(varchar, map(tinyint, bigint)))
-// ("{1, 2, 3, 4, 5}", {1:null,})
-// ("{}", {2:[4,5,null]})
-// ("{1, 2, 3}", {null:[7,8,9]})
-// query:
-// select aggr(c0)
-// output:
-// 50 (3rd row(4), 13("{1, 2, 3}") + 5 (null) + 28([7,8,9]))
 TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
   auto vectors = {makeRowVector({makeRowVector(
       {makeFlatVector<StringView>({
@@ -280,7 +240,7 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
       vectors,
       {"c0"},
       {"\"$internal$max_data_size_for_stats\"(c1)"},
-      "SELECT * FROM (VALUES (1,36),(2,36),(3,36))");
+      "VALUES (1,36),(2,36),(3,36)");
 }
 
 TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
@@ -312,7 +272,7 @@ TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
       vectors,
       {"c0"},
       {"\"$internal$max_data_size_for_stats\"(c1)"},
-      "SELECT * FROM (VALUES (1,32),(2,36),(3,50))");
+      "VALUES (1,32),(2,36),(3,50)");
 }
 
 } // namespace

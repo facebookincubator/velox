@@ -127,7 +127,7 @@ class MaxSizeForStatsAggregate
   }
 
  protected:
-  void upsertOneAccumulatorNew(
+  void updateOneAccumulator(
       char* const group,
       std::vector<vector_size_t>& rowSizes,
       vector_size_t idx) {
@@ -154,12 +154,12 @@ class MaxSizeForStatsAggregate
     if (decoded_.isConstantMapping()) {
       estimateSerializedSizes(arg, rows, 1);
       rows.applyToSelected([&](vector_size_t i) {
-        upsertOneAccumulatorNew(groups[i], elementSizes_, 0);
+        updateOneAccumulator(groups[i], elementSizes_, 0);
       });
     } else {
       estimateSerializedSizes(arg, rows, rows.countSelected());
       rows.applyToSelected([&](vector_size_t i) {
-        upsertOneAccumulatorNew(
+        updateOneAccumulator(
             groups[i], elementSizes_, selectToElementSizesIndexMap_[i]);
       });
     }
@@ -203,26 +203,19 @@ class MaxSizeForStatsAggregate
       }
       // Estimate first element because it is constant mapping.
       estimateSerializedSizes(arg, rows, 1);
-      upsertOneAccumulatorNew(group, elementSizes_, 0);
+      updateOneAccumulator(group, elementSizes_, 0);
       return;
     }
 
     estimateSerializedSizes(arg, rows, rows.countSelected());
     rows.applyToSelected([&](vector_size_t i) {
-      upsertOneAccumulatorNew(
+      updateOneAccumulator(
           group, elementSizes_, selectToElementSizesIndexMap_[i]);
     });
   }
 };
 
 bool registerMaxSizeForStatsAggregate(const std::string& name) {
-  // Types here are used by PlanBuilder to populate partial and final
-  // aggregation input and output types. E.g. intermediate results will be of
-  // type vector<intermediateType> and used to serve as the input vector type to
-  // final aggregation. argumentType is type of vector to AddRawInput
-  // intermediateType is the type of vector that extractAccumulator write to and
-  // that addIntermediateResults reads out of
-  // returnType is the type of vector that extractValues write to.
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
 
   signatures.push_back(exec::AggregateFunctionSignatureBuilder()
