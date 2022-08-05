@@ -17,7 +17,7 @@ FROM ${base}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && \
-      apt-get -y install sudo
+      apt-get -y install sudo tzdata
 
 ADD scripts /velox/scripts/
 RUN /velox/scripts/setup-ubuntu.sh
