@@ -65,3 +65,18 @@ target_link_libraries(
   ${ZSTD}
   ${ZLIB_LIBRARIES}
   ${TEST_LINK_LIBS})
+
+# The bit unpacking benchmark tests require arrow and duckdb
+if(VELOX_ENABLE_ARROW)
+  add_executable(velox_dwio_common_bitunpacking_test BitUnpackingTest.cpp)
+  add_test(velox_dwio_common_bitunpacking_test
+           velox_dwio_common_bitunpacking_test)
+  target_link_libraries(velox_dwio_common_bitunpacking_test arrow
+                        ${VELOX_LINK_LIBS} gtest gtest_main)
+
+  add_executable(velox_dwio_common_bitunpacking_benchmark
+                 BitUnpackingBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_common_bitunpacking_benchmark velox_dwio_common arrow duckdb
+    ${FOLLY} ${FOLLY_BENCHMARK})
+endif()

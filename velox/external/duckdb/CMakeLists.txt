@@ -23,6 +23,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_library(
+        duckdb-fastpforlib
+        duckdb-fastpforlib.cpp
+)
+
+add_library(
   duckdb
   duckdb-1.cpp
   duckdb-2.cpp
@@ -32,7 +37,7 @@ add_library(
   duckdb-6.cpp
   duckdb-7.cpp
   duckdb-8.cpp
-  duckdb-fastpforlib.cpp
+#  duckdb-fastpforlib.cpp
   duckdb-fmt.cpp
   duckdb-hyperloglog.cpp
   duckdb-libpg_query.cpp
@@ -40,5 +45,7 @@ add_library(
   duckdb-re2.cpp
   duckdb-utf8proc.cpp
   parquet-amalgamation.cpp)
+target_link_libraries(duckdb duckdb-fastpforlib)
 
 set_property(TARGET duckdb PROPERTY JOB_POOL_COMPILE high_memory_pool)
+
