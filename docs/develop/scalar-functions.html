@@ -879,9 +879,10 @@ the specified rows in a way that’s rather similar to a standard for loop.</p>
 <p>The “args” parameter is an std::vector of Velox vectors containing the values
 of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
-a single argument is guaranteed to receive its only input as a flat vector.
-By default, a function is assumed to be deterministic. If that’s not the
-case, the function must override isDeterministic method to return false.</p>
+a single argument and has default null behavior is guaranteed to receive its
+only input as a flat or constant vector. By default, a function is assumed to
+be deterministic. If that’s not the case, the function must override
+isDeterministic method to return false.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="nf">isDeterministic</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">override</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
 <span class="p">}</span><span class="w"></span>
