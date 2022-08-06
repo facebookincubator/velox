@@ -12,14 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ARG base=amd64/ubuntu:22.04
+# Set a default timezone, can be overriden via ARG
+ARG tz="Europe/Madrid"
+
 FROM ${base}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update && \
-      apt-get -y install sudo tzdata
+      apt-get -y install sudo
 
 ADD scripts /velox/scripts/
+
+# TZ and DEBIAN_FRONTEND="noninteractive"
+# are required to avoid tzdata installation
+# to prompt for region selection.
+ENV DEBIAN_FRONTEND="noninteractive" TZ=${tz}
 RUN /velox/scripts/setup-ubuntu.sh
 
 WORKDIR /velox
