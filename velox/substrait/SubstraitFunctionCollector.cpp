@@ -23,23 +23,20 @@
 
 namespace facebook::velox::substrait {
 
-const void SubstraitFunctionCollector::addFunctionToPlan(
+void SubstraitFunctionCollector::addFunctionToPlan(
     ::substrait::Plan& substraitPlan) const {
+  using SimpleExtensionURI = ::substrait::extensions::SimpleExtensionURI;
   int uriPos = 1;
-
-  auto uris = std::unordered_map<
-      std::string,
-      ::substrait::extensions::SimpleExtensionURI*>{};
-
-  for (auto& [referenceNum, function] : funcMap_->forwardMap_) {
-    ::substrait::extensions::SimpleExtensionURI* extensionUri;
-    if (uris.find(function->uri) == uris.end()) {
+  std::unordered_map<std::string, SimpleExtensionURI*> uris;
+  for ( auto& [referenceNum, function] : bidiMap_->forwardMap_) {
+    SimpleExtensionURI* extensionUri;
+    if (uris.find(function.uri) == uris.end()) {
       extensionUri = substraitPlan.add_extension_uris();
       extensionUri->set_extension_uri_anchor(++uriPos);
-      extensionUri->set_uri(function->uri);
-      uris[function->uri] = extensionUri;
+      extensionUri->set_uri(function.uri);
+      uris[function.uri] = extensionUri;
     } else {
-      extensionUri = uris.at(function->uri);
+      extensionUri = uris.at(function.uri);
     }
 
     auto extensionFunction =
@@ -47,25 +44,24 @@ const void SubstraitFunctionCollector::addFunctionToPlan(
     extensionFunction->set_extension_uri_reference(
         extensionUri->extension_uri_anchor());
     extensionFunction->set_function_anchor(referenceNum);
-    extensionFunction->set_name(function->key());
+    extensionFunction->set_name(function.key);
   }
 }
 
-const int SubstraitFunctionCollector::getFunctionReference(
+int SubstraitFunctionCollector::getFunctionReference(
     const SubstraitFunctionPtr& function) {
-  if (funcMap_->reverseMap_.end() != funcMap_->reverseMap_.end()) {
-    return funcMap_->reverseMap_.at(function);
+  if (bidiMap_->reverseMap_.find( function->anchor()) != bidiMap_->reverseMap_.end()) {
+    return bidiMap_->reverseMap_.at(function->anchor());
   }
-
   ++counter_;
-  funcMap_->put(counter_, function);
+  bidiMap_->put(counter_, function);
   return counter_;
 }
 
 void SubstraitFunctionCollector::BidiMap::put(
-    int reference,
-    SubstraitFunctionPtr function) {
-  forwardMap_[reference] = function;
-  reverseMap_[function] = reference;
+    const int& reference,
+    const SubstraitFunctionPtr& function) {
+  forwardMap_[reference] = function->anchor();
+  reverseMap_[function->anchor()] = reference;
 }
 } // namespace facebook::velox::substrait

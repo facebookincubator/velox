@@ -26,7 +26,8 @@ VeloxToSubstraitScalarFunctionConverter::convert(
     const core::CallTypedExprPtr& callTypeExpr,
     google::protobuf::Arena& arena,
     SubstraitExprConverter& topLevelConverter) const {
-  auto& scalarFunctionOption = functionLookup_->lookupFunction(callTypeExpr);
+  auto& scalarFunctionOption =
+      functionLookup_->lookupFunction(arena, callTypeExpr);
 
   if (!scalarFunctionOption.has_value()) {
     return std::nullopt;

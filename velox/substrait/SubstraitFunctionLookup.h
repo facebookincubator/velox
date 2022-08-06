@@ -21,6 +21,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/substrait/SubstraitFunction.h"
 #include "velox/substrait/SubstraitFunctionMappings.h"
+#include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 
 namespace facebook::velox::substrait {
@@ -29,7 +30,8 @@ class SubstraitFunctionLookup {
  public:
   SubstraitFunctionLookup(const std::vector<SubstraitFunctionPtr>& functions);
 
-  const std::optional<SubstraitFunctionPtr> lookupFunction(
+  std::optional<SubstraitFunctionPtr> lookupFunction(
+      google::protobuf::Arena& arena,
       const core::CallTypedExprPtr& callTypeExpr) const;
 
  protected:
@@ -39,21 +41,25 @@ class SubstraitFunctionLookup {
   class SubstraitFunctionFinder {
    public:
     SubstraitFunctionFinder(
-        const std::string name,
+        const std::string& name,
         const std::vector<SubstraitFunctionPtr>& functions);
 
-    const std::optional<SubstraitFunctionPtr> lookupFunction(
-        const core::TypedExprPtr& exprPtr) const;
+    std::optional<SubstraitFunctionPtr> lookupFunction(
+        google::protobuf::Arena& arena,
+        const core::CallTypedExprPtr& exprPtr) const;
 
    private:
-    const std::string name_;
-    std::unordered_map<std::string ,SubstraitFunctionPtr > directMap_;
+    const std::string& name_;
+    std::unordered_map<std::string, SubstraitFunctionPtr> directMap_;
+    std::optional<SubstraitFunctionPtr> anyTypeOption_;
+    VeloxToSubstraitTypeConvertorPtr typeConvertor_;
+
   };
 
   using SubstraitFunctionFinderPtr =
       std::shared_ptr<const SubstraitFunctionFinder>;
 
-  const std::unordered_map<std::string, SubstraitFunctionFinderPtr>
+  std::unordered_map<std::string, SubstraitFunctionFinderPtr>
       functionSignatures_;
 };
 

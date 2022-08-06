@@ -20,6 +20,11 @@ endif()
 
 add_subdirectory(xsimd)
 
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "disable yaml tests")
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "disable yaml tools")
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "disable yaml contrib")
+add_subdirectory(yaml-cpp)
+
 if(VELOX_ENABLE_ARROW)
   set(ARROW_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/arrow_ep")
   set(ARROW_CMAKE_ARGS

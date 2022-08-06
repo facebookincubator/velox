@@ -312,7 +312,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     }
 
     auto aggregateFunctionOption =
-        aggregateFunctionLookup_->lookupFunction(aggregatesExpr);
+        aggregateFunctionLookup_->lookupFunction(arena, aggregatesExpr);
 
     if (!aggregateFunctionOption.has_value()) {
       VELOX_NYI(

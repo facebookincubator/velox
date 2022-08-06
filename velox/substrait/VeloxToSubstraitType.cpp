@@ -160,6 +160,7 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
     default:
       VELOX_UNSUPPORTED("Unsupported velox type '{}'", type->toString());
   }
+  substraitType->string()
   return *substraitType;
 }
 

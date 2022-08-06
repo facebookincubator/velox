@@ -28,17 +28,16 @@
 
 namespace facebook::velox::substrait {
 
-// Maintains a mapping between function anchors and function references.
-// Generates references for new anchors.
+/// Maintains a mapping between function and function references.
 class SubstraitFunctionCollector {
  private:
-  // A bi-direction hash map to keep the relation between reference number and
-  // function
+  /// A bi-direction hash map to keep the relation between reference number and
+  /// function
   class BidiMap {
    public:
-    void put(int reference, SubstraitFunctionPtr function);
-    std::unordered_map<int, SubstraitFunctionPtr> forwardMap_;
-    std::unordered_map<SubstraitFunctionPtr, int> reverseMap_;
+    void put(const int& reference, const SubstraitFunctionPtr& function);
+    std::unordered_map<int, SubstraitFunctionAnchor> forwardMap_;
+    std::unordered_map<SubstraitFunctionAnchor, int> reverseMap_;
   };
 
  public:
@@ -47,20 +46,20 @@ class SubstraitFunctionCollector {
    * @param function substrait extension function
    * @return reference number of a Substrait extension function
    */
-  const int getFunctionReference(const SubstraitFunctionPtr& function);
+  int getFunctionReference(const SubstraitFunctionPtr& function);
 
   /**
    * add extension functions referenced in a Substrait plan
    * @param plan Substrait plan
    */
-  const void addFunctionToPlan(::substrait::Plan& plan) const;
+  void addFunctionToPlan(::substrait::Plan& plan) const;
 
  private:
   int counter_ = -1;
-  std::shared_ptr<BidiMap> funcMap_;
+  std::shared_ptr<BidiMap> bidiMap_;
 };
 
 using SubstraitFunctionCollectorPtr =
-    std::shared_ptr<SubstraitFunctionCollector>;
+    std::shared_ptr<const SubstraitFunctionCollector>;
 
 } // namespace facebook::velox::substrait

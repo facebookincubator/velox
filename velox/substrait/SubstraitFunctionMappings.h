@@ -29,19 +29,19 @@ using FunctionMappingMap = std::unordered_map<std::string, std::string>;
 
 struct SubstraitFunctionMappings {
   //scalar function names in difference between velox and Substrait
-  static const FunctionMappingMap scalarMappings() {
+  static const FunctionMappingMap& scalarMappings() {
    static FunctionMappingMap scalarMappings;
    return scalarMappings;
   };
 
   //aggregate function names in difference between velox and Substrait
-  static const FunctionMappingMap aggregateMappings() {
+  static const FunctionMappingMap& aggregateMappings() {
     static FunctionMappingMap aggregateMappings;
     return aggregateMappings;
   }
 
   //window function names in difference between velox and Substrait
-  static const FunctionMappingMap windowMappings() {
+  static const FunctionMappingMap& windowMappings() {
     static FunctionMappingMap windowMappings;
     return windowMappings;
   }

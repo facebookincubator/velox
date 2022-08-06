@@ -16,96 +16,99 @@
 
 #pragma once
 
+#include <algorithm>
+#include "folly/FBString.h"
+#include "functional"
 #include "sstream"
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitParser.h"
+#include "velox/substrait/SubstraitType.h"
 
 namespace facebook::velox::substrait {
 
 struct SubstraitFunctionArgument {
-  virtual bool isRequired() const = 0;
-  virtual std::shared_ptr<std::string> toTypeString() const = 0;
+  virtual const bool isRequired() const = 0;
+  virtual const std::string toTypeString() const = 0;
 };
 
 using SubstraitFunctionArgumentPtr =
     std::shared_ptr<const SubstraitFunctionArgument>;
 
-struct SubstraitEnumFunctionArgument : public SubstraitFunctionArgument {
-  std::vector<std::string> options;
-  std::string name;
+struct SubstraitEnumArgument : public SubstraitFunctionArgument {
+
   bool required;
-  bool isRequired() const override {
+  bool const isRequired() const override {
     return required;
   }
 
-  std::shared_ptr<std::string> toTypeString() const override {
-    std::string res = required ? "req" : "opt";
-    return std::make_shared<std::string>(res);
+  const std::string toTypeString() const override {
+    return required ? "req" : "opt";
   }
 };
 
-struct SubstraitTypeFunctionArgument : public SubstraitFunctionArgument {
-  std::string type;
-  std::string name;
-  std::shared_ptr<std::string> toTypeString() const override {
-    return std::make_shared<std::string>("type");
-  }
+struct SubstraitTypeArgument : public SubstraitFunctionArgument {
 
-  bool isRequired() const override {
+  const std::string toTypeString() const override {
+    return "type";
+  }
+  const bool isRequired() const override {
     return true;
   }
 };
 
-struct SubstraitValueFunctionArgument : public SubstraitFunctionArgument {
+struct SubstraitValueArgument : public SubstraitFunctionArgument {
   std::string type;
-  std::string name;
-  std::shared_ptr<std::string> toTypeString() const override {
-    return std::make_shared<std::string>(type);
+
+  const std::string toTypeString() const override {
+    return SubstraitType::argumentToSignature(type);
   }
 
-  bool isRequired() const override {
+  const bool isRequired() const override {
     return true;
   }
+
+  const bool isWildcard() const {
+    return SubstraitType::isWildcard(type);
+  }
 };
 
-enum class Nullability { MIRROR, DECLARED_OUTPUT, DISCRETE };
+struct SubstraitFunctionAnchor {
+  std::string uri;
+  std::string key;
 
-enum class Decomposability { NONE, ONE, MANY };
-
-struct Variadic {
-  int min;
-  int max;
+  bool operator==(const SubstraitFunctionAnchor& other) const {
+    return (uri == other.uri && key == other.key);
+  }
 };
 
-class SubstraitFunction {
- public:
+struct SubstraitFunction {
   std::string name;
   std::string uri;
-  Variadic variadic;
-  std::string description;
-  std::vector<SubstraitFunctionArgumentPtr> args;
-  Nullability nullability;
+  std::vector<SubstraitFunctionArgumentPtr> arguments;
   std::string returnType;
 
   static const std::string constructKey(
       const std::string& name,
       const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
-
     std::stringstream ss;
     ss << name << ":";
-    for (auto argument : arguments) {
+    for (auto& argument : arguments) {
       ss << "_" << argument->toTypeString();
     }
     return ss.str();
   }
 
   std::string key() const {
-    return SubstraitFunction::constructKey(name, args);
+    return SubstraitFunction::constructKey(name, arguments);
+  }
+
+  SubstraitFunctionAnchor anchor() const {
+    return {uri, key()};
   }
 
   const std::vector<SubstraitFunctionArgumentPtr> requireArguments() const {
     std::vector<SubstraitFunctionArgumentPtr> res;
-    for (const auto& arg : args) {
+    for (const auto& arg : arguments) {
       if (arg->isRequired()) {
         res.emplace_back(arg);
       }
@@ -118,24 +121,21 @@ using SubstraitFunctionPtr = std::shared_ptr<const SubstraitFunction>;
 
 struct SubstraitScalarFunction : public SubstraitFunction {};
 
-using SubstraitScalarFunctionPtr =
-    std::shared_ptr<const SubstraitScalarFunction>;
-
 struct SubstraitAggregateFunction : public SubstraitFunction {
-  Decomposability decomposability;
   std::string intermediate;
 };
 
-using SubstraitAggregateFunctionPtr =
-    std::shared_ptr<const SubstraitAggregateFunction>;
+} // namespace facebook::velox::substrait
 
-enum class WindowType { PARTITION, STREAMING };
+/// hash function for type facebook::velox::substrait::SubstraitFunctionAnchor
+namespace std {
 
-struct SubstraitWindowFunction : public SubstraitFunction {
-  WindowType windowType;
+template <>
+struct hash<facebook::velox::substrait::SubstraitFunctionAnchor> {
+  size_t operator()(
+      const facebook::velox::substrait::SubstraitFunctionAnchor& k) const {
+    return hash<std::string>()(k.key) ^ hash<std::string>()(k.uri);
+  }
 };
 
-using SubstraitWindowFunctionPtr =
-    std::shared_ptr<const SubstraitWindowFunction>;
-
-} // namespace facebook::velox::substrait
+}; // namespace std

@@ -50,14 +50,16 @@ set(SRCS
     VeloxToSubstraitExpr.cpp
     VeloxToSubstraitPlan.cpp
     VeloxToSubstraitType.cpp
-    VeloxToSubstraitFunctionConverter.cpp
-    VeloxToSubstraitFunctionCollector.cpp)
+    SubstraitType.cpp
+    VeloxToSubstraitCallConverter.cpp
+    SubstraitFunctionLookup.cpp
+    SubstraitFunctionCollector.cpp)
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
                            PUBLIC ${PROTO_OUTPUT_DIR})
 target_link_libraries(velox_substrait_plan_converter velox_connector
-                      velox_dwio_dwrf_common)
+                      velox_dwio_dwrf_common yaml-cpp)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

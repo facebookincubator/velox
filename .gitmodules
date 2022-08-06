@@ -4,3 +4,6 @@
 [submodule "third_party/xsimd"]
 	path = third_party/xsimd
 	url = https://github.com/xtensor-stack/xsimd.git
+[submodule "third_party/yaml-cpp"]
+	path = third_party/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git

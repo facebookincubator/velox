@@ -19,6 +19,7 @@
 #include "SubstraitFunction.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/substrait/SubstraitFunction.h"
+#include "yaml-cpp/yaml.h"
 
 namespace facebook::velox::substrait {
 
@@ -30,6 +31,7 @@ class SubstraitExtension {
   //
   static std::shared_ptr<SubstraitExtension> load() {
     static SubstraitExtension substraitExtension;
+
     return std::make_shared<SubstraitExtension>(substraitExtension);
   }
 

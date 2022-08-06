@@ -28,7 +28,7 @@ class FilterProjectTest : public OperatorTestBase {
  protected:
   void assertFilter(
       std::vector<RowVectorPtr>&& vectors,
-      const std::string& filter = "c1 % 10  > 0") {
+      const std::string& filter = "c0   > 0") {
     auto plan = PlanBuilder().values(vectors).filter(filter).planNode();
 
     assertQuery(plan, "SELECT * FROM tmp WHERE " + filter);
