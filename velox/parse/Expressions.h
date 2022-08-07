@@ -38,8 +38,9 @@ class Expressions {
 
   static TypedExprPtr inferTypes(
       const std::shared_ptr<const IExpr>& expr,
-      const TypePtr& input,
-      memory::MemoryPool* pool);
+      const std::shared_ptr<const Type>& input,
+      memory::MemoryPool* pool,
+      TypeResolverHook customResolverHook = nullptr);
 
   static TypePtr getInputRowType(const TypedExprPtr& expr);
 

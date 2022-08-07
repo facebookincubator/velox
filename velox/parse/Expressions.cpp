@@ -44,11 +44,26 @@ std::vector<TypePtr> getTypes(const std::vector<TypedExprPtr>& inputs) {
 
 // Determine output type based on input types.
 TypePtr resolveTypeImpl(
-    std::vector<TypedExprPtr> inputs,
+    std::vector<std::shared_ptr<const core::ITypedExpr>> inputs,
     const std::shared_ptr<const CallExpr>& expr,
-    bool nullOnFailure) {
-  VELOX_CHECK_NOT_NULL(Expressions::getResolverHook());
-  return Expressions::getResolverHook()(inputs, expr, nullOnFailure);
+    bool nullOnFailure,
+    Expressions::TypeResolverHook customResolverHook = nullptr) {
+  VELOX_CHECK_NOT_NULL(Expressions::getResolverHook() || customResolverHook);
+
+  if (customResolverHook) {
+    auto type = customResolverHook(inputs, expr, nullOnFailure);
+    if (type) {
+      return type;
+    }
+  }
+
+  if (Expressions::getResolverHook()) {
+    auto type = Expressions::getResolverHook()(inputs, expr, nullOnFailure);
+    if (type) {
+      return type;
+    }
+  }
+  return nullptr;
 }
 
 namespace {
@@ -114,8 +129,9 @@ std::vector<TypedExprPtr> genImplicitCasts(const TypedExprPtr& typedExpr) {
 TypedExprPtr adjustLastNArguments(
     std::vector<TypedExprPtr> inputs,
     const std::shared_ptr<const CallExpr>& expr,
-    size_t n) {
-  auto type = resolveTypeImpl(inputs, expr, true /*nullOnFailure*/);
+    size_t n,
+    Expressions::TypeResolverHook customResolverHook = nullptr) {
+  auto type = resolveTypeImpl(inputs, expr, true, customResolverHook);
   if (type != nullptr) {
     return std::make_unique<CallTypedExpr>(
         type, inputs, std::string{expr->getFunctionName()});
@@ -137,7 +153,8 @@ TypedExprPtr adjustLastNArguments(
 
   for (auto& viableExpr : viableExprs) {
     inputs[firstOfLastN] = viableExpr;
-    auto adjustedExpr = adjustLastNArguments(inputs, expr, n - 1);
+    auto adjustedExpr =
+        adjustLastNArguments(inputs, expr, n - 1, customResolverHook);
     if (adjustedExpr != nullptr) {
       return adjustedExpr;
     }
@@ -163,15 +180,18 @@ std::string toString(
 
 TypedExprPtr createWithImplicitCast(
     std::shared_ptr<const core::CallExpr> expr,
-    std::vector<TypedExprPtr> inputs) {
-  auto adjusted = adjustLastNArguments(inputs, expr, inputs.size());
+    std::vector<TypedExprPtr> inputs,
+    Expressions::TypeResolverHook customResolverHook = nullptr) {
+  auto adjusted =
+      adjustLastNArguments(inputs, expr, inputs.size(), customResolverHook);
   if (adjusted) {
     return adjusted;
   }
-  auto type = resolveTypeImpl(inputs, expr, false /*nullOnFailure*/);
+  auto type = resolveTypeImpl(inputs, expr, false, customResolverHook);
   return std::make_shared<CallTypedExpr>(
       type, move(inputs), std::string{expr->getFunctionName()});
 }
+
 } // namespace
 
 std::shared_ptr<const LambdaTypedExpr> Expressions::lookupLambdaExpr(
@@ -197,7 +217,8 @@ std::shared_ptr<const LambdaTypedExpr> Expressions::lookupLambdaExpr(
 TypedExprPtr Expressions::inferTypes(
     const std::shared_ptr<const core::IExpr>& expr,
     const TypePtr& inputRow,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    TypeResolverHook customResolverHook) {
   VELOX_CHECK_NOT_NULL(expr);
   if (auto lambdaExpr = lookupLambdaExpr(expr)) {
     return lambdaExpr;
@@ -220,7 +241,8 @@ TypedExprPtr Expressions::inferTypes(
         std::string{fae->getFieldName()});
   }
   if (auto fun = std::dynamic_pointer_cast<const CallExpr>(expr)) {
-    return createWithImplicitCast(move(fun), move(children));
+    return createWithImplicitCast(
+        move(fun), move(children), customResolverHook);
   }
   if (auto input = std::dynamic_pointer_cast<const InputExpr>(expr)) {
     return std::make_shared<const InputTypedExpr>(inputRow);

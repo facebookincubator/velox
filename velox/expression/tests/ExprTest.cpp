@@ -172,7 +172,8 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   std::shared_ptr<const core::ITypedExpr> parseExpression(
       const std::string& text,
-      const RowTypePtr& rowType = nullptr) {
+      const RowTypePtr& rowType = nullptr,
+      core::Expressions::TypeResolverHook customResolverHook = nullptr) {
     auto untyped = parse::parseExpr(text);
     return core::Expressions::inferTypes(
         untyped, rowType ? rowType : testDataType_, execCtx_->pool());
@@ -725,6 +726,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
   std::unique_ptr<exec::ExprSet> exprs_;
   std::vector<std::vector<EncodingOptions>> testEncodings_;
 };
+
+TypePtr dummyIntegerResolver(
+    const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs,
+    const std::shared_ptr<const core::CallExpr>& expr,
+    bool nullOnFailure) {
+  return std::make_shared<const IntegerType>();
+}
+
+TypePtr dummyBigIntResolver(
+    const std::vector<std::shared_ptr<const core::ITypedExpr>>& inputs,
+    const std::shared_ptr<const core::CallExpr>& expr,
+    bool nullOnFailure) {
+  return std::make_shared<const BigintType>();
+}
 
 #define IS_BIGINT1 testData_.bigint1.reference[row].has_value()
 #define IS_BIGINT2 testData_.bigint2.reference[row].has_value()
@@ -2826,4 +2841,52 @@ TEST_F(ExprTest, lambdaWithRowField) {
   auto evalResult = evaluate("filter(c1, function('lambda1'))", rowVector);
 
   assertEqualVectors(array, evalResult);
+}
+
+// This test shows resolverHook_ is not thread safe
+TEST_F(ExprTest, resolverHookNotThreadSafe) {
+  std::vector<std::string> names{"resolverHookNotThreadSafeTest"};
+  std::vector<std::shared_ptr<const Type>> types{BigintType::create()};
+  auto rowTypePtr =
+      std::make_shared<RowType>(std::move(names), std::move(types));
+  std::atomic<int> flag{0};
+
+  std::thread thread1([this]() {
+    core::Expressions::setTypeResolverHook(&dummyIntegerResolver);
+    auto resolver = core::Expressions::getResolverHook();
+    EXPECT_TRUE(resolver({}, nullptr, false)
+                    ->kindEquals(dummyIntegerResolver({}, nullptr, false)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // resolverHook_ has been updated by thread2
+    resolver = core::Expressions::getResolverHook();
+    EXPECT_FALSE(resolver({}, nullptr, false)
+                     ->kindEquals(dummyIntegerResolver({}, nullptr, false)));
+    EXPECT_TRUE(resolver({}, nullptr, false)
+                    ->kindEquals(dummyBigIntResolver({}, nullptr, false)));
+  });
+
+  std::thread thread2([this]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    core::Expressions::setTypeResolverHook(&dummyBigIntResolver);
+    auto resolver = core::Expressions::getResolverHook();
+    EXPECT_TRUE(resolver({}, nullptr, false)
+                    ->kindEquals(dummyBigIntResolver({}, nullptr, false)));
+  });
+
+  thread1.join();
+  thread2.join();
+}
+
+TEST_F(ExprTest, customResolverHook) {
+  auto expectedExpr =
+      parseExpression("(a + b) * 2.1", ROW({"a", "b"}, {INTEGER(), DOUBLE()}));
+
+  //  customResolverHook is the same as the default hook.
+  auto expr = parseExpression(
+      "(a + b) * 2.1",
+      ROW({"a", "b"}, {INTEGER(), DOUBLE()}),
+      core::Expressions::getResolverHook());
+
+  ASSERT_EQ(*expectedExpr, *expr);
 }
