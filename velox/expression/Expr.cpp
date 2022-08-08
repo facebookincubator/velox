@@ -80,11 +80,11 @@ bool isMember(
 
 void mergeFields(
     std::vector<FieldReference*>& distinctFields,
-    std::unordered_set<FieldReference*>& multiRefFields,
+    std::unordered_set<FieldReference*>& multiplyReferencedFields_,
     const std::vector<FieldReference*>& moreFields) {
   for (auto* newField : moreFields) {
     if (isMember(distinctFields, *newField)) {
-      multiRefFields.insert(newField);
+      multiplyReferencedFields_.insert(newField);
     } else {
       distinctFields.emplace_back(newField);
     }
@@ -193,7 +193,8 @@ void Expr::computeMetadata() {
     input->computeMetadata();
     deterministic_ &= input->deterministic_;
     propagatesNulls_ &= input->propagatesNulls_;
-    mergeFields(distinctFields_, multiRefFields_, input->distinctFields_);
+    mergeFields(
+        distinctFields_, multiplyReferencedFields_, input->distinctFields_);
   }
   if (isSpecialForm()) {
     propagatesNulls_ = propagatesNulls();
@@ -388,8 +389,8 @@ void Expr::eval(
     }
   } else if (!propagatesNulls_) {
     // Load multiply-referenced fields at common parent expr with "rows".
-    // Delay loading fields that are not in multiRefFields_.
-    for (const auto& field : multiRefFields_) {
+    // Delay loading fields that are not in multiplyReferencedFields_.
+    for (const auto& field : multiplyReferencedFields_) {
       context.ensureFieldLoaded(field->index(context), rows);
     }
   }
@@ -1322,7 +1323,8 @@ ExprSet::ExprSet(
       std::move(sources), execCtx, this, enableConstantFolding);
   std::vector<FieldReference*> allDistinctFields;
   for (auto& expr : exprs_) {
-    mergeFields(allDistinctFields, multiRefFields_, expr->distinctFields());
+    mergeFields(
+        allDistinctFields, multiplyReferencedFields_, expr->distinctFields());
   }
 }
 
@@ -1406,7 +1408,7 @@ void ExprSet::eval(
   // If b is a LazyVector and f(a) AND g(b) expression is evaluated first, it
   // will load b only for rows where f(a) is true. However, h(b) projection
   // needs all rows for "b".
-  for (const auto& field : multiRefFields_) {
+  for (const auto& field : multiplyReferencedFields_) {
     context->ensureFieldLoaded(field->index(*context), rows);
   }
 
@@ -1426,7 +1428,7 @@ void ExprSet::clear() {
   for (auto* memo : memoizingExprs_) {
     memo->clearMemo();
   }
-  multiRefFields_.clear();
+  multiplyReferencedFields_.clear();
 }
 
 void ExprSetSimplified::eval(
