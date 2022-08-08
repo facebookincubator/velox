@@ -906,31 +906,14 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
   const auto& supplierFileColumns = getFileColumnNames(kSupplier);
 
   const std::string shipDateFilter = formatDateFilter(
-      "l_shipdate", lineitemSelectedRowType, "'1996-01-01'", "'1996-02-29'");
+      "l_shipdate", lineitemSelectedRowType, "'1996-01-01'", "'1996-03-31'");
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   core::PlanNodeId lineitemScanNodeIdSubQuery;
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId supplierScanNodeId;
 
-  auto revenue0 =
-      PlanBuilder(planNodeIdGenerator)
-          .tableScan(
-              kLineitem,
-              lineitemSelectedRowType,
-              lineitemFileColumns,
-              {shipDateFilter})
-          .capturePlanNodeId(lineitemScanNodeIdSubQuery)
-          .project(
-              {"l_suppkey as supplier_no",
-               "l_extendedprice * (1.0 - l_discount) as part_revenue"})
-          .partialAggregation(
-              {"supplier_no"}, {"sum(part_revenue) as total_revenue"})
-          .localPartition({})
-          .finalAggregation()
-          .planNode();
-
-  auto lineitemMaxRevenue =
+  auto maxRevenue =
       PlanBuilder(planNodeIdGenerator)
           .tableScan(
               kLineitem,
@@ -945,9 +928,30 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
               {"l_suppkey"}, {"sum(part_revenue) as total_revenue"})
           .localPartition({})
           .finalAggregation()
-          .partialAggregation({}, {"max(total_revenue) as max_revenue"})
+          .singleAggregation({}, {"max(total_revenue) as max_revenue"})
+          .planNode();
+
+  auto supplierWithMaxRevenue =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kLineitem,
+              lineitemSelectedRowType,
+              lineitemFileColumns,
+              {shipDateFilter})
+          .capturePlanNodeId(lineitemScanNodeIdSubQuery)
+          .project(
+              {"l_suppkey as supplier_no",
+               "l_extendedprice * (1.0 - l_discount) as part_revenue"})
+          .partialAggregation(
+              {"supplier_no"}, {"sum(part_revenue) as total_revenue"})
           .localPartition({})
           .finalAggregation()
+          .hashJoin(
+              {"total_revenue"},
+              {"max_revenue"},
+              maxRevenue,
+              "",
+              {"supplier_no", "total_revenue"})
           .planNode();
 
   auto plan =
@@ -957,16 +961,9 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
           .hashJoin(
               {"s_suppkey"},
               {"supplier_no"},
-              revenue0,
+              supplierWithMaxRevenue,
               "",
               {"s_suppkey", "s_name", "s_address", "s_phone", "total_revenue"})
-          .hashJoin(
-              {"total_revenue"},
-              {"max_revenue"},
-              lineitemMaxRevenue,
-              "",
-              {"s_suppkey", "s_name", "s_address", "s_phone", "total_revenue"})
-          .localPartition({})
           .orderBy({"s_suppkey"}, false)
           .planNode();
 
