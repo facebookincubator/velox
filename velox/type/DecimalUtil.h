@@ -33,11 +33,38 @@ class DecimalUtil {
   template <typename T>
   static std::string toString(const T& value, const TypePtr& type);
 
-  template <class T>
-  static void rescaleWithRoundUp(
-      T& output,
+  inline static int128_t rescaleWithRoundUp(
       const int128_t& unscaledValue,
       const uint8_t fromScale,
-      const std::pair<uint8_t, uint8_t>& toPrecisionScale);
+      const std::pair<uint8_t, uint8_t>& toPrecisionScale,
+      bool& isNullOut) {
+    auto rescaledValue = unscaledValue;
+    auto rf = toPrecisionScale.second - fromScale;
+    if (rf >= 0) {
+      rescaledValue = unscaledValue * DecimalUtil::kPowersOfTen[rf];
+    } else {
+      rf = -1 * rf;
+      rescaledValue = unscaledValue / DecimalUtil::kPowersOfTen[rf];
+      int128_t remainder = unscaledValue % DecimalUtil::kPowersOfTen[rf];
+      if (unscaledValue >= 0) {
+        if (remainder > DecimalUtil::kPowersOfTen[rf] / 2) {
+          rescaledValue++;
+        }
+      } else {
+        if (remainder < -DecimalUtil::kPowersOfTen[rf] / 2) {
+          rescaledValue--;
+        }
+      }
+    }
+    // Check overflowing
+    auto valueToCompare = rescaledValue;
+    if (rescaledValue < 0) {
+      valueToCompare *= -1;
+    }
+    if (valueToCompare > DecimalUtil::kPowersOfTen[toPrecisionScale.first]) {
+      isNullOut = true;
+    }
+    return rescaledValue;
+  }
 };
 } // namespace facebook::velox

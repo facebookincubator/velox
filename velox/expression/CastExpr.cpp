@@ -452,7 +452,7 @@ VectorPtr CastExpr::applyRow(
       std::move(newChildren));
 }
 
-template <typename FROM, typename T>
+template <typename TInput, typename TOutput>
 void applyDecimalCastKernel(
     const SelectivityVector& rows,
     DecodedVector& input,
@@ -460,25 +460,26 @@ void applyDecimalCastKernel(
     const TypePtr& fromType,
     const TypePtr& toType,
     VectorPtr castResult) {
-  auto sourceVector = input.base()->as<SimpleVector<FROM>>();
-  T* castResultRawBuffer =
-      castResult->asUnchecked<FlatVector<T>>()->mutableRawValues();
+  auto sourceVector = input.base()->as<SimpleVector<TInput>>();
+  TOutput* castResultRawBuffer =
+      castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
   context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-    try {
-      DecimalUtil::rescaleWithRoundUp<T>(
-          castResultRawBuffer[row],
-          sourceVector->valueAt(row).unscaledValue(),
-          fromPrecisionScale.second,
-          toPrecisionScale);
-    } catch (VeloxRuntimeError& ex) {
+    bool isNullOut = false;
+    auto rescaledValue = DecimalUtil::rescaleWithRoundUp(
+        sourceVector->valueAt(row).unscaledValue(),
+        fromPrecisionScale.second,
+        toPrecisionScale,
+        isNullOut);
+    if (!isNullOut) {
+      castResultRawBuffer[row].setUnscaledValue(rescaledValue);
+    } else {
       castResult->setNull(row, true);
     }
   });
 }
 
-template <typename T>
 VectorPtr CastExpr::applyDecimal(
     const SelectivityVector& rows,
     DecodedVector& input,
@@ -490,15 +491,23 @@ VectorPtr CastExpr::applyDecimal(
   (*castResult).clearNulls(rows);
   switch (fromType->kind()) {
     case TypeKind::SHORT_DECIMAL: {
-      auto sourceVector = input.base()->asFlatVector<ShortDecimal>();
-      applyDecimalCastKernel<ShortDecimal, T>(
-          rows, input, context, fromType, toType, castResult);
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyDecimalCastKernel<ShortDecimal, ShortDecimal>(
+            rows, input, context, fromType, toType, castResult);
+      } else {
+        applyDecimalCastKernel<ShortDecimal, LongDecimal>(
+            rows, input, context, fromType, toType, castResult);
+      }
       break;
     }
     case TypeKind::LONG_DECIMAL: {
-      auto sourceVector = input.base()->asFlatVector<LongDecimal>();
-      applyDecimalCastKernel<LongDecimal, T>(
-          rows, input, context, fromType, toType, castResult);
+      if (toType->kind() == TypeKind::SHORT_DECIMAL) {
+        applyDecimalCastKernel<LongDecimal, ShortDecimal>(
+            rows, input, context, fromType, toType, castResult);
+      } else {
+        applyDecimalCastKernel<LongDecimal, LongDecimal>(
+            rows, input, context, fromType, toType, castResult);
+      }
       break;
     }
     default:
@@ -655,11 +664,8 @@ void CastExpr::apply(
               toType->asRow());
           break;
         case TypeKind::SHORT_DECIMAL:
-          localResult = applyDecimal<ShortDecimal>(
-              *translatedRows, *decoded, context, fromType, toType);
-          break;
         case TypeKind::LONG_DECIMAL:
-          localResult = applyDecimal<LongDecimal>(
+          localResult = applyDecimal(
               *translatedRows, *decoded, context, fromType, toType);
           break;
         default: {

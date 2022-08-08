@@ -162,7 +162,6 @@ class CastExpr : public SpecialForm {
       const RowType& fromType,
       const RowType& toType);
 
-  template <typename T>
   VectorPtr applyDecimal(
       const SelectivityVector& rows,
       DecodedVector& input,
