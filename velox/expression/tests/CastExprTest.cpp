@@ -697,7 +697,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
 
   // long to long, scale up.
   auto expectedLong = makeLongDecimalFlatVector(
-      {-20100000000, -10900000000, 0, 1050000000, 20800000000},
+      {-20'100'000'000, -10'900'000'000, 0, 1'050'000'000, 20800000000},
       DECIMAL(20, 10));
   testComplexCast("c0", longFlat, expectedShort);
   // long to long, scale down.
@@ -722,4 +722,11 @@ TEST_F(CastExprTest, decimalToDecimal) {
       makeShortDecimalFlatVector({-20500, -190, 12345, 19999}, DECIMAL(6, 4));
   expectedLong = makeLongDecimalFlatVector({-20, 0, 12, 20}, DECIMAL(20, 1));
   testComplexCast("c0", shortFlat, expectedLong);
+
+  // NULLs and overflow.
+  longFlat = makeNullableLongDecimalFlatVector(
+      {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
+  expectedShort = makeNullableShortDecimalFlatVector(
+      {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
+  testComplexCast("c0", longFlat, expectedShort);
 }
