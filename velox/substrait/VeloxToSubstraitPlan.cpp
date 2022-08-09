@@ -15,6 +15,8 @@
  */
 
 #include "velox/substrait/VeloxToSubstraitPlan.h"
+
+#include <utility>
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/substrait/SubstraitExtension.h"
 #include "velox/substrait/SubstraitFunctionLookup.h"
@@ -46,15 +48,13 @@ namespace {
 
 } // namespace
 
-VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor() {
-  // Construct the substrait extension
-  substraitExtension_ = SubstraitExtension::load();
-  // Construct the function collector
-  functionCollector_ = std::make_shared<SubstraitFunctionCollector>();
-
+VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
+    SubstraitExtensionPtr substraitExtension)
+    : substraitExtension_(std::move(substraitExtension)) {
   // Construct the aggregate function lookup
+
   auto scalarFunctionLookup = std::make_shared<SubstraitScalarFunctionLookup>(
-      substraitExtension_->scalarFunctions());
+      substraitExtension_->scalarFunctionVariants);
 
   // Construct the scalar function converter.
   auto scalaFunctionConverter =
@@ -70,7 +70,7 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor() {
 
   // Construct the aggregate function lookup
   aggregateFunctionLookup_ = std::make_shared<SubstraitAggregateFunctionLookup>(
-      substraitExtension_->aggregateFunctions());
+      substraitExtension_->aggregateFunctionVariants);
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -232,8 +232,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     // Add outputMapping for each expression.
     projRelEmit->add_output_mapping(inputTypeSize + i);
   }
-
-  return;
 }
 
 void VeloxToSubstraitPlanConvertor::toSubstrait(

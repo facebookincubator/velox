@@ -26,13 +26,13 @@
 namespace facebook::velox::substrait {
 
 SubstraitFunctionLookup::SubstraitFunctionLookup(
-    const std::vector<SubstraitFunctionPtr>& functions) {
+    const std::vector<SubstraitFunctionVariantPtr>& functions) {
   // TODO creaate signatures_ based on functions
-  std::unordered_map<std::string, std::vector<SubstraitFunctionPtr>> signatures;
+  std::unordered_map<std::string, std::vector<SubstraitFunctionVariantPtr>> signatures;
 
   for (const auto& function : functions) {
     if (signatures.find(function->name) == signatures.end()) {
-      std::vector<SubstraitFunctionPtr> nameFunctions;
+      std::vector<SubstraitFunctionVariantPtr> nameFunctions;
       nameFunctions.emplace_back(function);
       signatures.insert({function->name, nameFunctions});
     } else {
@@ -48,7 +48,7 @@ SubstraitFunctionLookup::SubstraitFunctionLookup(
   }
 }
 
-std::optional<SubstraitFunctionPtr> SubstraitFunctionLookup::lookupFunction(
+std::optional<SubstraitFunctionVariantPtr> SubstraitFunctionLookup::lookupFunction(
     google::protobuf::Arena& arena,
     const core::CallTypedExprPtr& callTypeExpr) const {
   const auto& veloxFunctionName = callTypeExpr->name();
@@ -69,13 +69,13 @@ std::optional<SubstraitFunctionPtr> SubstraitFunctionLookup::lookupFunction(
 
 SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
     const std::string& name,
-    const std::vector<SubstraitFunctionPtr>& functions)
+    const std::vector<SubstraitFunctionVariantPtr>& functions)
     : name_(name) {
   for (const auto& function : functions) {
     directMap_.insert({function->key(), function});
 
     if (function->requireArguments().size() != function->arguments.size()) {
-      const std::string& functionKey = SubstraitFunction::constructKey(
+      const std::string& functionKey = SubstraitFunctionVariant::constructKey(
           function->name, function->requireArguments());
       directMap_.insert({functionKey, function});
     }
@@ -99,7 +99,7 @@ SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
   }
 }
 
-std::optional<SubstraitFunctionPtr>
+std::optional<SubstraitFunctionVariantPtr>
 SubstraitFunctionLookup::SubstraitFunctionFinder::lookupFunction(
     google::protobuf::Arena& arena,
     const core::CallTypedExprPtr& expr) const {

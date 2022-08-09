@@ -35,7 +35,8 @@ namespace facebook::velox::substrait {
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
-  VeloxToSubstraitPlanConvertor();
+  VeloxToSubstraitPlanConvertor(
+      SubstraitExtensionPtr  substraitExtension);
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -88,8 +89,8 @@ class VeloxToSubstraitPlanConvertor {
 
   SubstraitFunctionCollectorPtr functionCollector_;
 
-  SubstraitExtensionPtr substraitExtension_;
-
   SubstraitAggregateFunctionLookupPtr aggregateFunctionLookup_;
+
+  const SubstraitExtensionPtr substraitExtension_;
 };
 } // namespace facebook::velox::substrait

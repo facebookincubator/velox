@@ -1,0 +1,23 @@
+%YAML 1.2
+---
+scalar_functions:
+  -
+    name: "ceil"
+    description: "Rounding to the ceiling of the value"
+    impls:
+      - args:
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+        return: fp64
+  -
+    name: "floor"
+    description: "Rounding to the floor of the value"
+    impls:
+      - args:
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+        return: fp64

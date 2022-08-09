@@ -28,9 +28,12 @@ namespace facebook::velox::substrait {
 
 class SubstraitFunctionLookup {
  public:
-  SubstraitFunctionLookup(const std::vector<SubstraitFunctionPtr>& functions);
+  SubstraitFunctionLookup() = delete;
 
-  std::optional<SubstraitFunctionPtr> lookupFunction(
+  SubstraitFunctionLookup(
+      const std::vector<std::shared_ptr<SubstraitFunctionVariant>>& functions);
+
+  std::optional<std::shared_ptr<SubstraitFunctionVariant>> lookupFunction(
       google::protobuf::Arena& arena,
       const core::CallTypedExprPtr& callTypeExpr) const;
 
@@ -42,18 +45,17 @@ class SubstraitFunctionLookup {
    public:
     SubstraitFunctionFinder(
         const std::string& name,
-        const std::vector<SubstraitFunctionPtr>& functions);
+        const std::vector<SubstraitFunctionVariantPtr>& functions);
 
-    std::optional<SubstraitFunctionPtr> lookupFunction(
+    std::optional<SubstraitFunctionVariantPtr> lookupFunction(
         google::protobuf::Arena& arena,
         const core::CallTypedExprPtr& exprPtr) const;
 
    private:
     const std::string& name_;
-    std::unordered_map<std::string, SubstraitFunctionPtr> directMap_;
-    std::optional<SubstraitFunctionPtr> anyTypeOption_;
+    std::unordered_map<std::string, SubstraitFunctionVariantPtr> directMap_;
+    std::optional<SubstraitFunctionVariantPtr> anyTypeOption_;
     VeloxToSubstraitTypeConvertorPtr typeConvertor_;
-
   };
 
   using SubstraitFunctionFinderPtr =
@@ -65,13 +67,13 @@ class SubstraitFunctionLookup {
 
 class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
  public:
-  explicit SubstraitScalarFunctionLookup(
-      const std::vector<SubstraitFunctionPtr>& functions)
+  SubstraitScalarFunctionLookup(
+      const std::vector<SubstraitFunctionVariantPtr>& functions)
       : SubstraitFunctionLookup(functions) {}
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {
-    return SubstraitFunctionMappings::scalarMappings();
+    //    return SubstraitFunctionMappings::scalarMappings();
   }
 };
 
@@ -81,12 +83,12 @@ using SubstraitScalarFunctionLookupPtr =
 class SubstraitAggregateFunctionLookup : public SubstraitFunctionLookup {
  public:
   SubstraitAggregateFunctionLookup(
-      const std::vector<SubstraitFunctionPtr>& functions)
+      const std::vector<SubstraitFunctionVariantPtr>& functions)
       : SubstraitFunctionLookup(functions) {}
 
  protected:
   const FunctionMappingMap& getFunctionMappings() const override {
-    return SubstraitFunctionMappings::aggregateMappings();
+    //    return SubstraitFunctionMappings::aggregateMappings();
   }
 };
 

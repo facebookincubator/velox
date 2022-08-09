@@ -35,7 +35,7 @@ class SubstraitFunctionCollector {
   /// function
   class BidiMap {
    public:
-    void put(const int& reference, const SubstraitFunctionPtr& function);
+    void put(const int& reference, const SubstraitFunctionVariantPtr& function);
     std::unordered_map<int, SubstraitFunctionAnchor> forwardMap_;
     std::unordered_map<SubstraitFunctionAnchor, int> reverseMap_;
   };
@@ -46,7 +46,7 @@ class SubstraitFunctionCollector {
    * @param function substrait extension function
    * @return reference number of a Substrait extension function
    */
-  int getFunctionReference(const SubstraitFunctionPtr& function);
+  int getFunctionReference(const SubstraitFunctionVariantPtr& function);
 
   /**
    * add extension functions referenced in a Substrait plan
@@ -60,6 +60,6 @@ class SubstraitFunctionCollector {
 };
 
 using SubstraitFunctionCollectorPtr =
-    std::shared_ptr<const SubstraitFunctionCollector>;
+    std::shared_ptr< SubstraitFunctionCollector>;
 
 } // namespace facebook::velox::substrait

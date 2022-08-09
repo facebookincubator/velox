@@ -19,10 +19,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 endif()
 
 add_subdirectory(xsimd)
-
-set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "disable yaml tests")
-set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "disable yaml tools")
-set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "disable yaml contrib")
 add_subdirectory(yaml-cpp)
 
 if(VELOX_ENABLE_ARROW)

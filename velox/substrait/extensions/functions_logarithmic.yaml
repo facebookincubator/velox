@@ -1,0 +1,106 @@
+%YAML 1.2
+---
+scalar_functions:
+  -
+    name: "ln"
+    description: "Natural logarithm of the value"
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "log10"
+    description: "Logarithm to base 10 of the value"
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "log2"
+    description: "Logarithm to base 2 of the value"
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "logb"
+    description: >
+      Logarithm of the value with the given base
+
+      logb(x, b) => log_{b} (x)
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+            name: "x"
+            description: "The number `x` to compute the logarithm of"
+          - value: fp32
+            name: "base"
+            description: "The logarithm base `b` to use"
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+            name: "x"
+            description: "The number `x` to compute the logarithm of"
+          - value: fp64
+            name: "base"
+            description: "The logarithm base `b` to use"
+        return: fp64
+
+

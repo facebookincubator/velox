@@ -14,24 +14,29 @@
  * limitations under the License.
  */
 
-#pragma once
-
 #include "SubstraitFunction.h"
-#include "velox/common/base/Exceptions.h"
-#include "velox/substrait/SubstraitFunction.h"
-#include "yaml-cpp/yaml.h"
 
 namespace facebook::velox::substrait {
 
-// class used to deserialize substrait YAML extension files.
-struct SubstraitExtension {
-  static std::shared_ptr<SubstraitExtension> load();
+std::string SubstraitFunctionVariant::constructKey(
+    const std::string& name,
+    const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
+  std::stringstream ss;
+  ss << name << ":";
+  for (auto& argument : arguments) {
+    ss << "_" << argument->toTypeString();
+  }
+  return ss.str();
+}
 
-  std::vector<std::shared_ptr<SubstraitFunctionVariant>> scalarFunctionVariants;
-  std::vector<std::shared_ptr<SubstraitFunctionVariant>>
-      aggregateFunctionVariants;
-};
-
-using SubstraitExtensionPtr = std::shared_ptr<const SubstraitExtension>;
-
+std::vector<SubstraitFunctionArgumentPtr>
+SubstraitFunctionVariant::requireArguments() const {
+  std::vector<SubstraitFunctionArgumentPtr> res;
+  for (auto& arg : arguments) {
+    if (arg->isRequired()) {
+      res.push_back(arg);
+    }
+  }
+  res;
+}
 } // namespace facebook::velox::substrait

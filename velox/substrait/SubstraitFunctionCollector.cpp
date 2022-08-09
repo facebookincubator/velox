@@ -28,7 +28,7 @@ void SubstraitFunctionCollector::addFunctionToPlan(
   using SimpleExtensionURI = ::substrait::extensions::SimpleExtensionURI;
   int uriPos = 1;
   std::unordered_map<std::string, SimpleExtensionURI*> uris;
-  for ( auto& [referenceNum, function] : bidiMap_->forwardMap_) {
+  for (auto& [referenceNum, function] : bidiMap_->forwardMap_) {
     SimpleExtensionURI* extensionUri;
     if (uris.find(function.uri) == uris.end()) {
       extensionUri = substraitPlan.add_extension_uris();
@@ -49,8 +49,9 @@ void SubstraitFunctionCollector::addFunctionToPlan(
 }
 
 int SubstraitFunctionCollector::getFunctionReference(
-    const SubstraitFunctionPtr& function) {
-  if (bidiMap_->reverseMap_.find( function->anchor()) != bidiMap_->reverseMap_.end()) {
+    const SubstraitFunctionVariantPtr& function) {
+  if (bidiMap_->reverseMap_.find(function->anchor()) !=
+      bidiMap_->reverseMap_.end()) {
     return bidiMap_->reverseMap_.at(function->anchor());
   }
   ++counter_;
@@ -60,7 +61,7 @@ int SubstraitFunctionCollector::getFunctionReference(
 
 void SubstraitFunctionCollector::BidiMap::put(
     const int& reference,
-    const SubstraitFunctionPtr& function) {
+    const SubstraitFunctionVariantPtr& function) {
   forwardMap_[reference] = function->anchor();
   reverseMap_[function->anchor()] = reference;
 }

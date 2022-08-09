@@ -26,26 +26,15 @@ namespace facebook::velox::substrait {
 // value: substrait function
 using FunctionMappingMap = std::unordered_map<std::string, std::string>;
 
-
 struct SubstraitFunctionMappings {
-  //scalar function names in difference between velox and Substrait
-  static const FunctionMappingMap& scalarMappings() {
-   static FunctionMappingMap scalarMappings;
-   return scalarMappings;
-  };
+  // scalar function names in difference between velox and Substrait
+  static const FunctionMappingMap& scalarMappings();
 
-  //aggregate function names in difference between velox and Substrait
-  static const FunctionMappingMap& aggregateMappings() {
-    static FunctionMappingMap aggregateMappings;
-    return aggregateMappings;
-  }
+  // aggregate function names in difference between velox and Substrait
+  static const FunctionMappingMap& aggregateMappings();
 
-  //window function names in difference between velox and Substrait
-  static const FunctionMappingMap& windowMappings() {
-    static FunctionMappingMap windowMappings;
-    return windowMappings;
-  }
-
+  // window function names in difference between velox and Substrait
+  static const FunctionMappingMap& windowMappings();
 };
 
 } // namespace facebook::velox::substrait

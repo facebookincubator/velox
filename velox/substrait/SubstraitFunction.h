@@ -35,7 +35,6 @@ using SubstraitFunctionArgumentPtr =
     std::shared_ptr<const SubstraitFunctionArgument>;
 
 struct SubstraitEnumArgument : public SubstraitFunctionArgument {
-
   bool required;
   bool const isRequired() const override {
     return required;
@@ -47,7 +46,6 @@ struct SubstraitEnumArgument : public SubstraitFunctionArgument {
 };
 
 struct SubstraitTypeArgument : public SubstraitFunctionArgument {
-
   const std::string toTypeString() const override {
     return "type";
   }
@@ -81,48 +79,43 @@ struct SubstraitFunctionAnchor {
   }
 };
 
-struct SubstraitFunction {
+struct SubstraitFunctionVariant {
   std::string name;
   std::string uri;
   std::vector<SubstraitFunctionArgumentPtr> arguments;
   std::string returnType;
 
-  static const std::string constructKey(
+  static std::string constructKey(
       const std::string& name,
-      const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
-    std::stringstream ss;
-    ss << name << ":";
-    for (auto& argument : arguments) {
-      ss << "_" << argument->toTypeString();
-    }
-    return ss.str();
-  }
+      const std::vector<SubstraitFunctionArgumentPtr>& arguments);
 
   std::string key() const {
-    return SubstraitFunction::constructKey(name, arguments);
+    return SubstraitFunctionVariant::constructKey(name, arguments);
   }
 
   SubstraitFunctionAnchor anchor() const {
     return {uri, key()};
   }
 
-  const std::vector<SubstraitFunctionArgumentPtr> requireArguments() const {
-    std::vector<SubstraitFunctionArgumentPtr> res;
-    for (const auto& arg : arguments) {
-      if (arg->isRequired()) {
-        res.emplace_back(arg);
-      }
-    }
-    res;
-  }
+  std::vector<SubstraitFunctionArgumentPtr> requireArguments() const;
 };
 
-using SubstraitFunctionPtr = std::shared_ptr<const SubstraitFunction>;
+using SubstraitFunctionVariantPtr = std::shared_ptr<SubstraitFunctionVariant>;
 
-struct SubstraitScalarFunction : public SubstraitFunction {};
+struct SubstraitScalarFunctionVariant : public SubstraitFunctionVariant {};
 
-struct SubstraitAggregateFunction : public SubstraitFunction {
+struct SubstraitAggregateFunctionVariant : public SubstraitFunctionVariant {
   std::string intermediate;
+};
+
+struct SubstraitScalarFunction {
+  std::string name;
+  std::vector<std::shared_ptr<SubstraitScalarFunctionVariant>> impls;
+};
+
+struct SubstraitAggregateFunction {
+  std::string name;
+  std::vector<std::shared_ptr<SubstraitAggregateFunctionVariant>> impls;
 };
 
 } // namespace facebook::velox::substrait
