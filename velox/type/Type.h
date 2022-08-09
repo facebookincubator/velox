@@ -1912,6 +1912,13 @@ struct CastTypeChecker {
   }
 };
 
+template <>
+struct CastTypeChecker<DynamicRow> {
+  static bool check(const TypePtr& vectorType) {
+    return TypeKind::ROW == vectorType->kind();
+  }
+};
+
 template <typename T>
 struct CastTypeChecker<Generic<T>> {
   static bool check(const TypePtr&) {
