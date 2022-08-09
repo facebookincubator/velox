@@ -36,34 +36,29 @@ class DecimalUtil {
   inline static int128_t rescaleWithRoundUp(
       const int128_t& unscaledValue,
       const uint8_t fromScale,
-      const std::pair<uint8_t, uint8_t>& toPrecisionScale,
-      bool& isNullOut) {
+      const std::pair<int, int>& toPrecisionScale) {
     auto rescaledValue = unscaledValue;
-    auto rf = toPrecisionScale.second - fromScale;
-    if (rf >= 0) {
-      rescaledValue = unscaledValue * DecimalUtil::kPowersOfTen[rf];
+    auto scaleDifference = toPrecisionScale.second - fromScale;
+    if (scaleDifference >= 0) {
+      rescaledValue *= DecimalUtil::kPowersOfTen[scaleDifference];
     } else {
-      rf = -1 * rf;
-      rescaledValue = unscaledValue / DecimalUtil::kPowersOfTen[rf];
-      int128_t remainder = unscaledValue % DecimalUtil::kPowersOfTen[rf];
-      if (unscaledValue >= 0) {
-        if (remainder > DecimalUtil::kPowersOfTen[rf] / 2) {
-          rescaledValue++;
-        }
-      } else {
-        if (remainder < -DecimalUtil::kPowersOfTen[rf] / 2) {
-          rescaledValue--;
-        }
+      scaleDifference = -scaleDifference;
+      rescaledValue =
+          unscaledValue / DecimalUtil::kPowersOfTen[scaleDifference];
+      int128_t remainder =
+          unscaledValue % DecimalUtil::kPowersOfTen[scaleDifference];
+      if (unscaledValue >= 0 &&
+          remainder > DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+        rescaledValue++;
+      } else if (remainder < -DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+        rescaledValue--;
       }
     }
     // Check overflowing
-    auto valueToCompare = rescaledValue;
-    if (rescaledValue < 0) {
-      valueToCompare *= -1;
-    }
-    if (valueToCompare > DecimalUtil::kPowersOfTen[toPrecisionScale.first]) {
-      isNullOut = true;
-    }
+    VELOX_CHECK_LE(
+        rescaledValue, DecimalUtil::kPowersOfTen[toPrecisionScale.first]);
+    VELOX_CHECK_GE(
+        rescaledValue, -DecimalUtil::kPowersOfTen[toPrecisionScale.first]);
     return rescaledValue;
   }
 };
