@@ -22,35 +22,23 @@ namespace facebook::velox::exec {
 // TODO: This implementation will be revised for Spill to disk semantics.
 WindowPartition::WindowPartition(
     const std::vector<exec::RowColumn>& columns,
-    const std::vector<TypePtr>& argTypes,
-    velox::memory::MemoryPool* pool)
-    : columns_(columns), pool_(pool) {
-  columnVectors_.reserve(columns.size());
-  for (const auto& argType : argTypes) {
-    columnVectors_.emplace_back(BaseVector::create(argType, 0, pool));
-  }
-}
+    const std::vector<TypePtr>& argTypes)
+    : columns_(columns) {}
 
 void WindowPartition::resetPartition(const folly::Range<char**>& rows) {
   // TODO : Is this a copy of the folly::Range ? If this involves a copy
   // of the vector of row pointers, then we can just maintain the
   // vector as a member variable in the Window operator
   partition_ = rows;
-  for (auto& argVector : columnVectors_) {
-    argVector->resize(0);
-  }
 }
 
-VectorPtr WindowPartition::argColumn(vector_size_t idx) const {
-  if (columnVectors_[idx]->size() != partition_.size()) {
-    columnVectors_[idx]->resize(partition_.size());
-    exec::RowContainer::extractColumn(
-        partition_.data(),
-        partition_.size(),
-        columns_[idx],
-        columnVectors_[idx]);
-  }
-  return columnVectors_[idx];
+void WindowPartition::extractColumn(
+    vector_size_t idx,
+    vector_size_t numRows,
+    vector_size_t rowOffset,
+    VectorPtr result) const {
+  exec::RowContainer::extractColumn(
+      partition_.data(), numRows, columns_[idx], result);
 }
 
 void WindowPartition::extractColumnOffsets(

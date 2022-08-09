@@ -90,11 +90,11 @@ Window::Window(
     inputColumns.push_back(data_->columnAt(i));
   }
   // The WindowPartition is structured over all the input columns data.
-  // Individual functions access its input argument columns from it.
+  // Individual functions access its input argument column values from it.
   // The RowColumns are copied by the WindowPartition, so its fine to use
   // a local variable here.
-  windowPartition_ = std::make_unique<WindowPartition>(
-      inputColumns, inputType->children(), pool());
+  windowPartition_ =
+      std::make_unique<WindowPartition>(inputColumns, inputType->children());
 
   createWindowFunctions(windowNode, inputType);
 }
@@ -144,7 +144,6 @@ void Window::createWindowFunctions(
 }
 
 void Window::addInput(RowVectorPtr input) {
-  // TODO : Is resize() or resizeAll() needed here ?
   inputRows_.resize(input->size());
 
   for (auto col = 0; col < input->childrenSize(); ++col) {
@@ -199,23 +198,23 @@ void Window::createPeerAndFrameBuffers() {
   rawPeerEndBuffer_ = peerEndBuffer_->asMutable<vector_size_t>();
 
   auto numFuncs = windowFunctions_.size();
-  allFuncsFrameStartBuffer_.reserve(numFuncs);
-  allFuncsFrameEndBuffer_.reserve(numFuncs);
-  allFuncsRawFrameStartBuffer_.reserve(numFuncs);
-  allFuncsRawFrameEndBuffer_.reserve(numFuncs);
+  frameStartBuffers_.reserve(numFuncs);
+  frameEndBuffers_.reserve(numFuncs);
+  rawFrameStartBuffers_.reserve(numFuncs);
+  rawFrameEndBuffers_.reserve(numFuncs);
 
   for (auto i = 0; i < numFuncs; i++) {
     BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
         numRowsPerOutput_, operatorCtx_->pool());
     BufferPtr frameEndBuffer = AlignedBuffer::allocate<vector_size_t>(
         numRowsPerOutput_, operatorCtx_->pool());
-    allFuncsFrameStartBuffer_.push_back(frameStartBuffer);
-    allFuncsFrameEndBuffer_.push_back(frameEndBuffer);
+    frameStartBuffers_.push_back(frameStartBuffer);
+    frameEndBuffers_.push_back(frameEndBuffer);
 
     auto rawFrameStartBuffer = frameStartBuffer->asMutable<vector_size_t>();
     auto rawFrameEndBuffer = frameEndBuffer->asMutable<vector_size_t>();
-    allFuncsRawFrameStartBuffer_.push_back(rawFrameStartBuffer);
-    allFuncsRawFrameEndBuffer_.push_back(rawFrameEndBuffer);
+    rawFrameStartBuffers_.push_back(rawFrameStartBuffer);
+    rawFrameEndBuffers_.push_back(rawFrameEndBuffer);
   }
 }
 
@@ -289,19 +288,8 @@ void Window::noMoreInput() {
   createPeerAndFrameBuffers();
 }
 
-// This function is to find the frame end points for the current row
-// being output.
-// @param idx : Index of the window function whose frame we are
-// computing.
-// @param partitionStartRow : Index of the start row of the current
-// partition being output.
-// @param partitionEndRow : Index of the end row of the current
-// partition being output.
-// @param currentRow : Index of the current row.
-// partitionStartRow, partitionEndRow and currentRow are indexes in
-// the sortedRows_ ordering of input rows.
 std::pair<vector_size_t, vector_size_t> Window::findFrameEndPoints(
-    vector_size_t /*idx*/,
+    vector_size_t /*functionNumber*/,
     vector_size_t partitionStartRow,
     vector_size_t /*partitionEndRow*/,
     vector_size_t currentRow) {
@@ -312,10 +300,11 @@ std::pair<vector_size_t, vector_size_t> Window::findFrameEndPoints(
   return std::make_pair(partitionStartRow, currentRow);
 }
 
-void Window::callResetPartition(vector_size_t idx) {
-  auto partitionSize = partitionStartRows_[idx + 1] - partitionStartRows_[idx];
+void Window::callResetPartition(vector_size_t partitionNumber) {
+  auto partitionSize = partitionStartRows_[partitionNumber + 1] -
+      partitionStartRows_[partitionNumber];
   auto partition = folly::Range(
-      sortedRows_.data() + partitionStartRows_[idx], partitionSize);
+      sortedRows_.data() + partitionStartRows_[partitionNumber], partitionSize);
   windowPartition_->resetPartition(partition);
   for (int i = 0; i < windowFunctions_.size(); i++) {
     windowFunctions_[i]->resetPartition(windowPartition_.get());
@@ -327,8 +316,8 @@ void Window::callResetPartition(vector_size_t idx) {
 void Window::callApplyForPartitionRows(
     vector_size_t startRow,
     vector_size_t endRow,
-    const std::vector<VectorPtr>& windowFunctionOutputs,
-    vector_size_t resultIndex) {
+    const std::vector<VectorPtr>& result,
+    vector_size_t resultOffset) {
   if (partitionStartRows_[currentPartition_] == startRow) {
     callResetPartition(currentPartition_);
   }
@@ -344,8 +333,8 @@ void Window::callApplyForPartitionRows(
   peerStartBuffer_->setSize(numRows);
   peerEndBuffer_->setSize(numRows);
   for (auto w = 0; w < numFuncs; w++) {
-    allFuncsFrameStartBuffer_[w]->setSize(numRows);
-    allFuncsFrameEndBuffer_[w]->setSize(numRows);
+    frameStartBuffers_[w]->setSize(numRows);
+    frameEndBuffers_[w]->setSize(numRows);
   }
 
   // Setup values in the peer and frame buffers.
@@ -382,10 +371,8 @@ void Window::callApplyForPartitionRows(
 
     for (auto w = 0; w < numFuncs; w++) {
       auto frameEndPoints = findFrameEndPoints(w, firstPartitionRow, endRow, i);
-      allFuncsRawFrameStartBuffer_[w][j] =
-          frameEndPoints.first - firstPartitionRow;
-      allFuncsRawFrameEndBuffer_[w][j] =
-          frameEndPoints.second - firstPartitionRow;
+      rawFrameStartBuffers_[w][j] = frameEndPoints.first - firstPartitionRow;
+      rawFrameEndBuffers_[w][j] = frameEndPoints.second - firstPartitionRow;
     }
   }
 
@@ -394,10 +381,10 @@ void Window::callApplyForPartitionRows(
     windowFunctions_[w]->apply(
         peerStartBuffer_,
         peerEndBuffer_,
-        allFuncsFrameStartBuffer_[w],
-        allFuncsFrameEndBuffer_[w],
-        resultIndex,
-        windowFunctionOutputs[w]);
+        frameStartBuffers_[w],
+        frameEndBuffers_[w],
+        resultOffset,
+        result[w]);
   }
 
   numProcessedRows_ += numRows;
@@ -409,17 +396,18 @@ void Window::callApplyForPartitionRows(
 // Function to compute window function values for the current output
 // buffer. The buffer has numOutputRows number of rows. windowOutputs
 // has the vectors for window function columns.
-void Window::computeWindowOutputs(
+void Window::callApplyLoop(
     vector_size_t numOutputRows,
     const std::vector<VectorPtr>& windowOutputs) {
   // Compute outputs by traversing as many partitions as possible. This
   // logic takes care of partial partitions output also.
 
   vector_size_t resultIndex = 0;
-  while (numOutputRows > 0) {
+  vector_size_t numOutputRowsLeft = numOutputRows;
+  while (numOutputRowsLeft > 0) {
     auto rowsForCurrentPartition =
         partitionStartRows_[currentPartition_ + 1] - numProcessedRows_;
-    if (rowsForCurrentPartition <= numOutputRows) {
+    if (rowsForCurrentPartition <= numOutputRowsLeft) {
       // Current partition can fit completely in the output buffer.
       // So output all its rows.
       callApplyForPartitionRows(
@@ -428,17 +416,17 @@ void Window::computeWindowOutputs(
           windowOutputs,
           resultIndex);
       resultIndex += rowsForCurrentPartition;
-      numOutputRows -= rowsForCurrentPartition;
+      numOutputRowsLeft -= rowsForCurrentPartition;
     } else {
       // Current partition can fit only partially in the output buffer.
       // Call apply for the rows that can fit in the buffer and break from
       // outputting.
       callApplyForPartitionRows(
           numProcessedRows_,
-          numProcessedRows_ + numOutputRows,
+          numProcessedRows_ + numOutputRowsLeft,
           windowOutputs,
           resultIndex);
-      numOutputRows = 0;
+      numOutputRowsLeft = 0;
       break;
     }
   }
@@ -474,7 +462,7 @@ RowVectorPtr Window::getOutput() {
   }
 
   // Compute the output values of window functions.
-  computeWindowOutputs(numOutputRows, windowOutputs);
+  callApplyLoop(numOutputRows, windowOutputs);
 
   for (int j = numInputColumns_; j < outputType_->size(); j++) {
     result->childAt(j) = windowOutputs[j - numInputColumns_];

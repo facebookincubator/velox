@@ -23,8 +23,7 @@ class WindowPartition {
  public:
   WindowPartition(
       const std::vector<exec::RowColumn>& columns,
-      const std::vector<TypePtr>& types,
-      velox::memory::MemoryPool* pool);
+      const std::vector<TypePtr>& types);
 
   /// Retrieves the column at index 'idx'. The function
   /// knows the index in the input columns list for the argument.
@@ -39,6 +38,16 @@ class WindowPartition {
       vector_size_t idx,
       const BufferPtr& offsets,
       vector_size_t resultOffset,
+      VectorPtr result) const;
+
+  /// Extracts into the result VectorPtr values from column at index 'idx'
+  /// for numRows starting at rowOffset in the partition.
+  /// This API is useful for window functions that examine column values
+  /// for their logic. Nulls at corresponding positions are copied.
+  void extractColumn(
+      vector_size_t idx,
+      vector_size_t numRows,
+      vector_size_t rowOffset,
       VectorPtr result) const;
 
   /// Returns the number of rows in the current WindowPartition.
@@ -64,14 +73,5 @@ class WindowPartition {
   // by the operator. We can assume these are valid values for the lifetime
   // of WindowPartition.
   folly::Range<char**> partition_;
-
-  // This is a vector of column values for the partition rows.
-  // These are requested by functions for evaluation. These
-  // are copied from partition rows only when requested by some
-  // function. They are re-used if multiple functions request for the same
-  // column.
-  std::vector<VectorPtr> columnVectors_;
-
-  velox::memory::MemoryPool* pool_;
 };
 } // namespace facebook::velox::exec

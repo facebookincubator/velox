@@ -22,18 +22,18 @@
 
 namespace facebook::velox::exec {
 
-// This is a very simple in-Memory implementation of a Window Operator
-// to compute window functions.
-//
-// This operator uses a very naive algorithm that sorts all the input
-// data with a combination of the (partition_by keys + order_by keys)
-// to obtain a full ordering of the input. We can easily identify
-// partitions while traversing this sorted data in order.
-// It is also sorted in the order required for the WindowFunction
-// to process it.
-//
-// We will revise this algorithm in the future using a HashTable based
-// approach pending some profiling results.
+/// This is a very simple in-Memory implementation of a Window Operator
+/// to compute window functions.
+///
+/// This operator uses a very naive algorithm that sorts all the input
+/// data with a combination of the (partition_by keys + order_by keys)
+/// to obtain a full ordering of the input. We can easily identify
+/// partitions while traversing this sorted data in order.
+/// It is also sorted in the order required for the WindowFunction
+/// to process it.
+///
+/// We will revise this algorithm in the future using a HashTable based
+/// approach pending some profiling results.
 class Window : public Operator {
  public:
   Window(
@@ -92,7 +92,7 @@ class Window : public Operator {
 
   // Helper function to call WindowFunction::resetPartition() for
   // all WindowFunctions.
-  void callResetPartition(vector_size_t idx);
+  void callResetPartition(vector_size_t partitionNumber);
 
   // Helper method to call WindowFunction::apply to all the rows
   // of a partition between startRow and endRow. The outputs
@@ -101,13 +101,22 @@ class Window : public Operator {
   void callApplyForPartitionRows(
       vector_size_t startRow,
       vector_size_t endRow,
-      const std::vector<VectorPtr>& windowFunctionOutputs,
-      vector_size_t resultIndex);
+      const std::vector<VectorPtr>& result,
+      vector_size_t resultOffset);
 
-  // Helper function to find the frame end-points for the current
-  // row.
+  // This function is to find the frame end points for the current row
+  // being output.
+  // @param functionNumber  Index of the window function whose frame we
+  // are computing.
+  // @param partitionStartRow  Index of the start row of the current
+  // partition being output.
+  // @param partitionEndRow  Index of the end row of the current
+  // partition being output.
+  // @param currentRow  Index of the current row.
+  // partitionStartRow, partitionEndRow and currentRow are indexes in
+  // the sortedRows_ ordering of input rows.
   std::pair<vector_size_t, vector_size_t> findFrameEndPoints(
-      vector_size_t idx,
+      vector_size_t functionNumber,
       vector_size_t partitionStartRow,
       vector_size_t partitionEndRow,
       vector_size_t currentRow);
@@ -122,7 +131,7 @@ class Window : public Operator {
 
   // Function to compute the window function output values for the
   // current rows being output.
-  void computeWindowOutputs(
+  void callApplyLoop(
       vector_size_t numOutputRows,
       const std::vector<VectorPtr>& windowOutputs);
 
@@ -178,10 +187,10 @@ class Window : public Operator {
   // Number of rows that be fit into an output block.
   vector_size_t numRowsPerOutput_;
 
-  // This is a vector that gives the index of the start row of
-  // each partition in the RowContainer data_. The sorting follows
-  // the order in sortedRows_. This auxiliary structure helps
-  // demarcate partitions in getOutput calls.
+  // This is a vector that gives the index of the start row
+  // (in sortedRows_) of each partition in the RowContainer data_.
+  // This auxiliary structure helps demarcate partitions in
+  // getOutput calls.
   std::vector<vector_size_t> partitionStartRows_;
 
   // The following 4 Buffers are used to pass peer and frame start and
@@ -195,14 +204,14 @@ class Window : public Operator {
   // A separate BufferPtr is required for the frame indexes of each
   // function. Each function has its own frame clause and style. So we
   // have as many buffers as the number of functions.
-  std::vector<BufferPtr> allFuncsFrameStartBuffer_;
-  std::vector<BufferPtr> allFuncsFrameEndBuffer_;
+  std::vector<BufferPtr> frameStartBuffers_;
+  std::vector<BufferPtr> frameEndBuffers_;
 
   // The 4 below are for the raw pointers to the above 4 BufferPtrs.
   vector_size_t* rawPeerStartBuffer_;
   vector_size_t* rawPeerEndBuffer_;
-  std::vector<vector_size_t*> allFuncsRawFrameStartBuffer_;
-  std::vector<vector_size_t*> allFuncsRawFrameEndBuffer_;
+  std::vector<vector_size_t*> rawFrameStartBuffers_;
+  std::vector<vector_size_t*> rawFrameEndBuffers_;
 
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This
