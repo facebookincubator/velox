@@ -21,12 +21,67 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/Udf.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 using facebook::velox::test::BatchMaker;
+
+namespace {
+
+template <typename T>
+struct AlwaysTrueSimpleFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  void call(
+      bool& out,
+      const arg_type<Generic<T1>>& /*lhs*/,
+      const arg_type<Generic<T1>>& /*rhs*/) {
+    // Custom simple function that will always return true.
+    out = true;
+  }
+};
+
+class AlwaysTrueVectorFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /*outputType*/,
+      exec::EvalCtx* context,
+      VectorPtr* result) const override {
+    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
+    auto resultVector = (*result)->asUnchecked<FlatVector<bool>>();
+
+    rows.applyToSelected([&](auto row) { resultVector->set(row, true && !args[0]->isNullAt(row) && !args[1]->isNullAt(row)); });
+  }
+
+  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
+    return {exec::FunctionSignatureBuilder()
+                .returnType("boolean")
+                .argumentType("integer")
+                .argumentType("integer")
+                .build()};
+  }
+};
+}
+
+namespace facebook::velox::functions {
+
+VELOX_DECLARE_VECTOR_FUNCTION(
+    udf_vector_function_two_my_args,
+    AlwaysTrueVectorFunction::signatures(),
+    std::make_unique<AlwaysTrueVectorFunction>());
+
+void registerMyVectorFunctions() {
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_function_two_my_args, "my_vector_function");
+  registerFunction<AlwaysTrueSimpleFunction, bool, Generic<T1>, Generic<T1>>(
+      {"my_simple_function"});
+}
+} // namespace facebook::velox::functions
 
 class HashJoinTest : public HiveConnectorTestBase {
  protected:
@@ -1537,4 +1592,60 @@ TEST_F(HashJoinTest, smallOutputBatchSize) {
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchSize, std::to_string(10))
       .assertResults("SELECT c0, u_c1 FROM t, u WHERE c0 = u_c0 AND c1 < u_c1");
+}
+
+TEST_F(HashJoinTest, righJoinFilter) {
+
+  auto leftBatch1 = 10;
+  auto leftBatch2 = 20;
+  auto rightBatch = 30;
+
+  // Left side keys are [0, 1, 2,..10].
+  auto leftVectors = {
+      makeRowVector({
+          makeFlatVector<int32_t>(
+              leftBatch1, [](auto row) { return row % 11; }, nullEvery(13)),
+          makeFlatVector<int32_t>(leftBatch1, [](auto row) { return row; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>(
+              leftBatch2, [](auto row) { return (row + 3) % 11; }, nullEvery(13)),
+          makeFlatVector<int32_t>(leftBatch2, [](auto row) { return row; }),
+      }),
+  };
+
+  // Right side keys are [-3, -2, -1, 0, 1, 2, 3].
+  auto rightVectors = makeRowVector({
+      makeFlatVector<int32_t>(
+          rightBatch, [](auto row) { return -3 + row % 7; }, nullEvery(11)),
+      makeFlatVector<int32_t>(
+          rightBatch, [](auto row) { return -111 + row * 2; }, nullEvery(13)),
+  });
+
+  createDuckDbTable("t", leftVectors);
+  createDuckDbTable("u", {rightVectors});
+  facebook::velox::functions::registerMyVectorFunctions();
+
+  auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+
+  auto buildSide = PlanBuilder(planNodeIdGenerator)
+                       .values({rightVectors})
+                       .project({"c0 AS u_c0", "c1 AS u_c1"})
+                       .planNode();
+
+  // Additional filter.
+  auto op = PlanBuilder(planNodeIdGenerator)
+           .values(leftVectors)
+           .hashJoin(
+               {"c0"},
+               {"u_c0"},
+               buildSide,
+               "my_vector_function(c1, u_c1)",
+               {"c0", "u_c0", "c1", "u_c1"},
+               core::JoinType::kRight)
+           .planNode();
+
+  assertQuery(
+      op,
+      "SELECT t.c0, u.c0, t.c1, u.c1 FROM t RIGHT JOIN u ON t.c0 = u.c0");
 }
