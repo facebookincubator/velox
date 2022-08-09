@@ -453,7 +453,7 @@ VectorPtr CastExpr::applyRow(
 }
 
 template <typename TInput, typename TOutput>
-void applyDecimalCastKernel(
+void CastExpr::applyDecimalCastKernel(
     const SelectivityVector& rows,
     DecodedVector& input,
     exec::EvalCtx& context,
@@ -466,16 +466,19 @@ void applyDecimalCastKernel(
   const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
   context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
-    bool isNullOut = false;
-    auto rescaledValue = DecimalUtil::rescaleWithRoundUp(
-        sourceVector->valueAt(row).unscaledValue(),
-        fromPrecisionScale.second,
-        toPrecisionScale,
-        isNullOut);
-    if (!isNullOut) {
+    try {
+      auto rescaledValue = DecimalUtil::rescaleWithRoundUp(
+          sourceVector->valueAt(row).unscaledValue(),
+          fromPrecisionScale.second,
+          toPrecisionScale);
       castResultRawBuffer[row].setUnscaledValue(rescaledValue);
-    } else {
-      castResult->setNull(row, true);
+    } catch (const std::exception& ex) {
+      if (nullOnFailure_) {
+        castResult->setNull(row, true);
+      } else {
+        VELOX_FAIL(
+            makeErrorMessage(input, row, castResult->type()) + " " + ex.what());
+      }
     }
   });
 }

@@ -44,7 +44,6 @@ class TestingDictionaryFunction : public exec::VectorFunction {
     VELOX_CHECK(rows.isAllSelected());
     const auto size = rows.size();
     auto indices = makeIndicesInReverse(size, context->pool());
-    auto resultFalt = args[0]->asFlatVector<ShortDecimal>();
     *result = BaseVector::wrapInDictionary(
         BufferPtr(nullptr), indices, size, args[0]);
   }
@@ -688,7 +687,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   auto longFlat =
       makeLongDecimalFlatVector({-201, -109, 0, 105, 208}, DECIMAL(20, 2));
   expectedShort = makeShortDecimalFlatVector(
-      {-201000, -109000, 0, 105000, 208000}, DECIMAL(10, 5));
+      {-201'000, -109'000, 0, 105'000, 208'000}, DECIMAL(10, 5));
   testComplexCast("c0", longFlat, expectedShort);
   // long to short, scale down.
   expectedShort =
@@ -697,7 +696,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
 
   // long to long, scale up.
   auto expectedLong = makeLongDecimalFlatVector(
-      {-20'100'000'000, -10'900'000'000, 0, 1'050'000'000, 20800000000},
+      {-20'100'000'000, -10'900'000'000, 0, 1'050'000'000, 20'800'000'000},
       DECIMAL(20, 10));
   testComplexCast("c0", longFlat, expectedShort);
   // long to long, scale down.
@@ -707,19 +706,19 @@ TEST_F(CastExprTest, decimalToDecimal) {
 
   // short to long, scale up.
   expectedLong = makeLongDecimalFlatVector(
-      {-3000000000,
-       -2000000000,
-       -1000000000,
+      {-3'000'000'000,
+       -2'000'000'000,
+       -1'000'000'000,
        0,
-       55000000000,
-       69000000000,
-       72000000000},
+       55'000'000'000,
+       69'000'000'000,
+       72'000'000'000},
       DECIMAL(20, 11));
   testComplexCast("c0", shortFlat, expectedLong);
 
   // short to long, scale down.
-  shortFlat =
-      makeShortDecimalFlatVector({-20500, -190, 12345, 19999}, DECIMAL(6, 4));
+  shortFlat = makeShortDecimalFlatVector(
+      {-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4));
   expectedLong = makeLongDecimalFlatVector({-20, 0, 12, 20}, DECIMAL(20, 1));
   testComplexCast("c0", shortFlat, expectedLong);
 
@@ -728,5 +727,8 @@ TEST_F(CastExprTest, decimalToDecimal) {
       {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
   expectedShort = makeNullableShortDecimalFlatVector(
       {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
-  testComplexCast("c0", longFlat, expectedShort);
+  // Throws exception if CAST fails.
+  EXPECT_THROW(testComplexCast("c0", longFlat, expectedShort), VeloxException);
+  // nullOnFailure is true.
+  testComplexCast("c0", longFlat, expectedShort, true);
 }
