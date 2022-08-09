@@ -461,7 +461,7 @@ void CastExpr::applyDecimalCastKernel(
     const TypePtr& toType,
     VectorPtr castResult) {
   auto sourceVector = input.base()->as<SimpleVector<TInput>>();
-  TOutput* castResultRawBuffer =
+  auto castResultRawBuffer =
       castResult->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto& fromPrecisionScale = getDecimalPrecisionScale(*fromType);
   const auto& toPrecisionScale = getDecimalPrecisionScale(*toType);
@@ -470,15 +470,17 @@ void CastExpr::applyDecimalCastKernel(
       auto rescaledValue = DecimalUtil::rescaleWithRoundUp(
           sourceVector->valueAt(row).unscaledValue(),
           fromPrecisionScale.second,
-          toPrecisionScale);
-      castResultRawBuffer[row].setUnscaledValue(rescaledValue);
-    } catch (const std::exception& ex) {
-      if (nullOnFailure_) {
+          toPrecisionScale.first,
+          toPrecisionScale.second,
+          nullOnFailure_);
+      if (rescaledValue == std::nullopt) {
         castResult->setNull(row, true);
       } else {
-        VELOX_FAIL(
-            makeErrorMessage(input, row, castResult->type()) + " " + ex.what());
+        castResultRawBuffer[row].setUnscaledValue(*rescaledValue);
       }
+    } catch (const std::exception& ex) {
+      VELOX_FAIL(
+          makeErrorMessage(input, row, castResult->type()) + " " + ex.what());
     }
   });
 }

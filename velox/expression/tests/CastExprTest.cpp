@@ -676,7 +676,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   auto shortFlat =
       makeShortDecimalFlatVector({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(2, 2));
   auto expectedShort = makeShortDecimalFlatVector(
-      {-300, -200, -100, 0, 5500, 6900, 7200}, DECIMAL(4, 4));
+      {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(4, 4));
   testComplexCast("c0", shortFlat, expectedShort);
   // short to short, scale down.
   expectedShort =
