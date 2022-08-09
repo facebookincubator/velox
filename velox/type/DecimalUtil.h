@@ -33,18 +33,19 @@ class DecimalUtil {
   template <typename T>
   static std::string toString(const T& value, const TypePtr& type);
 
-  inline static int128_t rescaleWithRoundUp(
+  inline static std::optional<int128_t> rescaleWithRoundUp(
       const int128_t& unscaledValue,
       const uint8_t fromScale,
-      const std::pair<int, int>& toPrecisionScale) {
+      const uint8_t toPrecision,
+      const uint8_t toScale,
+      const bool nullOnFailure) {
     auto rescaledValue = unscaledValue;
-    auto scaleDifference = toPrecisionScale.second - fromScale;
+    auto scaleDifference = toScale - fromScale;
     if (scaleDifference >= 0) {
       rescaledValue *= DecimalUtil::kPowersOfTen[scaleDifference];
     } else {
       scaleDifference = -scaleDifference;
-      rescaledValue =
-          unscaledValue / DecimalUtil::kPowersOfTen[scaleDifference];
+      rescaledValue /= DecimalUtil::kPowersOfTen[scaleDifference];
       int128_t remainder =
           unscaledValue % DecimalUtil::kPowersOfTen[scaleDifference];
       if (unscaledValue >= 0 &&
@@ -55,10 +56,13 @@ class DecimalUtil {
       }
     }
     // Check overflowing
-    VELOX_CHECK_LE(
-        rescaledValue, DecimalUtil::kPowersOfTen[toPrecisionScale.first]);
-    VELOX_CHECK_GE(
-        rescaledValue, -DecimalUtil::kPowersOfTen[toPrecisionScale.first]);
+    if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
+        rescaledValue > DecimalUtil::kPowersOfTen[toPrecision]) {
+      if (nullOnFailure) {
+        return std::nullopt;
+      }
+      VELOX_FAIL();
+    }
     return rescaledValue;
   }
 };
