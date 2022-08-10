@@ -330,11 +330,12 @@ void Window::callApplyForPartitionRows(
   vector_size_t numFuncs = windowFunctions_.size();
 
   // Size buffers for the call to WindowFunction::apply.
-  peerStartBuffer_->setSize(numRows);
-  peerEndBuffer_->setSize(numRows);
+  auto bufferSize = numRows * sizeof(vector_size_t);
+  peerStartBuffer_->setSize(bufferSize);
+  peerEndBuffer_->setSize(bufferSize);
   for (auto w = 0; w < numFuncs; w++) {
-    frameStartBuffers_[w]->setSize(numRows);
-    frameEndBuffers_[w]->setSize(numRows);
+    frameStartBuffers_[w]->setSize(bufferSize);
+    frameEndBuffers_[w]->setSize(bufferSize);
   }
 
   // Setup values in the peer and frame buffers.

@@ -38,7 +38,7 @@ class RowNumberFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       vector_size_t resultOffset,
       const VectorPtr& result) {
-    int numRows = peerGroupStarts->size();
+    int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
     auto* rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
     for (int i = 0; i < numRows; i++) {
       rawValues[resultOffset + i] = rowNumber_++;
