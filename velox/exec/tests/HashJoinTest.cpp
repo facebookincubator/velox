@@ -135,25 +135,20 @@ class HashJoinTest : public HiveConnectorTestBase {
     return stats[operatorIndex].inputPositions;
   }
 
-  static void ensureTaskCompletion(exec::Task* task) {
-    // ASSERT_TRUE requires a function with return type void.
-    ASSERT_TRUE(waitForTaskCompletion(task));
-  }
-
   static uint64_t getOutputPositions(
       const std::shared_ptr<Task>& task,
       const core::PlanNodeId planId,
       const std::string& operatorType) {
-    ensureTaskCompletion(task.get());
+    uint64_t count = 0;
     for (const auto& pipelineStat : task->taskStats().pipelineStats) {
       for (const auto& operatorStat : pipelineStat.operatorStats) {
         if (operatorStat.planNodeId == planId &&
             operatorStat.operatorType == operatorType) {
-          return operatorStat.outputPositions;
+          count += operatorStat.outputPositions;
         }
       }
     }
-    return -1;
+    return count;
   }
 };
 
