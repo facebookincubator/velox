@@ -35,29 +35,28 @@ class DecimalUtil {
 
   template <typename TInput, typename TOutput>
   inline static std::optional<TOutput> rescaleWithRoundUp(
-      const TInput unscaledValue,
-      const uint8_t fromPrecision,
-      const uint8_t fromScale,
-      const uint8_t toPrecision,
-      const uint8_t toScale,
+      const TInput inputValue,
+      const int fromPrecision,
+      const int fromScale,
+      const int toPrecision,
+      const int toScale,
       const bool nullOnFailure) {
-    TOutput rescaledValue(unscaledValue.unscaledValue());
+    TOutput rescaledValue(inputValue.unscaledValue());
     auto scaleDifference = toScale - fromScale;
     if (scaleDifference >= 0) {
       rescaledValue *= DecimalUtil::kPowersOfTen[scaleDifference];
     } else {
       scaleDifference = -scaleDifference;
-      rescaledValue /= DecimalUtil::kPowersOfTen[scaleDifference];
-      int128_t remainder =
-          unscaledValue % DecimalUtil::kPowersOfTen[scaleDifference];
-      if (unscaledValue >= 0 &&
-          remainder >= DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+      const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
+      rescaledValue /= scalingFactor;
+      int128_t remainder = inputValue % scalingFactor;
+      if (inputValue >= 0 && remainder >= scalingFactor / 2) {
         ++rescaledValue;
-      } else if (remainder <= -DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+      } else if (remainder <= -scalingFactor / 2) {
         --rescaledValue;
       }
     }
-    // Check overflowing
+    // Check overflow.
     if (rescaledValue < -DecimalUtil::kPowersOfTen[toPrecision] ||
         rescaledValue > DecimalUtil::kPowersOfTen[toPrecision]) {
       if (nullOnFailure) {
@@ -66,7 +65,7 @@ class DecimalUtil {
       VELOX_FAIL(
           "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
           DecimalUtil::toString<TInput>(
-              unscaledValue, DECIMAL(fromPrecision, fromScale)),
+              inputValue, DECIMAL(fromPrecision, fromScale)),
           toPrecision,
           toScale);
     }

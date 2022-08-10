@@ -74,26 +74,26 @@ struct ShortDecimal {
   }
 
   ShortDecimal& operator*=(const int128_t& rhs) {
-    this->unscaledValue_ *= rhs;
+    unscaledValue_ *= rhs;
     return *this;
   }
 
   ShortDecimal& operator/=(const int128_t& rhs) {
-    this->unscaledValue_ /= rhs;
+    unscaledValue_ /= rhs;
     return *this;
   }
 
   int128_t operator%(const int128_t& rhs) const {
-    return this->unscaledValue_ % rhs;
+    return unscaledValue_ % rhs;
   }
 
   ShortDecimal& operator++() {
-    ++this->unscaledValue_;
+    unscaledValue_++;
     return *this;
   }
 
   ShortDecimal& operator--() {
-    --this->unscaledValue_;
+    unscaledValue_--;
     return *this;
   }
 

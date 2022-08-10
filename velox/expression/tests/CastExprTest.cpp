@@ -17,6 +17,7 @@
 #include <limits>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/prestosql/tests/FunctionBaseTest.h"
@@ -678,6 +679,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   auto expectedShort = makeShortDecimalFlatVector(
       {-300, -200, -100, 0, 5'500, 6'900, 7'200}, DECIMAL(4, 4));
   testComplexCast("c0", shortFlat, expectedShort);
+
   // short to short, scale down.
   expectedShort =
       makeShortDecimalFlatVector({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1));
@@ -689,6 +691,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   expectedShort = makeShortDecimalFlatVector(
       {-201'000, -109'000, 0, 105'000, 208'000}, DECIMAL(10, 5));
   testComplexCast("c0", longFlat, expectedShort);
+
   // long to short, scale down.
   expectedShort =
       makeShortDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(10, 1));
@@ -699,6 +702,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
       {-20'100'000'000, -10'900'000'000, 0, 1'050'000'000, 20'800'000'000},
       DECIMAL(20, 10));
   testComplexCast("c0", longFlat, expectedShort);
+
   // long to long, scale down.
   expectedLong =
       makeLongDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(20, 1));
@@ -727,8 +731,12 @@ TEST_F(CastExprTest, decimalToDecimal) {
       {-20'000, -1'000'000, 10'000, std::nullopt}, DECIMAL(20, 3));
   expectedShort = makeNullableShortDecimalFlatVector(
       {-200'000, std::nullopt, 100'000, std::nullopt}, DECIMAL(6, 4));
+
   // Throws exception if CAST fails.
-  EXPECT_THROW(testComplexCast("c0", longFlat, expectedShort), VeloxException);
+  VELOX_ASSERT_THROW(
+      testComplexCast("c0", longFlat, expectedShort),
+      "Cannot cast DECIMAL '-1000.000' to DECIMAL(6,4)");
+
   // nullOnFailure is true.
   testComplexCast("c0", longFlat, expectedShort, true);
 }

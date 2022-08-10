@@ -73,7 +73,7 @@ struct LongDecimal {
     return unscaledValue_ >= other;
   }
 
-  const LongDecimal& operator*=(const int128_t& rhs) {
+  LongDecimal& operator*=(const int128_t& rhs) {
     unscaledValue_ *= rhs;
     return *this;
   }
@@ -84,16 +84,16 @@ struct LongDecimal {
   }
 
   int128_t operator%(const int128_t& rhs) const {
-    return this->unscaledValue_ % rhs;
+    return unscaledValue_ % rhs;
   }
 
   LongDecimal& operator++() {
-    ++this->unscaledValue_;
+    unscaledValue_++;
     return *this;
   }
 
   LongDecimal& operator--() {
-    --this->unscaledValue_;
+    unscaledValue_--;
     return *this;
   }
 
