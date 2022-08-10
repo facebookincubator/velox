@@ -25,21 +25,6 @@ class WindowPartition {
       const std::vector<exec::RowColumn>& columns,
       const std::vector<TypePtr>& types);
 
-  /// Retrieves the column at index 'idx'. The function
-  /// knows the index in the input columns list for the argument.
-  VectorPtr argColumn(vector_size_t idx) const;
-
-  /// Extracts into the result VectorPtr (starting from resultOffset),
-  /// values from column at index 'idx' and at row offsets in 'offsets'
-  /// buffer. This API is useful for Value functions like NthValue
-  /// that are just extracting column values but are not interested in
-  /// them. Nulls at corresponding positions are copied.
-  void extractColumnOffsets(
-      vector_size_t idx,
-      const BufferPtr& offsets,
-      vector_size_t resultOffset,
-      VectorPtr result) const;
-
   /// Extracts into the result VectorPtr values from column at index 'idx'
   /// for numRows starting at rowOffset in the partition.
   /// This API is useful for window functions that examine column values

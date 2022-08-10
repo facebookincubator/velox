@@ -183,7 +183,7 @@ inline bool Window::compareRowsWithKeys(
   return false;
 }
 
-// This function is used to initialize the peer Buffers and frame buffers that
+// This function is used to initialize the peer buffers and frame buffers that
 // are used in window function invocations.
 void Window::createPeerAndFrameBuffers() {
   // TODO: This computation needs to be revised. It only takes into account
@@ -222,7 +222,7 @@ void Window::createPeerAndFrameBuffers() {
 // which stores the starting row for each input partition in the data.
 void Window::computePartitionStartRows() {
   // Randomly assuming that max 10000 partitions are in the data.
-  partitionStartRows_.reserve(10000);
+  partitionStartRows_.reserve(numRows_);
   auto partitionCompare = [&](const char* lhs, const char* rhs) -> bool {
     return compareRowsWithKeys(lhs, rhs, partitionKeyInfo_);
   };
@@ -438,8 +438,7 @@ RowVectorPtr Window::getOutput() {
   }
 
   auto numRowsLeft = numRows_ - numProcessedRows_;
-  auto numOutputRows =
-      (numRowsPerOutput_ < numRowsLeft) ? numRowsPerOutput_ : numRowsLeft;
+  auto numOutputRows = std::min(numRowsPerOutput_, numRowsLeft);
   auto result = std::dynamic_pointer_cast<RowVector>(
       BaseVector::create(outputType_, numOutputRows, operatorCtx_->pool()));
 

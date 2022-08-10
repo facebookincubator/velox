@@ -41,11 +41,4 @@ void WindowPartition::extractColumn(
       partition_.data(), numRows, columns_[idx], result);
 }
 
-void WindowPartition::extractColumnOffsets(
-    vector_size_t idx,
-    const BufferPtr& offsets,
-    vector_size_t resultOffset,
-    VectorPtr result) const {
-  VELOX_NYI();
-}
 } // namespace facebook::velox::exec
