@@ -217,7 +217,7 @@ class HashProbe : public Operator {
   };
 
   /// True if this is the last HashProbe operator in the pipeline. It is
-  /// responsible for producing matching build-side rows for the right\ semi
+  /// responsible for producing matching build-side rows for the right semi
   /// join and non-matching build-side rows for right join and full join.
   bool lastProbe_{false};
 

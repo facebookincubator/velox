@@ -604,8 +604,8 @@ TEST_F(HashJoinTest, rightSemiJoin) {
           makeFlatVector<int32_t>(123, [](auto row) { return row; }),
       });
 
-  createDuckDbTable("t", {rightVectors});
   createDuckDbTable("u", {leftVectors});
+  createDuckDbTable("t", {rightVectors});
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
   auto op = PlanBuilder(planNodeIdGenerator)
@@ -660,13 +660,6 @@ TEST_F(HashJoinTest, rightSemiJoin) {
 }
 
 TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
-  auto rightVectors = makeRowVector(
-      {"t0", "t1"},
-      {
-          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
-          makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
-      });
-
   auto leftVectors = makeRowVector(
       {"u0", "u1"},
       {
@@ -674,41 +667,43 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
           makeFlatVector<int32_t>(1'234, [](auto row) { return row; }),
       });
 
-  createDuckDbTable("t", {rightVectors});
+  auto rightVectors = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+      });
+
   createDuckDbTable("u", {leftVectors});
+  createDuckDbTable("t", {rightVectors});
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
-  auto op = PlanBuilder(planNodeIdGenerator)
-                .values({leftVectors})
-                .hashJoin(
-                    {"u0"},
-                    {"t0"},
-                    PlanBuilder(planNodeIdGenerator)
-                        .values({rightVectors})
-                        .planNode(),
-                    "",
-                    {"t0", "t1"},
-                    core::JoinType::kRightSemi)
-                .planNode();
+  auto Plan = [&](const std::string& filter) -> core::PlanNodePtr {
+    return PlanBuilder(planNodeIdGenerator)
+        .values({leftVectors})
+        .hashJoin(
+            {"u0"},
+            {"t0"},
+            PlanBuilder(planNodeIdGenerator).values({rightVectors}).planNode(),
+            filter,
+            {"t0", "t1"},
+            core::JoinType::kRightSemi)
+        .planNode();
+  };
 
+  // Always true filter.
   assertQuery(
-      op, "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0)");
+      Plan("u1 > -1"),
+      "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > -1)");
 
-  op = PlanBuilder(planNodeIdGenerator)
-           .values({leftVectors})
-           .hashJoin(
-               {"u0"},
-               {"t0"},
-               PlanBuilder(planNodeIdGenerator)
-                   .values({rightVectors})
-                   .planNode(),
-               "t1 != u1",
-               {"t0", "t1"},
-               core::JoinType::kRightSemi)
-           .planNode();
-
+  // Always false filter.
   assertQuery(
-      op,
+      Plan("u1 > 100000"),
+      "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > 100000)");
+
+  // Selective filter.
+  assertQuery(
+      Plan("t1 != u1"),
       "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND t1 <> u1)");
 }
 
