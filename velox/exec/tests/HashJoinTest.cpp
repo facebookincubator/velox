@@ -134,6 +134,19 @@ class HashJoinTest : public HiveConnectorTestBase {
     auto stats = task->taskStats().pipelineStats.front().operatorStats;
     return stats[operatorIndex].inputPositions;
   }
+
+  static uint64_t getOutputPositions(
+      const std::shared_ptr<Task>& task,
+      const std::string& operatorName) {
+    for (const auto& pipelineStat : task->taskStats().pipelineStats) {
+      for (const auto& operatorStat : pipelineStat.operatorStats) {
+        if (operatorStat.operatorType == operatorName) {
+          return operatorStat.outputPositions;
+        }
+      }
+    }
+    return -1;
+  }
 };
 
 TEST_F(HashJoinTest, bigintArray) {
@@ -663,14 +676,14 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
   auto leftVectors = makeRowVector(
       {"u0", "u1"},
       {
-          makeFlatVector<int32_t>(1'234, [](auto row) { return row % 5; }),
+          makeFlatVector<int32_t>(1'234, [](auto row) { return row; }),
           makeFlatVector<int32_t>(1'234, [](auto row) { return row; }),
       });
 
   auto rightVectors = makeRowVector(
       {"t0", "t1"},
       {
-          makeFlatVector<int32_t>(1'000, [](auto row) { return row % 11; }),
+          makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
           makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
       });
 
@@ -690,21 +703,41 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
             core::JoinType::kRightSemi)
         .planNode();
   };
-
-  // Always true filter.
-  assertQuery(
-      Plan("u1 > -1"),
-      "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > -1)");
-
-  // Always false filter.
-  assertQuery(
-      Plan("u1 > 100000"),
-      "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > 100000)");
-
-  // Selective filter.
-  assertQuery(
-      Plan("t1 != u1"),
-      "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND t1 <> u1)");
+  {
+    // Always true filter.
+    auto task = assertQuery(
+        Plan("u1 > -1"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > -1)");
+    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 1'000);
+  }
+  {
+    // Always true filter.
+    auto task = assertQuery(
+        Plan("t1 > -1"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND t1 > -1)");
+    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 1'000);
+  }
+  {
+    // Always false filter.
+    auto task = assertQuery(
+        Plan("u1 > 100000"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > 100000)");
+    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 0);
+  }
+  {
+    // Always false filter.
+    auto task = assertQuery(
+        Plan("t1 > 100000"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND t1 > 100000)");
+    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 0);
+  }
+  {
+    // Selective filter.
+    auto task = assertQuery(
+        Plan("u1%5 = 0"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND u1 %5 = 0)");
+    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 200);
+  }
 }
 
 TEST_F(HashJoinTest, antiJoin) {
