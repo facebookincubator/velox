@@ -23,15 +23,14 @@ namespace facebook::velox::exec {
 
 class PartitionedOutput;
 
+// Base class for both streaming and non-streaming Destinations
 class Destination {
  public:
   Destination(
       const std::string& taskId,
       int destination,
       memory::MappedMemory* FOLLY_NONNULL memory)
-      : taskId_(taskId), destination_(destination), memory_(memory) {
-    setTargetSizePct();
-  }
+      : taskId_(taskId), destination_(destination), memory_(memory) {}
 
   // Resets the destination before starting a new batch.
   void beginBatch() {
@@ -47,17 +46,17 @@ class Destination {
     rows_.push_back(rows);
   }
 
-  BlockingReason advance(
+  virtual BlockingReason advance(
       uint64_t maxBytes,
       const std::vector<vector_size_t>& sizes,
       const RowVectorPtr& output,
       PartitionedOutputBufferManager& bufferManager,
       bool* FOLLY_NONNULL atEnd,
-      ContinueFuture* FOLLY_NONNULL future);
+      ContinueFuture* FOLLY_NONNULL future) = 0;
 
-  BlockingReason flush(
+  virtual BlockingReason flush(
       PartitionedOutputBufferManager& bufferManager,
-      ContinueFuture* FOLLY_NULLABLE future);
+      ContinueFuture* FOLLY_NULLABLE future) = 0;
 
   bool isFinished() const {
     return finished_;
@@ -71,9 +70,54 @@ class Destination {
     return bytesInCurrent_;
   }
 
- private:
-  void
-  serialize(const RowVectorPtr& input, vector_size_t begin, vector_size_t end);
+  virtual ~Destination() = default;
+
+ protected:
+  void virtual serialize(
+      const RowVectorPtr& input,
+      vector_size_t begin,
+      vector_size_t end) = 0;
+
+  const std::string taskId_;
+  const int destination_;
+  memory::MappedMemory* FOLLY_NONNULL const memory_;
+  uint64_t bytesInCurrent_{0};
+  std::vector<IndexRange> rows_;
+
+  // First row of 'rows_' that is not appended to 'current_'
+  vector_size_t row_{0};
+  bool finished_{false};
+};
+
+class BufferingDestination : public Destination {
+ public:
+  BufferingDestination(
+      const std::string& taskId,
+      int destination,
+      memory::MappedMemory* FOLLY_NONNULL memory)
+      : Destination(taskId, destination, memory) {
+    setTargetSizePct();
+  }
+
+  BlockingReason advance(
+      uint64_t maxBytes,
+      const std::vector<vector_size_t>& sizes,
+      const RowVectorPtr& output,
+      PartitionedOutputBufferManager& bufferManager,
+      bool* FOLLY_NONNULL atEnd,
+      ContinueFuture* FOLLY_NONNULL future) override;
+
+  BlockingReason flush(
+      PartitionedOutputBufferManager& bufferManager,
+      ContinueFuture* FOLLY_NULLABLE future) override;
+
+  virtual ~BufferingDestination() = default;
+
+ protected:
+  void serialize(
+      const RowVectorPtr& input,
+      vector_size_t begin,
+      vector_size_t end) override;
 
   // Sets the next target size for flushing. This is called at the
   // start of each batch of output for the destination. The effect is
@@ -88,16 +132,7 @@ class Destination {
     targetNumRows_ = (10000 * targetSizePct_) / 100;
   }
 
-  const std::string taskId_;
-  const int destination_;
-  memory::MappedMemory* FOLLY_NONNULL const memory_;
-  uint64_t bytesInCurrent_{0};
-  std::vector<IndexRange> rows_;
-
-  // First row of 'rows_' that is not appended to 'current_'
-  vector_size_t row_{0};
   std::unique_ptr<VectorStreamGroup> current_;
-  bool finished_{false};
 
   // Flush accumulated data to buffer manager after reaching this
   // percentage of target bytes or rows. This will make data for
@@ -110,6 +145,70 @@ class Destination {
 
   // Generator for varying target batch size. Randomly seeded at construction.
   folly::Random::DefaultGenerator rng_;
+};
+
+// Base class for destinations that do not need the block manager
+// These destinations rely on an external shuffle services
+class PassThroughDestination : public Destination {
+ public:
+  PassThroughDestination(
+      const std::string& taskId,
+      int destination,
+      memory::MappedMemory* FOLLY_NONNULL memory)
+      : Destination(taskId, destination, memory) {}
+
+  BlockingReason advance(
+      uint64_t maxBytes,
+      const std::vector<vector_size_t>& sizes,
+      const RowVectorPtr& output,
+      PartitionedOutputBufferManager& bufferManager,
+      bool* FOLLY_NONNULL atEnd,
+      ContinueFuture* FOLLY_NONNULL future) = 0;
+
+  BlockingReason flush(
+      PartitionedOutputBufferManager& bufferManager,
+      ContinueFuture* FOLLY_NULLABLE future) {
+    VELOX_FAIL("Passthrough destination should not implement flush!")
+  }
+
+  void
+  serialize(const RowVectorPtr& input, vector_size_t begin, vector_size_t end) {
+    VELOX_FAIL("Passthrough destination should not implement serialize!")
+  }
+};
+
+// Base class for the factory generating destinations
+class DestinationFactory {
+ public:
+  virtual std::unique_ptr<Destination> createDestination(
+      const std::string& taskId,
+      int destination,
+      memory::MappedMemory* FOLLY_NONNULL memory) = 0;
+
+  // Signals the destination factory about a new vector initialization
+  virtual void beginBatch(const RowVectorPtr& output) = 0;
+
+  // Signals the destination factory that an output is ready
+  virtual void outputReady() = 0;
+
+  virtual ~DestinationFactory() = default;
+};
+
+// Default factory for buffering destinations
+class BufferingDestinationFactory : public DestinationFactory {
+ public:
+  std::unique_ptr<Destination> createDestination(
+      const std::string& taskId,
+      int destination,
+      memory::MappedMemory* FOLLY_NONNULL memory) override {
+    return std::make_unique<BufferingDestination>(taskId, destination, memory);
+  }
+
+  void beginBatch(const RowVectorPtr& output) override {}
+
+  void outputReady() override {}
+
+  virtual ~BufferingDestinationFactory() = default;
 };
 
 // In a distributed query engine data needs to be shuffled between workers so
@@ -151,7 +250,8 @@ class PartitionedOutput : public Operator {
         bufferManager_(PartitionedOutputBufferManager::getInstance()),
         maxBufferedBytes_(
             ctx->task->queryCtx()->config().maxPartitionedOutputBufferSize()),
-        mappedMemory_{operatorCtx_->mappedMemory()} {
+        mappedMemory_{operatorCtx_->mappedMemory()},
+        destinationFactory_(destinationFactoryGenerator_s()) {
     if (numDestinations_ == 1 || planNode->isBroadcast()) {
       VELOX_CHECK(keyChannels_.empty());
       VELOX_CHECK_NULL(partitionFunction_);
@@ -184,6 +284,25 @@ class PartitionedOutput : public Operator {
 
   void close() override {
     destinations_.clear();
+  }
+
+  const static bool isDestinationBuffering() {
+    return isDestinationBuffering_s;
+  }
+
+  const std::unique_ptr<DestinationFactory>& destinationFactory() {
+    VELOX_CHECK(destinationFactory_ != nullptr);
+    return destinationFactory_;
+  }
+
+  using DestinationFactoryGenerator =
+      std::function<std::unique_ptr<DestinationFactory>()>;
+
+  static void registerDestinationFactory(
+      const DestinationFactoryGenerator& factoryGenerator,
+      bool isDestinationBuffering) {
+    destinationFactoryGenerator_s = std::move(factoryGenerator);
+    isDestinationBuffering_s = isDestinationBuffering;
   }
 
  private:
@@ -225,6 +344,9 @@ class PartitionedOutput : public Operator {
   SelectivityVector nullRows_;
   std::vector<uint32_t> partitions_;
   std::vector<DecodedVector> decodedVectors_;
+  std::unique_ptr<DestinationFactory> destinationFactory_ = nullptr;
+  static DestinationFactoryGenerator destinationFactoryGenerator_s;
+  static bool isDestinationBuffering_s;
 };
 
 } // namespace facebook::velox::exec

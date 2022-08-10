@@ -25,6 +25,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/LocalPlanner.h"
 #include "velox/exec/Merge.h"
+#include "velox/exec/PartitionedOutput.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/Task.h"
 #if CODEGEN_ENABLED == 1
@@ -158,7 +159,7 @@ Task::Task(
 
 Task::~Task() {
   try {
-    if (hasPartitionedOutput_) {
+    if (hasPartitionedOutput_ && hasBufferingPartitionedOutput_) {
       if (auto bufferManager = bufferManager_.lock()) {
         bufferManager->removeTask(taskId_);
       }
@@ -386,11 +387,15 @@ void Task::start(
           !self->hasPartitionedOutput_,
           "Only one output pipeline per task is supported");
       self->hasPartitionedOutput_ = true;
-      bufferManager->initializeTask(
-          self,
-          partitionedOutputNode->isBroadcast(),
-          partitionedOutputNode->numPartitions(),
-          self->numDriversInPartitionedOutput_ * numSplitGroups);
+      self->hasBufferingPartitionedOutput_ =
+          PartitionedOutput::isDestinationBuffering();
+      if (self->hasBufferingPartitionedOutput_) {
+        bufferManager->initializeTask(
+            self,
+            partitionedOutputNode->isBroadcast(),
+            partitionedOutputNode->numPartitions(),
+            self->numDriversInPartitionedOutput_ * numSplitGroups);
+      }
     }
 
     if (auto exchangeNodeId = factory->needsExchangeClient()) {
@@ -852,7 +857,7 @@ bool Task::checkNoMoreSplitGroupsLocked() {
   }
   if (noMoreSplitGroups) {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_;
-    if (hasPartitionedOutput_) {
+    if (hasPartitionedOutput_ && hasBufferingPartitionedOutput_) {
       auto bufferManager = bufferManager_.lock();
       bufferManager->updateNumDrivers(
           taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
@@ -972,14 +977,16 @@ bool Task::isFinishedLocked() const {
 }
 
 void Task::updateBroadcastOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  auto bufferManager = bufferManager_.lock();
-  VELOX_CHECK_NOT_NULL(
-      bufferManager,
-      "Unable to initialize task. "
-      "PartitionedOutputBufferManager was already destructed");
+  if (hasBufferingPartitionedOutput_) {
+    auto bufferManager = bufferManager_.lock();
+    VELOX_CHECK_NOT_NULL(
+        bufferManager,
+        "Unable to initialize task. "
+        "PartitionedOutputBufferManager was already destructed");
 
-  bufferManager->updateBroadcastOutputBuffers(
-      taskId_, numBuffers, noMoreBuffers);
+    bufferManager->updateBroadcastOutputBuffers(
+        taskId_, numBuffers, noMoreBuffers);
+  }
 }
 
 int Task::getOutputPipelineId() const {
@@ -1230,7 +1237,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   // Task. The Drivers are now detached from Task and therefore will
   // not go on thread. The reference in the future callback is
   // typically the last one.
-  if (hasPartitionedOutput_) {
+  if (hasPartitionedOutput_ && hasBufferingPartitionedOutput_) {
     if (auto bufferManager = bufferManager_.lock()) {
       bufferManager->removeTask(taskId_);
     }

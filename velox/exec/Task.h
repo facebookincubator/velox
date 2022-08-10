@@ -643,6 +643,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // True if produces output via PartitionedOutputBufferManager.
   bool hasPartitionedOutput_ = false;
+  // True if the partitions in PartitionedOutput need to write into the buffer
+  // manager
+  bool hasBufferingPartitionedOutput_ = false;
   // Set to true by PartitionedOutputBufferManager when all output is
   // acknowledged. If this happens before Drivers are at end, the last
   // Driver to finish will set state_ to kFinished. If Drivers have

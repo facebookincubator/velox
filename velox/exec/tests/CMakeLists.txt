@@ -40,6 +40,7 @@ add_executable(
   OrderByTest.cpp
   ParseTypeSignatureTest.cpp
   PartitionedOutputBufferManagerTest.cpp
+  PassThroughPartitionedOutputTest.cpp
   PlanBuilderTest.cpp
   PlanNodeToStringTest.cpp
   PrintPlanWithStatsTest.cpp

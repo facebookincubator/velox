@@ -19,7 +19,7 @@
 
 namespace facebook::velox::exec {
 
-BlockingReason Destination::advance(
+BlockingReason BufferingDestination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
@@ -58,7 +58,7 @@ BlockingReason Destination::advance(
   return BlockingReason::kNotBlocked;
 }
 
-void Destination::serialize(
+void BufferingDestination::serialize(
     const RowVectorPtr& output,
     vector_size_t begin,
     vector_size_t end) {
@@ -74,7 +74,7 @@ void Destination::serialize(
   current_->append(output, folly::Range(&rows_[begin], end - begin));
 }
 
-BlockingReason Destination::flush(
+BlockingReason BufferingDestination::flush(
     PartitionedOutputBufferManager& bufferManager,
     ContinueFuture* future) {
   if (!current_) {
@@ -125,7 +125,7 @@ void PartitionedOutput::initializeDestinations() {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
       destinations_.push_back(
-          std::make_unique<Destination>(taskId, i, mappedMemory_));
+          destinationFactory()->createDestination(taskId, i, mappedMemory_));
     }
   }
 }
@@ -168,9 +168,11 @@ void PartitionedOutput::addInput(RowVectorPtr input) {
   initializeDestinations();
 
   initializeSizeBuffers();
+  if (isDestinationBuffering()) {
+    estimateRowSizes();
+  }
 
-  estimateRowSizes();
-
+  destinationFactory()->beginBatch(output_);
   for (auto& destination : destinations_) {
     destination->beginBatch();
   }
@@ -236,6 +238,7 @@ RowVectorPtr PartitionedOutput::getOutput() {
   if (finished_) {
     return nullptr;
   }
+  auto isBuffering = isDestinationBuffering();
 
   blockingReason_ = BlockingReason::kNotBlocked;
   Destination* blockedDestination = nullptr;
@@ -277,8 +280,11 @@ RowVectorPtr PartitionedOutput::getOutput() {
           destination->serializedBytes() < kMinDestinationSize) {
         continue;
       }
-      destination->flush(*bufferManager, nullptr);
+      if (isBuffering) {
+        destination->flush(*bufferManager, nullptr);
+      }
     }
+    destinationFactory()->outputReady();
     return nullptr;
   }
   // All of 'output_' is written into the destinations. We are finishing, hence
@@ -289,21 +295,31 @@ RowVectorPtr PartitionedOutput::getOutput() {
       if (destination->isFinished()) {
         continue;
       }
-      destination->flush(*bufferManager, nullptr);
+      if (isBuffering) {
+        destination->flush(*bufferManager, nullptr);
+      }
       destination->setFinished();
     }
-
-    bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    if (isBuffering) {
+      bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    }
     finished_ = true;
   }
   // The input is fully processed, drop the reference to allow reuse.
   input_ = nullptr;
   output_ = nullptr;
+  destinationFactory()->outputReady();
   return nullptr;
 }
 
 bool PartitionedOutput::isFinished() {
   return finished_;
 }
+
+PartitionedOutput::DestinationFactoryGenerator
+    PartitionedOutput::destinationFactoryGenerator_s =
+        []() { return std::make_unique<BufferingDestinationFactory>(); };
+
+bool PartitionedOutput::isDestinationBuffering_s = true;
 
 } // namespace facebook::velox::exec
