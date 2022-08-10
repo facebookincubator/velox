@@ -33,13 +33,15 @@ class DecimalUtil {
   template <typename T>
   static std::string toString(const T& value, const TypePtr& type);
 
-  inline static std::optional<int128_t> rescaleWithRoundUp(
-      const int128_t& unscaledValue,
+  template <typename TInput, typename TOutput>
+  inline static std::optional<TOutput> rescaleWithRoundUp(
+      const TInput unscaledValue,
+      const uint8_t fromPrecision,
       const uint8_t fromScale,
       const uint8_t toPrecision,
       const uint8_t toScale,
       const bool nullOnFailure) {
-    auto rescaledValue = unscaledValue;
+    TOutput rescaledValue(unscaledValue.unscaledValue());
     auto scaleDifference = toScale - fromScale;
     if (scaleDifference >= 0) {
       rescaledValue *= DecimalUtil::kPowersOfTen[scaleDifference];
@@ -49,10 +51,10 @@ class DecimalUtil {
       int128_t remainder =
           unscaledValue % DecimalUtil::kPowersOfTen[scaleDifference];
       if (unscaledValue >= 0 &&
-          remainder > DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
-        rescaledValue++;
-      } else if (remainder < -DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
-        rescaledValue--;
+          remainder >= DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+        ++rescaledValue;
+      } else if (remainder <= -DecimalUtil::kPowersOfTen[scaleDifference] / 2) {
+        --rescaledValue;
       }
     }
     // Check overflowing
@@ -61,7 +63,12 @@ class DecimalUtil {
       if (nullOnFailure) {
         return std::nullopt;
       }
-      VELOX_FAIL();
+      VELOX_FAIL(
+          "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
+          DecimalUtil::toString<TInput>(
+              unscaledValue, DECIMAL(fromPrecision, fromScale)),
+          toPrecision,
+          toScale);
     }
     return rescaledValue;
   }

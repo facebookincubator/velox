@@ -169,15 +169,6 @@ class CastExpr : public SpecialForm {
       const TypePtr& fromType,
       const TypePtr& toType);
 
-  template <typename TInput, typename TOutput>
-  void applyDecimalCastKernel(
-      const SelectivityVector& rows,
-      DecodedVector& input,
-      exec::EvalCtx& context,
-      const TypePtr& fromType,
-      const TypePtr& toType,
-      VectorPtr castResult);
-
   // When enabled the error in casting leads to null being returned.
   const bool nullOnFailure_;
 

@@ -680,7 +680,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast("c0", shortFlat, expectedShort);
   // short to short, scale down.
   expectedShort =
-      makeShortDecimalFlatVector({0, 0, 0, 0, 5, 7, 7}, DECIMAL(4, 1));
+      makeShortDecimalFlatVector({0, 0, 0, 0, 6, 7, 7}, DECIMAL(4, 1));
   testComplexCast("c0", shortFlat, expectedShort);
 
   // long to short, scale up.
@@ -691,7 +691,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast("c0", longFlat, expectedShort);
   // long to short, scale down.
   expectedShort =
-      makeShortDecimalFlatVector({-20, -11, 0, 10, 21}, DECIMAL(10, 1));
+      makeShortDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(10, 1));
   testComplexCast("c0", longFlat, expectedShort);
 
   // long to long, scale up.
@@ -701,7 +701,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   testComplexCast("c0", longFlat, expectedShort);
   // long to long, scale down.
   expectedLong =
-      makeLongDecimalFlatVector({-20, -11, 0, 10, 21}, DECIMAL(20, 1));
+      makeLongDecimalFlatVector({-20, -11, 0, 11, 21}, DECIMAL(20, 1));
   testComplexCast("c0", longFlat, expectedLong);
 
   // short to long, scale up.
@@ -719,7 +719,7 @@ TEST_F(CastExprTest, decimalToDecimal) {
   // short to long, scale down.
   shortFlat = makeShortDecimalFlatVector(
       {-20'500, -190, 12'345, 19'999}, DECIMAL(6, 4));
-  expectedLong = makeLongDecimalFlatVector({-20, 0, 12, 20}, DECIMAL(20, 1));
+  expectedLong = makeLongDecimalFlatVector({-21, 0, 12, 20}, DECIMAL(20, 1));
   testComplexCast("c0", shortFlat, expectedLong);
 
   // NULLs and overflow.

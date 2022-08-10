@@ -49,6 +49,10 @@ struct ShortDecimal {
     return unscaledValue_ < other.unscaledValue_;
   }
 
+  bool operator<(const int128_t& other) const {
+    return unscaledValue_ < other;
+  }
+
   bool operator<=(const ShortDecimal& other) const {
     return unscaledValue_ <= other.unscaledValue_;
   }
@@ -57,8 +61,40 @@ struct ShortDecimal {
     return unscaledValue_ > other.unscaledValue_;
   }
 
-  bool operator>=(const ShortDecimal& other) const {
+  bool operator>(const int128_t& other) const {
+    return unscaledValue_ > other;
+  }
+
+  bool operator>=(const ShortDecimal other) const {
     return unscaledValue_ >= other.unscaledValue_;
+  }
+
+  bool operator>=(const int other) const {
+    return unscaledValue_ >= other;
+  }
+
+  ShortDecimal& operator*=(const int128_t& rhs) {
+    this->unscaledValue_ *= rhs;
+    return *this;
+  }
+
+  ShortDecimal& operator/=(const int128_t& rhs) {
+    this->unscaledValue_ /= rhs;
+    return *this;
+  }
+
+  int128_t operator%(const int128_t& rhs) const {
+    return this->unscaledValue_ % rhs;
+  }
+
+  ShortDecimal& operator++() {
+    ++this->unscaledValue_;
+    return *this;
+  }
+
+  ShortDecimal& operator--() {
+    --this->unscaledValue_;
+    return *this;
   }
 
  private:
