@@ -62,6 +62,14 @@ struct UnscaledLongDecimal {
     return unscaledValue_ <= other.unscaledValue_;
   }
 
+  bool operator>=(const int other) const {
+    return unscaledValue_ >= other;
+  }
+
+  int128_t operator%(const int128_t& rhs) const {
+    return unscaledValue_ % rhs;
+  }
+
  private:
   int128_t unscaledValue_;
 }; // struct UnscaledLongDecimal
