@@ -133,11 +133,11 @@ void LazyVector::ensureLoadedRows(
   } else {
     baseRows.resize(0);
     baseRows.resize(lazyVector->size(), false);
-    rows.applyToSelected([&](auto row) {
-      if (!decoded.isNullAt(row)) {
-        baseRows.setValid(decoded.index(row), true);
-      }
-    });
+    rows.applyToSelected(
+        [&](auto row) { baseRows.setValid(decoded.index(row), true); });
+    // Manually mark the last item to be selected to ensure end
+    // being no less than the expected size.
+    baseRows.setValid(lazyVector->size() - 1, true);
     baseRows.updateBounds();
 
     rowNumbers.resize(baseRows.end());
