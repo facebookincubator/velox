@@ -135,12 +135,20 @@ class HashJoinTest : public HiveConnectorTestBase {
     return stats[operatorIndex].inputPositions;
   }
 
+  static void ensureTaskCompletion(exec::Task* task) {
+    // ASSERT_TRUE requires a function with return type void.
+    ASSERT_TRUE(waitForTaskCompletion(task));
+  }
+
   static uint64_t getOutputPositions(
       const std::shared_ptr<Task>& task,
-      const std::string& operatorName) {
+      const core::PlanNodeId planId,
+      const std::string& operatorType) {
+    ensureTaskCompletion(task.get());
     for (const auto& pipelineStat : task->taskStats().pipelineStats) {
       for (const auto& operatorStat : pipelineStat.operatorStats) {
-        if (operatorStat.operatorType == operatorName) {
+        if (operatorStat.planNodeId == planId &&
+            operatorStat.operatorType == operatorType) {
           return operatorStat.outputPositions;
         }
       }
@@ -691,6 +699,7 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
   createDuckDbTable("t", {rightVectors});
 
   auto planNodeIdGenerator = std::make_shared<PlanNodeIdGenerator>();
+  core::PlanNodeId hashJoinId;
   auto plan = [&](const std::string& filter) -> core::PlanNodePtr {
     return PlanBuilder(planNodeIdGenerator)
         .values({leftVectors})
@@ -701,6 +710,7 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
             filter,
             {"t0", "t1"},
             core::JoinType::kRightSemi)
+        .capturePlanNodeId(hashJoinId)
         .planNode();
   };
   {
@@ -708,35 +718,35 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
     auto task = assertQuery(
         plan("u1 > -1"),
         "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > -1)");
-    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 1'000);
+    EXPECT_EQ(getOutputPositions(task, hashJoinId, "HashProbe"), 1'000);
   }
   {
     // Always true filter.
     auto task = assertQuery(
         plan("t1 > -1"),
         "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND t1 > -1)");
-    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 1'000);
+    EXPECT_EQ(getOutputPositions(task, hashJoinId, "HashProbe"), 1'000);
   }
   {
     // Always false filter.
     auto task = assertQuery(
         plan("u1 > 100000"),
         "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND u1 > 100000)");
-    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 0);
+    EXPECT_EQ(getOutputPositions(task, hashJoinId, "HashProbe"), 0);
   }
   {
     // Always false filter.
     auto task = assertQuery(
         plan("t1 > 100000"),
         "SELECT t.* FROM t WHERE EXISTS (SELECT u0 FROM u WHERE t0 = u0 AND t1 > 100000)");
-    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 0);
+    EXPECT_EQ(getOutputPositions(task, hashJoinId, "HashProbe"), 0);
   }
   {
     // Selective filter.
     auto task = assertQuery(
         plan("u1 % 5 = 0"),
         "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND u1 % 5 = 0)");
-    EXPECT_EQ(getOutputPositions(task, "HashProbe"), 200);
+    EXPECT_EQ(getOutputPositions(task, hashJoinId, "HashProbe"), 200);
   }
 }
 
