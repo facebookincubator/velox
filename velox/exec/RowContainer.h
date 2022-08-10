@@ -571,7 +571,7 @@ class RowContainer {
       uint8_t nullMask,
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
-    auto numRows = offsets->size();
+    auto numRows = offsets->size() / sizeof(vector_size_t);
     auto offsetsVector = offsets->as<vector_size_t>();
 
     BufferPtr nullBuffer = result->mutableNulls(resultOffset + numRows);
@@ -618,7 +618,7 @@ class RowContainer {
       int32_t columnOffset,
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
-    auto numRows = offsets->size();
+    auto numRows = offsets->size() / sizeof(vector_size_t);
     auto offsetsVector = offsets->as<vector_size_t>();
 
     BufferPtr valuesBuffer = result->mutableValues(resultOffset + numRows);
@@ -1042,6 +1042,53 @@ inline void RowContainer::extractValuesWithNulls<StringView>(
       result->setNull(i, true);
     } else {
       extractString(valueAt<StringView>(rows[i], offset), result, i);
+    }
+  }
+}
+
+template <>
+inline void RowContainer::extractValuesOffsetsNoNulls<StringView>(
+    const char* const* rows,
+    const BufferPtr& offsets,
+    int32_t columnOffset,
+    const vector_size_t resultOffset,
+    FlatVector<StringView>* result) {
+  auto numRows = offsets->size() / sizeof(vector_size_t);
+  auto offsetsVector = offsets->as<vector_size_t>();
+
+  for (int32_t i = 0; i < numRows; ++i) {
+    auto row = rows[offsetsVector[i]];
+    auto resultIndex = resultOffset + i;
+    if (row == nullptr) {
+      result->setNull(resultIndex, true);
+    } else {
+      result->setNull(resultIndex, false);
+      extractString(
+          valueAt<StringView>(row, columnOffset), result, resultIndex);
+    }
+  }
+}
+
+template <>
+inline void RowContainer::extractValuesOffsetsWithNulls<StringView>(
+    const char* const* rows,
+    const BufferPtr& offsets,
+    int32_t columnOffset,
+    int32_t nullByte,
+    uint8_t nullMask,
+    const vector_size_t resultOffset,
+    FlatVector<StringView>* result) {
+  auto numRows = offsets->size() / sizeof(vector_size_t);
+  auto offsetsVector = offsets->as<vector_size_t>();
+
+  for (int32_t i = 0; i < numRows; ++i) {
+    auto row = rows[offsetsVector[i]];
+    auto resultIndex = resultOffset + i;
+    if (!row || isNullAt(row, nullByte, nullMask)) {
+      result->setNull(resultIndex, true);
+    } else {
+      extractString(
+          valueAt<StringView>(row, columnOffset), result, resultIndex);
     }
   }
 }

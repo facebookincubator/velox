@@ -405,7 +405,7 @@ void RowContainer::extractOffsetsComplexType(
   auto nullMask = column.nullMask();
   auto columnOffset = column.offset();
 
-  auto numRows = offsets->size();
+  auto numRows = offsets->size() / sizeof(vector_size_t);
   auto offsetsVector = offsets->as<vector_size_t>();
   for (int i = 0; i < numRows; ++i) {
     auto row = rows[offsetsVector[i]];

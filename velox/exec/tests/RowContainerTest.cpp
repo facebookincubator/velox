@@ -80,7 +80,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     auto oddsSize = size / 2;
     auto offsetsBuffer =
         AlignedBuffer::allocate<vector_size_t>(oddsSize, pool_.get());
-    offsetsBuffer->setSize(oddsSize);
+    offsetsBuffer->setSize(oddsSize * sizeof(vector_size_t));
     auto rawOffsetsBuffer = offsetsBuffer->asMutable<vector_size_t>();
     for (int i = 0; i < oddsSize; i++) {
       rawOffsetsBuffer[i] = i * 2;
@@ -111,7 +111,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
 
     auto offsetsBuffer =
         AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
-    offsetsBuffer->setSize(size);
+    offsetsBuffer->setSize(size * sizeof(vector_size_t));
     auto rawOffsetsBuffer = offsetsBuffer->asMutable<vector_size_t>();
     for (int i = 0; i < size; i++) {
       rawOffsetsBuffer[i] = i;
