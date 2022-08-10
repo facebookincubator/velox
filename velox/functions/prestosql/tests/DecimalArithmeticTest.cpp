@@ -174,3 +174,43 @@ TEST_F(DecimalArithmeticTest, decimalSubTest) {
       "minus(c0, c1)",
       {shortWithNullsA, shortWithNullsB});
 }
+
+TEST_F(DecimalArithmeticTest, decimalMulTest) {
+  auto shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(17, 3));
+  auto expectedLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(34, 6));
+  // Multiply short and short, returning long.
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      expectedLongFlat, "multiply(c0, c1)", {shortFlat, shortFlat});
+  // Multiply short and long, returning long.
+  auto longFlat = makeLongDecimalFlatVector({1000, 2000}, DECIMAL(20, 3));
+  expectedLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(37, 6));
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      expectedLongFlat, "multiply(c0, c1)", {shortFlat, longFlat});
+  // Multiply long and short, returning long.
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      expectedLongFlat, "multiply(c0, c1)", {longFlat, shortFlat});
+  // Multiply long and long, returning long.
+  expectedLongFlat =
+      makeLongDecimalFlatVector({1000000, 4000000}, DECIMAL(38, 6));
+  testDecimalExpr<TypeKind::LONG_DECIMAL>(
+      expectedLongFlat, "multiply(c0, c1)", {longFlat, longFlat});
+
+  // Multiply short and short, returning short.
+  shortFlat = makeShortDecimalFlatVector({1000, 2000}, DECIMAL(6, 3));
+  auto expectedShortFlat =
+      makeShortDecimalFlatVector({1000000, 4000000}, DECIMAL(12, 6));
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      expectedShortFlat, "c0 * c1", {shortFlat, shortFlat});
+  auto expectedConstantFlat =
+      makeShortDecimalFlatVector({100000, 200000}, DECIMAL(9, 5));
+
+  // Constant and Flat arguments.
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      expectedConstantFlat, "1.00 * c0", {shortFlat});
+
+  // Flat and Constant arguments.
+  testDecimalExpr<TypeKind::SHORT_DECIMAL>(
+      expectedConstantFlat, "c0 * 1.00", {shortFlat});
+}
