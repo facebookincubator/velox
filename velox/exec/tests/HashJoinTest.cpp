@@ -734,8 +734,8 @@ TEST_F(HashJoinTest, rightSemiJoinWithFilter) {
   {
     // Selective filter.
     auto task = assertQuery(
-        plan("u1%5 = 0"),
-        "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND u1 %5 = 0)");
+        plan("u1 % 5 = 0"),
+        "SELECT t.* FROM t WHERE EXISTS (SELECT u0, u1 FROM u WHERE t0 = u0 AND u1 % 5 = 0)");
     EXPECT_EQ(getOutputPositions(task, "HashProbe"), 200);
   }
 }
