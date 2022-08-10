@@ -19,7 +19,7 @@
 
 namespace facebook::velox::exec {
 
-BlockingReason Destination::advance(
+BlockingReason StreamingDestination::advance(
     uint64_t maxBytes,
     const std::vector<vector_size_t>& sizes,
     const RowVectorPtr& output,
@@ -58,7 +58,7 @@ BlockingReason Destination::advance(
   return BlockingReason::kNotBlocked;
 }
 
-void Destination::serialize(
+void StreamingDestination::serialize(
     const RowVectorPtr& output,
     vector_size_t begin,
     vector_size_t end) {
@@ -74,7 +74,7 @@ void Destination::serialize(
   current_->append(output, folly::Range(&rows_[begin], end - begin));
 }
 
-BlockingReason Destination::flush(
+BlockingReason StreamingDestination::flush(
     PartitionedOutputBufferManager& bufferManager,
     ContinueFuture* future) {
   if (!current_) {
@@ -125,7 +125,7 @@ void PartitionedOutput::initializeDestinations() {
     auto taskId = operatorCtx_->taskId();
     for (int i = 0; i < numDestinations_; ++i) {
       destinations_.push_back(
-          std::make_unique<Destination>(taskId, i, mappedMemory_));
+          destinationFactory_->createDestination(taskId, i, mappedMemory_));
     }
   }
 }
@@ -292,8 +292,9 @@ RowVectorPtr PartitionedOutput::getOutput() {
       destination->flush(*bufferManager, nullptr);
       destination->setFinished();
     }
-
-    bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    if (destinationFactory_->needsBufferManager()) {
+      bufferManager->noMoreData(operatorCtx_->task()->taskId());
+    }
     finished_ = true;
   }
   // The input is fully processed, drop the reference to allow reuse.

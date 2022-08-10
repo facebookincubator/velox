@@ -386,11 +386,13 @@ void Task::start(
           !self->hasPartitionedOutput_,
           "Only one output pipeline per task is supported");
       self->hasPartitionedOutput_ = true;
-      bufferManager->initializeTask(
-          self,
-          partitionedOutputNode->isBroadcast(),
-          partitionedOutputNode->numPartitions(),
-          self->numDriversInPartitionedOutput_ * numSplitGroups);
+      if (partitionedOutputNode->isStreaming()) {
+        bufferManager->initializeTask(
+            self,
+            partitionedOutputNode->isBroadcast(),
+            partitionedOutputNode->numPartitions(),
+            self->numDriversInPartitionedOutput_ * numSplitGroups);
+      }
     }
 
     if (factory->needsExchangeClient()) {

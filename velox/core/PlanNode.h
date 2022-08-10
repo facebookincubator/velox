@@ -822,7 +822,8 @@ class PartitionedOutputNode : public PlanNode {
       bool replicateNullsAndAny,
       PartitionFunctionFactory partitionFunctionFactory,
       RowTypePtr outputType,
-      PlanNodePtr source)
+      PlanNodePtr source,
+      bool streaming = true)
       : PlanNode(id),
         sources_{{std::move(source)}},
         keys_(keys),
@@ -830,7 +831,8 @@ class PartitionedOutputNode : public PlanNode {
         broadcast_(broadcast),
         replicateNullsAndAny_(replicateNullsAndAny),
         partitionFunctionFactory_(std::move(partitionFunctionFactory)),
-        outputType_(std::move(outputType)) {
+        outputType_(std::move(outputType)),
+        streaming_(streaming) {
     VELOX_CHECK(numPartitions > 0, "numPartitions must be greater than zero");
     if (numPartitions == 1) {
       VELOX_CHECK(
@@ -919,6 +921,10 @@ class PartitionedOutputNode : public PlanNode {
     return "PartitionedOutput";
   }
 
+  bool isStreaming() const {
+    return streaming_;
+  }
+
  private:
   void addDetails(std::stringstream& stream) const override;
 
@@ -929,6 +935,7 @@ class PartitionedOutputNode : public PlanNode {
   const bool replicateNullsAndAny_;
   const PartitionFunctionFactory partitionFunctionFactory_;
   const RowTypePtr outputType_;
+  const bool streaming_;
 };
 
 enum class JoinType {
