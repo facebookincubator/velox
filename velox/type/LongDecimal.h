@@ -57,44 +57,16 @@ struct LongDecimal {
     return unscaledValue_ < other.unscaledValue_;
   }
 
-  bool operator<(const int128_t& other) const {
-    return unscaledValue_ < other;
-  }
-
   bool operator<=(const LongDecimal& other) const {
     return unscaledValue_ <= other.unscaledValue_;
-  }
-
-  bool operator>(const int128_t& other) const {
-    return unscaledValue_ > other;
   }
 
   bool operator>=(const int other) const {
     return unscaledValue_ >= other;
   }
 
-  LongDecimal& operator*=(const int128_t& rhs) {
-    unscaledValue_ *= rhs;
-    return *this;
-  }
-
-  LongDecimal& operator/=(const int128_t& rhs) {
-    unscaledValue_ /= rhs;
-    return *this;
-  }
-
   int128_t operator%(const int128_t& rhs) const {
     return unscaledValue_ % rhs;
-  }
-
-  LongDecimal& operator++() {
-    unscaledValue_++;
-    return *this;
-  }
-
-  LongDecimal& operator--() {
-    unscaledValue_--;
-    return *this;
   }
 
  private:

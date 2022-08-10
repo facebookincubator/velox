@@ -739,4 +739,20 @@ TEST_F(CastExprTest, decimalToDecimal) {
 
   // nullOnFailure is true.
   testComplexCast("c0", longFlat, expectedShort, true);
+
+  // long to short, big numbers.
+  longFlat = makeNullableLongDecimalFlatVector(
+      {buildInt128(10, 100),
+       buildInt128(-2, 200),
+       buildInt128(-1, 300),
+       buildInt128(0, 400),
+       buildInt128(1, 500),
+       std::nullopt},
+      DECIMAL(23, 8));
+
+  // 00000000000000000000000011001000
+  // 36893488147419103432
+  expectedShort = makeNullableShortDecimalFlatVector(
+      {-368934881474, -184467440737, 0, 184467440737, std::nullopt},
+      DECIMAL(12, 0));
 }
