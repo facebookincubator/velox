@@ -41,7 +41,7 @@ class DecimalUtil {
       const int toPrecision,
       const int toScale,
       const bool nullOnFailure) {
-    TOutput rescaledValue(inputValue.unscaledValue());
+    int128_t rescaledValue = inputValue.unscaledValue();
     auto scaleDifference = toScale - fromScale;
     if (scaleDifference >= 0) {
       rescaledValue *= DecimalUtil::kPowersOfTen[scaleDifference];
@@ -69,7 +69,11 @@ class DecimalUtil {
           toPrecision,
           toScale);
     }
-    return rescaledValue;
+    if constexpr (std::is_same_v<TOutput, ShortDecimal>) {
+      return ShortDecimal(static_cast<int64_t>(rescaledValue));
+    } else {
+      return LongDecimal(rescaledValue);
+    }
   }
 };
 } // namespace facebook::velox
