@@ -1329,70 +1329,91 @@ void SubstraitVeloxPlanConverter::constructSubfieldFilters(
   using RangeType = typename RangeTraits<KIND>::RangeType;
   using MultiRangeType = typename RangeTraits<KIND>::MultiRangeType;
 
+  if (!filterInfo->isInitialized()) {
+    return;
+  }
+
+  uint32_t rangeSize = std::max(
+      filterInfo->lowerBounds_.size(), filterInfo->upperBounds_.size());
+  bool nullAllowed = filterInfo->nullAllowed_;
+
   // Handle 'in' filter.
   if (filterInfo->valuesVector_.size() > 0) {
     setInFilter<KIND>(
-        filterInfo->valuesVector_,
-        filterInfo->nullAllowed_,
-        inputName,
-        filters);
+        filterInfo->valuesVector_, nullAllowed, inputName, filters);
     // Currently, In cannot coexist with other filter conditions
-    // due to multirange is in 'OR' relation but 'AND' can be needed.
+    // due to multirange is in 'OR' relation but 'AND' is needed.
     VELOX_CHECK(
-        filterInfo->lowerBounds_.size() == 0,
-        "Other conditons cannot be supported.");
+        rangeSize == 0,
+        "LowerBounds or upperBounds conditons cannot be supported after IN filter.");
     VELOX_CHECK(
-        filterInfo->upperBounds_.size() == 0,
-        "Other conditons cannot be supported.");
+        nullAllowed, "Null filtering cannot be supported after IN filter.");
+    VELOX_CHECK(
+        !filterInfo->notValue_.has_value(),
+        "Not equal cannot be supported after IN filter.");
     return;
   }
 
   // Construct the Filters.
   std::vector<std::unique_ptr<FilterType>> colFilters;
+
+  // Handle not(equal) filter.
+  if (filterInfo->notValue_) {
+    variant notVariant = filterInfo->notValue_.value();
+    createNotEqualFilter<KIND, FilterType>(
+        notVariant, filterInfo->nullAllowed_, colFilters);
+    // Currently, Not-equal cannot coexist with other filter conditions
+    // due to multirange is in 'OR' relation but 'AND' is needed.
+    VELOX_CHECK(
+        rangeSize == 0,
+        "LowerBounds or upperBounds conditons cannot be supported after not-equal filter.");
+    filters[common::Subfield(inputName)] =
+        std::make_unique<MultiRangeType>(std::move(colFilters), nullAllowed);
+    return;
+  }
+
+  // Handle null filtering.
+  if (rangeSize == 0 && !nullAllowed) {
+    std::unique_ptr<common::IsNotNull> filter =
+        std::make_unique<common::IsNotNull>();
+    filters[common::Subfield(inputName)] = std::move(filter);
+    return;
+  }
+
+  // Handle other filter ranges.
   NativeType lowerBound = getLowest<NativeType>();
   NativeType upperBound = getMax<NativeType>();
   bool lowerUnbounded = true;
   bool upperUnbounded = true;
   bool lowerExclusive = false;
   bool upperExclusive = false;
-  if (filterInfo->isInitialized()) {
-    // Handle not(equal) filter.
-    if (filterInfo->notValue_) {
-      variant notVariant = filterInfo->notValue_.value();
-      createNotEqualFilter<KIND, FilterType>(
-          notVariant, filterInfo->nullAllowed_, colFilters);
-    }
 
-    // Handle other filter ranges.
-    uint32_t rangeSize = std::max(
-        filterInfo->lowerBounds_.size(), filterInfo->upperBounds_.size());
-    bool nullAllowed = filterInfo->nullAllowed_;
-    for (uint32_t idx = 0; idx < rangeSize; idx++) {
-      if (idx < filterInfo->lowerBounds_.size() &&
-          filterInfo->lowerBounds_[idx]) {
-        lowerUnbounded = false;
-        variant lowerVariant = filterInfo->lowerBounds_[idx].value();
-        lowerBound = lowerVariant.value<NativeType>();
-        lowerExclusive = filterInfo->lowerExclusives_[idx];
-      }
-      if (idx < filterInfo->upperBounds_.size() &&
-          filterInfo->upperBounds_[idx]) {
-        upperUnbounded = false;
-        variant upperVariant = filterInfo->upperBounds_[idx].value();
-        upperBound = upperVariant.value<NativeType>();
-        upperExclusive = filterInfo->upperExclusives_[idx];
-      }
-      std::unique_ptr<FilterType> filter = std::make_unique<RangeType>(
-          lowerBound,
-          lowerUnbounded,
-          lowerExclusive,
-          upperBound,
-          upperUnbounded,
-          upperExclusive,
-          nullAllowed);
-      colFilters.emplace_back(std::move(filter));
+  for (uint32_t idx = 0; idx < rangeSize; idx++) {
+    if (idx < filterInfo->lowerBounds_.size() &&
+        filterInfo->lowerBounds_[idx]) {
+      lowerUnbounded = false;
+      variant lowerVariant = filterInfo->lowerBounds_[idx].value();
+      lowerBound = lowerVariant.value<NativeType>();
+      lowerExclusive = filterInfo->lowerExclusives_[idx];
     }
+    if (idx < filterInfo->upperBounds_.size() &&
+        filterInfo->upperBounds_[idx]) {
+      upperUnbounded = false;
+      variant upperVariant = filterInfo->upperBounds_[idx].value();
+      upperBound = upperVariant.value<NativeType>();
+      upperExclusive = filterInfo->upperExclusives_[idx];
+    }
+    std::unique_ptr<FilterType> filter = std::make_unique<RangeType>(
+        lowerBound,
+        lowerUnbounded,
+        lowerExclusive,
+        upperBound,
+        upperUnbounded,
+        upperExclusive,
+        nullAllowed);
+    colFilters.emplace_back(std::move(filter));
   }
+
   // Set the SubfieldFilter.
   setSubfieldFilter<KIND, FilterType>(
       std::move(colFilters), inputName, filterInfo->nullAllowed_, filters);
