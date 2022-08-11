@@ -25,34 +25,40 @@
 
 namespace facebook::velox::substrait {
 
-/// A map store function names in difference between Velox and Substrait.
 using FunctionMappingMap = std::unordered_map<std::string, std::string>;
 
-struct SubstraitFunctionMappings {
-  /// scalar function names in difference between velox and Substrait.
-  static FunctionMappingMap& scalarMappings();
+class SubstraitFunctionMappings {
+ public:
+  /// scalar function names in difference between  engine own and Substrait.
+  virtual const FunctionMappingMap scalarMappings() const = 0;
 
-  /// aggregate function names in difference between velox and Substrait.
-  static FunctionMappingMap& aggregateMappings();
+  /// aggregate function names in difference between  engine own and Substrait.
+  virtual const FunctionMappingMap aggregateMappings() const = 0;
 
-  /// window function names in difference between velox and Substrait.
-  static FunctionMappingMap& windowMappings();
+  /// window function names in difference between engine own and Substrait.
+  virtual const FunctionMappingMap windowMappings() const = 0;
 };
+
+using SubstraitFunctionMappingsPtr =
+    std::shared_ptr<const SubstraitFunctionMappings>;
 
 class SubstraitFunctionLookup {
  public:
   SubstraitFunctionLookup(
-      const std::vector<SubstraitFunctionVariantPtr>& functions);
+      const std::vector<SubstraitFunctionVariantPtr>& functions,
+      const SubstraitFunctionMappingsPtr& functionMappings);
 
-  /// lookup function variant by given CallTyped Expression
-  std::optional<std::shared_ptr<SubstraitFunctionVariant>> lookupFunction(
-      google::protobuf::Arena& arena,
-      const core::CallTypedExprPtr& callTypeExpr) const;
+  /// lookup function variant by given functionName and types
+  const std::optional<SubstraitFunctionVariantPtr> lookupFunction(
+      const std::string& functionName,
+      const std::vector<::substrait::Type>& types) const;
 
  protected:
   /// get the map which store the function names in difference between velox and
   /// substrait.
-  virtual const FunctionMappingMap& getFunctionMappings() const = 0;
+  virtual const FunctionMappingMap getFunctionMappings() const = 0;
+
+  SubstraitFunctionMappingsPtr functionMappings_;
 
  private:
   class SubstraitFunctionFinder {
@@ -61,16 +67,14 @@ class SubstraitFunctionLookup {
         const std::string& name,
         const std::vector<SubstraitFunctionVariantPtr>& functions);
 
-    std::optional<std::shared_ptr<SubstraitFunctionVariant>> lookupFunction(
+    std::optional<SubstraitFunctionVariantPtr> lookupFunction(
         const std::string& substraitFuncName,
-        google::protobuf::Arena& arena,
-        const core::CallTypedExprPtr& exprPtr) const;
+        const std::vector<::substrait::Type>& types) const;
 
    private:
     const std::string& name_;
     std::unordered_map<std::string, SubstraitFunctionVariantPtr> directMap_;
     std::optional<SubstraitFunctionVariantPtr> anyTypeOption_;
-    VeloxToSubstraitTypeConvertorPtr typeConvertor_;
   };
 
   using SubstraitFunctionFinderPtr =
@@ -83,14 +87,15 @@ class SubstraitFunctionLookup {
 class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
  public:
   SubstraitScalarFunctionLookup(
-      const std::vector<SubstraitFunctionVariantPtr>& functions)
-      : SubstraitFunctionLookup(functions) {}
+      const std::vector<SubstraitFunctionVariantPtr>& functions,
+      const SubstraitFunctionMappingsPtr& functionMappings)
+      : SubstraitFunctionLookup(functions, functionMappings) {}
 
  protected:
   /// A  map store the difference of scalar function names between velox
   /// and substrait.
-  const FunctionMappingMap& getFunctionMappings() const override {
-    return SubstraitFunctionMappings::scalarMappings();
+  const FunctionMappingMap getFunctionMappings() const override {
+    return functionMappings_->scalarMappings();
   }
 };
 
@@ -100,14 +105,15 @@ using SubstraitScalarFunctionLookupPtr =
 class SubstraitAggregateFunctionLookup : public SubstraitFunctionLookup {
  public:
   SubstraitAggregateFunctionLookup(
-      const std::vector<SubstraitFunctionVariantPtr>& functions)
-      : SubstraitFunctionLookup(functions) {}
+      const std::vector<SubstraitFunctionVariantPtr>& functions,
+      const SubstraitFunctionMappingsPtr& functionMappings)
+      : SubstraitFunctionLookup(functions, functionMappings) {}
 
  protected:
   /// A  map store the difference of aggregate function names between velox
   /// and substrait.
-  const FunctionMappingMap& getFunctionMappings() const override {
-    return SubstraitFunctionMappings::aggregateMappings();
+  const FunctionMappingMap getFunctionMappings() const override {
+    return functionMappings_->aggregateMappings();
   }
 };
 

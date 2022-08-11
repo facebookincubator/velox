@@ -150,7 +150,8 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
       break;
     }
     case velox::TypeKind::UNKNOWN: {
-      auto substraitTypeAnchor = typeLookup_->lookupType(type);
+      //velox unknown type binding to substrait unknown type
+      auto substraitTypeAnchor = typeLookup_->lookupType("unknown");
       if (substraitTypeAnchor.has_value()) {
         auto substraitUserDefined = google::protobuf::Arena::CreateMessage<
             ::substrait::Type_UserDefined>(&arena);

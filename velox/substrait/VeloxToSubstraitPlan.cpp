@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "velox/substrait/SubstraitExtension.h"
+#include "velox/substrait/VeloxToSubstraitMappings.h"
 #include "velox/substrait/VeloxToSubstraitPlan.h"
 
 namespace facebook::velox::substrait {
@@ -46,23 +47,36 @@ namespace {
 
 // Merge the two RowTypePointer into one.
 std::shared_ptr<facebook::velox::RowType> mergeRowTypes(
-  RowTypePtr leftRowTypePtr, RowTypePtr rightRowTypePtr) {
-
+    RowTypePtr leftRowTypePtr,
+    RowTypePtr rightRowTypePtr) {
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   // TODO: Swith to RowType::unionWith when it's implemented;
   // auto joinInputType = leftRowTypePtr->unionWith(rightRowTypePtr);
-  names.insert(names.end(), leftRowTypePtr->names().begin(), leftRowTypePtr->names().end());
-  names.insert(names.end(), rightRowTypePtr->names().begin(), rightRowTypePtr->names().end());
-  types.insert(types.end(), leftRowTypePtr->children().begin(), leftRowTypePtr->children().end());
-  types.insert(types.end(), rightRowTypePtr->children().begin(), rightRowTypePtr->children().end());
+  names.insert(
+      names.end(),
+      leftRowTypePtr->names().begin(),
+      leftRowTypePtr->names().end());
+  names.insert(
+      names.end(),
+      rightRowTypePtr->names().begin(),
+      rightRowTypePtr->names().end());
+  types.insert(
+      types.end(),
+      leftRowTypePtr->children().begin(),
+      leftRowTypePtr->children().end());
+  types.insert(
+      types.end(),
+      rightRowTypePtr->children().begin(),
+      rightRowTypePtr->children().end());
 
   // Union two input RowType.
   return std::make_shared<RowType>(std::move(names), std::move(types));
 }
 
 // Return true if the join type is supported.
-bool checkForSupportJoinType(const std::shared_ptr<const core::AbstractJoinNode>& nodePtr) {
+bool checkForSupportJoinType(
+    const std::shared_ptr<const core::AbstractJoinNode>& nodePtr) {
   // TODO: Implemented other types of Join.
   return nodePtr->isInnerJoin();
 }
@@ -79,8 +93,12 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
   typeConvertor_ = std::make_shared<VeloxToSubstraitTypeConvertor>(
       extensionCollector_, typeLookup);
   // Construct the scalar function lookup
-  auto scalarFunctionLookup = std::make_shared<SubstraitScalarFunctionLookup>(
-      substraitExtension_->scalarFunctionVariants);
+
+  auto functionMappings =
+      std::make_shared<const VeloxToSubstraitFunctionMappings>();
+  auto scalarFunctionLookup =
+      std::make_shared<const SubstraitScalarFunctionLookup>(
+          substraitExtension_->scalarFunctionVariants, functionMappings);
 
   // Construct the if/Then call converter
   auto ifThenCallConverter =
@@ -88,7 +106,7 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
   // Construct the scalar function converter.
   auto scalaFunctionConverter =
       std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
-          scalarFunctionLookup, extensionCollector_);
+          scalarFunctionLookup, extensionCollector_, typeConvertor_);
 
   std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
   callConvertors.push_back(ifThenCallConverter);
@@ -100,7 +118,7 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
 
   // Construct the aggregate function lookup
   aggregateFunctionLookup_ = std::make_shared<SubstraitAggregateFunctionLookup>(
-      substraitExtension_->aggregateFunctionVariants);
+      substraitExtension_->aggregateFunctionVariants, functionMappings);
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
@@ -334,8 +352,16 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
+    std::vector<::substrait::Type> inputTypes;
+    inputTypes.reserve(aggregatesExpr->inputs().size());
+    for (auto& input : aggregatesExpr->inputs()) {
+      auto& substraitType =
+          typeConvertor_->toSubstraitType(arena, input->type());
+      inputTypes.emplace_back(substraitType);
+    }
+
     auto aggregateFunctionOption =
-        aggregateFunctionLookup_->lookupFunction(arena, aggregatesExpr);
+        aggregateFunctionLookup_->lookupFunction(funName, inputTypes);
 
     if (!aggregateFunctionOption.has_value()) {
       VELOX_NYI(
@@ -411,6 +437,5 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     return;
   }
 }
-
 
 } // namespace facebook::velox::substrait

@@ -23,12 +23,13 @@ namespace facebook::velox::substrait {
 class SubstraitTypeLookup {
  public:
   SubstraitTypeLookup(const std::vector<SubstraitTypeAnchorPtr>& types);
-  /// lookup substrait type anchor by given velox type
-  // currently only support unknown type.
-  std::optional<SubstraitTypeAnchorPtr> lookupType(const TypePtr& type) const;
+  /// lookup substrait type anchor by given type name
+  std::optional<SubstraitTypeAnchorPtr> lookupType(
+      const std::string& typeName) const;
 
  private:
-  SubstraitTypeAnchorPtr unknownType;
+  // type signatures , key is type name, value is the type anchor
+  std::unordered_map<std::string, SubstraitTypeAnchorPtr> signatures_;
 };
 
 using SubstraitTypeLookupPtr = std::shared_ptr<const SubstraitTypeLookup>;

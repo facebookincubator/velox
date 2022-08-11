@@ -57,12 +57,22 @@ VeloxToSubstraitScalarFunctionConverter::convert(
     const core::CallTypedExprPtr& callTypeExpr,
     google::protobuf::Arena& arena,
     SubstraitExprConverter& topLevelConverter) const {
+
+  const auto& veloxFunctionName = callTypeExpr->name();
+  std::vector<::substrait::Type> types;
+
+  for (auto& input : callTypeExpr->inputs()) {
+    auto& substraitType = typeConvertor_->toSubstraitType(arena, input->type());
+    types.emplace_back(substraitType);
+  }
+
   const auto& scalarFunctionOption =
-      functionLookup_->lookupFunction(arena, callTypeExpr);
+      functionLookup_->lookupFunction(veloxFunctionName, types);
 
   if (!scalarFunctionOption.has_value()) {
     return std::nullopt;
   }
+
   auto* substraitExpr =
       google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
   auto scalarExpr = substraitExpr->mutable_scalar_function();

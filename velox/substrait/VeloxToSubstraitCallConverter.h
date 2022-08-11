@@ -45,7 +45,6 @@ class VeloxToSubstraitCallConverter {
 using VeloxToSubstraitCallConverterPtr =
     std::shared_ptr<const VeloxToSubstraitCallConverter>;
 
-
 /// convert 'if/switch' CallTypedExpr to substrait ifThen expression.
 class VeloxToSubstraitIfThenConverter : public VeloxToSubstraitCallConverter {
  public:
@@ -55,16 +54,17 @@ class VeloxToSubstraitIfThenConverter : public VeloxToSubstraitCallConverter {
       SubstraitExprConverter& topLevelConverter) const override;
 };
 
-
 /// convert callTypedExpr to substrait expression except 'if/switch'
 class VeloxToSubstraitScalarFunctionConverter
     : public VeloxToSubstraitCallConverter {
  public:
   VeloxToSubstraitScalarFunctionConverter(
-      const SubstraitScalarFunctionLookupPtr functionLookup,
-      const SubstraitExtensionCollectorPtr extensionCollector)
+      const SubstraitScalarFunctionLookupPtr& functionLookup,
+      const SubstraitExtensionCollectorPtr& extensionCollector,
+      const VeloxToSubstraitTypeConvertorPtr typeConvertor)
       : functionLookup_(functionLookup),
-        extensionCollector_(extensionCollector) {}
+        extensionCollector_(extensionCollector),
+        typeConvertor_(typeConvertor) {}
 
   const std::optional<::substrait::Expression*> convert(
       const core::CallTypedExprPtr& callTypeExpr,
@@ -72,8 +72,8 @@ class VeloxToSubstraitScalarFunctionConverter
       SubstraitExprConverter& topLevelConverter) const override;
 
  private:
-  const SubstraitExtensionCollectorPtr extensionCollector_;
-  const SubstraitScalarFunctionLookupPtr functionLookup_;
+  SubstraitScalarFunctionLookupPtr functionLookup_;
+  SubstraitExtensionCollectorPtr extensionCollector_;
   VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 };
 

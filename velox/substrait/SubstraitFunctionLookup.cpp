@@ -21,29 +21,10 @@
 
 namespace facebook::velox::substrait {
 
-FunctionMappingMap& SubstraitFunctionMappings::scalarMappings() {
-  static FunctionMappingMap scalarMap{
-      {"plus", "add"},
-      {"minus", "subtract"},
-      {"mod", "modulus"},
-      {"eq", "equal"},
-      {"neq", "not_equal"},
-  };
-  return scalarMap;
-}
-
-FunctionMappingMap& SubstraitFunctionMappings::aggregateMappings() {
-  static FunctionMappingMap aggregateMap;
-  return aggregateMap;
-}
-
-FunctionMappingMap& SubstraitFunctionMappings::windowMappings() {
-  static FunctionMappingMap windowMap;
-  return windowMap;
-}
-
 SubstraitFunctionLookup::SubstraitFunctionLookup(
-    const std::vector<SubstraitFunctionVariantPtr>& functions) {
+    const std::vector<SubstraitFunctionVariantPtr>& functions,
+    const SubstraitFunctionMappingsPtr& functionMappings)
+    : functionMappings_(functionMappings) {
   std::unordered_map<std::string, std::vector<SubstraitFunctionVariantPtr>>
       signatures;
 
@@ -65,16 +46,15 @@ SubstraitFunctionLookup::SubstraitFunctionLookup(
   }
 }
 
-std::optional<SubstraitFunctionVariantPtr>
+const std::optional<SubstraitFunctionVariantPtr>
 SubstraitFunctionLookup::lookupFunction(
-    google::protobuf::Arena& arena,
-    const core::CallTypedExprPtr& callTypeExpr) const {
-  const auto& veloxFunctionName = callTypeExpr->name();
-  const auto& functionMappings = this->getFunctionMappings();
+    const std::string& functionName,
+    const std::vector<::substrait::Type>& types) const {
+  const auto& functionMappings = getFunctionMappings();
   const auto& substraitFunctionName =
-      functionMappings.find(veloxFunctionName) != functionMappings.end()
-      ? functionMappings.at(veloxFunctionName)
-      : veloxFunctionName;
+      functionMappings.find(functionName) != functionMappings.end()
+      ? functionMappings.at(functionName)
+      : functionName;
 
   if (functionSignatures_.find(substraitFunctionName) ==
       functionSignatures_.end()) {
@@ -82,8 +62,7 @@ SubstraitFunctionLookup::lookupFunction(
   }
 
   const auto& functionFinder = functionSignatures_.at(substraitFunctionName);
-  return functionFinder->lookupFunction(
-      substraitFunctionName, arena, callTypeExpr);
+  return functionFinder->lookupFunction(substraitFunctionName, types);
 }
 
 SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
@@ -116,15 +95,7 @@ SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
 std::optional<SubstraitFunctionVariantPtr>
 SubstraitFunctionLookup::SubstraitFunctionFinder::lookupFunction(
     const std::string& substraitFuncName,
-    google::protobuf::Arena& arena,
-    const core::CallTypedExprPtr& expr) const {
-  std::vector<::substrait::Type> types;
-
-  for (auto& input : expr->inputs()) {
-    auto& substraitType = typeConvertor_->toSubstraitType(arena, input->type());
-    types.emplace_back(substraitType);
-  }
-
+    const std::vector<::substrait::Type>& types) const {
   const auto& signature =
       SubstraitTypeUtil::signature(substraitFuncName, types);
   /// try to do a direct match

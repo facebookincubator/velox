@@ -24,17 +24,14 @@ namespace facebook::velox::substrait {
 SubstraitTypeLookup::SubstraitTypeLookup(
     const std::vector<SubstraitTypeAnchorPtr>& types) {
   for (auto& typeAnchor : types) {
-    if (typeAnchor->name == "unknown") {
-      unknownType = typeAnchor;
-      break;
-    }
+    signatures_.insert({typeAnchor->name, typeAnchor});
   }
 }
 
 std::optional<SubstraitTypeAnchorPtr> SubstraitTypeLookup::lookupType(
-    const TypePtr& type) const {
-  if (type->isUnKnown()) {
-    return std::make_optional(unknownType);
+    const std::string& typeName) const {
+  if (signatures_.find(typeName) != signatures_.end()) {
+    return std::make_optional(signatures_.at(typeName));
   }
   return std::nullopt;
 }

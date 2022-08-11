@@ -29,7 +29,7 @@ class VeloxToSubstraitExprConvertor {
   /// each of which is responsible for convert Velox CallTypedExpr into
   /// Corresponding Substrait Expression.
   explicit VeloxToSubstraitExprConvertor(
-      const VeloxToSubstraitTypeConvertorPtr typeConvertor,
+      const VeloxToSubstraitTypeConvertorPtr& typeConvertor,
       const std::vector<VeloxToSubstraitCallConverterPtr>& callConverters)
       : typeConvertor_(typeConvertor), callConverters_(callConverters) {}
 
@@ -98,7 +98,6 @@ class VeloxToSubstraitExprConvertor {
       const velox::variant& variantValue);
 
   const VeloxToSubstraitTypeConvertorPtr typeConvertor_;
-
   const std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
 };
 
