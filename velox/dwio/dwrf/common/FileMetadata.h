@@ -212,6 +212,39 @@ class ProtoType {
   }
 };
 
+class ProtoUserMetadataItem {
+  dwrfFormat format_;
+  void* impl_;
+
+ public:
+  explicit ProtoUserMetadataItem(proto::UserMetadataItem* item)
+      : format_{dwrfFormat::kDwrf}, impl_{item} {}
+  explicit ProtoUserMetadataItem(proto::orc::UserMetadataItem* item)
+      : format_{dwrfFormat::kOrc}, impl_{item} {}
+
+  dwrfFormat format() const {
+    return format_;
+  }
+
+  const std::string& name() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->name() : orcPtr()->name();
+  }
+
+  const std::string& value() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->value()
+                                        : orcPtr()->value();
+  }
+
+ private:
+  // private helper with no format checking
+  inline proto::UserMetadataItem* dwrfPtr() const {
+    return reinterpret_cast<proto::UserMetadataItem*>(impl_);
+  }
+  inline proto::orc::UserMetadataItem* orcPtr() const {
+    return reinterpret_cast<proto::orc::UserMetadataItem*>(impl_);
+  }
+};
+
 class Footer {
   dwrfFormat format_;
   void* impl_;
@@ -295,8 +328,7 @@ class Footer {
   }
 
   uint32_t rowIndexStride() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
-    return dwrfPtr()->rowindexstride();
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->rowindexstride() : 0;
   }
 
   int stripeCacheOffsetsSize() const {
@@ -319,13 +351,13 @@ class Footer {
       ::facebook::velox::dwrf::proto::ColumnStatistics>&
   statistics() const {
     DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
-    return dwrfFooter_->statistics();
+    return dwrfPtr()->statistics();
   }
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& statistics(
       int index) const {
     DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
-    return dwrfFooter_->statistics(index);
+    return dwrfPtr()->statistics(index);
   }
 
   // TODO: ORC has not supported encryption yet
@@ -335,7 +367,7 @@ class Footer {
 
   const ::facebook::velox::dwrf::proto::Encryption& encryption() const {
     DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
-    return dwrfFooter_->encryption();
+    return dwrfPtr()->encryption();
   }
 
   int stripesSize() const {
@@ -360,25 +392,15 @@ class Footer {
         : ProtoType(orcPtr()->mutable_types(index));
   }
 
-  /***
-   * TODO
-   ***/
   int metadataSize() const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->metadata_size();
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->metadata_size()
+                                        : orcPtr()->metadata_size();
   }
 
-  const ::google::protobuf::RepeatedPtrField<
-      ::facebook::velox::dwrf::proto::UserMetadataItem>&
-  metadata() const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->metadata();
-  }
-
-  const ::facebook::velox::dwrf::proto::UserMetadataItem& metadata(
-      int index) const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->metadata(index);
+  ProtoUserMetadataItem metadata(int index) const {
+    return format_ == dwrfFormat::kDwrf
+        ? ProtoUserMetadataItem(dwrfPtr()->mutable_metadata(index))
+        : ProtoUserMetadataItem(orcPtr()->mutable_metadata(index));
   }
 
  private:
@@ -389,30 +411,6 @@ class Footer {
   inline proto::orc::Footer* orcPtr() const {
     return reinterpret_cast<proto::orc::Footer*>(impl_);
   }
-
- private:
-  uint64_t headerLength_;
-  uint64_t contentLength_;
-  uint64_t numberOfRows_;
-  uint32_t rowIndexStride_;
-  // TODO: wrap stripes, types, metadata, column statistics
-
-  // DWRF-specific
-  uint64_t rawDataSize_;
-  std::vector<uint32_t> stripeCacheOffsets_;
-  proto::ChecksumAlgorithm checksumAlgorithm_;
-  // TODO: encryption fallback to dwrfFooter_
-
-  // ORC-specific
-  // TODO: getter
-  uint32_t writer_;
-  // TODO: encryption
-  proto::orc::CalendarKind calendarKind_;
-  std::string softwareVersion_;
-
-  // pointers to format-specific footers
-  proto::Footer* dwrfFooter_ = nullptr;
-  proto::orc::Footer* orcFooter_ = nullptr;
 };
 
 } // namespace facebook::velox::dwrf

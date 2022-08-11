@@ -89,7 +89,7 @@ TypeKind ProtoType::kind() const {
     case proto::orc::Type_Kind_STRING:
     case proto::orc::Type_Kind_BINARY:
     case proto::orc::Type_Kind_TIMESTAMP:
-      return static_cast<TypeKind>(dwrfPtr()->kind());
+      return static_cast<TypeKind>(orcPtr()->kind());
     case proto::orc::Type_Kind_LIST:
       return TypeKind::ARRAY;
     case proto::orc::Type_Kind_MAP:

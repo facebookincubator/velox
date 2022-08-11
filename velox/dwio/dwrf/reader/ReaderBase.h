@@ -189,19 +189,16 @@ class ReaderBase {
         : WriterVersion::FUTURE;
   }
 
-  // TODO: fix after metadata is done
   const std::string& getWriterName() const {
+    for (int32_t index = 0; index < footer_->metadataSize(); ++index) {
+      auto entry = footer_->metadata(index);
+      if (entry.name() == WRITER_NAME_KEY) {
+        return entry.value();
+      }
+    }
+
     static const std::string kEmpty;
     return kEmpty;
-
-    // for (auto& entry : footer_->metadata()) {
-    //   if (entry.name() == WRITER_NAME_KEY) {
-    //     return entry.value();
-    //   }
-    // }
-
-    // static const std::string kEmpty;
-    // return kEmpty;
   }
 
   std::unique_ptr<dwio::common::Statistics> getStatistics() const;
