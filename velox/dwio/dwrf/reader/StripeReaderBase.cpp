@@ -20,7 +20,7 @@ namespace facebook::velox::dwrf {
 
 using dwio::common::LogType;
 
-const ProtoStripeInformation StripeReaderBase::loadStripe(
+ProtoStripeInformation StripeReaderBase::loadStripe(
     uint32_t index,
     bool& preload) {
   auto& footer = reader_->getFooter();

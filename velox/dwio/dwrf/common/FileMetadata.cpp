@@ -31,9 +31,9 @@ CompressionKind orcCompressionToCompressionKind(
     case proto::orc::CompressionKind::LZO:
       return CompressionKind::CompressionKind_LZO;
     case proto::orc::CompressionKind::LZ4:
-      return CompressionKind::CompressionKind_ZSTD;
-    case proto::orc::CompressionKind::ZSTD:
       return CompressionKind::CompressionKind_LZ4;
+    case proto::orc::CompressionKind::ZSTD:
+      return CompressionKind::CompressionKind_ZSTD;
   }
   return CompressionKind::CompressionKind_NONE;
 }
@@ -89,7 +89,7 @@ TypeKind ProtoType::kind() const {
       case proto::Type_Kind_STRUCT:
         return TypeKind::ROW;
       default:
-        DWIO_RAISE("Unknown type kind");
+        VELOX_FAIL("Unknown type kind");
     }
   }
 
@@ -124,7 +124,7 @@ TypeKind ProtoType::kind() const {
           "{} not supported yet.",
           proto::orc::Type_Kind_Name(orcPtr()->kind()));
     default:
-      DWIO_RAISE("Unknown type kind");
+      VELOX_FAIL("Unknown type kind");
   }
 }
 

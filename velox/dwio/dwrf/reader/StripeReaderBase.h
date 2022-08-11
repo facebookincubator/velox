@@ -44,7 +44,7 @@ class StripeReaderBase {
 
   virtual ~StripeReaderBase() = default;
 
-  const ProtoStripeInformation loadStripe(uint32_t index, bool& preload);
+  ProtoStripeInformation loadStripe(uint32_t index, bool& preload);
 
   const proto::StripeFooter& getStripeFooter() const {
     DWIO_ENSURE_NOT_NULL(footer_, "stripe not loaded");

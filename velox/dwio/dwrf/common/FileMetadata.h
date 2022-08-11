@@ -24,7 +24,7 @@
 
 namespace facebook::velox::dwrf {
 
-enum DwrfFormat : uint8_t { kDwrf, kOrc };
+enum class DwrfFormat : uint8_t { kDwrf, kOrc };
 
 class ProtoWrapperBase {
  protected:
@@ -290,12 +290,12 @@ class Footer : public ProtoWrapperBase {
       : ProtoWrapperBase(DwrfFormat::kOrc, footer) {}
 
   const proto::Footer* getDwrfPtr() const {
-    DWIO_ENSURE(format_ == kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return reinterpret_cast<proto::Footer*>(rawProtoPtr());
   }
 
   const proto::orc::Footer* getOrcPtr() const {
-    DWIO_ENSURE(format_ == kOrc);
+    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
     return reinterpret_cast<proto::orc::Footer*>(rawProtoPtr());
   }
 
