@@ -210,6 +210,22 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, sumMask) {
       "FROM tmp");
 }
 
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, caseWhen) {
+  auto vectors = makeVectors(3, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan =
+      PlanBuilder().values(vectors).project({"case when 1=1 then 1 else 0  end as x" }).planNode();
+  assertPlanConversion(plan, "SELECT case when 1=1 then 1 else 0  end as x  FROM tmp");
+}
+
+TEST_F(VeloxSubstraitRoundTripPlanConverterTest, ifThen) {
+  auto vectors = makeVectors(3, 4, 2);
+  createDuckDbTable(vectors);
+  auto plan =
+      PlanBuilder().values(vectors).project({"if (1=1, 0,1) as x" }).planNode();
+  assertPlanConversion(plan, "SELECT if (1=1, 0,1) as x  FROM tmp");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::init(&argc, &argv, false);

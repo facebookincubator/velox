@@ -62,9 +62,6 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
   // Construct the if/Then call converter
   auto ifThenCallConverter =
       std::make_shared<VeloxToSubstraitIfThenConverter>();
-  // Construct the switch call converter
-  auto switchCallConverter =
-      std::make_shared<VeloxToSubstraitIfThenConverter>();
   // Construct the scalar function converter.
   auto scalaFunctionConverter =
       std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
@@ -72,7 +69,6 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
 
   std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
   callConvertors.push_back(ifThenCallConverter);
-  callConvertors.push_back(switchCallConverter);
   callConvertors.push_back(scalaFunctionConverter);
 
   // Construct the expression converter.

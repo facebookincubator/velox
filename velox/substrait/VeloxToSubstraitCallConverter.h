@@ -46,7 +46,7 @@ using VeloxToSubstraitCallConverterPtr =
     std::shared_ptr<const VeloxToSubstraitCallConverter>;
 
 
-/// convert 'if' CallTypedExpr to substrait ifThen expression.
+/// convert 'if/switch' CallTypedExpr to substrait ifThen expression.
 class VeloxToSubstraitIfThenConverter : public VeloxToSubstraitCallConverter {
  public:
   const std::optional<::substrait::Expression*> convert(
@@ -55,14 +55,6 @@ class VeloxToSubstraitIfThenConverter : public VeloxToSubstraitCallConverter {
       SubstraitExprConverter& topLevelConverter) const override;
 };
 
-/// convert 'switch' CallTypedExpr to substrait switch expression.
-class VeloxToSubstraitSwitchConverter : public VeloxToSubstraitCallConverter {
- public:
-  const std::optional<::substrait::Expression*> convert(
-      const core::CallTypedExprPtr& callTypeExpr,
-      google::protobuf::Arena& arena,
-      SubstraitExprConverter& topLevelConverter) const override;
-};
 
 /// convert callTypedExpr to substrait expression except 'if/switch'
 class VeloxToSubstraitScalarFunctionConverter
