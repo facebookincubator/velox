@@ -98,7 +98,8 @@ class ReaderBase {
             stream_
                 ? std::make_unique<dwio::common::BufferedInput>(*stream_, pool_)
                 : nullptr},
-        schema_{std::dynamic_pointer_cast<const RowType>(convertType(*footer))},
+        schema_{
+            std::dynamic_pointer_cast<const RowType>(convertType(*footer_))},
         fileLength_{0},
         psLength_{0} {
     DWIO_ENSURE(footer_->getDwrfPtr()->GetArena());
@@ -188,15 +189,19 @@ class ReaderBase {
         : WriterVersion::FUTURE;
   }
 
+  // TODO: fix after metadata is done
   const std::string& getWriterName() const {
-    for (auto& entry : footer_->metadata()) {
-      if (entry.name() == WRITER_NAME_KEY) {
-        return entry.value();
-      }
-    }
-
     static const std::string kEmpty;
     return kEmpty;
+
+    // for (auto& entry : footer_->metadata()) {
+    //   if (entry.name() == WRITER_NAME_KEY) {
+    //     return entry.value();
+    //   }
+    // }
+
+    // static const std::string kEmpty;
+    // return kEmpty;
   }
 
   std::unique_ptr<dwio::common::Statistics> getStatistics() const;
@@ -237,7 +242,7 @@ class ReaderBase {
 
  private:
   static std::shared_ptr<const Type> convertType(
-      const proto::Footer& footer,
+      const Footer& footer,
       uint32_t index = 0);
 
   memory::MemoryPool& pool_;

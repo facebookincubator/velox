@@ -50,4 +50,67 @@ PostScript::PostScript(const proto::orc::PostScript& ps)
       metadataLength_{ps.metadatalength()},
       stripeStatisticsLength_{ps.stripestatisticslength()} {}
 
+TypeKind ProtoType::kind() const {
+  if (format_ == dwrfFormat::kDwrf) {
+    switch (dwrfPtr()->kind()) {
+      case proto::Type_Kind_BOOLEAN:
+      case proto::Type_Kind_BYTE:
+      case proto::Type_Kind_SHORT:
+      case proto::Type_Kind_INT:
+      case proto::Type_Kind_LONG:
+      case proto::Type_Kind_FLOAT:
+      case proto::Type_Kind_DOUBLE:
+      case proto::Type_Kind_STRING:
+      case proto::Type_Kind_BINARY:
+      case proto::Type_Kind_TIMESTAMP:
+        return static_cast<TypeKind>(dwrfPtr()->kind());
+      case proto::Type_Kind_LIST:
+        return TypeKind::ARRAY;
+      case proto::Type_Kind_MAP:
+        return TypeKind::MAP;
+      case proto::Type_Kind_UNION: {
+        DWIO_RAISE("Union type is deprecated!");
+      }
+      case proto::Type_Kind_STRUCT:
+        return TypeKind::ROW;
+      default:
+        DWIO_RAISE("Unknown type kind");
+    }
+  }
+
+  switch (orcPtr()->kind()) {
+    case proto::orc::Type_Kind_BOOLEAN:
+    case proto::orc::Type_Kind_BYTE:
+    case proto::orc::Type_Kind_SHORT:
+    case proto::orc::Type_Kind_INT:
+    case proto::orc::Type_Kind_LONG:
+    case proto::orc::Type_Kind_FLOAT:
+    case proto::orc::Type_Kind_DOUBLE:
+    case proto::orc::Type_Kind_STRING:
+    case proto::orc::Type_Kind_BINARY:
+    case proto::orc::Type_Kind_TIMESTAMP:
+      return static_cast<TypeKind>(dwrfPtr()->kind());
+    case proto::orc::Type_Kind_LIST:
+      return TypeKind::ARRAY;
+    case proto::orc::Type_Kind_MAP:
+      return TypeKind::MAP;
+    case proto::orc::Type_Kind_UNION: {
+      DWIO_RAISE("Union type is deprecated!");
+    }
+    case proto::orc::Type_Kind_STRUCT:
+      return TypeKind::ROW;
+    case proto::orc::Type_Kind_VARCHAR:
+      return TypeKind::VARCHAR;
+    case proto::orc::Type_Kind_DECIMAL:
+    case proto::orc::Type_Kind_DATE:
+    case proto::orc::Type_Kind_CHAR:
+    case proto::orc::Type_Kind_TIMESTAMP_INSTANT:
+      DWIO_RAISE(
+          "{} not supported yet.",
+          proto::orc::Type_Kind_Name(orcPtr()->kind()));
+    default:
+      DWIO_RAISE("Unknown type kind");
+  }
+}
+
 } // namespace facebook::velox::dwrf

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -154,30 +156,71 @@ class ProtoStripeInformation {
   }
 };
 
+class ProtoType {
+  dwrfFormat format_;
+  void* impl_;
+
+ public:
+  explicit ProtoType(proto::Type* t) : format_{dwrfFormat::kDwrf}, impl_{t} {}
+  explicit ProtoType(proto::orc::Type* t)
+      : format_{dwrfFormat::kOrc}, impl_{t} {}
+
+  dwrfFormat format() const {
+    return format_;
+  }
+
+  TypeKind kind() const;
+
+  int subtypesSize() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes_size()
+                                        : orcPtr()->subtypes_size();
+  }
+
+  const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
+  subtypes() {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes()
+                                        : orcPtr()->subtypes();
+  }
+
+  uint32_t subtypes(int index) const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes(index)
+                                        : orcPtr()->subtypes(index);
+  }
+
+  int fieldNamesSize() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames_size()
+                                        : orcPtr()->fieldnames_size();
+  }
+
+  const ::google::protobuf::RepeatedPtrField<std::string>& fieldNames() {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames()
+                                        : orcPtr()->fieldnames();
+  }
+
+  const std::string& fieldNames(int index) const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames(index)
+                                        : orcPtr()->fieldnames(index);
+  }
+
+ private:
+  // private helper with no format checking
+  inline proto::Type* dwrfPtr() const {
+    return reinterpret_cast<proto::Type*>(impl_);
+  }
+  inline proto::orc::Type* orcPtr() const {
+    return reinterpret_cast<proto::orc::Type*>(impl_);
+  }
+};
+
 class Footer {
   dwrfFormat format_;
   void* impl_;
 
  public:
   explicit Footer(proto::Footer* footer)
-      : format_{dwrfFormat::kDwrf},
-        impl_{footer},
-        headerLength_{footer->has_headerlength() ? footer->headerlength() : 0},
-        contentLength_{
-            footer->has_contentlength() ? footer->contentlength() : 0},
-        numberOfRows_{footer->has_numberofrows() ? footer->numberofrows() : 0},
-        rowIndexStride_{
-            footer->has_rowindexstride() ? footer->rowindexstride() : 0},
-        rawDataSize_{footer->has_rawdatasize() ? footer->rawdatasize() : 0},
-        checksumAlgorithm_{
-            footer->has_checksumalgorithm() ? footer->checksumalgorithm()
-                                            : proto::ChecksumAlgorithm::NULL_},
-        dwrfFooter_{footer} {
-    stripeCacheOffsets_.reserve(footer->stripecacheoffsets_size());
-    for (const auto offset : footer->stripecacheoffsets()) {
-      stripeCacheOffsets_.push_back(offset);
-    }
-  }
+      : format_{dwrfFormat::kDwrf}, impl_{footer} {}
+  explicit Footer(proto::orc::Footer* footer)
+      : format_{dwrfFormat::kOrc}, impl_{footer} {}
 
   dwrfFormat format() const {
     return format_;
@@ -306,26 +349,20 @@ class Footer {
         : ProtoStripeInformation(orcPtr()->mutable_stripes(index));
   }
 
+  int typesSize() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->types_size()
+                                        : orcPtr()->types_size();
+  }
+
+  ProtoType types(int index) const {
+    return format_ == dwrfFormat::kDwrf
+        ? ProtoType(dwrfPtr()->mutable_types(index))
+        : ProtoType(orcPtr()->mutable_types(index));
+  }
+
   /***
    * TODO
    ***/
-  int typesSize() const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->types_size();
-  }
-
-  const ::google::protobuf::RepeatedPtrField<
-      ::facebook::velox::dwrf::proto::Type>&
-  types() const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->types();
-  }
-
-  const ::facebook::velox::dwrf::proto::Type& types(int index) const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->types(index);
-  }
-
   int metadataSize() const {
     DWIO_ENSURE(dwrfFooter_);
     return dwrfFooter_->metadata_size();
