@@ -19,6 +19,8 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 endif()
 
 add_subdirectory(xsimd)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "Enable testing")
+include_directories(yaml-cpp/include)
 add_subdirectory(yaml-cpp)
 
 if(VELOX_ENABLE_ARROW)
