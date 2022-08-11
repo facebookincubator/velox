@@ -103,7 +103,7 @@ using <code class="docutils literal notranslate"><span class="pre">string</span>
 <dl class="py function">
 <dt class="sig sig-object py" id="date_trunc">
 <span class="sig-name descname"><span class="pre">date_trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unit</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#date_trunc" title="Permalink to this definition">¶</a></dt>
-<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> truncated to <code class="docutils literal notranslate"><span class="pre">unit</span></code>. The supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are TIMESTAMP and DATE.</p>
+<dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> truncated to <code class="docutils literal notranslate"><span class="pre">unit</span></code>. The supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE.</p>
 </dd></dl>
 
 </section>
@@ -315,7 +315,7 @@ pattern format. The symbols currently supported are <code class="docutils litera
 </section>
 <section id="convenience-extraction-functions">
 <h2>Convenience Extraction Functions<a class="headerlink" href="#convenience-extraction-functions" title="Permalink to this headline">¶</a></h2>
-<p>These functions are supported for TIMESTAMP, DATE, and Presto TIMESTAMPWITHTIMEZONE values.</p>
+<p>These functions support TIMESTAMP, DATE, and TIMESTAMP WITH TIME ZONE input types.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="day">
 <span class="sig-name descname"><span class="pre">day</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#day" title="Permalink to this definition">¶</a></dt>

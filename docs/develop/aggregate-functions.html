@@ -159,8 +159,10 @@ accumulators.</p>
 <dt>Prepare:</dt><dd><ul>
 <li><p>Figure out what are the input, intermediate and final types.</p></li>
 <li><p>Figure out what are partial and final calculations.</p></li>
-<li><p>Design the accumulator.</p></li>
-<li><p>Create a new class that extends velox::exec::Aggregate base class (see velox/exec/Aggregate.h) and implement virtual methods.</p></li>
+<li><p>Design the accumulator. Make sure the same accumulator can accept both raw
+inputs and intermediate results.</p></li>
+<li><p>Create a new class that extends velox::exec::Aggregate base class
+(see velox/exec/Aggregate.h) and implement virtual methods.</p></li>
 </ul>
 </dd>
 </dl>
@@ -232,35 +234,100 @@ accumulators.</p>
 <p>At this point you have accumulatorFixedWidthSize() and initializeNewGroups() methods implemented. Now, we can proceed to implementing the end-to-end group-by aggregation. We need the following pieces:</p>
 <ul class="simple">
 <li><dl class="simple">
-<dt>Logic for adding raw input to the partial accumulator:</dt><dd><ul>
+<dt>Logic for adding raw input to the accumulator:</dt><dd><ul>
 <li><p>addRawInput() method.</p></li>
 </ul>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>Logic for producing intermediate results from the partial accumulator:</dt><dd><ul>
+<dt>Logic for producing intermediate results from the accumulator:</dt><dd><ul>
 <li><p>extractAccumulators() method.</p></li>
 </ul>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>Logic for adding intermediate results to the final accumulator:</dt><dd><ul>
+<dt>Logic for adding intermediate results to the accumulator:</dt><dd><ul>
 <li><p>addIntermediateResults() method.</p></li>
 </ul>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>Logic for producing final results from the final accumulator:</dt><dd><ul>
+<dt>Logic for producing final results from the accumulator:</dt><dd><ul>
 <li><p>extractValues() method.</p></li>
 </ul>
 </dd>
 </dl>
 </li>
+<li><dl class="simple">
+<dt>Logic for adding previously spilled data back to the accumulator:</dt><dd><ul>
+<li><p>addSingleGroupIntermediateResults() method.</p></li>
 </ul>
-<p>We start with the addRawInput() method which receives raw input vectors and adds the data to partial accumulators.</p>
+</dd>
+</dl>
+</li>
+</ul>
+<p>Some methods are only used in a subset of aggregation workflows. The following
+tables shows which methods are used in which workflows.</p>
+<table class="colwidths-given docutils align-default">
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Method</p></th>
+<th class="head"><p>Partial</p></th>
+<th class="head"><p>Final</p></th>
+<th class="head"><p>Single</p></th>
+<th class="head"><p>Intermediate</p></th>
+<th class="head"><p>Streaming</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>addRawInput</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>extractAccumulators</p></td>
+<td><p>Y</p></td>
+<td><p>Y (used for spilling)</p></td>
+<td><p>Y (used for spilling)</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>addIntermediateResults</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>extractValues</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>addSingleGroupIntermediateResults</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+</tr>
+</tbody>
+</table>
+<p>We start with the addRawInput() method which receives raw input vectors and adds the data to accumulators.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the accumulator in &#39;groups&#39; with the values in &#39;args&#39;.</span>
 <span class="c1">// @param groups Pointers to the start of the group rows. These are aligned</span>
 <span class="c1">// with the &#39;args&#39;, e.g. data in the i-th row of the &#39;args&#39; goes to the i-th group.</span>
@@ -280,7 +347,7 @@ accumulators.</p>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
-<p>addRawInput() method would use DecodedVector’s to decode the input data. Then, loop over rows to update the accumulators. I recommend defining a member variable of type DecodedVector for each input vector. This allows for reusing the memory needed to decode the inputs between batches of input.</p>
+<p>addRawInput() method would use DecodedVector’s to decode the input data. Then, loop over rows to update the accumulators. It is a good practice to define a member variable of type DecodedVector for each input vector. This allows for reusing the memory needed to decode the inputs between batches of input.</p>
 <p>After implementing the addRawInput() method, we proceed to adding logic for extracting intermediate results.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Extracts partial results (used for partial and intermediate aggregations).</span>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
@@ -290,7 +357,7 @@ accumulators.</p>
 <span class="nf">extractAccumulators</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
-<p>Next, we implement the addIntermediateResults() method that receives intermediate results and updates final accumulators.</p>
+<p>Next, we implement the addIntermediateResults() method that receives intermediate results and updates accumulators.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addIntermediateResults</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
@@ -298,7 +365,7 @@ accumulators.</p>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
-<p>Finally we implement the extractValues() method that extracts final results from the accumulators.</p>
+<p>Next, we implement the extractValues() method that extracts final results from the accumulators.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Extracts final results (used for final and single aggregations).</span>
 <span class="c1">// @param groups Pointers to the start of the group rows.</span>
 <span class="c1">// @param numGroups Number of groups to extract results from.</span>
@@ -307,11 +374,29 @@ accumulators.</p>
 <span class="nf">extractValues</span><span class="p">(</span><span class="kt">char</span><span class="o">**</span><span class="w"> </span><span class="n">groups</span><span class="p">,</span><span class="w"> </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">numGroups</span><span class="p">,</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
+<p>Finally, we implement the addSingleGroupIntermediateResults() method that is used to add previously spilled data back to the accumulator.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the single final accumulator from intermediate results for global</span>
+<span class="c1">// aggregation.</span>
+<span class="c1">// @param group Pointer to the start of the group row.</span>
+<span class="c1">// @param rows Rows of the &#39;args&#39; to add to the accumulators. These may not</span>
+<span class="c1">// be contiguous if the aggregation has mask. &#39;rows&#39; is guaranteed to have at</span>
+<span class="c1">// least one active row.</span>
+<span class="c1">// @param args Intermediate results produced by extractAccumulators().</span>
+<span class="c1">// @param mayPushdown True if aggregation can be pushdown down via LazyVector.</span>
+<span class="c1">// The pushdown can happen only if this flag is true and &#39;args&#39; is a single</span>
+<span class="c1">// LazyVector.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">addSingleGroupIntermediateResults</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="kt">char</span><span class="o">*</span><span class="w"> </span><span class="n">group</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
 <p>GroupBy aggregation code path is done. We proceed to global aggregation.</p>
 </section>
 <section id="global-aggregation">
 <h2>Global aggregation<a class="headerlink" href="#global-aggregation" title="Permalink to this headline">¶</a></h2>
-<p>Global aggregation is similar to group-by aggregation, but there is only one group and one accumulator. After implementing group-by aggregation, the only thing needed to enable global aggregation is to implement addSingleGroupRawInput() and addSingleGroupIntermediateResults() methods.</p>
+<p>Global aggregation is similar to group-by aggregation, but there is only one group and one accumulator. After implementing group-by aggregation, the only thing needed to enable global aggregation is to implement addSingleGroupRawInput() method (addSingleGroupIntermediateResults() method is already implemented as it is used for spilling group by).</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Updates the single accumulator used for global aggregation.</span>
 <span class="c1">// @param group Pointer to the start of the group row.</span>
 <span class="c1">// @param allRows A contiguous range of row numbers starting from 0.</span>
@@ -326,6 +411,58 @@ accumulators.</p>
 <span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">mayPushdown</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"></span>
 </pre></div>
 </div>
+<p>Spilling is not helpful for global aggregations, hence, it is not supported. The
+following table shows which methods are used in different global aggregation
+workflows.</p>
+<table class="colwidths-given docutils align-default">
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Method</p></th>
+<th class="head"><p>Partial</p></th>
+<th class="head"><p>Final</p></th>
+<th class="head"><p>Single</p></th>
+<th class="head"><p>Intermediate</p></th>
+<th class="head"><p>Streaming</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>addSingleGroupRawInput</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>extractAccumulators</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-even"><td><p>addSingleGroupIntermediateResults</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+</tr>
+<tr class="row-odd"><td><p>extractValues</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+<td><p>Y</p></td>
+<td><p>N</p></td>
+<td><p>Y</p></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="factory-function">
 <h2>Factory function<a class="headerlink" href="#factory-function" title="Permalink to this headline">¶</a></h2>
@@ -414,71 +551,58 @@ result type is the same as input value type.</p>
 works.</p>
 <p>Use AggregationTestBase from velox/aggregates/tests/AggregationTestBase.h as a
 base class for the test.</p>
-<p>If the new aggregate function is supported by DuckDB, you can use DuckDB to
-check results. In this case you write a query plan with an aggregation node
-that uses the new function and compare the results of that plan with SQL query
-that runs on DuckDB.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">agg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">values</span><span class="p">(</span><span class="n">vectors</span><span class="p">)</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">partialAggregation</span><span class="p">({</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">})</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">()</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
-<span class="n">assertQuery</span><span class="p">(</span><span class="n">agg</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span><span class="w"></span>
+<p>If the new aggregate function is supported by <a class="reference external" href="https://duckdb.org/docs/sql/aggregates">DuckDB</a>, you can use DuckDB to check
+results. In this case you specify input data, grouping keys, a list of
+aggregates and a SQL query to run on DuckDB to calculate the expected results
+and call helper function testAggregates defined in AggregationTestBase class.
+Grouping keys can be empty for global aggregations.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT sum(c1) FROM tmp&quot;</span><span class="p">);</span><span class="w"></span>
+
+<span class="c1">// Group by aggregation.</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;sum(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;SELECT c0, sum(c1) FROM tmp GROUP BY 1&quot;</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
 <p>If the new function is not supported by DuckDB, you need to specify the expected
 results manually.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">testGroupByAgg</span><span class="p">(</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">keys</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">values</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="n">percentile</span><span class="p">,</span><span class="w"></span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">RowVectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
-<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">rowVector</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">makeRowVector</span><span class="p">({</span><span class="n">keys</span><span class="p">,</span><span class="w"> </span><span class="n">values</span><span class="p">});</span><span class="w"></span>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// Global aggregation.</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
 
-<span class="w">  </span><span class="k">auto</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"></span>
-<span class="w">      </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">rowVector</span><span class="p">})</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">singleAggregation</span><span class="p">(</span><span class="w"></span>
-<span class="w">              </span><span class="p">{</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">fmt</span><span class="o">::</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;approx_percentile(c1, {})&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)})</span><span class="w"></span>
-<span class="w">          </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
-
-<span class="w">  </span><span class="n">assertQuery</span><span class="p">(</span><span class="n">op</span><span class="p">,</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
-
-<span class="w">  </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">values</span><span class="p">({</span><span class="n">rowVector</span><span class="p">})</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">partialAggregation</span><span class="p">(</span><span class="w"></span>
-<span class="w">               </span><span class="p">{</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">fmt</span><span class="o">::</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;approx_percentile(c1, {})&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)})</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">()</span><span class="w"></span>
-<span class="w">           </span><span class="p">.</span><span class="n">planNode</span><span class="p">();</span><span class="w"></span>
-
-<span class="w">  </span><span class="n">assertQuery</span><span class="p">(</span><span class="n">op</span><span class="p">,</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
-<span class="p">}</span><span class="w"></span>
+<span class="c1">// Group by aggregation.</span>
+<span class="n">testAggregations</span><span class="p">(</span><span class="n">vectors</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;c0&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;map_union(c1)&quot;</span><span class="p">},</span><span class="w"> </span><span class="n">expectedResult</span><span class="p">);</span><span class="w"></span>
 </pre></div>
 </div>
-<p>As shown in the example above, you can use PlanBuilder to create aggregation plan nodes.</p>
+<p>Under the covers, testAggregations method generates multiple different but
+logically equivalent plans, executes these plans, verifies successful
+completion and compares the results with DuckDB or specified expected results.</p>
+<p>The following query plans are being tested.</p>
 <ul class="simple">
-<li><p>partialAggregation() creates plan node for a partial aggregation</p></li>
-<li><p>finalAggregation() creates plan node for a final aggregation</p></li>
-<li><p>singleAggregation() creates plan node for a single agg</p></li>
+<li><p>Partial aggregation followed by final aggregation. Query runs
+single-threaded.</p></li>
+<li><p>Single aggregation. Query runs single-threaded.</p></li>
+<li><p>Partial aggregation followed by intermediate aggregation followed by final
+aggregation. Query runs single-threaded.</p></li>
+<li><p>Partial aggregation followed by local exchange on the grouping keys followed
+by final aggregation. Query runs using 4 threads.</p></li>
+<li><p>Local exchange using round-robin repartitioning followed by partial
+aggregation followed by local exchange on the grouping keys followed by
+final aggregation with forced spilling. Query runs using 4 threads.</p></li>
 </ul>
-<p>partialAggregation() and singleAggregation() methods take a list of grouping
-keys (as indices into the input RowVector) and a list of aggregate functions
-(as SQL strings). Testing framework parses SQL strings for the aggregate
-functions and infers the types of the results using signatures stored in the
-registry.</p>
-<p>finalAggregation() method doesn’t take any parameters and infers grouping keys
-and aggregate functions from the preceding partial aggregation.</p>
-<p>When building a plan that includes final aggregation without the corresponding
-partial aggregation, use finalAggregation() variant that takes grouping keys,
-aggregate functions and aggregate functions result types.</p>
-<p>For example,</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">PlanBuilder</span><span class="p">()</span><span class="w"></span>
-<span class="w">    </span><span class="p">...</span><span class="w"></span>
-<span class="w">    </span><span class="p">.</span><span class="n">finalAggregation</span><span class="p">({</span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;approx_percentile(a0)&quot;</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="n">DOUBLE</span><span class="p">()})</span><span class="w"></span>
-</pre></div>
-</div>
-<p>creates a final aggregation using an approx_percentile aggregate function with
-DOUBLE result type.</p>
+<p>Query run with forced spilling is enabled only for group-by aggregations and
+only if <cite>allowInputShuffle_</cite> flag is enabled by calling allowInputShuffle
+() method from the SetUp(). Spill testing requires multiple batches of input.
+To split input data into multiple batches we add local exchange with
+round-robin repartitioning before the partial aggregation. This changes the order
+in which aggregation inputs are processed, hence, query results with spilling
+are expected to be the same as without spilling only if aggregate functions used
+in the query are not sensitive to the order of inputs. Many functions produce
+the same results regardless of the order of inputs, but some functions may return
+different results if inputs are provided in a different order. For
+example, <a class="reference internal" href="../functions/aggregate.html#arbitrary" title="arbitrary"><code class="xref py py-func docutils literal notranslate"><span class="pre">arbitrary()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#array_agg" title="array_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">array_agg()</span></code></a>, <a class="reference internal" href="../functions/aggregate.html#map_agg" title="map_agg"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_agg()</span></code></a> and
+<a class="reference internal" href="../functions/aggregate.html#map_union" title="map_union"><code class="xref py py-func docutils literal notranslate"><span class="pre">map_union()</span></code></a> functions are sensitive to the order of inputs,
+and <a class="reference internal" href="../functions/aggregate.html#min_by" title="min_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">min_by()</span></code></a> and <a class="reference internal" href="../functions/aggregate.html#max_by" title="max_by"><code class="xref py py-func docutils literal notranslate"><span class="pre">max_by()</span></code></a> functions are sensitive to the order of
+inputs in the presence of ties.</p>
 </section>
 <section id="function-names">
 <h2>Function names<a class="headerlink" href="#function-names" title="Permalink to this headline">¶</a></h2>
