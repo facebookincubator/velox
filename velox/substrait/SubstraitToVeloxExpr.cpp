@@ -232,30 +232,6 @@ SubstraitVeloxExprConverter::toExtractExpr(
 }
 
 std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toRowConstructorExpr(
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
-    const std::string& typeName) {
-  std::vector<std::string> structTypeNames;
-  subParser_->getSubFunctionTypes(typeName, structTypeNames);
-  VELOX_CHECK(
-      structTypeNames.size() > 0, "At lease one type name is expected.");
-
-  // Preparation for the conversion from struct types to RowType.
-  std::vector<TypePtr> rowTypes;
-  std::vector<std::string> names;
-  for (int idx = 0; idx < structTypeNames.size(); idx++) {
-    std::string substraitTypeName = structTypeNames[idx];
-    names.emplace_back("col_" + std::to_string(idx));
-    rowTypes.emplace_back(std::move(toVeloxType(substraitTypeName)));
-  }
-
-  return std::make_shared<const core::CallTypedExpr>(
-      ROW(std::move(names), std::move(rowTypes)),
-      std::move(params),
-      "row_constructor");
-}
-
-std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& sFunc,
     const RowTypePtr& inputType) {
@@ -276,9 +252,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   }
   if (veloxFunction == "is_not_null") {
     return toIsNotNullExpr(std::move(params), toVeloxType(typeName));
-  }
-  if (veloxFunction == "row_constructor") {
-    return toRowConstructorExpr(std::move(params), typeName);
   }
 
   return std::make_shared<const core::CallTypedExpr>(

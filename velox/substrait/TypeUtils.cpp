@@ -123,5 +123,12 @@ TypePtr toVeloxType(const std::string& typeName) {
       VELOX_NYI("Velox type conversion not supported for type {}.", typeName);
   }
 }
-
+const ::substrait::Expression& getExprFromFunctionArgument(
+    const ::substrait::FunctionArgument& arg) {
+  if (arg.has_value()) {
+    return arg.value();
+  } else {
+    VELOX_NYI("FunctionArgument arg must has value.");
+  }
+}
 } // namespace facebook::velox::substrait

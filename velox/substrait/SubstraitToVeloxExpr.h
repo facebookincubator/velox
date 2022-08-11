@@ -74,11 +74,6 @@ class SubstraitVeloxExprConverter {
       const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
       const TypePtr& outputType);
 
-  /// Create expression for row_constructor.
-  std::shared_ptr<const core::ITypedExpr> toRowConstructorExpr(
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
-      const std::string& typeName);
-
   /// Used to convert Substrait Literal into Velox Expression.
   std::shared_ptr<const core::ConstantTypedExpr> toVeloxExpr(
       const ::substrait::Expression::Literal& substraitLit);

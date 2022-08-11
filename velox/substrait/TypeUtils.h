@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "velox/substrait/SubstraitParser.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Type.h"
 

@@ -263,10 +263,11 @@ class SubstraitVeloxPlanConverter {
   /// one once called.
   std::string nextPlanNodeId();
 
-  /// Check the args of the scalar function. Should be field or
-  /// field with literal.
+  /// Returns whether the args of a scalar function being field or
+  /// field with literal. If yes, extract and set the field index.
   bool fieldOrWithLiteral(
-      const ::substrait::Expression_ScalarFunction& function);
+      const ::substrait::Expression_ScalarFunction& function,
+      uint32_t& fieldIndex);
 
   /// Separate the functions to be two parts:
   /// subfield functions to be handled by the subfieldFilters in
@@ -278,9 +279,36 @@ class SubstraitVeloxPlanConverter {
       std::vector<::substrait::Expression_ScalarFunction>& subfieldFunctions,
       std::vector<::substrait::Expression_ScalarFunction>& remainingFunctions);
 
-  /// Check whether the chidren functions of this scalar function have the
-  /// same column index. Curretly used to check whether the two chilren
-  /// functions of 'or' expression are effective on the same column.
+  /// Returns whether a function can be pushed down.
+  bool canPushdownCommonFunction(
+      const ::substrait::Expression_ScalarFunction& scalarFunction,
+      const std::unordered_set<uint32_t>& inCols,
+      const std::string& filterName);
+
+  /// Returns whether a NOT function can be pushed down.
+  bool canPushdownNot(
+      const ::substrait::Expression_ScalarFunction& scalarFunction,
+      const std::unordered_set<uint32_t>& inCols,
+      std::unordered_set<uint32_t>& notEqualCols);
+
+  /// Returns whether a OR function can be pushed down.
+  bool canPushdownOr(
+      const ::substrait::Expression_ScalarFunction& scalarFunction,
+      const std::unordered_set<uint32_t>& inCols);
+
+  /// Returns a set of unique column indices for IN function to be pushed down.
+  std::unordered_set<uint32_t> getInColIndices(
+      const std::vector<::substrait::Expression_ScalarFunction>&
+          scalarFunctions);
+
+  /// Return the column index from IN function, and check whether the
+  /// IN function is valid.
+  uint32_t getColumnIndexFromIn(
+      const ::substrait::Expression_ScalarFunction& scalarFunction);
+
+  /// Check whether the chidren functions of this scalar function have the same
+  /// column index. Curretly used to check whether the two chilren functions of
+  /// 'or' expression are effective on the same column.
   bool chidrenFunctionsOnSameField(
       const ::substrait::Expression_ScalarFunction& function);
 
