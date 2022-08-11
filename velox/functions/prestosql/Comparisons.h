@@ -88,6 +88,8 @@ struct EqFunction {
 
 template <typename T>
 struct BetweenFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void call(
       bool& result,
@@ -96,6 +98,30 @@ struct BetweenFunction {
       const TInput& high) {
     result = value >= low && value <= high;
   }
-};
 
+  bool call(
+      bool& out,
+      const arg_type<Generic<T1>>& value,
+      const arg_type<Generic<T1>>& low,
+      const arg_type<Generic<T1>>& high) {
+    VELOX_CHECK(value.type()->equivalent(*low.type()));
+    VELOX_CHECK(value.type()->equivalent(*high.type()));
+    static constexpr CompareFlags kFlags = {
+        false, true, /*euqalsOnly*/ true, true /*stopAtNull*/};
+    auto lowResult = value.compare(low, kFlags);
+    if (!lowResult.has_value()) {
+      return false;
+    }
+    if (lowResult.value() < 0) {
+      out = false;
+      return true;
+    }
+    auto highResult = value.compare(high, kFlags);
+    if (!highResult.has_value()) {
+      return false;
+    }
+    out = highResult.value() <= 0;
+    return true;
+  }
+};
 } // namespace facebook::velox::functions

@@ -43,7 +43,7 @@ TEST_F(ComparisonsTest, between) {
       {0, false}, {1, true}, {4, true}, {5, true}, {10, false}, {-1, false}};
 
   auto result = evaluate<SimpleVector<bool>>(
-      "c0 between 1 and 5",
+      "c0 between 1::integer and 5::integer",
       makeRowVector({makeFlatVector<int32_t, 0>(testData)}));
 
   for (int i = 0; i < testData.size(); ++i) {
@@ -290,4 +290,28 @@ TEST_F(ComparisonsTest, eqNestedComplex) {
         evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector({row1, row2}));
     ASSERT_EQ(result->isNullAt(0), true);
   }
+}
+
+TEST_F(ComparisonsTest, betweenDecimal) {
+  this->options_.parseDecimalAsDouble = false;
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(3, 2));
+  auto actual = evaluate<SimpleVector<bool>>(
+      "c0 between 2.00 and 3.00", makeRowVector({shortFlat}));
+  std::vector<std::optional<bool>> expectedResult{
+      false, true, true, false, false};
+  for (auto i = 0; i < expectedResult.size(); ++i) {
+    EXPECT_EQ(actual->valueAt(i), expectedResult[i]);
+  }
+
+  shortFlat = makeNullableShortDecimalFlatVector({100}, DECIMAL(3, 3));
+  EXPECT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 between 2.00 and 3.00", makeRowVector({shortFlat})),
+      VeloxRuntimeError);
+  shortFlat = makeNullableShortDecimalFlatVector({100}, DECIMAL(4, 2));
+  EXPECT_THROW(
+      evaluate<SimpleVector<bool>>(
+          "c0 between 2.00 and 3.00", makeRowVector({shortFlat})),
+      VeloxRuntimeError);
 }

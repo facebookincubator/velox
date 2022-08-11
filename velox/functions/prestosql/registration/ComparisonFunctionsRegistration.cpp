@@ -43,6 +43,12 @@ void registerComparisonFunctions() {
   registerFunction<BetweenFunction, bool, Varchar, Varchar, Varchar>(
       {"between"});
   registerFunction<BetweenFunction, bool, Date, Date, Date>({"between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      Generic<T1>,
+      Generic<T2>,
+      Generic<T3>>({"between"});
 }
 
 } // namespace facebook::velox::functions
