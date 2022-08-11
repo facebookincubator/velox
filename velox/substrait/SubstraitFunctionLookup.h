@@ -87,9 +87,11 @@ class SubstraitFunctionLookup {
 class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
  public:
   SubstraitScalarFunctionLookup(
-      const std::vector<SubstraitFunctionVariantPtr>& functions,
+      const SubstraitExtensionPtr& extension,
       const SubstraitFunctionMappingsPtr& functionMappings)
-      : SubstraitFunctionLookup(functions, functionMappings) {}
+      : SubstraitFunctionLookup(
+            extension->scalarFunctionVariants,
+            functionMappings) {}
 
  protected:
   /// A  map store the difference of scalar function names between velox

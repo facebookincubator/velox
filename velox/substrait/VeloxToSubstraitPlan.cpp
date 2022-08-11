@@ -84,21 +84,19 @@ bool checkForSupportJoinType(
 } // namespace
 
 VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
-    SubstraitExtensionPtr substraitExtension)
-    : substraitExtension_(std::move(substraitExtension)) {
+    const SubstraitExtensionPtr& substraitExtension,
+    const SubstraitFunctionMappingsPtr& functionMappings) {
+  // Construct the extension collector
   extensionCollector_ = std::make_shared<SubstraitExtensionCollector>();
 
-  auto typeLookup =
-      std::make_shared<SubstraitTypeLookup>(substraitExtension_->types);
+  auto substraitTypeLookup =
+      std::make_shared<SubstraitTypeLookup>(substraitExtension->types);
   typeConvertor_ = std::make_shared<VeloxToSubstraitTypeConvertor>(
-      extensionCollector_, typeLookup);
+      extensionCollector_, substraitTypeLookup);
   // Construct the scalar function lookup
-
-  auto functionMappings =
-      std::make_shared<const VeloxToSubstraitFunctionMappings>();
   auto scalarFunctionLookup =
       std::make_shared<const SubstraitScalarFunctionLookup>(
-          substraitExtension_->scalarFunctionVariants, functionMappings);
+          substraitExtension, functionMappings);
 
   // Construct the if/Then call converter
   auto ifThenCallConverter =
@@ -118,7 +116,7 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
 
   // Construct the aggregate function lookup
   aggregateFunctionLookup_ = std::make_shared<SubstraitAggregateFunctionLookup>(
-      substraitExtension_->aggregateFunctionVariants, functionMappings);
+      substraitExtension->aggregateFunctionVariants, functionMappings);
 }
 
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(

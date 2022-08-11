@@ -238,9 +238,6 @@ using SubstraitTypePtr = std::shared_ptr<const SubstraitType>;
 
 class SubstraitTypeUtil {
  private:
-  /// Return the Substrait signature according to the substrait type.
-  static const std::string typeToSignature(const ::substrait::Type& type);
-
   /// A map store the mapping of substrait type kind to corresponding type.
   static const std::unordered_map<::substrait::Type::KindCase, SubstraitTypePtr>
       TYPES;
@@ -249,6 +246,9 @@ class SubstraitTypeUtil {
 
  public:
   static const SubstraitTypePtr parseType(const std::string& rawType);
+
+  /// Return the Substrait signature according to the substrait type.
+  static const std::string typeToSignature(const ::substrait::Type& type);
 
   // Return function signature according to the given function name and
   // substrait types.
