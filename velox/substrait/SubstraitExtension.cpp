@@ -271,7 +271,8 @@ std::shared_ptr<SubstraitExtension> SubstraitExtension::loadExtension(
     const std::vector<std::string>& extensionFiles) {
   SubstraitExtension mergedExtension;
   for (const auto& extensionFile : extensionFiles) {
-    const auto& extensionUri = basePath + extensionFile;
+    auto const pos = basePath.find_last_of('/');
+    const auto& extensionUri = basePath.substr(0, pos) + "/" + extensionFile;
     const auto& substraitExtension =
         YAML::LoadFile(extensionUri).as<SubstraitExtension>();
 
