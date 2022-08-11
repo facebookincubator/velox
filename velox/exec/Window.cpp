@@ -161,9 +161,6 @@ void Window::addInput(RowVectorPtr input) {
   numRows_ += inputRows_.size();
 }
 
-// This is a common function used to compare rows in the RowContainer
-// wrt a set of keys (could be partition keys, order by keys or their
-// combination).
 inline bool Window::compareRowsWithKeys(
     const char* lhs,
     const char* rhs,
@@ -183,8 +180,6 @@ inline bool Window::compareRowsWithKeys(
   return false;
 }
 
-// This function is used to initialize the peer buffers and frame buffers that
-// are used in window function invocations.
 void Window::createPeerAndFrameBuffers() {
   // TODO: This computation needs to be revised. It only takes into account
   // the input columns size. We need to also account for the output columns.
@@ -194,14 +189,10 @@ void Window::createPeerAndFrameBuffers() {
       numRowsPerOutput_, operatorCtx_->pool());
   peerEndBuffer_ = AlignedBuffer::allocate<vector_size_t>(
       numRowsPerOutput_, operatorCtx_->pool());
-  rawPeerStartBuffer_ = peerStartBuffer_->asMutable<vector_size_t>();
-  rawPeerEndBuffer_ = peerEndBuffer_->asMutable<vector_size_t>();
 
   auto numFuncs = windowFunctions_.size();
   frameStartBuffers_.reserve(numFuncs);
   frameEndBuffers_.reserve(numFuncs);
-  rawFrameStartBuffers_.reserve(numFuncs);
-  rawFrameEndBuffers_.reserve(numFuncs);
 
   for (auto i = 0; i < numFuncs; i++) {
     BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
@@ -210,16 +201,9 @@ void Window::createPeerAndFrameBuffers() {
         numRowsPerOutput_, operatorCtx_->pool());
     frameStartBuffers_.push_back(frameStartBuffer);
     frameEndBuffers_.push_back(frameEndBuffer);
-
-    auto rawFrameStartBuffer = frameStartBuffer->asMutable<vector_size_t>();
-    auto rawFrameEndBuffer = frameEndBuffer->asMutable<vector_size_t>();
-    rawFrameStartBuffers_.push_back(rawFrameStartBuffer);
-    rawFrameEndBuffers_.push_back(rawFrameEndBuffer);
   }
 }
 
-// This function computes the auxiliary structure partitionStartRows_
-// which stores the starting row for each input partition in the data.
 void Window::computePartitionStartRows() {
   // Randomly assuming that max 10000 partitions are in the data.
   partitionStartRows_.reserve(numRows_);
@@ -246,10 +230,6 @@ void Window::computePartitionStartRows() {
   partitionStartRows_.push_back(sortedRows_.size());
 }
 
-// This function orders the input rows by (partition keys + order by keys).
-// Doing so orders all rows of a partition adjacent to each other
-// and sorted by the ORDER BY clause. This is the order in which the rows
-// will be output by this operator.
 void Window::sortPartitions() {
   // This is a very inefficient but easy implementation to order the input rows
   // by partition keys + sort keys.
@@ -311,8 +291,6 @@ void Window::callResetPartition(vector_size_t partitionNumber) {
   }
 }
 
-// Call WindowFunction::apply for the rows between startRow and endRow in
-// the sortedRows_ ordering of the data_ RowContainer.
 void Window::callApplyForPartitionRows(
     vector_size_t startRow,
     vector_size_t endRow,
@@ -333,47 +311,44 @@ void Window::callApplyForPartitionRows(
   auto bufferSize = numRows * sizeof(vector_size_t);
   peerStartBuffer_->setSize(bufferSize);
   peerEndBuffer_->setSize(bufferSize);
+  auto rawPeerStartBuffer = peerStartBuffer_->asMutable<vector_size_t>();
+  auto rawPeerEndBuffer = peerEndBuffer_->asMutable<vector_size_t>();
+
+  std::vector<vector_size_t*> rawFrameStartBuffers;
+  std::vector<vector_size_t*> rawFrameEndBuffers;
+  rawFrameStartBuffers.reserve(numFuncs);
+  rawFrameEndBuffers.reserve(numFuncs);
   for (auto w = 0; w < numFuncs; w++) {
     frameStartBuffers_[w]->setSize(bufferSize);
     frameEndBuffers_[w]->setSize(bufferSize);
+
+    auto rawFrameStartBuffer =
+        frameStartBuffers_[w]->asMutable<vector_size_t>();
+    auto rawFrameEndBuffer = frameEndBuffers_[w]->asMutable<vector_size_t>();
+    rawFrameStartBuffers.push_back(rawFrameStartBuffer);
+    rawFrameEndBuffers.push_back(rawFrameEndBuffer);
   }
 
   // Setup values in the peer and frame buffers.
   auto firstPartitionRow = partitionStartRows_[currentPartition_];
   auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
   for (auto i = startRow, j = 0; i < endRow; i++, j++) {
-    // When traversing input partition rows, the peers are the rows
-    // with the same values for the ORDER BY clause. These rows
-    // are equal in some ways and affect the results of ranking functions.
-    // This logic exploits the fact that all rows between the peerStartRow_
-    // and peerEndRow_ have the same values for peerStartRow_ and peerEndRow_.
-    // So we can compute them just once and reuse across the rows in that peer
-    // interval.
-
-    // Compute peerStart and peerEnd rows for the first row of the partition or
-    // when past the previous peerGroup.
-    if (i == firstPartitionRow || i >= peerEndRow_) {
-      peerStartRow_ = i;
-      peerEndRow_ = i;
-      while (peerEndRow_ <= lastPartitionRow) {
-        if (peerCompare(sortedRows_[peerStartRow_], sortedRows_[peerEndRow_])) {
-          break;
-        }
-        peerEndRow_++;
-      }
-    }
+    // TODO : Compute peerStart and peerEnd values. Assuming a default
+    // of all rows in each partition being peers for now.
+    auto peerStartRow = firstPartitionRow;
+    auto peerEndRow = lastPartitionRow;
 
     // The peer and frame values set in the WindowFunction::apply buffers
     // are the offsets within the current partition, whereas all the row
     // numbers in the logic are wrt sortedRows_ ordering. So we need to
     // adjust for the first row of the partition.
-    rawPeerStartBuffer_[j] = peerStartRow_ - firstPartitionRow;
-    rawPeerEndBuffer_[j] = peerEndRow_ - 1 - firstPartitionRow;
+    rawPeerStartBuffer[j] = peerStartRow - firstPartitionRow;
+    rawPeerEndBuffer[j] = peerEndRow - 1 - firstPartitionRow;
 
     for (auto w = 0; w < numFuncs; w++) {
       auto frameEndPoints = findFrameEndPoints(w, firstPartitionRow, endRow, i);
-      rawFrameStartBuffers_[w][j] = frameEndPoints.first - firstPartitionRow;
-      rawFrameEndBuffers_[w][j] = frameEndPoints.second - firstPartitionRow;
+      rawFrameStartBuffers[w][j] = frameEndPoints.first - firstPartitionRow;
+      rawFrameEndBuffers[w][j] = frameEndPoints.second - firstPartitionRow;
     }
   }
 
@@ -394,9 +369,6 @@ void Window::callApplyForPartitionRows(
   }
 }
 
-// Function to compute window function values for the current output
-// buffer. The buffer has numOutputRows number of rows. windowOutputs
-// has the vectors for window function columns.
 void Window::callApplyLoop(
     vector_size_t numOutputRows,
     const std::vector<VectorPtr>& windowOutputs) {

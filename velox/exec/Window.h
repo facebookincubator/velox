@@ -87,7 +87,12 @@ class Window : public Operator {
 
   // This function is invoked after receiving all the input data.
   // The input data needs to be separated into partitions and
-  // ordered within it.
+  // ordered within it (as that is the order in which the rows
+  // will be output for the partition).
+  // This function achieves this by ordering the input rows by
+  // (partition keys + order by keys). Doing so orders all rows
+  // of a partition adjacent to each other and sorted by the
+  // ORDER BY clause.
   void sortPartitions();
 
   // Helper function to call WindowFunction::resetPartition() for
@@ -129,8 +134,9 @@ class Window : public Operator {
       const char* rhs,
       const std::vector<std::pair<column_index_t, core::SortOrder>>& keys);
 
-  // Function to compute the window function output values for the
-  // current rows being output.
+  // Function to compute window function values for the current output
+  // buffer. The buffer has numOutputRows number of rows. windowOutputs
+  // has the vectors for window function columns.
   void callApplyLoop(
       vector_size_t numOutputRows,
       const std::vector<VectorPtr>& windowOutputs);
@@ -206,12 +212,6 @@ class Window : public Operator {
   std::vector<BufferPtr> frameStartBuffers_;
   std::vector<BufferPtr> frameEndBuffers_;
 
-  // The 4 below are for the raw pointers to the above 4 BufferPtrs.
-  vector_size_t* rawPeerStartBuffer_;
-  vector_size_t* rawPeerEndBuffer_;
-  std::vector<vector_size_t*> rawFrameStartBuffers_;
-  std::vector<vector_size_t*> rawFrameEndBuffers_;
-
   // Number of rows output from the WindowOperator so far. The rows
   // are output in the same order of the pointers in sortedRows. This
   // value is updated as the WindowFunction::apply() function is
@@ -221,16 +221,6 @@ class Window : public Operator {
   // output across multiple getOutput() calls so this needs to
   // be tracked in the operator.
   vector_size_t currentPartition_;
-
-  // When traversing input partition rows, the peers are the rows
-  // with the same values for the ORDER BY clause. These rows
-  // are equal in some ways and affect the results of ranking functions.
-  // Since all rows between the peerStartRow_ and peerEndRow_ have the same
-  // values for peerStartRow_ and peerEndRow_, we needn't compute
-  // them for each row independently. Since these rows might
-  // cross getOutput boundaries they are saved in the operator.
-  vector_size_t peerStartRow_ = 0;
-  vector_size_t peerEndRow_ = 0;
 };
 
 } // namespace facebook::velox::exec

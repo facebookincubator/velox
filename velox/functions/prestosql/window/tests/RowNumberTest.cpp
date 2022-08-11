@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -34,13 +34,14 @@ class RowNumberTest : public OperatorTestBase {
   std::vector<RowVectorPtr> makeVectors(
       const std::shared_ptr<const RowType>& rowType,
       vector_size_t size,
-      int numVectors,
-      std::function<bool(vector_size_t /*index*/)> isNullAt) {
+      int numVectors) {
     std::vector<RowVectorPtr> vectors;
+    VectorFuzzer::Options options;
+    options.vectorSize = size;
+    VectorFuzzer fuzzer(options, pool_.get(), 0);
     for (int32_t i = 0; i < numVectors; ++i) {
-      auto vector = std::dynamic_pointer_cast<RowVector>(
-          velox::test::BatchMaker::createBatch(
-              rowType, size, *pool_, isNullAt));
+      auto vector =
+          std::dynamic_pointer_cast<RowVector>(fuzzer.fuzzRow(rowType));
       vectors.push_back(vector);
     }
     return vectors;
@@ -58,7 +59,7 @@ class RowNumberTest : public OperatorTestBase {
   folly::Random::DefaultGenerator rng_;
 };
 
-TEST_F(RowNumberTest, basicRowNumber) {
+TEST_F(RowNumberTest, basic) {
   auto testWindowSql = [&](const RowVectorPtr& input,
                            const std::string& windowSql) -> void {
     VELOX_CHECK_GE(input->size(), 2);
@@ -70,7 +71,7 @@ TEST_F(RowNumberTest, basicRowNumber) {
                   .orderBy({"c0 asc nulls last", "c1 asc nulls last"}, false)
                   .planNode();
     assertQuery(
-        op, "SELECT c0, c1, " + windowSql + " FROM tmp order by c0, c1");
+        op, "SELECT c0, c1, " + windowSql + " FROM tmp ORDER BY c0, c1");
   };
 
   auto basicTests = [&](const RowVectorPtr& vectors) -> void {
@@ -116,8 +117,9 @@ TEST_F(RowNumberTest, basicRowNumber) {
   createDuckDbTable({vectors});
   basicTests(vectors);
 
-  // Test all input in a single partition.
-  size = 50;
+  // Test all input in a single partition. This data size would
+  // need multiple input blocks.
+  size = 1000;
   auto valueAtC01 = [](auto row) -> int32_t { return 1; };
   auto valueAtC11 = [](auto row) -> int32_t { return row; };
 
@@ -130,10 +132,8 @@ TEST_F(RowNumberTest, basicRowNumber) {
   basicTests(vectors);
 }
 
-TEST_F(RowNumberTest, rowNumberRandomGen) {
-  // Add nulls in the mix too.
-  auto vectors = makeVectors(
-      rowType_, 100, 100, [](vector_size_t i) { return i % 35 == 0; });
+TEST_F(RowNumberTest, randomGen) {
+  auto vectors = makeVectors(rowType_, 10, 1);
   createDuckDbTable(vectors);
 
   auto testWindowSql = [&](std::vector<RowVectorPtr>& input,
@@ -152,25 +152,29 @@ TEST_F(RowNumberTest, rowNumberRandomGen) {
     assertQuery(
         op,
         "SELECT c0, c1, c2, c3, " + windowSql +
-            " FROM tmp order by c0, c1, c2, c3");
+            " FROM tmp ORDER BY c0, c1, c2, c3");
   };
 
   testWindowSql(
       vectors,
-      "row_number() over (partition by c0 order by c1) as row_number_partition");
+      "row_number() over (partition by c0 order by c1, c2, c3) as row_number_partition");
   testWindowSql(
       vectors,
-      "row_number() over (partition by c1 order by c0) as row_number_partition");
+      "row_number() over (partition by c1 order by c0, c2, c3) as row_number_partition");
   testWindowSql(
       vectors,
-      "row_number() over (partition by c0 order by c1 desc) as row_number_partition");
+      "row_number() over (partition by c0 order by c1 desc, c2, c3) as row_number_partition");
   testWindowSql(
       vectors,
-      "row_number() over (partition by c1 order by c0 desc) as row_number_partition");
+      "row_number() over (partition by c1 order by c0 desc, c2, c3) as row_number_partition");
 
   testWindowSql(
       vectors,
-      "row_number() over (partition by c0, c1) as row_number_partition");
+      "row_number() over (order by c0, c1, c2, c3) as row_number_partition");
+
+  testWindowSql(
+      vectors,
+      "row_number() over (partition by c0, c1, c2, c3) as row_number_partition");
 }
 
 }; // namespace

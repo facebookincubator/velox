@@ -51,6 +51,7 @@ class RowNumberFunction : public exec::WindowFunction {
 
 } // namespace
 
+// Signature of this function is : row_number() -> bigint.
 void registerRowNumber(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder().returnType("bigint").build(),

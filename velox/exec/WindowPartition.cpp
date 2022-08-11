@@ -17,28 +17,13 @@
 
 namespace facebook::velox::exec {
 
-// Simple WindowPartition that builds over the RowContainer used for storing
-// the input rows in the Window Operator. This works completely in-memory.
-// TODO: This implementation will be revised for Spill to disk semantics.
 WindowPartition::WindowPartition(
     const std::vector<exec::RowColumn>& columns,
     const std::vector<TypePtr>& argTypes)
     : columns_(columns) {}
 
 void WindowPartition::resetPartition(const folly::Range<char**>& rows) {
-  // TODO : Is this a copy of the folly::Range ? If this involves a copy
-  // of the vector of row pointers, then we can just maintain the
-  // vector as a member variable in the Window operator
   partition_ = rows;
-}
-
-void WindowPartition::extractColumn(
-    vector_size_t idx,
-    vector_size_t numRows,
-    vector_size_t rowOffset,
-    VectorPtr result) const {
-  exec::RowContainer::extractColumn(
-      partition_.data(), numRows, columns_[idx], result);
 }
 
 } // namespace facebook::velox::exec

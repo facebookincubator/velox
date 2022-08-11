@@ -46,16 +46,16 @@ class WindowFunction {
 
   /// This function is invoked by the Window Operator to compute
   /// the window function for a batch of rows.
-  /// @param peerGroupStarts : A buffer of the indexes of rows at which the
+  /// @param peerGroupStarts  A buffer of the indexes of rows at which the
   /// peer group of the current row starts. Rows are peers if they
   /// have the same value in the partition ordering.
-  /// @param peerGroupEnds : A buffer of the indexes of rows at which the
+  /// @param peerGroupEnds  A buffer of the indexes of rows at which the
   /// peer group of the current row ends.
-  /// @param frameStarts : A buffer of the indexes of rows at which the
+  /// @param frameStarts  A buffer of the indexes of rows at which the
   /// frame for the current row starts.
-  /// @param frameEnds : A buffer of the indexes of rows at which the frame
+  /// @param frameEnds  A buffer of the indexes of rows at which the frame
   /// for the current row ends.
-  /// @param resultOffset : This function is invoked multiple times for a
+  /// @param resultOffset  This function is invoked multiple times for a
   /// partition as output buffers are available for it. resultOffset
   /// is the offset in the result buffer corresponding to the current
   /// block of rows. The function author is expected to populate values
@@ -86,11 +86,11 @@ class WindowFunction {
 };
 
 /// Information from the Window operator that is useful for the function logic.
-/// @param argTypes : Vector of the types of the input arguments to the function
-/// @param argIndices : Vector of the positions of the corresponding input
+/// @param argTypes  Vector of the types of the input arguments to the function
+/// @param argIndices  Vector of the positions of the corresponding input
 /// argument column in the input row of the Operator. These indices are used
 /// to access data from the WindowPartition object.
-///  @param resultType : Type of the result of the function.
+///  @param resultType  Type of the result of the function.
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
     const std::vector<TypePtr>& argTypes,
     const std::vector<column_index_t>& argIndices,

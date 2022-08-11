@@ -18,22 +18,16 @@
 #include "velox/exec/RowContainer.h"
 #include "velox/vector/BaseVector.h"
 
+/// Simple WindowPartition that builds over the RowContainer used for storing
+/// the input rows in the Window Operator. This works completely in-memory.
+/// TODO: This implementation will be revised for Spill to disk semantics.
+
 namespace facebook::velox::exec {
 class WindowPartition {
  public:
   WindowPartition(
       const std::vector<exec::RowColumn>& columns,
       const std::vector<TypePtr>& types);
-
-  /// Extracts into the result VectorPtr values from column at index 'idx'
-  /// for numRows starting at rowOffset in the partition.
-  /// This API is useful for window functions that examine column values
-  /// for their logic. Nulls at corresponding positions are copied.
-  void extractColumn(
-      vector_size_t idx,
-      vector_size_t numRows,
-      vector_size_t rowOffset,
-      VectorPtr result) const;
 
   /// Returns the number of rows in the current WindowPartition.
   vector_size_t numRows() const {
