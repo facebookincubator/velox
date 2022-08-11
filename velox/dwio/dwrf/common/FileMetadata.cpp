@@ -51,7 +51,7 @@ PostScript::PostScript(const proto::orc::PostScript& ps)
       stripeStatisticsLength_{ps.stripestatisticslength()} {}
 
 TypeKind ProtoType::kind() const {
-  if (format_ == dwrfFormat::kDwrf) {
+  if (format_ == DwrfFormat::kDwrf) {
     switch (dwrfPtr()->kind()) {
       case proto::Type_Kind_BOOLEAN:
       case proto::Type_Kind_BYTE:

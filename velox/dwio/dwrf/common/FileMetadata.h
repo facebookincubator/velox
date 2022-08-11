@@ -9,7 +9,7 @@
 
 namespace facebook::velox::dwrf {
 
-enum dwrfFormat { kDwrf, kOrc };
+enum DwrfFormat { kDwrf, kOrc };
 
 class PostScript {
  public:
@@ -76,73 +76,73 @@ class PostScript {
 };
 
 class ProtoStripeInformation {
-  dwrfFormat format_;
+  DwrfFormat format_;
   void* impl_;
 
  public:
   explicit ProtoStripeInformation(proto::StripeInformation* si)
-      : format_{dwrfFormat::kDwrf}, impl_{si} {}
+      : format_{DwrfFormat::kDwrf}, impl_{si} {}
 
   explicit ProtoStripeInformation(proto::orc::StripeInformation* si)
-      : format_{dwrfFormat::kOrc}, impl_{si} {}
+      : format_{DwrfFormat::kOrc}, impl_{si} {}
 
-  dwrfFormat format() const {
+  DwrfFormat format() const {
     return format_;
   }
 
   uint64_t offset() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->offset()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->offset()
                                         : orcPtr()->offset();
   }
 
   uint64_t indexLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->indexlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->indexlength()
                                         : orcPtr()->indexlength();
   }
 
   uint64_t dataLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->datalength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->datalength()
                                         : orcPtr()->datalength();
   }
 
   uint64_t footerLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->footerlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->footerlength()
                                         : orcPtr()->footerlength();
   }
 
   uint64_t numberOfRows() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->numberofrows()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->numberofrows()
                                         : orcPtr()->numberofrows();
   }
 
   // DWRF-specific fields
   uint64_t rawDataSize() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->rawdatasize();
   }
 
   int64_t checksum() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->checksum();
   }
 
   uint64_t groupSize() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->groupsize();
   }
 
   int keyMetadataSize() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata_size();
   }
 
   const std::string& keyMetadata(int index) const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata(index);
   }
 
   const ::google::protobuf::RepeatedPtrField<std::string>& keyMetadata() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata();
   }
 
@@ -157,48 +157,48 @@ class ProtoStripeInformation {
 };
 
 class ProtoType {
-  dwrfFormat format_;
+  DwrfFormat format_;
   void* impl_;
 
  public:
-  explicit ProtoType(proto::Type* t) : format_{dwrfFormat::kDwrf}, impl_{t} {}
+  explicit ProtoType(proto::Type* t) : format_{DwrfFormat::kDwrf}, impl_{t} {}
   explicit ProtoType(proto::orc::Type* t)
-      : format_{dwrfFormat::kOrc}, impl_{t} {}
+      : format_{DwrfFormat::kOrc}, impl_{t} {}
 
-  dwrfFormat format() const {
+  DwrfFormat format() const {
     return format_;
   }
 
   TypeKind kind() const;
 
   int subtypesSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes_size()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->subtypes_size()
                                         : orcPtr()->subtypes_size();
   }
 
   const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
   subtypes() {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->subtypes()
                                         : orcPtr()->subtypes();
   }
 
   uint32_t subtypes(int index) const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->subtypes(index)
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->subtypes(index)
                                         : orcPtr()->subtypes(index);
   }
 
   int fieldNamesSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames_size()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->fieldnames_size()
                                         : orcPtr()->fieldnames_size();
   }
 
   const ::google::protobuf::RepeatedPtrField<std::string>& fieldNames() {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->fieldnames()
                                         : orcPtr()->fieldnames();
   }
 
   const std::string& fieldNames(int index) const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->fieldnames(index)
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->fieldnames(index)
                                         : orcPtr()->fieldnames(index);
   }
 
@@ -213,25 +213,25 @@ class ProtoType {
 };
 
 class ProtoUserMetadataItem {
-  dwrfFormat format_;
+  DwrfFormat format_;
   void* impl_;
 
  public:
   explicit ProtoUserMetadataItem(proto::UserMetadataItem* item)
-      : format_{dwrfFormat::kDwrf}, impl_{item} {}
+      : format_{DwrfFormat::kDwrf}, impl_{item} {}
   explicit ProtoUserMetadataItem(proto::orc::UserMetadataItem* item)
-      : format_{dwrfFormat::kOrc}, impl_{item} {}
+      : format_{DwrfFormat::kOrc}, impl_{item} {}
 
-  dwrfFormat format() const {
+  DwrfFormat format() const {
     return format_;
   }
 
   const std::string& name() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->name() : orcPtr()->name();
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->name() : orcPtr()->name();
   }
 
   const std::string& value() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->value()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->value()
                                         : orcPtr()->value();
   }
 
@@ -246,16 +246,16 @@ class ProtoUserMetadataItem {
 };
 
 class Footer {
-  dwrfFormat format_;
+  DwrfFormat format_;
   void* impl_;
 
  public:
   explicit Footer(proto::Footer* footer)
-      : format_{dwrfFormat::kDwrf}, impl_{footer} {}
+      : format_{DwrfFormat::kDwrf}, impl_{footer} {}
   explicit Footer(proto::orc::Footer* footer)
-      : format_{dwrfFormat::kOrc}, impl_{footer} {}
+      : format_{DwrfFormat::kOrc}, impl_{footer} {}
 
-  dwrfFormat format() const {
+  DwrfFormat format() const {
     return format_;
   }
 
@@ -274,131 +274,131 @@ class Footer {
   }
 
   bool hasHeaderLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_headerlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_headerlength()
                                         : orcPtr()->has_headerlength();
   }
 
   uint64_t headerLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->headerlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->headerlength()
                                         : orcPtr()->headerlength();
   }
 
   bool hasContentLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_contentlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_contentlength()
                                         : orcPtr()->has_contentlength();
   }
 
   uint64_t contentLength() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->contentlength()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->contentlength()
                                         : orcPtr()->contentlength();
   }
 
   bool hasNumberOfRows() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_numberofrows()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_numberofrows()
                                         : orcPtr()->has_numberofrows();
   }
 
   uint64_t numberOfRows() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->numberofrows()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->numberofrows()
                                         : orcPtr()->numberofrows();
   }
 
   bool hasRawDataSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_rawdatasize() : false;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_rawdatasize() : false;
   }
 
   uint64_t rawDataSize() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->rawdatasize();
   }
 
   bool hasChecksumAlgorithm() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_checksumalgorithm()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_checksumalgorithm()
                                         : false;
   }
 
   const proto::ChecksumAlgorithm checksumAlgorithm() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->checksumalgorithm();
   }
 
   bool hasRowIndexStride() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_rowindexstride()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_rowindexstride()
                                         : false;
   }
 
   uint32_t rowIndexStride() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->rowindexstride() : 0;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->rowindexstride() : 0;
   }
 
   int stripeCacheOffsetsSize() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->stripecacheoffsets_size();
   }
 
   const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
   stripeCacheOffsets() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->stripecacheoffsets();
   }
 
   // TODO: ORC has not supported column statistics yet
   int statisticsSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->statistics_size() : 0;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->statistics_size() : 0;
   }
 
   const ::google::protobuf::RepeatedPtrField<
       ::facebook::velox::dwrf::proto::ColumnStatistics>&
   statistics() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->statistics();
   }
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& statistics(
       int index) const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->statistics(index);
   }
 
   // TODO: ORC has not supported encryption yet
   bool hasEncryption() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->has_encryption() : false;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_encryption() : false;
   }
 
   const ::facebook::velox::dwrf::proto::Encryption& encryption() const {
-    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
     return dwrfPtr()->encryption();
   }
 
   int stripesSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->stripes_size()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->stripes_size()
                                         : orcPtr()->stripes_size();
   }
 
   ProtoStripeInformation stripes(int index) const {
-    return format_ == dwrfFormat::kDwrf
+    return format_ == DwrfFormat::kDwrf
         ? ProtoStripeInformation(dwrfPtr()->mutable_stripes(index))
         : ProtoStripeInformation(orcPtr()->mutable_stripes(index));
   }
 
   int typesSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->types_size()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->types_size()
                                         : orcPtr()->types_size();
   }
 
   ProtoType types(int index) const {
-    return format_ == dwrfFormat::kDwrf
+    return format_ == DwrfFormat::kDwrf
         ? ProtoType(dwrfPtr()->mutable_types(index))
         : ProtoType(orcPtr()->mutable_types(index));
   }
 
   int metadataSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->metadata_size()
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->metadata_size()
                                         : orcPtr()->metadata_size();
   }
 
   ProtoUserMetadataItem metadata(int index) const {
-    return format_ == dwrfFormat::kDwrf
+    return format_ == DwrfFormat::kDwrf
         ? ProtoUserMetadataItem(dwrfPtr()->mutable_metadata(index))
         : ProtoUserMetadataItem(orcPtr()->mutable_metadata(index));
   }

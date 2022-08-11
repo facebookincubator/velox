@@ -250,7 +250,7 @@ bool DwrfReaderShared::hasMetadataValue(const std::string& key) const {
 }
 
 uint64_t maxStreamsForType(const ProtoType& type) {
-  if (type.format() == dwrfFormat::kOrc) {
+  if (type.format() == DwrfFormat::kOrc) {
     switch (type.kind()) {
       case TypeKind::ROW:
         return 1;
