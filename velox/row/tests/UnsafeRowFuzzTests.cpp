@@ -87,11 +87,12 @@ TEST_F(UnsafeRowFuzzTests, simpleTypeRoundTripTest) {
     clearBuffer();
     const auto& inputVector = fuzzer.fuzzRow(rowType);
     // Serialize rowVector into bytes.
+    UnsafeRowDynamicSerializer::preloadVector(inputVector);
     auto rowSize = UnsafeRowDynamicSerializer::serialize(
         rowType, inputVector, buffer_, /*idx=*/0);
 
     auto rowSizeMeasured =
-        UnsafeRowDynamicSerializer::getSize(rowType, inputVector, 0);
+        UnsafeRowDynamicSerializer::getSizeRow(rowType, inputVector.get(), 0);
     EXPECT_EQ(rowSize.value_or(0), rowSizeMeasured);
 
     // Deserialize previous bytes back to row vector

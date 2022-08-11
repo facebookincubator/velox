@@ -295,7 +295,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
    */
 
   /// Gets the size of a group of primitives in a vector
-  /// \tparam Kind The kind of the elements
+  /// \param Kind The kind of the elements
   /// \param size The number of elements
   /// \param data The elements vector
   /// \return
@@ -304,12 +304,8 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
       size_t size,
       const BaseVector* data) {
     using NativeType = typename TypeTraits<Kind>::NativeType;
-    const auto& simple =
-        *data->loadedVector()->asUnchecked<SimpleVector<NativeType>>();
     size_t dataSize = size * sizeof(NativeType);
-    size_t nullLength = UnsafeRow::getNullLength(size);
-
-    return UnsafeRow::alignToFieldWidth(dataSize + nullLength);
+    return UnsafeRow::alignToFieldWidth(dataSize + UnsafeRow::kFieldWidthBytes);
   }
 
   /// Extracts and returns size for StringView fields
@@ -318,8 +314,7 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   /// \param idx the index of the element in the vector
   /// \return
   inline static size_t getSizeStringView(const VectorPtr& data, size_t idx) {
-    auto* rawData = data->loadedVector();
-    const auto& simple = static_cast<const SimpleVector<StringView>&>(*rawData);
+    const auto& simple = static_cast<const SimpleVector<StringView>&>(*data);
     if (simple.isNullAt(idx)) {
       return 0;
     }
@@ -338,14 +333,15 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
       int32_t offset,
       vector_size_t size,
       const VectorPtr& elementsVector) {
-    // Adding null bitset and also the size of the array first
-    // The adding elements
+    // Adding null bitset and also the size of the array first before adding
+    // the elements
     // Check specs at
     // https://github.com/apache/spark/blob/master/sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/UnsafeArrayData.java
     size_t result = 1 * UnsafeRow::kFieldWidthBytes;
     size_t nullLength = UnsafeRow::getNullLength(size);
 
-    result += nullLength + getSizeVector(elementsType, offset, size, elementsVector);
+    result +=
+        nullLength + getSizeVector(elementsType, offset, size, elementsVector);
     return result;
   }
 
@@ -359,7 +355,8 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
   static size_t
   getSizeElementAt(const TypePtr& type, const DataType& data, size_t idx) {
     auto serializedSize = getSize(type, data, idx);
-    return serializedSize;
+    // Every variable size value must be aligned to field width
+    return UnsafeRow::alignToFieldWidth(serializedSize);
   }
 
   /// Gets the size of a range of elements in a vector
@@ -382,14 +379,9 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
       }
       return fieldsSize + UnsafeRow::alignToFieldWidth(elementsSize);
     } else {
-      size_t serializedDataSize =
-          VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-              getSizeSimpleVector,
-              type->kind(),
-              size,
-              vector.get());
+      size_t serializedDataSize = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          getSizeSimpleVector, type->kind(), size, vector.get());
       return serializedDataSize;
-      // return size * UnsafeRow::kFieldWidthBytes;
     }
   }
 
@@ -478,6 +470,40 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     }
   }
 
+  /// This function prepares the vector hierarchy for serialization or size
+  /// calculation
+  /// \param data the vector data
+  inline static void preloadVector(const VectorPtr data) {
+    switch (data->typeKind()) {
+      case TypeKind::ROW: {
+        auto rowVector =
+            data->wrappedVector()->template asUnchecked<RowVector>();
+        for (int fieldIdx = 0; fieldIdx < rowVector->childrenSize();
+             fieldIdx++) {
+          preloadVector(rowVector->childAt(fieldIdx));
+        }
+      } break;
+      case TypeKind::ARRAY: {
+        auto arrayVector =
+            data->wrappedVector()->template asUnchecked<ArrayVector>();
+        preloadVector(arrayVector->elements());
+      } break;
+      case TypeKind::MAP: {
+        auto mapVector =
+            data->wrappedVector()->template asUnchecked<MapVector>();
+        preloadVector(mapVector->mapKeys());
+        preloadVector(mapVector->mapValues());
+      } break;
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        data->loadedVector();
+        break;
+      default: {
+        // No action needed
+      }
+    }
+  }
+
   /// Gets a size of a row in a row vector
   /// \param type type of the row
   /// \param data row vector
@@ -488,7 +514,6 @@ struct UnsafeRowDynamicSerializer : UnsafeRowSerializer {
     if (data == nullptr || data->isNullAt(idx)) {
       return 0;
     }
-
     const size_t numFields = data->childrenSize();
     size_t nullLength = UnsafeRow::getNullLength(numFields);
 

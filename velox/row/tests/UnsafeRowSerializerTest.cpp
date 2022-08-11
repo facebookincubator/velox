@@ -266,24 +266,21 @@ TEST_F(UnsafeRowSerializerTests, StringsDynamic) {
       UnsafeRowSerializer::serialize<VarcharType>(stringVec, buffer_, 0);
   EXPECT_TRUE(checkVariableLength(serialized0, 13, u8"Hello, World!"));
 
-  auto size =
-      UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 0);
+  auto size = UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 0);
   EXPECT_EQ(size, serialized0.value_or(0));
 
   auto serialized1 =
       UnsafeRowSerializer::serialize<VarcharType>(stringVec, buffer_, 1);
   EXPECT_TRUE(checkVariableLength(serialized1, 0, u8""));
 
-  size =
-      UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 1);
+  size = UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 1);
   EXPECT_EQ(size, serialized1.value_or(0));
 
   auto serialized2 =
       UnsafeRowSerializer::serialize<VarcharType>(stringVec, buffer_, 2);
   EXPECT_TRUE(checkIsNull(serialized2));
 
-  size =
-      UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 2);
+  size = UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 2);
   EXPECT_EQ(size, serialized2.value_or(0));
 
   // velox::StringView inlines string prefix, check that we can handle inlining.
@@ -291,10 +288,8 @@ TEST_F(UnsafeRowSerializerTests, StringsDynamic) {
       UnsafeRowSerializer::serialize<VarcharType>(stringVec, buffer_, 3);
   EXPECT_TRUE(checkVariableLength(serialized3, 6, u8"INLINE"));
 
-  size =
-      UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 3);
+  size = UnsafeRowDynamicSerializer::getSize(VARCHAR(), stringVec, 3);
   EXPECT_EQ(size, serialized3.value_or(0));
-
 }
 
 TEST_F(UnsafeRowSerializerTests, timestamp) {
@@ -536,7 +531,7 @@ TEST_F(UnsafeRowSerializerTests, arrayStringView) {
 
   auto arraySize =
       UnsafeRowDynamicSerializer::getSize(ARRAY(VARCHAR()), arrayVector, 0);
-//  EXPECT_EQ(arraySize, dynamic0);
+  EXPECT_EQ(arraySize, dynamic0);
 
   EXPECT_TRUE(checkVariableLength(dynamic0, 14 * 8, *expected0));
   // forth element (idx 3) is null
@@ -845,9 +840,9 @@ TEST_F(UnsafeRowSerializerTests, map) {
   auto dynamic0 = UnsafeRowDynamicSerializer::serialize(
       MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, buffer_, 0);
 
- // auto mapSize = UnsafeRowDynamicSerializer::getSize(
- //     MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, 0);
-  // EXPECT_EQ(mapSize, dynamic0);
+  auto mapSize = UnsafeRowDynamicSerializer::getSize(
+      MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, 0);
+  EXPECT_EQ(mapSize, dynamic0);
 
   EXPECT_TRUE(checkVariableLength(dynamic0, 25 * 8, *expected0));
   clearBuffer();
@@ -862,9 +857,9 @@ TEST_F(UnsafeRowSerializerTests, map) {
       MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, buffer_, 1);
   EXPECT_TRUE(checkIsNull(dynamic1));
 
-  //mapSize = UnsafeRowDynamicSerializer::getSize(
-  //    MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, 1);
-  //EXPECT_EQ(mapSize, dynamic1.value_or(0));
+  mapSize = UnsafeRowDynamicSerializer::getSize(
+      MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, 1);
+  EXPECT_EQ(mapSize, dynamic1.value_or(0));
 
   clearBuffer();
 
@@ -889,7 +884,7 @@ TEST_F(UnsafeRowSerializerTests, map) {
       MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, buffer_, 2);
   EXPECT_TRUE(checkVariableLength(dynamic2, 12 * 8, *expected2));
 
-  auto mapSize = UnsafeRowDynamicSerializer::getSize(
+  mapSize = UnsafeRowDynamicSerializer::getSize(
       MAP(VARCHAR(), ARRAY(TINYINT())), mapVector, 2);
   EXPECT_EQ(mapSize, dynamic2.value_or(0));
 
@@ -1109,19 +1104,6 @@ TEST_F(UnsafeRowSerializerTests, rowVarLength) {
       2, VARCHAR(), pool_.get(), nulls5, elements5);
 
   auto rowVector = makeRowVector({c0, c1, c2, c3, c4, c5});
-
-  // These row sizes are manually computed for each row. It starts with 8 bit
-  // null set followed by 8bit per column followed by the pool of the variable
-  // columns
-  auto expectedRowSizes =
-      std::vector<size_t>{8 + 6 * 8 + 0 + 4 + 30, 8 + 6 * 8 + 12 + 4 + 20};
-  for (int index = 0; index < 2; index++) {
-    auto rowSize = UnsafeRowDynamicSerializer::getSizeRow(
-        ROW({BIGINT(), VARCHAR(), BIGINT(), VARCHAR(), VARCHAR(), VARCHAR()}),
-        rowVector.get(),
-        index);
-    EXPECT_EQ(rowSize, expectedRowSizes[index]);
-  }
 
   // row[0], 0b010010
   // {0x0101010101010101, null, 0xABCDEF, 56llu << 32 | 4, null, 64llu << 32 |
