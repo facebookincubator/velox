@@ -210,7 +210,7 @@ ReaderBase::ReaderBase(
   if (!cache_ && input_->shouldPrefetchStripes()) {
     auto numStripes = getFooter().stripesSize();
     for (auto i = 0; i < numStripes; i++) {
-      auto stripe = getFooter().stripes(i);
+      const auto stripe = getFooter().stripes(i);
       input_->enqueue(
           {stripe.offset() + stripe.indexLength() + stripe.dataLength(),
            stripe.footerLength()});

@@ -249,7 +249,7 @@ bool DwrfReaderShared::hasMetadataValue(const std::string& key) const {
   return false;
 }
 
-uint64_t maxStreamsForType(ProtoType& type) {
+uint64_t maxStreamsForType(const ProtoType& type) {
   if (type.format() == dwrfFormat::kOrc) {
     switch (type.kind()) {
       case TypeKind::ROW:
@@ -352,7 +352,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
   uint64_t nSelectedStreams = 0;
   for (int32_t i = 0; !hasStringColumn && i < footer.typesSize(); i++) {
     if (cs.shouldReadNode(i)) {
-      auto type = footer.types(i);
+      const auto type = footer.types(i);
       nSelectedStreams += maxStreamsForType(type);
       switch (type.kind()) {
         case TypeKind::VARCHAR:
@@ -394,7 +394,7 @@ uint64_t DwrfReaderShared::getMemoryUse(
   if (compression != dwio::common::CompressionKind_NONE) {
     for (int32_t i = 0; i < footer.typesSize(); i++) {
       if (cs.shouldReadNode(i)) {
-        auto type = footer.types(i);
+        const auto type = footer.types(i);
         decompressorMemory +=
             maxStreamsForType(type) * readerBase.getCompressionBlockSize();
       }
