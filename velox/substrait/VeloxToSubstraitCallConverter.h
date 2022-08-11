@@ -21,7 +21,7 @@
 
 #include "optional"
 #include "velox/expression/Expr.h"
-#include "velox/substrait/SubstraitFunctionCollector.h"
+#include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/SubstraitFunctionLookup.h"
 #include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
@@ -35,13 +35,7 @@ using SubstraitExprConverter =
 // function expression.
 class VeloxToSubstraitCallConverter {
  public:
-  /**
-   * convert callTypedExpr to substrait Expression
-   * @param callTypeExpr
-   * @param arena
-   * @param inputType
-   * @return an optional of substrait expression
-   */
+  /// convert callTypedExpr to substrait Expression.
   virtual const std::optional<::substrait::Expression*> convert(
       const core::CallTypedExprPtr& callTypeExpr,
       google::protobuf::Arena& arena,
@@ -51,14 +45,34 @@ class VeloxToSubstraitCallConverter {
 using VeloxToSubstraitCallConverterPtr =
     std::shared_ptr<const VeloxToSubstraitCallConverter>;
 
+
+/// convert 'if' CallTypedExpr to substrait ifThen expression.
+class VeloxToSubstraitIfThenConverter : public VeloxToSubstraitCallConverter {
+ public:
+  const std::optional<::substrait::Expression*> convert(
+      const core::CallTypedExprPtr& callTypeExpr,
+      google::protobuf::Arena& arena,
+      SubstraitExprConverter& topLevelConverter) const override;
+};
+
+/// convert 'switch' CallTypedExpr to substrait switch expression.
+class VeloxToSubstraitSwitchConverter : public VeloxToSubstraitCallConverter {
+ public:
+  const std::optional<::substrait::Expression*> convert(
+      const core::CallTypedExprPtr& callTypeExpr,
+      google::protobuf::Arena& arena,
+      SubstraitExprConverter& topLevelConverter) const override;
+};
+
+/// convert callTypedExpr to substrait expression except 'if/switch'
 class VeloxToSubstraitScalarFunctionConverter
     : public VeloxToSubstraitCallConverter {
  public:
   VeloxToSubstraitScalarFunctionConverter(
       const SubstraitScalarFunctionLookupPtr functionLookup,
-      const SubstraitFunctionCollectorPtr functionCollector)
+      const SubstraitExtensionCollectorPtr extensionCollector)
       : functionLookup_(functionLookup),
-        functionCollector_(functionCollector) {}
+        extensionCollector_(extensionCollector) {}
 
   const std::optional<::substrait::Expression*> convert(
       const core::CallTypedExprPtr& callTypeExpr,
@@ -66,7 +80,7 @@ class VeloxToSubstraitScalarFunctionConverter
       SubstraitExprConverter& topLevelConverter) const override;
 
  private:
-  const SubstraitFunctionCollectorPtr functionCollector_;
+  const SubstraitExtensionCollectorPtr extensionCollector_;
   const SubstraitScalarFunctionLookupPtr functionLookup_;
   VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 };

@@ -47,15 +47,16 @@ set(SRCS
     SubstraitToVeloxExpr.cpp
     SubstraitToVeloxPlan.cpp
     TypeUtils.cpp
+    SubstraitType.cpp
+    SubstraitExtension.cpp
+    SubstraitTypeLookup.cpp
+    VeloxToSubstraitCallConverter.cpp
+    SubstraitExtensionCollector.cpp
+    SubstraitFunctionLookup.cpp
     VeloxToSubstraitExpr.cpp
     VeloxToSubstraitPlan.cpp
     VeloxToSubstraitType.cpp
-    SubstraitType.cpp
-    SubstraitExtension.cpp
-    SubstraitFunction.cpp
-    VeloxToSubstraitCallConverter.cpp
-    SubstraitFunctionLookup.cpp
-    SubstraitFunctionCollector.cpp)
+   )
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter

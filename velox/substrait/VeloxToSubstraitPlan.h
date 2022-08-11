@@ -24,7 +24,7 @@
 #include "velox/type/Type.h"
 
 #include "velox/substrait/SubstraitExtension.h"
-#include "velox/substrait/SubstraitFunctionCollector.h"
+#include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/SubstraitFunctionLookup.h"
 #include "velox/substrait/VeloxToSubstraitExpr.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
@@ -35,8 +35,10 @@ namespace facebook::velox::substrait {
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
-  VeloxToSubstraitPlanConvertor(
-      SubstraitExtensionPtr  substraitExtension);
+  /// @param substraitExtension: A substrait Extension which store
+  /// scalarFunction and aggregateFunction each of which is responsible for
+  /// convert Velox CallTypedExpr into Corresponding Substrait Expression.
+  VeloxToSubstraitPlanConvertor(SubstraitExtensionPtr substraitExtension);
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -77,18 +79,18 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const core::AggregationNode>& aggregateNode,
       ::substrait::AggregateRel* aggregateRel);
 
-  ///  Fetch all functions from Velox's registry and create Substrait extensions
-  ///  for these.
-  ::substrait::Plan& addExtensionFunc(google::protobuf::Arena& arena);
-
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.
   VeloxToSubstraitExprConvertorPtr exprConvertor_;
 
+  /// The Type converter used to conver velox representation into Substrait
+  /// type.
   VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
-  SubstraitFunctionCollectorPtr functionCollector_;
+  /// The Extension Collector used to collect the function reference.
+  SubstraitExtensionCollectorPtr extensionCollector_;
 
+  /// The Aggregate function lookup- used to lookup aggregate function variant.
   SubstraitAggregateFunctionLookupPtr aggregateFunctionLookup_;
 
   const SubstraitExtensionPtr substraitExtension_;

@@ -72,7 +72,8 @@ class VeloxSubstraitRoundTripPlanConverterTest : public OperatorTestBase {
   }
 
   std::shared_ptr<VeloxToSubstraitPlanConvertor> veloxConvertor_ =
-      std::make_shared<VeloxToSubstraitPlanConvertor>();
+      std::make_shared<VeloxToSubstraitPlanConvertor>(
+          SubstraitExtension::loadExtension());
   std::shared_ptr<SubstraitVeloxPlanConverter> substraitConverter_ =
       std::make_shared<SubstraitVeloxPlanConverter>();
 };

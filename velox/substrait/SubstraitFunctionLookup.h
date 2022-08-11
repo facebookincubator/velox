@@ -16,28 +16,42 @@
 
 #pragma once
 
-#include "iostream"
-#include "unordered_map"
-#include "velox/expression/Expr.h"
-#include "velox/substrait/SubstraitFunction.h"
-#include "velox/substrait/SubstraitFunctionMappings.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/core/Expressions.h"
+#include "velox/substrait/SubstraitExtension.h"
+#include "velox/substrait/SubstraitParser.h"
 #include "velox/substrait/VeloxToSubstraitType.h"
-#include "velox/substrait/proto/substrait/algebra.pb.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
+/// A map store function names in difference between Velox and Substrait.
+using FunctionMappingMap = std::unordered_map<std::string, std::string>;
+
+struct SubstraitFunctionMappings {
+  /// scalar function names in difference between velox and Substrait.
+  static FunctionMappingMap& scalarMappings();
+
+  /// aggregate function names in difference between velox and Substrait.
+  static FunctionMappingMap& aggregateMappings();
+
+  /// window function names in difference between velox and Substrait.
+  static FunctionMappingMap& windowMappings();
+};
+
 class SubstraitFunctionLookup {
  public:
-  SubstraitFunctionLookup() = delete;
-
   SubstraitFunctionLookup(
-      const std::vector<std::shared_ptr<SubstraitFunctionVariant>>& functions);
+      const std::vector<SubstraitFunctionVariantPtr>& functions);
 
+  /// lookup function variant by given CallTyped Expression
   std::optional<std::shared_ptr<SubstraitFunctionVariant>> lookupFunction(
       google::protobuf::Arena& arena,
       const core::CallTypedExprPtr& callTypeExpr) const;
 
  protected:
+  /// get the map which store the function names in difference between velox and
+  /// substrait.
   virtual const FunctionMappingMap& getFunctionMappings() const = 0;
 
  private:
@@ -47,7 +61,8 @@ class SubstraitFunctionLookup {
         const std::string& name,
         const std::vector<SubstraitFunctionVariantPtr>& functions);
 
-    std::optional<SubstraitFunctionVariantPtr> lookupFunction(
+    std::optional<std::shared_ptr<SubstraitFunctionVariant>> lookupFunction(
+        const std::string& substraitFuncName,
         google::protobuf::Arena& arena,
         const core::CallTypedExprPtr& exprPtr) const;
 
@@ -72,8 +87,10 @@ class SubstraitScalarFunctionLookup : public SubstraitFunctionLookup {
       : SubstraitFunctionLookup(functions) {}
 
  protected:
+  /// A  map store the difference of scalar function names between velox
+  /// and substrait.
   const FunctionMappingMap& getFunctionMappings() const override {
-    //    return SubstraitFunctionMappings::scalarMappings();
+    return SubstraitFunctionMappings::scalarMappings();
   }
 };
 
@@ -87,8 +104,10 @@ class SubstraitAggregateFunctionLookup : public SubstraitFunctionLookup {
       : SubstraitFunctionLookup(functions) {}
 
  protected:
+  /// A  map store the difference of aggregate function names between velox
+  /// and substrait.
   const FunctionMappingMap& getFunctionMappings() const override {
-    //    return SubstraitFunctionMappings::aggregateMappings();
+    return SubstraitFunctionMappings::aggregateMappings();
   }
 };
 

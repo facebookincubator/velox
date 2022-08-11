@@ -15,29 +15,16 @@
  */
 
 #include "SubstraitExtension.h"
+#include "sstream"
+#include "yaml-cpp/yaml.h"
 
 namespace YAML {
 
-using EnumArgument = facebook::velox::substrait::SubstraitEnumArgument;
-
-using ValueArgument = facebook::velox::substrait::SubstraitValueArgument;
-
-using TypeArgument = facebook::velox::substrait::SubstraitTypeArgument;
-
-using ScalarFunctionVariant =
-    facebook::velox::substrait::SubstraitScalarFunctionVariant;
-
-using AggregateFunctionVariant =
-    facebook::velox::substrait::SubstraitAggregateFunctionVariant;
-
-using ScalarFunction = facebook::velox::substrait::SubstraitScalarFunction;
-
-using AggregateFunction =
-    facebook::velox::substrait::SubstraitAggregateFunction;
+using namespace facebook::velox::substrait;
 
 template <>
-struct convert<EnumArgument> {
-  static bool decode(const Node& node, EnumArgument& argument) {
+struct convert<SubstraitEnumArgument> {
+  static bool decode(const Node& node, SubstraitEnumArgument& argument) {
     // 'options' is required  property
     auto& options = node["options"];
     if (options && options.IsSequence()) {
@@ -51,11 +38,12 @@ struct convert<EnumArgument> {
 };
 
 template <>
-struct convert<ValueArgument> {
-  static bool decode(const Node& node, ValueArgument& argument) {
+struct convert<SubstraitValueArgument> {
+  static bool decode(const Node& node, SubstraitValueArgument& argument) {
     auto& value = node["value"];
     if (value && value.IsScalar()) {
-      argument.type = value.as<std::string>();
+      auto valueType = value.as<std::string>();
+      argument.type = SubstraitTypeUtil::parseType(valueType);
       return true;
     }
     return false;
@@ -63,8 +51,8 @@ struct convert<ValueArgument> {
 };
 
 template <>
-struct convert<TypeArgument> {
-  static bool decode(const Node& node, TypeArgument& argument) {
+struct convert<SubstraitTypeArgument> {
+  static bool decode(const Node& node, SubstraitTypeArgument& argument) {
     if (node["type"]) {
       return true;
     } else {
@@ -74,8 +62,10 @@ struct convert<TypeArgument> {
 };
 
 template <>
-struct convert<ScalarFunctionVariant> {
-  static bool decode(const Node& node, ScalarFunctionVariant& function) {
+struct convert<SubstraitScalarFunctionVariant> {
+  static bool decode(
+      const Node& node,
+      SubstraitScalarFunctionVariant& function) {
     auto& returnType = node["return"];
     if (returnType && returnType.IsScalar()) {
       function.returnType = returnType.as<std::string>();
@@ -83,16 +73,16 @@ struct convert<ScalarFunctionVariant> {
       if (args && args.IsSequence()) {
         for (auto& arg : args) {
           if (arg["options"]) { // enum argument
-            auto enumArgument =
-                std::make_shared<EnumArgument>(arg.as<EnumArgument>());
+            auto enumArgument = std::make_shared<SubstraitEnumArgument>(
+                arg.as<SubstraitEnumArgument>());
             function.arguments.emplace_back(enumArgument);
           } else if (arg["value"]) {
-            auto valueArgument =
-                std::make_shared<ValueArgument>(arg.as<ValueArgument>());
+            auto valueArgument = std::make_shared<SubstraitValueArgument>(
+                arg.as<SubstraitValueArgument>());
             function.arguments.emplace_back(valueArgument);
           } else {
-            auto typeArgument =
-                std::make_shared<TypeArgument>(arg.as<TypeArgument>());
+            auto typeArgument = std::make_shared<SubstraitTypeArgument>(
+                arg.as<SubstraitTypeArgument>());
             function.arguments.emplace_back(typeArgument);
           }
         }
@@ -104,8 +94,10 @@ struct convert<ScalarFunctionVariant> {
 };
 
 template <>
-struct convert<AggregateFunctionVariant> {
-  static bool decode(const Node& node, AggregateFunctionVariant& function) {
+struct convert<SubstraitAggregateFunctionVariant> {
+  static bool decode(
+      const Node& node,
+      SubstraitAggregateFunctionVariant& function) {
     auto& returnType = node["return"];
     if (returnType && returnType.IsScalar()) {
       function.returnType = returnType.as<std::string>();
@@ -113,16 +105,16 @@ struct convert<AggregateFunctionVariant> {
       if (args && args.IsSequence()) {
         for (auto& arg : args) {
           if (arg["options"]) { // enum argument
-            auto enumArgument =
-                std::make_shared<EnumArgument>(arg.as<EnumArgument>());
+            auto enumArgument = std::make_shared<SubstraitEnumArgument>(
+                arg.as<SubstraitEnumArgument>());
             function.arguments.emplace_back(enumArgument);
           } else if (arg["value"]) { // value argument
-            auto valueArgument =
-                std::make_shared<ValueArgument>(arg.as<ValueArgument>());
+            auto valueArgument = std::make_shared<SubstraitValueArgument>(
+                arg.as<SubstraitValueArgument>());
             function.arguments.emplace_back(valueArgument);
           } else { // type argument
-            auto typeArgument =
-                std::make_shared<TypeArgument>(arg.as<TypeArgument>());
+            auto typeArgument = std::make_shared<SubstraitTypeArgument>(
+                arg.as<SubstraitTypeArgument>());
             function.arguments.emplace_back(typeArgument);
           }
         }
@@ -134,18 +126,20 @@ struct convert<AggregateFunctionVariant> {
 };
 
 template <>
-struct convert<ScalarFunction> {
-  static bool decode(const Node& node, ScalarFunction& function) {
+struct convert<SubstraitScalarFunction> {
+  static bool decode(const Node& node, SubstraitScalarFunction& function) {
     auto& name = node["name"];
     if (name && name.IsScalar()) {
       function.name = name.as<std::string>();
       auto& impls = node["impls"];
       if (impls && impls.IsSequence() && impls.size() > 0) {
         for (auto& impl : impls) {
-          auto scalarFunctionVariant = impl.as<ScalarFunctionVariant>();
+          auto scalarFunctionVariant =
+              impl.as<SubstraitScalarFunctionVariant>();
           scalarFunctionVariant.name = function.name;
           function.impls.emplace_back(
-              std::make_shared<ScalarFunctionVariant>(scalarFunctionVariant));
+              std::make_shared<SubstraitScalarFunctionVariant>(
+                  scalarFunctionVariant));
         }
       }
       return true;
@@ -155,21 +149,36 @@ struct convert<ScalarFunction> {
 };
 
 template <>
-struct convert<AggregateFunction> {
-  static bool decode(const Node& node, AggregateFunction& function) {
+struct convert<SubstraitAggregateFunction> {
+  static bool decode(const Node& node, SubstraitAggregateFunction& function) {
     auto& name = node["name"];
     if (name && name.IsScalar()) {
       function.name = name.as<std::string>();
       auto& impls = node["impls"];
       if (impls && impls.IsSequence() && impls.size() > 0) {
         for (auto& impl : impls) {
-          auto aggregateFunctionVariant = impl.as<AggregateFunctionVariant>();
+          auto aggregateFunctionVariant =
+              impl.as<SubstraitAggregateFunctionVariant>();
           aggregateFunctionVariant.name = function.name;
           function.impls.emplace_back(
-              std::make_shared<AggregateFunctionVariant>(
+              std::make_shared<SubstraitAggregateFunctionVariant>(
                   aggregateFunctionVariant));
         }
       }
+      return true;
+    }
+    return false;
+  }
+};
+
+template <>
+struct convert<facebook::velox::substrait::SubstraitTypeAnchor> {
+  static bool decode(
+      const Node& node,
+      facebook::velox::substrait::SubstraitTypeAnchor& typeAnchor) {
+    auto& name = node["name"];
+    if (name && name.IsScalar()) {
+      typeAnchor.name = name.as<std::string>();
       return true;
     }
     return false;
@@ -193,7 +202,8 @@ struct convert<facebook::velox::substrait::SubstraitExtension> {
 
     if (scalarFunctionsExists) {
       for (auto& scalarFunctionNode : scalarFunctions) {
-        const auto& scalarFunction = scalarFunctionNode.as<ScalarFunction>();
+        const auto& scalarFunction =
+            scalarFunctionNode.as<SubstraitScalarFunction>();
         for (auto& scalaFunctionVariant : scalarFunction.impls) {
           extension.scalarFunctionVariants.emplace_back(scalaFunctionVariant);
         }
@@ -203,11 +213,20 @@ struct convert<facebook::velox::substrait::SubstraitExtension> {
     if (aggregateFunctionsExists) {
       for (auto& aggregateFunctionNode : aggregateFunctions) {
         const auto& aggregateFunction =
-            aggregateFunctionNode.as<AggregateFunction>();
+            aggregateFunctionNode.as<SubstraitAggregateFunction>();
         for (auto& aggregateFunctionVariant : aggregateFunction.impls) {
           extension.aggregateFunctionVariants.emplace_back(
               aggregateFunctionVariant);
         }
+      }
+    }
+
+    auto& types = node["types"];
+    if (types && types.IsSequence()) {
+      for (auto& type : types) {
+        auto typeAnchor = type.as<SubstraitTypeAnchor>();
+        extension.types.emplace_back(
+            std::make_shared<SubstraitTypeAnchor>(typeAnchor));
       }
     }
 
@@ -225,8 +244,7 @@ std::string getSubstraitExtensionAbsolutePath() {
   return absolute_path.substr(0, pos) + "/extensions/";
 }
 
-std::shared_ptr<SubstraitExtension> SubstraitExtension::load() {
-  SubstraitExtension mergedExtension;
+std::shared_ptr<SubstraitExtension> SubstraitExtension::loadExtension() {
   std::vector<std::string> extensionFiles = {
       "functions_aggregate_approx.yaml",
       "functions_aggregate_generic.yaml",
@@ -237,13 +255,21 @@ std::shared_ptr<SubstraitExtension> SubstraitExtension::load() {
       "functions_datetime.yaml",
       "functions_logarithmic.yaml",
       "functions_rounding.yaml",
-      "functions_string.yaml"};
+      "functions_string.yaml",
+      "unknown.yaml",
+  };
+  const auto& extensionRootPath = getSubstraitExtensionAbsolutePath();
+  return loadExtension(extensionRootPath, extensionFiles);
+}
 
+std::shared_ptr<SubstraitExtension> SubstraitExtension::loadExtension(
+    const std::string& basePath,
+    const std::vector<std::string>& extensionFiles) {
+  SubstraitExtension mergedExtension;
   for (const auto& extensionFile : extensionFiles) {
-    const auto& extensionUri =
-        getSubstraitExtensionAbsolutePath() + extensionFile;
+    const auto& extensionUri = basePath + extensionFile;
     const auto& substraitExtension =
-        YAML::Load(extensionUri).as<SubstraitExtension>();
+        YAML::LoadFile(extensionUri).as<SubstraitExtension>();
 
     for (auto& scalarFunctionVariant :
          substraitExtension.scalarFunctionVariants) {
@@ -258,9 +284,40 @@ std::shared_ptr<SubstraitExtension> SubstraitExtension::load() {
       mergedExtension.aggregateFunctionVariants.emplace_back(
           aggregateFunctionVariant);
     }
-  }
 
+    for (auto& type : substraitExtension.types) {
+      type->uri = extensionUri;
+      mergedExtension.types.emplace_back(type);
+    }
+  }
   return std::make_shared<SubstraitExtension>(mergedExtension);
+}
+
+std::string SubstraitFunctionVariant::constructKey(
+    const std::string& name,
+    const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
+  std::stringstream ss;
+  ss << name << ":";
+  for (auto it = arguments.begin(); it != arguments.end(); ++it) {
+    const auto& typeSign = (*it)->toTypeString();
+    if (it == arguments.end() - 1) {
+      ss << typeSign;
+    } else {
+      ss << typeSign << "_";
+    }
+  }
+  return ss.str();
+}
+
+std::vector<SubstraitFunctionArgumentPtr>
+SubstraitFunctionVariant::requireArguments() const {
+  std::vector<SubstraitFunctionArgumentPtr> res;
+  for (auto& arg : arguments) {
+    if (arg->isRequired()) {
+      res.push_back(arg);
+    }
+  }
+  return res;
 }
 
 } // namespace facebook::velox::substrait

@@ -15,7 +15,6 @@
  */
 
 #include "velox/substrait/VeloxToSubstraitExpr.h"
-#include "velox/functions/FunctionRegistry.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::substrait {
@@ -23,7 +22,7 @@ namespace facebook::velox::substrait {
 namespace {
 std::shared_ptr<VeloxToSubstraitExprConvertor> exprConvertor_;
 
-template <TypeKind sourceKind>
+template <TypeKind SourceKind>
 void convertVectorValue(
     google::protobuf::Arena& arena,
     const velox::VectorPtr& vectorValue,
@@ -31,7 +30,7 @@ void convertVectorValue(
     ::substrait::Expression_Literal* substraitField) {
   const TypePtr& childType = vectorValue->type();
 
-  using T = typename TypeTraits<sourceKind>::NativeType;
+  using T = typename TypeTraits<SourceKind>::NativeType;
 
   auto childToFlatVec = vectorValue->asFlatVector<T>();
 
@@ -135,8 +134,7 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
         return this->toSubstraitExpr(arena, typeExpr, inputType);
       };
   for (const auto& cc : callConverters_) {
-    auto expressionOption =
-        cc->convert(callTypeExpr, arena, topLevelConverter);
+    auto expressionOption = cc->convert(callTypeExpr, arena, topLevelConverter);
     if (expressionOption.has_value()) {
       return *expressionOption.value();
     }

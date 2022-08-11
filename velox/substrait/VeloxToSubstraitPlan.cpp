@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/substrait/VeloxToSubstraitPlan.h"
-
 #include <utility>
-#include "velox/functions/FunctionRegistry.h"
+
 #include "velox/substrait/SubstraitExtension.h"
-#include "velox/substrait/SubstraitFunctionLookup.h"
+#include "velox/substrait/VeloxToSubstraitPlan.h"
 
 namespace facebook::velox::substrait {
 
@@ -51,22 +49,35 @@ namespace {
 VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
     SubstraitExtensionPtr substraitExtension)
     : substraitExtension_(std::move(substraitExtension)) {
-  // Construct the aggregate function lookup
+  extensionCollector_ = std::make_shared<SubstraitExtensionCollector>();
 
+  auto typeLookup =
+      std::make_shared<SubstraitTypeLookup>(substraitExtension_->types);
+  typeConvertor_ = std::make_shared<VeloxToSubstraitTypeConvertor>(
+      extensionCollector_, typeLookup);
+  // Construct the scalar function lookup
   auto scalarFunctionLookup = std::make_shared<SubstraitScalarFunctionLookup>(
       substraitExtension_->scalarFunctionVariants);
 
+  // Construct the if/Then call converter
+  auto ifThenCallConverter =
+      std::make_shared<VeloxToSubstraitIfThenConverter>();
+  // Construct the switch call converter
+  auto switchCallConverter =
+      std::make_shared<VeloxToSubstraitIfThenConverter>();
   // Construct the scalar function converter.
   auto scalaFunctionConverter =
       std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
-          scalarFunctionLookup, functionCollector_);
+          scalarFunctionLookup, extensionCollector_);
 
   std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
+  callConvertors.push_back(ifThenCallConverter);
+  callConvertors.push_back(switchCallConverter);
   callConvertors.push_back(scalaFunctionConverter);
 
   // Construct the expression converter.
-  exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(callConvertors);
+  exprConvertor_ = std::make_shared<VeloxToSubstraitExprConvertor>(
+      typeConvertor_, callConvertors);
 
   // Construct the aggregate function lookup
   aggregateFunctionLookup_ = std::make_shared<SubstraitAggregateFunctionLookup>(
@@ -77,24 +88,18 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
   // Assume only accepts a single plan fragment.
-  ::substrait::Plan* substraitPlan =
+  auto* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-
-  // Add Extension Functions.
-  substraitPlan->MergeFrom(addExtensionFunc(arena));
-
-  // Add unknown type in extension.
-  auto unknownType = substraitPlan->add_extensions()->mutable_extension_type();
-
-  unknownType->set_extension_uri_reference(0);
-  unknownType->set_type_anchor(0);
-  unknownType->set_name("UNKNOWN");
 
   // Do conversion.
   ::substrait::RelRoot* rootRel =
       substraitPlan->add_relations()->mutable_root();
 
   toSubstrait(arena, plan, rootRel->mutable_input());
+
+  // Add Extension Functions.
+  extensionCollector_->addExtensionToPlan(substraitPlan);
+
   // Set RootRel names.
   for (const auto& name : plan->outputType()->names()) {
     rootRel->add_names(name);
@@ -320,7 +325,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
     // Set substrait aggregate Function reference and output type.
     aggFunction->set_function_reference(
-        functionCollector_->getFunctionReference(
+        extensionCollector_->getFunctionReference(
             aggregateFunctionOption.value()));
 
     aggFunction->mutable_output_type()->MergeFrom(
@@ -332,14 +337,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   // Direct output.
   aggregateRel->mutable_common()->mutable_direct();
-}
-
-::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
-    google::protobuf::Arena& arena) {
-  auto substraitPlan =
-      google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-  functionCollector_->addFunctionToPlan(*substraitPlan);
-  return *substraitPlan;
 }
 
 } // namespace facebook::velox::substrait

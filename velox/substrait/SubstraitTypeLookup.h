@@ -14,29 +14,23 @@
  * limitations under the License.
  */
 
-#include "SubstraitFunction.h"
+#pragma once
+
+#include "velox/core/PlanNode.h"
+#include "velox/substrait/SubstraitType.h"
 
 namespace facebook::velox::substrait {
+class SubstraitTypeLookup {
+ public:
+  SubstraitTypeLookup(const std::vector<SubstraitTypeAnchorPtr>& types);
+  /// lookup substrait type anchor by given velox type
+  // currently only support unknown type.
+  std::optional<SubstraitTypeAnchorPtr> lookupType(const TypePtr& type) const;
 
-std::string SubstraitFunctionVariant::constructKey(
-    const std::string& name,
-    const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
-  std::stringstream ss;
-  ss << name << ":";
-  for (auto& argument : arguments) {
-    ss << "_" << argument->toTypeString();
-  }
-  return ss.str();
-}
+ private:
+  SubstraitTypeAnchorPtr unknownType;
+};
 
-std::vector<SubstraitFunctionArgumentPtr>
-SubstraitFunctionVariant::requireArguments() const {
-  std::vector<SubstraitFunctionArgumentPtr> res;
-  for (auto& arg : arguments) {
-    if (arg->isRequired()) {
-      res.push_back(arg);
-    }
-  }
-  res;
-}
+using SubstraitTypeLookupPtr = std::shared_ptr<const SubstraitTypeLookup>;
+
 } // namespace facebook::velox::substrait

@@ -25,11 +25,13 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitExprConvertor {
  public:
-  /// @param functionMap: A pre-constructed map
-  /// storing the relations between the function name and the function id.
+  /// @param callConverters: A collection of CallConverter
+  /// each of which is responsible for convert Velox CallTypedExpr into
+  /// Corresponding Substrait Expression.
   explicit VeloxToSubstraitExprConvertor(
+      const VeloxToSubstraitTypeConvertorPtr typeConvertor,
       const std::vector<VeloxToSubstraitCallConverterPtr>& callConverters)
-      : callConverters_(callConverters) {}
+      : typeConvertor_(typeConvertor), callConverters_(callConverters) {}
 
   /// Convert Velox Expression to Substrait Expression.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -95,7 +97,7 @@ class VeloxToSubstraitExprConvertor {
       google::protobuf::Arena& arena,
       const velox::variant& variantValue);
 
-  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
+  const VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
   const std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
 };

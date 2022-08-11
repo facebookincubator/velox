@@ -22,6 +22,69 @@
 namespace facebook::velox::substrait {
 
 const std::optional<::substrait::Expression*>
+VeloxToSubstraitIfThenConverter::convert(
+    const core::CallTypedExprPtr& callTypeExpr,
+    google::protobuf::Arena& arena,
+    SubstraitExprConverter& topLevelConverter) const {
+  if (callTypeExpr->name() != "if") {
+    return std::nullopt;
+  }
+  if (callTypeExpr->inputs().size() % 2 != 1) {
+    VELOX_NYI(
+        "Number of arguments are always going to be odd for if/then expression");
+  }
+
+  auto* substraitExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+  auto ifThenExpr = substraitExpr->mutable_if_then();
+
+  auto last = callTypeExpr->inputs().size() - 1;
+  for (int i = 0; i < last; i += 2) {
+    auto ifClauseExpr = ifThenExpr->add_ifs();
+    ifClauseExpr->mutable_if_()->MergeFrom(
+        topLevelConverter(callTypeExpr->inputs().at(i)));
+
+    ifClauseExpr->mutable_then()->MergeFrom(
+        topLevelConverter(callTypeExpr->inputs().at(i + 1)));
+  }
+  ifThenExpr->mutable_else_()->MergeFrom(
+      topLevelConverter(callTypeExpr->inputs().at(last)));
+  return std::make_optional(substraitExpr);
+}
+
+const std::optional<::substrait::Expression*>
+VeloxToSubstraitSwitchConverter::convert(
+    const core::CallTypedExprPtr& callTypeExpr,
+    google::protobuf::Arena& arena,
+    SubstraitExprConverter& topLevelConverter) const {
+  if (callTypeExpr->name() != "switch") {
+    return std::nullopt;
+  }
+  if (callTypeExpr->inputs().size() % 2 != 1) {
+    VELOX_NYI(
+        "Number of arguments are always going to be odd for case/when expression");
+  }
+
+  auto* substraitExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+  auto switchExpr = substraitExpr->mutable_switch_expression();
+
+  auto last = callTypeExpr->inputs().size() - 1;
+  for (int i = 0; i < last; i += 2) {
+    auto switchIfExpr = switchExpr->add_ifs();
+    switchIfExpr->mutable_if_()->MergeFrom(
+        topLevelConverter(callTypeExpr->inputs().at(i)));
+
+    switchIfExpr->mutable_then()->MergeFrom(
+        topLevelConverter(callTypeExpr->inputs().at(i + 1)));
+  }
+
+  switchExpr->mutable_else_()->MergeFrom(
+      topLevelConverter(callTypeExpr->inputs().at(last)));
+  return std::make_optional(substraitExpr);
+}
+
+const std::optional<::substrait::Expression*>
 VeloxToSubstraitScalarFunctionConverter::convert(
     const core::CallTypedExprPtr& callTypeExpr,
     google::protobuf::Arena& arena,
@@ -36,7 +99,7 @@ VeloxToSubstraitScalarFunctionConverter::convert(
       google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
   auto scalarExpr = substraitExpr->mutable_scalar_function();
   scalarExpr->set_function_reference(
-      functionCollector_->getFunctionReference(scalarFunctionOption.value()));
+      extensionCollector_->getFunctionReference(scalarFunctionOption.value()));
 
   for (auto& arg : callTypeExpr->inputs()) {
     scalarExpr->add_args()->MergeFrom(topLevelConverter(arg));
