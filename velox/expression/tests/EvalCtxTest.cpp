@@ -77,3 +77,26 @@ TEST_F(EvalCtxTest, vectorPool) {
   ASSERT_EQ(anotherVector->size(), 512);
   ASSERT_EQ(anotherVector.get(), vectorPtr);
 }
+
+TEST_F(EvalCtxTest, VectorRecycler) {
+  EvalCtx context(&execCtx_);
+  VectorPtr vector;
+  BaseVector* vectorPtr;
+  {
+    VectorRecycler vectorRecycler(vector, context.vectorPool());
+    vector = context.getVector(BIGINT(), 1'00);
+    vectorPtr = vector.get();
+  }
+  auto newVector = context.getVector(BIGINT(), 1'00);
+  ASSERT_EQ(newVector.get(), vectorPtr);
+  vector.reset();
+  { VectorRecycler vectorRecycler(vector, context.vectorPool()); }
+
+  // Hold the allocated vector on scoped vector destruction.
+  vector = context.getVector(BIGINT(), 1'00);
+  ASSERT_NE(vector.get(), newVector.get());
+  newVector = vector;
+  { VectorRecycler vectorRecycler(vector, context.vectorPool()); }
+  vector = context.getVector(BIGINT(), 1'00);
+  ASSERT_NE(vector.get(), newVector.get());
+}

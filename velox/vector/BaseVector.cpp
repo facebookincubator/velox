@@ -427,7 +427,7 @@ void BaseVector::resizeIndices(
   *raw = indices->get()->asMutable<vector_size_t>();
 }
 
-std::string BaseVector::toString() const {
+std::string BaseVector::toSummaryString() const {
   std::stringstream out;
   out << "[" << encoding() << " " << type_->toString() << ": " << length_
       << " elements, ";
@@ -437,6 +437,27 @@ std::string BaseVector::toString() const {
     out << countNulls(nulls_, 0, length_) << " nulls";
   }
   out << "]";
+  return out.str();
+}
+
+std::string BaseVector::toString(bool recursive) const {
+  std::stringstream out;
+  out << toSummaryString();
+
+  if (recursive) {
+    switch (encoding()) {
+      case VectorEncoding::Simple::DICTIONARY:
+      case VectorEncoding::Simple::SEQUENCE:
+      case VectorEncoding::Simple::CONSTANT:
+        if (valueVector() != nullptr) {
+          out << ", " << valueVector()->toString(true);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
   return out.str();
 }
 
@@ -551,10 +572,22 @@ VectorPtr newConstant(
     velox::memory::MemoryPool* pool) {
   using T = typename KindToFlatVector<kind>::WrapperType;
   T copy = T();
-  if (!value.isNull()) {
-    if constexpr (std::is_same_v<T, StringView>) {
+  TypePtr type;
+  if constexpr (std::is_same_v<T, StringView>) {
+    type = Type::create<kind>();
+    if (!value.isNull()) {
       copy = StringView(value.value<kind>());
-    } else {
+    }
+  } else if constexpr (
+      std::is_same_v<T, ShortDecimal> || std::is_same_v<T, LongDecimal>) {
+    const auto& decimal = value.value<kind>();
+    type = DECIMAL(decimal.precision, decimal.scale);
+    if (!value.isNull()) {
+      copy = decimal.value();
+    }
+  } else {
+    type = Type::create<kind>();
+    if (!value.isNull()) {
       copy = value.value<T>();
     }
   }
@@ -563,30 +596,10 @@ VectorPtr newConstant(
       pool,
       size,
       value.isNull(),
-      Type::create<kind>(),
+      type,
       std::move(copy),
       SimpleVectorStats<T>{},
       sizeof(T) /*representedByteCount*/);
-}
-
-template <>
-VectorPtr newConstant<TypeKind::SHORT_DECIMAL>(
-    variant& value,
-    vector_size_t size,
-    velox::memory::MemoryPool* pool) {
-  // ShortDecimal variant is not supported to create
-  // constant vector.
-  VELOX_UNSUPPORTED();
-}
-
-template <>
-VectorPtr newConstant<TypeKind::LONG_DECIMAL>(
-    variant& value,
-    vector_size_t size,
-    velox::memory::MemoryPool* pool) {
-  // LongDecimal variant is not supported to create
-  // constant vector.
-  VELOX_UNSUPPORTED();
 }
 
 template <>

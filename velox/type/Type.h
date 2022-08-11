@@ -678,7 +678,7 @@ inline bool isDecimalName(const std::string& typeName) {
   return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
 }
 
-void getDecimalPrecisionScale(const Type& type, int& precision, int& scale);
+std::pair<int, int> getDecimalPrecisionScale(const Type& type);
 
 class UnknownType : public TypeBase<TypeKind::UNKNOWN> {
  public:
@@ -1025,6 +1025,20 @@ template <>
 struct TypeFactory<TypeKind::UNKNOWN> {
   static std::shared_ptr<const UnknownType> create() {
     return std::make_shared<UnknownType>();
+  }
+};
+
+template <>
+struct TypeFactory<TypeKind::SHORT_DECIMAL> {
+  static std::shared_ptr<const ShortDecimalType> create() {
+    VELOX_UNSUPPORTED();
+  }
+};
+
+template <>
+struct TypeFactory<TypeKind::LONG_DECIMAL> {
+  static std::shared_ptr<const LongDecimalType> create() {
+    VELOX_UNSUPPORTED();
   }
 };
 

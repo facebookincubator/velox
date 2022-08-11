@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/OperatorUtils.h"
+#include "velox/exec/VectorHasher.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/vector/ConstantVector.h"
 #include "velox/vector/FlatVector.h"
@@ -22,30 +23,18 @@
 namespace facebook::velox::exec {
 
 void deselectRowsWithNulls(
-    const RowVector& input,
-    const std::vector<column_index_t>& channels,
-    SelectivityVector& rows,
-    core::ExecCtx& execCtx) {
+    const std::vector<std::unique_ptr<VectorHasher>>& hashers,
+    SelectivityVector& rows) {
   bool anyChange = false;
-  auto numRows = input.size();
-
-  DecodedVector scratchDecodedVector;
-  SelectivityVector scratchRows;
-  for (auto channel : channels) {
-    auto& child = const_cast<VectorPtr&>(input.childAt(channel));
-    LazyVector::ensureLoadedRows(
-        child, rows, scratchDecodedVector, scratchRows);
-    auto key = input.childAt(channel)->loadedVector();
-    if (key->mayHaveNulls()) {
-      auto nulls = key->flatRawNulls(rows);
+  for (int32_t i = 0; i < hashers.size(); ++i) {
+    auto& decoded = hashers[i]->decodedVector();
+    if (decoded.mayHaveNulls()) {
       anyChange = true;
-      bits::andBits(
-          rows.asMutableRange().bits(),
-          nulls,
-          0,
-          std::min(rows.size(), numRows));
+      const auto* nulls = hashers[i]->decodedVector().nulls();
+      bits::andBits(rows.asMutableRange().bits(), nulls, 0, rows.end());
     }
   }
+
   if (anyChange) {
     rows.updateBounds();
   }
@@ -116,7 +105,6 @@ vector_size_t processEncodedFilterResults(
   auto values = decoded.data<uint64_t>();
   auto nulls = decoded.nulls();
   auto indices = decoded.indices();
-  auto nullIndices = decoded.nullIndices();
 
   vector_size_t passed = 0;
   auto* rawSelected = filterEvalCtx.getRawSelectedIndices(size, pool);
@@ -124,8 +112,7 @@ vector_size_t processEncodedFilterResults(
   memset(rawSelectedBits, 0, bits::nbytes(size));
   for (int32_t i = 0; i < size; ++i) {
     auto index = indices[i];
-    auto nullIndex = nullIndices ? nullIndices[i] : i;
-    if ((!nulls || !bits::isBitNull(nulls, nullIndex)) &&
+    if ((!nulls || !bits::isBitNull(nulls, i)) &&
         bits::isBitSet(values, index)) {
       rawSelected[passed++] = i;
       bits::setBit(rawSelectedBits, i);

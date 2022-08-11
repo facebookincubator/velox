@@ -445,7 +445,6 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
     auto base = decoded.base();
     auto nulls = decoded.nulls();
     auto indices = decoded.indices();
-    auto nullIndices = decoded.nullIndices();
     for (int32_t i = 0; i < sourceSize; ++i) {
       if (i % 2 == 0) {
         auto sourceIdx = evenSource[i];
@@ -454,9 +453,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
             << source->toString(sourceIdx);
 
         // We check the same with 'decoded'.
-        if (nulls &&
-            bits::isBitNull(
-                nulls, nullIndices ? nullIndices[sourceIdx] : sourceIdx)) {
+        if (nulls && bits::isBitNull(nulls, sourceIdx)) {
           EXPECT_TRUE(decoded.isNullAt(sourceIdx));
           EXPECT_TRUE(bits::isBitNull(flatNulls, sourceIdx));
           EXPECT_TRUE(target->isNullAt(i));
@@ -471,9 +468,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
         EXPECT_TRUE(target->equalValueAt(source.get(), i, oddSource[i]));
         // We check the same with 'decoded'.
         auto sourceIdx = oddSource[i];
-        if (nulls &&
-            bits::isBitNull(
-                nulls, nullIndices ? nullIndices[sourceIdx] : sourceIdx)) {
+        if (nulls && bits::isBitNull(nulls, sourceIdx)) {
           EXPECT_TRUE(bits::isBitNull(flatNulls, sourceIdx));
           EXPECT_TRUE(target->isNullAt(i));
         } else {
@@ -569,7 +564,7 @@ class VectorTest : public testing::Test, public test::VectorTestBase {
           break;
         }
       }
-      constant = BaseVector::wrapInConstant(firstNull + 20, firstNull, source);
+      constant = BaseVector::wrapInConstant(firstNull + 123, firstNull, source);
       testCopy(constant, level - 1);
     }
 
@@ -872,12 +867,6 @@ TEST_F(VectorTest, createOther) {
 TEST_F(VectorTest, createDecimal) {
   testFlat<TypeKind::SHORT_DECIMAL>(SHORT_DECIMAL(10, 5), vectorSize_);
   testFlat<TypeKind::LONG_DECIMAL>(LONG_DECIMAL(30, 5), vectorSize_);
-  auto constVector =
-      BaseVector::createNullConstant(SHORT_DECIMAL(10, 5), 1, pool_.get());
-  ASSERT_TRUE(constVector->isNullAt(0));
-  constVector =
-      BaseVector::createNullConstant(LONG_DECIMAL(30, 5), 1, pool_.get());
-  ASSERT_TRUE(constVector->isNullAt(0));
 }
 
 TEST_F(VectorTest, createOpaque) {
@@ -1275,9 +1264,18 @@ TEST_F(VectorTest, compareNan) {
 class VectorCreateConstantTest : public VectorTest {
  public:
   template <TypeKind KIND>
-  void testPrimitiveConstant(typename TypeTraits<KIND>::NativeType val) {
+  void testPrimitiveConstant(
+      typename TypeTraits<KIND>::NativeType val,
+      const TypePtr& type = Type::create<KIND>()) {
     using TCpp = typename TypeTraits<KIND>::NativeType;
-    auto var = variant::create<KIND>(val);
+    variant var;
+    if constexpr (std::is_same_v<TCpp, ShortDecimal>) {
+      var = variant::shortDecimal(val.unscaledValue(), type);
+    } else if constexpr (std::is_same_v<TCpp, LongDecimal>) {
+      var = variant::longDecimal(val.unscaledValue(), type);
+    } else {
+      var = variant::create<KIND>(val);
+    }
 
     auto baseVector = BaseVector::createConstant(var, size_, pool_.get());
     auto simpleVector = baseVector->template as<SimpleVector<TCpp>>();
@@ -1291,20 +1289,17 @@ class VectorCreateConstantTest : public VectorTest {
       if constexpr (std::is_same<TCpp, StringView>::value) {
         ASSERT_EQ(
             var.template value<KIND>(), std::string(simpleVector->valueAt(i)));
+      } else if constexpr (
+          std::is_same<TCpp, ShortDecimal>::value ||
+          std::is_same<TCpp, LongDecimal>::value) {
+        const auto& value = var.template value<KIND>().value();
+        ASSERT_EQ(value, simpleVector->valueAt(i));
       } else {
         ASSERT_EQ(var.template value<KIND>(), simpleVector->valueAt(i));
       }
     }
 
-    auto expectedStr = fmt::format(
-        "[CONSTANT {}: {} value, {} size]",
-        KIND,
-        baseVector->toString(0),
-        size_);
-    EXPECT_EQ(expectedStr, baseVector->toString());
-    for (auto i = 1; i < baseVector->size(); ++i) {
-      EXPECT_EQ(baseVector->toString(0), baseVector->toString(i));
-    }
+    verifyConstantToString(type, baseVector);
   }
 
   template <TypeKind KIND>
@@ -1323,14 +1318,18 @@ class VectorCreateConstantTest : public VectorTest {
       ASSERT_TRUE(vector->equalValueAt(baseVector.get(), 0, i));
     }
 
+    verifyConstantToString(type, baseVector);
+  }
+
+  void verifyConstantToString(const TypePtr& type, const VectorPtr& constant) {
     auto expectedStr = fmt::format(
-        "[CONSTANT {}: {} value, {} size]",
+        "[CONSTANT {}: {} elements, {}]",
         type->toString(),
-        vector->toString(0),
-        size_);
-    EXPECT_EQ(expectedStr, baseVector->toString());
-    for (auto i = 1; i < baseVector->size(); ++i) {
-      EXPECT_EQ(baseVector->toString(0), baseVector->toString(i));
+        size_,
+        constant->toString(0));
+    EXPECT_EQ(expectedStr, constant->toString());
+    for (auto i = 1; i < constant->size(); ++i) {
+      EXPECT_EQ(constant->toString(0), constant->toString(i));
     }
   }
 
@@ -1351,7 +1350,7 @@ class VectorCreateConstantTest : public VectorTest {
     }
 
     auto expectedStr = fmt::format(
-        "[CONSTANT {}: null value, {} size]", type->toString(), size_);
+        "[CONSTANT {}: {} elements, null]", type->toString(), size_);
     EXPECT_EQ(expectedStr, baseVector->toString());
     for (auto i = 1; i < baseVector->size(); ++i) {
       EXPECT_EQ(baseVector->toString(0), baseVector->toString(i));
@@ -1374,6 +1373,10 @@ TEST_F(VectorCreateConstantTest, scalar) {
 
   testPrimitiveConstant<TypeKind::REAL>(99.98);
   testPrimitiveConstant<TypeKind::DOUBLE>(12.345);
+  testPrimitiveConstant<TypeKind::SHORT_DECIMAL>(
+      ShortDecimal(12345), DECIMAL(5, 4));
+  testPrimitiveConstant<TypeKind::LONG_DECIMAL>(
+      LongDecimal(12345), DECIMAL(20, 4));
 
   testPrimitiveConstant<TypeKind::VARCHAR>(StringView("hello world"));
   testPrimitiveConstant<TypeKind::VARBINARY>(StringView("my binary buffer"));
@@ -1419,6 +1422,8 @@ TEST_F(VectorCreateConstantTest, null) {
 
   testNullConstant<TypeKind::REAL>(REAL());
   testNullConstant<TypeKind::DOUBLE>(DOUBLE());
+  testNullConstant<TypeKind::SHORT_DECIMAL>(DECIMAL(10, 5));
+  testNullConstant<TypeKind::LONG_DECIMAL>(DECIMAL(20, 5));
 
   testNullConstant<TypeKind::TIMESTAMP>(TIMESTAMP());
   testNullConstant<TypeKind::DATE>(DATE());

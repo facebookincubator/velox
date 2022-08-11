@@ -68,7 +68,7 @@ void printResults(const std::vector<RowVectorPtr>& results) {
       std::cout << vector->type()->asRow().toString() << std::endl;
       printType = false;
     }
-    for (size_t i = 0; i < vector->size(); ++i) {
+    for (vector_size_t i = 0; i < vector->size(); ++i) {
       std::cout << vector->toString(i) << std::endl;
     }
   }
@@ -154,6 +154,11 @@ BENCHMARK(q5) {
 
 BENCHMARK(q6) {
   const auto planContext = queryBuilder->getQueryPlan(6);
+  benchmark.run(planContext);
+}
+
+BENCHMARK(q9) {
+  const auto planContext = queryBuilder->getQueryPlan(9);
   benchmark.run(planContext);
 }
 

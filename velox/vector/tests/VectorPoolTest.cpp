@@ -58,6 +58,9 @@ TEST_F(VectorPoolTest, basic) {
   // Verify that multiply-referenced vector cannot be returned to the pool.
   auto copy = anotherRecycledVector;
   ASSERT_FALSE(vectorPool.release(anotherRecycledVector));
+
+  VectorPtr nullVector = nullptr;
+  ASSERT_FALSE(vectorPool.release(nullVector));
 }
 
 TEST_F(VectorPoolTest, limit) {
@@ -93,5 +96,37 @@ TEST_F(VectorPoolTest, limit) {
   // Return all vectors to the pool. Verify that only 'limit' number of vectors
   // can be returned.
   ASSERT_EQ(vectorPool.release(vectors), 10);
+}
+
+TEST_F(VectorPoolTest, ScopedVectorPtr) {
+  VectorPool vectorPool(pool());
+
+  // Empty scoped vector does nothing.
+  VectorPtr vectorPtr;
+  { VectorRecycler vectorRecycler(vectorPtr, vectorPool); }
+
+  // Get new vector from the pool and release it back.
+  BaseVector* rawPtr;
+  {
+    VectorRecycler vectorRecycler(vectorPtr, vectorPool);
+    vectorPtr = vectorPool.get(BIGINT(), 1'000);
+    rawPtr = vectorPtr.get();
+  }
+
+  // Get new vector from the pool and hold it on scoped vector destruction.
+  VectorPtr vectorHolder;
+  {
+    VectorRecycler vectorRecycler(vectorPtr, vectorPool);
+    vectorPtr = vectorPool.get(BIGINT(), 1'000);
+    ASSERT_EQ(rawPtr, vectorPtr.get());
+    vectorHolder = vectorPtr;
+  }
+  ASSERT_NE(vectorHolder, nullptr);
+
+  {
+    VectorRecycler vectorRecycler(vectorPtr, vectorPool);
+    vectorPtr = vectorPool.get(BIGINT(), 1'000);
+    ASSERT_NE(rawPtr, vectorPtr.get());
+  }
 }
 } // namespace facebook::velox::test

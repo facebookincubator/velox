@@ -97,7 +97,7 @@ void ConjunctExpr::evalSpecialForm(
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
   VarSetter saveError(context.mutableThrowOnError(), false);
-  BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+  context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
   if (flatResult->mayHaveNulls()) {
@@ -129,6 +129,7 @@ void ConjunctExpr::evalSpecialForm(
   int32_t numActive = activeRows->countSelected();
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     VectorPtr inputResult;
+    VectorRecycler inputResultRecycler(inputResult, context.vectorPool());
     EvalCtx::ErrorVectorPtr errors;
     if (handleErrors) {
       context.swapErrors(errors);

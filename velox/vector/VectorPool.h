@@ -31,7 +31,8 @@ class VectorPool {
   VectorPtr get(const TypePtr& type, vector_size_t size);
 
   /// Moves vector into 'this' if it is flat, recursively singly referenced and
-  /// there is space.
+  /// there is space. The function returns true if 'vector' is not null and has
+  /// been returned back to this pool, otherwise returns false.
   bool release(VectorPtr& vector);
 
   size_t release(std::vector<VectorPtr>& vectors);
@@ -60,6 +61,28 @@ class VectorPool {
 
   /// Caches of pre-allocated vectors indexed by typeKind.
   std::array<TypePool, kNumCachedVectorTypes> vectors_;
+};
+
+/// A simple vector ptr wrapper with an associated vector pool. It releases
+/// the allocated vector back to vector pool on destruction.
+class VectorRecycler {
+ public:
+  explicit VectorRecycler(VectorPtr& vector, VectorPool& pool)
+      : vector_(vector), pool_(pool) {}
+  VectorRecycler(const VectorRecycler&) = delete;
+  VectorRecycler& operator=(const VectorRecycler&) = delete;
+  VectorRecycler(const VectorRecycler&&) = delete;
+  VectorRecycler& operator=(const VectorRecycler&&) = delete;
+  VectorRecycler(VectorRecycler&) = delete;
+  VectorRecycler& operator=(VectorRecycler&) = delete;
+
+  ~VectorRecycler() {
+    pool_.release(vector_);
+  }
+
+ private:
+  VectorPtr& vector_;
+  VectorPool& pool_;
 };
 
 } // namespace facebook::velox

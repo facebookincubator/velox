@@ -105,6 +105,7 @@ void DecodedVector::reset(vector_size_t size) {
   indices_ = nullptr;
   data_ = nullptr;
   nulls_ = nullptr;
+  allNulls_.reset();
   baseVector_ = nullptr;
   mayHaveNulls_ = false;
   hasExtraNulls_ = false;
@@ -197,6 +198,11 @@ void DecodedVector::combineWrappers(
 void DecodedVector::applyDictionaryWrapper(
     const BaseVector& dictionaryVector,
     const SelectivityVector& rows) {
+  if (!rows.hasSelections()) {
+    // No further processing is needed.
+    return;
+  }
+
   auto newIndices = dictionaryVector.wrapInfo()->as<vector_size_t>();
   auto newNulls = dictionaryVector.rawNulls();
   if (newNulls) {
@@ -231,6 +237,11 @@ void DecodedVector::applyDictionaryWrapper(
 void DecodedVector::applySequenceWrapper(
     const BaseVector& sequenceVector,
     const SelectivityVector& rows) {
+  if (!rows.hasSelections()) {
+    // No further processing is needed.
+    return;
+  }
+
   const auto* lengths = sequenceVector.wrapInfo()->as<vector_size_t>();
   auto newNulls = sequenceVector.rawNulls();
   if (newNulls) {
@@ -503,5 +514,35 @@ VectorPtr DecodedVector::wrap(
       std::move(wrapping.indices),
       rows.end(),
       std::move(data));
+}
+
+const uint64_t* DecodedVector::nulls() {
+  if (allNulls_.has_value()) {
+    return allNulls_.value();
+  }
+
+  if (hasExtraNulls_) {
+    allNulls_ = nulls_;
+  } else if (!nulls_ || size_ == 0) {
+    allNulls_ = nullptr;
+  } else {
+    if (isIdentityMapping_) {
+      allNulls_ = nulls_;
+    } else if (isConstantMapping_) {
+      copiedNulls_.resize(0);
+      copiedNulls_.resize(bits::nwords(size_), bits::kNull64);
+      allNulls_ = copiedNulls_.data();
+    } else {
+      // Copy base nulls.
+      copiedNulls_.resize(bits::nwords(size_));
+      auto* rawCopiedNulls = copiedNulls_.data();
+      for (auto i = 0; i < size_; ++i) {
+        bits::setNull(rawCopiedNulls, i, bits::isBitNull(nulls_, indices_[i]));
+      }
+      allNulls_ = copiedNulls_.data();
+    }
+  }
+
+  return allNulls_.value();
 }
 } // namespace facebook::velox

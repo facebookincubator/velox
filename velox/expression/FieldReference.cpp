@@ -23,11 +23,12 @@ void FieldReference::evalSpecialForm(
     EvalCtx& context,
     VectorPtr& result) {
   if (result) {
-    BaseVector::ensureWritable(rows, type_, context.pool(), &result);
+    context.ensureWritable(rows, type_, result);
   }
   const RowVector* row;
   DecodedVector decoded;
   VectorPtr input;
+  VectorRecycler inputRecycler(input, context.vectorPool());
   bool useDecode = false;
   if (inputs_.empty()) {
     row = context.row();
@@ -45,7 +46,7 @@ void FieldReference::evalSpecialForm(
       }
     }
 
-    decoded.decode(*input.get(), rows);
+    decoded.decode(*input, rows);
     useDecode = !decoded.isIdentityMapping();
     const BaseVector* base = decoded.base();
     VELOX_CHECK(base->encoding() == VectorEncoding::Simple::ROW);
@@ -83,7 +84,7 @@ void FieldReference::evalSpecialForm(
         child = BaseVector::wrapInConstant(rows.size(), 0, child);
       }
     }
-    result = useDecode ? std::move(decoded.wrap(child, *input.get(), rows))
+    result = useDecode ? std::move(decoded.wrap(child, *input, rows))
                        : std::move(child);
   }
 }

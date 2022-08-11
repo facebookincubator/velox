@@ -58,6 +58,7 @@ BooleanMix getFlatBool(
         BaseVector::ensureBuffer<bool>(
             size, context.pool(), tempValues, &mergedValues);
 
+        // NOTE: false bit in 'nulls' indicate null.
         bits::andBits(
             mergedValues, values, nulls, activeRows.begin(), activeRows.end());
 
@@ -100,11 +101,9 @@ BooleanMix getFlatBool(
       auto values = decoded.data<uint64_t>();
       auto nulls = decoded.nulls();
       auto indices = decoded.indices();
-      auto nullIndices = decoded.nullIndices();
       activeRows.applyToSelected([&](int32_t i) {
         auto index = indices[i];
-        bool isNull =
-            nulls && bits::isBitNull(nulls, nullIndices ? nullIndices[i] : i);
+        bool isNull = nulls && bits::isBitNull(nulls, i);
         if (mergeNullsToValues && nulls) {
           if (!isNull && bits::isBitSet(values, index)) {
             bits::setBit(valuesToSet, i);

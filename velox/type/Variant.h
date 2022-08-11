@@ -24,7 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/type/Conversions.h"
-#include "velox/type/DecimalUtils.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -151,6 +151,16 @@ struct DecimalCapsule {
            DecimalUtil::kPowersOfTen[other.scale]);
     }
     return lhsIntegral < rhsIntegral;
+  }
+
+  size_t hash() const {
+    auto hasher = folly::Hash{};
+    auto hash = folly::hash::hash_combine_generic(
+        hasher, hasher(precision), hasher(scale));
+    if (hasValue()) {
+      hash = folly::hash::hash_combine_generic(hasher, hasher(value()), hash);
+    }
+    return hash;
   }
 };
 

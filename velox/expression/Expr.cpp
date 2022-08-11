@@ -251,6 +251,11 @@ void Expr::evalSimplified(
   addNulls(rows, remainingRows->asRange().bits(), context, result);
 }
 
+void Expr::releaseInputValues(EvalCtx& evalCtx) {
+  evalCtx.releaseVectors(inputValues_);
+  inputValues_.clear();
+}
+
 void Expr::evalSimplifiedImpl(
     const SelectivityVector& rows,
     EvalCtx& context,
@@ -265,6 +270,7 @@ void Expr::evalSimplifiedImpl(
   inputValues_.resize(inputs_.size());
   const bool defaultNulls = vectorFunction_->isDefaultNullBehavior();
 
+  LocalDecodedVector decodedVector(context);
   for (int32_t i = 0; i < inputs_.size(); ++i) {
     auto& inputValue = inputValues_[i];
     inputs_[i]->evalSimplified(remainingRows, context, inputValue);
@@ -275,15 +281,16 @@ void Expr::evalSimplifiedImpl(
     // If the resulting vector has nulls, merge them into our current remaining
     // rows bitmap.
     if (defaultNulls && inputValue->mayHaveNulls()) {
-      remainingRows.deselectNulls(
-          inputValue->flatRawNulls(rows),
-          remainingRows.begin(),
-          remainingRows.end());
+      decodedVector.get()->decode(*inputValue, rows);
+      if (auto* rawNulls = decodedVector->nulls()) {
+        remainingRows.deselectNulls(
+            rawNulls, remainingRows.begin(), remainingRows.end());
+      }
     }
 
     // All rows are null, return a null constant.
     if (!remainingRows.hasSelections()) {
-      inputValues_.clear();
+      releaseInputValues(context);
       result =
           BaseVector::createNullConstant(type(), rows.size(), context.pool());
       return;
@@ -296,7 +303,7 @@ void Expr::evalSimplifiedImpl(
 
   // Make sure the returned vector has its null bitmap properly set.
   addNulls(rows, remainingRows.asRange().bits(), context, result);
-  inputValues_.clear();
+  releaseInputValues(context);
 }
 
 void Expr::evalFlatNoNulls(
@@ -332,7 +339,7 @@ void Expr::evalFlatNoNulls(
       VELOX_CHECK_NULL(inputValues_[i]);
     }
   }
-  inputValues_.clear();
+  releaseInputValues(context);
 }
 
 void Expr::eval(
@@ -469,7 +476,7 @@ SelectivityVector* translateToInnerRows(
   // indices for places that a dictionary sets to null are not
   // defined. Null adding dictionaries are not peeled off non
   // null-propagating Exprs.
-  auto flatNulls = decoded.nullIndices() != indices ? decoded.nulls() : nullptr;
+  auto flatNulls = decoded.hasExtraNulls() ? decoded.nulls() : nullptr;
 
   auto* newRows = newRowsHolder.get(baseSize, false);
   rows.applyToSelected([&](vector_size_t row) {
@@ -709,13 +716,13 @@ bool Expr::removeSureNulls(
     }
 
     if (values->mayHaveNulls()) {
-      auto nulls = values->flatRawNulls(rows);
-      if (nulls) {
+      LocalDecodedVector decoded(context, *values, rows);
+      if (auto* rawNulls = decoded->nulls()) {
         if (!result) {
           result = nullHolder.get(rows);
         }
         auto bits = result->asMutableRange().bits();
-        bits::andBits(bits, nulls, rows.begin(), rows.end());
+        bits::andBits(bits, rawNulls, rows.begin(), rows.end());
       }
     }
   }
@@ -822,7 +829,7 @@ void Expr::evalWithMemo(
       assert(cached); // lint
       cached->intersect(*cachedDictionaryIndices_);
       if (cached->hasSelections()) {
-        BaseVector::ensureWritable(rows, type(), context.pool(), &result);
+        context.ensureWritable(rows, type(), result);
         result->copy(dictionaryCache_.get(), *cached, nullptr);
       }
     }
@@ -856,8 +863,7 @@ void Expr::evalWithMemo(
       LocalSelectivityVector allUncached(context, dictionaryCache_->size());
       allUncached.get()->setAll();
       allUncached.get()->deselect(*cachedDictionaryIndices_);
-      BaseVector::ensureWritable(
-          *allUncached.get(), type(), context.pool(), &dictionaryCache_);
+      context.ensureWritable(*allUncached.get(), type(), dictionaryCache_);
 
       if (cachedDictionaryIndices_->size() < newCacheSize) {
         cachedDictionaryIndices_->resize(newCacheSize, false);
@@ -871,10 +877,14 @@ void Expr::evalWithMemo(
       }
       dictionaryCache_->copy(result.get(), *uncached, nullptr);
     }
+    context.releaseVector(base);
     return;
   }
+  context.releaseVector(baseDictionary_);
   baseDictionary_ = base;
   evalWithNulls(rows, context, result);
+
+  context.releaseVector(dictionaryCache_);
   dictionaryCache_ = result;
   if (!cachedDictionaryIndices_) {
     cachedDictionaryIndices_ =
@@ -1007,14 +1017,15 @@ void Expr::evalAll(
         remainingRows = nonNulls.get();
         assert(remainingRows); // lint
       }
-      nonNulls.get()->deselectNulls(
-          inputValues_[i]->flatRawNulls(rows),
-          remainingRows->begin(),
-          remainingRows->end());
-      if (!remainingRows->hasSelections()) {
-        inputValues_.clear();
-        setAllNulls(rows, context, result);
-        return;
+      LocalDecodedVector decoded(context, *inputValues_[i], rows);
+      if (auto* rawNulls = decoded->nulls()) {
+        nonNulls.get()->deselectNulls(
+            rawNulls, remainingRows->begin(), remainingRows->end());
+        if (!remainingRows->hasSelections()) {
+          releaseInputValues(context);
+          setAllNulls(rows, context, result);
+          return;
+        }
       }
     }
   }
@@ -1032,7 +1043,7 @@ void Expr::evalAll(
     }
     deselectErrors(context, *nonNulls.get());
     if (!remainingRows->hasSelections()) {
-      inputValues_.clear();
+      releaseInputValues(context);
       setAllNulls(rows, context, result);
       return;
     }
@@ -1045,7 +1056,7 @@ void Expr::evalAll(
   if (remainingRows != &rows) {
     addNulls(rows, remainingRows->asRange().bits(), context, result);
   }
-  inputValues_.clear();
+  releaseInputValues(context);
 }
 
 namespace {

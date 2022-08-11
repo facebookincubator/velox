@@ -872,9 +872,10 @@ Input vectors
 The “args” parameter is an std::vector of Velox vectors containing the values
 of the function arguments. These vectors are not necessarily flat and may be
 dictionary or constant encoded. However, a deterministic function that takes
-a single argument is guaranteed to receive its only input as a flat vector.
-By default, a function is assumed to be deterministic. If that’s not the
-case, the function must override isDeterministic method to return false.
+a single argument and has default null behavior is guaranteed to receive its
+only input as a flat or constant vector. By default, a function is assumed to
+be deterministic. If that’s not the case, the function must override
+isDeterministic method to return false.
 
 .. code-block:: c++
 
@@ -1112,6 +1113,10 @@ name already exists.
 Use exec::registerStatefulVectorFunction to register a stateful vector
 function.
 
+Note: A vector function will be given precedence over a simple function during resolution time.
+This is because in certain cases it makes sense to write an optimized vector function, and thus more precedence is given
+to a vector function over an equivalent simple function.
+
 .. code-block:: c++
 
     bool registerStatefulVectorFunction(
@@ -1308,6 +1313,35 @@ Function names
 For both simple and vector functions, their names are case insensitive. Function
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.
+
+
+Function Resolution order
+-------------------------
+
+Vector functions have precedence over simple functions during function resolution. If a function `foo` has
+multiple implementations, then the order in which function resolution will proceed is as follows:
+
+    1. Vector Function
+    2. Simple Function which are generic free and variadic free
+    3. Simple Function has variadic but generic free
+    4. Simple Function has generic but no variadic of generic
+    5. Simple function has variadic of generic
+
+The available function with lowest rank is picked during function resolution.
+If there is more than one function with the same lowest rank, we count the number of concrete types in the signature
+and return the signature with highest concrete types count. (a concrete type is any type other variadic or generic).
+
+For example: consider the two signatures bellow which are both of type 4.
+
+.. code-block:: c++
+
+    void call(bool& out, const int& , const Any& , const& Variadic<int>)    // concrete types = 2
+    void call(bool& out, const int& , const Any& ,const Any&)               // concrete types = 1
+
+
+When both of them are valid for a given input, the first one will be picked  since it has more concrete types.
+When number of concrete types are the same, the call is ambiguous, and it's undefined which function is called.
+
 
 Benchmarking
 ------------
