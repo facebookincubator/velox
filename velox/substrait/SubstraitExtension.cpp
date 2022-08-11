@@ -238,11 +238,15 @@ struct convert<facebook::velox::substrait::SubstraitExtension> {
 
 namespace facebook::velox::substrait {
 
+namespace {
+
 std::string getSubstraitExtensionAbsolutePath() {
   const std::string absolute_path = __FILE__;
   auto const pos = absolute_path.find_last_of('/');
   return absolute_path.substr(0, pos) + "/extensions/";
 }
+
+} // namespace
 
 std::shared_ptr<SubstraitExtension> SubstraitExtension::loadExtension() {
   std::vector<std::string> extensionFiles = {
