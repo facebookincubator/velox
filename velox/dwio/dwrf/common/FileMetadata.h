@@ -73,6 +73,87 @@ class PostScript {
   uint64_t stripeStatisticsLength_;
 };
 
+class ProtoStripeInformation {
+  dwrfFormat format_;
+  void* impl_;
+
+ public:
+  explicit ProtoStripeInformation(proto::StripeInformation* si)
+      : format_{dwrfFormat::kDwrf}, impl_{si} {}
+
+  explicit ProtoStripeInformation(proto::orc::StripeInformation* si)
+      : format_{dwrfFormat::kOrc}, impl_{si} {}
+
+  dwrfFormat format() const {
+    return format_;
+  }
+
+  uint64_t offset() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->offset()
+                                        : orcPtr()->offset();
+  }
+
+  uint64_t indexLength() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->indexlength()
+                                        : orcPtr()->indexlength();
+  }
+
+  uint64_t dataLength() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->datalength()
+                                        : orcPtr()->datalength();
+  }
+
+  uint64_t footerLength() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->footerlength()
+                                        : orcPtr()->footerlength();
+  }
+
+  uint64_t numberOfRows() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->numberofrows()
+                                        : orcPtr()->numberofrows();
+  }
+
+  // DWRF-specific fields
+  uint64_t rawDataSize() const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->rawdatasize();
+  }
+
+  int64_t checksum() const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->checksum();
+  }
+
+  uint64_t groupSize() const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->groupsize();
+  }
+
+  int keyMetadataSize() const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->keymetadata_size();
+  }
+
+  const std::string& keyMetadata(int index) const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->keymetadata(index);
+  }
+
+  const ::google::protobuf::RepeatedPtrField<std::string>& keyMetadata() const {
+    DWIO_ENSURE(format_ == dwrfFormat::kDwrf);
+    return dwrfPtr()->keymetadata();
+  }
+
+ private:
+  inline const proto::StripeInformation* dwrfPtr() const {
+    return reinterpret_cast<proto::StripeInformation*>(impl_);
+  }
+
+  inline const proto::orc::StripeInformation* orcPtr() const {
+    return reinterpret_cast<proto::orc::StripeInformation*>(impl_);
+  }
+};
+
 class Footer {
   dwrfFormat format_;
   void* impl_;
@@ -134,11 +215,6 @@ class Footer {
   uint64_t contentLength() const {
     return format_ == dwrfFormat::kDwrf ? dwrfPtr()->contentlength()
                                         : orcPtr()->contentlength();
-  }
-
-  int stripesSize() const {
-    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->stripes_size()
-                                        : orcPtr()->stripes_size();
   }
 
   bool hasNumberOfRows() const {
@@ -219,15 +295,20 @@ class Footer {
     return dwrfFooter_->encryption();
   }
 
+  int stripesSize() const {
+    return format_ == dwrfFormat::kDwrf ? dwrfPtr()->stripes_size()
+                                        : orcPtr()->stripes_size();
+  }
+
+  ProtoStripeInformation stripes(int index) const {
+    return format_ == dwrfFormat::kDwrf
+        ? ProtoStripeInformation(dwrfPtr()->mutable_stripes(index))
+        : ProtoStripeInformation(orcPtr()->mutable_stripes(index));
+  }
+
   /***
    * TODO
    ***/
-  const ::facebook::velox::dwrf::proto::StripeInformation& stripes(
-      int index) const {
-    DWIO_ENSURE(dwrfFooter_);
-    return dwrfFooter_->stripes(index);
-  }
-
   int typesSize() const {
     DWIO_ENSURE(dwrfFooter_);
     return dwrfFooter_->types_size();
@@ -265,10 +346,10 @@ class Footer {
 
  private:
   // private helper with no format checking
-  inline const proto::Footer* dwrfPtr() const {
+  inline proto::Footer* dwrfPtr() const {
     return reinterpret_cast<proto::Footer*>(impl_);
   }
-  inline const proto::orc::Footer* orcPtr() const {
+  inline proto::orc::Footer* orcPtr() const {
     return reinterpret_cast<proto::orc::Footer*>(impl_);
   }
 

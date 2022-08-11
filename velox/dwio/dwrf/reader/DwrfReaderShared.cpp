@@ -53,8 +53,8 @@ DwrfRowReaderShared::DwrfRowReaderShared(
   firstRowOfStripe.reserve(numberOfStripes);
   for (uint32_t i = 0; i < numberOfStripes; ++i) {
     firstRowOfStripe.push_back(rowTotal);
-    proto::StripeInformation stripeInfo = footer.stripes(i);
-    rowTotal += stripeInfo.numberofrows();
+    auto stripeInfo = footer.stripes(i);
+    rowTotal += stripeInfo.numberOfRows();
     if ((stripeInfo.offset() >= opts.getOffset()) &&
         (stripeInfo.offset() < opts.getLimit())) {
       if (i < currentStripe) {
@@ -209,15 +209,14 @@ std::unique_ptr<StripeInformation> DwrfReaderShared::getStripe(
     uint32_t stripeIndex) const {
   DWIO_ENSURE_LT(
       stripeIndex, getNumberOfStripes(), "stripe index out of range");
-  proto::StripeInformation stripeInfo =
-      readerBase_->getFooter().stripes(stripeIndex);
+  auto stripeInfo = readerBase_->getFooter().stripes(stripeIndex);
 
   return std::make_unique<StripeInformationImpl>(
       stripeInfo.offset(),
-      stripeInfo.indexlength(),
-      stripeInfo.datalength(),
-      stripeInfo.footerlength(),
-      stripeInfo.numberofrows());
+      stripeInfo.indexLength(),
+      stripeInfo.dataLength(),
+      stripeInfo.footerLength(),
+      stripeInfo.numberOfRows());
 }
 
 std::vector<std::string> DwrfReaderShared::getMetadataKeys() const {
@@ -309,13 +308,13 @@ uint64_t DwrfReaderShared::getMemoryUse(
   uint64_t maxDataLength = 0;
   auto& footer = readerBase.getFooter();
   if (stripeIx >= 0 && stripeIx < footer.stripesSize()) {
-    uint64_t stripe = footer.stripes(stripeIx).datalength();
+    uint64_t stripe = footer.stripes(stripeIx).dataLength();
     if (maxDataLength < stripe) {
       maxDataLength = stripe;
     }
   } else {
     for (int32_t i = 0; i < footer.stripesSize(); i++) {
-      uint64_t stripe = footer.stripes(i).datalength();
+      uint64_t stripe = footer.stripes(i).dataLength();
       if (maxDataLength < stripe) {
         maxDataLength = stripe;
       }
@@ -388,8 +387,8 @@ void DwrfRowReaderShared::startNextStripe() {
 
   resetColumnReaderImpl();
   bool preload = options_.getPreloadStripe();
-  auto& currentStripeInfo = loadStripe(currentStripe, preload);
-  rowsInCurrentStripe = currentStripeInfo.numberofrows();
+  auto currentStripeInfo = loadStripe(currentStripe, preload);
+  rowsInCurrentStripe = currentStripeInfo.numberOfRows();
 
   StripeStreamsImpl stripeStreams(
       *this,

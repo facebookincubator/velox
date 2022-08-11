@@ -131,9 +131,9 @@ TEST_F(WriterTest, WriteFooter) {
   ASSERT_EQ(footer.contentLength(), (10 + 10 + 10) * 3);
   ASSERT_EQ(footer.stripesSize(), 3);
   for (size_t i = 0; i < 3; ++i) {
-    auto& stripe = footer.stripes(i);
-    ASSERT_EQ(stripe.rawdatasize(), 345);
-    ASSERT_EQ(stripe.numberofrows(), 123);
+    auto stripe = footer.stripes(i);
+    ASSERT_EQ(stripe.rawDataSize(), 345);
+    ASSERT_EQ(stripe.numberOfRows(), 123);
   }
   ASSERT_EQ(footer.typesSize(), 4);
   ASSERT_EQ(footer.metadataSize(), 4);
