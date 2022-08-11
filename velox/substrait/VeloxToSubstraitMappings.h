@@ -41,7 +41,7 @@ class VeloxToSubstraitFunctionMappings : public SubstraitFunctionMappings {
   };
 
   /// window function names in difference between velox and Substrait.
-  virtual const FunctionMappingMap windowMappings() const override {
+  const FunctionMappingMap windowMappings() const override {
     static FunctionMappingMap aggregateMappings{};
     return aggregateMappings;
   };
