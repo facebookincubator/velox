@@ -38,11 +38,10 @@ struct SubstraitExtension {
   /// extension yaml.
   std::vector<SubstraitFunctionVariantPtr> aggregateFunctionVariants;
 
+  /// substrait user defined types loaded from Substrait extension yaml.
   std::vector<SubstraitTypeAnchorPtr> types;
 };
 
 using SubstraitExtensionPtr = std::shared_ptr<const SubstraitExtension>;
 
 } // namespace facebook::velox::substrait
-
-
