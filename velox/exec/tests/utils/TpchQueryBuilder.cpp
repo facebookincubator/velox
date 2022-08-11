@@ -615,11 +615,12 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
                "year(o_orderdate) AS o_year"})
           .partialAggregation(
               {"o_year"},
-              {"sum(brazil_volume) as volume_num", "sum(volume) as volume_den"})
+              {"sum(brazil_volume) as volume_brazil",
+               "sum(volume) as volume_all"})
           .localPartition({})
           .finalAggregation()
           .orderBy({"o_year"}, false)
-          .project({"o_year", "(volume_num / volume_den) as mkt_share"})
+          .project({"o_year", "(volume_brazil / volume_all) as mkt_share"})
           .planNode();
 
   TpchPlan context;
