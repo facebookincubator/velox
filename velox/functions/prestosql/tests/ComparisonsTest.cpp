@@ -307,11 +307,12 @@ TEST_F(ComparisonsTest, betweenDecimal) {
   shortFlat = makeNullableShortDecimalFlatVector({100}, DECIMAL(3, 3));
   EXPECT_THROW(
       evaluate<SimpleVector<bool>>(
-          "c0 between 2.00 and 3.00", makeRowVector({shortFlat})),
+          "c0 between 2.00::decimal(3,2) and 3.00::decimal(3,2)", makeRowVector({shortFlat})),
       VeloxRuntimeError);
   shortFlat = makeNullableShortDecimalFlatVector({100}, DECIMAL(4, 2));
   EXPECT_THROW(
       evaluate<SimpleVector<bool>>(
-          "c0 between 2.00 and 3.00", makeRowVector({shortFlat})),
+          "c0 between 2.00::decimal(3,2) and 3.00::decimal(3,2)",
+          makeRowVector({shortFlat})),
       VeloxRuntimeError);
 }
