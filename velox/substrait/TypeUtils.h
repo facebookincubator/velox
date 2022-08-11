@@ -15,7 +15,6 @@
  */
 
 #include "velox/type/Type.h"
-#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::substrait {
 

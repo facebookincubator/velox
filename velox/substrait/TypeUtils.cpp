@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-#include <boost/algorithm/string.hpp>
-#include <algorithm>
-#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
