@@ -994,13 +994,6 @@ DateTimeResult DateTimeFormatter::parse(const std::string_view& input) const {
     }
   }
 
-  LOG(INFO) << "START LOG" << std::endl;
-  LOG(INFO) << "INPUT: " << input << std::endl;
-  LOG(INFO) << "YEAR: " << date.year << std::endl;
-  LOG(INFO) << "MONTH: " << date.month << std::endl;
-  LOG(INFO) << "DAY: " << date.day << std::endl;
-  LOG(INFO) << "END LOG" << std::endl << std::endl;
-
   // Convert the parsed date/time into a timestamp.
   int64_t daysSinceEpoch;
   if (date.weekDateFormat) {
