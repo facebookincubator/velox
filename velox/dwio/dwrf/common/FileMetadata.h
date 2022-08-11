@@ -110,12 +110,12 @@ class PostScript {
   uint64_t stripeStatisticsLength_;
 };
 
-class ProtoStripeInformation : public ProtoWrapperBase {
+class StripeInformationWrapper : public ProtoWrapperBase {
  public:
-  explicit ProtoStripeInformation(proto::StripeInformation* si)
+  explicit StripeInformationWrapper(proto::StripeInformation* si)
       : ProtoWrapperBase(DwrfFormat::kDwrf, si) {}
 
-  explicit ProtoStripeInformation(proto::orc::StripeInformation* si)
+  explicit StripeInformationWrapper(proto::orc::StripeInformation* si)
       : ProtoWrapperBase(DwrfFormat::kOrc, si) {}
 
   const proto::StripeInformation* getDwrfPtr() const {
@@ -195,10 +195,10 @@ class ProtoStripeInformation : public ProtoWrapperBase {
   }
 };
 
-class ProtoType : public ProtoWrapperBase {
+class TypeWrapper : public ProtoWrapperBase {
  public:
-  explicit ProtoType(proto::Type* t) : ProtoWrapperBase(DwrfFormat::kDwrf, t) {}
-  explicit ProtoType(proto::orc::Type* t)
+  explicit TypeWrapper(proto::Type* t) : ProtoWrapperBase(DwrfFormat::kDwrf, t) {}
+  explicit TypeWrapper(proto::orc::Type* t)
       : ProtoWrapperBase(DwrfFormat::kOrc, t) {}
 
   const proto::Type* getDwrfPtr() const {
@@ -254,12 +254,12 @@ class ProtoType : public ProtoWrapperBase {
   }
 };
 
-class ProtoUserMetadataItem : public ProtoWrapperBase {
+class UserMetadataItemWrapper : public ProtoWrapperBase {
  public:
-  explicit ProtoUserMetadataItem(proto::UserMetadataItem* item)
+  explicit UserMetadataItemWrapper(proto::UserMetadataItem* item)
       : ProtoWrapperBase(DwrfFormat::kDwrf, item) {}
 
-  explicit ProtoUserMetadataItem(proto::orc::UserMetadataItem* item)
+  explicit UserMetadataItemWrapper(proto::orc::UserMetadataItem* item)
       : ProtoWrapperBase(DwrfFormat::kOrc, item) {}
 
   const std::string& name() const {
@@ -281,12 +281,12 @@ class ProtoUserMetadataItem : public ProtoWrapperBase {
   }
 };
 
-class Footer : public ProtoWrapperBase {
+class FooterWrapper : public ProtoWrapperBase {
  public:
-  explicit Footer(proto::Footer* footer)
+  explicit FooterWrapper(proto::Footer* footer)
       : ProtoWrapperBase(DwrfFormat::kDwrf, footer) {}
 
-  explicit Footer(proto::orc::Footer* footer)
+  explicit FooterWrapper(proto::orc::Footer* footer)
       : ProtoWrapperBase(DwrfFormat::kOrc, footer) {}
 
   const proto::Footer* getDwrfPtr() const {
@@ -401,10 +401,10 @@ class Footer : public ProtoWrapperBase {
                                         : orcPtr()->stripes_size();
   }
 
-  ProtoStripeInformation stripes(int index) const {
+  StripeInformationWrapper stripes(int index) const {
     return format_ == DwrfFormat::kDwrf
-        ? ProtoStripeInformation(dwrfPtr()->mutable_stripes(index))
-        : ProtoStripeInformation(orcPtr()->mutable_stripes(index));
+        ? StripeInformationWrapper(dwrfPtr()->mutable_stripes(index))
+        : StripeInformationWrapper(orcPtr()->mutable_stripes(index));
   }
 
   int typesSize() const {
@@ -412,10 +412,10 @@ class Footer : public ProtoWrapperBase {
                                         : orcPtr()->types_size();
   }
 
-  ProtoType types(int index) const {
+  TypeWrapper types(int index) const {
     return format_ == DwrfFormat::kDwrf
-        ? ProtoType(dwrfPtr()->mutable_types(index))
-        : ProtoType(orcPtr()->mutable_types(index));
+        ? TypeWrapper(dwrfPtr()->mutable_types(index))
+        : TypeWrapper(orcPtr()->mutable_types(index));
   }
 
   int metadataSize() const {
@@ -423,10 +423,10 @@ class Footer : public ProtoWrapperBase {
                                         : orcPtr()->metadata_size();
   }
 
-  ProtoUserMetadataItem metadata(int index) const {
+  UserMetadataItemWrapper metadata(int index) const {
     return format_ == DwrfFormat::kDwrf
-        ? ProtoUserMetadataItem(dwrfPtr()->mutable_metadata(index))
-        : ProtoUserMetadataItem(orcPtr()->mutable_metadata(index));
+        ? UserMetadataItemWrapper(dwrfPtr()->mutable_metadata(index))
+        : UserMetadataItemWrapper(orcPtr()->mutable_metadata(index));
   }
 
  private:

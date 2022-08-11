@@ -175,14 +175,14 @@ ReaderBase::ReaderBase(
     ProtoUtils::readProtoInto<proto::Footer>(
         createDecompressedStream(std::move(footerStream), "File Footer"),
         footer);
-    footer_ = std::make_unique<Footer>(footer);
+    footer_ = std::make_unique<FooterWrapper>(footer);
   } else {
     auto footer = google::protobuf::Arena::CreateMessage<proto::orc::Footer>(
         arena_.get());
     ProtoUtils::readProtoInto<proto::orc::Footer>(
         createDecompressedStream(std::move(footerStream), "File Footer"),
         footer);
-    footer_ = std::make_unique<Footer>(footer);
+    footer_ = std::make_unique<FooterWrapper>(footer);
   }
 
   schema_ = std::dynamic_pointer_cast<const RowType>(convertType(*footer_));
@@ -277,7 +277,7 @@ std::unique_ptr<ColumnStatistics> ReaderBase::getColumnStatistics(
 }
 
 std::shared_ptr<const Type> ReaderBase::convertType(
-    const Footer& footer,
+    const FooterWrapper& footer,
     uint32_t index) {
   DWIO_ENSURE_LT(
       index,

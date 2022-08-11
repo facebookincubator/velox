@@ -91,7 +91,7 @@ class ReaderBase {
       : pool_{pool},
         stream_{std::move(stream)},
         postScript_{std::move(ps)},
-        footer_{std::make_unique<Footer>(footer)},
+        footer_{std::make_unique<FooterWrapper>(footer)},
         cache_{std::move(cache)},
         handler_{std::move(handler)},
         input_{
@@ -130,7 +130,7 @@ class ReaderBase {
     return *postScript_;
   }
 
-  const Footer& getFooter() const {
+  const FooterWrapper& getFooter() const {
     return *footer_;
   }
 
@@ -239,14 +239,14 @@ class ReaderBase {
 
  private:
   static std::shared_ptr<const Type> convertType(
-      const Footer& footer,
+      const FooterWrapper& footer,
       uint32_t index = 0);
 
   memory::MemoryPool& pool_;
   std::unique_ptr<dwio::common::InputStream> stream_;
   std::unique_ptr<google::protobuf::Arena> arena_;
   std::unique_ptr<PostScript> postScript_;
-  std::unique_ptr<Footer> footer_ = nullptr;
+  std::unique_ptr<FooterWrapper> footer_ = nullptr;
   uint64_t fileNum_;
   std::unique_ptr<StripeMetadataCache> cache_;
   // Keeps factory alive for possibly async prefetch.

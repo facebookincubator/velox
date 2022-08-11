@@ -1385,7 +1385,7 @@ TEST(TestReader, testOrcReaderSimple) {
 
 TEST(TestReader, testFooterWrapper) {
   proto::Footer impl;
-  Footer wrapper(&impl);
+  FooterWrapper wrapper(&impl);
   EXPECT_FALSE(wrapper.hasNumberOfRows());
   impl.set_numberofrows(0);
   ASSERT_TRUE(wrapper.hasNumberOfRows());

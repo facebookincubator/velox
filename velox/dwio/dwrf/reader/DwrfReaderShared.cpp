@@ -249,7 +249,7 @@ bool DwrfReaderShared::hasMetadataValue(const std::string& key) const {
   return false;
 }
 
-uint64_t maxStreamsForType(const ProtoType& type) {
+uint64_t maxStreamsForType(const TypeWrapper& type) {
   if (type.format() == DwrfFormat::kOrc) {
     switch (type.kind()) {
       case TypeKind::ROW:
@@ -443,7 +443,7 @@ size_t DwrfRowReaderShared::estimatedReaderMemory() const {
 }
 
 std::optional<size_t> DwrfRowReaderShared::estimatedRowSizeHelper(
-    const Footer& footer,
+    const FooterWrapper& footer,
     const dwio::common::Statistics& stats,
     uint32_t nodeId) const {
   DWIO_ENSURE_LT(nodeId, footer.typesSize(), "Types missing in footer");
