@@ -59,7 +59,9 @@ void DecryptionHandler::populateChildNodeMap(
 std::unique_ptr<DecryptionHandler> DecryptionHandler::create(
     const Footer& footer,
     DecrypterFactory* factory) {
-  return create(*footer.getDwrfFooter(), factory);
+  return footer.format() == dwrfFormat::kDwrf
+      ? create(*footer.getDwrfPtr(), factory)
+      : std::make_unique<DecryptionHandler>();
 }
 
 std::unique_ptr<DecryptionHandler> DecryptionHandler::create(

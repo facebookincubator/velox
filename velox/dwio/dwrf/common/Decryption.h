@@ -18,6 +18,7 @@
 
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/EncryptionCommon.h"
+#include "velox/dwio/dwrf/common/FileMetadata.h"
 
 namespace facebook::velox::dwrf::encryption {
 
