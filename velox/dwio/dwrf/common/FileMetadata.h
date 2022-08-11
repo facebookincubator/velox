@@ -103,6 +103,16 @@ class ProtoStripeInformation : public ProtoWrapperBase {
   explicit ProtoStripeInformation(proto::orc::StripeInformation* si)
       : ProtoWrapperBase(DwrfFormat::kOrc, si) {}
 
+  const proto::StripeInformation* getDwrfPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    return dwrfPtr();
+  }
+
+  const proto::orc::StripeInformation* getOrcPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    return orcPtr();
+  }
+
   uint64_t offset() const {
     return format_ == DwrfFormat::kDwrf ? dwrfPtr()->offset()
                                         : orcPtr()->offset();
@@ -160,6 +170,7 @@ class ProtoStripeInformation : public ProtoWrapperBase {
   }
 
  private:
+  // private helper with no format checking
   inline const proto::StripeInformation* dwrfPtr() const {
     return reinterpret_cast<proto::StripeInformation*>(rawProtoPtr());
   }
@@ -174,6 +185,16 @@ class ProtoType : public ProtoWrapperBase {
   explicit ProtoType(proto::Type* t) : ProtoWrapperBase(DwrfFormat::kDwrf, t) {}
   explicit ProtoType(proto::orc::Type* t)
       : ProtoWrapperBase(DwrfFormat::kOrc, t) {}
+
+  const proto::Type* getDwrfPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    return dwrfPtr();
+  }
+
+  const proto::orc::Type* getOrcPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    return orcPtr();
+  }
 
   TypeKind kind() const;
 
