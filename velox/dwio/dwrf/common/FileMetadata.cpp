@@ -35,7 +35,7 @@ CompressionKind orcCompressionToCompressionKind(
     case proto::orc::CompressionKind::ZSTD:
       return CompressionKind::CompressionKind_ZSTD;
   }
-  VELOX_FAIL("Unknown compression kind");
+  VELOX_FAIL("Unknown compression kind: {}", CompressionKind_Name(compression));
 }
 } // namespace detail
 
@@ -63,7 +63,7 @@ TypeKind TypeWrapper::kind() const {
       case proto::Type_Kind_STRUCT:
         return TypeKind::ROW;
       default:
-        VELOX_FAIL("Unknown type kind");
+        VELOX_FAIL("Unknown type kind: {}", Type_Kind_Name(dwrfPtr()->kind()));
     }
   }
 
@@ -98,7 +98,7 @@ TypeKind TypeWrapper::kind() const {
           "{} not supported yet.",
           proto::orc::Type_Kind_Name(orcPtr()->kind()));
     default:
-      VELOX_FAIL("Unknown type kind");
+      VELOX_FAIL("Unknown type kind: {}", Type_Kind_Name(orcPtr()->kind()));
   }
 }
 

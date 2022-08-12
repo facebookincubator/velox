@@ -17,6 +17,7 @@
 
 #include <string>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/Common.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -72,12 +73,12 @@ class PostScript {
         impl_{std::make_unique<proto::orc::PostScript>(std::move(ps))} {}
 
   const proto::PostScript* getDwrfPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr();
   }
 
   const proto::orc::PostScript* getOrcPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kOrc);
     return orcPtr();
   }
 
@@ -129,7 +130,7 @@ class PostScript {
   }
 
   StripeCacheMode cacheMode() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return static_cast<StripeCacheMode>(dwrfPtr()->cachemode());
   }
 
@@ -138,7 +139,7 @@ class PostScript {
   }
 
   uint32_t cacheSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->cachesize();
   }
 
@@ -161,12 +162,12 @@ class StripeInformationWrapper : public ProtoWrapperBase {
       : ProtoWrapperBase(DwrfFormat::kOrc, si) {}
 
   const proto::StripeInformation* getDwrfPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr();
   }
 
   const proto::orc::StripeInformation* getOrcPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kOrc);
     return orcPtr();
   }
 
@@ -197,32 +198,32 @@ class StripeInformationWrapper : public ProtoWrapperBase {
 
   // DWRF-specific fields
   uint64_t rawDataSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->rawdatasize();
   }
 
   int64_t checksum() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->checksum();
   }
 
   uint64_t groupSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->groupsize();
   }
 
   int keyMetadataSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata_size();
   }
 
   const std::string& keyMetadata(int index) const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata(index);
   }
 
   const ::google::protobuf::RepeatedPtrField<std::string>& keyMetadata() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->keymetadata();
   }
 
@@ -245,12 +246,12 @@ class TypeWrapper : public ProtoWrapperBase {
       : ProtoWrapperBase(DwrfFormat::kOrc, t) {}
 
   const proto::Type* getDwrfPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr();
   }
 
   const proto::orc::Type* getOrcPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kOrc);
     return orcPtr();
   }
 
@@ -333,12 +334,12 @@ class FooterWrapper : public ProtoWrapperBase {
       : ProtoWrapperBase(DwrfFormat::kOrc, footer) {}
 
   const proto::Footer* getDwrfPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return reinterpret_cast<proto::Footer*>(rawProtoPtr());
   }
 
   const proto::orc::Footer* getOrcPtr() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kOrc);
     return reinterpret_cast<proto::orc::Footer*>(rawProtoPtr());
   }
 
@@ -377,7 +378,7 @@ class FooterWrapper : public ProtoWrapperBase {
   }
 
   uint64_t rawDataSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->rawdatasize();
   }
 
@@ -387,7 +388,7 @@ class FooterWrapper : public ProtoWrapperBase {
   }
 
   const proto::ChecksumAlgorithm checksumAlgorithm() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->checksumalgorithm();
   }
 
@@ -401,13 +402,13 @@ class FooterWrapper : public ProtoWrapperBase {
   }
 
   int stripeCacheOffsetsSize() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->stripecacheoffsets_size();
   }
 
   const ::google::protobuf::RepeatedField<::google::protobuf::uint32>&
   stripeCacheOffsets() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->stripecacheoffsets();
   }
 
@@ -419,13 +420,13 @@ class FooterWrapper : public ProtoWrapperBase {
   const ::google::protobuf::RepeatedPtrField<
       ::facebook::velox::dwrf::proto::ColumnStatistics>&
   statistics() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->statistics();
   }
 
   const ::facebook::velox::dwrf::proto::ColumnStatistics& statistics(
       int index) const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->statistics(index);
   }
 
@@ -435,7 +436,7 @@ class FooterWrapper : public ProtoWrapperBase {
   }
 
   const ::facebook::velox::dwrf::proto::Encryption& encryption() const {
-    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    VELOX_CHECK_EQ(format_, DwrfFormat::kDwrf);
     return dwrfPtr()->encryption();
   }
 

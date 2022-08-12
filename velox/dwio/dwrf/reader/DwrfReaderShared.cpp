@@ -520,7 +520,7 @@ std::optional<size_t> DwrfRowReaderShared::estimatedRowSizeHelper(
         auto subtypeEstimate =
             estimatedRowSizeHelper(footer, stats, t.subtypes(i));
         if (subtypeEstimate.has_value()) {
-          totalEstimate + subtypeEstimate.value();
+          totalEstimate += subtypeEstimate.value();
         } else {
           return std::nullopt;
         }
