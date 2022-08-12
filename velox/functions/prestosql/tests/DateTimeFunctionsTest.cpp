@@ -223,6 +223,12 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
     }
     return signatureStrings;
   }
+
+  Date parseDate(const StringView& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  }
 };
 
 bool operator==(
@@ -483,6 +489,73 @@ TEST_F(DateTimeFunctionsTest, yearTimestampWithTimezone) {
       std::nullopt,
       evaluateWithTimestampWithTimezone<int64_t>(
           "year(c0)", std::nullopt, std::nullopt));
+}
+
+TEST_F(DateTimeFunctionsTest, weekDate) {
+  const auto week = [&](const StringView& date) {
+    return evaluateOnce<int64_t>(
+               "week(c0)", std::make_optional(parseDate(date)))
+               .value() &
+        evaluateOnce<int64_t>(
+            "week_of_year(c0)", std::make_optional(parseDate(date)))
+            .value();
+  };
+
+  EXPECT_EQ(1, week("1919-12-31"));
+  EXPECT_EQ(1, week("1920-01-01"));
+  EXPECT_EQ(1, week("1920-01-04"));
+  EXPECT_EQ(2, week("1920-01-05"));
+  EXPECT_EQ(53, week("1960-01-01"));
+  EXPECT_EQ(53, week("1960-01-03"));
+  EXPECT_EQ(1, week("1960-01-04"));
+  EXPECT_EQ(1, week("1969-12-31"));
+  EXPECT_EQ(1, week("1970-01-01"));
+  EXPECT_EQ(1, week("0001-01-01"));
+  EXPECT_EQ(52, week("9999-12-31"));
+}
+
+TEST_F(DateTimeFunctionsTest, week) {
+  const auto weekTimestamp = [&](const StringView& time) {
+    auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
+    return evaluateOnce<int64_t>(
+               "week(c0)",
+               std::make_optional(
+                   Timestamp(timestampInSeconds * 100'000'000, 0)))
+               .value() &
+        evaluateOnce<int64_t>(
+            "week_of_year(c0)",
+            std::make_optional(Timestamp(timestampInSeconds * 100'000'000, 0)))
+            .value();
+  };
+
+  EXPECT_EQ(1, weekTimestamp("00:00:00"));
+  EXPECT_EQ(10, weekTimestamp("11:59:59"));
+  EXPECT_EQ(51, weekTimestamp("06:01:01"));
+  EXPECT_EQ(24, weekTimestamp("06:59:59"));
+  EXPECT_EQ(27, weekTimestamp("12:00:01"));
+  EXPECT_EQ(7, weekTimestamp("12:59:59"));
+}
+
+TEST_F(DateTimeFunctionsTest, weekTimestampWithTimezone) {
+  const auto weekTimestampTimezone = [&](const StringView& time,
+                                         const StringView& timezone) {
+    auto timestampInSeconds = util::fromTimeString(time) / 1'000'000;
+    return evaluateWithTimestampWithTimezone<int64_t>(
+               "week(c0)", timestampInSeconds * 100'000'000, timezone)
+               .value() &
+        evaluateWithTimestampWithTimezone<int64_t>(
+            "week_of_year(c0)", timestampInSeconds * 100'000'000, timezone)
+            .value();
+  };
+
+  EXPECT_EQ(1, weekTimestampTimezone("00:00:00", "-12:00"));
+  EXPECT_EQ(1, weekTimestampTimezone("00:00:00", "+12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("11:59:59", "-12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("11:59:59", "+12:00"));
+  EXPECT_EQ(33, weekTimestampTimezone("06:01:01", "-12:00"));
+  EXPECT_EQ(34, weekTimestampTimezone("06:01:01", "+12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("12:00:01", "-12:00"));
+  EXPECT_EQ(47, weekTimestampTimezone("12:00:01", "+12:00"));
 }
 
 TEST_F(DateTimeFunctionsTest, quarter) {
