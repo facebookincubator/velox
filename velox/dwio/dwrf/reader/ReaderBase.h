@@ -233,8 +233,8 @@ class ReaderBase {
     return arena_.get();
   }
 
-  dwio::common::FileFormat getFileFormat() const {
-    return postScript_->fileFormat();
+  DwrfFormat format() const {
+    return postScript_->format();
   }
 
  private:

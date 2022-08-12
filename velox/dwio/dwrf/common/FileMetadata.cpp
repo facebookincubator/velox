@@ -35,35 +35,9 @@ CompressionKind orcCompressionToCompressionKind(
     case proto::orc::CompressionKind::ZSTD:
       return CompressionKind::CompressionKind_ZSTD;
   }
-  return CompressionKind::CompressionKind_NONE;
+  VELOX_FAIL("Unknown compression kind");
 }
 } // namespace detail
-
-PostScript::PostScript(const proto::PostScript& ps)
-    : footerLength_{ps.footerlength()},
-      compression_{
-          ps.has_compression()
-              ? static_cast<dwio::common::CompressionKind>(ps.compression())
-              : dwio::common::CompressionKind::CompressionKind_NONE},
-      compressionBlockSize_{
-          ps.has_compressionblocksize()
-              ? ps.compressionblocksize()
-              : dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE},
-      writerVersion_{
-          ps.has_writerversion()
-              ? static_cast<WriterVersion>(ps.writerversion())
-              : WriterVersion::ORIGINAL},
-      cacheMode_{static_cast<StripeCacheMode>(ps.cachemode())},
-      cacheSize_{ps.cachesize()} {}
-
-PostScript::PostScript(const proto::orc::PostScript& ps)
-    : fileFormat_{dwio::common::FileFormat::ORC},
-      footerLength_{ps.footerlength()},
-      compression_{detail::orcCompressionToCompressionKind(ps.compression())},
-      compressionBlockSize_{ps.compressionblocksize()},
-      writerVersion_{static_cast<WriterVersion>(ps.writerversion())},
-      metadataLength_{ps.metadatalength()},
-      stripeStatisticsLength_{ps.stripestatisticslength()} {}
 
 TypeKind TypeWrapper::kind() const {
   if (format_ == DwrfFormat::kDwrf) {
@@ -126,6 +100,12 @@ TypeKind TypeWrapper::kind() const {
     default:
       VELOX_FAIL("Unknown type kind");
   }
+}
+
+dwio::common::CompressionKind PostScript::compression() const {
+  return format_ == DwrfFormat::kDwrf
+      ? static_cast<dwio::common::CompressionKind>(dwrfPtr()->compression())
+      : detail::orcCompressionToCompressionKind(orcPtr()->compression());
 }
 
 } // namespace facebook::velox::dwrf

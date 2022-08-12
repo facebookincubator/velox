@@ -135,15 +135,16 @@ ReaderBase::ReaderBase(
   if (fileFormat == FileFormat::DWRF) {
     auto postScript = ProtoUtils::readProto<proto::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<PostScript>(*postScript);
+    postScript_ = std::make_unique<PostScript>(std::move(postScript));
   } else {
     auto postScript = ProtoUtils::readProto<proto::orc::PostScript>(
         input_->read(fileLength_ - psLength_ - 1, psLength_, LogType::FOOTER));
-    postScript_ = std::make_unique<PostScript>(*postScript);
+    postScript_ = std::make_unique<PostScript>(std::move(postScript));
   }
 
   uint64_t footerSize = postScript_->footerLength();
-  uint64_t cacheSize = postScript_->cacheSize();
+  uint64_t cacheSize =
+      postScript_->hasCacheSize() ? postScript_->cacheSize() : 0;
   uint64_t tailSize = 1 + psLength_ + footerSize + cacheSize;
 
   // There are cases in warehouse, where RC/text files are stored
@@ -156,7 +157,7 @@ ReaderBase::ReaderBase(
   DWIO_ENSURE_LE(tailSize, fileLength_, "Corrupted file, tail size is invalid");
 
   DWIO_ENSURE(
-      (getFileFormat() == FileFormat::DWRF)
+      (format() == DwrfFormat::kDwrf)
           ? proto::CompressionKind_IsValid(postScript_->compression())
           : proto::orc::CompressionKind_IsValid(postScript_->compression()),
       "Corrupted File, invalid compression kind ",
@@ -190,8 +191,7 @@ ReaderBase::ReaderBase(
 
   // load stripe index/footer cache
   if (cacheSize > 0) {
-    DWIO_ENSURE_EQ(getFileFormat(), FileFormat::DWRF);
-
+    DWIO_ENSURE_EQ(format(), DwrfFormat::kDwrf);
     if (input_->shouldPrefetchStripes()) {
       cache_ = std::make_unique<StripeMetadataCache>(
           postScript_->cacheMode(),

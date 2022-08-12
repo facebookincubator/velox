@@ -117,7 +117,6 @@ TEST(StripeStream, planReads) {
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
       nullptr);
-  std::cout << "done" << std::endl;
   ColumnSelector cs{readerBase->getSchema(), std::vector<uint64_t>{2}, true};
   auto stripeFooter =
       google::protobuf::Arena::CreateMessage<proto::StripeFooter>(&arena);
@@ -216,7 +215,11 @@ TEST(StripeStream, zeroLength) {
   auto is = std::make_unique<RecordingInputStream>();
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
-      pool, std::move(is), std::make_unique<PostScript>(ps), footer, nullptr);
+      pool,
+      std::move(is),
+      std::make_unique<PostScript>(std::move(ps)),
+      footer,
+      nullptr);
 
   auto stripeFooter =
       google::protobuf::Arena::CreateMessage<proto::StripeFooter>(&arena);
@@ -290,7 +293,7 @@ TEST(StripeStream, planReadsIndex) {
   auto readerBase = std::make_shared<ReaderBase>(
       pool,
       std::move(is),
-      std::make_unique<PostScript>(ps),
+      std::make_unique<PostScript>(std::move(ps)),
       footer,
       std::move(cache));
 
@@ -405,7 +408,7 @@ TEST(StripeStream, readEncryptedStreams) {
   auto readerBase = std::make_shared<ReaderBase>(
       pool,
       std::make_unique<MemoryInputStream>(nullptr, 0),
-      std::make_unique<PostScript>(ps),
+      std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
       std::move(handler));
@@ -470,7 +473,7 @@ TEST(StripeStream, schemaMismatch) {
   auto readerBase = std::make_shared<ReaderBase>(
       pool,
       std::make_unique<MemoryInputStream>(nullptr, 0),
-      std::make_unique<PostScript>(ps),
+      std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
       std::move(handler));

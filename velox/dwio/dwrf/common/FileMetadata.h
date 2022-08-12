@@ -46,68 +46,110 @@ class ProtoWrapperBase {
   }
 };
 
+/***
+ * PostScript that takes the ownership of proto::PostScript /
+ *proto::orc::PostScript and provides access to the attributes
+ ***/
 class PostScript {
+  DwrfFormat format_;
+  std::unique_ptr<google::protobuf::Message> impl_;
+
  public:
-  PostScript(
-      uint64_t footerLength,
-      dwio::common::CompressionKind compression,
-      uint64_t compressionBlockSize,
-      uint32_t writerVersion)
-      : footerLength_{footerLength},
-        compression_{compression},
-        compressionBlockSize_{compressionBlockSize},
-        writerVersion_{static_cast<WriterVersion>(writerVersion)} {}
+  PostScript() = delete;
 
-  explicit PostScript(const proto::PostScript& ps);
+  explicit PostScript(std::unique_ptr<proto::PostScript> ps)
+      : format_{DwrfFormat::kDwrf}, impl_{std::move(ps)} {}
 
-  explicit PostScript(const proto::orc::PostScript& ps);
+  explicit PostScript(proto::PostScript&& ps)
+      : format_{DwrfFormat::kDwrf},
+        impl_{std::make_unique<proto::PostScript>(std::move(ps))} {}
 
-  dwio::common::FileFormat fileFormat() const {
-    return fileFormat_;
+  explicit PostScript(std::unique_ptr<proto::orc::PostScript> ps)
+      : format_{DwrfFormat::kOrc}, impl_{std::move(ps)} {}
+
+  explicit PostScript(proto::orc::PostScript&& ps)
+      : format_{DwrfFormat::kOrc},
+        impl_{std::make_unique<proto::orc::PostScript>(std::move(ps))} {}
+
+  const proto::PostScript* getDwrfPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    return dwrfPtr();
+  }
+
+  const proto::orc::PostScript* getOrcPtr() const {
+    DWIO_ENSURE(format_ == DwrfFormat::kOrc);
+    return orcPtr();
+  }
+
+  DwrfFormat format() const {
+    return format_;
   }
 
   // General methods
-  uint64_t footerLength() const {
-    return footerLength_;
+  bool hasFooterLength() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_footerlength()
+                                        : orcPtr()->has_footerlength();
   }
 
-  dwio::common::CompressionKind compression() const {
-    return compression_;
+  uint64_t footerLength() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->footerlength()
+                                        : orcPtr()->footerlength();
+  }
+
+  bool hasCompression() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_compression()
+                                        : orcPtr()->has_compression();
+  }
+
+  dwio::common::CompressionKind compression() const;
+
+  bool hasCompressionBlockSize() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_compressionblocksize()
+                                        : orcPtr()->has_compressionblocksize();
   }
 
   uint64_t compressionBlockSize() const {
-    return compressionBlockSize_;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->compressionblocksize()
+                                        : orcPtr()->compressionblocksize();
+  }
+
+  bool hasWriterVersion() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_writerversion()
+                                        : orcPtr()->has_writerversion();
   }
 
   uint32_t writerVersion() const {
-    return writerVersion_;
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->writerversion()
+                                        : orcPtr()->writerversion();
   }
 
   // DWRF-specific methods
+  bool hasCacheMode() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_cachemode() : false;
+  }
+
   StripeCacheMode cacheMode() const {
-    return cacheMode_;
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    return static_cast<StripeCacheMode>(dwrfPtr()->cachemode());
+  }
+
+  bool hasCacheSize() const {
+    return format_ == DwrfFormat::kDwrf ? dwrfPtr()->has_cachesize() : false;
   }
 
   uint32_t cacheSize() const {
-    return cacheSize_;
+    DWIO_ENSURE(format_ == DwrfFormat::kDwrf);
+    return dwrfPtr()->cachesize();
   }
 
  private:
-  // General attributes
-  dwio::common::FileFormat fileFormat_ = dwio::common::FileFormat::DWRF;
-  uint64_t footerLength_;
-  dwio::common::CompressionKind compression_ =
-      dwio::common::CompressionKind::CompressionKind_NONE;
-  uint64_t compressionBlockSize_ = dwio::common::DEFAULT_COMPRESSION_BLOCK_SIZE;
-  WriterVersion writerVersion_ = WriterVersion::ORIGINAL;
+  inline proto::PostScript* dwrfPtr() const {
+    return reinterpret_cast<proto::PostScript*>(impl_.get());
+  }
 
-  // DWRF-specific attributes
-  StripeCacheMode cacheMode_;
-  uint32_t cacheSize_ = 0;
-
-  // ORC-specific attributes
-  uint64_t metadataLength_;
-  uint64_t stripeStatisticsLength_;
+  inline proto::orc::PostScript* orcPtr() const {
+    return reinterpret_cast<proto::orc::PostScript*>(impl_.get());
+  }
 };
 
 class StripeInformationWrapper : public ProtoWrapperBase {
@@ -197,7 +239,8 @@ class StripeInformationWrapper : public ProtoWrapperBase {
 
 class TypeWrapper : public ProtoWrapperBase {
  public:
-  explicit TypeWrapper(proto::Type* t) : ProtoWrapperBase(DwrfFormat::kDwrf, t) {}
+  explicit TypeWrapper(proto::Type* t)
+      : ProtoWrapperBase(DwrfFormat::kDwrf, t) {}
   explicit TypeWrapper(proto::orc::Type* t)
       : ProtoWrapperBase(DwrfFormat::kOrc, t) {}
 
