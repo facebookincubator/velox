@@ -27,7 +27,4 @@ int64_t bytesOfType(const TypePtr& type);
 /// Return the Velox type according to the typename.
 TypePtr toVeloxType(const std::string& typeName);
 
-
-
-
 } // namespace facebook::velox::substrait
