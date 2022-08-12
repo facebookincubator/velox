@@ -192,13 +192,13 @@ class RowContainer {
       RowColumn col,
       VectorPtr result);
 
-  // Copies the values from the array pointed to by 'rows' at 'col' into
-  // 'result' (starting at 'resultOffset') for the rows at positions in
-  // the 'offsets' array. If an entry in 'rows' is null, sets corresponding
-  // row in 'result' to null.
-  static void extractColumnAtOffsets(
+  /// Copies the values from the array pointed to by 'rows' at 'col' into
+  /// 'result' (starting at 'resultOffset') for the rows at positions in
+  /// the 'rowNumbers' array. If a 'row' is null, sets
+  /// corresponding row in 'result' to null.
+  static void extractColumn(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       RowColumn col,
       const vector_size_t resultOffset,
       VectorPtr result);
@@ -214,18 +214,18 @@ class RowContainer {
     extractColumn(rows, numRows, columnAt(columnIndex), result);
   }
 
-  // Copies the values at 'columnIndex' at positions in the 'offsets' array for
-  // the rows pointed to by 'rows'. The values are copied into the 'result'
-  // vector at the offset pointed by 'resultOffset'. If an entry in 'rows'
-  // is null, sets corresponding row in 'result' to null.
-  void extractColumnAtOffsets(
+  /// Copies the values at 'columnIndex' at positions in the 'rowNumbers' array
+  /// for the rows pointed to by 'rows'. The values are copied into the 'result'
+  /// vector at the offset pointed by 'resultOffset'. If an entry in 'rows'
+  /// is null, sets corresponding row in 'result' to null.
+  void extractColumn(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       int32_t columnIndex,
       const vector_size_t resultOffset,
       VectorPtr result) {
-    extractColumnAtOffsets(
-        rows, offsets, columnAt(columnIndex), resultOffset, result);
+    extractColumn(
+        rows, rowNumbers, columnAt(columnIndex), resultOffset, result);
   }
 
   static inline int32_t nullByte(int32_t nullOffset) {
@@ -463,15 +463,17 @@ class RowContainer {
   }
 
   template <TypeKind Kind>
-  static void extractColumnOffsetsTyped(
+  static void extractColumnRowsTyped(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       RowColumn column,
       const vector_size_t resultOffset,
       VectorPtr result) {
+    auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+    VELOX_CHECK_GE(result->size(), resultOffset + numRows);
     if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
-      extractOffsetsComplexType(rows, offsets, column, resultOffset, result);
+      extractRowsComplexType(rows, rowNumbers, column, resultOffset, result);
       return;
     }
     using T = typename KindToFlatVector<Kind>::HashRowType;
@@ -479,12 +481,12 @@ class RowContainer {
     auto nullMask = column.nullMask();
     auto columnOffset = column.offset();
     if (!nullMask) {
-      extractValuesOffsetsNoNulls<T>(
-          rows, offsets, columnOffset, resultOffset, flatResult);
+      extractValuesRowsNoNulls<T>(
+          rows, rowNumbers, columnOffset, resultOffset, flatResult);
     } else {
-      extractValuesOffsetsWithNulls<T>(
+      extractValuesRowsWithNulls<T>(
           rows,
-          offsets,
+          rowNumbers,
           columnOffset,
           column.nullByte(),
           nullMask,
@@ -563,16 +565,16 @@ class RowContainer {
   }
 
   template <typename T>
-  static void extractValuesOffsetsWithNulls(
+  static void extractValuesRowsWithNulls(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       int32_t columnOffset,
       int32_t nullByte,
       uint8_t nullMask,
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
-    auto numRows = offsets->size() / sizeof(vector_size_t);
-    auto offsetsVector = offsets->as<vector_size_t>();
+    auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+    auto rowNumbersVector = rowNumbers->as<vector_size_t>();
 
     BufferPtr nullBuffer = result->mutableNulls(resultOffset + numRows);
     auto nulls = nullBuffer->asMutable<uint64_t>();
@@ -581,7 +583,7 @@ class RowContainer {
 
     for (int32_t i = 0; i < numRows; ++i) {
       auto resultIndex = resultOffset + i;
-      auto row = rows[offsetsVector[i]];
+      auto row = rows[rowNumbersVector[i]];
       if (row == nullptr) {
         bits::setNull(nulls, resultIndex, true);
       } else {
@@ -612,25 +614,27 @@ class RowContainer {
   }
 
   template <typename T>
-  static void extractValuesOffsetsNoNulls(
+  static void extractValuesRowsNoNulls(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       int32_t columnOffset,
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
-    auto numRows = offsets->size() / sizeof(vector_size_t);
-    auto offsetsVector = offsets->as<vector_size_t>();
+    auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+    auto rowNumbersVector = rowNumbers->as<vector_size_t>();
 
     BufferPtr valuesBuffer = result->mutableValues(resultOffset + numRows);
     auto values = valuesBuffer->asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       auto resultIndex = resultOffset + i;
-      auto row = rows[offsetsVector[i]];
+      auto row = rows[rowNumbersVector[i]];
       if (row == nullptr) {
         result->setNull(resultIndex, true);
       } else {
         result->setNull(resultIndex, false);
-        // Here a StringView will reference the hash table, not copy.
+        // Here StringView would reference the hash-table, not copy.
+        // Hence, there is a separate specialization written for StringView
+        // for this function.
         values[resultIndex] = valueAt<T>(row, columnOffset);
       }
     }
@@ -852,9 +856,9 @@ class RowContainer {
       RowColumn column,
       VectorPtr result);
 
-  static void extractOffsetsComplexType(
+  static void extractRowsComplexType(
       const char* const* rows,
-      const BufferPtr& offsets,
+      const BufferPtr& rowNumbers,
       RowColumn column,
       const vector_size_t resultOffset,
       VectorPtr result);
@@ -1047,17 +1051,17 @@ inline void RowContainer::extractValuesWithNulls<StringView>(
 }
 
 template <>
-inline void RowContainer::extractValuesOffsetsNoNulls<StringView>(
+inline void RowContainer::extractValuesRowsNoNulls<StringView>(
     const char* const* rows,
-    const BufferPtr& offsets,
+    const BufferPtr& rowNumbers,
     int32_t columnOffset,
     const vector_size_t resultOffset,
     FlatVector<StringView>* result) {
-  auto numRows = offsets->size() / sizeof(vector_size_t);
-  auto offsetsVector = offsets->as<vector_size_t>();
+  auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
 
   for (int32_t i = 0; i < numRows; ++i) {
-    auto row = rows[offsetsVector[i]];
+    auto row = rows[rowNumbersVector[i]];
     auto resultIndex = resultOffset + i;
     if (row == nullptr) {
       result->setNull(resultIndex, true);
@@ -1070,19 +1074,19 @@ inline void RowContainer::extractValuesOffsetsNoNulls<StringView>(
 }
 
 template <>
-inline void RowContainer::extractValuesOffsetsWithNulls<StringView>(
+inline void RowContainer::extractValuesRowsWithNulls<StringView>(
     const char* const* rows,
-    const BufferPtr& offsets,
+    const BufferPtr& rowNumbers,
     int32_t columnOffset,
     int32_t nullByte,
     uint8_t nullMask,
     const vector_size_t resultOffset,
     FlatVector<StringView>* result) {
-  auto numRows = offsets->size() / sizeof(vector_size_t);
-  auto offsetsVector = offsets->as<vector_size_t>();
+  auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
 
   for (int32_t i = 0; i < numRows; ++i) {
-    auto row = rows[offsetsVector[i]];
+    auto row = rows[rowNumbersVector[i]];
     auto resultIndex = resultOffset + i;
     if (!row || isNullAt(row, nullByte, nullMask)) {
       result->setNull(resultIndex, true);
@@ -1103,9 +1107,9 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
 }
 
 template <>
-inline void RowContainer::extractColumnOffsetsTyped<TypeKind::OPAQUE>(
+inline void RowContainer::extractColumnRowsTyped<TypeKind::OPAQUE>(
     const char* const* /*rows*/,
-    const BufferPtr& /*offsets*/,
+    const BufferPtr& /*rowNumbers*/,
     RowColumn /*column*/,
     const vector_size_t /*resultOffset*/,
     VectorPtr /*result*/) {
@@ -1121,17 +1125,17 @@ inline void RowContainer::extractColumn(
       extractColumnTyped, result->typeKind(), rows, numRows, column, result);
 }
 
-inline void RowContainer::extractColumnAtOffsets(
+inline void RowContainer::extractColumn(
     const char* const* rows,
-    const BufferPtr& offsets,
+    const BufferPtr& rowNumbers,
     RowColumn column,
     vector_size_t resultOffset,
     VectorPtr result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      extractColumnOffsetsTyped,
+      extractColumnRowsTyped,
       result->typeKind(),
       rows,
-      offsets,
+      rowNumbers,
       column,
       resultOffset,
       result);

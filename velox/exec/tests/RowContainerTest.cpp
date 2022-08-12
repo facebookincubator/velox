@@ -37,11 +37,29 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected) {
-    testExtractColumnBasicForOddRows(container, rows, column, expected);
-    testExtractColumnOffsetsForOddRows(container, rows, column, expected);
+    auto verifyResults = [&](const VectorPtr& result) {
+      auto size = rows.size();
+      EXPECT_EQ(size, result->size());
+      for (vector_size_t row = 0; row < size; ++row) {
+        if (row % 2 == 0) {
+          EXPECT_TRUE(result->isNullAt(row)) << "at " << row;
+        } else {
+          EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
+              << "at " << row << ": expected " << expected->toString(row)
+              << ", got " << result->toString();
+        }
+      }
+    };
+
+    auto result =
+        testExtractColumnBasicForOddRows(container, rows, column, expected);
+    verifyResults(result);
+    auto resultRowNumbers = testExtractColumnRowNumbersForOddRows(
+        container, rows, column, expected);
+    verifyResults(resultRowNumbers);
   }
 
-  void testExtractColumnBasicForOddRows(
+  VectorPtr testExtractColumnBasicForOddRows(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
@@ -56,52 +74,51 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
 
     auto result = BaseVector::create(expected->type(), size, pool_.get());
     container.extractColumn(oddRows.data(), size, column, result);
-    EXPECT_EQ(size, result->size());
-    for (vector_size_t row = 0; row < size; ++row) {
-      if (row % 2 == 0) {
-        EXPECT_TRUE(result->isNullAt(row)) << "at " << row;
-      } else {
-        EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
-            << "at " << row << ": expected " << expected->toString(row)
-            << ", got " << result->toString();
-      }
-    }
+    return result;
   }
 
-  void testExtractColumnOffsetsForOddRows(
+  VectorPtr testExtractColumnRowNumbersForOddRows(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected) {
     auto size = rows.size();
 
-    // Extract only odd rows.
-    // Test using extractColumnOffsets API.
-    auto oddsSize = size / 2;
-    auto offsetsBuffer =
-        AlignedBuffer::allocate<vector_size_t>(oddsSize, pool_.get());
-    offsetsBuffer->setSize(oddsSize * sizeof(vector_size_t));
-    auto rawOffsetsBuffer = offsetsBuffer->asMutable<vector_size_t>();
-    for (int i = 0; i < oddsSize; i++) {
-      rawOffsetsBuffer[i] = i * 2;
+    // Add a single null row to the beginning of the data, so that
+    // even rowNumbers can point to it.
+    std::vector<char*> oddRows(size, nullptr);
+    for (auto i = 1; i < size; i += 1) {
+      oddRows[i] = rows[i];
     }
 
-    auto result = BaseVector::create(expected->type(), oddsSize, pool_.get());
-    container.extractColumnAtOffsets(
-        rows.data(), offsetsBuffer, column, 0, result);
-    EXPECT_EQ(oddsSize, result->size());
-    for (vector_size_t row = 0; row < oddsSize; ++row) {
-      EXPECT_TRUE(result->equalValueAt(expected.get(), row, row * 2))
-          << "at " << row << ": expected " << expected->toString(row)
-          << ", got " << result->toString();
+    // Extract only odd rows.
+    // Test using extractColumnOffsets API.
+    // The rowNumbersBuffer has values like 0, 1, 0, 3, 0, 5, 0, 7, etc
+    // This tests the case that the rowNumber values are repeated and are
+    // also out of order.
+    auto rowNumbersBuffer =
+        AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
+    auto rawRowNumbersBuffer = rowNumbersBuffer->asMutable<vector_size_t>();
+    for (int i = 0; i < size; i++) {
+      if (i % 2 == 0) {
+        rawRowNumbersBuffer[i] = 0;
+      } else {
+        rawRowNumbersBuffer[i] = i;
+      }
     }
+
+    auto result = BaseVector::create(expected->type(), size, pool_.get());
+    container.extractColumn(
+        oddRows.data(), rowNumbersBuffer, column, 0, result);
+    return result;
   }
 
   void testExtractColumnForAllRows(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
-      const VectorPtr& expected) {
+      const VectorPtr& expected,
+      int offset = 0) {
     auto size = rows.size();
 
     // Test using extractColumn API.
@@ -109,18 +126,34 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     container.extractColumn(rows.data(), size, column, result);
     assertEqualVectors(expected, result);
 
-    auto offsetsBuffer =
+    // Test using extractColumn (with rowNumbers) API.
+    auto rowNumbersBuffer =
         AlignedBuffer::allocate<vector_size_t>(size, pool_.get());
-    offsetsBuffer->setSize(size * sizeof(vector_size_t));
-    auto rawOffsetsBuffer = offsetsBuffer->asMutable<vector_size_t>();
+    auto rawRowNumbersBuffer = rowNumbersBuffer->asMutable<vector_size_t>();
     for (int i = 0; i < size; i++) {
-      rawOffsetsBuffer[i] = i;
+      rawRowNumbersBuffer[i] = i;
     }
-    auto resultForOffsets =
+    auto resultForRowNumbers =
         BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumnAtOffsets(
-        rows.data(), offsetsBuffer, column, 0, resultForOffsets);
-    assertEqualVectors(expected, resultForOffsets);
+    container.extractColumn(
+        rows.data(), rowNumbersBuffer, column, 0, resultForRowNumbers);
+    assertEqualVectors(expected, resultForRowNumbers);
+
+    // Test using extractColumn (with rowNumbers and an offset specified).
+    if (size >= offset) {
+      auto rowNumbersBuffer2 =
+          AlignedBuffer::allocate<vector_size_t>(size - offset, pool_.get());
+      auto rawRowNumbersBuffer2 = rowNumbersBuffer2->asMutable<vector_size_t>();
+      for (int i = 0; i < size - offset; i++) {
+        rawRowNumbersBuffer2[i] = i + offset;
+      }
+      auto resultForRowNumbers2 =
+          BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(
+          rows.data(), rowNumbersBuffer2, column, offset, resultForRowNumbers2);
+      EXPECT_EQ(
+          expected->compare(resultForRowNumbers2.get(), offset, offset), 0);
+    }
   }
 
   void checkSizes(std::vector<char*>& rows, RowContainer& data) {
@@ -330,6 +363,9 @@ TEST_F(RowContainerTest, storeExtractArrayOfVarchar) {
 
 TEST_F(RowContainerTest, types) {
   constexpr int32_t kNumRows = 100;
+  // This value is used when testing extractColumn with a row offset
+  // value. This number should be < kNumRows for triggering the test.
+  const int32_t kOffset = 10;
   auto batch = makeDataset(
       ROW(
           {{"bool_val", BOOLEAN()},
@@ -422,7 +458,8 @@ TEST_F(RowContainerTest, types) {
   auto copy = std::static_pointer_cast<RowVector>(
       BaseVector::create(batch->type(), batch->size(), pool_.get()));
   for (auto column = 0; column < batch->childrenSize(); ++column) {
-    testExtractColumnForAllRows(*data, rows, column, batch->childAt(column));
+    testExtractColumnForAllRows(
+        *data, rows, column, batch->childAt(column), kOffset);
     testExtractColumnForOddRows(*data, rows, column, batch->childAt(column));
 
     auto extracted = copy->childAt(column);

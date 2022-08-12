@@ -394,9 +394,9 @@ void RowContainer::extractComplexType(
   }
 }
 
-void RowContainer::extractOffsetsComplexType(
+void RowContainer::extractRowsComplexType(
     const char* const* rows,
-    const BufferPtr& offsets,
+    const BufferPtr& rowNumbers,
     RowColumn column,
     const vector_size_t resultOffset,
     VectorPtr result) {
@@ -405,10 +405,10 @@ void RowContainer::extractOffsetsComplexType(
   auto nullMask = column.nullMask();
   auto columnOffset = column.offset();
 
-  auto numRows = offsets->size() / sizeof(vector_size_t);
-  auto offsetsVector = offsets->as<vector_size_t>();
+  auto numRows = rowNumbers->size() / sizeof(vector_size_t);
+  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
   for (int i = 0; i < numRows; ++i) {
-    auto row = rows[offsetsVector[i]];
+    auto row = rows[rowNumbersVector[i]];
     auto resultIndex = resultOffset + i;
     if (!row || row[nullByte] & nullMask) {
       result->setNull(resultIndex, true);
