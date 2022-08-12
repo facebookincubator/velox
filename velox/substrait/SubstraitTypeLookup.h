@@ -27,6 +27,8 @@ class SubstraitTypeLookup {
   std::optional<SubstraitTypeAnchorPtr> lookupType(
       const std::string& typeName) const;
 
+  std::optional<SubstraitTypeAnchorPtr> lookupUnknownType() const;
+
  private:
   // type signatures , key is type name, value is the type anchor
   std::unordered_map<std::string, SubstraitTypeAnchorPtr> signatures_;

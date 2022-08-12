@@ -48,6 +48,7 @@ set(SRCS
     SubstraitToVeloxPlan.cpp
     TypeUtils.cpp
     SubstraitType.cpp
+    SubstraitFunction.cpp
     SubstraitExtension.cpp
     SubstraitTypeLookup.cpp
     VeloxToSubstraitCallConverter.cpp

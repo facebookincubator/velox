@@ -36,4 +36,9 @@ std::optional<SubstraitTypeAnchorPtr> SubstraitTypeLookup::lookupType(
   return std::nullopt;
 }
 
+std::optional<SubstraitTypeAnchorPtr> SubstraitTypeLookup::lookupUnknownType()
+    const {
+  return lookupType("unknown");
+}
+
 } // namespace facebook::velox::substrait
