@@ -103,12 +103,12 @@ void SubstraitExtensionCollector::addTypeToPlan(
 }
 
 int SubstraitExtensionCollector::getTypeReference(
-    const SubstraitTypeAnchorPtr& type) {
-  if (types_->reverseMap_.find(*type) != types_->reverseMap_.end()) {
-    return types_->reverseMap_.at(*type);
+    const SubstraitTypeAnchorPtr& typeAnchor) {
+  if (types_->reverseMap_.find(*typeAnchor) != types_->reverseMap_.end()) {
+    return types_->reverseMap_.at(*typeAnchor);
   }
   ++typeReference_;
-  types_->put(functionReference_, *type);
+  types_->put(functionReference_, *typeAnchor);
   return typeReference_;
 }
 

@@ -48,10 +48,11 @@ class SubstraitFunctionLookup {
       const std::vector<SubstraitFunctionVariantPtr>& functions,
       const SubstraitFunctionMappingsPtr& functionMappings);
 
-  /// lookup function variant by given functionName and types
+  /// lookup function variant by given functionName and substrait extension
+  /// types.
   const std::optional<SubstraitFunctionVariantPtr> lookupFunction(
       const std::string& functionName,
-      const std::vector<::substrait::Type>& types) const;
+      const std::vector<SubstraitTypePtr>& substraitTypes) const;
 
  protected:
   /// get the map which store the function names in difference between velox and
@@ -66,15 +67,17 @@ class SubstraitFunctionLookup {
     SubstraitFunctionFinder(
         const std::string& name,
         const std::vector<SubstraitFunctionVariantPtr>& functions);
-
-    std::optional<SubstraitFunctionVariantPtr> lookupFunction(
-        const std::string& substraitFuncName,
-        const std::vector<::substrait::Type>& types) const;
+    /// lookup function variant by given functionName and substrait extension
+    /// types.
+    const std::optional<SubstraitFunctionVariantPtr> lookupFunction(
+        const std::string& functionName,
+        const std::vector<SubstraitTypePtr>& substraitTypes) const;
 
    private:
     const std::string& name_;
     std::unordered_map<std::string, SubstraitFunctionVariantPtr> directMap_;
-    std::optional<SubstraitFunctionVariantPtr> anyTypeOption_;
+    std::unordered_map<std::string , std::unordered_map<int,bool>> anyPositionMap_;
+    std::pair<size_t, size_t> argRange_;
   };
 
   using SubstraitFunctionFinderPtr =

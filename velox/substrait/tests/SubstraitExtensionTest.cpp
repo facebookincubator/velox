@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/substrait/SubstraitExtension.h"
@@ -25,7 +24,7 @@ using namespace facebook::velox::substrait;
 class SubstraitExtensionTest : public ::testing::Test {};
 
 TEST_F(SubstraitExtensionTest, loadExtension) {
-  auto extension  = SubstraitExtension::loadExtension();
-  ASSERT_TRUE(extension->scalarFunctionVariants.size()>0);
-  ASSERT_TRUE(extension->aggregateFunctionVariants.size()>0);
+  auto extension = SubstraitExtension::loadExtension();
+  ASSERT_TRUE(extension->scalarFunctionVariants.size() > 0);
+  ASSERT_TRUE(extension->aggregateFunctionVariants.size() > 0);
 }

@@ -36,10 +36,10 @@ class SubstraitExtensionCollector {
   /// @return reference number of a Substrait extension function
   int getFunctionReference(const SubstraitFunctionVariantPtr& function);
 
-  /// get type reference by given Substrait type.
-  /// @param type substrait extension type
+  /// get type reference by given Substrait type anchor.
+  /// @param typeAnchor substrait extension type
   /// @return reference number of a Substrait extension type
-  int getTypeReference(const SubstraitTypeAnchorPtr& type);
+  int getTypeReference(const SubstraitTypeAnchorPtr& typeAnchor);
 
   /// add extension functions and types to Substrait plan.
   void addExtensionToPlan(::substrait::Plan* plan) const;

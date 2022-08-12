@@ -18,6 +18,7 @@
  */
 
 #include "SubstraitFunctionLookup.h"
+#include "limits.h"
 
 namespace facebook::velox::substrait {
 
@@ -49,7 +50,7 @@ SubstraitFunctionLookup::SubstraitFunctionLookup(
 const std::optional<SubstraitFunctionVariantPtr>
 SubstraitFunctionLookup::lookupFunction(
     const std::string& functionName,
-    const std::vector<::substrait::Type>& types) const {
+    const std::vector<SubstraitTypePtr>& substraitTypes) const {
   const auto& functionMappings = getFunctionMappings();
   const auto& substraitFunctionName =
       functionMappings.find(functionName) != functionMappings.end()
@@ -60,49 +61,73 @@ SubstraitFunctionLookup::lookupFunction(
       functionSignatures_.end()) {
     return std::nullopt;
   }
-
   const auto& functionFinder = functionSignatures_.at(substraitFunctionName);
-  return functionFinder->lookupFunction(substraitFunctionName, types);
+  return functionFinder->lookupFunction(substraitFunctionName, substraitTypes);
 }
 
 SubstraitFunctionLookup::SubstraitFunctionFinder::SubstraitFunctionFinder(
     const std::string& name,
     const std::vector<SubstraitFunctionVariantPtr>& functions)
     : name_(name) {
+  size_t minArgs =
+      functions.empty() ? 0 : functions[0]->requireArguments().size();
+  size_t maxArgs = functions.empty() ? 0 : functions[0]->arguments.size();
   for (const auto& function : functions) {
+    minArgs = std::min(minArgs, function->requireArguments().size());
+    maxArgs = std::max(maxArgs, function->arguments.size());
     directMap_.insert({function->key(), function});
-
     if (function->requireArguments().size() != function->arguments.size()) {
       const std::string& functionKey = SubstraitFunctionVariant::constructKey(
           function->name, function->requireArguments());
       directMap_.insert({functionKey, function});
     }
   }
-  anyTypeOption_ = std::nullopt;
   for (const auto& function : functions) {
-    for (const auto& arg : function->arguments) {
-      if (const auto& valueArgument =
-              std::dynamic_pointer_cast<const SubstraitValueArgument>(arg)) {
-        if (valueArgument->isWildcard()) {
-          anyTypeOption_ = std::make_optional(function);
-          break;
-        }
+    if (function->hasAny()) {
+      anyPositionMap_.insert({function->key(), function->anyPosition()});
+      if (function->requireArguments().size() != function->arguments.size()) {
+        const std::string& functionKey = SubstraitFunctionVariant::constructKey(
+            function->name, function->requireArguments());
+        auto pos = function->anyPosition(function->requireArguments());
+        anyPositionMap_.insert({functionKey, pos});
       }
     }
   }
+  argRange_ = {minArgs, maxArgs};
 }
 
-std::optional<SubstraitFunctionVariantPtr>
+const std::optional<SubstraitFunctionVariantPtr>
 SubstraitFunctionLookup::SubstraitFunctionFinder::lookupFunction(
     const std::string& substraitFuncName,
-    const std::vector<::substrait::Type>& types) const {
+    const std::vector<SubstraitTypePtr>& types) const {
+  // Check number of types within argRange
+  if (types.size() < argRange_.first || types.size() > argRange_.second) {
+    return std::nullopt;
+  }
+
   const auto& signature =
       SubstraitTypeUtil::signature(substraitFuncName, types);
   /// try to do a direct match
   if (directMap_.find(signature) != directMap_.end()) {
     return std::make_optional(directMap_.at(signature));
   } else {
-    return anyTypeOption_;
+    for (const auto& [anySignature, anyPosition] : anyPositionMap_) {
+      std::vector<SubstraitTypePtr> anyTypes;
+      anyTypes.reserve(types.size());
+      for (int i = 0; i < types.size(); i++) {
+        if (anyPosition.find(i) != anyPosition.end() && anyPosition.at(i)) {
+          anyTypes.emplace_back(std::make_shared<SubstraitAnyType>("any"));
+        } else {
+          anyTypes.emplace_back(types.at(i));
+        }
+      }
+      const auto& newSignature =
+          SubstraitTypeUtil::signature(substraitFuncName, anyTypes);
+      if (directMap_.find(newSignature) != directMap_.end()) {
+        return std::make_optional(directMap_.at(newSignature));
+      }
+    }
+    return std::nullopt;
   }
 }
 

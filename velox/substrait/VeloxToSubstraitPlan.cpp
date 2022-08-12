@@ -350,14 +350,11 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
-    std::vector<::substrait::Type> inputTypes;
+    std::vector<SubstraitTypePtr> inputTypes;
     inputTypes.reserve(aggregatesExpr->inputs().size());
     for (auto& input : aggregatesExpr->inputs()) {
-      auto& substraitType =
-          typeConvertor_->toSubstraitType(arena, input->type());
-      inputTypes.emplace_back(substraitType);
+      inputTypes.emplace_back(SubstraitTypeUtil::fromVelox(input->type()));
     }
-
     auto aggregateFunctionOption =
         aggregateFunctionLookup_->lookupFunction(funName, inputTypes);
 

@@ -42,8 +42,8 @@ class VeloxToSubstraitTypeConvertor {
 
  private:
   /// The Extension Collector used to collect the function reference.
-  SubstraitExtensionCollectorPtr extensionCollector_;
-  SubstraitTypeLookupPtr typeLookup_;
+  const SubstraitExtensionCollectorPtr extensionCollector_;
+  const SubstraitTypeLookupPtr typeLookup_;
 };
 
 using VeloxToSubstraitTypeConvertorPtr =

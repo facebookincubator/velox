@@ -43,7 +43,7 @@ struct convert<SubstraitValueArgument> {
     auto& value = node["value"];
     if (value && value.IsScalar()) {
       auto valueType = value.as<std::string>();
-      argument.type = SubstraitTypeUtil::parseType(valueType);
+      argument.type = SubstraitTypeUtil::fromString(valueType);
       return true;
     }
     return false;
@@ -296,33 +296,6 @@ std::shared_ptr<SubstraitExtension> SubstraitExtension::loadExtension(
     }
   }
   return std::make_shared<SubstraitExtension>(mergedExtension);
-}
-
-std::string SubstraitFunctionVariant::constructKey(
-    const std::string& name,
-    const std::vector<SubstraitFunctionArgumentPtr>& arguments) {
-  std::stringstream ss;
-  ss << name << ":";
-  for (auto it = arguments.begin(); it != arguments.end(); ++it) {
-    const auto& typeSign = (*it)->toTypeString();
-    if (it == arguments.end() - 1) {
-      ss << typeSign;
-    } else {
-      ss << typeSign << "_";
-    }
-  }
-  return ss.str();
-}
-
-std::vector<SubstraitFunctionArgumentPtr>
-SubstraitFunctionVariant::requireArguments() const {
-  std::vector<SubstraitFunctionArgumentPtr> res;
-  for (auto& arg : arguments) {
-    if (arg->isRequired()) {
-      res.push_back(arg);
-    }
-  }
-  return res;
 }
 
 } // namespace facebook::velox::substrait

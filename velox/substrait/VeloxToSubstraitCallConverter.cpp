@@ -59,13 +59,10 @@ VeloxToSubstraitScalarFunctionConverter::convert(
     SubstraitExprConverter& topLevelConverter) const {
 
   const auto& veloxFunctionName = callTypeExpr->name();
-  std::vector<::substrait::Type> types;
-
+  std::vector<SubstraitTypePtr> types;
   for (auto& input : callTypeExpr->inputs()) {
-    auto& substraitType = typeConvertor_->toSubstraitType(arena, input->type());
-    types.emplace_back(substraitType);
+    types.emplace_back(SubstraitTypeUtil::fromVelox(input->type()));
   }
-
   const auto& scalarFunctionOption =
       functionLookup_->lookupFunction(veloxFunctionName, types);
 

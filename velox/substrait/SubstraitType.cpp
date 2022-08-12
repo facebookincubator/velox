@@ -21,94 +21,83 @@
 
 namespace facebook::velox::substrait {
 
-
-const std::unordered_map<::substrait::Type::KindCase, SubstraitTypePtr>
-    SubstraitTypeUtil::TYPES = {
-        {SubstraitTypeKind::kBool, std::make_shared<BooleanType>()},
-        {SubstraitTypeKind::kI8, std::make_shared<TinyintType>()},
-        {SubstraitTypeKind::kI16, std::make_shared<SmallintType>()},
-        {SubstraitTypeKind::kI32, std::make_shared<IntegerType>()},
-        {SubstraitTypeKind::kI64, std::make_shared<BigintType>()},
-        {SubstraitTypeKind::kFp32, std::make_shared<RealType>()},
-        {SubstraitTypeKind::kFp64, std::make_shared<DoubleType>()},
-        {SubstraitTypeKind::kString, std::make_shared<StringType>()},
-        {SubstraitTypeKind::kBinary, std::make_shared<BinaryType>()},
-        {SubstraitTypeKind::kTimestamp, std::make_shared<TimestampType>()},
-        {SubstraitTypeKind::kDate, std::make_shared<DateType>()},
-        {SubstraitTypeKind::kTime, std::make_shared<TimeType>()},
-        {SubstraitTypeKind::kIntervalYear,
-         std::make_shared<IntervalYearType>()},
-        {SubstraitTypeKind::kIntervalDay, std::make_shared<IntervalDayType>()},
-        {SubstraitTypeKind::kTimestampTz, std::make_shared<TimestampTzType>()},
-        {SubstraitTypeKind::kUuid, std::make_shared<UuidType>()},
-        {SubstraitTypeKind::kFixedChar, std::make_shared<FixedCharType>()},
-        {SubstraitTypeKind::kVarchar, std::make_shared<VarcharType>()},
-        {SubstraitTypeKind::kFixedBinary, std::make_shared<FixedBinaryType>()},
-        {SubstraitTypeKind::kDecimal, std::make_shared<DecimalType>()},
-        {SubstraitTypeKind::kStruct, std::make_shared<StructType>()},
-        {SubstraitTypeKind::kList, std::make_shared<ListType>()},
-        {SubstraitTypeKind::kMap, std::make_shared<MapType>()},
-        {SubstraitTypeKind::kUserDefined, std::make_shared<UserDefinedType>()},
-};
-
-const SubstraitTypePtr SubstraitTypeUtil::ANY_TYPE =
-    std::make_unique<facebook::velox::substrait::SubstraitAnyType>();
-
-const SubstraitTypePtr SubstraitTypeUtil::UNKNOWN_TYPE =
-    std::make_unique<facebook::velox::substrait::SubstraitUnknownType>();
-
-const std::string SubstraitTypeUtil::typeToSignature(
-    const ::substrait::Type& type) {
-  if (type.kind_case() == substrait::SubstraitTypeKind::kUserDefined) {
-    return ANY_TYPE->signature();
-  } else {
-    if (TYPES.find(type.kind_case()) != TYPES.end()) {
-      return TYPES.at(type.kind_case())->signature();
-    } else {
-      VELOX_NYI(
-          "Returning Substrait signature of Substrait Type not supported for Substrait type {}.",
-          type.kind_case());
-    }
-  }
+SubstraitTypePtr SubstraitTypeUtil::fromVelox(const TypePtr& type) {
+  return VELOX_DYNAMIC_TYPE_DISPATCH(
+      SubstraitTypeUtil::substraitTypeMaker, type->kind());
 }
 
-const SubstraitTypePtr SubstraitTypeUtil::parseType(
-    const std::string& rawType) {
-  std::string lowerCaseRawType = rawType;
+SubstraitTypePtr SubstraitTypeUtil::fromString(const std::string& type) {
+  std::string lowerCaseRawType = type;
   std::transform(
-      lowerCaseRawType.begin(), lowerCaseRawType.end(), lowerCaseRawType.begin(), [](unsigned char c) {
-        return std::tolower(c);
-      });
+      lowerCaseRawType.begin(),
+      lowerCaseRawType.end(),
+      lowerCaseRawType.begin(),
+      [](unsigned char c) { return std::tolower(c); });
 
-  if (lowerCaseRawType.rfind(ANY_TYPE->rawType(), 0) == 0) {
-    return ANY_TYPE;
-  } else if (lowerCaseRawType.rfind(UNKNOWN_TYPE->rawType(), 0) == 0) {
-    return UNKNOWN_TYPE;
-  } else {
-    for (auto& [typeKind, type] : TYPES) {
-      if (lowerCaseRawType.rfind(type->rawType(), 0) == 0) {
-        return type;
-      }
+  const auto& scalarTypes = SubstraitTypeUtil::scalarTypes();
+  for (const auto& [matchingType, substraitType] : scalarTypes) {
+    if (lowerCaseRawType.rfind(matchingType, 0) == 0) {
+      return substraitType;
     }
-    VELOX_NYI(
-        "Returning Substrait Type not supported for raw type {}.", rawType);
+  }
+  if (lowerCaseRawType.rfind("any", 0) == 0) {
+    return std::make_shared<const SubstraitAnyType>(type);
+
+  } else if (lowerCaseRawType.rfind("unknown", 0) == 0) {
+    return std::make_shared<const SubstraitUnknownType>();
+  } else {
+    VELOX_NYI("Returning Substrait Type not supported for raw type {}.", type);
   }
 }
 
 std::string SubstraitTypeUtil::signature(
     const std::string& functionName,
-    const std::vector<::substrait::Type>& substraitTypes) {
+    const std::vector<SubstraitTypePtr>& substraitTypes) {
   std::stringstream signature;
-  signature << functionName << ":";
-  for (auto it = substraitTypes.begin(); it != substraitTypes.end(); ++it) {
-    const auto& typeSign = typeToSignature(*it);
-    if (it == substraitTypes.end() - 1) {
-      signature << typeSign;
-    } else {
-      signature << typeSign << "_";
+  signature << functionName;
+  if (!substraitTypes.empty()) {
+    signature << ":";
+    for (auto it = substraitTypes.begin(); it != substraitTypes.end(); ++it) {
+      const auto& typeSign = (*it)->signature();
+      if (it == substraitTypes.end() - 1) {
+        signature << typeSign;
+      } else {
+        signature << typeSign << "_";
+      }
     }
   }
+
   return signature.str();
+}
+std::unordered_map<std::string, SubstraitTypePtr>&
+SubstraitTypeUtil::scalarTypes() {
+  static std::unordered_map<std::string, SubstraitTypePtr> map{
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kBool),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kI8),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kI16),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kI32),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kI64),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kFp32),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kFp64),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kString),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kBinary),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kTimestamp),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kTimestampTz),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kDate),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kTime),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kIntervalDay),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kIntervalYear),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kUuid),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kFixedChar),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kVarchar),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kFixedBinary),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kDecimal),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kStruct),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kList),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kMap),
+      SUBSTRAIT_SCALAR_TYPE_MAPPING(SubstraitTypeKind::kUserDefined),
+  };
+  return map;
 }
 
 } // namespace facebook::velox::substrait

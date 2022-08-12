@@ -26,6 +26,10 @@ struct SubstraitFunctionArgument {
   /// convert argument type to short type string based on
   /// https://substrait.io/extensions/#function-signature-compound-names
   virtual const std::string toTypeString() const = 0;
+
+  virtual const bool isAnyType() const {
+    return false;
+  };
 };
 
 using SubstraitFunctionArgumentPtr =
@@ -65,6 +69,9 @@ class SubstraitValueArgument : public SubstraitFunctionArgument {
   const bool isWildcard() const {
     return type->isWildcard();
   }
+  const bool isAnyType() const override {
+    return type->isWildcard();
+  }
 };
 
 struct SubstraitFunctionAnchor {
@@ -79,6 +86,15 @@ struct SubstraitFunctionAnchor {
     return (uri == other.uri && key == other.key);
   }
 };
+
+struct SubstraitFunctionVariadicBehavior {
+  int min;
+  int max;
+  bool consistent;
+};
+
+using SubstraitFunctionVariadicBehaviorPtr =
+    std::shared_ptr<SubstraitFunctionVariadicBehavior>;
 
 struct SubstraitFunctionVariant {
   /// scalar function name.
@@ -99,6 +115,28 @@ struct SubstraitFunctionVariant {
 
   SubstraitFunctionAnchor anchor() const {
     return {uri, key()};
+  }
+
+  bool hasAny() const {
+    for (auto& arg : arguments) {
+      if (arg->isAnyType()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  std::unordered_map<int, bool> anyPosition() {
+    return this->anyPosition(arguments);
+  }
+
+  std::unordered_map<int, bool> anyPosition(
+     const std::vector<SubstraitFunctionArgumentPtr>& args) {
+    std::unordered_map<int, bool> res;
+    for (int i = 0; i < args.size(); i++) {
+      res.insert({i, args.at(i)->isAnyType()});
+    }
+    return res;
   }
 
   std::vector<SubstraitFunctionArgumentPtr> requireArguments() const;
