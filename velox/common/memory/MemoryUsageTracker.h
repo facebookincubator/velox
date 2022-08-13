@@ -94,6 +94,8 @@ class MemoryUsageTracker
  public:
   enum class UsageType : int { kUserMem = 0, kSystemMem = 1, kTotalMem = 2 };
 
+  ~MemoryUsageTracker();
+
   // Function to increase a MemoryUsageTracker's limits. This is called when an
   // allocation would exceed the tracker's size limit. The usage in
   // 'tracker' at the time of call is as if the allocation had
@@ -161,7 +163,6 @@ class MemoryUsageTracker
       remaining = reservation_ - usedReservation_;
       reservation_ = 0;
       minReservation_ = 0;
-      usedReservation_ = 0;
     }
     if (remaining) {
       decrementUsage(type_, remaining);

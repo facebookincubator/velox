@@ -385,6 +385,10 @@ class MemoryPoolImpl : public MemoryPoolBase {
       std::weak_ptr<MemoryPool> parent,
       int64_t cap = kMaxMemory);
 
+  ~MemoryPoolImpl() {
+    VELOX_CHECK_EQ(localMemoryUsage_.getCurrentBytes(), 0);
+  }
+
   // Actual memory allocation operations. Can be delegated.
   // Access global MemoryManager to check usage of current node and enforce
   // memory cap accordingly. Since MemoryManager walks the MemoryPoolImpl

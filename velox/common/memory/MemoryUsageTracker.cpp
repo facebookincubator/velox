@@ -32,6 +32,13 @@ std::shared_ptr<MemoryUsageTracker> MemoryUsageTracker::create(
   return std::make_shared<SharedMemoryUsageTracker>(parent, type, config);
 }
 
+MemoryUsageTracker::~MemoryUsageTracker() {
+  VELOX_CHECK_EQ(reservation_, 0);
+  VELOX_CHECK_EQ(usedReservation_, 0);
+  VELOX_CHECK_EQ(minReservation_, 0);
+  VELOX_CHECK_EQ(total(currentUsageInBytes_), 0);
+}
+
 void MemoryUsageTracker::checkAndPropagateReservationIncrement(
     int64_t increment,
     bool updateMinReservation) {
