@@ -48,8 +48,6 @@ TypePtr resolveTypeImpl(
     const std::shared_ptr<const CallExpr>& expr,
     bool nullOnFailure,
     Expressions::TypeResolverHook customResolverHook = nullptr) {
-  VELOX_CHECK_NOT_NULL(Expressions::getResolverHook() || customResolverHook);
-
   if (customResolverHook) {
     auto type = customResolverHook(inputs, expr, nullOnFailure);
     if (type) {
@@ -63,7 +61,11 @@ TypePtr resolveTypeImpl(
       return type;
     }
   }
-  return nullptr;
+
+  // Check simple functions.
+  auto fun = exec::SimpleFunctions().resolveFunction(
+      expr->getFunctionName(), getTypes(inputs));
+  return fun ? fun->getMetadata()->returnType() : nullptr;
 }
 
 namespace {
