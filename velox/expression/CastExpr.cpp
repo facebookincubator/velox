@@ -493,20 +493,20 @@ VectorPtr CastExpr::applyDecimal(
   switch (fromType->kind()) {
     case TypeKind::SHORT_DECIMAL: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<ShortDecimal, ShortDecimal>(
+        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledShortDecimal>(
             rows, input, context, fromType, toType, castResult, nullOnFailure_);
       } else {
-        applyDecimalCastKernel<ShortDecimal, LongDecimal>(
+        applyDecimalCastKernel<UnscaledShortDecimal, UnscaledLongDecimal>(
             rows, input, context, fromType, toType, castResult, nullOnFailure_);
       }
       break;
     }
     case TypeKind::LONG_DECIMAL: {
       if (toType->kind() == TypeKind::SHORT_DECIMAL) {
-        applyDecimalCastKernel<LongDecimal, ShortDecimal>(
+        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledShortDecimal>(
             rows, input, context, fromType, toType, castResult, nullOnFailure_);
       } else {
-        applyDecimalCastKernel<LongDecimal, LongDecimal>(
+        applyDecimalCastKernel<UnscaledLongDecimal, UnscaledLongDecimal>(
             rows, input, context, fromType, toType, castResult, nullOnFailure_);
       }
       break;

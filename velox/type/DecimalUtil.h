@@ -69,10 +69,10 @@ class DecimalUtil {
           toPrecision,
           toScale);
     }
-    if constexpr (std::is_same_v<TOutput, ShortDecimal>) {
-      return ShortDecimal(static_cast<int64_t>(rescaledValue));
+    if constexpr (std::is_same_v<TOutput, UnscaledShortDecimal>) {
+      return UnscaledShortDecimal(static_cast<int64_t>(rescaledValue));
     } else {
-      return LongDecimal(rescaledValue);
+      return UnscaledLongDecimal(rescaledValue);
     }
   }
 };

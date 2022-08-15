@@ -750,8 +750,6 @@ TEST_F(CastExprTest, decimalToDecimal) {
        std::nullopt},
       DECIMAL(23, 8));
 
-  // 00000000000000000000000011001000
-  // 36893488147419103432
   expectedShort = makeNullableShortDecimalFlatVector(
       {-368934881474, -184467440737, 0, 184467440737, std::nullopt},
       DECIMAL(12, 0));
