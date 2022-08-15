@@ -169,7 +169,7 @@ class DateTimeFormatter {
     return tokens_;
   }
 
-  DateTimeResult parse(const std::string_view& input) const;
+  DateTimeResult parse(const std::string_view& input, const bool joda) const;
 
   std::string format(
       const Timestamp& timestamp,

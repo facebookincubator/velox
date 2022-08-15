@@ -913,7 +913,7 @@ struct DateParseFunction {
     }
 
     auto dateTimeResult =
-        format_->parse(std::string_view(input.data(), input.size()));
+        format_->parse(std::string_view(input.data(), input.size()), false);
 
     // Since MySql format has no timezone specifier, simply check if session
     // timezone was provided. If not, fallback to 0 (GMT).
@@ -996,7 +996,7 @@ struct ParseDateTimeFunction {
           std::string_view(format.data(), format.size()));
     }
     auto dateTimeResult =
-        format_->parse(std::string_view(input.data(), input.size()));
+        format_->parse(std::string_view(input.data(), input.size()), true);
 
     // If timezone was not parsed, fallback to the session timezone. If there's
     // no session timezone, fallback to 0 (GMT).
