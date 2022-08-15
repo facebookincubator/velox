@@ -20,7 +20,7 @@
 namespace facebook::velox::functions {
 
 template <typename T>
-struct isJsonScalarFunction {
+struct IsJsonScalarFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   FOLLY_ALWAYS_INLINE void call(

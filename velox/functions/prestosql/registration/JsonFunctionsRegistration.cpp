@@ -19,7 +19,7 @@
 
 namespace facebook::velox::functions {
 void registerJsonFunctions() {
-  registerFunction<isJsonScalarFunction, bool, Varchar>({"is_json_scalar"});
+  registerFunction<IsJsonScalarFunction, bool, Varchar>({"is_json_scalar"});
   registerFunction<JsonExtractScalarFunction, Varchar, Varchar, Varchar>(
       {"json_extract_scalar"});
 }

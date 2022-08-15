@@ -33,6 +33,7 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
   EXPECT_EQ(is_json_scalar(R"(1)"), true);
   EXPECT_EQ(is_json_scalar(R"(123456)"), true);
   EXPECT_EQ(is_json_scalar(R"("hello")"), true);
+  EXPECT_EQ(is_json_scalar(R"("thefoxjumpedoverthefence")"), true);
   EXPECT_EQ(is_json_scalar(R"(1.1)"), true);
   EXPECT_EQ(is_json_scalar(R"("")"), true);
   EXPECT_EQ(is_json_scalar(R"(true)"), true);
