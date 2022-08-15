@@ -111,11 +111,11 @@ class Addition {
     return std::max(0, toScale - fromScale);
   }
 
-  inline static const std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      uint8_t aPrecision,
-      uint8_t aScale,
-      uint8_t bPrecision,
-      uint8_t bScale) {
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale,
+      const uint8_t bPrecision,
+      const uint8_t bScale) {
     return {
         std::min(
             38,
@@ -135,18 +135,16 @@ class Subtraction {
         b.unscaledValue() * DecimalUtil::kPowersOfTen[bRescale]);
   }
 
-  inline static uint8_t computeRescaleFactor(
-      const uint8_t fromScale,
-      const uint8_t toScale,
-      const uint8_t rScale = 0) {
+  inline static uint8_t
+  computeRescaleFactor(uint8_t fromScale, uint8_t toScale, uint8_t rScale = 0) {
     return std::max(0, toScale - fromScale);
   }
 
-  inline static const std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
-      uint8_t aPrecision,
-      uint8_t aScale,
-      uint8_t bPrecision,
-      uint8_t bScale) {
+  inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
+      const uint8_t aPrecision,
+      const uint8_t aScale,
+      const uint8_t bPrecision,
+      const uint8_t bScale) {
     return Addition::computeResultPrecisionScale(
         aPrecision, aScale, bPrecision, bScale);
   }
@@ -228,6 +226,7 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_add,
     decimalAddSubtractSignature(),
     createDecimalFunction<Addition>);
+
 VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_sub,
     decimalAddSubtractSignature(),
