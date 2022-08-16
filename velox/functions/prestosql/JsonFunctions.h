@@ -65,7 +65,7 @@ struct JsonArrayLengthFunction {
       int64_t& result,
       const arg_type<Varchar>& json) {
     auto parsedJson = folly::parseJson(json);
-    if(!parsedJson.isArray()) {
+    if (!parsedJson.isArray()) {
       return false;
     }
 
