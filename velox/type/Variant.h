@@ -40,38 +40,6 @@ struct VariantConverter;
 
 class variant;
 
-template <TypeKind KIND>
-struct VariantEquality;
-
-template <>
-struct VariantEquality<TypeKind::TIMESTAMP>;
-
-template <>
-struct VariantEquality<TypeKind::DATE>;
-
-template <>
-struct VariantEquality<TypeKind::INTERVAL_DAY_TIME>;
-
-template <>
-struct VariantEquality<TypeKind::ARRAY>;
-
-template <>
-struct VariantEquality<TypeKind::ROW>;
-
-template <>
-struct VariantEquality<TypeKind::MAP>;
-
-template <>
-struct VariantEquality<TypeKind::SHORT_DECIMAL>;
-
-template <>
-struct VariantEquality<TypeKind::LONG_DECIMAL>;
-
-bool dispatchDynamicVariantEquality(
-    const variant& a,
-    const variant& b,
-    const bool& enableNullEqualsNull);
-
 namespace detail {
 template <TypeKind KIND>
 using scalar_stored_type = typename TypeTraits<KIND>::DeepCopiedType;
@@ -267,12 +235,6 @@ class variant {
   struct Hasher {
     size_t operator()(variant const& input) const noexcept {
       return input.hash();
-    }
-  };
-
-  struct NullEqualsNullsComparator {
-    bool operator()(const variant& a, const variant& b) const {
-      return a.equalsWithNullEqualsNull(b);
     }
   };
 
@@ -501,13 +463,6 @@ class variant {
       return this->isNull();
     }
     return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(equals, kind_, *this, other);
-  }
-
-  bool equalsWithNullEqualsNull(const variant& other) const {
-    if (other.kind_ != this->kind_) {
-      return false;
-    }
-    return dispatchDynamicVariantEquality(*this, other, true);
   }
 
   variant(variant&& other) : kind_{other.kind_}, ptr_{other.ptr_} {
