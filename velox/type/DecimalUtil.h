@@ -49,8 +49,8 @@ class DecimalUtil {
       scaleDifference = -scaleDifference;
       const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
       rescaledValue /= scalingFactor;
-      int128_t remainder = inputValue % scalingFactor;
-      if (inputValue >= 0 && remainder >= scalingFactor / 2) {
+      int128_t remainder = inputValue.unscaledValue() % scalingFactor;
+      if (inputValue.unscaledValue() >= 0 && remainder >= scalingFactor / 2) {
         ++rescaledValue;
       } else if (remainder <= -scalingFactor / 2) {
         --rescaledValue;
