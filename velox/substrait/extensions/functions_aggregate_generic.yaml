@@ -1,0 +1,24 @@
+%YAML 1.2
+---
+aggregate_functions:
+  - name: "count"
+    description: Count a set of values
+    impls:
+      - args:
+          - options: [SILENT, SATURATE, ERROR]
+            required: false
+          - value: any
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64
+        return: i64
+  - name: "count"
+    description: "Count a set of records (not field referenced)"
+    impls:
+      - args:
+          - options: [SILENT, SATURATE, ERROR]
+            required: false
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64
+        return: i64

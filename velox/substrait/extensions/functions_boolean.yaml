@@ -1,0 +1,36 @@
+%YAML 1.2
+---
+scalar_functions:
+  -
+    name: or
+    description: The boolean or of two values using Kleene logic.
+    impls:
+      - args:
+          - value: boolean
+        variadic:
+          min: 2
+        return: boolean
+  -
+    name: and
+    description: The boolean and of two values using Kleene logic.
+    impls:
+      - args:
+          - value: boolean
+        variadic:
+          min: 2
+        return: boolean
+  -
+    name: xor
+    description: The boolean xor of two values using Kleene logic.
+    impls:
+      - args:
+          - value: boolean
+          - value: boolean
+        return: boolean
+  -
+    name: not
+    description: The not of a boolean value.
+    impls:
+      - args:
+          - value: boolean
+        return: boolean
