@@ -76,9 +76,11 @@ struct JsonArrayLengthFunction {
 
 template <typename T>
 struct JsonArrayContainsFunction {
-  template <typename TOutput = bool, typename TInput1, typename TInput2>
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
-  call(TOutput& result, TInput1& json, TInput2& value) {
+  call(bool& result, const arg_type<Varchar>& json, const TInput& value) {
     auto parsedJson = folly::parseJson(json);
     if (!parsedJson.isArray()) {
       return false;
