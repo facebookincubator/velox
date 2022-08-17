@@ -74,4 +74,25 @@ struct JsonArrayLengthFunction {
   }
 };
 
+template <typename T>
+struct JsonArrayContainsFunction {
+  template <typename TOutput = bool, typename TInput1, typename TInput2>
+  FOLLY_ALWAYS_INLINE bool
+  call(TOutput& result, TInput1& json, TInput2& value) {
+    auto parsedJson = folly::parseJson(json);
+    if (!parsedJson.isArray()) {
+      return false;
+    }
+
+    result = false;
+    for (const auto& v : parsedJson) {
+      if (v == value) {
+        result = true;
+        break;
+      }
+    }
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
