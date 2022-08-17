@@ -219,7 +219,7 @@ xsimd::batch_bool<int64_t> BigintValuesUsingHashTable::testValues(
     return Filter::testValues(x);
   }
   auto allEmpty = xsimd::broadcast<int64_t>(kEmptyMarker);
-  xsimd::batch<int64_t> indices(xsimd::batch<uint64_t>(x) * M & sizeMask_);
+  xsimd::batch<int64_t> indices(xsimd::batch<uint64_t>(x.data) * M & sizeMask_);
   auto data =
       simd::maskGather(allEmpty, ~outOfRange, hashTable_.data(), indices);
   // The lanes with kEmptyMarker missed, the lanes matching x hit and the other
