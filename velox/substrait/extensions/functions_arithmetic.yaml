@@ -1,0 +1,800 @@
+%YAML 1.2
+---
+scalar_functions:
+  -
+    name: "add"
+    description: "Add two values."
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+          - value: i64
+        return: i64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+          - value: fp64
+        return: fp64
+  -
+    name: "subtract"
+    description: "Subtract one value from another."
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+          - value: i64
+        return: i64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+          - value: fp64
+        return: fp64
+  -
+    name: "multiply"
+    description: "Multiply two values."
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+          - value: i64
+        return: i64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+          - value: fp64
+        return: fp64
+  -
+    name: "divide"
+    description: "Divide one value by another. Partial values are truncated."
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+          - value: i64
+        return: i64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+          - value: fp64
+        return: fp64
+  -
+    name: "negate"
+    description: "Negation of the value"
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+        return: i64
+      - args:
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+        return: fp64
+  -
+    name: "modulus"
+    description: "Get the remainder when dividing one value by another."
+    impls:
+      - args:
+          - value: i8
+          - value: i8
+        return: i8
+      - args:
+          - value: i16
+          - value: i16
+        return: i16
+      - args:
+          - value: i32
+          - value: i32
+        return: i32
+      - args:
+          - value: i64
+          - value: i64
+        return: i64
+  -
+    name: "power"
+    description: "Take the power with the first value as the base and second as exponent."
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+          - value: i64
+        return: i64
+      - args:
+          - value: fp32
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+          - value: fp64
+        return: fp64
+  -
+    name: "sqrt"
+    description: "Square root of the value"
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: i64
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "cos"
+    description: "Get the cosine of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "sin"
+    description: "Get the sine of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "tan"
+    description: "Get the tangent of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "acos"
+    description: "Get the arccosine of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "asin"
+    description: "Get the arcsine of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "atan"
+    description: "Get the arctangent of a value in radians."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        return: fp64
+  -
+    name: "atan2"
+    description: "Get the arctangent of values given as x/y pairs."
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp32
+          - value: fp32
+        return: fp64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - name: on_domain_error
+            options: [ NAN, ERROR ]
+            required: false
+          - value: fp64
+          - value: fp64
+        return: fp64
+  - 
+    name: "abs"
+    description: >
+      Calculate the absolute value of the argument.
+
+      Integer values allow the specification of overflow behavior to handle the
+      unevenness of the twos complement, e.g. Int8 range [-128 : 127].
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+        return: i8
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+        return: i16
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+        return: i32
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+        return: i64
+      - args:
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+        return: fp64
+  -
+    name: "sign"
+    description: >
+      Return the signedness of the argument.
+
+      Integer values return signedness with the same type as the input.
+      Possible return values are [-1, 0, 1]
+
+      Floating point values return signedness with the same type as the input.
+      Possible return values are [-1.0, -0.0, 0.0, 1.0, NaN]
+    impls:
+      - args:
+          - value: i8
+        return: i8
+      - args:
+          - value: i16
+        return: i16
+      - args:
+          - value: i32
+        return: i32
+      - args:
+          - value: i64
+        return: i64
+      - args:
+          - value: fp32
+        return: fp32
+      - args:
+          - value: fp64
+        return: fp64
+
+aggregate_functions:
+  - name: "sum"
+    description: Sum a set of values. The sum of zero elements yields null.
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp64?
+        return: fp64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp64?
+        return: fp64?
+  - name: "avg"
+    description: Average a set of values. For integral types, this truncates partial values.
+    impls:
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<i64,i64>"
+        return: i8?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<i64,i64>"
+        return: i16?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<i64,i64>"
+        return: i32?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<i64,i64>"
+        return: i64?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<fp64,i64>"
+        return: fp32?
+      - args:
+          - options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: "STRUCT<fp64,i64>"
+        return: fp64?
+  - name: "min"
+    description: Min a set of values.
+    impls:
+      - args:
+          - value: i8
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i8?
+        return: i8?
+      - args:
+          - value: i16
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i16?
+        return: i16?
+      - args:
+          - value: i32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i32?
+        return: i32?
+      - args:
+          - value: i64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp32?
+        return: fp32?
+      - args:
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp64?
+        return: fp64?
+  - name: "max"
+    description: Max a set of values.
+    impls:
+      - args:
+          - value: i8
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i8?
+        return: i8?
+      - args:
+          - value: i16
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i16?
+        return: i16?
+      - args:
+          - value: i32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i32?
+        return: i32?
+      - args:
+          - value: i64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: i64?
+        return: i64?
+      - args:
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp32?
+        return: fp32?
+      - args:
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        decomposable: MANY
+        intermediate: fp64?
+        return: fp64?
+  - name: "product"
+    description: Product of a set of values. Returns 1 for empty input.
+    impls:
+      - args:
+          - name: overflow
+            options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i8
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: i64
+        return: i8
+      - args:
+          - name: overflow
+            options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i16
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: i64
+        return: i16
+      - args:
+          - name: overflow
+            options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i32
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: i64
+        return: i32
+      - args:
+          - name: overflow
+            options: [ SILENT, SATURATE, ERROR ]
+            required: false
+          - value: i64
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: i64
+        return: i64
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: fp64
+        return: fp32
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        nullability: MIRROR
+        decomposable: MANY
+        intermediate: fp64
+        return: fp64
+  - name: "std_dev"
+    description: Calculates standard-deviation for a set of values.
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        return: fp32?
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        return: fp64?
+  - name: "variance"
+    description: Calculates variance for a set of values.
+    impls:
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp32
+        nullability: DECLARED_OUTPUT
+        return: fp32?
+      - args:
+          - name: rounding
+            options: [ TIE_TO_EVEN, TIE_AWAY_FROM_ZERO, TRUNCATE, CEILING, FLOOR ]
+            required: false
+          - value: fp64
+        nullability: DECLARED_OUTPUT
+        return: fp64?
+window_functions:
+  - name: "row_number"
+    description: "the number of the current row within its partition."
+    impls:
+      - args: []
+        nullability: DECLARED_OUTPUT
+        decomposable: NONE
+        return: i64?
+        window_type: PARTITION
+  - name: "rank"
+    description: "the rank of the current row, with gaps."
+    impls:
+      - args: []
+        nullability: DECLARED_OUTPUT
+        decomposable: NONE
+        return: i64?
+        window_type: PARTITION
+  - name: "dense_rank"
+    description: "the rank of the current row, without gaps."
+    impls:
+      - args: []
+        nullability: DECLARED_OUTPUT
+        decomposable: NONE
+        return: i64?
+        window_type: PARTITION
+  - name: "percent_rank"
+    description: "the relative rank of the current row."
+    impls:
+      - args: []
+        nullability: DECLARED_OUTPUT
+        decomposable: NONE
+        return: fp64?
+        window_type: PARTITION
+  - name: "cume_dist"
+    description: "the cumulative distribution."
+    impls:
+      - args: []
+        nullability: DECLARED_OUTPUT
+        decomposable: NONE
+        return: fp64?
+        window_type: PARTITION
+  - name: "ntile"
+    description: "Return an integer ranging from 1 to the argument value,dividing the partition as equally as possible."
+    impls:
+      - args:
+          - value: i32
+        nullability: DECLARED_OUTPUT  
+        decomposable: NONE
+        return: i32?
+        window_type: PARTITION
+      - args:
+          - value: i64
+        nullability: DECLARED_OUTPUT  
+        decomposable: NONE
+        return: i64?
+        window_type: PARTITION
