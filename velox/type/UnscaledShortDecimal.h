@@ -54,6 +54,14 @@ struct UnscaledShortDecimal {
     return unscaledValue_ <= other.unscaledValue_;
   }
 
+  bool operator>(const UnscaledShortDecimal& other) const {
+    return unscaledValue_ > other.unscaledValue_;
+  }
+
+  bool operator>=(const UnscaledShortDecimal& other) const {
+    return unscaledValue_ >= other.unscaledValue_;
+  }
+
  private:
   int64_t unscaledValue_;
 };

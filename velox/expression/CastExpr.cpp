@@ -513,7 +513,9 @@ VectorPtr CastExpr::applyDecimal(
     }
     default:
       VELOX_UNSUPPORTED(
-          "Cast from {} to DECIMAL is not supported", fromType->toString());
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
   }
   return castResult;
 }
@@ -625,7 +627,6 @@ void CastExpr::apply(
         nullOnFailure_,
         result);
   } else {
-    LocalDecodedVector decoded(context, *input, rows);
     if (toType->isArray() || toType->isMap() || toType->isRow() ||
         isDecimalKind(toType->kind())) {
       LocalSelectivityVector translatedRows(

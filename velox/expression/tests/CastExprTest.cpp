@@ -746,10 +746,16 @@ TEST_F(CastExprTest, decimalToDecimal) {
            buildInt128(-1, 300),
            buildInt128(0, 400),
            buildInt128(1, 1),
+           buildInt128(10, 100),
            std::nullopt},
           DECIMAL(23, 8)),
       makeNullableShortDecimalFlatVector(
-          {-368934881474, -184467440737, 0, 184467440737, std::nullopt},
+          {-368934881474,
+           -184467440737,
+           0,
+           184467440737,
+           std::nullopt,
+           std::nullopt},
           DECIMAL(12, 0)),
       true);
 }
