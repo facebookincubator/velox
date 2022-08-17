@@ -168,8 +168,8 @@ class Multiply {
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
     r.setUnscaledValue(
-        (a.unscaledValue() * DecimalUtil::kPowersOfTen[aRescale]) *
-        (b.unscaledValue() * DecimalUtil::kPowersOfTen[bRescale]));
+        a.unscaledValue() * b.unscaledValue() *
+        DecimalUtil::kPowersOfTen[aRescale + bRescale]);
   }
 
   inline static uint8_t
