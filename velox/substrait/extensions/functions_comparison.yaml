@@ -1,0 +1,86 @@
+%YAML 1.2
+---
+scalar_functions:
+  -
+    name: "not_equal"
+    description: Whether two values are not_equal (nulls are considered not not-equal).
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "equal"
+    description: Whether two values are equal (nulls are considered unequal).
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "is_not_distinct_from"
+    description: Whether two values are equal (nulls are considered equal).
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "lt"
+    description: Less than
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "gt"
+    description: Greater than
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "lte"
+    description: Less than or equal to
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "gte"
+    description: Greater than or equal to
+    impls:
+      - args:
+          - value: any1
+          - value: any1
+        return: BOOLEAN
+  -
+    name: "is_null"
+    description: Whether a value is null.
+    impls:
+      - args:
+          - value: any1
+        return: BOOLEAN
+        nullability: DECLARED_OUTPUT
+  -
+    name: "is_not_null"
+    description: Whether a value is not null.
+    impls:
+      - args:
+          - value: any1
+        return: BOOLEAN
+        nullability: DECLARED_OUTPUT
+  -
+    name: "is_nan"
+    description: Whether a value is not a number.
+    impls:
+      - args:
+          - value: fp32
+        return: BOOLEAN
+      - args:
+          - value: fp64
+        return: BOOLEAN
+
