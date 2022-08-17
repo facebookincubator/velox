@@ -406,11 +406,11 @@ void RowContainer::extractRowsComplexType(
   auto columnOffset = column.offset();
 
   auto numRows = rowNumbers->size() / sizeof(vector_size_t);
-  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
+  auto rowNumberVector = rowNumbers->as<vector_size_t>();
   for (int i = 0; i < numRows; ++i) {
-    auto row = rows[rowNumbersVector[i]];
+    auto row = rows[rowNumberVector[i]];
     auto resultIndex = resultOffset + i;
-    if (!row || row[nullByte] & nullMask) {
+    if (row == nullptr || row[nullByte] & nullMask) {
       result->setNull(resultIndex, true);
     } else {
       result->setNull(resultIndex, false);

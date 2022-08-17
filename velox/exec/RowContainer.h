@@ -574,16 +574,16 @@ class RowContainer {
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
     auto numRows = rowNumbers->size() / sizeof(vector_size_t);
-    auto rowNumbersVector = rowNumbers->as<vector_size_t>();
+    auto maxRow = resultOffset + numRows;
+    VELOX_DCHECK(rowNumbers->size() > maxRow);
+    auto rowNumberVector = rowNumbers->as<vector_size_t>();
 
-    BufferPtr nullBuffer = result->mutableNulls(resultOffset + numRows);
-    auto nulls = nullBuffer->asMutable<uint64_t>();
-    BufferPtr valuesBuffer = result->mutableValues(resultOffset + numRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    auto nulls = result->mutableNulls(maxRow)->template asMutable<uint64_t>();
+    auto values = result->mutableValues(maxRow)->template asMutableRange<T>();
 
     for (int32_t i = 0; i < numRows; ++i) {
       auto resultIndex = resultOffset + i;
-      auto row = rows[rowNumbersVector[i]];
+      auto row = rows[rowNumberVector[i]];
       if (row == nullptr) {
         bits::setNull(nulls, resultIndex, true);
       } else {
@@ -621,13 +621,14 @@ class RowContainer {
       const vector_size_t resultOffset,
       FlatVector<T>* result) {
     auto numRows = rowNumbers->size() / sizeof(vector_size_t);
-    auto rowNumbersVector = rowNumbers->as<vector_size_t>();
+    VELOX_DCHECK(rowNumbers->size() > resultOffset + numRows);
+    auto rowNumberVector = rowNumbers->as<vector_size_t>();
 
-    BufferPtr valuesBuffer = result->mutableValues(resultOffset + numRows);
-    auto values = valuesBuffer->asMutableRange<T>();
+    auto values = result->mutableValues(resultOffset + numRows)
+                      ->template asMutableRange<T>();
     for (int32_t i = 0; i < numRows; ++i) {
       auto resultIndex = resultOffset + i;
-      auto row = rows[rowNumbersVector[i]];
+      auto row = rows[rowNumberVector[i]];
       if (row == nullptr) {
         result->setNull(resultIndex, true);
       } else {
@@ -1058,10 +1059,10 @@ inline void RowContainer::extractValuesRowsNoNulls<StringView>(
     const vector_size_t resultOffset,
     FlatVector<StringView>* result) {
   auto numRows = rowNumbers->size() / sizeof(vector_size_t);
-  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
+  auto rowNumberVector = rowNumbers->as<vector_size_t>();
 
   for (int32_t i = 0; i < numRows; ++i) {
-    auto row = rows[rowNumbersVector[i]];
+    auto row = rows[rowNumberVector[i]];
     auto resultIndex = resultOffset + i;
     if (row == nullptr) {
       result->setNull(resultIndex, true);
@@ -1083,14 +1084,15 @@ inline void RowContainer::extractValuesRowsWithNulls<StringView>(
     const vector_size_t resultOffset,
     FlatVector<StringView>* result) {
   auto numRows = rowNumbers->size() / sizeof(vector_size_t);
-  auto rowNumbersVector = rowNumbers->as<vector_size_t>();
+  auto rowNumberVector = rowNumbers->as<vector_size_t>();
 
   for (int32_t i = 0; i < numRows; ++i) {
-    auto row = rows[rowNumbersVector[i]];
+    auto row = rows[rowNumberVector[i]];
     auto resultIndex = resultOffset + i;
-    if (!row || isNullAt(row, nullByte, nullMask)) {
+    if (row == nullptr || isNullAt(row, nullByte, nullMask)) {
       result->setNull(resultIndex, true);
     } else {
+      result->setNull(resultIndex, false);
       extractString(
           valueAt<StringView>(row, columnOffset), result, resultIndex);
     }
@@ -1113,7 +1115,9 @@ inline void RowContainer::extractColumnRowsTyped<TypeKind::OPAQUE>(
     RowColumn /*column*/,
     const vector_size_t /*resultOffset*/,
     VectorPtr /*result*/) {
-  VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
+  VELOX_UNSUPPORTED(
+      "RowContainer doesn't support values of type {}",
+      mapTypeKindToName(TypeKind::OPAQUE));
 }
 
 inline void RowContainer::extractColumn(

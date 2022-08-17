@@ -84,15 +84,15 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const VectorPtr& expected) {
     auto size = rows.size();
 
-    // Add a single null row to the beginning of the data, so that
-    // even rowNumbers can point to it.
+    // Set the first row in 'oddRows' to be null, and all the
+    // even row numbers point to it.
     std::vector<char*> oddRows(size, nullptr);
-    for (auto i = 1; i < size; i += 1) {
+    for (auto i = 1; i < size; i++) {
       oddRows[i] = rows[i];
     }
 
     // Extract only odd rows.
-    // Test using extractColumnOffsets API.
+    // Test using extractColumn (with rowNumbers) API.
     // The rowNumbersBuffer has values like 0, 1, 0, 3, 0, 5, 0, 7, etc
     // This tests the case that the rowNumber values are repeated and are
     // also out of order.
@@ -139,7 +139,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
         rows.data(), rowNumbersBuffer, column, 0, resultForRowNumbers);
     assertEqualVectors(expected, resultForRowNumbers);
 
-    // Test using extractColumn (with rowNumbers and an offset specified).
+    // Test using extractColumn (with rowNumbers and a non-zero result vector
+    // offset).
     if (size >= offset) {
       auto rowNumbersBuffer2 =
           AlignedBuffer::allocate<vector_size_t>(size - offset, pool_.get());
