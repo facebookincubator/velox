@@ -134,6 +134,27 @@ or string):</p>
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="is_json_scalar">
+<span class="sig-name descname"><span class="pre">is_json_scalar</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#is_json_scalar" title="Permalink to this definition">¶</a></dt>
+<dd><p>Determine if <code class="docutils literal notranslate"><span class="pre">json</span></code> is a scalar (i.e. a JSON number, a JSON string,
+<code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code>):</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">is_json_scalar</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">);</span> <span class="o">*--</span> <span class="n">true</span><span class="o">*</span>
+<span class="n">SELECT</span> <span class="n">is_json_scalar</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span> <span class="o">*--</span> <span class="n">false</span><span class="o">*</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="json_array_length">
+<span class="sig-name descname"><span class="pre">json_array_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#json_array_length" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the array length of <code class="docutils literal notranslate"><span class="pre">json</span></code> (a string containing a JSON
+array). Returns NULL if <code class="docutils literal notranslate"><span class="pre">json</span></code> is not an array:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_length</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 </section>
 <section id="json-vectors">
