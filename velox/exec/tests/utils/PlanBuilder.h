@@ -505,6 +505,10 @@ class PlanBuilder {
       const std::string& idName = "unique",
       const int32_t taskUniqueId = 1);
 
+  PlanBuilder& markDistinct(
+      const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+          distinctVariables);
+
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.
   ///
@@ -520,6 +524,7 @@ class PlanBuilder {
   /// the input. Output columns may appear in different order from the input,
   /// some input columns may be missing in the output, some columns may be
   /// duplicated in the output.
+
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,

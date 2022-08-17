@@ -419,6 +419,24 @@ void AssignUniqueIdNode::addDetails(std::stringstream& /* stream */) const {
   // Nothing to add.
 }
 
+MarkDistinctNode::MarkDistinctNode(
+    const PlanNodeId& id,
+    const std::vector<std::shared_ptr<const FieldAccessTypedExpr>>&
+        distinctVariables,
+    std::shared_ptr<const PlanNode> source)
+    : PlanNode(id), sources_{std::move(source)} {
+  distinctVariables_ = std::move(distinctVariables);
+  std::vector<std::string> names(sources_[0]->outputType()->names());
+  std::vector<TypePtr> types(sources_[0]->outputType()->children());
+  names.emplace_back("isDistinct");
+  types.emplace_back(BOOLEAN());
+  outputType_ = ROW(std::move(names), std::move(types));
+}
+
+void MarkDistinctNode::addDetails(std::stringstream& /* stream */) const {
+  // Nothing to add.
+}
+
 namespace {
 RowTypePtr getWindowOutputType(
     const RowTypePtr& inputType,

@@ -27,6 +27,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashProbe.h"
 #include "velox/exec/Limit.h"
+#include "velox/exec/MarkDistinct.h"
 #include "velox/exec/Merge.h"
 #include "velox/exec/MergeJoin.h"
 #include "velox/exec/OrderBy.h"
@@ -411,6 +412,14 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
           assignUniqueIdNode,
           assignUniqueIdNode->taskUniqueId(),
           assignUniqueIdNode->uniqueIdCounter()));
+    } else if (
+        auto markDistinctNode =
+            std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode)) {
+      std::vector<uint32_t> channels = toChannels(
+          markDistinctNode->inputType(),
+          markDistinctNode->getDistinctVariables());
+      operators.push_back(std::make_unique<MarkDistinct>(
+          id, ctx.get(), markDistinctNode, channels));
     } else {
       auto extended = Operator::fromPlanNode(ctx.get(), id, planNode);
       VELOX_CHECK(extended, "Unsupported plan node: {}", planNode->toString());

@@ -55,7 +55,9 @@ add_executable(
   TreeOfLosersTest.cpp
   UnnestTest.cpp
   VectorHasherTest.cpp
-  WindowFunctionRegistryTest.cpp)
+  WindowFunctionRegistryTest.cpp
+  AssignUniqueIdTest.cpp
+  MarkDistinctTest.cpp)
 
 add_test(
   NAME velox_exec_test

@@ -702,6 +702,14 @@ PlanBuilder& PlanBuilder::assignUniqueId(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::markDistinct(
+    const std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>&
+        distinctVariables) {
+  planNode_ = std::make_shared<core::MarkDistinctNode>(
+      nextPlanNodeId(), distinctVariables, planNode_);
+  return *this;
+}
+
 namespace {
 core::PartitionFunctionFactory createPartitionFunctionFactory(
     const RowTypePtr& inputType,
