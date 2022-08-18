@@ -91,6 +91,10 @@ TEST_F(E2EFilterTest, integerDictionary) {
        {::parquet::Compression::ZSTD,
         ::parquet::Compression::GZIP,
         ::parquet::Compression::UNCOMPRESSED}) {
+    if (!arrow::util::Codec::IsAvailable(compression)) {
+      continue;
+    }
+
     writerProperties_ = ::parquet::WriterProperties::Builder()
                             .data_pagesize(4 * 1024)
                             ->compression(compression)
