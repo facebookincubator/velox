@@ -189,6 +189,7 @@ class PlanBuilder {
   /// splits.
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
+  /// @param batch The flag set to true for batch exchange nodes
   PlanBuilder& exchange(const RowTypePtr& outputType);
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.

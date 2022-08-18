@@ -25,6 +25,8 @@ namespace facebook::velox::exec {
 
 // Corresponds to Presto SerializedPage, i.e. a container for
 // serialize vectors in Presto wire format.
+// External shuffle services can encapsulate their specific data inside this
+// by using it as a base class
 class SerializedPage {
  public:
   static constexpr int kSerializedPageOwner = -11;
@@ -41,13 +43,13 @@ class SerializedPage {
   ~SerializedPage();
 
   // Returns the size of the serialized data in bytes.
-  uint64_t size() const {
+  virtual uint64_t size() const {
     return iobufBytes_;
   }
 
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
+  virtual void prepareStreamForDeserialize(ByteStream* input);
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -370,7 +372,14 @@ class Exchange : public SourceOperator {
 
   bool isFinished() override;
 
- private:
+  using ExternalDataConvertorType = std::function<
+      bool(const std::unique_ptr<SerializedPage>&, RowVectorPtr&)>;
+  static void setExternalDataConvertor(
+      const ExternalDataConvertorType& externalDataCovertor) {
+    externalDataCovertor_s = std::move(externalDataCovertor);
+  }
+
+ protected:
   /// Fetches splits from the task until there are no more splits or task
   /// returns a future that will be complete when more splits arrive. Adds
   /// splits to exchangeClient_. Returns true if received a future from the task
@@ -392,6 +401,14 @@ class Exchange : public SourceOperator {
   std::unique_ptr<SerializedPage> currentPage_;
   std::unique_ptr<ByteStream> inputStream_;
   bool atEnd_{false};
+
+  // If this convertor is set, the output vector are generated using this
+  // instead of vector stream
+  // External shuffle services must register their own special ExchangeSources
+  // that enqueues encapsulated shuffle data inside SerializedPage interface
+  // Plus the factory to create them.
+  // And also provide proper externalDataCovertor_
+  static ExternalDataConvertorType externalDataCovertor_s;
 };
 
 } // namespace facebook::velox::exec

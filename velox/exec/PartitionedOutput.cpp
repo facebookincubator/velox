@@ -308,7 +308,9 @@ RowVectorPtr PartitionedOutput::getOutput() {
   // The input is fully processed, drop the reference to allow reuse.
   input_ = nullptr;
   output_ = nullptr;
-  destinationFactory()->outputReady();
+  if (!destinations_.empty()) {
+    destinationFactory()->outputReady();
+  }
   return nullptr;
 }
 

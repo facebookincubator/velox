@@ -288,6 +288,8 @@ std::string ExchangeClient::toString() {
   return out.str();
 }
 
+Exchange::ExternalDataConvertorType Exchange::externalDataCovertor_s = nullptr;
+
 bool Exchange::getSplits(ContinueFuture* future) {
   if (operatorCtx_->driverCtx()->driverId != 0) {
     // When there are multiple pipelines, a single operator, the one from
@@ -369,21 +371,28 @@ RowVectorPtr Exchange::getOutput() {
     return nullptr;
   }
 
-  if (!inputStream_) {
-    inputStream_ = std::make_unique<ByteStream>();
+  if (externalDataCovertor_s != nullptr) {
     stats_.rawInputBytes += currentPage_->size();
-    currentPage_->prepareStreamForDeserialize(inputStream_.get());
-  }
+    externalDataCovertor_s(currentPage_, result_);
+    stats_.inputPositions += result_->size();
+    stats_.inputBytes += result_->retainedSize();
+  } else {
+    if (!inputStream_) {
+      inputStream_ = std::make_unique<ByteStream>();
+      stats_.rawInputBytes += currentPage_->size();
+      currentPage_->prepareStreamForDeserialize(inputStream_.get());
+    }
 
-  VectorStreamGroup::read(
-      inputStream_.get(), operatorCtx_->pool(), outputType_, &result_);
+    VectorStreamGroup::read(
+        inputStream_.get(), operatorCtx_->pool(), outputType_, &result_);
 
-  stats_.inputPositions += result_->size();
-  stats_.inputBytes += result_->retainedSize();
+    stats_.inputPositions += result_->size();
+    stats_.inputBytes += result_->retainedSize();
 
-  if (inputStream_->atEnd()) {
-    currentPage_ = nullptr;
-    inputStream_ = nullptr;
+    if (inputStream_->atEnd()) {
+      currentPage_ = nullptr;
+      inputStream_ = nullptr;
+    }
   }
 
   return result_;

@@ -24,6 +24,7 @@ add_executable(
   CustomJoinTest.cpp
   DriverTest.cpp
   EnforceSingleRowTest.cpp
+  ExternalShuffleTest.cpp
   FilterProjectTest.cpp
   FunctionResolutionTest.cpp
   FunctionSignatureBuilderTest.cpp
