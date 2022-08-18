@@ -16,6 +16,8 @@ add_library(
   Aggregate.cpp
   AggregateFunctionRegistry.cpp
   AggregationMasks.cpp
+  BatchExchange.cpp
+  BatchPartitionedDestination.cpp
   ContainerRowSerde.cpp
   CrossJoinBuild.cpp
   CrossJoinProbe.cpp

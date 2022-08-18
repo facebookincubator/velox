@@ -41,13 +41,13 @@ class SerializedPage {
   ~SerializedPage();
 
   // Returns the size of the serialized data in bytes.
-  uint64_t size() const {
+  virtual uint64_t size() const {
     return iobufBytes_;
   }
 
   // Makes 'input' ready for deserializing 'this' with
   // VectorStreamGroup::read().
-  void prepareStreamForDeserialize(ByteStream* input);
+  virtual void prepareStreamForDeserialize(ByteStream* input);
 
   std::unique_ptr<folly::IOBuf> getIOBuf() const {
     return iobuf_->clone();
@@ -358,7 +358,7 @@ class Exchange : public SourceOperator {
 
   bool isFinished() override;
 
- private:
+ protected:
   /// Fetches splits from the task until there are no more splits or task
   /// returns a future that will be complete when more splits arrive. Adds
   /// splits to exchangeClient_. Returns true if received a future from the task
