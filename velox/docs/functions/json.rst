@@ -124,6 +124,15 @@ JSON Functions
 
         SELECT json_array_contains('[1, 2, 3]', 2);
 
+.. function:: json_extract(json, json_path) -> json
+
+    Evaluates the `JSONPath`_-like expression ``json_path`` on ``json``
+    (a string containing JSON) and returns the result as a JSON string::
+
+        SELECT json_extract(json, '$.store.book');
+
+    .. _JSONPath: http://goessner.net/articles/JsonPath/
+
 ============
 JSON Vectors
 ============

@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/JsonFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
 void registerJsonFunctions() {
@@ -32,6 +33,8 @@ void registerJsonFunctions() {
       {"json_array_contains"});
   registerFunction<JsonArrayContainsFunction, bool, Varchar, Varchar>(
       {"json_array_contains"});
+  registerFunction<JsonExtractFunction, Json, Varchar, Varchar>(
+      {"json_extract"});
 }
 
 } // namespace facebook::velox::functions

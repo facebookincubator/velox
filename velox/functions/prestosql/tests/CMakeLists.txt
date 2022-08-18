@@ -45,7 +45,6 @@ add_executable(
   HyperLogLogFunctionsTest.cpp
   InPredicateTest.cpp
   JsonCastTest.cpp
-  JsonExtractScalarTest.cpp
   JsonFunctionsTest.cpp
   MapConcatTest.cpp
   MapEntriesTest.cpp

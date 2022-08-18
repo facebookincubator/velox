@@ -16,6 +16,7 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/UDFOutputString.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 
 namespace facebook::velox::functions {
 
@@ -111,6 +112,27 @@ struct JsonArrayContainsFunction {
       }
     }
     return true;
+  }
+};
+
+template <typename T>
+struct JsonExtractFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE bool call(
+      Json& result,
+      const arg_type<Varchar>& json,
+      const arg_type<Varchar>& jsonPath) {
+    const folly::StringPiece& jsonStringPiece = json;
+    const folly::StringPiece& jsonPathStringPiece = jsonPath;
+    auto extractResult = jsonExtract(jsonStringPiece, jsonPathStringPiece);
+    if (extractResult.hasValue()) {
+      result = StringView(toJson(extractResult.value()));
+      return true;
+
+    } else {
+      return false;
+    }
   }
 };
 

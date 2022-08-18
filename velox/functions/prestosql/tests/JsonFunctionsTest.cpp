@@ -37,6 +37,48 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
       std::optional<T> value) {
     return evaluateOnce<bool>("json_array_contains(c0, c1)", json, value);
   }
+
+  std::optional<Json> json_extract(
+      std::optional<std::string> json,
+      std::optional<std::string> value) {
+    return evaluateOnce<Json>("json_extract(c0, c1)", json, value);
+  }
+
+  std::optional<std::string> json_extract_scalar(
+      std::optional<std::string> json,
+      std::optional<std::string> path) {
+    return evaluateOnce<std::string>("json_extract_scalar(c0, c1)", json, path);
+  }
+
+  void evaluateWithJsonType(
+      const std::vector<std::optional<StringView>>& json,
+      const std::vector<std::optional<StringView>>& path,
+      const std::vector<std::optional<StringView>>& expected) {
+    auto jsonVector = makeNullableFlatVector<Json>(json, JSON());
+    auto pathVector = makeNullableFlatVector<StringView>(path);
+    auto expectedVector = makeNullableFlatVector<StringView>(expected);
+
+    ::facebook::velox::test::assertEqualVectors(
+        expectedVector,
+        evaluate<SimpleVector<StringView>>(
+            "json_extract_scalar(c0, c1)",
+            makeRowVector({jsonVector, pathVector})));
+  }
+
+  void evaluateWithJsonTypeReturnJson(
+      const std::vector<std::optional<StringView>>& json,
+      const std::vector<std::optional<StringView>>& path,
+      const std::vector<std::optional<Json>>& expected) {
+    auto jsonVector = makeNullableFlatVector<Json>(json, JSON());
+    auto pathVector = makeNullableFlatVector<StringView>(path);
+    auto expectedVector = makeNullableFlatVector<Json>(expected);
+
+    ::facebook::velox::test::assertEqualVectors(
+        expectedVector,
+        evaluate<SimpleVector<Json>>(
+            "json_extract_scalar(c0, c1)",
+            makeRowVector({jsonVector, pathVector})));
+  }
 };
 
 TEST_F(JsonFunctionsTest, isJsonScalar) {
@@ -54,6 +96,169 @@ TEST_F(JsonFunctionsTest, isJsonScalar) {
   EXPECT_EQ(is_json_scalar(R"({"k1":"v1"})"), false);
   EXPECT_EQ(is_json_scalar(R"({"k1":[0,1,2]})"), false);
   EXPECT_EQ(is_json_scalar(R"({"k1":""})"), false);
+};
+
+TEST_F(JsonFunctionsTest, jsonExtractScalarSimple) {
+  // Scalars.
+  EXPECT_EQ(json_extract_scalar(R"(1)", "$"), "1");
+  EXPECT_EQ(json_extract_scalar(R"(123456)", "$"), "123456");
+  EXPECT_EQ(json_extract_scalar(R"("hello")", "$"), "hello");
+  EXPECT_EQ(json_extract_scalar(R"(1.1)", "$"), "1.1");
+  EXPECT_EQ(json_extract_scalar(R"("")", "$"), "");
+  EXPECT_EQ(json_extract_scalar(R"(true)", "$"), "true");
+
+  // Simple lists.
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[0]"), "1");
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[1]"), "2");
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[2]"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"([1,2])", "$[999]"), std::nullopt);
+
+  // Simple maps.
+  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1"), "v1");
+  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k2"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"({"k1":"v1"})", "$.k1.k3"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"({"k1":[0,1,2]})", "$.k1"), std::nullopt);
+  EXPECT_EQ(json_extract_scalar(R"({"k1":""})", "$.k1"), "");
+
+  // Nested
+  EXPECT_EQ(json_extract_scalar(R"({"k1":{"k2": 999}})", "$.k1.k2"), "999");
+  EXPECT_EQ(json_extract_scalar(R"({"k1":[1,2,3]})", "$.k1[0]"), "1");
+  EXPECT_EQ(json_extract_scalar(R"({"k1":[1,2,3]})", "$.k1[2]"), "3");
+  EXPECT_EQ(json_extract_scalar(R"([{"k1":"v1"}, 2])", "$[0].k1"), "v1");
+  EXPECT_EQ(json_extract_scalar(R"([{"k1":"v1"}, 2])", "$[1]"), "2");
+  EXPECT_EQ(
+      json_extract_scalar(
+          R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
+      "v2");
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractScalarJsonType) {
+  // Scalars.
+  evaluateWithJsonType(
+      {R"(1)"_sv,
+       R"(123456)"_sv,
+       R"("hello")"_sv,
+       R"(1.1)"_sv,
+       R"("")"_sv,
+       R"(true)"},
+      {"$"_sv, "$"_sv, "$"_sv, "$"_sv, "$"_sv, "$"_sv},
+      {"1"_sv, "123456"_sv, "hello"_sv, "1.1"_sv, ""_sv, "true"_sv});
+
+  // Simple lists.
+  evaluateWithJsonType(
+      {R"([1,2])"_sv, R"([1,2])"_sv, R"([1,2])"_sv, R"([1,2])"_sv},
+      {"$[0]"_sv, "$[1]"_sv, "$[2]"_sv, "$[999]"_sv},
+      {"1"_sv, "2"_sv, std::nullopt, std::nullopt});
+
+  // Simple maps.
+  evaluateWithJsonType(
+      {R"({"k1":"v1"})"_sv,
+       R"({"k1":"v1"})"_sv,
+       R"({"k1":"v1"})"_sv,
+       R"({"k1":[0,1,2]})"_sv,
+       R"({"k1":""})"_sv},
+      {"$.k1"_sv, "$.k2"_sv, "$.k1.k3"_sv, "$.k1"_sv, "$.k1"_sv},
+      {"v1"_sv, std::nullopt, std::nullopt, std::nullopt, ""_sv});
+
+  // Nested
+  evaluateWithJsonType(
+      {R"({"k1":{"k2": 999}})"_sv,
+       R"({"k1":[1,2,3]})"_sv,
+       R"({"k1":[1,2,3]})"_sv,
+       R"([{"k1":"v1"}, 2])"_sv,
+       R"([{"k1":"v1"}, 2])"_sv,
+       R"([{"k1":[{"k2": ["v1", "v2"]}]}])"_sv},
+      {"$.k1.k2"_sv,
+       "$.k1[0]"_sv,
+       "$.k1[2]"_sv,
+       "$[0].k1"_sv,
+       "$[1]"_sv,
+       "$[0].k1[0].k2[1]"_sv},
+      {"999"_sv, "1"_sv, "3"_sv, "v1"_sv, "2"_sv, "v2"_sv});
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractScalarUtf8) {
+  EXPECT_EQ(
+      json_extract_scalar(R"({"k1":"I \u2665 UTF-8"})", "$.k1"),
+      "I \u2665 UTF-8");
+  EXPECT_EQ(
+      json_extract_scalar("{\"k1\":\"I \u2665 UTF-8\"}", "$.k1"),
+      "I \u2665 UTF-8");
+
+  EXPECT_EQ(
+      json_extract_scalar(
+          "{\"k1\":\"I \U0001D11E playing in G-clef\"}", "$.k1"),
+      "I \U0001D11E playing in G-clef");
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractScalarInvalidPath) {
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", ""), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", "$[]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"([0,1,2])", "$[-1]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$k1"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$.k1."), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1"})", "$.k1]"), VeloxUserError);
+  EXPECT_THROW(json_extract_scalar(R"({"k1":"v1)", "$.k1]"), VeloxUserError);
+}
+
+// TODO: Folly tries to convert scalar integers, and in case they are large
+// enough it overflows and throws conversion error. In this case, we do out best
+// and return NULL, but in Presto java the large integer is returned as-is as a
+// string.
+TEST_F(JsonFunctionsTest, jsonExtractScalarOverflow) {
+  EXPECT_EQ(
+      json_extract_scalar(
+          R"(184467440737095516151844674407370955161518446744073709551615)",
+          "$"),
+      std::nullopt);
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractSimple) {
+  EXPECT_EQ(json_extract(R"(1)", "$"), R"(1)");
+  EXPECT_EQ(json_extract(R"(123456)", "$"), R"(123456)");
+  EXPECT_EQ(json_extract(R"("hello")", "$"), R"("hello")");
+  EXPECT_EQ(json_extract(R"(1.1)", "$"), R"(1.1)");
+  EXPECT_EQ(json_extract(R"("")", "$"), R"("")");
+  EXPECT_EQ(json_extract(R"(true)", "$"), R"(true)");
+  EXPECT_EQ(json_extract(R"({"k1":"v1"})", "$.k1"), R"("v1")");
+  EXPECT_EQ(json_extract(R"([1,2])", "$[0]"), R"(1)");
+  EXPECT_EQ(json_extract(R"({"k1":{"k2": 999}})", "$.k1.k2"), R"(999)");
+  EXPECT_EQ(json_extract(R"({"k1":[1,2,3]})", "$.k1[0]"), R"(1)");
+  EXPECT_EQ(json_extract(R"([{"k1":"v1"}, 2])", "$[0].k1"), R"("v1")");
+  EXPECT_EQ(
+      json_extract(R"([{"k1":[{"k2": ["v1", "v2"]}]}])", "$[0].k1[0].k2[1]"),
+      R"("v2")");
+
+  EXPECT_EQ(json_extract(R"([1,2])", "$[2]"), std::nullopt);
+  EXPECT_EQ(json_extract(R"({"k1":"v1"})", "$.k2"), std::nullopt);
+  EXPECT_EQ(json_extract(R"({"k1":"v1"})", "$.k1.k3"), std::nullopt);
+  EXPECT_EQ(json_extract(R"([1,2,[1,2,3]])", "$[2]"), R"([1,2,3])");
+  EXPECT_EQ(json_extract(R"({"k1":[0,1,2]})", "$.k1"), R"([0,1,2])");
+  EXPECT_EQ(
+      json_extract(R"({"k1":[0,1,2], "k2":{"k3":"v3"}})", "$.k2"),
+      R"({"k3":"v3"})");
+  EXPECT_EQ(json_extract(R"({"k1":""})", "$.k1"), R"("")");
+  EXPECT_EQ(json_extract(R"([{"k1":"v1"}, [1,2]])", "$[1]"), R"([1,2])");
+  EXPECT_EQ(
+      json_extract(R"([{"k1":{"k2": ["v1", "v2"]}}])", "$[0].k1"),
+      R"({"k2":["v1","v2"]})");
+  EXPECT_EQ(
+      json_extract(R"({"k1": ["k3", {"k2": "v1"}]})", "$.k1[1]"),
+      R"({"k2":"v1"})");
+}
+
+TEST_F(JsonFunctionsTest, jsonExtractInvalidPath) {
+  EXPECT_THROW(json_extract(R"([[0,1,2],1,2])", ""), VeloxUserError);
+  EXPECT_THROW(json_extract(R"([[0,1,2],1,2])", "$[]"), VeloxUserError);
+  EXPECT_THROW(json_extract(R"([[0,1,2],1,2])", "$[-1]"), VeloxUserError);
+  EXPECT_THROW(
+      json_extract(R"({"k1":"v1", "k2":[1,2,3]})", "$k2"), VeloxUserError);
+  EXPECT_THROW(
+      json_extract(R"({"k1":"v1", "k2":[1,2,3]})", "$.k2."), VeloxUserError);
+  EXPECT_THROW(
+      json_extract(R"({"k1":"v1", "k2":[1,2,3]})", "$.k2]"), VeloxUserError);
+  EXPECT_THROW(
+      json_extract(R"({"k1":"v1",  "k2":[1,2,3)", "$.k2]"), VeloxUserError);
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayLength) {
