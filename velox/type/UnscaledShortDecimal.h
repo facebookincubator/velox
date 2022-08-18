@@ -69,7 +69,7 @@ struct UnscaledShortDecimal {
 
  private:
   int64_t unscaledValue_;
-};
+} FOLLY_PACK_ATTR;
 
 static inline UnscaledShortDecimal operator/(
     const UnscaledShortDecimal& a,

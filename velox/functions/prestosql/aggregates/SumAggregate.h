@@ -183,6 +183,32 @@ inline void SumAggregate<float, double, float>::extractValues(
       });
 }
 
+/// Override 'initializeNewGroups' for decimal values to call set method to
+/// initialize the decimal value properly.
+template <>
+inline void
+SumAggregate<UnscaledShortDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  exec::Aggregate::setAllNulls(groups, indices);
+  for (auto i : indices) {
+    exec::Aggregate::value<UnscaledLongDecimal>(groups[i])->setUnscaledValue(0);
+  }
+}
+
+template <>
+inline void
+SumAggregate<UnscaledLongDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
+    initializeNewGroups(
+        char** groups,
+        folly::Range<const vector_size_t*> indices) {
+  exec::Aggregate::setAllNulls(groups, indices);
+  for (auto i : indices) {
+    exec::Aggregate::value<UnscaledLongDecimal>(groups[i])->setUnscaledValue(0);
+  }
+}
+
 template <template <typename U, typename V, typename W> class T>
 bool registerSumAggregate(const std::string& name) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{

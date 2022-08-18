@@ -82,7 +82,7 @@ struct UnscaledLongDecimal {
 
  private:
   int128_t unscaledValue_;
-}; // struct UnscaledLongDecimal
+} FOLLY_PACK_ATTR;
 
 static inline UnscaledLongDecimal operator/(
     const UnscaledLongDecimal& a,
