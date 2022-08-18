@@ -75,12 +75,11 @@ TEST_F(JsonFunctionsTest, jsonArrayLength) {
 }
 
 TEST_F(JsonFunctionsTest, jsonArrayContainsBool) {
-  EXPECT_EQ(json_array_contains<bool>(R"([])", 0), false);
-  EXPECT_EQ(json_array_contains<bool>(R"([1, 2, 3])", 1), false);
-  EXPECT_EQ(json_array_contains<bool>(R"([1.2, 2.3, 3.4])", 2.3), false);
+  EXPECT_EQ(json_array_contains<bool>(R"([])", true), false);
+  EXPECT_EQ(json_array_contains<bool>(R"([1, 2, 3])", false), false);
+  EXPECT_EQ(json_array_contains<bool>(R"([1.2, 2.3, 3.4])", true), false);
   EXPECT_EQ(
-      json_array_contains<bool>(
-          R"(["hello", "presto", "world"])", R"("hello")"),
+      json_array_contains<bool>(R"(["hello", "presto", "world"])", false),
       false);
   EXPECT_EQ(json_array_contains<bool>(R"(1)", true), std::nullopt);
   EXPECT_EQ(
@@ -116,6 +115,7 @@ true, true, true, true, true, true, true, true, true, true, true])",
 TEST_F(JsonFunctionsTest, jsonArrayContainsInt) {
   EXPECT_EQ(json_array_contains<int64_t>(R"([])", 0), false);
   EXPECT_EQ(json_array_contains<int64_t>(R"([1.2, 2.3, 3.4])", 2), false);
+  EXPECT_EQ(json_array_contains<int64_t>(R"([1.2, 2.0, 3.4])", 2), false);
   EXPECT_EQ(
       json_array_contains<int64_t>(R"(["hello", "presto", "world"])", 2),
       false);
@@ -154,6 +154,7 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsInt) {
 TEST_F(JsonFunctionsTest, jsonArrayContainsDouble) {
   EXPECT_EQ(json_array_contains<double>(R"([])", 2.3), false);
   EXPECT_EQ(json_array_contains<double>(R"([1, 2, 3])", 2.3), false);
+  EXPECT_EQ(json_array_contains<double>(R"([1, 2, 3])", 2.0), false);
   EXPECT_EQ(
       json_array_contains<double>(R"(["hello", "presto", "world"])", 2.3),
       false);
@@ -236,6 +237,16 @@ TEST_F(JsonFunctionsTest, jsonArrayContainsString) {
       json_array_contains<std::string>(
           R"(["hello", "presto", "world", 1, 2, 3, true, false, 1.2, 2.3, {"k1":[0,1,2], "k2":"v1"}])",
           "world"),
+      true);
+  EXPECT_EQ(
+      json_array_contains<std::string>(
+          R"(["the fox jumped over the fence", "hello presto world"])",
+          "hello velox world"),
+      false);
+  EXPECT_EQ(
+      json_array_contains<std::string>(
+          R"(["the fox jumped over the fence", "hello presto world"])",
+          "the fox jumped over the fence"),
       true);
 }
 
