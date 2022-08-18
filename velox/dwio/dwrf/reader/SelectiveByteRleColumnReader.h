@@ -160,9 +160,7 @@ void SelectiveByteRleColumnReader::processFilter(
       break;
     case FilterKind::kIsNull:
       filterNulls<int8_t>(
-          rows,
-          true,
-          !std::is_same_v<decltype(extractValues), DropValues>);
+          rows, true, !std::is_same_v<decltype(extractValues), DropValues>);
       break;
     case FilterKind::kIsNotNull:
       if (std::is_same_v<decltype(extractValues), DropValues>) {

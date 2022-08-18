@@ -67,8 +67,7 @@ class VectorValueGenerator {
       std::optional<folly::Random::DefaultGenerator>& rng,
       StringViewBufferHolder& stringViewBufferHolder,
       std::optional<uint32_t> fixedWidthStringSize = std::nullopt) {
-    if constexpr (
-        std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
+    if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
       return useFullTypeRange ? getRand64(rng) : getRand32(rng);
     } else if constexpr (
         std::is_integral<T>::value && !std::is_same_v<T, bool>) {
@@ -76,12 +75,10 @@ class VectorValueGenerator {
       auto max = std::numeric_limits<T>::max();
       if (!useFullTypeRange) {
         if constexpr (
-            std::is_same_v<T, int32_t> ||
-            std::is_same_v<T, uint32_t>) {
+            std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
           max = std::numeric_limits<int16_t>::max();
         } else if constexpr (
-            std::is_same_v<T, int16_t> ||
-            std::is_same_v<T, uint16_t>) {
+            std::is_same_v<T, int16_t> || std::is_same_v<T, uint16_t>) {
           max = std::numeric_limits<int8_t>::max();
         } else {
           max = std::numeric_limits<int8_t>::max() / 2;

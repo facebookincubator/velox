@@ -94,7 +94,8 @@ class ExtremeValueFunction : public exec::VectorFunction {
       rawResult[row] = currentValue;
     });
 
-    if constexpr (std::is_same_v<T, TypeTraits<TypeKind::VARCHAR>::NativeType>) {
+    if constexpr (std::
+                      is_same_v<T, TypeTraits<TypeKind::VARCHAR>::NativeType>) {
       auto* flatResult = (*result)->as<FlatVector<T>>();
       for (auto index : usedInputs) {
         flatResult->acquireSharedStringBuffers(args[index].get());

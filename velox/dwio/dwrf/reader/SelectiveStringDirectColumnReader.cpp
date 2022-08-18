@@ -384,9 +384,7 @@ void SelectiveStringDirectColumnReader::processFilter(
       break;
     case common::FilterKind::kIsNull:
       filterNulls<StringView>(
-          rows,
-          true,
-          !std::is_same_v<decltype(extractValues), DropValues>);
+          rows, true, !std::is_same_v<decltype(extractValues), DropValues>);
       break;
     case common::FilterKind::kIsNotNull:
       if (std::is_same_v<decltype(extractValues), DropValues>) {

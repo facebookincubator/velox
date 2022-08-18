@@ -1026,7 +1026,7 @@ class FloatingPointRange final : public AbstractRange {
             upperExclusive,
             nullAllowed,
             (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
-                                             : FilterKind::kFloatRange),
+                                        : FilterKind::kFloatRange),
         lower_(lower),
         upper_(upper) {
     VELOX_CHECK(lowerUnbounded || !std::isnan(lower_));
@@ -1041,7 +1041,7 @@ class FloatingPointRange final : public AbstractRange {
             other.upperExclusive_,
             nullAllowed,
             (std::is_same_v<T, double>) ? FilterKind::kDoubleRange
-                                             : FilterKind::kFloatRange),
+                                        : FilterKind::kFloatRange),
         lower_(other.lower_),
         upper_(other.upper_) {
     VELOX_CHECK(lowerUnbounded_ || !std::isnan(lower_));

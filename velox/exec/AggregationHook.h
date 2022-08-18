@@ -100,8 +100,7 @@ namespace {
 template <typename TOutput, typename TInput>
 inline void updateSingleValue(TOutput& result, TInput value) {
   if constexpr (
-      std::is_same_v<TOutput, double> ||
-      std::is_same_v<TOutput, float>) {
+      std::is_same_v<TOutput, double> || std::is_same_v<TOutput, float>) {
     result += value;
   } else {
     result = checkedPlus<TOutput>(result, value);

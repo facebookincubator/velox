@@ -213,9 +213,7 @@ class ISerializable {
     return obj.asBool();
   }
 
-  template <
-      class T,
-      typename = std::enable_if_t<std::is_same_v<T, double>>>
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, double>>>
   static double deserialize(const folly::dynamic& obj) {
     return obj.asDouble();
   }
