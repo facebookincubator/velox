@@ -87,22 +87,27 @@ struct JsonArrayContainsFunction {
     }
 
     result = false;
-    bool valueBool = std::is_same_v<TInput, bool>;
-    bool valueInt = std::is_same_v<TInput, int64_t>;
-    bool valueDouble = std::is_same_v<TInput, double>;
     for (const auto& v : parsedJson) {
-      if (valueBool && v.isBool() && v == value) {
-        result = true;
-        break;
-      } else if (valueInt && v.isInt() && v == value) {
-        result = true;
-        break;
-      } else if (valueDouble && v.isDouble() && v == value) {
-        result = true;
-        break;
-      } else if (v.isString() && v == value) {
-        result = true;
-        break;
+      if constexpr (std::is_same_v<TInput, bool>) {
+        if (v.isBool() && v == value) {
+          result = true;
+          break;
+        }
+      } else if constexpr (std::is_same_v<TInput, int64_t>) {
+        if (v.isInt() && v == value) {
+          result = true;
+          break;
+        }
+      } else if constexpr (std::is_same_v<TInput, double>) {
+        if (v.isDouble() && v == value) {
+          result = true;
+          break;
+        }
+      } else {
+        if (v.isString() && v == value) {
+          result = true;
+          break;
+        }
       }
     }
     return true;
