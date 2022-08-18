@@ -87,48 +87,55 @@ TEST_F(E2EFilterTest, integerDirect) {
 }
 
 TEST_F(E2EFilterTest, integerDictionary) {
-  writerProperties_ =
-      ::parquet::WriterProperties::Builder().data_pagesize(4 * 1024)->build();
+  for (const auto compression :
+       {::parquet::Compression::ZSTD,
+        ::parquet::Compression::GZIP,
+        ::parquet::Compression::UNCOMPRESSED}) {
+    writerProperties_ = ::parquet::WriterProperties::Builder()
+                            .data_pagesize(4 * 1024)
+                            ->compression(compression)
+                            ->build();
 
-  testWithTypes(
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint",
-      [&]() {
-        makeIntDistribution<int64_t>(
-            Subfield("long_val"),
-            10, // min
-            100, // max
-            22, // repeats
-            19, // rareFrequency
-            -9999, // rareMin
-            10000000000, // rareMax
-            true); // keepNulls
+    testWithTypes(
+        "short_val:smallint,"
+        "int_val:int,"
+        "long_val:bigint",
+        [&]() {
+          makeIntDistribution<int64_t>(
+              Subfield("long_val"),
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -9999, // rareMin
+              10000000000, // rareMax
+              true); // keepNulls
 
-        makeIntDistribution<int32_t>(
-            Subfield("int_val"),
-            10, // min
-            100, // max
-            22, // repeats
-            19, // rareFrequency
-            -9999, // rareMin
-            100000000, // rareMax
-            false); // keepNulls
+          makeIntDistribution<int32_t>(
+              Subfield("int_val"),
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -9999, // rareMin
+              100000000, // rareMax
+              false); // keepNulls
 
-        makeIntDistribution<int16_t>(
-            Subfield("short_val"),
-            10, // min
-            100, // max
-            22, // repeats
-            19, // rareFrequency
-            -999, // rareMin
-            30000, // rareMax
-            true); // keepNulls
-      },
-      false,
-      {"short_val", "int_val", "long_val"},
-      20,
-      true);
+          makeIntDistribution<int16_t>(
+              Subfield("short_val"),
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true); // keepNulls
+        },
+        false,
+        {"short_val", "int_val", "long_val"},
+        20,
+        true);
+  }
 }
 
 TEST_F(E2EFilterTest, floatAndDoubleDirect) {
