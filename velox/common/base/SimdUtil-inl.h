@@ -1057,7 +1057,7 @@ template <typename T, typename A>
 struct HalfBatchImpl<
     T,
     A,
-    std::enable_if_t<std::is_base_of<xsimd::avx, A>::value>> {
+    std::enable_if_t<std::is_base_of_v<xsimd::avx, A>>> {
   using Type = xsimd::batch<T, xsimd::sse2>;
 };
 
@@ -1066,8 +1066,8 @@ struct HalfBatchImpl<
     T,
     A,
     std::enable_if_t<
-        std::is_base_of<xsimd::sse2, A>::value ||
-        std::is_base_of<xsimd::neon, A>::value>> {
+        std::is_base_of_v<xsimd::sse2, A> ||
+        std::is_base_of_v<xsimd::neon, A>>> {
   using Type = Batch64<T>;
 };
 
