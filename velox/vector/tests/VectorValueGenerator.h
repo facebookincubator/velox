@@ -70,7 +70,7 @@ class VectorValueGenerator {
     if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t>) {
       return useFullTypeRange ? getRand64(rng) : getRand32(rng);
     } else if constexpr (
-        std::is_integral<T>::value && !std::is_same_v<T, bool>) {
+        std::is_integral_v<T> && !std::is_same_v<T, bool>) {
       // The other integral cases, signed and unsigned
       auto max = std::numeric_limits<T>::max();
       if (!useFullTypeRange) {
