@@ -1054,10 +1054,7 @@ xsimd::batch<T, A> iota(const A&) {
 namespace detail {
 
 template <typename T, typename A>
-struct HalfBatchImpl<
-    T,
-    A,
-    std::enable_if_t<std::is_base_of_v<xsimd::avx, A>>> {
+struct HalfBatchImpl<T, A, std::enable_if_t<std::is_base_of_v<xsimd::avx, A>>> {
   using Type = xsimd::batch<T, xsimd::sse2>;
 };
 
