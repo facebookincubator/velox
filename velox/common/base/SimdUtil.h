@@ -402,6 +402,83 @@ inline bool isDense(const T* values, int32_t size) {
   return (values[size - 1] - values[0] == size - 1);
 }
 
+namespace {
+template <typename T, typename F>
+uint64_t seqFindBound(
+    const T* data,
+    const uint64_t start,
+    const uint64_t end,
+    const T& comparable,
+    F comparator) {
+  for (uint64_t i = start; i < end; ++i) {
+    if (comparator(data[i], comparable)) {
+      return i;
+    }
+  }
+  return end;
+}
+
+template <typename T, typename F>
+uint64_t findBounds(
+    const T* data,
+    const uint64_t size,
+    const T comparable,
+    F comparator) {
+  const uint64_t batchSize = xsimd::batch<T>::size;
+  if (size < batchSize) {
+    return seqFindBound(data, 0, size, comparable, comparator);
+  }
+  auto comparableBatch = xsimd::batch<T>::broadcast(comparable);
+  uint64_t l = 0;
+  // If the last batch is not a full batch then we leave it as an outlier
+  uint64_t r = size / batchSize - 1;
+  uint64_t m = (l + r) / 2;
+  int32_t resultBits = 0;
+  do {
+    auto batch = xsimd::batch<T>::load_unaligned(data + m * batchSize);
+    resultBits = simd::toBitMask(comparator(batch, comparableBatch));
+    if (resultBits == 0) {
+      l = m + 1;
+    } else {
+      r = m;
+    }
+    m = (l + r) / 2;
+  } while (l < r);
+  if (resultBits != 0) {
+    return r * batchSize + __builtin_ctzl(resultBits);
+  }
+  // Result should be in the last couple of outliers that do not form a full
+  // batch
+  return seqFindBound(data, (r + 1) * batchSize, size, comparable, comparator);
+}
+} // namespace
+
+// Similar to std::lower_bound, returns the index of the element which is the
+// first one that's greater or equal to 'comparable' in 'data'. Returns 'size'
+// if none of them are greater or equal to 'comparable'. The range must be
+// partitioned with respect to the expression element < comparable, i.e., all
+// elements for which the expression is true must precede all elements for which
+// the expression is false. A fully-sorted range meets this criterion.
+template <typename T>
+uint64_t lowerBound(const T* data, const uint64_t size, const T comparable) {
+  return findBounds<T>(data, size, comparable, [](auto value, auto comparable) {
+    return value >= comparable;
+  });
+}
+
+// Similar to std::upper_bound, Returns the index of the element which is the
+// first one that's greater than 'comparable' in 'data'. Returns 'size' if none
+// of them are greater than 'comparable'.The range must be partitioned with
+// respect to the expression element <= comparable, i.e., all elements for which
+// the expression is true must precede all elements for which the expression is
+// false. A fully-sorted range meets this criterion.
+template <typename T>
+int32_t upperBound(const T* data, const uint64_t size, const T comparable) {
+  return findBounds<T>(data, size, comparable, [](auto value, auto comparable) {
+    return value > comparable;
+  });
+}
+
 } // namespace facebook::velox::simd
 
 #include "velox/common/base/SimdUtil-inl.h"

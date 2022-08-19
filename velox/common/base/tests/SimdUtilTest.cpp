@@ -332,4 +332,31 @@ TEST_F(SimdUtilTest, Batch64_memory) {
   EXPECT_EQ(data[1], 2);
 }
 
+TEST_F(SimdUtilTest, lowerUpperBound) {
+  {
+    int32_t a[] = {0, 1, 2, 3, 3, 3, 6, 7};
+    EXPECT_EQ(simd::lowerBound(a, 8, 3), 3);
+    EXPECT_EQ(simd::upperBound(a, 8, 3), 6);
+    EXPECT_EQ(simd::lowerBound(a, 8, 10), 8);
+    EXPECT_EQ(simd::upperBound(a, 8, 10), 8);
+  }
+  {
+    auto size = 2048;
+    auto upperBound = size / 2;
+    auto lowerBound = size / 4;
+    int8_t c[size];
+    for (int i = 0; i < size; i++) {
+      if (i < lowerBound) {
+        c[i] = 0;
+      } else if (i >= lowerBound && i <= upperBound) {
+        c[i] = 10;
+      } else {
+        c[i] = 100;
+      }
+    }
+    EXPECT_EQ(simd::lowerBound(c, size, (int8_t)10), lowerBound);
+    EXPECT_EQ(simd::upperBound(c, size, (int8_t)10), upperBound + 1);
+  }
+}
+
 } // namespace
