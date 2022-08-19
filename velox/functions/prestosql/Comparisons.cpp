@@ -29,25 +29,20 @@ namespace {
 template <typename ComparisonOp, typename Arch = xsimd::default_arch>
 struct SimdComparator {
   template <typename T, bool isConstant>
-  inline auto loadSimdData(
-      const T* rawData,
-      vector_size_t offset,
-      vector_size_t constIndex) {
+  inline auto loadSimdData(const T* rawData, vector_size_t offset) {
     using d_type = xsimd::batch<T>;
     if constexpr (isConstant) {
-      return xsimd::broadcast<T>(rawData[constIndex]);
+      return xsimd::broadcast<T>(rawData[0]);
     }
     return d_type::load_unaligned(rawData + offset);
   }
 
   template <typename T, bool isLeftConstant, bool isRightConstant>
   void applySimdComparison(
-      vector_size_t begin,
-      vector_size_t end,
+      const vector_size_t begin,
+      const vector_size_t end,
       const T* rawLhs,
       const T* rawRhs,
-      vector_size_t lhsConstIndex,
-      vector_size_t rhsConstIndex,
       uint8_t* rawResult) {
     using d_type = xsimd::batch<T>;
     constexpr auto numScalarElements = d_type::size;
@@ -57,10 +52,8 @@ struct SimdComparator {
       for (auto i = begin; i < vectorEnd; i += 8) {
         rawResult[i / 8] = 0;
         for (auto j = 0; j < 8 && j < vectorEnd; j += numScalarElements) {
-          auto left =
-              loadSimdData<T, isLeftConstant>(rawLhs, i + j, lhsConstIndex);
-          auto right =
-              loadSimdData<T, isRightConstant>(rawRhs, i + j, rhsConstIndex);
+          auto left = loadSimdData<T, isLeftConstant>(rawLhs, i + j);
+          auto right = loadSimdData<T, isRightConstant>(rawRhs, i + j);
 
           uint8_t res = simd::toBitMask(ComparisonOp()(left, right));
           rawResult[i / 8] |= res << j;
@@ -68,8 +61,8 @@ struct SimdComparator {
       }
     } else {
       for (auto i = begin; i < vectorEnd; i += numScalarElements) {
-        auto left = loadSimdData<T, isLeftConstant>(rawLhs, i, lhsConstIndex);
-        auto right = loadSimdData<T, isRightConstant>(rawRhs, i, rhsConstIndex);
+        auto left = loadSimdData<T, isLeftConstant>(rawLhs, i);
+        auto right = loadSimdData<T, isRightConstant>(rawRhs, i);
 
         auto res = simd::toBitMask(ComparisonOp()(left, right));
         if constexpr (numScalarElements == 8) {
@@ -88,7 +81,9 @@ struct SimdComparator {
 
     // Evaluate remaining values.
     for (auto i = vectorEnd; i < end; i++) {
-      if constexpr (isRightConstant) {
+      if constexpr (isRightConstant && isLeftConstant) {
+        bits::setBit(rawResult, i, ComparisonOp()(rawLhs[0], rawRhs[0]));
+      } else if constexpr (isRightConstant) {
         bits::setBit(rawResult, i, ComparisonOp()(rawLhs[i], rawRhs[0]));
       } else if constexpr (isLeftConstant) {
         bits::setBit(rawResult, i, ComparisonOp()(rawLhs[0], rawRhs[i]));
@@ -132,29 +127,18 @@ struct SimdComparator {
       return;
     }
 
-    if (lhs.isConstantMapping()) {
-      auto lhsConstIndex = lhs.index(0);
+    if (lhs.isConstantMapping() && rhs.isConstantMapping()) {
+      applySimdComparison<T, true, true>(
+          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
+    } else if (lhs.isConstantMapping()) {
       applySimdComparison<T, true, false>(
-          rows.begin(),
-          rows.end(),
-          rawLhs,
-          rawRhs,
-          lhsConstIndex,
-          0,
-          rawResult);
+          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
     } else if (rhs.isConstantMapping()) {
-      auto rhsConstIndex = rhs.index(0);
       applySimdComparison<T, false, true>(
-          rows.begin(),
-          rows.end(),
-          rawLhs,
-          rawRhs,
-          0,
-          rhsConstIndex,
-          rawResult);
+          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
     } else {
       applySimdComparison<T, false, false>(
-          rows.begin(), rows.end(), rawLhs, rawRhs, 0, 0, rawResult);
+          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
     }
 
     if (resultVector->nulls()) {
@@ -193,7 +177,7 @@ class ComparisonSimdFunction : public exec::VectorFunction {
     VELOX_CHECK_EQ(args[0]->typeKind(), args[1]->typeKind());
     VELOX_USER_CHECK_EQ(outputType, BOOLEAN());
 
-    BaseVector::ensureWritable(rows, BOOLEAN(), context->pool(), result);
+    context->ensureWritable(rows, outputType, *result);
 
     exec::LocalDecodedVector lhs(context, *args[0], rows);
     exec::LocalDecodedVector rhs(context, *args[1], rows);

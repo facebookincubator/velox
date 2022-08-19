@@ -343,7 +343,7 @@ class PreprocBenchmark : public functions::test::FunctionBenchmarkBase {
   }
 
   /// Scale factor for the data.
-  static auto const scaleFactor_ = 2;
+  static auto const scaleFactor_ = 1;
 };
 
 BENCHMARK_MULTI(simple, n) {
