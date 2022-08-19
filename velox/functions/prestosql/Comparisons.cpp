@@ -29,10 +29,13 @@ namespace {
 template <typename ComparisonOp, typename Arch = xsimd::default_arch>
 struct SimdComparator {
   template <typename T, bool isConstant>
-  inline auto loadSimdData(const T* rawData, vector_size_t offset) {
+  inline auto loadSimdData(
+      const T* rawData,
+      vector_size_t offset,
+      vector_size_t constIndex) {
     using d_type = xsimd::batch<T>;
     if constexpr (isConstant) {
-      return xsimd::broadcast<T>(rawData[0]);
+      return xsimd::broadcast<T>(rawData[constIndex]);
     }
     return d_type::load_unaligned(rawData + offset);
   }
@@ -43,6 +46,8 @@ struct SimdComparator {
       vector_size_t end,
       const T* rawLhs,
       const T* rawRhs,
+      vector_size_t lhsConstIndex,
+      vector_size_t rhsConstIndex,
       uint8_t* rawResult) {
     using d_type = xsimd::batch<T>;
     constexpr auto numScalarElements = d_type::size;
@@ -52,8 +57,10 @@ struct SimdComparator {
       for (auto i = begin; i < vectorEnd; i += 8) {
         rawResult[i / 8] = 0;
         for (auto j = 0; j < 8 && j < vectorEnd; j += numScalarElements) {
-          auto left = loadSimdData<T, isLeftConstant>(rawLhs, i + j);
-          auto right = loadSimdData<T, isRightConstant>(rawRhs, i + j);
+          auto left =
+              loadSimdData<T, isLeftConstant>(rawLhs, i + j, lhsConstIndex);
+          auto right =
+              loadSimdData<T, isRightConstant>(rawRhs, i + j, rhsConstIndex);
 
           uint8_t res = simd::toBitMask(ComparisonOp()(left, right));
           rawResult[i / 8] |= res << j;
@@ -61,8 +68,8 @@ struct SimdComparator {
       }
     } else {
       for (auto i = begin; i < vectorEnd; i += numScalarElements) {
-        auto left = loadSimdData<T, isLeftConstant>(rawLhs, i);
-        auto right = loadSimdData<T, isRightConstant>(rawRhs, i);
+        auto left = loadSimdData<T, isLeftConstant>(rawLhs, i, lhsConstIndex);
+        auto right = loadSimdData<T, isRightConstant>(rawRhs, i, rhsConstIndex);
 
         auto res = simd::toBitMask(ComparisonOp()(left, right));
         if constexpr (numScalarElements == 8) {
@@ -111,7 +118,8 @@ struct SimdComparator {
     auto resultVector = (*result)->asUnchecked<FlatVector<bool>>();
     auto rawResult = resultVector->mutableRawValues<uint8_t>();
 
-    auto isSimdizable = lhs.isIdentityMapping() && rhs.isIdentityMapping() &&
+    auto isSimdizable = (lhs.isConstantMapping() || lhs.isIdentityMapping()) &&
+        (rhs.isConstantMapping() || rhs.isIdentityMapping()) &&
         rows.isAllSelected();
 
     if (!isSimdizable) {
@@ -125,18 +133,34 @@ struct SimdComparator {
     }
 
     if (lhs.isConstantMapping()) {
+      auto lhsConstIndex = lhs.index(0);
       applySimdComparison<T, true, false>(
-          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
+          rows.begin(),
+          rows.end(),
+          rawLhs,
+          rawRhs,
+          lhsConstIndex,
+          0,
+          rawResult);
     } else if (rhs.isConstantMapping()) {
+      auto rhsConstIndex = rhs.index(0);
       applySimdComparison<T, false, true>(
-          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
+          rows.begin(),
+          rows.end(),
+          rawLhs,
+          rawRhs,
+          0,
+          rhsConstIndex,
+          rawResult);
     } else {
       applySimdComparison<T, false, false>(
-          rows.begin(), rows.end(), rawLhs, rawRhs, rawResult);
+          rows.begin(), rows.end(), rawLhs, rawRhs, 0, 0, rawResult);
     }
 
-    auto nullsBuffer = resultVector->mutableRawNulls();
-    bits::fillBits(nullsBuffer, rows.begin(), rows.end(), bits::kNotNull);
+    if (resultVector->nulls()) {
+      auto nullsBuffer = resultVector->mutableRawNulls();
+      bits::fillBits(nullsBuffer, rows.begin(), rows.end(), bits::kNotNull);
+    }
   }
 
   template <
@@ -198,6 +222,10 @@ class ComparisonSimdFunction : public exec::VectorFunction {
     }
 
     return signatures;
+  }
+
+  bool supportsFlatNoNullsFastPath() const override {
+    return true;
   }
 };
 
