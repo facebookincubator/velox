@@ -146,7 +146,7 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     scalarExpr->set_function_reference(functionMap_[functionName]);
 
     for (auto& arg : inputs) {
-      scalarExpr->add_args()->MergeFrom(toSubstraitExpr(arena, arg, inputType));
+      scalarExpr->add_arguments()->mutable_value()->MergeFrom(toSubstraitExpr(arena, arg, inputType));
     }
 
     scalarExpr->mutable_output_type()->MergeFrom(

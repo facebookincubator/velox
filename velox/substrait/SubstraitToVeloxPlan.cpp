@@ -138,9 +138,10 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
     auto aggFunction = measure.measure();
     // Get the params of this Aggregate function.
     std::vector<core::TypedExprPtr> aggParams;
-    auto args = aggFunction.args();
+    auto args = aggFunction.arguments();
     aggParams.reserve(args.size());
-    for (auto arg : args) {
+    for (auto funcArg : args) {
+      auto arg = funcArg.value();
       auto typeCase = arg.rex_type_case();
       switch (typeCase) {
         case ::substrait::Expression::RexTypeCase::kSelection: {
@@ -601,7 +602,8 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toVeloxFilter(
     int32_t colIdx;
     // TODO: Add different types' support here.
     double val;
-    for (auto& param : scalarFunction.args()) {
+    for (auto& funcParam : scalarFunction.arguments()) {
+      auto param = funcParam.value();
       auto typeCase = param.rex_type_case();
       switch (typeCase) {
         case ::substrait::Expression::RexTypeCase::kSelection: {
@@ -685,8 +687,8 @@ void SubstraitVeloxPlanConverter::flattenConditions(
           functionMap_, sFunc.function_reference());
       // TODO: Only and relation is supported here.
       if (substraitParser_->getFunctionName(filterNameSpec) == "and") {
-        for (const auto& sCondition : sFunc.args()) {
-          flattenConditions(sCondition, scalarFunctions);
+        for (const auto& sCondition : sFunc.arguments()) {
+          flattenConditions(sCondition.value(), scalarFunctions);
         }
       } else {
         scalarFunctions.emplace_back(sFunc);
