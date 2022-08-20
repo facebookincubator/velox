@@ -143,6 +143,13 @@ Returns null if there are no non-null elements in common but either array contai
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="array_sum">
+<span class="sig-name descname"><span class="pre">array_sum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(T)</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint/double</span></span></span><a class="headerlink" href="#array_sum" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the sum of all non-null elements of the array. If there is no non-null elements, returns 0. The behaviour is similar to aggregation function sum().
+T must be coercible to double. Returns bigint if T is coercible to bigint. Otherwise, returns double.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="cardinality">
 <span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cardinality" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns the cardinality (size) of the array <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>

@@ -155,6 +155,17 @@ array). Returns NULL if <code class="docutils literal notranslate"><span class="
 </div>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="json_array_contains">
+<span class="sig-name descname"><span class="pre">json_array_contains</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#json_array_contains" title="Permalink to this definition">¶</a></dt>
+<dd><p>Determine if <code class="docutils literal notranslate"><span class="pre">value</span></code> exists in <code class="docutils literal notranslate"><span class="pre">json</span></code> (a string containing a JSON
+array). <code class="docutils literal notranslate"><span class="pre">value</span></code> could be a boolean, bigint, double, or varchar.
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">json</span></code> is not an array:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">json_array_contains</span><span class="p">(</span><span class="s1">&#39;[1, 2, 3]&#39;</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+</pre></div>
+</div>
+</dd></dl>
+
 </section>
 </section>
 <section id="json-vectors">
