@@ -15,6 +15,8 @@
  */
 
 #include "velox/dwio/common/tests/utils/DataFiles.h"
+
+#include <glog/logging.h>
 #include "velox/common/base/tests/Fs.h"
 
 namespace facebook::velox::test {
