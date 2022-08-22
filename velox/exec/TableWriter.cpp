@@ -15,7 +15,7 @@
  */
 
 #include "velox/exec/TableWriter.h"
-#include "velox/exec/Task.h"
+#include "velox/exec/CommitAwareOperator.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec {
@@ -101,32 +101,13 @@ RowVectorPtr TableWriter::getOutput() {
   }
   finished_ = true;
 
-  auto rowsWritten = std::dynamic_pointer_cast<FlatVector<int64_t>>(
-      BaseVector::create(BIGINT(), 1, pool()));
-  rowsWritten->set(0, numWrittenRows_);
-
-  std::vector<VectorPtr> columns = {rowsWritten};
-
-  // TODO Find a way to not have this Presto-specific logic in here.
-  if (outputType_->size() > 1) {
-    auto fragments = std::dynamic_pointer_cast<FlatVector<StringView>>(
-        BaseVector::create(VARBINARY(), 1, pool()));
-    fragments->setNull(0, true);
-    columns.emplace_back(fragments);
-
-    // clang-format off
-    auto commitContextJson = folly::toJson(
-        folly::dynamic::object
-            ("lifespan", "TaskWide")
-            ("taskId", driverCtx_->task->taskId())
-            ("pageSinkCommitStrategy", "NO_COMMIT")
-            ("lastPage", false));
-    // clang-format on
-
-    auto commitContext = std::make_shared<ConstantVector<StringView>>(
-        pool(), 1, false, VARBINARY(), StringView(commitContextJson));
-    columns.emplace_back(commitContext);
-  }
+  std::vector<VectorPtr> columns;
+  CommitAwareOperator::buildDMLOutput(
+      numWrittenRows_,
+      operatorCtx_->driverCtx(),
+      pool(),
+      columns,
+      outputType_->size() > 1);
 
   return std::make_shared<RowVector>(
       pool(), outputType_, BufferPtr(nullptr), 1, columns);

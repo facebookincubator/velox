@@ -163,6 +163,11 @@ Driver::Driver(
   curOpIndex_ = operators_.size() - 1;
   // Operators need access to their Driver for adaptation.
   ctx_->driver = this;
+  // Delete and Update operators need reference to an UpdatableDataSource
+  // belonging to the SourceOperator in the same Driver.
+  if (auto source = dynamic_cast<SourceOperator*>(operators_[0].get())) {
+    updatableDataSourceSupplier_ = source->updatableDataSource();
+  }
 }
 
 namespace {

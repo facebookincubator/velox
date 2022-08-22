@@ -275,6 +275,20 @@ PlanBuilder& PlanBuilder::tableWrite(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::tableDelete(
+    const std::string& rowIdColumnName,
+    const std::string& rowCountColumnName) {
+  auto outputType =
+      ROW({rowCountColumnName, "fragments", "commitcontext"},
+          {BIGINT(), VARBINARY(), VARBINARY()});
+  planNode_ = std::make_shared<core::DeleteNode>(
+      nextPlanNodeId(),
+      field(planNode_->outputType(), rowIdColumnName),
+      outputType,
+      planNode_);
+  return *this;
+}
+
 namespace {
 
 std::string throwAggregateFunctionDoesntExist(const std::string& name) {

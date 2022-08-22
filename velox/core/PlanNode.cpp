@@ -535,6 +535,10 @@ void TableWriteNode::addDetails(std::stringstream& /* stream */) const {
   // TODO Add connector details.
 }
 
+void DeleteNode::addDetails(std::stringstream& /* stream */) const {
+  // TODO Add connector details.
+}
+
 void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(stream, sortingKeys_, sortingOrders_);
 }

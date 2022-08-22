@@ -147,6 +147,18 @@ class DataSource {
   }
 };
 
+class UpdatableDataSource : public DataSource {
+ public:
+  virtual ~UpdatableDataSource() = default;
+
+  virtual void deleteRows(const VectorPtr& rowIds) = 0;
+
+  // TODO updateRows, add support for UPDATE
+
+  // TODO finish and abort, add support for 2PC implementation
+};
+using UpdatableDataSourcePtr = std::shared_ptr<UpdatableDataSource>;
+
 // Exposes expression evaluation functionality of the engine to the connector.
 // Connector may use it, for example, to evaluate pushed down filters.
 class ExpressionEvaluator {

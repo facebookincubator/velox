@@ -19,6 +19,7 @@ add_library(
   ContainerRowSerde.cpp
   CrossJoinBuild.cpp
   CrossJoinProbe.cpp
+  Delete.cpp
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp

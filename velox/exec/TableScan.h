@@ -47,6 +47,13 @@ class TableScan : public SourceOperator {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
+  UpdatableDataSourceSupplier updatableDataSource() override {
+    return [this]() {
+      return std::dynamic_pointer_cast<connector::UpdatableDataSource>(
+          dataSource_);
+    };
+  }
+
  private:
   static constexpr int32_t kDefaultBatchSize = 1024;
 

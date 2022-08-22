@@ -419,6 +419,42 @@ class TableWriteNode : public PlanNode {
   const RowTypePtr outputType_;
 };
 
+class DeleteNode : public PlanNode {
+ public:
+  DeleteNode(
+      const PlanNodeId& id,
+      core::FieldAccessTypedExprPtr rowId,
+      RowTypePtr outputType,
+      PlanNodePtr source)
+      : PlanNode(id),
+        rowId_{std::move(rowId)},
+        sources_{std::move(source)},
+        outputType_{std::move(outputType)} {}
+
+  const core::FieldAccessTypedExprPtr& rowId() const {
+    return rowId_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "Delete";
+  }
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const core::FieldAccessTypedExprPtr rowId_;
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+};
+
 class AggregationNode : public PlanNode {
  public:
   enum class Step {

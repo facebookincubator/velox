@@ -268,6 +268,11 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return ctx_->task;
   }
 
+  std::function<std::optional<connector::UpdatableDataSourcePtr>()>
+  updatableDataSourceSupplier() const {
+    return updatableDataSourceSupplier_;
+  }
+
   // Updates the stats in Task and frees resources. Only called by Task for
   // closing non-running Drivers.
   void closeByTask();
@@ -301,6 +306,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
   size_t curOpIndex_{0};
 
   std::vector<std::unique_ptr<Operator>> operators_;
+
+  std::function<std::optional<connector::UpdatableDataSourcePtr>()>
+      updatableDataSourceSupplier_;
 
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
 };

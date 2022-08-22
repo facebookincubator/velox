@@ -19,6 +19,7 @@
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/CrossJoinProbe.h"
+#include "velox/exec/Delete.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FilterProject.h"
@@ -314,6 +315,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::TableWriteNode>(planNode)) {
       operators.push_back(
           std::make_unique<TableWriter>(id, ctx.get(), tableWriteNode));
+    } else if (
+        auto deleteNode =
+            std::dynamic_pointer_cast<const core::DeleteNode>(planNode)) {
+      operators.push_back(std::make_unique<Delete>(id, ctx.get(), deleteNode));
     } else if (
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
