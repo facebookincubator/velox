@@ -47,8 +47,8 @@ class Aggregate {
   // width part of the state from the fixed part.
   virtual int32_t accumulatorFixedWidthSize() const = 0;
 
-  /// Some types such as int128_t require aligned access.
   /// Returns the alignment size of the accumulator.
+  /// Some types such as int128_t require aligned access.
   virtual int32_t accumulatorAlignmentSize() const {
     return 1;
   };

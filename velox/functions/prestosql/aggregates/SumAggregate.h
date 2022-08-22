@@ -214,7 +214,8 @@ SumAggregate<UnscaledLongDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::
 }
 
 /// Override 'accumulatorAlignmentSize' for UnscaledLongDecimal values as it
-/// uses int128_t type.
+/// uses int128_t type. Some CPUs don't support misaligned access to int128_t
+/// type.
 template <>
 inline int32_t
 SumAggregate<UnscaledShortDecimal, UnscaledLongDecimal, UnscaledLongDecimal>::

@@ -44,7 +44,9 @@ inline UnscaledShortDecimal checkedPlus(
       __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR(
-        "integer overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+        "short decimal plus overflow: {} + {}",
+        a.unscaledValue(),
+        b.unscaledValue());
   }
   return UnscaledShortDecimal(result);
 }
@@ -58,7 +60,9 @@ inline UnscaledLongDecimal checkedPlus(
       __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR(
-        "integer overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+        "long decimal plus overflow: {} + {}",
+        a.unscaledValue(),
+        b.unscaledValue());
   }
   return UnscaledLongDecimal(result);
 }
@@ -92,7 +96,9 @@ inline UnscaledShortDecimal checkedMultiply(
       __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR(
-        "integer overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
+        "short decimal multiply overflow: {} * {}",
+        a.unscaledValue(),
+        b.unscaledValue());
   }
   return UnscaledShortDecimal(result);
 }
@@ -106,7 +112,9 @@ inline UnscaledLongDecimal checkedMultiply(
       __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR(
-        "integer overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
+        "long decimal multiply overflow: {} * {}",
+        a.unscaledValue(),
+        b.unscaledValue());
   }
   return UnscaledLongDecimal(result);
 }

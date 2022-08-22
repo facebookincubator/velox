@@ -107,11 +107,10 @@ class FlatVector final : public SimpleVector<T> {
         rawValues_(values_.get() ? const_cast<T*>(values_->as<T>()) : nullptr) {
     setStringBuffers(std::move(stringBuffers));
     VELOX_DCHECK_GE(stringBuffers_.size(), stringBufferSet_.size());
-    if constexpr (std::is_same<T, UnscaledShortDecimal>::value) {
-      VELOX_CHECK(type->isShortDecimal());
-    } else if constexpr (std::is_same<T, UnscaledLongDecimal>::value) {
-      VELOX_CHECK(type->isLongDecimal());
-    }
+    VELOX_DCHECK_EQ(
+        (std::is_same_v<T, UnscaledShortDecimal>), type->isShortDecimal());
+    VELOX_DCHECK_EQ(
+        (std::is_same_v<T, UnscaledLongDecimal>), type->isLongDecimal());
     VELOX_CHECK(
         values_ || BaseVector::nulls_,
         "FlatVector needs to either have values or nulls");
