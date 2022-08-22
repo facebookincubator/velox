@@ -192,6 +192,32 @@ inline void forEachWord(
   }
 }
 
+/// Variant of forEachWord with a single callable for more concise
+/// invocation for cases with a long callable.
+template <typename PartialWordFunc>
+inline void
+forEachWord(int32_t begin, int32_t end, PartialWordFunc partialWordFunc) {
+  if (begin >= end) {
+    return;
+  }
+  int32_t firstWord = roundUp(begin, 64);
+  int32_t lastWord = end & ~63L;
+  if (lastWord < firstWord) {
+    partialWordFunc(
+        lastWord / 64, lowMask(end - lastWord) & highMask(firstWord - begin));
+    return;
+  }
+  if (begin != firstWord) {
+    partialWordFunc(begin / 64, highMask(firstWord - begin));
+  }
+  for (int32_t i = firstWord; i + 64 <= lastWord; i += 64) {
+    partialWordFunc(i / 64, ~0ULL);
+  }
+  if (end != lastWord) {
+    partialWordFunc(lastWord / 64, lowMask(end - lastWord));
+  }
+}
+
 /// Invokes a function for each batch of bits (partial or full words)
 /// in a given range in descending order of address.
 ///

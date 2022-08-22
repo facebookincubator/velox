@@ -440,6 +440,14 @@ TEST(FilterTest, bigintValuesUsingBitmask) {
   EXPECT_FALSE(filter->testInt64Range(11, 11, false));
   EXPECT_FALSE(filter->testInt64Range(-10, -5, false));
   EXPECT_FALSE(filter->testInt64Range(1234, 2000, false));
+
+  auto verify = [&](int64_t x) { return filter->testInt64(x); };
+
+  // Two first out of range, third miss, 4th hit.
+  int64_t n4[] = {-10, 100000, 22, 1000};
+  checkSimd(filter.get(), n4, verify);
+  int32_t n8[] = {-10, 100000, 22, 1000, -10, 100000, 22, 1000};
+  checkSimd(filter.get(), n8, verify);
 }
 
 TEST(FilterTest, negatedBigintValuesUsingBitmask) {

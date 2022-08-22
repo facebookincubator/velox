@@ -333,3 +333,7 @@ TEST_F(SimdUtilTest, Batch64_memory) {
 }
 
 } // namespace
+
+void cpyf(void* d, void* s, int c) {
+  facebook::velox::simd::memcpy(d, s, c);
+}
