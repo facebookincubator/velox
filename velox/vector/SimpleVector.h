@@ -203,11 +203,10 @@ class SimpleVector : public BaseVector {
   /// rows. If rowMappings is null then we revert to indexes in the
   /// SelectivityVector.
   template <typename U = T>
-  typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>::
-      type
-      isAscii(
-          const SelectivityVector& rows,
-          const vector_size_t* rowMappings = nullptr) const {
+  typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>
+  isAscii(
+      const SelectivityVector& rows,
+      const vector_size_t* rowMappings = nullptr) const {
     VELOX_CHECK(rows.hasSelections())
     if (asciiSetRows_.hasSelections()) {
       if (rowMappings) {
@@ -228,7 +227,7 @@ class SimpleVector : public BaseVector {
   /// 3. std::nullopt if we havent computed ASCII'ness at that index.
   template <typename U = T>
   typename std::enable_if_t<std::is_same_v<U, StringView>, std::optional<bool>>
-      isAscii(vector_size_t index) const {
+  isAscii(vector_size_t index) const {
     VELOX_CHECK_GE(index, 0)
     if (asciiSetRows_.size() > index && asciiSetRows_.isValid(index)) {
       return isAllAscii_;
@@ -289,8 +288,8 @@ class SimpleVector : public BaseVector {
   }
 
   template <typename U = T>
-  typename std::enable_if_t<std::is_same_v<U, StringView>, void>
-  setAllIsAscii(bool ascii) {
+  typename std::enable_if_t<std::is_same_v<U, StringView>, void> setAllIsAscii(
+      bool ascii) {
     ensureIsAsciiCapacity(length_);
     isAllAscii_ = ascii;
     asciiSetRows_.setAll();
