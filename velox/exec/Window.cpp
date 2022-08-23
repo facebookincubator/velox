@@ -25,7 +25,7 @@ void initKeyInfo(
     const std::vector<core::FieldAccessTypedExprPtr>& keys,
     const std::vector<core::SortOrder>& orders,
     std::vector<std::pair<column_index_t, core::SortOrder>>& keyInfo) {
-  core::SortOrder defaultPartitionSortOrder(true, true);
+  const core::SortOrder defaultPartitionSortOrder(true, true);
 
   keyInfo.reserve(keys.size());
   for (auto i = 0; i < keys.size(); ++i) {
@@ -268,18 +268,6 @@ void Window::noMoreInput() {
   createPeerAndFrameBuffers();
 }
 
-std::pair<vector_size_t, vector_size_t> Window::findFrameEndPoints(
-    vector_size_t /*functionNumber*/,
-    vector_size_t partitionStartRow,
-    vector_size_t /*partitionEndRow*/,
-    vector_size_t currentRow) {
-  // TODO : We handle only the default window frame in this code. Add support
-  // for all window frames subsequently.
-
-  // Default window frame is Range UNBOUNDED PRECEDING CURRENT ROW.
-  return std::make_pair(partitionStartRow, currentRow);
-}
-
 void Window::callResetPartition(vector_size_t partitionNumber) {
   auto partitionSize = partitionStartRows_[partitionNumber + 1] -
       partitionStartRows_[partitionNumber];
@@ -299,10 +287,6 @@ void Window::callApplyForPartitionRows(
   if (partitionStartRows_[currentPartition_] == startRow) {
     callResetPartition(currentPartition_);
   }
-
-  auto peerCompare = [&](const char* lhs, const char* rhs) -> bool {
-    return compareRowsWithKeys(lhs, rhs, sortKeyInfo_);
-  };
 
   vector_size_t numRows = endRow - startRow;
   vector_size_t numFuncs = windowFunctions_.size();
@@ -327,29 +311,6 @@ void Window::callApplyForPartitionRows(
     auto rawFrameEndBuffer = frameEndBuffers_[w]->asMutable<vector_size_t>();
     rawFrameStartBuffers.push_back(rawFrameStartBuffer);
     rawFrameEndBuffers.push_back(rawFrameEndBuffer);
-  }
-
-  // Setup values in the peer and frame buffers.
-  auto firstPartitionRow = partitionStartRows_[currentPartition_];
-  auto lastPartitionRow = partitionStartRows_[currentPartition_ + 1] - 1;
-  for (auto i = startRow, j = 0; i < endRow; i++, j++) {
-    // TODO : Compute peerStart and peerEnd values. Assuming a default
-    // of all rows in each partition being peers for now.
-    auto peerStartRow = firstPartitionRow;
-    auto peerEndRow = lastPartitionRow;
-
-    // The peer and frame values set in the WindowFunction::apply buffers
-    // are the offsets within the current partition, whereas all the row
-    // numbers in the logic are wrt sortedRows_ ordering. So we need to
-    // adjust for the first row of the partition.
-    rawPeerStartBuffer[j] = peerStartRow - firstPartitionRow;
-    rawPeerEndBuffer[j] = peerEndRow - 1 - firstPartitionRow;
-
-    for (auto w = 0; w < numFuncs; w++) {
-      auto frameEndPoints = findFrameEndPoints(w, firstPartitionRow, endRow, i);
-      rawFrameStartBuffers[w][j] = frameEndPoints.first - firstPartitionRow;
-      rawFrameEndBuffers[w][j] = frameEndPoints.second - firstPartitionRow;
-    }
   }
 
   // Invoke the apply method for the WindowFunctions

@@ -109,23 +109,6 @@ class Window : public Operator {
       const std::vector<VectorPtr>& result,
       vector_size_t resultOffset);
 
-  // This function is to find the frame end points for the current row
-  // being output.
-  // @param functionNumber  Index of the window function whose frame we
-  // are computing.
-  // @param partitionStartRow  Index of the start row of the current
-  // partition being output.
-  // @param partitionEndRow  Index of the end row of the current
-  // partition being output.
-  // @param currentRow  Index of the current row.
-  // partitionStartRow, partitionEndRow and currentRow are indexes in
-  // the sortedRows_ ordering of input rows.
-  std::pair<vector_size_t, vector_size_t> findFrameEndPoints(
-      vector_size_t functionNumber,
-      vector_size_t partitionStartRow,
-      vector_size_t partitionEndRow,
-      vector_size_t currentRow);
-
   // Helper function to compare the rows at lhs and rhs pointers
   // using the keyInfo in keys. This can be used to compare the
   // rows for partitionKeys, orderByKeys or a combination of both.
