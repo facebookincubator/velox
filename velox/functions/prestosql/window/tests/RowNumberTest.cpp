@@ -45,12 +45,12 @@ class RowNumberTest : public OperatorTestBase {
     return vectors;
   }
 
-  void basicTests(const RowVectorPtr& vectors) {
-    auto testWindowSql = [&](const RowVectorPtr& input,
+  void basicTests(const std::vector<RowVectorPtr>& vectors) {
+    auto testWindowSql = [&](const std::vector<RowVectorPtr>& input,
                              const std::string& windowSql) -> void {
-      VELOX_CHECK_GE(input->size(), 2);
+      VELOX_CHECK_GE(input[0]->size(), 2);
 
-      auto op = PlanBuilder().values({input}).window({windowSql}).planNode();
+      auto op = PlanBuilder().values(input).window({windowSql}).planNode();
       assertQuery(op, "SELECT c0, c1, " + windowSql + " FROM tmp");
     };
 
@@ -98,12 +98,11 @@ TEST_F(RowNumberTest, basic) {
   });
 
   createDuckDbTable({vectors});
-  basicTests(vectors);
+  basicTests({vectors});
 }
 
 TEST_F(RowNumberTest, singlePartition) {
-  // Test all input rows in a single partition. This data size would
-  // need multiple input blocks.
+  // Test all input rows in a single partition.
   vector_size_t size = 1000;
 
   auto vectors = makeRowVector({
@@ -111,12 +110,15 @@ TEST_F(RowNumberTest, singlePartition) {
       makeFlatVector<int32_t>(size, [](auto row) -> int32_t { return row; }),
   });
 
-  createDuckDbTable({vectors});
-  basicTests(vectors);
+  // Invoking with 2 vectors so that the underlying WindowFunction::apply() is
+  // called twice for the same partition.
+  std::vector<RowVectorPtr> input = {vectors, vectors};
+  createDuckDbTable(input);
+  basicTests(input);
 }
 
 TEST_F(RowNumberTest, randomGen) {
-  auto vectors = makeVectors(rowType_, 10, 1);
+  auto vectors = makeVectors(rowType_, 10, 2);
   createDuckDbTable(vectors);
 
   auto testWindowSql = [&](std::vector<RowVectorPtr>& input,
