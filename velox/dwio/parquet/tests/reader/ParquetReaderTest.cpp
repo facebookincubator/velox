@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/tests/ParquetReaderTestBase.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common;
@@ -23,7 +24,23 @@ using namespace facebook::velox::dwio::common;
 using namespace facebook::velox::dwio::parquet;
 using namespace facebook::velox::parquet;
 
-class ParquetReaderTest : public ParquetReaderTestBase {};
+class ParquetReaderTest : public ParquetReaderTestBase {
+ public:
+  void assertReadWithFilters(
+      const std::string& fileName,
+      const RowTypePtr& fileSchema,
+      FilterMap filters,
+      const RowVectorPtr& expected) {
+    const auto filePath(getExampleFilePath(fileName));
+
+    ReaderOptions readerOptions;
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<FileInputStream>(filePath), readerOptions);
+
+    assertReadWithReaderAndFilters(
+        std::move(reader), fileName, fileSchema, std::move(filters), expected);
+  }
+};
 
 TEST_F(ParquetReaderTest, parseSample) {
   // sample.parquet holds two columns (a: BIGINT, b: DOUBLE) and
@@ -102,4 +119,96 @@ TEST_F(ParquetReaderTest, parseRowMapArray) {
 
   auto col0_1_1_0 = col0_1_1->childAt(0);
   EXPECT_EQ(col0_1_1_0->type->kind(), TypeKind::INTEGER);
+}
+
+TEST_F(ParquetReaderTest, varcharFilters) {
+  // name < 'CANADA'
+  FilterMap filters;
+  filters.insert({"name", exec::lessThan("CANADA")});
+
+  auto expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({0, 1, 2}),
+      vectorMaker_->flatVector({"ALGERIA", "ARGENTINA", "BRAZIL"}),
+      vectorMaker_->flatVector<int64_t>({0, 1, 1}),
+  });
+
+  auto rowType =
+      ROW({"nationkey", "name", "regionkey"}, {BIGINT(), VARCHAR(), BIGINT()});
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name <= 'CANADA'
+  filters.insert({"name", exec::lessThanOrEqual("CANADA")});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({0, 1, 2, 3}),
+      vectorMaker_->flatVector({"ALGERIA", "ARGENTINA", "BRAZIL", "CANADA"}),
+      vectorMaker_->flatVector<int64_t>({0, 1, 1, 1}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name > UNITED KINGDOM
+  filters.insert({"name", exec::greaterThan("UNITED KINGDOM")});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({21, 24}),
+      vectorMaker_->flatVector({"VIETNAM", "UNITED STATES"}),
+      vectorMaker_->flatVector<int64_t>({2, 1}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name >= UNITED KINGDOM
+  filters.insert({"name", exec::greaterThanOrEqual("UNITED KINGDOM")});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({21, 23, 24}),
+      vectorMaker_->flatVector({"VIETNAM", "UNITED KINGDOM", "UNITED STATES"}),
+      vectorMaker_->flatVector<int64_t>({2, 3, 1}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name = 'CANADA'
+  filters.insert({"name", exec::equal("CANADA")});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({3}),
+      vectorMaker_->flatVector({"CANADA"}),
+      vectorMaker_->flatVector<int64_t>({1}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name IN ('CANADA', 'UNITED KINGDOM')
+  filters.insert({"name", exec::in({std::string("CANADA"), "UNITED KINGDOM"})});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({3, 23}),
+      vectorMaker_->flatVector({"CANADA", "UNITED KINGDOM"}),
+      vectorMaker_->flatVector<int64_t>({1, 3}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
+
+  // name IN ('UNITED STATES', 'CANADA', 'INDIA', 'RUSSIA')
+  filters.insert(
+      {"name",
+       exec::in({std::string("UNITED STATES"), "INDIA", "CANADA", "RUSSIA"})});
+
+  expected = vectorMaker_->rowVector({
+      vectorMaker_->flatVector<int64_t>({3, 8, 22, 24}),
+      vectorMaker_->flatVector({"CANADA", "INDIA", "RUSSIA", "UNITED STATES"}),
+      vectorMaker_->flatVector<int64_t>({1, 2, 3, 1}),
+  });
+
+  assertReadWithFilters(
+      "nation.parquet", rowType, std::move(filters), expected);
 }

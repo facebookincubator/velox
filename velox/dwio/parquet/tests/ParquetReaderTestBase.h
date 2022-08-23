@@ -62,7 +62,7 @@ class ParquetReaderTestBase : public testing::Test {
       const VectorPtr& actual,
       vector_size_t offset) {
     ASSERT_GE(expected->size(), actual->size() + offset);
-    ASSERT_EQ(expected->typeKind(), actual->typeKind());
+    ASSERT_TRUE(expected->type()->equivalent(*actual->type()));
     for (vector_size_t i = 0; i < actual->size(); i++) {
       ASSERT_TRUE(expected->equalValueAt(actual.get(), i + offset, i))
           << "at " << (i + offset) << ": expected "
@@ -84,7 +84,7 @@ class ParquetReaderTestBase : public testing::Test {
       EXPECT_GT(part, 0);
       if (part > 0) {
         assertEqualVectorPart(expected, result, total);
-        total += part;
+        total += result->size();
       } else {
         break;
       }
@@ -103,7 +103,7 @@ class ParquetReaderTestBase : public testing::Test {
       EXPECT_GT(part, 0);
       if (part > 0) {
         assertEqualVectorPart(expected, result, total);
-        total += part;
+        total += result->size();
       } else {
         break;
       }
@@ -144,7 +144,7 @@ class ParquetReaderTestBase : public testing::Test {
     auto rowReaderOpts = getReaderOpts(fileSchema);
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    assertReadExpected(*rowReader, expected);
+    assertReadExpected(fileSchema, *rowReader, expected, *pool_);
   }
 
   std::string getExampleFilePath(const std::string& fileName) {
