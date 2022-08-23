@@ -2201,7 +2201,10 @@ std::unique_ptr<ColumnReader> ColumnReader::build(
           dataType, stripe, std::move(flatMapContext));
     case TypeKind::DATE:
       return std::make_unique<IntegerDirectColumnReader<Date>>(
-          dataType, stripe, dwio::common::INT_BYTE_SIZE, std::move(flatMapContext));
+          dataType,
+          stripe,
+          dwio::common::INT_BYTE_SIZE,
+          std::move(flatMapContext));
     default:
       DWIO_RAISE("buildReader unhandled type");
   }
