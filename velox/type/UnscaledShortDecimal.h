@@ -74,6 +74,7 @@ struct UnscaledShortDecimal {
 static inline UnscaledShortDecimal operator/(
     const UnscaledShortDecimal& a,
     int b) {
+  VELOX_CHECK_NE(b, 0, "Divide by zero is not supported");
   return UnscaledShortDecimal(a.unscaledValue() / b);
 }
 } // namespace facebook::velox

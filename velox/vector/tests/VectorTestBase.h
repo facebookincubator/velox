@@ -136,6 +136,8 @@ class VectorTestBase {
     return vectorMaker_.flatVector<T>(size, valueAt, isNullAt);
   }
 
+  /// Decimal Vector type cannot be inferred from the cpp type alone as the cpp
+  /// type does not contain the precision and scale.
   template <typename T>
   FlatVectorPtr<EvalType<T>> makeFlatVector(
       const std::vector<T>& data,

@@ -46,7 +46,7 @@ std::string makeCreateTableSql(
           << child->asMap().valueType()->kindName() << ")";
     } else if (child->isShortDecimal() || child->isLongDecimal()) {
       const auto& [precision, scale] = getDecimalPrecisionScale(*child);
-      sql << "decimal(" << precision << ", " << scale << ")";
+      sql << "DECIMAL(" << precision << ", " << scale << ")";
     } else {
       sql << child->kindName();
     }
@@ -228,13 +228,12 @@ velox::variant decimalVariantAt(const ::duckdb::Value& value) {
   uint8_t precision;
   uint8_t scale;
   value.type().GetDecimalProperties(precision, scale);
-  auto duckType = DECIMAL(precision, scale);
-  if (duckType->isShortDecimal()) {
-    return velox::variant::shortDecimal(value.GetValue<int64_t>(), duckType);
+  auto type = DECIMAL(precision, scale);
+  if (type->isShortDecimal()) {
+    return velox::variant::shortDecimal(value.GetValue<int64_t>(), type);
   } else {
     auto val = value.GetValueUnsafe<::duckdb::hugeint_t>();
-    return velox::variant::longDecimal(
-        buildInt128(val.upper, val.lower), duckType);
+    return velox::variant::longDecimal(buildInt128(val.upper, val.lower), type);
   }
 }
 

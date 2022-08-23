@@ -87,6 +87,7 @@ struct UnscaledLongDecimal {
 static inline UnscaledLongDecimal operator/(
     const UnscaledLongDecimal& a,
     int b) {
+  VELOX_CHECK_NE(b, 0, "Divide by zero is not supported");
   return UnscaledLongDecimal(a.unscaledValue() / b);
 }
 
