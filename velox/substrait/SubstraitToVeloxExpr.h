@@ -60,10 +60,6 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::Cast& castExpr,
       const RowTypePtr& inputType);
 
-  /// Create expression for alias.
-  std::shared_ptr<const core::ITypedExpr> toAliasExpr(
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params);
-
   /// Create expression for is_not_null.
   std::shared_ptr<const core::ITypedExpr> toIsNotNullExpr(
       const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,

@@ -204,14 +204,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 }
 
 std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toAliasExpr(
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& params) {
-  VELOX_CHECK(params.size() == 1, "Alias expects one parameter.");
-  // Alias is omitted due to name change is not needed.
-  return params[0];
-}
-
-std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toIsNotNullExpr(
     const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
     const TypePtr& outputType) {
@@ -270,9 +262,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 
   if (veloxFunction == "extract") {
     return toExtractExpr(std::move(params), toVeloxType(typeName));
-  }
-  if (veloxFunction == "alias") {
-    return toAliasExpr(std::move(params));
   }
 
   if (veloxFunction == "is_not_null") {
