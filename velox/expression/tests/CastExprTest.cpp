@@ -113,7 +113,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
     std::vector<VectorPtr> result(1);
     {
       exec::EvalCtx evalCtx(&execCtx_, &exprSet, rowVector.get());
-      exprSet.eval(rows, &evalCtx, &result);
+      exprSet.eval(rows, evalCtx, result);
 
       assertEqualVectors(expected, result[0]);
     }
@@ -125,7 +125,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
       auto constantData = BaseVector::wrapInConstant(size, index, data);
       auto constantRow = makeRowVector({constantData});
       exec::EvalCtx evalCtx(&execCtx_, &exprSet, constantRow.get());
-      exprSet.eval(rows, &evalCtx, &result);
+      exprSet.eval(rows, evalCtx, result);
 
       assertEqualVectors(
           BaseVector::wrapInConstant(size, index, expected), result[0]);
@@ -143,7 +143,7 @@ class CastExprTest : public functions::test::FunctionBaseTest {
           nullOnFailure);
       exec::ExprSet dictionaryExprSet({dictionaryCastExpr}, &execCtx_);
       exec::EvalCtx evalCtx(&execCtx_, &dictionaryExprSet, rowVector.get());
-      dictionaryExprSet.eval(rows, &evalCtx, &result);
+      dictionaryExprSet.eval(rows, evalCtx, result);
 
       auto indices = ::makeIndicesInReverse(size, pool());
       assertEqualVectors(wrapInDictionary(indices, size, expected), result[0]);
