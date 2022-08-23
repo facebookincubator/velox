@@ -564,8 +564,8 @@ class BigintRange final : public Filter {
       bool upperExclusive,
       bool nullAllowed)
       : Filter(true, nullAllowed, FilterKind::kBigintRange),
-        lower_(lowerExclusive ? lower - 1 : lower),
-        upper_(upperExclusive ? upper + 1 : upper),
+        lower_(lowerExclusive ? lower + 1 : lower),
+        upper_(upperExclusive ? upper - 1 : upper),
         lower32_(std::max<int64_t>(lower, std::numeric_limits<int32_t>::min())),
         upper32_(std::min<int64_t>(upper, std::numeric_limits<int32_t>::max())),
         lower16_(std::max<int64_t>(lower, std::numeric_limits<int16_t>::min())),

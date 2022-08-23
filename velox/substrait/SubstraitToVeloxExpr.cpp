@@ -159,19 +159,43 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
       const auto& dRef = substraitField.direct_reference();
+      VELOX_CHECK(dRef.has_struct_field(), "Struct field expected.");
       int32_t colIdx = subParser_->parseReferenceSegment(dRef);
+      std::optional<int32_t> childIdx;
+      if (dRef.struct_field().has_child()) {
+        childIdx =
+            subParser_->parseReferenceSegment(dRef.struct_field().child());
+      }
+
+      const auto& inputTypes = inputType->children();
       const auto& inputNames = inputType->names();
       const int64_t inputSize = inputNames.size();
-      if (colIdx <= inputSize) {
-        const auto& inputTypes = inputType->children();
-        // Convert type to row.
+
+      if (colIdx >= inputSize) {
+        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
+      }
+
+      if (!childIdx.has_value()) {
         return std::make_shared<core::FieldAccessTypedExpr>(
             inputTypes[colIdx],
             std::make_shared<core::InputTypedExpr>(inputTypes[colIdx]),
             inputNames[colIdx]);
       } else {
-        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
+        // Select a subfield in a struct by name.
+        if (auto inputColumnType = asRowType(inputTypes[colIdx])) {
+          if (childIdx.value() >= inputColumnType->size()) {
+            VELOX_FAIL("Missing the subfield with id '{}' .", childIdx.value());
+          }
+          return std::make_shared<core::FieldAccessTypedExpr>(
+              inputColumnType->childAt(childIdx.value()),
+              std::make_shared<core::FieldAccessTypedExpr>(
+                  inputTypes[colIdx], inputNames[colIdx]),
+              inputColumnType->nameOf(childIdx.value()));
+        } else {
+          VELOX_FAIL("RowType expected.");
+        }
       }
+      break;
     }
     default:
       VELOX_NYI(
@@ -250,6 +274,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
   if (veloxFunction == "alias") {
     return toAliasExpr(std::move(params));
   }
+
   if (veloxFunction == "is_not_null") {
     return toIsNotNullExpr(std::move(params), toVeloxType(typeName));
   }

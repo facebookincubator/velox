@@ -579,7 +579,6 @@ std::unique_ptr<Filter> createBigintValuesFilter(
       min, max, values, nullAllowed);
 }
 
-
 std::unique_ptr<Filter> createBigintValues(
     const std::vector<int64_t>& values,
     bool nullAllowed) {
