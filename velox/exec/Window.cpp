@@ -313,7 +313,8 @@ void Window::callApplyForPartitionRows(
     rawFrameEndBuffers.push_back(rawFrameEndBuffer);
   }
 
-  // Invoke the apply method for the WindowFunctions
+  // TODO : Calculate values for peer and frame buffers.
+  // Invoke the apply method for the WindowFunctions.
   for (auto w = 0; w < numFuncs; w++) {
     windowFunctions_[w]->apply(
         peerStartBuffer_,
