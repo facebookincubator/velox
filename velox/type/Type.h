@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <boost/algorithm/string.hpp>
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <folly/Format.h>
@@ -675,7 +676,8 @@ inline bool isDecimalKind(TypeKind typeKind) {
 }
 
 inline bool isDecimalName(const std::string& typeName) {
-  return (typeName == "SHORT_DECIMAL" || typeName == "LONG_DECIMAL");
+  auto typeNameUpper = boost::algorithm::to_upper_copy(typeName);
+  return (typeNameUpper == "SHORT_DECIMAL" || typeNameUpper == "LONG_DECIMAL");
 }
 
 std::pair<int, int> getDecimalPrecisionScale(const Type& type);

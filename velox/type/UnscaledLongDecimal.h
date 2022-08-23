@@ -104,6 +104,10 @@ struct UnscaledLongDecimal {
     return unscaledValue_ < other.unscaledValue_;
   }
 
+  bool operator>=(const UnscaledLongDecimal& other) const {
+    return unscaledValue_ >= other.unscaledValue_;
+  }
+
   bool operator<=(const UnscaledLongDecimal& other) const {
     return unscaledValue_ <= other.unscaledValue_;
   }

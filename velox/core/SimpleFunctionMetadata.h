@@ -186,8 +186,14 @@ struct TypeAnalysis {
         CppToType<T>::isPrimitiveType ||
         CppToType<T>::typeKind == TypeKind::OPAQUE);
     results.stats.concreteCount++;
-    results.out << boost::algorithm::to_lower_copy(
-        std::string(CppToType<T>::name));
+    if (isDecimalKind(CppToType<T>::typeKind)) {
+      results.out << boost::algorithm::to_lower_copy(
+                         std::string(CppToType<T>::name))
+                  << "(a_precision,a_scale)";
+    } else {
+      results.out << boost::algorithm::to_lower_copy(
+          std::string(CppToType<T>::name));
+    }
   }
 };
 

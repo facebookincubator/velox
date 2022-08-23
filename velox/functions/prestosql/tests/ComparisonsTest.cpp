@@ -97,6 +97,72 @@ TEST_F(ComparisonsTest, betweenDate) {
   }
 }
 
+TEST_F(ComparisonsTest, betweenDecimal) {
+  this->options_.parseDecimalAsDouble = false;
+  auto runAndCompare = [&](const std::string& exprStr,
+                           VectorPtr input,
+                           std::vector<bool>& expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector({input}));
+    for (auto i = 0; i < expectedResult.size(); ++i) {
+      EXPECT_EQ(actual->valueAt(i), expectedResult[i]);
+    }
+  };
+  auto shortFlat = makeNullableShortDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(3, 2));
+  std::vector<bool> expectedResult{false, true, true, false, false};
+
+  runAndCompare("c0 between 2.00 and 3.00", shortFlat, expectedResult);
+
+  auto longFlat = makeNullableLongDecimalFlatVector(
+      {100, 250, 300, 500, std::nullopt}, DECIMAL(20, 2));
+
+  // Comparing LONG_DECIMAL and SHORT_DECIMAL must throw error.
+  try {
+    runAndCompare("c0 between 2.00 and 3.00", longFlat, expectedResult);
+    FAIL();
+  } catch (VeloxUserError& ex) {
+    ASSERT_TRUE(
+        ex.message().find(
+            "Scalar function signature is not supported: "
+            "between(LONG_DECIMAL(20,2), SHORT_DECIMAL(3,2), SHORT_DECIMAL(3,2))") !=
+        std::string::npos);
+  }
+}
+
+TEST_F(ComparisonsTest, eqDecimal) {
+  auto runAndCompare = [&](const std::string& expr,
+                           std::vector<VectorPtr>& inputs,
+                           std::vector<bool>& expectedResult) {
+    auto actual =
+        evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector(inputs));
+    for (auto i = 0; i < expectedResult.size(); ++i) {
+      EXPECT_EQ(actual->valueAt(i), expectedResult[i]);
+    }
+  };
+
+  std::vector<VectorPtr> inputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {1, 2, 3, -3, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expected = std::vector<bool>{true, false, true, true, false, false};
+  runAndCompare("c0 == c1", inputs, expected);
+
+  // Test with different data types.
+  inputs = {
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 5)),
+      makeShortDecimalFlatVector({1}, DECIMAL(10, 4))};
+  try {
+    runAndCompare("c0 == c1", inputs, expected);
+    FAIL();
+  } catch (VeloxUserError& ex) {
+    ASSERT_TRUE(
+        ex.message().find("Scalar function signature is not supported: "
+                          "eq(SHORT_DECIMAL(10,5), SHORT_DECIMAL(10,4))") !=
+        std::string::npos);
+  }
+}
+
 TEST_F(ComparisonsTest, eqArray) {
   auto test =
       [&](const std::optional<std::vector<std::optional<int64_t>>>& array1,
