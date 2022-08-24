@@ -112,6 +112,89 @@ class EvalCtx {
   using ErrorVector = FlatVector<std::shared_ptr<void>>;
   using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
 
+  /// Add exceptions in fromErrors to the corresponding position in toErrors.
+  /// fromErrors is allowed to be wrapped in indices and wrapNulls. rows is also
+  /// allowed to be different from the target rows in toErrors with a mapping
+  /// toTargetRows.
+  /// @param rows Rows of fromErrors.
+  /// @param toTargetRows Mapping from rows of fromErrors to rows of toErrors.
+  /// @param indices Indices that wrap fromErrors.
+  /// @param wrapNulls Null buffer that wrap fromErrors.
+  template <bool constantWrapIndex>
+  void restoreErrors(
+      const SelectivityVector& rows,
+      const vector_size_t* FOLLY_NULLABLE toTargetRows,
+      const vector_size_t* FOLLY_NULLABLE indices,
+      const uint64_t* FOLLY_NULLABLE wrapNulls,
+      const ErrorVectorPtr& fromErrors,
+      ErrorVectorPtr& toErrors) {
+    rows.applyToSelected([&](auto row) {
+      // A known null in the outer row masks an error.
+      if (wrapNulls && bits::isBitNull(wrapNulls, row)) {
+        return;
+      }
+
+      vector_size_t fromIndex;
+      if constexpr (constantWrapIndex) {
+        fromIndex = indices ? indices[row] : constantWrapIndex_;
+      } else {
+        fromIndex = indices ? indices[row] : row;
+      }
+
+      auto toIndex = toTargetRows ? toTargetRows[row] : row;
+
+      if (fromErrors->isIndexInRange(fromIndex) &&
+          !fromErrors->isNullAt(fromIndex)) {
+        addError(
+            row,
+            *std::static_pointer_cast<std::exception_ptr>(
+                fromErrors->valueAt(fromIndex)),
+            toErrors);
+      }
+    });
+  }
+
+  /// Invokes a function on each selected row of an array or map's element
+  /// vector, and records exceptions at the corresponding top-level rows by
+  /// calling 'setError'. The element vector may be the base of a decoded
+  /// vector. In such a case, rows and elementIndices arguments are used to find
+  /// the decoded row corresponding to a base row. The function must take a
+  /// single "row" argument of type vector_size_t and return void.
+  /// @param baseRows Selected rows of the base of a decoded element vector.
+  /// @param rows Selected rows of the decoded element vector. nullptr means no
+  /// encoding of the element vector is peeled.
+  /// @param toTopLevelRows A mapping from decoded element rows to the top-level
+  /// array or map rows that this element belongs to. nullptr means no
+  /// difference between element rows and top-level rows.
+  /// @param elementIndices The mapping from decoded element rows to the
+  /// corresponding base element rows. nullptr means no encoding of the element
+  /// vector is peeled.
+  /// @param func The function to apply on the element vector per selected row.
+  template <typename Callable>
+  void applyToSelectedPeeledElementsNoThrow(
+      const SelectivityVector& baseRows,
+      const SelectivityVector* FOLLY_NULLABLE rows,
+      const vector_size_t* FOLLY_NULLABLE toTopLevelRows,
+      const vector_size_t* FOLLY_NULLABLE elementIndices,
+      Callable func) {
+    ErrorVectorPtr errors = std::move(errors_);
+    errors_ = nullptr;
+    baseRows.applyToSelected([&](auto row) INLINE_LAMBDA {
+      try {
+        func(row);
+      } catch (const std::exception& e) {
+        setError(row, std::current_exception());
+      }
+    });
+
+    ErrorVectorPtr localErrors = std::move(errors_);
+    errors_ = errors;
+    if (rows && localErrors) {
+      restoreErrors<false>(
+          *rows, toTopLevelRows, elementIndices, nullptr, localErrors, errors_);
+    }
+  }
+
   // Sets the error at 'index' in '*errorPtr' if the value is
   // null. Creates and resizes '*errorPtr' as needed and initializes
   // new positions to null.

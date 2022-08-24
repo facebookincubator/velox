@@ -33,6 +33,21 @@
 namespace facebook::velox {
 namespace {
 
+// Utility struct to map peeled element rows to the top-level array or map rows.
+struct ElementsToTopLevelMapping {
+  const SelectivityVector* decodedRows_;
+  const vector_size_t* toTopLevelRows_;
+  const vector_size_t* elementIndices_;
+
+  ElementsToTopLevelMapping(
+      const SelectivityVector* decodedRows,
+      const vector_size_t* toTopLevelRows,
+      const vector_size_t* elementIndices)
+      : decodedRows_{decodedRows},
+        toTopLevelRows_{toTopLevelRows},
+        elementIndices_{elementIndices} {}
+};
+
 template <typename T, bool isMapKey = false>
 void generateJsonTyped(
     const SimpleVector<T>& input,
@@ -83,6 +98,7 @@ void castToJson(
     exec::EvalCtx* context,
     const SelectivityVector& rows,
     FlatVector<StringView>& flatResult,
+    const ElementsToTopLevelMapping& elementsMapping,
     bool isMapKey = false) {
   using T = typename TypeTraits<kind>::NativeType;
 
@@ -91,16 +107,21 @@ void castToJson(
 
   std::string result;
   if (!isMapKey) {
-    context->applyToSelectedNoThrow(rows, [&](auto row) {
-      if (inputVector->isNullAt(row)) {
-        flatResult.set(row, "null");
-      } else {
-        result.clear();
-        generateJsonTyped(*inputVector, row, result);
+    context->applyToSelectedPeeledElementsNoThrow(
+        rows,
+        elementsMapping.decodedRows_,
+        elementsMapping.toTopLevelRows_,
+        elementsMapping.elementIndices_,
+        [&](auto row) {
+          if (inputVector->isNullAt(row)) {
+            flatResult.set(row, "null");
+          } else {
+            result.clear();
+            generateJsonTyped(*inputVector, row, result);
 
-        flatResult.set(row, StringView{result});
-      }
-    });
+            flatResult.set(row, StringView{result});
+          }
+        });
   } else {
     context->applyToSelectedNoThrow(rows, [&](auto row) {
       if (inputVector->isNullAt(row)) {
@@ -143,6 +164,7 @@ void castToJson(
     exec::EvalCtx* context,
     const SelectivityVector& rows,
     FlatVector<StringView>& flatResult,
+    const ElementsToTopLevelMapping& elementsMapping,
     bool isMapKey = false) {
   VELOX_CHECK(
       !isMapKey, "Casting map with complex key type to JSON is not supported");
@@ -159,18 +181,35 @@ void castToJson(
   }
 }
 
-// Helper struct representing the Json vector of input.
+// Helper struct representing the Json vector of input. This is used to access
+// the Json of the element vector(s) of an array, map, or row vector. If
+// toTopLevelRows is not null, it keeps a mapping from element rows to the
+// top-level rows that contain the elements.
 struct AsJson {
   AsJson(
       exec::EvalCtx* context,
       const VectorPtr& input,
       const SelectivityVector& rows,
+      const BufferPtr& toTopLevelRows = nullptr,
       bool isMapKey = false)
       : decoded_(context, *input, rows) {
+    using ErrorVector = FlatVector<std::shared_ptr<void>>;
+    using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
+
+    vector_size_t* rawToTopLevelRows = nullptr;
+    if (toTopLevelRows) {
+      rawToTopLevelRows = toTopLevelRows->asMutable<vector_size_t>();
+    }
+
     if (isMapKey && decoded_->mayHaveNulls()) {
-      context->applyToSelectedNoThrow(rows, [&](auto row) {
-        if (decoded_->isNullAt(row)) {
-          VELOX_FAIL("Cannot cast map with null keys to JSON.");
+      rows.applyToSelected([&](auto row) {
+        try {
+          if (decoded_->isNullAt(row)) {
+            VELOX_FAIL("Cannot cast map with null keys to JSON.");
+          }
+        } catch (const VeloxException& e) {
+          auto index = rawToTopLevelRows ? rawToTopLevelRows[row] : row;
+          context->setError(index, std::current_exception());
         }
       });
     }
@@ -201,6 +240,8 @@ struct AsJson {
         context,
         *baseRows,
         *flatJsonStrings,
+        ElementsToTopLevelMapping{
+            &rows, rawToTopLevelRows, decoded_->indices()},
         isMapKey);
 
     jsonStrings_ = flatJsonStrings;
@@ -236,6 +277,37 @@ struct AsJson {
   const SimpleVector<StringView>* jsonStrings_;
 };
 
+// Assuming topLevelVector is flat, this function populates elementRows
+// corresponding to the selected topLevelRows, as well as a reverse mapping from
+// elementRows back to topLevelRows.
+template <typename T>
+void getElementRowsAndReverseMapping(
+    vector_size_t size,
+    const SelectivityVector& topLevelRows,
+    const T* topLevelVector,
+    SelectivityVector& elementRows,
+    BufferPtr& elementToTopLevelRows) {
+  auto rawNulls = topLevelVector->rawNulls();
+  auto rawSizes = topLevelVector->rawSizes();
+  auto rawOffsets = topLevelVector->rawOffsets();
+  auto rawElementToTopLevelRows =
+      elementToTopLevelRows->asMutable<vector_size_t>();
+
+  topLevelRows.applyToSelected([&](vector_size_t row) {
+    if (rawNulls && bits::isBitNull(rawNulls, row)) {
+      return;
+    }
+    auto size = rawSizes[row];
+    auto offset = rawOffsets[row];
+    elementRows.setValidRange(offset, offset + size, true);
+
+    for (auto i = 0; i < size; ++i) {
+      rawElementToTopLevelRows[offset + i] = row;
+    }
+  });
+  elementRows.updateBounds();
+}
+
 void castToJsonFromArray(
     const BaseVector& input,
     exec::EvalCtx* context,
@@ -245,9 +317,14 @@ void castToJsonFromArray(
   auto inputArray = input.as<ArrayVector>();
 
   auto elements = inputArray->elements();
-  auto elementsRows =
-      functions::toElementRows(elements->size(), rows, inputArray);
-  AsJson elementsAsJson{context, elements, elementsRows};
+  SelectivityVector elementsRows(elements->size(), false);
+  auto elementsToTopLevelRows =
+      AlignedBuffer::allocate<vector_size_t>(elements->size(), context->pool());
+  getElementRowsAndReverseMapping(
+      elements->size(), rows, inputArray, elementsRows, elementsToTopLevelRows);
+
+  AsJson elementsAsJson{
+      context, elements, elementsRows, elementsToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -306,12 +383,17 @@ void castToJsonFromMap(
 
   auto mapKeys = inputMap->mapKeys();
   auto mapValues = inputMap->mapValues();
-  auto elementsRows = functions::toElementRows(mapKeys->size(), rows, inputMap);
+  SelectivityVector elementsRows(mapKeys->size(), false);
+  auto elementsToTopLevelRows =
+      AlignedBuffer::allocate<vector_size_t>(mapKeys->size(), context->pool());
+  getElementRowsAndReverseMapping(
+      mapKeys->size(), rows, inputMap, elementsRows, elementsToTopLevelRows);
 
   // Maps with unsupported key types should have already been rejected by
   // JsonCastOperator::isSupportedType() beforehand.
-  AsJson keysAsJson{context, mapKeys, elementsRows, true};
-  AsJson valuesAsJson{context, mapValues, elementsRows};
+  AsJson keysAsJson{
+      context, mapKeys, elementsRows, elementsToTopLevelRows, true};
+  AsJson valuesAsJson{context, mapValues, elementsRows, elementsToTopLevelRows};
 
   // Estimates an upperbound of the total length of all Json strings for the
   // input according to the length of all elements Json strings and the
@@ -724,7 +806,13 @@ void JsonCastOperator::castTo(
   // Casting from VARBINARY and OPAQUE are not supported and should have been
   // rejected by isSupportedType() in the caller.
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      castToJson, input.typeKind(), input, &context, rows, *flatResult);
+      castToJson,
+      input.typeKind(),
+      input,
+      &context,
+      rows,
+      *flatResult,
+      ElementsToTopLevelMapping{nullptr, nullptr, nullptr});
 }
 
 /// Converts an input vector from Json type to the type of result vector.

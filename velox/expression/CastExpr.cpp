@@ -476,35 +476,80 @@ void applyCustomTypeCast(
     exec::EvalCtx& context,
     bool nullOnFailure,
     VectorPtr& result) {
+  using ErrorVector = FlatVector<std::shared_ptr<void>>;
+  using ErrorVectorPtr = std::shared_ptr<ErrorVector>;
+
   VELOX_CHECK_NE(
       thisType,
       otherType,
       "Attempting to cast from {} to itself.",
       thisType->toString());
 
-  exec::LocalSelectivityVector baseRows(
-      *context.execCtx(), inputDecoded.base()->size());
-  baseRows->clearAll();
-  context.applyToSelectedNoThrow(nonNullRows, [&](auto row) {
-    baseRows->setValid(inputDecoded.index(row), true);
-  });
-  baseRows->updateBounds();
-
   VectorPtr localResult;
-  if constexpr (castTo) {
-    context.ensureWritable(*baseRows, thisType, localResult);
-
-    castOperator->castTo(
-        *inputDecoded.base(), context, *baseRows, nullOnFailure, *localResult);
-  } else {
-    context.ensureWritable(*baseRows, otherType, localResult);
-
-    castOperator->castFrom(
-        *inputDecoded.base(), context, *baseRows, nullOnFailure, *localResult);
-  }
-
   if (!inputDecoded.isIdentityMapping()) {
+    exec::LocalSelectivityVector baseRows(
+        *context.execCtx(), inputDecoded.base()->size());
+    baseRows->clearAll();
+    context.applyToSelectedNoThrow(nonNullRows, [&](auto row) {
+      baseRows->setValid(inputDecoded.index(row), true);
+    });
+    baseRows->updateBounds();
+
+    ErrorVectorPtr errors = *context.errorsPtr();
+    *context.errorsPtr() = nullptr;
+    if constexpr (castTo) {
+      context.ensureWritable(*baseRows, thisType, localResult);
+
+      castOperator->castTo(
+          *inputDecoded.base(),
+          context,
+          *baseRows,
+          nullOnFailure,
+          *localResult);
+    } else {
+      context.ensureWritable(*baseRows, otherType, localResult);
+
+      castOperator->castFrom(
+          *inputDecoded.base(),
+          context,
+          *baseRows,
+          nullOnFailure,
+          *localResult);
+    }
+
+    ErrorVectorPtr localErrors = *context.errorsPtr();
+    *context.errorsPtr() = errors;
+    if (localErrors) {
+      context.restoreErrors<false>(
+          nonNullRows,
+          nullptr,
+          inputDecoded.indices(),
+          nullptr,
+          localErrors,
+          *context.errorsPtr());
+    }
+
     localResult = inputDecoded.wrap(localResult, *input, allRows);
+  } else {
+    if constexpr (castTo) {
+      context.ensureWritable(nonNullRows, thisType, localResult);
+
+      castOperator->castTo(
+          *inputDecoded.base(),
+          context,
+          nonNullRows,
+          nullOnFailure,
+          *localResult);
+    } else {
+      context.ensureWritable(nonNullRows, otherType, localResult);
+
+      castOperator->castFrom(
+          *inputDecoded.base(),
+          context,
+          nonNullRows,
+          nullOnFailure,
+          *localResult);
+    }
   }
 
   context.moveOrCopyResult(localResult, nonNullRows, result);

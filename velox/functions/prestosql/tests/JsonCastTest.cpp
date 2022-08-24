@@ -1000,3 +1000,49 @@ TEST_F(JsonCastTest, toInvalid) {
       {R"(["red",1.1])"_sv, R"(["blue",2.2])"_sv});
   testThrow<Json, ComplexType>(JSON(), ARRAY(ROW({DOUBLE()})), {"null"_sv});
 }
+
+TEST_F(JsonCastTest, castInTry) {
+  // Cast map whose elements are wrapped in a dictionary to Json. The map vector
+  // contains four rows: {g -> null, null -> -6}, {e -> null, d -> -4}, {null ->
+  // 3, b -> -2}, {null -> 1}.
+  std::vector<std::optional<StringView>> keys{
+      std::nullopt, "b"_sv, std::nullopt, "d"_sv, "e"_sv, std::nullopt, "g"_sv};
+  std::vector<std::optional<int64_t>> values{1, -2, 3, -4, std::nullopt, -6, 7};
+  auto map = makeMapWithDictionaryElements(keys, values, 2);
+
+  auto jsonExpected = makeNullableFlatVector<Json>(
+      {std::nullopt, R"({"d":-4,"e":null})", std::nullopt, std::nullopt},
+      JSON());
+  evaluateCastInTry(
+      MAP(VARCHAR(), BIGINT()), JSON(), makeRowVector({map}), jsonExpected);
+  evaluateCastInTryDictEncoding(
+      MAP(VARCHAR(), BIGINT()), JSON(), makeRowVector({map}), jsonExpected);
+
+  // Cast Json object to map
+  auto data = makeNullableFlatVector<Json>(
+      {R"({"102":"2","101":1.1})"_sv,
+       R"("abc")"_sv,
+       "123"_sv,
+       "null"_sv,
+       std::nullopt},
+      JSON());
+  auto mapExpected = makeNullableMapVector<int64_t, double>(
+      {{{{101, 1.1}, {102, 2.0}}},
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
+  evaluateCastInTry(
+      JSON(), MAP(BIGINT(), DOUBLE()), makeRowVector({data}), mapExpected);
+  evaluateCastInTryDictEncoding(
+      JSON(), MAP(BIGINT(), DOUBLE()), makeRowVector({data}), mapExpected);
+
+  // Cast Json to bigint
+  data = makeNullableFlatVector<Json>(
+      {"1"_sv, "2a"_sv, "3"_sv, std::nullopt}, JSON());
+  auto bigintExpected =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt});
+  evaluateCastInTry(JSON(), BIGINT(), makeRowVector({data}), bigintExpected);
+  evaluateCastInTryDictEncoding(
+      JSON(), BIGINT(), makeRowVector({data}), bigintExpected);
+}
