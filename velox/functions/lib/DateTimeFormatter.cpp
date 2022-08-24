@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <velox/common/base/Exceptions.h>
 #include <velox/type/Date.h>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include "velox/external/date/date.h"
@@ -855,6 +856,28 @@ void parseFromPattern(
   }
 }
 
+int64_t getDaysSinceEpochFromFirstDayOfWeekYear(int year) {
+  int daysSinceEpoch = util::daysSinceEpochFromDate(year, 1, 4);
+  return daysSinceEpoch - (util::extractISODayOfTheWeek(daysSinceEpoch) - 1);
+}
+
+int64_t getWeekYearOfDate(int64_t year, uint16_t month, uint16_t day) {
+  if (month == 12 && day >= 29) {
+    // If we're >= December 29th, check if next weekyear has started
+    if (util::daysSinceEpochFromDate(year, month, day) >=
+        getDaysSinceEpochFromFirstDayOfWeekYear(year + 1)) {
+      return year + 1;
+    }
+  } else if (month == 1 && day <= 4) {
+    // If we're <= Jan 4th, check if still in previous weekyear
+    if (util::daysSinceEpochFromDate(year, month, day) <
+        getDaysSinceEpochFromFirstDayOfWeekYear(year)) {
+      return year - 1;
+    }
+  }
+  return year;
+}
+
 } // namespace
 
 std::string DateTimeFormatter::format(
@@ -1023,10 +1046,20 @@ std::string DateTimeFormatter::format(
           result += timezone->name();
           break;
 
+        case DateTimeFormatSpecifier::WEEK_YEAR: {
+          result += padContent(
+              getWeekYearOfDate(
+                  static_cast<signed>(calDate.year()),
+                  static_cast<unsigned>(calDate.month()),
+                  static_cast<unsigned>(calDate.day())),
+              '0',
+              token.pattern.minRepresentDigits);
+          break;
+        }
+
         case DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID:
           // TODO: implement timezone offset id formatting, need a map from full
           // name to offset time
-        case DateTimeFormatSpecifier::WEEK_YEAR:
         case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR:
         default:
           VELOX_UNSUPPORTED(

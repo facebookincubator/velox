@@ -2016,16 +2016,18 @@ TEST_F(DateTimeFunctionsTest, parseDatetime) {
       parseDatetime("1969-12-31+07:30+02:00", "YYYY-MM-dd+HH:mmZZ"));
 }
 
-TEST_F(DateTimeFunctionsTest, formatDateTime) {
+TEST_F(DateTimeFunctionsTest, formatEra) {
   using util::fromTimestampString;
-
   // era test cases - 'G'
   EXPECT_EQ("AD", formatDatetime(fromTimestampString("1970-01-01"), "G"));
   EXPECT_EQ("BC", formatDatetime(fromTimestampString("-100-01-01"), "G"));
   EXPECT_EQ("BC", formatDatetime(fromTimestampString("0-01-01"), "G"));
   EXPECT_EQ("AD", formatDatetime(fromTimestampString("01-01-01"), "G"));
   EXPECT_EQ("AD", formatDatetime(fromTimestampString("01-01-01"), "GGGGGGG"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatCenturyOfEra) {
+  using util::fromTimestampString;
   // century of era test cases - 'C'
   EXPECT_EQ("19", formatDatetime(fromTimestampString("1900-01-01"), "C"));
   EXPECT_EQ("19", formatDatetime(fromTimestampString("1955-01-01"), "C"));
@@ -2036,7 +2038,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ("19", formatDatetime(fromTimestampString("-1900-01-01"), "C"));
   EXPECT_EQ(
       "000019", formatDatetime(fromTimestampString("1955-01-01"), "CCCCCC"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatYearOfEra) {
+  using util::fromTimestampString;
   // year of era test cases - 'Y'
   EXPECT_EQ("1970", formatDatetime(fromTimestampString("1970-01-01"), "Y"));
   EXPECT_EQ("2020", formatDatetime(fromTimestampString("2020-01-01"), "Y"));
@@ -2049,7 +2054,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "0000000001",
       formatDatetime(fromTimestampString("01-01-01"), "YYYYYYYYYY"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatDayOfWeek) {
+  using util::fromTimestampString;
   // day of week number - 'e'
   for (int i = 0; i < 31; i++) {
     StringView date("2022-08-" + std::to_string(i + 1));
@@ -2059,7 +2067,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   }
   EXPECT_EQ(
       "000001", formatDatetime(fromTimestampString("2022-08-01"), "eeeeee"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatDayOfWeekText) {
+  using util::fromTimestampString;
   // day of week text - 'E'
   for (int i = 0; i < 31; i++) {
     StringView date("2022-08-" + std::to_string(i + 1));
@@ -2073,7 +2084,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
     EXPECT_EQ(
         daysLong[i % 7], formatDatetime(fromTimestampString(date), "EEEEEEEE"));
   }
+}
 
+TEST_F(DateTimeFunctionsTest, formatYear) {
+  using util::fromTimestampString;
   // year test cases - 'y'
   EXPECT_EQ("2022", formatDatetime(fromTimestampString("2022-06-20"), "y"));
   EXPECT_EQ("22", formatDatetime(fromTimestampString("2022-06-20"), "yy"));
@@ -2093,7 +2107,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ("00", formatDatetime(fromTimestampString("-1600-06-20"), "yy"));
   EXPECT_EQ("01", formatDatetime(fromTimestampString("-1601-06-20"), "yy"));
   EXPECT_EQ("10", formatDatetime(fromTimestampString("-1610-06-20"), "yy"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatDayOfYear) {
+  using util::fromTimestampString;
   // day of year test cases - 'D'
   EXPECT_EQ("1", formatDatetime(fromTimestampString("2022-01-01"), "D"));
   EXPECT_EQ("10", formatDatetime(fromTimestampString("2022-01-10"), "D"));
@@ -2105,7 +2122,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   // leap year case
   EXPECT_EQ("60", formatDatetime(fromTimestampString("2020-02-29"), "D"));
   EXPECT_EQ("366", formatDatetime(fromTimestampString("2020-12-31"), "D"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatMonthOfYear) {
+  using util::fromTimestampString;
   // month of year test cases - 'M'
   for (int i = 0; i < 12; i++) {
     auto month = i + 1;
@@ -2119,7 +2139,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
     EXPECT_EQ(
         monthsLong[i], formatDatetime(fromTimestampString(date), "MMMMMMMM"));
   }
+}
 
+TEST_F(DateTimeFunctionsTest, formatDayOfMonth) {
+  using util::fromTimestampString;
   // day of month test cases - 'd'
   EXPECT_EQ("1", formatDatetime(fromTimestampString("2022-01-01"), "d"));
   EXPECT_EQ("10", formatDatetime(fromTimestampString("2022-01-10"), "d"));
@@ -2131,7 +2154,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
 
   // leap year case
   EXPECT_EQ("29", formatDatetime(fromTimestampString("2020-02-29"), "d"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatHalfDayOfDay) {
+  using util::fromTimestampString;
   // halfday of day test cases - 'a'
   EXPECT_EQ(
       "AM", formatDatetime(fromTimestampString("2022-01-01 00:00:00"), "a"));
@@ -2148,6 +2174,12 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       "PM",
       formatDatetime(fromTimestampString("2022-01-01 12:00:00"), "aaaaaaaa"));
 
+  // leap year case
+  EXPECT_EQ("29", formatDatetime(fromTimestampString("2020-02-29"), "d"));
+}
+
+TEST_F(DateTimeFunctionsTest, formatHourOfHalfDay) {
+  using util::fromTimestampString;
   // hour of halfday test cases - 'K'
   for (int i = 0; i < 24; i++) {
     std::string buildString = "2022-01-01 " + padNumber(i) + ":00:00";
@@ -2158,7 +2190,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000011",
       formatDatetime(fromTimestampString("2022-01-01 11:00:00"), "KKKKKKKK"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatClockHourOfHalfDay) {
+  using util::fromTimestampString;
   // clockhour of halfday test cases - 'h'
   for (int i = 0; i < 24; i++) {
     std::string buildString = "2022-01-01 " + padNumber(i) + ":00:00";
@@ -2170,7 +2205,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000011",
       formatDatetime(fromTimestampString("2022-01-01 11:00:00"), "hhhhhhhh"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatHourOfDay) {
+  using util::fromTimestampString;
   // hour of day test cases - 'H'
   for (int i = 0; i < 24; i++) {
     std::string buildString = "2022-01-01 " + padNumber(i) + ":00:00";
@@ -2181,7 +2219,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000011",
       formatDatetime(fromTimestampString("2022-01-01 11:00:00"), "HHHHHHHH"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatClockHourOfDay) {
+  using util::fromTimestampString;
   // clockhour of day test cases - 'k'
   for (int i = 0; i < 24; i++) {
     std::string buildString = "2022-01-01 " + padNumber(i) + ":00:00";
@@ -2193,7 +2234,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000011",
       formatDatetime(fromTimestampString("2022-01-01 11:00:00"), "kkkkkkkk"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatMinuteOfHour) {
+  using util::fromTimestampString;
   // minute of hour test cases - 'm'
   EXPECT_EQ(
       "0", formatDatetime(fromTimestampString("2022-01-01 00:00:00"), "m"));
@@ -2208,7 +2252,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000042",
       formatDatetime(fromTimestampString("2022-01-01 00:42:42"), "mmmmmmmm"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatSecondOfMinute) {
+  using util::fromTimestampString;
   // second of minute test cases - 's'
   EXPECT_EQ(
       "0", formatDatetime(fromTimestampString("2022-01-01 00:00:00"), "s"));
@@ -2223,7 +2270,10 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
   EXPECT_EQ(
       "00000042",
       formatDatetime(fromTimestampString("2022-01-01 00:42:42"), "ssssssss"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatFractionOfSecond) {
+  using util::fromTimestampString;
   // fraction of second test cases - 'S'
   EXPECT_EQ(
       "0", formatDatetime(fromTimestampString("2022-01-01 00:00:00.0"), "S"));
@@ -2246,13 +2296,74 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       "12300000",
       formatDatetime(
           fromTimestampString("2022-01-01 03:30:30.123"), "SSSSSSSS"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatWeekYear) {
+  using util::fromTimestampString;
+  // Week year test cases
+  // Normal cases
+  EXPECT_EQ("2021", formatDatetime(fromTimestampString("2021-03-12"), "x"));
+  EXPECT_EQ("192", formatDatetime(fromTimestampString("0192-08-28"), "x"));
+  EXPECT_EQ("-1340", formatDatetime(fromTimestampString("-1340-06-03"), "x"));
+
+  // Edge cases
+  // 1969-12-29 is part of week year 1970
+  EXPECT_EQ(
+      "1970", formatDatetime(fromTimestampString("1969-12-29 00:00:00"), "x"));
+  // 2024-12-30 is part of week year 2025
+  EXPECT_EQ(
+      "2025", formatDatetime(fromTimestampString("2024-12-30 00:00:00"), "x"));
+  // 1934-12-31 is part of week year 1935
+  EXPECT_EQ(
+      "1935", formatDatetime(fromTimestampString("1934-12-31 00:00:00"), "x"));
+  // 1990-01-01 is part of week year 1990
+  EXPECT_EQ(
+      "1990", formatDatetime(fromTimestampString("1990-01-01 00:00:00"), "x"));
+  // Week year 204 starts on 0204-01-02, therefore all dates before that belong
+  // to week year 203
+  EXPECT_EQ(
+      "204", formatDatetime(fromTimestampString("0204-01-02 00:00:00"), "x"));
+  EXPECT_EQ(
+      "203", formatDatetime(fromTimestampString("0204-01-01 00:00:00"), "x"));
+  // Week year -102 starts on -102-01-03, therefore all dates before that belong
+  // to week year -103
+  EXPECT_EQ(
+      "-102", formatDatetime(fromTimestampString("-0102-01-03 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-103", formatDatetime(fromTimestampString("-0102-01-02 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-103", formatDatetime(fromTimestampString("-0102-01-01 00:00:00"), "x"));
+  // Week year -108 starts on -108-01-04, therefore all dates before that belong
+  // to week year -109
+  EXPECT_EQ(
+      "-108", formatDatetime(fromTimestampString("-0108-01-04 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-109", formatDatetime(fromTimestampString("-0108-01-03 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-109", formatDatetime(fromTimestampString("-0108-01-02 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-109", formatDatetime(fromTimestampString("-0108-01-01 00:00:00"), "x"));
+  // Week year -1001 starts on -1002-12-31, therefore all dates before that
+  // belong to week year -1002
+  EXPECT_EQ(
+      "-1001",
+      formatDatetime(fromTimestampString("-1002-12-31 00:00:00"), "x"));
+  EXPECT_EQ(
+      "-1002",
+      formatDatetime(fromTimestampString("-1002-12-30 00:00:00"), "x"));
+}
+
+TEST_F(DateTimeFunctionsTest, formatTimezone) {
+  using util::fromTimestampString;
   // time zone test cases - 'z'
   setQueryTimeZone("Asia/Kolkata");
   EXPECT_EQ(
       "Asia/Kolkata",
       formatDatetime(fromTimestampString("1970-01-01"), "zzzz"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatLiteral) {
+  using util::fromTimestampString;
   // literal test cases
   EXPECT_EQ(
       "hello", formatDatetime(fromTimestampString("1970-01-01"), "'hello'"));
@@ -2273,8 +2384,12 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       formatDatetime(
           fromTimestampString("1970-01-01"),
           "\\\"!@#$%^&*()-+[]{}||`~<>.,?/;:1234567890"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatMixedLiteralAndSpecifier) {
+  using util::fromTimestampString;
   // Multi-specifier and literal formats
+  setQueryTimeZone("Asia/Kolkata");
   EXPECT_EQ(
       "AD 19 1970 4 Thu 1970 1 1 1 AM 2 2 2 2 33 11 5 Asia/Kolkata",
       formatDatetime(
@@ -2285,10 +2400,11 @@ TEST_F(DateTimeFunctionsTest, formatDateTime) {
       formatDatetime(
           fromTimestampString("1970-01-01 02:33:11.5"),
           "G C Y e 'asdfghjklzxcvbnmqwertyuiop' E '' y D M d a K h H k m s S 1234567890\\\"!@#$%^&*()-+`~{}[];:,./ zzzz"));
+}
 
+TEST_F(DateTimeFunctionsTest, formatUnsupportedSpecifiers) {
+  using util::fromTimestampString;
   // User format errors or unsupported errors
-  EXPECT_THROW(
-      formatDatetime(fromTimestampString("1970-01-01"), "x"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(fromTimestampString("1970-01-01"), "w"), VeloxUserError);
   EXPECT_THROW(
@@ -2551,9 +2667,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
       VeloxUserError);
   EXPECT_THROW(
       dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%v"),
-      VeloxUserError);
-  EXPECT_THROW(
-      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%x"),
       VeloxUserError);
 }
 
