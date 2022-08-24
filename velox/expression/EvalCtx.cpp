@@ -49,16 +49,15 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
   VELOX_CHECK_NOT_NULL(execCtx);
 }
 
-void EvalCtx::setWrapped(
+VectorPtr EvalCtx::applyWrapToPeeledResult(
     Expr* FOLLY_NONNULL expr,
-    VectorPtr source,
-    const SelectivityVector& rows,
-    VectorPtr& result) {
-  VectorPtr localResult;
+    VectorPtr peeledResult,
+    const SelectivityVector& rows) {
+  VectorPtr wrappedResult;
   if (wrapEncoding_ == VectorEncoding::Simple::DICTIONARY) {
-    if (!source) {
+    if (!peeledResult) {
       // If all rows are null, make a constant null vector of the right type.
-      localResult =
+      wrappedResult =
           BaseVector::createNullConstant(expr->type(), rows.size(), pool());
     } else {
       BufferPtr nulls;
@@ -87,17 +86,16 @@ void EvalCtx::setWrapped(
       } else {
         nulls = wrapNulls_;
       }
-      localResult = BaseVector::wrapInDictionary(
-          std::move(nulls), wrap_, rows.end(), std::move(source));
+      wrappedResult = BaseVector::wrapInDictionary(
+          std::move(nulls), wrap_, rows.end(), std::move(peeledResult));
     }
   } else if (wrapEncoding_ == VectorEncoding::Simple::CONSTANT) {
-    localResult = BaseVector::wrapInConstant(
-        rows.size(), constantWrapIndex_, std::move(source));
+    wrappedResult = BaseVector::wrapInConstant(
+        rows.size(), constantWrapIndex_, std::move(peeledResult));
   } else {
     VELOX_FAIL("Bad expression wrap encoding {}", wrapEncoding_);
   }
-
-  moveOrCopyResult(localResult, rows, result);
+  return wrappedResult;
 }
 
 void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
