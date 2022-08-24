@@ -2353,6 +2353,95 @@ TEST_F(DateTimeFunctionsTest, formatWeekYear) {
       formatDatetime(fromTimestampString("-1002-12-30 00:00:00"), "x"));
 }
 
+TEST_F(DateTimeFunctionsTest, formatWeekOfWeekYear) {
+  using util::fromTimestampString;
+  // Week year test cases
+  // Normal cases
+  EXPECT_EQ("10", formatDatetime(fromTimestampString("2021-03-12"), "w"));
+  EXPECT_EQ("35", formatDatetime(fromTimestampString("0192-08-28"), "w"));
+  EXPECT_EQ("22", formatDatetime(fromTimestampString("-1340-06-03"), "w"));
+
+  // Edge cases
+  // 1969-12-29 is part of week 1 of week year 1970
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1969-12-29 00:00:00"), "w"));
+  // 2024-12-30 is part of week 1 of week year year 2025
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("2024-12-30 00:00:00"), "w"));
+  // 1934-12-31 is part of week 1 of week year year 1935
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1934-12-31 00:00:00"), "w"));
+  // 1990-01-01 is part of week 1 of week year year 1990
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1990-01-01 00:00:00"), "w"));
+  // Week 1 of week year 204 starts on 0204-01-02, therefore all dates before
+  // that belong to week 52 of week year 203
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("0204-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "52", formatDatetime(fromTimestampString("0204-01-01 00:00:00"), "w"));
+  // Week 1 of week year -102 starts on -102-01-03, therefore all dates before
+  // that belong to week 52 of week year -103
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("-0102-01-03 00:00:00"), "w"));
+  EXPECT_EQ(
+      "52", formatDatetime(fromTimestampString("-0102-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "52", formatDatetime(fromTimestampString("-0102-01-01 00:00:00"), "w"));
+  // Week 1 of week year -108 starts on -108-01-04, therefore all dates before
+  // that belong to week 53 of week year -109. It is week 53 since -109-01-01
+  // starts on a Thursday, making it a 53 week year
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("-0108-01-04 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("-0108-01-03 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("-0108-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("-0108-01-01 00:00:00"), "w"));
+  // Week 1 of week year -1001 starts on -1002-12-31, therefore all dates before
+  // that belong to week 52 of week year -1002
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("-1002-12-31 00:00:00"), "w"));
+  EXPECT_EQ(
+      "52", formatDatetime(fromTimestampString("-1002-12-30 00:00:00"), "w"));
+
+  // 53 week year cases
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1977-01-01 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1977-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1977-01-03 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1982-01-01 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1982-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1982-01-03 00:00:00"), "w"));
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1982-01-04 00:00:00"), "w"));
+  // Leap year starting on Wednesday has 53 weeks case
+  EXPECT_EQ(
+      "52", formatDatetime(fromTimestampString("1812-12-27 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1812-12-28 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1812-12-29 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1812-12-30 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1812-12-31 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1813-01-01 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1813-01-02 00:00:00"), "w"));
+  EXPECT_EQ(
+      "53", formatDatetime(fromTimestampString("1813-01-03 00:00:00"), "w"));
+  EXPECT_EQ(
+      "1", formatDatetime(fromTimestampString("1813-01-04 00:00:00"), "w"));
+}
+
 TEST_F(DateTimeFunctionsTest, formatTimezone) {
   using util::fromTimestampString;
   // time zone test cases - 'z'
@@ -2405,8 +2494,6 @@ TEST_F(DateTimeFunctionsTest, formatMixedLiteralAndSpecifier) {
 TEST_F(DateTimeFunctionsTest, formatUnsupportedSpecifiers) {
   using util::fromTimestampString;
   // User format errors or unsupported errors
-  EXPECT_THROW(
-      formatDatetime(fromTimestampString("1970-01-01"), "w"), VeloxUserError);
   EXPECT_THROW(
       formatDatetime(fromTimestampString("1970-01-01"), "z"), VeloxUserError);
   EXPECT_THROW(
@@ -2664,9 +2751,6 @@ TEST_F(DateTimeFunctionsTest, dateFormat) {
       VeloxUserError);
   EXPECT_THROW(
       dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%X"),
-      VeloxUserError);
-  EXPECT_THROW(
-      dateFormat(fromTimestampString("-2000-02-29 00:00:00.987"), "%v"),
       VeloxUserError);
 }
 

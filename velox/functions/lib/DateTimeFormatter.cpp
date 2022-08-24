@@ -878,6 +878,26 @@ int64_t getWeekYearOfDate(int64_t year, uint16_t month, uint16_t day) {
   return year;
 }
 
+// Returns the week of the week year for a given date (year, month, day).
+// Returns [1-53] since certain week years have 53 weeks. Returns -1 if no week
+// can be found for given date, but this case should never be reached.
+int16_t getWeekOfWeekYearOfDate(int64_t year, uint16_t month, uint16_t day) {
+  auto weekYear = getWeekYearOfDate(year, month, day);
+  auto dayOfWeekOfFirst = util::extractISODayOfTheWeek(
+      util::daysSinceEpochFromDate(weekYear, 1, 1));
+  int numWeeks = 52 +
+      (dayOfWeekOfFirst == 4 ||
+       (util::isLeapYear(weekYear) && dayOfWeekOfFirst == 3));
+
+  for (int i = 1; i <= numWeeks; i++) {
+    if (getDaysSinceEpochFromFirstDayOfWeekYear(weekYear) + 7 * i >
+        util::daysSinceEpochFromDate(year, month, day)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 } // namespace
 
 std::string DateTimeFormatter::format(
@@ -1057,10 +1077,20 @@ std::string DateTimeFormatter::format(
           break;
         }
 
+        case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR: {
+          auto month = static_cast<unsigned>(calDate.month());
+          auto day = static_cast<unsigned>(calDate.day());
+          auto year = static_cast<signed>(calDate.year());
+          result += padContent(
+              getWeekOfWeekYearOfDate(year, month, day),
+              '0',
+              token.pattern.minRepresentDigits);
+          break;
+        }
+
         case DateTimeFormatSpecifier::TIMEZONE_OFFSET_ID:
           // TODO: implement timezone offset id formatting, need a map from full
           // name to offset time
-        case DateTimeFormatSpecifier::WEEK_OF_WEEK_YEAR:
         default:
           VELOX_UNSUPPORTED(
               "format is not supported for specifier {}",
