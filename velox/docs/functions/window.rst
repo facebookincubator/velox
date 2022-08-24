@@ -2,11 +2,14 @@
 Window functions
 ================
 
-Window functions perform calculations across rows of the query result. They
-run after the HAVING clause but before the ORDER BY clause.
+Velox window functions can be used to compute SQL window functions.
 
-Invoking a window function requires special syntax using the OVER clause to specify
-the window as follows:
+Understanding the window function definition
+--------------------------------------------
+Window functions operate over all the input rows.
+
+Each window function can be thought to operate with an OVER clause
+that specifies how it is evaluated:
 
 .. code-block::
 
@@ -33,17 +36,16 @@ frame_start and frame_end can be any of:
    expression FOLLOWING  -- only allowed in ROWS mode
    UNBOUNDED FOLLOWING
 
-The window definition has 3 components:
+More details:
 
-* The PARTITION BY clause separates the input rows into different partitions.
+* The PARTITION BY fields separates the input rows into different partitions.
 
-  This is analogous to how the GROUP BY clause separates rows into different groups for aggregate functions.
-  If PARTITION BY is not specified, the entire input is treated as a single partition.
+  This is analogous to how the aggregate functions input is separated into different groups for evaluation.
+  If PARTITION BY fields are not specified, the entire input is treated as a single partition.
 
-* The ORDER BY clause determines the order in which input rows will be processed by the window function.
+* The ORDER BY fields determines the order in which input rows will be processed by the window function.
 
-  If ORDER BY is not specified, the ordering is undefined.
-  Note that the ORDER BY clause within window functions does not support ordinals. You need to use actual expressions.
+  If ORDER BY fields are not specified, the ordering is undefined.
 
 * The frame clause specifies the sliding window of rows to be processed by the function for a given input row.
 
@@ -59,10 +61,11 @@ The window definition has 3 components:
 
   If no frame is specified, a default frame of RANGE UNBOUNDED PRECEDING is used.
 
-Examples
-________
+SQL Example
+___________
 
-The following query ranks orders for each clerk by price:
+Window functions can be used to evaluate the following SQL query.
+The query ranks orders for each clerk by price:
 
 .. code-block:: sql
 
