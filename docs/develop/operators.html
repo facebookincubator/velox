@@ -161,6 +161,10 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>AssignUniqueId</p></td>
 <td></td>
 </tr>
+<tr class="row-odd"><td><p>WindowNode</p></td>
+<td><p>Window</p></td>
+<td></td>
+</tr>
 </tbody>
 </table>
 <section id="plan-nodes">
@@ -716,6 +720,45 @@ the nodes executing the same query stage in a distributed query execution.</p>
 </tbody>
 </table>
 </section>
+<section id="windownode">
+<h3>WindowNode<a class="headerlink" href="#windownode" title="Permalink to this headline">¶</a></h3>
+<p>The Window operator is used to evaluate window functions. The operator adds columns
+for the window functions output at the end of the input columns.</p>
+<p>The window operator groups the input data into partitions based on the values
+of the partition columns. If no partition columns are specified, then all the input
+rows are considered to be in the same partition.
+Within each partition rows are ordered by the values of the sorting columns.
+The window function is computed for each row at a time in this order.
+If no sorting columns are specified then the order of the results is unspecified.</p>
+<table class="colwidths-given docutils align-left">
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 75%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>partitionKeys</p></td>
+<td><p>Partition by columns for the window functions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>sortingKeys</p></td>
+<td><p>Order by columns for the window functions.</p></td>
+</tr>
+<tr class="row-even"><td><p>sortingOrders</p></td>
+<td><p>Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.</p></td>
+</tr>
+<tr class="row-odd"><td><p>windowColumnNames</p></td>
+<td><p>Output column names for each window function invocation in windowFunctions list below.</p></td>
+</tr>
+<tr class="row-even"><td><p>windowFunctions</p></td>
+<td><p>Window function calls with the frame clause. e.g row_number(), first_value(name) between range 10 preceding and current row. The default frame is between range unbounded preceding and current row.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
 </section>
 <section id="examples">
 <h2>Examples<a class="headerlink" href="#examples" title="Permalink to this headline">¶</a></h2>
@@ -795,6 +838,7 @@ ALL.</p>
 <li><a class="reference internal" href="#localpartitionnode">LocalPartitionNode</a></li>
 <li><a class="reference internal" href="#enforcesinglerownode">EnforceSingleRowNode</a></li>
 <li><a class="reference internal" href="#assignuniqueidnode">AssignUniqueIdNode</a></li>
+<li><a class="reference internal" href="#windownode">WindowNode</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#examples">Examples</a><ul>
