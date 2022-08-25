@@ -19,5 +19,5 @@ target_link_libraries(velox_file PUBLIC Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
-  add_subdirectory(benchmarks)
+  add_subdirectory(benchmark)
 endif()
