@@ -97,8 +97,8 @@ class AggregationHook : public ValueHook {
 };
 
 namespace {
-template <typename TOutput, typename TInput>
-inline void updateSingleValue(TOutput& result, TInput value) {
+template <typename TOutput>
+inline void updateSingleValue(TOutput& result, TOutput value) {
   if constexpr (
       std::is_same_v<TOutput, double> || std::is_same_v<TOutput, float>) {
     result += value;
@@ -143,7 +143,7 @@ class SumHook final : public AggregationHook {
     clearNull(group);
     updateSingleValue(
         *reinterpret_cast<TAggregate*>(group + offset_),
-        *reinterpret_cast<const TValue*>(value));
+        TAggregate(*reinterpret_cast<const TValue*>(value)));
   }
 };
 

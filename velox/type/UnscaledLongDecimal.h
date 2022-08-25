@@ -32,6 +32,16 @@ constexpr int128_t buildInt128(uint64_t hi, uint64_t lo) {
   return (static_cast<__uint128_t>(hi) << 64) | lo;
 }
 
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+__attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+inline int128_t
+mul(int128_t x, const int128_t y) {
+  return x * y;
+}
+
 struct UnscaledLongDecimal {
  public:
   // Default required for creating vector with NULL values.
@@ -94,7 +104,7 @@ static inline UnscaledLongDecimal operator/(
 static inline UnscaledLongDecimal operator*(
     const UnscaledLongDecimal& a,
     int b) {
-  return UnscaledLongDecimal(a.unscaledValue() * b);
+  return UnscaledLongDecimal(mul(a.unscaledValue(), b));
 }
 } // namespace facebook::velox
 
