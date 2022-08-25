@@ -199,5 +199,38 @@ TEST_F(AverageAggregationTest, partialResults) {
 
   assertQuery(plan, "SELECT row(4950, 100)");
 }
+
+TEST_F(AverageAggregationTest, finalAvgForNullsWithRowConstructor) {
+  auto batchSize = 1'000;
+  auto rowType = ROW({"c0", "c1", "c2"}, {INTEGER(), DOUBLE(), BIGINT()});
+
+  auto sumVec = makeFlatVector<double>(batchSize, [](auto row) { return row; });
+  for (auto i = 0; i < sumVec->size() - 1; i++) {
+    // One value is not null to create a non constant mapping case.
+    sumVec->setNull(i, true);
+  }
+  auto countVec =
+      makeFlatVector<int64_t>(batchSize, [](auto row) { return 0; });
+  for (auto i = 0; i < countVec->size() - 1; i++) {
+    // One value is not null to create a non constant mapping case.
+    countVec->setNull(i, true);
+  }
+
+  auto data = makeRowVector(
+      {makeFlatVector<int32_t>(
+           batchSize, [](auto row) { return row % 100; }, nullEvery(6)),
+       sumVec,
+       countVec});
+  createDuckDbTable({data});
+
+  auto planNode = PlanBuilder()
+                      .values({data})
+                      .project({"c0", "row_constructor(c1, c2) as p0"})
+                      .finalAggregation({"c0"}, {"avg(p0)"}, {DOUBLE()})
+                      .planNode();
+
+  assertQuery(planNode, "SELECT c0, sum(c1) / count(c2) FROM tmp group by c0");
+}
+
 } // namespace
 } // namespace facebook::velox::aggregate::test
