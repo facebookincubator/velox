@@ -18,7 +18,7 @@
 
 namespace facebook::velox::substrait {
 namespace {
-std::vector<std::string_view> getRowTypesFromCompoundName(
+std::vector<std::string_view> getTypesFromCompoundName(
     std::string_view compoundName) {
   // CompoundName is like ROW<BIGINT,DOUBLE>
   // or ROW<BIGINT,ROW<DOUBLE,BIGINT>,ROW<DOUBLE,BIGINT>>
@@ -91,18 +91,25 @@ TypePtr toVeloxType(const std::string& typeName) {
     case TypeKind::VARBINARY:
       return VARBINARY();
     case TypeKind::ROW: {
-      auto fieldNames = getRowTypesFromCompoundName(typeName);
+      auto fieldTypes = getTypesFromCompoundName(typeName);
       VELOX_CHECK(
-          !fieldNames.empty(),
+          !fieldTypes.empty(),
           "Converting empty ROW type from Substrait to Velox is not supported.");
 
       std::vector<TypePtr> types;
       std::vector<std::string> names;
-      for (int idx = 0; idx < fieldNames.size(); idx++) {
+      for (int idx = 0; idx < fieldTypes.size(); idx++) {
         names.emplace_back("col_" + std::to_string(idx));
-        types.emplace_back(toVeloxType(std::string(fieldNames[idx])));
+        types.emplace_back(toVeloxType(std::string(fieldTypes[idx])));
       }
       return ROW(std::move(names), std::move(types));
+    }
+    case TypeKind::ARRAY: {
+      auto fieldTypes = getTypesFromCompoundName(typeName);
+      VELOX_CHECK(
+          fieldTypes.size() == 1,
+          "The size of ARRAY type should be one.");
+      return ARRAY(toVeloxType(std::string(fieldTypes[0])));
     }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
