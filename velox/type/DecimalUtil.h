@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
 #include "velox/type/UnscaledLongDecimal.h"
@@ -31,7 +32,7 @@ __attribute__((__no_sanitize__("signed-integer-overflow")))
 #endif
 inline int128_t
 mul(int128_t x, const int128_t y) {
-  return x * y;
+  return checkedMultiply<int128_t>(x, y);
 }
 
 /// A static class that holds helper functions for DECIMAL type.

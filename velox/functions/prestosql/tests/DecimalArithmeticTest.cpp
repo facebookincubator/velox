@@ -211,4 +211,28 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
   // Flat and Constant arguments.
   testDecimalExpr<TypeKind::SHORT_DECIMAL>(
       expectedConstantFlat, "c0 * 1.00", {shortFlat});
+
+  // Long decimal limits
+  try {
+    testDecimalExpr<TypeKind::LONG_DECIMAL>(
+        {},
+        "c0 * 10.00",
+        {makeLongDecimalFlatVector({kInt128Max}, DECIMAL(38, 0))});
+    FAIL();
+  } catch (VeloxUserError& ex) {
+    EXPECT_EQ(
+        ex.message(),
+        "integer overflow: 170141183460469231731687303715884105727 * 1000");
+  }
+  try {
+    testDecimalExpr<TypeKind::LONG_DECIMAL>(
+        {},
+        "c0 * 10.00",
+        {makeLongDecimalFlatVector({kInt128Min}, DECIMAL(38, 0))});
+    FAIL();
+  } catch (VeloxUserError& ex) {
+    EXPECT_EQ(
+        ex.message(),
+        "integer overflow: -170141183460469231731687303715884105728 * 1000");
+  }
 }
