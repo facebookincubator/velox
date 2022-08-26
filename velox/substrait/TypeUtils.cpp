@@ -110,12 +110,6 @@ TypePtr toVeloxType(const std::string& typeName) {
       }
       return ROW(std::move(names), std::move(types));
     }
-    case TypeKind::ARRAY: {
-      auto fieldTypes = getTypesFromCompoundName(typeName);
-      VELOX_CHECK(
-          fieldTypes.size() == 1, "The size of ARRAY type should be only one.");
-      return ARRAY(toVeloxType(std::string(fieldTypes[0])));
-    }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
     default:
