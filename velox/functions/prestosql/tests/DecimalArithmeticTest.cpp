@@ -221,9 +221,7 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
             {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 0))});
     FAIL();
   } catch (VeloxUserError& ex) {
-    EXPECT_EQ(
-        ex.message(),
-        "integer overflow: 170141183460469231731687303715884105727 * 1000");
+    EXPECT_EQ(ex.message(), "Decimal Overflow");
   }
   try {
     testDecimalExpr<TypeKind::LONG_DECIMAL>(
@@ -233,8 +231,6 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
             {std::numeric_limits<int128_t>::min()}, DECIMAL(38, 0))});
     FAIL();
   } catch (VeloxUserError& ex) {
-    EXPECT_EQ(
-        ex.message(),
-        "integer overflow: -170141183460469231731687303715884105728 * 1000");
+    EXPECT_EQ(ex.message(), "Decimal Overflow");
   }
 }

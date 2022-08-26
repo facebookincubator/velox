@@ -173,7 +173,7 @@ class Multiply {
           DecimalUtil::kPowersOfTen[aRescale + bRescale]));
     } catch (const VeloxUserError& ex) {
       if (ex.errorCode() == "ARITHMETIC_ERROR") {
-        VELOX_CHECK(false, "Decimal Overflow");
+        VELOX_USER_FAIL("Decimal Overflow");
       } else {
         throw ex;
       }

@@ -758,9 +758,8 @@ TEST_F(CastExprTest, decimalToDecimal) {
            std::nullopt},
           DECIMAL(12, 0)),
       true);
-}
 
-TEST_F(CastExprTest, overflow) {
+  // Overflow case.
   try {
     testComplexCast(
         "c0",
