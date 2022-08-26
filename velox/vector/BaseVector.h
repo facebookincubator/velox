@@ -377,7 +377,20 @@ class BaseVector {
       vector_size_t targetIndex,
       vector_size_t sourceIndex,
       vector_size_t count) {
-    VELOX_UNSUPPORTED("Only flat vectors support copy operation");
+    CopyRange range{sourceIndex, targetIndex, count};
+    copyRanges(source, folly::Range(&range, 1));
+  }
+
+  struct CopyRange {
+    vector_size_t sourceIndex;
+    vector_size_t targetIndex;
+    vector_size_t count;
+  };
+
+  virtual void copyRanges(
+      const BaseVector* /*source*/,
+      const folly::Range<const CopyRange*>& /*ranges*/) {
+    VELOX_UNSUPPORTED("Can only copy into flat or complex vectors");
   }
 
   // Construct a zero-copy slice of the vector with the indicated offset and
@@ -712,16 +725,6 @@ class BaseVector {
 
   BufferPtr sliceNulls(vector_size_t offset, vector_size_t length) const {
     return sliceBuffer(*BOOLEAN(), nulls_, offset, length, pool_);
-  }
-
-  BufferPtr
-  ensureIndices(BufferPtr& buf, const vector_size_t*& raw, vector_size_t size) {
-    if (buf && buf->isMutable() &&
-        buf->capacity() >= size * sizeof(vector_size_t)) {
-      return buf;
-    }
-    resizeIndices(size, 0, &buf, &raw);
-    return buf;
   }
 
   const TypePtr type_;
