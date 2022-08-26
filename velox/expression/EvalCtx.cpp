@@ -20,7 +20,7 @@
 
 namespace facebook::velox::exec {
 
-ContextSaver::~ContextSaver() {
+ScopedContextSaver::~ScopedContextSaver() {
   if (context) {
     context->restore(*this);
   }
@@ -98,7 +98,9 @@ VectorPtr EvalCtx::applyWrapToPeeledResult(
   return wrappedResult;
 }
 
-void EvalCtx::saveAndReset(ContextSaver& saver, const SelectivityVector& rows) {
+void EvalCtx::saveAndReset(
+    ScopedContextSaver& saver,
+    const SelectivityVector& rows) {
   if (saver.context) {
     return;
   }
@@ -151,7 +153,7 @@ void EvalCtx::addError(
   }
 }
 
-void EvalCtx::restore(ContextSaver& saver) {
+void EvalCtx::restore(ScopedContextSaver& saver) {
   peeledFields_ = std::move(saver.peeled);
   nullsPruned_ = saver.nullsPruned;
   if (errors_) {

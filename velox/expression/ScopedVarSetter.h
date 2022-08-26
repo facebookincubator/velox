@@ -19,20 +19,20 @@
 namespace facebook::velox {
 
 template <typename T>
-class VarSetter {
+class ScopedVarSetter {
  public:
-  VarSetter(T* place, T value) : place_(place), old_(*place) {
+  ScopedVarSetter(T* place, T value) : place_(place), old_(*place) {
     *place = value;
   }
 
   // Updates "place" to "value" if condition is true. No-op otherwise.
-  VarSetter(T* place, T value, bool condition) : place_(place), old_(*place) {
+  ScopedVarSetter(T* place, T value, bool condition) : place_(place), old_(*place) {
     if (condition) {
       *place = value;
     }
   }
 
-  ~VarSetter() {
+  ~ScopedVarSetter() {
     *place_ = old_;
   }
 

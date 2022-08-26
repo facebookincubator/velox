@@ -16,7 +16,7 @@
 #include "velox/expression/SwitchExpr.h"
 #include "velox/expression/BooleanMix.h"
 #include "velox/expression/ConstantExpr.h"
-#include "velox/expression/VarSetter.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
 
@@ -91,9 +91,9 @@ void SwitchExpr::evalSpecialForm(
   const uint64_t* values;
 
   // SWITCH: fix finalSelection at "rows" unless already fixed
-  VarSetter finalSelection(
+  ScopedVarSetter finalSelection(
       context.mutableFinalSelection(), &rows, context.isFinalSelection());
-  VarSetter isFinalSelection(context.mutableIsFinalSelection(), false);
+  ScopedVarSetter isFinalSelection(context.mutableIsFinalSelection(), false);
 
   for (auto i = 0; i < numCases_; i++) {
     if (!remainingRows.get()->hasSelections()) {

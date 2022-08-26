@@ -15,7 +15,7 @@
  */
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/BooleanMix.h"
-#include "velox/expression/VarSetter.h"
+#include "velox/expression/ScopedVarSetter.h"
 
 namespace facebook::velox::exec {
 
@@ -96,7 +96,7 @@ void ConjunctExpr::evalSpecialForm(
     VectorPtr& result) {
   // TODO Revisit error handling
   bool throwOnError = *context.mutableThrowOnError();
-  VarSetter saveError(context.mutableThrowOnError(), false);
+  ScopedVarSetter saveError(context.mutableThrowOnError(), false);
   context.ensureWritable(rows, type(), result);
   auto flatResult = result->asFlatVector<bool>();
   // clear nulls from the result for the active rows.
@@ -114,11 +114,11 @@ void ConjunctExpr::evalSpecialForm(
   }
 
   // OR: fix finalSelection at "rows" unless already fixed
-  VarSetter finalSelectionOr(
+  ScopedVarSetter finalSelectionOr(
       context.mutableFinalSelection(),
       &rows,
       !isAnd_ && context.isFinalSelection());
-  VarSetter isFinalSelectionOr(
+  ScopedVarSetter isFinalSelectionOr(
       context.mutableIsFinalSelection(), false, !isAnd_);
 
   bool handleErrors = false;
@@ -137,7 +137,7 @@ void ConjunctExpr::evalSpecialForm(
 
     // AND: reduce finalSelection to activeRows unless it has been fixed by IF
     // or OR above.
-    VarSetter finalSelectionAnd(
+    ScopedVarSetter finalSelectionAnd(
         context.mutableFinalSelection(),
         static_cast<const SelectivityVector*>(activeRows),
         isAnd_ && context.isFinalSelection());

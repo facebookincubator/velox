@@ -27,7 +27,7 @@ namespace facebook::velox::exec {
 
 class Expr;
 class ExprSet;
-struct ContextSaver;
+struct ScopedContextSaver;
 
 // Context for holding the base row vector, error state and various
 // flags for Expr interpreter.
@@ -70,9 +70,9 @@ class EvalCtx {
   }
 
   /// Used by peelEncodings.
-  void saveAndReset(ContextSaver& saver, const SelectivityVector& rows);
+  void saveAndReset(ScopedContextSaver& saver, const SelectivityVector& rows);
 
-  void restore(ContextSaver& saver);
+  void restore(ScopedContextSaver& saver);
 
   // Wraps the 'peeledResult' in the wrap produced by the last peeling in
   // EvalEncoding() and returns the vector created as a result.
@@ -268,8 +268,8 @@ class EvalCtx {
   ErrorVectorPtr errors_;
 };
 
-struct ContextSaver {
-  ~ContextSaver();
+struct ScopedContextSaver {
+  ~ScopedContextSaver();
   // The context to restore. nullptr if nothing to restore.
   EvalCtx* FOLLY_NULLABLE context = nullptr;
   std::vector<VectorPtr> peeled;
