@@ -217,7 +217,8 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
     testDecimalExpr<TypeKind::LONG_DECIMAL>(
         {},
         "c0 * 10.00",
-        {makeLongDecimalFlatVector({kInt128Max}, DECIMAL(38, 0))});
+        {makeLongDecimalFlatVector(
+            {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 0))});
     FAIL();
   } catch (VeloxUserError& ex) {
     EXPECT_EQ(
@@ -228,7 +229,8 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
     testDecimalExpr<TypeKind::LONG_DECIMAL>(
         {},
         "c0 * 10.00",
-        {makeLongDecimalFlatVector({kInt128Min}, DECIMAL(38, 0))});
+        {makeLongDecimalFlatVector(
+            {std::numeric_limits<int128_t>::min()}, DECIMAL(38, 0))});
     FAIL();
   } catch (VeloxUserError& ex) {
     EXPECT_EQ(

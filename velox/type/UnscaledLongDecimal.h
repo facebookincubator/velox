@@ -26,10 +26,6 @@ namespace facebook::velox {
 
 using int128_t = __int128_t;
 
-static const __uint128_t kUint128Max = __uint128_t(int128_t(-1L));
-static const int128_t kInt128Max = kUint128Max >> 1;
-static const int128_t kInt128Min = -kInt128Max - 1;
-
 constexpr int128_t buildInt128(uint64_t hi, uint64_t lo) {
   // GCC does not allow left shift negative value.
   return (static_cast<__uint128_t>(hi) << 64) | lo;
@@ -86,15 +82,4 @@ struct hasher<::facebook::velox::UnscaledLongDecimal> {
 
 namespace std {
 string to_string(facebook::velox::int128_t x);
-
-template <>
-class numeric_limits<facebook::velox::UnscaledLongDecimal> {
- public:
-  static facebook::velox::UnscaledLongDecimal min() {
-    return facebook::velox::UnscaledLongDecimal(facebook::velox::kInt128Min);
-  }
-  static facebook::velox::UnscaledLongDecimal max() {
-    return facebook::velox::UnscaledLongDecimal(facebook::velox::kInt128Min);
-  }
-};
 } // namespace std

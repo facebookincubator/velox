@@ -25,16 +25,6 @@
 
 namespace facebook::velox {
 
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-__attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-inline int128_t
-mul(int128_t x, const int128_t y) {
-  return checkedMultiply<int128_t>(x, y);
-}
-
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
@@ -55,8 +45,20 @@ class DecimalUtil {
     int128_t rescaledValue = inputValue.unscaledValue();
     auto scaleDifference = toScale - fromScale;
     if (scaleDifference >= 0) {
-      rescaledValue =
-          mul(rescaledValue, DecimalUtil::kPowersOfTen[scaleDifference]);
+      try {
+        rescaledValue = checkedMultiply<int128_t>(
+            rescaledValue, DecimalUtil::kPowersOfTen[scaleDifference]);
+      } catch (VeloxUserError& ex) {
+        if (ex.errorCode() == "ARITHMETIC_ERROR") {
+          VELOX_USER_FAIL(
+              "Cannot cast DECIMAL '{}' to DECIMAL({},{})",
+              DecimalUtil::toString<TInput>(
+                  inputValue, DECIMAL(fromPrecision, fromScale)),
+              toPrecision,
+              toScale);
+        }
+        throw ex;
+      }
     } else {
       scaleDifference = -scaleDifference;
       const auto scalingFactor = DecimalUtil::kPowersOfTen[scaleDifference];
