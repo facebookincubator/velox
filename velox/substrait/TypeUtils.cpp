@@ -90,6 +90,12 @@ TypePtr toVeloxType(const std::string& typeName) {
       return VARCHAR();
     case TypeKind::VARBINARY:
       return VARBINARY();
+    case TypeKind::ARRAY: {
+      auto fieldTypes = getTypesFromCompoundName(typeName);
+      VELOX_CHECK(
+          fieldTypes.size() == 1, "The size of ARRAY type should be only one.");
+      return ARRAY(toVeloxType(std::string(fieldTypes[0])));
+    }
     case TypeKind::ROW: {
       auto fieldTypes = getTypesFromCompoundName(typeName);
       VELOX_CHECK(
@@ -103,12 +109,6 @@ TypePtr toVeloxType(const std::string& typeName) {
         types.emplace_back(toVeloxType(std::string(fieldTypes[idx])));
       }
       return ROW(std::move(names), std::move(types));
-    }
-    case TypeKind::ARRAY: {
-      auto fieldTypes = getTypesFromCompoundName(typeName);
-      VELOX_CHECK(
-          fieldTypes.size() == 1, "The size of ARRAY type should be only one.");
-      return ARRAY(toVeloxType(std::string(fieldTypes[0])));
     }
     case TypeKind::UNKNOWN:
       return UNKNOWN();
