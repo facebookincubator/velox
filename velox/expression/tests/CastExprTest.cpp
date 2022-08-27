@@ -758,19 +758,4 @@ TEST_F(CastExprTest, decimalToDecimal) {
            std::nullopt},
           DECIMAL(12, 0)),
       true);
-
-  // Overflow case.
-  try {
-    testComplexCast(
-        "c0",
-        makeNullableLongDecimalFlatVector(
-            {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 0)),
-        makeNullableLongDecimalFlatVector(
-            {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 1)));
-    FAIL();
-  } catch (const VeloxUserError& ex) {
-    EXPECT_EQ(
-        ex.message(),
-        "Cannot cast DECIMAL '170141183460469231731687303715884105727' to DECIMAL(38,1)");
-  }
 }
