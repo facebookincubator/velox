@@ -30,15 +30,36 @@ namespace facebook::velox {
 
 namespace {
 constexpr std::string_view kSep{"/"};
+// AWS S3 EMRFS, Hadoop block storage filesystem ontop of Amazon S3 buckets
 constexpr std::string_view kS3Scheme{"s3://"};
+// S3N Hadoop S3 native filesystem - s3n:// old implementation (legacy support)
+// This could not be mixed with s3 nor the s3a.
+// S3A Hadoop 3.x, successor of deprecated "s3" and "s3n"
+constexpr std::string_view kS3aScheme{"s3a://"};
+// OSS Alibaba, Object Storage Service is compliance with S3 format
+constexpr std::string_view kOssScheme{"oss://"};
 // From AWS documentation
 constexpr int kS3MaxKeySize{1024};
 } // namespace
 
-inline bool isS3File(const std::string_view filename) {
-  return (filename.substr(0, kS3Scheme.size()) == kS3Scheme);
+inline bool isS3aHadoopFile(const std::string_view filename) {
+  return filename.substr(0, kS3aScheme.size()) == kS3aScheme;
+}  
+  
+inline bool isOssAlibabaFile(const std::string_view filename) {
+  return filename.substr(0, kOssScheme.size()) == kS3aScheme;
 }
 
+inline bool isS3EmrfsFile(const std::string_view filename) {
+  return filename.substr(0, kS3Scheme.size()) == kS3Scheme;
+}
+  
+inline bool isS3File(const std::string_view filename) {
+  return isS3EmrfsFile(filename)  || 
+         isS3HadoopFile(filename) || 
+         isOssAlibabaFile(filename);
+}
+  
 inline void bucketAndKeyFromS3Path(
     const std::string& path,
     std::string& bucket,
@@ -57,8 +78,10 @@ inline std::string s3URI(const std::string& bucket, const std::string& key) {
 }
 
 inline std::string s3Path(const std::string_view& path) {
-  // Remove the prefix S3:// from the given path
-  return std::string(path.substr(kS3Scheme.length()));
+  // Remove the prefix 's3://' or one off 'oss://' 's3a://' from the given path
+  if isS3EmrfsFile(path)
+    return std::string(path.substr(kS3Scheme.length()));
+  return std::string(path.substr(isS3aHadoopFile(path) ? kS3aScheme.length() : kOssScheme.length()));
 }
 
 inline Aws::String awsString(const std::string& s) {
