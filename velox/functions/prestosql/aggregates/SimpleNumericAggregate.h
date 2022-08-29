@@ -145,7 +145,9 @@ class SimpleNumericAggregate : public exec::Aggregate {
     if (decoded.isConstantMapping()) {
       if (!decoded.isNullAt(0)) {
         updateDuplicateValues(
-            initialValue, decoded.valueAt<TInput>(0), rows.countSelected());
+            initialValue,
+            TData(decoded.valueAt<TInput>(0)),
+            rows.countSelected());
         updateNonNullValue<true, TData>(group, initialValue, updateSingleValue);
       }
     } else if (decoded.mayHaveNulls()) {

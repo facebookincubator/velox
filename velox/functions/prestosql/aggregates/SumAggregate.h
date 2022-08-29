@@ -91,7 +91,7 @@ class SumAggregate
         &updateSingleValue<TAccumulator>,
         &updateDuplicateValues<TAccumulator>,
         mayPushdown,
-        TInput(0));
+        TAccumulator(0));
   }
 
   void addSingleGroupIntermediateResults(
@@ -106,7 +106,7 @@ class SumAggregate
         &updateSingleValue<ResultType>,
         &updateDuplicateValues<ResultType>,
         mayPushdown,
-        TInput(0));
+        ResultType(0));
   }
 
  protected:
