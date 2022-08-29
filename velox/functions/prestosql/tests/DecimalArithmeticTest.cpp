@@ -286,4 +286,18 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
   EXPECT_THROW(
       testDecimalExpr<TypeKind::SHORT_DECIMAL>({}, "c0 / 0.0", {shortFlat}),
       VeloxRuntimeError);
+
+  // Long decimal limits.
+  try {
+    testDecimalExpr<TypeKind::LONG_DECIMAL>(
+        {},
+        "c0 / 0.001",
+        {makeLongDecimalFlatVector(
+            {std::numeric_limits<int128_t>::min()}, DECIMAL(38, 0))});
+    FAIL();
+  } catch (VeloxUserError& ex) {
+    EXPECT_EQ(
+        ex.message(),
+        "integer overflow: -170141183460469231731687303715884105728 * 1000000");
+  }
 }

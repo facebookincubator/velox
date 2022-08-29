@@ -203,7 +203,8 @@ class Divide {
       resultSign *= -1;
       unsignedDivisor *= -1;
     }
-    unsignedDividendRescaled *= DecimalUtil::kPowersOfTen[aRescale];
+    unsignedDividendRescaled = checkedMultiply<int128_t>(
+        unsignedDividendRescaled, DecimalUtil::kPowersOfTen[aRescale]);
     auto quotient = unsignedDividendRescaled / unsignedDivisor;
     auto remainder = unsignedDividendRescaled % unsignedDivisor;
     if (remainder * 2 >= unsignedDivisor) {
