@@ -51,7 +51,7 @@ class Aggregate {
   /// Some types such as int128_t require aligned access.
   virtual int32_t accumulatorAlignmentSize() const {
     return 1;
-  };
+  }
 
   // Return true if accumulator is allocated from external memory, e.g. memory
   // not managed by Velox.
