@@ -17,7 +17,6 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/RowContainer.h"
 
-
 namespace facebook::velox::exec {
 
 StreamingAggregation::StreamingAggregation(
