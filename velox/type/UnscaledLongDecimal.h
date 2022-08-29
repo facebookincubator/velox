@@ -42,6 +42,16 @@ mul(int128_t x, const int128_t y) {
   return x * y;
 }
 
+#if defined(__has_feature)
+#if __has_feature(__address_sanitizer__)
+__attribute__((__no_sanitize__("signed-integer-overflow")))
+#endif
+#endif
+inline int128_t
+add(int128_t x, const int128_t y) {
+  return x + y;
+}
+
 struct UnscaledLongDecimal {
  public:
   // Default required for creating vector with NULL values.
@@ -83,7 +93,7 @@ struct UnscaledLongDecimal {
   }
 
   UnscaledLongDecimal operator+(const UnscaledLongDecimal& other) const {
-    return UnscaledLongDecimal(unscaledValue_ + other.unscaledValue_);
+    return UnscaledLongDecimal(add(unscaledValue_, other.unscaledValue_));
   }
 
   UnscaledLongDecimal operator=(int value) const {
