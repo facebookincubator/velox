@@ -167,17 +167,9 @@ class Multiply {
   template <typename R, typename A, typename B>
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
-    try {
-      r.setUnscaledValue(checkedMultiply<int128_t>(
-          checkedMultiply<int128_t>(a.unscaledValue(), b.unscaledValue()),
-          DecimalUtil::kPowersOfTen[aRescale + bRescale]));
-    } catch (const VeloxUserError& ex) {
-      if (ex.errorCode() == "ARITHMETIC_ERROR") {
-        VELOX_USER_FAIL("Decimal Overflow");
-      } else {
-        throw ex;
-      }
-    }
+    r.setUnscaledValue(checkedMultiply<int128_t>(
+        checkedMultiply<int128_t>(a.unscaledValue(), b.unscaledValue()),
+        DecimalUtil::kPowersOfTen[aRescale + bRescale]));
   }
 
   inline static uint8_t
