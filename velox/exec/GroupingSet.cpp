@@ -374,10 +374,9 @@ bool GroupingSet::getGlobalAggregationOutput(
 }
 
 void GroupingSet::destroyGlobalAggregations() {
-  auto groups = lookup_->hits.data();
-
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     if (aggregates_[i]->accumulatorUsesExternalMemory()) {
+      auto groups = lookup_->hits.data();
       aggregates_[i]->destroy(folly::Range(groups, 1));
     }
   }
