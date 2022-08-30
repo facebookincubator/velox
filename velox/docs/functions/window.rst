@@ -38,12 +38,12 @@ frame_start and frame_end can be any of:
 
 More details:
 
-* The PARTITION BY fields separates the input rows into different partitions.
+* The PARTITION BY fields separate the input rows into different partitions.
 
   This is analogous to how the aggregate functions input is separated into different groups for evaluation.
   If PARTITION BY fields are not specified, the entire input is treated as a single partition.
 
-* The ORDER BY fields determines the order in which input rows will be processed by the window function.
+* The ORDER BY fields determine the order in which input rows are processed by the window function.
 
   If ORDER BY fields are not specified, the ordering is undefined.
 
@@ -52,9 +52,10 @@ More details:
   A frame can be ROWS type or RANGE type, and it runs from frame_start to frame_end.
   If frame_end is not specified, a default value of CURRENT ROW is used.
 
-  In ROWS mode, CURRENT ROW refers specifically to the current row.
+  In ROWS mode, CURRENT ROW refers to the current row.
 
-  In RANGE mode, CURRENT ROW refers to any peer row of the current row for the purpose of the ORDER BY.
+  In RANGE mode, CURRENT ROW refers to any peer row of the current row.
+  Rows are peers if they have the same values for the ORDER BY fields.
   A frame start of CURRENT ROW refers to the first peer row of the current row,
   while a frame end of CURRENT ROW refers to the last peer row of the current row.
   If no ORDER BY is specified, all rows are considered peers of the current row.
