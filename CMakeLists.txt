@@ -17,6 +17,8 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # set the project name
 project(velox)
 
+include(ThirdpartyToolchain.cmake)
+
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # Add all options below
@@ -281,10 +283,12 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   link_directories("${ICU_INCLUDE_DIRS}/../lib")
 endif()
 
-find_package(folly CONFIG REQUIRED)
+set(folly_SOURCE AUTO)
+resolve_dependency(folly)
+
 set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION_LIBRARIES}
-    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS})
+    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS} ${FMT})
 
 set(FOLLY ${FOLLY_LIBRARIES})
 set(FOLLY_BENCHMARK Folly::follybenchmark)
