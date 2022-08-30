@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.11)
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 
 # set the project name
 project(velox)
+
+include(ThirdpartyToolchain.cmake)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -273,13 +275,16 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   link_directories("${ICU_INCLUDE_DIRS}/../lib")
 endif()
 
-find_package(folly CONFIG REQUIRED)
+set(folly_SOURCE AUTO)
+resolve_dependency(folly)
+
 set(FOLLY_WITH_DEPENDENCIES
     ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION_LIBRARIES}
-    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS})
+    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS} ${FMT})
 
-set(FOLLY ${FOLLY_LIBRARIES})
-set(FOLLY_BENCHMARK Folly::follybenchmark)
+# TODO: Fix link to follybenchmark library to be retrieved on FetchContent
+# when building folly. This is just a hack to test build.
+set(FOLLY_BENCHMARK "/velox/_build/release/_deps/folly-build/folly/libfollybenchmark.a")
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_package(BZip2 MODULE)
