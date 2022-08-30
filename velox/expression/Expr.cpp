@@ -423,12 +423,20 @@ bool Expr::checkGetSharedSubexprValues(
     // Add the missingRows to sharedSubexprRows_ that will eventually be
     // evaluated and added to sharedSubexprValues_.
     sharedSubexprRows_->select(*missingRows);
-    // Fix finalSelection to the updated sharedSubexprRows_ to avoid
-    // losing values outside missingRows.
+
+    // Fix finalSelection to avoid losing values outside missingRows.
+    LocalSelectivityVector newFinalSelectionHolder(
+        context, *sharedSubexprRows_);
+    auto newFinalSelection = newFinalSelectionHolder.get();
+    assert(newFinalSelection); // lint
+    if (context.finalSelection() != nullptr) {
+      // In case currently set finalSelection does not include all rows in
+      // sharedSubexprRows_.
+      newFinalSelection->select(*context.finalSelection());
+    }
     VarSetter finalSelectionPreservePrecomputedValues(
         context.mutableFinalSelection(),
-        const_cast<const SelectivityVector*>(sharedSubexprRows_.get()),
-        context.isFinalSelection());
+        const_cast<const SelectivityVector*>(newFinalSelection));
     VarSetter isFinalSelectionPreservePrecomputedValues(
         context.mutableIsFinalSelection(), false, context.isFinalSelection());
 
@@ -852,7 +860,8 @@ void Expr::evalWithMemo(
     }
     if (uncached->hasSelections()) {
       // Fix finalSelection at "rows" if uncached rows is a strict subset to
-      // avoid losing values not in uncached rows.
+      // avoid losing values not in uncached rows that were copied earlier into
+      // "result" from the cached rows.
       bool updateFinalSelection = context.isFinalSelection() &&
           (uncached->countSelected() < rows.countSelected());
       VarSetter finalSelectionMemo(
