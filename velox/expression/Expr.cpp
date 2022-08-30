@@ -417,7 +417,7 @@ bool Expr::checkGetSharedSubexprValues(
   if (!rows.isSubset(*sharedSubexprRows_)) {
     LocalSelectivityVector missingRowsHolder(context, rows);
     auto missingRows = missingRowsHolder.get();
-    VELOX_DCHECK(missingRows != nullptr);
+    VELOX_DCHECK(missingRows); // lint
     missingRows->deselect(*sharedSubexprRows_);
 
     // Add the missingRows to sharedSubexprRows_ that will eventually be
@@ -428,7 +428,7 @@ bool Expr::checkGetSharedSubexprValues(
     LocalSelectivityVector newFinalSelectionHolder(
         context, *sharedSubexprRows_);
     auto newFinalSelection = newFinalSelectionHolder.get();
-    assert(newFinalSelection); // lint
+    VELOX_DCHECK(newFinalSelection); // lint
     if (context.finalSelection() != nullptr) {
       // In case currently set finalSelection does not include all rows in
       // sharedSubexprRows_.

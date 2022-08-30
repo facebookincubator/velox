@@ -2240,7 +2240,6 @@ TEST_F(ExprTest, flatNoNullsFastPath) {
 TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
   // This test case does a sanity check of the code path that re-uses
   // precomputed results for common sub-expressions.
-  // TODO: consider adding metrics that expose use of optimizations like this.
   auto data = makeRowVector(
       {makeFlatVector<int64_t>({1, 1, 2, 2}),
        makeFlatVector<int64_t>({10, 10, 20, 20}),
