@@ -98,8 +98,8 @@ TypePtr toVeloxType(const std::string& typeName) {
     }
     case TypeKind::MAP: {
       auto fieldTypes = getTypesFromCompoundName(typeName);
-      VELOX_CHECK(
-          fieldTypes.size() == 2, "The size of MAP type should be two.");
+      VELOX_CHECK_EQ(
+          fieldTypes.size(), 2, "The size of MAP type should be two.");
       auto keyType = toVeloxType(std::string(fieldTypes[0]));
       auto valueType = toVeloxType(std::string(fieldTypes[1]));
       return MAP(keyType, valueType);
