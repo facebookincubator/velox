@@ -174,7 +174,7 @@ def get_commit(files):
         return "HEAD^"
 
     if files == "branch":
-        return util.run("git merge-base origin/main HEAD")[1]
+        return util.run("git merge-base origin/bd_main HEAD")[1]
 
     return ""
 

@@ -70,7 +70,7 @@ jobs:
           - _build/debug/velox/examples/velox_example_opaque_type
   format-check:
     name: format check
-    image: hub.byted.org/base/velox.ci:3af98fe94bb3ad769e823952369eb021
+    image: hub.byted.org/base/velox.ci:50a422b3568bf8ed66d7c961e28b7f37
     steps:
       - name: Check formatting
         commands:
