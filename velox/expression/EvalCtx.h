@@ -268,6 +268,10 @@ class EvalCtx {
   ErrorVectorPtr errors_;
 };
 
+/// Utility wrapper struct that is used to temporarily reset the value of the an
+/// ExprCtx till it goes out of scope. EvalCtx::saveAndReset() is used to
+/// achieve that. The old context can also be explicitly restored using
+/// EvalCtx::restore().
 struct ScopedContextSaver {
   ~ScopedContextSaver();
   // The context to restore. nullptr if nothing to restore.

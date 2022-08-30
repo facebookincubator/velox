@@ -17,7 +17,7 @@
 #pragma once
 
 namespace facebook::velox {
-
+/// Used to temporarily set the value of a variable till it goes out of scope.
 template <typename T>
 class ScopedVarSetter {
  public:

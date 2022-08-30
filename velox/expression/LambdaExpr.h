@@ -64,20 +64,25 @@ class LambdaExpr : public SpecialForm {
   /// Used to initialize captureChannels_ and typeWithCapture_ on first use.
   void makeTypeWithCapture(EvalCtx& context);
 
-  std::shared_ptr<const RowType> signature_;
+  RowTypePtr signature_;
+
   /// The inner expression that will be applied to the elements of the input
   /// array/map.
   ExprPtr body_;
+
   /// List of field references to columns in the input row vector.
   std::vector<std::shared_ptr<FieldReference>> capture_;
+
   /// These contain column indices of the captured columns with respect to the
   /// input row vector. Stored in the same order as in capture_. Filled on first
   /// use.
   std::vector<column_index_t> captureChannels_;
-  /// A row type representing column types in the order => inner types of the
-  /// array/map it operates on followed by types of the columns that it captures
-  /// in the same order as that in capture_. This is used to create an input row
-  /// vector which is fed to the inner expression. Filled on first use.
-  std::shared_ptr<const RowType> typeWithCapture_;
+
+  /// A row type representing column types in the order starting with inner
+  /// types of the array/map it operates on followed by types of the columns
+  /// that it captures (in the same order as that in capture_). This is used to
+  /// create an input row vector which is fed to the inner expression. Filled on
+  /// first use.
+  RowTypePtr typeWithCapture_;
 };
 } // namespace facebook::velox::exec
