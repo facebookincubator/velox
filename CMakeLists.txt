@@ -287,8 +287,13 @@ set(folly_SOURCE AUTO)
 resolve_dependency(folly)
 
 set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION_LIBRARIES}
-    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS} ${FMT})
+    ${FOLLY_LIBRARIES}
+    ${Boost_LIBRARIES}
+    ${DOUBLE_CONVERSION_LIBRARIES}
+    ${EVENT}
+    ${SNAPPY}
+    ${CMAKE_DL_LIBS}
+    ${FMT})
 
 set(FOLLY ${FOLLY_LIBRARIES})
 set(FOLLY_BENCHMARK Folly::follybenchmark)
