@@ -80,7 +80,7 @@ function install_fmt {
 
 function install_folly {
   github_checkout facebook/folly "${FB_OS_VERSION}"
-  cmake_install -DBUILD_TESTS=OFF
+  #cmake_install -DBUILD_TESTS=OFF
 }
 
 function install_protobuf {
