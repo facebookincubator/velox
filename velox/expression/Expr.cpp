@@ -429,9 +429,10 @@ bool Expr::checkGetSharedSubexprValues(
         context, *sharedSubexprRows_);
     auto newFinalSelection = newFinalSelectionHolder.get();
     VELOX_DCHECK(newFinalSelection); // lint
-    if (context.finalSelection() != nullptr) {
+    if (!context.isFinalSelection()) {
       // In case currently set finalSelection does not include all rows in
       // sharedSubexprRows_.
+      VELOX_DCHECK(context.finalSelection() != nullptr);
       newFinalSelection->select(*context.finalSelection());
     }
     VarSetter finalSelectionPreservePrecomputedValues(
