@@ -20,7 +20,7 @@ namespace facebook::velox::substrait {
 namespace {
 std::vector<std::string_view> getTypesFromCompoundName(
     std::string_view compoundName) {
-  // CompoundName is like ROW<BIGINT,DOUBLE>
+  // CompoundName is like ARRAY<BIGINT> or MAP<BIGINT,DOUBLE>
   // or ROW<BIGINT,ROW<DOUBLE,BIGINT>,ROW<DOUBLE,BIGINT>>
   // the position of then delimiter is where the number of leftAngleBracket
   // equals rightAngleBracket need to split.
@@ -92,8 +92,8 @@ TypePtr toVeloxType(const std::string& typeName) {
       return VARBINARY();
     case TypeKind::ARRAY: {
       auto fieldTypes = getTypesFromCompoundName(typeName);
-      VELOX_CHECK(
-          fieldTypes.size() == 1, "The size of ARRAY type should be only one.");
+      VELOX_CHECK_EQ(
+          fieldTypes.size(), 1, "The size of ARRAY type should be only one.");
       return ARRAY(toVeloxType(std::string(fieldTypes[0])));
     }
     case TypeKind::ROW: {
