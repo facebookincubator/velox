@@ -243,4 +243,23 @@ VectorPtr EvalCtx::ensureFieldLoaded(
   return field;
 }
 
+ScopedFinalSelectionSetter::ScopedFinalSelectionSetter(
+    EvalCtx& evalCtx,
+    const SelectivityVector* finalSelection,
+    bool checkCondition,
+    bool override)
+    : evalCtx_(evalCtx),
+      oldFinalSelection_(*evalCtx.mutableFinalSelection()),
+      oldIsFinalSelection_(*evalCtx.mutableIsFinalSelection()) {
+  if ((evalCtx.isFinalSelection() && checkCondition) || override) {
+    *evalCtx.mutableFinalSelection() = finalSelection;
+    *evalCtx.mutableIsFinalSelection() = false;
+  }
+}
+
+ScopedFinalSelectionSetter::~ScopedFinalSelectionSetter() {
+  *evalCtx_.mutableFinalSelection() = oldFinalSelection_;
+  *evalCtx_.mutableIsFinalSelection() = oldIsFinalSelection_;
+}
+
 } // namespace facebook::velox::exec

@@ -449,11 +449,12 @@ bool Expr::checkGetSharedSubexprValues(
       VELOX_DCHECK_NOT_NULL(context.finalSelection());
       newFinalSelection->select(*context.finalSelection());
     }
-    ScopedVarSetter finalSelectionPreservePrecomputedValues(
-        context.mutableFinalSelection(),
-        const_cast<const SelectivityVector*>(newFinalSelection));
-    ScopedVarSetter isFinalSelectionPreservePrecomputedValues(
-        context.mutableIsFinalSelection(), false, context.isFinalSelection());
+
+    ScopedFinalSelectionSetter scopedFinalSelectionSetter(
+        context,
+        const_cast<const SelectivityVector*>(newFinalSelection),
+        true /*checkCondition*/,
+        true /*override*/);
 
     evalEncodings(*missingRows, context, sharedSubexprValues_);
   }
@@ -877,12 +878,8 @@ void Expr::evalWithMemo(
       // Fix finalSelection at "rows" if uncached rows is a strict subset to
       // avoid losing values not in uncached rows that were copied earlier into
       // "result" from the cached rows.
-      bool updateFinalSelection = context.isFinalSelection() &&
-          (uncached->countSelected() < rows.countSelected());
-      ScopedVarSetter finalSelectionMemo(
-          context.mutableFinalSelection(), &rows, updateFinalSelection);
-      ScopedVarSetter isFinalSelectionMemo(
-          context.mutableIsFinalSelection(), false, updateFinalSelection);
+      ScopedFinalSelectionSetter scopedFinalSelectionSetter(
+          context, &rows, uncached->countSelected() < rows.countSelected());
 
       evalWithNulls(*uncached, context, result);
       deselectErrors(context, *uncached);

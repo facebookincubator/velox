@@ -114,12 +114,8 @@ void ConjunctExpr::evalSpecialForm(
   }
 
   // OR: fix finalSelection at "rows" unless already fixed
-  ScopedVarSetter finalSelectionOr(
-      context.mutableFinalSelection(),
-      &rows,
-      !isAnd_ && context.isFinalSelection());
-  ScopedVarSetter isFinalSelectionOr(
-      context.mutableIsFinalSelection(), false, !isAnd_);
+  ScopedFinalSelectionSetter scopedFinalSelectionSetter(
+      context, &rows, !isAnd_);
 
   bool handleErrors = false;
   LocalSelectivityVector errorRows(context);
@@ -134,13 +130,6 @@ void ConjunctExpr::evalSpecialForm(
     if (handleErrors) {
       context.swapErrors(errors);
     }
-
-    // AND: reduce finalSelection to activeRows unless it has been fixed by IF
-    // or OR above.
-    ScopedVarSetter finalSelectionAnd(
-        context.mutableFinalSelection(),
-        static_cast<const SelectivityVector*>(activeRows),
-        isAnd_ && context.isFinalSelection());
 
     SelectivityTimer timer(selectivity_[inputOrder_[i]], numActive);
     inputs_[inputOrder_[i]]->eval(*activeRows, context, inputResult);

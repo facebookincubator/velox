@@ -91,9 +91,7 @@ void SwitchExpr::evalSpecialForm(
   const uint64_t* values;
 
   // SWITCH: fix finalSelection at "rows" unless already fixed
-  ScopedVarSetter finalSelection(
-      context.mutableFinalSelection(), &rows, context.isFinalSelection());
-  ScopedVarSetter isFinalSelection(context.mutableIsFinalSelection(), false);
+  ScopedFinalSelectionSetter scopedFinalSelectionSetter(context, &rows);
 
   for (auto i = 0; i < numCases_; i++) {
     if (!remainingRows.get()->hasSelections()) {

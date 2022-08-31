@@ -463,4 +463,24 @@ class LocalDecodedVector {
   std::unique_ptr<DecodedVector> vector_;
 };
 
+/// Utility class used to activate final selection (setting isFinalSelection to
+/// false and finalSelection to the input 'finalSelection') temporarily till it
+/// goes out of scope. It only sets final selection if it has not already been
+/// set and 'checkCondition' is true. Additionally, 'override' can be set to
+/// true to always set finalSelection even if its already set.
+class ScopedFinalSelectionSetter {
+ public:
+  ScopedFinalSelectionSetter(
+      EvalCtx& evalCtx,
+      const SelectivityVector* FOLLY_NULLABLE finalSelection,
+      bool checkCondition = true,
+      bool override = false);
+  ~ScopedFinalSelectionSetter();
+
+ private:
+  EvalCtx& evalCtx_;
+  const SelectivityVector* FOLLY_NULLABLE oldFinalSelection_;
+  bool oldIsFinalSelection_;
+};
+
 } // namespace facebook::velox::exec
