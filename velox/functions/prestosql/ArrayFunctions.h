@@ -316,4 +316,41 @@ struct ArraySumFunction {
   }
 };
 
+template <typename T>
+struct ArrayAverageFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T)
+  FOLLY_ALWAYS_INLINE bool call(
+      double& out,
+      const arg_type<Array<double>>& array) {
+    double sum = 0;
+    size_t count = 0;
+    for (const auto& item : array) {
+      if (item.has_value()) {
+        sum += *item;
+        count++;
+      }
+    }
+    if (count != 0) {
+      out = sum / count;
+    }
+    return count != 0;
+  }
+
+  FOLLY_ALWAYS_INLINE bool callNullFree(
+      double& out,
+      const arg_type<Array<double>>& array) {
+    // If the array is empty then set result to null
+    if (array.size() == 0) {
+      return false;
+    }
+
+    double sum = 0;
+    for (const auto& item : array) {
+      sum += item;
+    }
+    out = sum / array.size();
+    return true;
+  }
+};
+
 } // namespace facebook::velox::functions
