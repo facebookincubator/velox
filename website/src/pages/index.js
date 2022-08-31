@@ -32,8 +32,8 @@ function HomepageHeader() {
                 'button button--success button--lg',
                 styles.getStarted,
               )}
-              to={ useBaseUrl('docs/') }>
-              Learn More
+              to={ "https://github.com/facebookincubator/velox/blob/main/CONTRIBUTING.md" }>
+              Join Us
             </Link>
           </div>
         </div>
