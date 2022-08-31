@@ -147,7 +147,8 @@ TEST_F(ComparisonsTest, eqDecimal) {
       makeShortDecimalFlatVector({1}, DECIMAL(10, 4))};
   VELOX_ASSERT_THROW(
       runAndCompare("c0 == c1", inputs, expected),
-      "Scalar function signature is not supported: eq(SHORT_DECIMAL(10,5), SHORT_DECIMAL(10,4))");
+      "Scalar function signature is not supported: eq(SHORT_DECIMAL(10,5),"
+      "SHORT_DECIMAL(10,4))");
 }
 
 TEST_F(ComparisonsTest, eqArray) {
