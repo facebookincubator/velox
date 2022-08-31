@@ -40,6 +40,8 @@ class GroupingSet {
       bool isRawInput,
       OperatorCtx* FOLLY_NONNULL operatorCtx);
 
+  ~GroupingSet();
+
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
   void noMoreInput();

@@ -104,6 +104,12 @@ GroupingSet::GroupingSet(
   }
 }
 
+GroupingSet::~GroupingSet() {
+  if (isGlobal_) {
+    destroyGlobalAggregations();
+  }
+}
+
 namespace {
 bool equalKeys(
     const std::vector<column_index_t>& keys,
@@ -364,8 +370,6 @@ bool GroupingSet::getGlobalAggregationOutput(
       aggregates_[i]->extractValues(groups, 1, &result->childAt(i));
     }
   }
-
-  destroyGlobalAggregations();
 
   iterator.allocationIndex = std::numeric_limits<int32_t>::max();
   return true;
