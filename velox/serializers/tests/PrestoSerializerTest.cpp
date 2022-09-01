@@ -299,3 +299,20 @@ TEST_F(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   auto deserialized = deserialize(rowType, out.str(), {});
   assertEqualVectors(deserialized, expectedOutputWithLostPrecision);
 }
+
+TEST_F(PrestoSerializerTest, unscaledLongDecimal) {
+  std::vector<int128_t> decimalValues(100);
+  for (int row = 0; row < 100; row++) {
+    decimalValues[row] = row - 50;
+  }
+  auto vector =
+      vectorMaker_->longDecimalFlatVector(decimalValues, DECIMAL(20, 5));
+
+  testRoundTrip(vector);
+
+  // Add some nulls.
+  for (auto i = 0; i < 100; i += 7) {
+    vector->setNull(i, true);
+  }
+  testRoundTrip(vector);
+}
