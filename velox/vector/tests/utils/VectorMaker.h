@@ -720,4 +720,4 @@ class VectorMaker {
 
 } // namespace facebook::velox::test
 
-#include "velox/vector/tests/VectorMaker-inl.h"
+#include "VectorMaker-inl.h"
