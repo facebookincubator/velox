@@ -16,55 +16,54 @@ add_subdirectory(utils)
 
 add_executable(
   velox_functions_test
-  # ArithmeticTest.cpp
-  # ArrayCombinationsTest.cpp
-  # ArrayConstructorTest.cpp
-  # ArrayContainsTest.cpp
-  # ArrayDistinctTest.cpp
-  # ArrayDuplicatesTest.cpp
-  # ArrayExceptTest.cpp
-  # ArrayFilterTest.cpp
-  # ArrayIntersectTest.cpp
-  # ArrayMaxTest.cpp
-  # ArrayMinTest.cpp
-  # ArrayPositionTest.cpp
-  # ArraySortTest.cpp
-  # ArraysOverlapTest.cpp
-  # ArraySumTest.cpp
-  # BitwiseTest.cpp
-  # CardinalityTest.cpp
-  # CeilFloorTest.cpp
-  # ComparisonsTest.cpp
-  # DateTimeFunctionsTest.cpp
+  ArithmeticTest.cpp
+  ArrayCombinationsTest.cpp
+  ArrayConstructorTest.cpp
+  ArrayContainsTest.cpp
+  ArrayDistinctTest.cpp
+  ArrayDuplicatesTest.cpp
+  ArrayExceptTest.cpp
+  ArrayFilterTest.cpp
+  ArrayIntersectTest.cpp
+  ArrayMaxTest.cpp
+  ArrayMinTest.cpp
+  ArrayPositionTest.cpp
+  ArraySortTest.cpp
+  ArraysOverlapTest.cpp
+  ArraySumTest.cpp
+  BitwiseTest.cpp
+  CardinalityTest.cpp
+  CeilFloorTest.cpp
+  ComparisonsTest.cpp
+  DateTimeFunctionsTest.cpp
   DecimalArithmeticTest.cpp
-  # ElementAtTest.cpp
-  # HyperLogLogCastTest.cpp
-  # HyperLogLogFunctionsTest.cpp
-  # InPredicateTest.cpp
-  # JsonCastTest.cpp
-  # JsonExtractScalarTest.cpp
-  # JsonFunctionsTest.cpp
-  # MapConcatTest.cpp
-  # MapEntriesTest.cpp
-  # MapFilterTest.cpp
-  # MapKeysAndValuesTest.cpp
-  # MapTest.cpp
-  # NotTest.cpp
-  # ReduceTest.cpp
-  # RegexpReplaceTest.cpp
-  # ReverseTest.cpp
-  # RoundTest.cpp
-  # SliceTest.cpp
-  # SplitTest.cpp
-  # StringFunctionsTest.cpp
-  # TransformTest.cpp
-  # TransformKeysTest.cpp
-  # TransformValuesTest.cpp
-  # URLFunctionsTest.cpp
-  # WidthBucketArrayTest.cpp
-  # GreatestLeastTest.cpp
-  # ZipTest.cpp)
-)
+  ElementAtTest.cpp
+  HyperLogLogCastTest.cpp
+  HyperLogLogFunctionsTest.cpp
+  InPredicateTest.cpp
+  JsonCastTest.cpp
+  JsonExtractScalarTest.cpp
+  JsonFunctionsTest.cpp
+  MapConcatTest.cpp
+  MapEntriesTest.cpp
+  MapFilterTest.cpp
+  MapKeysAndValuesTest.cpp
+  MapTest.cpp
+  NotTest.cpp
+  ReduceTest.cpp
+  RegexpReplaceTest.cpp
+  ReverseTest.cpp
+  RoundTest.cpp
+  SliceTest.cpp
+  SplitTest.cpp
+  StringFunctionsTest.cpp
+  TransformTest.cpp
+  TransformKeysTest.cpp
+  TransformValuesTest.cpp
+  URLFunctionsTest.cpp
+  WidthBucketArrayTest.cpp
+  GreatestLeastTest.cpp
+  ZipTest.cpp)
 
 add_test(velox_functions_test velox_functions_test)
 
