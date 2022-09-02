@@ -32,6 +32,12 @@ class SubstraitVeloxExprConverter {
       const std::unordered_map<uint64_t, std::string>& functionMap)
       : functionMap_(functionMap) {}
 
+  /// Stores the variant and its type.
+  struct TypedVariant {
+    variant veloxVariant;
+    TypePtr variantType;
+  };
+
   /// Convert Substrait Field into Velox Field Expression.
   std::shared_ptr<const core::FieldAccessTypedExpr> toVeloxExpr(
       const ::substrait::Expression::FieldReference& substraitField,
@@ -55,6 +61,10 @@ class SubstraitVeloxExprConverter {
   std::shared_ptr<const core::ITypedExpr> toVeloxExpr(
       const ::substrait::Expression& substraitExpr,
       const RowTypePtr& inputType);
+
+  /// Get variant and its type from Substrait Literal.
+  std::shared_ptr<TypedVariant> toTypedVariant(
+      const ::substrait::Expression::Literal& literal);
 
  private:
   /// The Substrait parser used to convert Substrait representations into
