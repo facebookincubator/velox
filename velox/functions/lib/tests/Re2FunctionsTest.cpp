@@ -405,8 +405,39 @@ TEST_F(Re2FunctionsTest, likePattern) {
 TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
   auto testPattern =
       [&](StringView pattern, PatternKind patternKind, vector_size_t length) {
-        EXPECT_EQ(
-            determinePatternKind(pattern), std::make_pair(patternKind, length));
+        auto patternParameters = determinePatternKind(pattern);
+        EXPECT_EQ(patternParameters.patternKind, patternKind);
+        switch (patternKind) {
+          case PatternKind::kExactlyN:
+          case PatternKind::kAtLeastN: {
+            EXPECT_EQ(patternParameters.numSingleWildcards, length);
+            EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
+            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            break;
+          }
+          case PatternKind::kFixed:
+          case PatternKind::kPrefix:
+          case PatternKind::kSuffix: {
+            EXPECT_EQ(patternParameters.reducedPatternLength, length);
+            EXPECT_EQ(patternParameters.numSingleWildcards, NULL);
+            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            break;
+          }
+          case PatternKind::kMiddleWildcards: {
+            EXPECT_EQ(patternParameters.numFixedPatterns, length);
+            EXPECT_TRUE(patternParameters.fixedPatterns);
+            EXPECT_EQ(patternParameters.fixedPatterns.value().size(), length);
+            EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
+            EXPECT_EQ(patternParameters.numSingleWildcards, NULL);
+            break;
+          }
+          case PatternKind::kGeneric: {
+            EXPECT_EQ(patternParameters.numFixedPatterns, NULL);
+            EXPECT_EQ(patternParameters.reducedPatternLength, NULL);
+            EXPECT_EQ(patternParameters.numSingleWildcards, NULL);
+            break;
+          }
+        }
       };
 
   testPattern("_", PatternKind::kExactlyN, 1);
@@ -428,16 +459,22 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKind) {
   testPattern("hello%%", PatternKind::kPrefix, 5);
   testPattern("a%", PatternKind::kPrefix, 1);
   testPattern("helloPrestoWorld%%%", PatternKind::kPrefix, 16);
-  testPattern("aBcD%%e%", PatternKind::kGeneric, 0);
+  testPattern("aB_D%%e%", PatternKind::kGeneric, 0);
   testPattern("aBc_D%%", PatternKind::kGeneric, 0);
 
   testPattern("%presto", PatternKind::kSuffix, 6);
   testPattern("%%hello", PatternKind::kSuffix, 5);
   testPattern("%a", PatternKind::kSuffix, 1);
   testPattern("%%%helloPrestoWorld", PatternKind::kSuffix, 16);
-  testPattern("%%_%aBcD", PatternKind::kGeneric, 0);
-  testPattern("%%a%%BcD", PatternKind::kGeneric, 0);
-  testPattern("foo%bar", PatternKind::kGeneric, 0);
+  testPattern("%%a_%BcD", PatternKind::kGeneric, 0);
+  testPattern("foo_bar", PatternKind::kGeneric, 0);
+
+  testPattern("Hello%world%", PatternKind::kMiddleWildcards, 2);
+  testPattern("%%hEllo%%world", PatternKind::kMiddleWildcards, 2);
+  testPattern("hello%prEsto%%world", PatternKind::kMiddleWildcards, 3);
+  testPattern("%HeLlO%%%presto%%%worLd%%", PatternKind::kMiddleWildcards, 3);
+  testPattern("%%a_%%BcD", PatternKind::kGeneric, 0);
+  testPattern("foo%bar_", PatternKind::kGeneric, 0);
 }
 
 TEST_F(Re2FunctionsTest, likePatternWildcard) {
@@ -589,6 +626,58 @@ TEST_F(Re2FunctionsTest, likePatternSuffix) {
 
   std::string input = generateString(kLikePatternCharacterSet, 65);
   EXPECT_TRUE(like(input, generateString(kAnyWildcardCharacter) + input));
+}
+
+TEST_F(Re2FunctionsTest, likeFixedPatternsWithWildcards) {
+  auto like = [&](std::string str, std::string pattern) {
+    auto likeResult = evaluateOnce<bool>(
+        fmt::format("like(c0, '{}')", pattern), std::make_optional(str));
+    VELOX_CHECK(likeResult, "Like operator evaluation failed");
+    return *likeResult;
+  };
+
+  EXPECT_TRUE(like("abcabc", "abc%abc"));
+  EXPECT_TRUE(like("abcdefghi", "a%i%"));
+  EXPECT_TRUE(like("abcdefghi", "%abc%def%ghi"));
+  EXPECT_TRUE(like("abcdefghi", "%%abc%%def%%ghi%%"));
+  EXPECT_TRUE(like("abcdefghi", "%a%e%i"));
+  EXPECT_TRUE(like("abcdefghi", "%a%e%i%"));
+  EXPECT_TRUE(like("abcdefghi", "%%b%%d%%g%%"));
+  EXPECT_TRUE(like("abcdefghijklmnop", "%a%p%"));
+  EXPECT_TRUE(like("abcdefghijklmnop", "%a%p"));
+  EXPECT_TRUE(like("abcdefghijklmnop", "%a%%b%e%i%%l%%%m%p%%"));
+  EXPECT_TRUE(like("abcdefghijklmnop", "%a%c%%%e%i%%%l%%p"));
+  EXPECT_FALSE(like("abc", "abc%abc%"));
+  EXPECT_FALSE(like("abc", "abc%%%a%%%"));
+  EXPECT_FALSE(like("abcabcabcdef", "abc%abc%abc"));
+  EXPECT_FALSE(like("abcdefghi", "%abc%fe%ghi"));
+  EXPECT_FALSE(like("abcdefghi", "%%ac%%def%%ghi%%"));
+  EXPECT_FALSE(like("abcdefghi", "%abc%def%h"));
+  EXPECT_FALSE(like("abcdefghi", "%%abc%%df%%ghi%%"));
+  EXPECT_FALSE(like("abcdefghijklmnop", "a%q"));
+  EXPECT_FALSE(like("abcdefghijklmnop", "%a%%be%i%%l%%%m%k%%"));
+  EXPECT_FALSE(like("abcdefghijklmnop", "%a%f%%%e%i%%%l%%x%"));
+  EXPECT_TRUE(like("\nabcdef\nghijk\tlmnop\b", "\na%\ng%k\t%p\b"));
+  EXPECT_TRUE(like("\nabcdef\nghijk\tlmnop\b", "\na%p\b"));
+  EXPECT_TRUE(like("\nabcdef\nghijk\tlmnop\b", "%a%\t%p%"));
+  EXPECT_TRUE(like("\nabcdef\nghijk\tlmnop\b", "_a%p_"));
+  EXPECT_FALSE(like("\nabcdef\nghijk\tlmnop\b", "\na%\nm%"));
+  EXPECT_FALSE(like("\nabcdef\nghijk\tlmnop\b", "_a%o_"));
+
+  const auto input = generateString(kLikePatternCharacterSet);
+  const auto largeInput = generateString(kLikePatternCharacterSet, 66);
+  const auto anyWildcardInput = generateString(kAnyWildcardCharacter);
+  auto combinedInput = input + input + input + input + input;
+  auto patternNoTrailingWildcard = input + anyWildcardInput + input;
+  auto largerCombinedInput =
+      largeInput + input + largeInput + input + largeInput;
+  auto patternTrailingWildcard = anyWildcardInput + largeInput +
+      anyWildcardInput + largeInput + anyWildcardInput + input +
+      anyWildcardInput;
+  EXPECT_TRUE(like(combinedInput, patternNoTrailingWildcard));
+  EXPECT_TRUE(like(largerCombinedInput, patternTrailingWildcard));
+  EXPECT_FALSE(like(combinedInput, patternTrailingWildcard));
+  EXPECT_FALSE(like(largerCombinedInput, patternNoTrailingWildcard));
 }
 
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {

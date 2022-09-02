@@ -39,9 +39,37 @@ enum class PatternKind {
   kPrefix,
   /// Fixed pattern preceded by one or more '%', such as '%foo', '%%%hello'.
   kSuffix,
+  /// One or more fixed patterns separated by a contiguous stream of one or more
+  /// '%' e.g 'hello%%%world%', '%%hello%%%', '%%hello%%world%%'.
+  kMiddleWildcards,
   /// Patterns which do not fit any of the above types, such as 'hello_world',
   /// '_presto%'.
   kGeneric,
+};
+
+struct PatternMetadata {
+  PatternMetadata(
+      const PatternKind& patternKindArg,
+      vector_size_t numSingleWildcardsArg,
+      vector_size_t reducedPatternLengthArg,
+      vector_size_t numFixedPatternsArg,
+      const std::optional<std::vector<std::string>>& fixedPatternsArg =
+          std::nullopt)
+      : patternKind(patternKindArg),
+        numSingleWildcards(numSingleWildcardsArg),
+        reducedPatternLength(reducedPatternLengthArg),
+        numFixedPatterns(numFixedPatternsArg),
+        fixedPatterns(fixedPatternsArg) {}
+
+  const PatternKind patternKind;
+  // Number of '_' wildcards in the pattern.
+  const vector_size_t numSingleWildcards;
+  // Length of the fixed pattern in kFixed, kPrefix, and kSuffix patterns.
+  const vector_size_t reducedPatternLength;
+  // Number of fixed patterns in kMiddleWildcard patterns.
+  const vector_size_t numFixedPatterns;
+  // Vector of fixed patterns in kMiddleWildcard patterns.
+  const std::optional<std::vector<std::string>> fixedPatterns;
 };
 
 /// The functions in this file use RE2 as the regex engine. RE2 is fast, but
@@ -95,11 +123,7 @@ std::shared_ptr<exec::VectorFunction> makeRe2Extract(
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures();
 
-/// Return the pair {pattern kind, length of the fixed pattern} for fixed,
-/// prefix, and suffix patterns. Return the pair {pattern kind, number of '_'
-/// characters} for patterns with wildcard characters only. Return
-/// {kGenericPattern, 0} for generic patterns).
-std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern);
+PatternMetadata determinePatternKind(const StringView& pattern);
 
 std::shared_ptr<exec::VectorFunction> makeLike(
     const std::string& name,

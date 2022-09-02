@@ -404,26 +404,106 @@ bool matchSuffixPattern(
           length) == 0;
 }
 
+// Search for 'pattern' in 'input' starting from positions greater than
+// 'startPosition'.
+vector_size_t matchPatternAtPosition(
+    const StringView& input,
+    const StringView& pattern,
+    vector_size_t startPosition) {
+  const auto inputData = input.data();
+  const auto patternData = pattern.data();
+  const auto patternSize = pattern.size();
+  if (input.size() - startPosition < patternSize) {
+    return -1;
+  }
+  const auto lastPosition = input.size() - patternSize;
+
+  auto i = startPosition;
+  while (i <= lastPosition) {
+    if (std::memcmp(inputData + i, patternData, patternSize) == 0) {
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
 template <PatternKind P>
 class OptimizedLikeWithMemcmp final : public VectorFunction {
  public:
   OptimizedLikeWithMemcmp(
-      StringView pattern,
-      vector_size_t reducedPatternLength)
-      : pattern_{pattern}, reducedPatternLength_{reducedPatternLength} {}
+      const StringView& pattern,
+      const PatternMetadata& patternParameters)
+      : pattern_{pattern}, patternMetadata_{patternParameters} {
+    trailingWildcard_ = pattern_.data()[pattern_.size() - 1] == '%';
+  }
+
+  // Match 'numFixedPatterns' fixed patterns from the vector of fixedPatterns
+  // in the pattern with input in their order of occurence.
+  vector_size_t matchFixedPatterns(
+      const StringView& input,
+      const vector_size_t numMatches) const {
+    const auto fixedPatterns = patternMetadata_.fixedPatterns.value();
+    auto startPosition = 0;
+
+    for (auto i = 0; i < numMatches; i++) {
+      const std::string fixedPatternString{fixedPatterns[i]};
+      auto fixedPattern = StringView(fixedPatternString);
+      if ((startPosition = matchPatternAtPosition(
+               input, fixedPattern, startPosition)) == -1) {
+        return -1;
+      }
+      startPosition += fixedPattern.size();
+    }
+    return startPosition;
+  }
+
+  // Match all fixed patterns in an input string having fixed patterns
+  // interspersed with one or more '%' wildcard character streams.
+  bool matchFixedWithWildcard(const StringView& input) const {
+    auto startPosition = 0;
+    const auto numFixedPatterns = trailingWildcard_
+        ? patternMetadata_.numFixedPatterns
+        : patternMetadata_.numFixedPatterns - 1;
+    if ((startPosition = matchFixedPatterns(input, numFixedPatterns)) == -1) {
+      return false;
+    }
+
+    // Match the last fixed pattern with memcmp when there is no trailing '%'
+    // wildcard character.
+    if (!trailingWildcard_) {
+      const std::string lastPatternString{
+          patternMetadata_.fixedPatterns
+              .value()[patternMetadata_.numFixedPatterns - 1]};
+      auto lastPattern = StringView(lastPatternString);
+      auto fixedPatternLength = lastPattern.size();
+      return (
+          input.size() - fixedPatternLength >= startPosition &&
+          std::memcmp(
+              input.data() + input.size() - fixedPatternLength,
+              lastPattern.data(),
+              fixedPatternLength) == 0);
+    }
+    return true;
+  }
 
   bool match(StringView input) const {
     switch (P) {
       case PatternKind::kExactlyN:
-        return input.size() == reducedPatternLength_;
+        return input.size() == patternMetadata_.numSingleWildcards;
       case PatternKind::kAtLeastN:
-        return input.size() >= reducedPatternLength_;
+        return input.size() >= patternMetadata_.numSingleWildcards;
       case PatternKind::kFixed:
-        return matchExactPattern(input, pattern_, reducedPatternLength_);
+        return matchExactPattern(
+            input, pattern_, patternMetadata_.reducedPatternLength);
       case PatternKind::kPrefix:
-        return matchPrefixPattern(input, pattern_, reducedPatternLength_);
+        return matchPrefixPattern(
+            input, pattern_, patternMetadata_.reducedPatternLength);
       case PatternKind::kSuffix:
-        return matchSuffixPattern(input, pattern_, reducedPatternLength_);
+        return matchSuffixPattern(
+            input, pattern_, patternMetadata_.reducedPatternLength);
+      case PatternKind::kMiddleWildcards:
+        return matchFixedWithWildcard(input);
     }
   }
 
@@ -459,8 +539,9 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
   }
 
  private:
-  StringView pattern_;
-  vector_size_t reducedPatternLength_;
+  const StringView pattern_;
+  const PatternMetadata patternMetadata_;
+  bool trailingWildcard_;
 };
 
 class LikeWithRe2 final : public VectorFunction {
@@ -809,71 +890,75 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
   };
 }
 
-std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern) {
-  vector_size_t patternLength = pattern.size();
-  vector_size_t i = 0;
-  // Index of the first % or _ character.
-  vector_size_t wildcardStart = -1;
-  // Index of the first character that is not % and not _.
-  vector_size_t fixedPatternStart = -1;
-  // Total number of % characters.
-  vector_size_t anyCharacterWildcardCount = 0;
-  // Total number of _ characters.
-  vector_size_t singleCharacterWildcardCount = 0;
-  auto patternStr = pattern.data();
+PatternMetadata determinePatternKind(const StringView& pattern) {
+  auto i = 0;
+  const auto patternLength = pattern.size();
+  const auto patternString = pattern.str();
+  auto wildcardStart = 0;
+  auto numAnyWildcardStream = 0;
+  auto numWildcards = 0;
+  auto numAnyWildcards = 0;
+  auto numSingleWildcards = 0;
+  auto fixedPatternStart = 0;
+  auto numFixedPatterns = 0;
+  std::vector<std::string> fixedPatterns;
 
   while (i < patternLength) {
-    if (patternStr[i] == '%' || patternStr[i] == '_') {
-      // Ensures that pattern has a single contiguous stream of wildcard
-      // characters.
-      if (wildcardStart != -1) {
-        return std::make_pair(PatternKind::kGeneric, 0);
-      }
+    if (patternString[i] == '%' || patternString[i] == '_') {
       // Look till the last contiguous wildcard character, starting from this
       // index, is found, or the end of pattern is reached.
       wildcardStart = i;
       while (i < patternLength &&
-             (patternStr[i] == '%' || patternStr[i] == '_')) {
-        singleCharacterWildcardCount += (patternStr[i] == '_');
-        anyCharacterWildcardCount += (patternStr[i] == '%');
+             (patternString[i] == '%' || patternString[i] == '_')) {
+        numSingleWildcards += (patternString[i] == '_');
+        numAnyWildcards += (patternString[i] == '%');
         i++;
       }
+      numAnyWildcardStream += (numAnyWildcards > 0);
     } else {
-      // Ensure that pattern has a single fixed pattern.
-      if (fixedPatternStart != -1) {
-        return std::make_pair(PatternKind::kGeneric, 0);
-      }
       // Look till the end of fixed pattern, starting from this index, is found,
       // or the end of pattern is reached.
       fixedPatternStart = i;
       while (i < patternLength &&
-             (patternStr[i] != '%' && patternStr[i] != '_')) {
+             (patternString[i] != '%' && patternString[i] != '_')) {
         i++;
       }
+      numFixedPatterns++;
+      fixedPatterns.emplace_back(
+          patternString.substr(fixedPatternStart, i - fixedPatternStart));
     }
   }
+  numWildcards = numSingleWildcards + numAnyWildcards;
 
-  // Pattern contains wildcard characters only.
-  if (fixedPatternStart == -1) {
-    if (!anyCharacterWildcardCount) {
-      return {PatternKind::kExactlyN, singleCharacterWildcardCount};
+  // Pattern contains only wildcard characters.
+  if (!numFixedPatterns && numWildcards) {
+    if (!numAnyWildcards) {
+      return PatternMetadata(PatternKind::kExactlyN, numSingleWildcards, 0, 0);
     }
-    return {PatternKind::kAtLeastN, singleCharacterWildcardCount};
+    return PatternMetadata(PatternKind::kAtLeastN, numSingleWildcards, 0, 0);
   }
-  // Pattern contains no wildcard characters (is a fixed pattern).
-  if (wildcardStart == -1) {
-    return {PatternKind::kFixed, patternLength};
+  // Pattern is fixed if there are no wildcards.
+  if (!numWildcards && numFixedPatterns == 1) {
+    return PatternMetadata(PatternKind::kFixed, 0, patternLength, 0);
   }
-  // Pattern is generic if it has '_' wildcard characters and a fixed pattern.
-  if (singleCharacterWildcardCount) {
-    return {PatternKind::kGeneric, 0};
+  // Patterns containing one fixed pattern and a single stream of '%' wildcards
+  // is either a prefix or a suffix pattern. Based on the positions of the fixed
+  // pattern and contiguous wildcard character stream, classify accordingly.
+  if (!numSingleWildcards && numFixedPatterns <= 1 &&
+      numAnyWildcardStream <= 1) {
+    if (fixedPatternStart < wildcardStart) {
+      return PatternMetadata(PatternKind::kPrefix, 0, wildcardStart, 0);
+    }
+    return PatternMetadata(
+        PatternKind::kSuffix, 0, patternLength - fixedPatternStart, 0);
   }
-  // Classify pattern as prefix pattern or suffix pattern based on the
-  // positions of the fixed pattern and contiguous wildcard character stream.
-  if (fixedPatternStart < wildcardStart) {
-    return {PatternKind::kPrefix, wildcardStart};
+  // Patterns with multiple fixed patterns and '%' wildcard character streams
+  // are classified as kMiddleWildcard patterns.
+  if (!numSingleWildcards && numAnyWildcardStream && numFixedPatterns) {
+    return PatternMetadata(
+        PatternKind::kMiddleWildcards, 0, 0, numFixedPatterns, fixedPatterns);
   }
-  return {PatternKind::kSuffix, patternLength - fixedPatternStart};
+  return PatternMetadata(PatternKind::kGeneric, 0, 0, 0);
 }
 
 std::shared_ptr<exec::VectorFunction> makeLike(
@@ -928,28 +1013,30 @@ std::shared_ptr<exec::VectorFunction> makeLike(
       inputArgs[1].type->toString());
   auto pattern = constantPattern->as<ConstantVector<StringView>>()->valueAt(0);
   if (!escapeChar) {
-    PatternKind patternKind;
-    vector_size_t reducedLength;
-    std::tie(patternKind, reducedLength) = determinePatternKind(pattern);
+    auto patternMetadata = determinePatternKind(pattern);
 
-    switch (patternKind) {
+    switch (patternMetadata.patternKind) {
       case PatternKind::kExactlyN:
         return std::make_shared<
             OptimizedLikeWithMemcmp<PatternKind::kExactlyN>>(
-            pattern, reducedLength);
+            pattern, patternMetadata);
       case PatternKind::kAtLeastN:
         return std::make_shared<
             OptimizedLikeWithMemcmp<PatternKind::kAtLeastN>>(
-            pattern, reducedLength);
+            pattern, patternMetadata);
       case PatternKind::kFixed:
         return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kFixed>>(
-            pattern, reducedLength);
+            pattern, patternMetadata);
       case PatternKind::kPrefix:
         return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kPrefix>>(
-            pattern, reducedLength);
+            pattern, patternMetadata);
       case PatternKind::kSuffix:
         return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kSuffix>>(
-            pattern, reducedLength);
+            pattern, patternMetadata);
+      case PatternKind::kMiddleWildcards:
+        return std::make_shared<
+            OptimizedLikeWithMemcmp<PatternKind::kMiddleWildcards>>(
+            pattern, patternMetadata);
       default:
         return std::make_shared<LikeWithRe2>(pattern, escapeChar);
     }

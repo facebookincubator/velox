@@ -90,6 +90,10 @@ class LikeFunctionsBenchmark : public FunctionBaseTest,
         auto fixedPatternString = inputString.substr(fixedPatternStartIdx, 10);
         return generateRandomString(kAnyWildcardCharacter) + fixedPatternString;
       }
+      case PatternKind::kMiddleWildcards: {
+        auto anyWildcardString = generateRandomString(kAnyWildcardCharacter);
+        return anyWildcardString + inputString + anyWildcardString;
+      }
       default:
         return inputString;
     }
@@ -195,6 +199,10 @@ BENCHMARK_MULTI(prefixPattern) {
 
 BENCHMARK_MULTI(suffixPattern) {
   return benchmark->run(PatternKind::kSuffix);
+}
+
+BENCHMARK_MULTI(fixedPatternsWithWildcards) {
+  return benchmark->run(PatternKind::kMiddleWildcards);
 }
 
 BENCHMARK_DRAW_LINE();
