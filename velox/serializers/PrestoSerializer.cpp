@@ -294,9 +294,8 @@ void readValues<IntervalDayTime>(
   }
 }
 
-static const int64_t kInt64DeserializeMask = ~(static_cast<int64_t>(1) << 63);
-
 UnscaledLongDecimal readUnscaledLongDecimal(ByteStream* source) {
+  constexpr int64_t kInt64DeserializeMask = ~(static_cast<int64_t>(1) << 63);
   // ByteStream does not support reading int128_t values.
   auto low = source->read<int64_t>();
   auto high = source->read<int64_t>();
@@ -990,17 +989,22 @@ void VectorStream::append(folly::Range<const IntervalDayTime*> values) {
   }
 }
 
-static const __int128_t kInt128SerializeMask =
-    (static_cast<__int128_t>(1) << 127);
-
 template <>
 inline void VectorStream::append(
     folly::Range<const UnscaledLongDecimal*> values) {
+  constexpr int128_t kInt128SerializeMask = (static_cast<int128_t>(1) << 127);
   for (auto& value : values) {
-    __int128_t val = value.unscaledValue();
+    int128_t val = value.unscaledValue();
     // Presto Java UnscaledDecimal128 representation uses signed magnitude
     // representation. Only negative values differ in this representation.
+    // Due to this difference in representation, the UnscaledLongDecimal minimum
+    // value cannot be represented as a Presto UnscaledDecimal128 value. We
+    // throw an error in this case.
     if (val < 0) {
+      if (value == std::numeric_limits<UnscaledLongDecimal>::min()) {
+        VELOX_FAIL(
+            "Cannot serialize '{}' as a Presto UnscaledDecimal128 value", val);
+      }
       val *= -1;
       val |= kInt128SerializeMask;
     }
