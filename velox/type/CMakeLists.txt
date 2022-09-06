@@ -23,6 +23,7 @@ add_library(
   Filter.cpp
   IntervalDayTime.cpp
   UnscaledLongDecimal.cpp
+  UnscaledShortDecimal.cpp
   StringView.h
   Subfield.cpp
   Timestamp.cpp

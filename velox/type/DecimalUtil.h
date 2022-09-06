@@ -27,7 +27,7 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
-  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision];
+  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1];
 
   /// Helper function to convert a decimal value to string.
   template <typename T>
@@ -75,6 +75,12 @@ class DecimalUtil {
     } else {
       return UnscaledLongDecimal(rescaledValue);
     }
+  }
+
+  template <class T>
+  inline static bool isValueOverflow(const T& value) {
+    return value < std::numeric_limits<T>::min() ||
+        value > std::numeric_limits<T>::max();
   }
 };
 } // namespace facebook::velox

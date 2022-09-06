@@ -92,6 +92,10 @@ struct UnscaledLongDecimal {
     return unscaledValue_ <= other.unscaledValue_;
   }
 
+  bool operator>(const UnscaledLongDecimal& other) const {
+    return unscaledValue_ > other.unscaledValue_;
+  }
+
   UnscaledLongDecimal operator+(const UnscaledLongDecimal& other) const {
     return UnscaledLongDecimal(add(unscaledValue_, other.unscaledValue_));
   }
@@ -145,13 +149,7 @@ struct hash<facebook::velox::UnscaledLongDecimal> {
 template <>
 class numeric_limits<facebook::velox::UnscaledLongDecimal> {
  public:
-  static facebook::velox::UnscaledLongDecimal min() {
-    return facebook::velox::UnscaledLongDecimal(
-        std::numeric_limits<__int128_t>::min());
-  }
-  static facebook::velox::UnscaledLongDecimal max() {
-    return facebook::velox::UnscaledLongDecimal(
-        std::numeric_limits<__int128_t>::max());
-  }
+  static facebook::velox::UnscaledLongDecimal min();
+  static facebook::velox::UnscaledLongDecimal max();
 };
 } // namespace std

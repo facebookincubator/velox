@@ -217,16 +217,16 @@ TEST_F(DecimalArithmeticTest, decimalMultiplyTest) {
   VELOX_ASSERT_THROW(
       testDecimalExpr<TypeKind::LONG_DECIMAL>(
           {},
-          "c0 * 10.00",
+          "c0 * cast(10.0 as decimal(2,0))",
           {makeLongDecimalFlatVector(
-              {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 0))}),
-      "integer overflow: 170141183460469231731687303715884105727 * 1000");
+              {DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0))}),
+      "Decimal overflow");
 
   VELOX_ASSERT_THROW(
       testDecimalExpr<TypeKind::LONG_DECIMAL>(
           {},
-          "c0 * 10.00",
+          "c0 * cast(10.0 as decimal(2,0))",
           {makeLongDecimalFlatVector(
-              {std::numeric_limits<int128_t>::min()}, DECIMAL(38, 0))}),
-      "integer overflow: -170141183460469231731687303715884105728 * 1000");
+              {-DecimalUtil::kPowersOfTen[37]}, DECIMAL(38, 0))}),
+      "Decimal overflow");
 }

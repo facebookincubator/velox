@@ -15,8 +15,23 @@
  */
 
 #include "velox/type/UnscaledLongDecimal.h"
+#include "velox/type/DecimalUtil.h"
 
 namespace std {
+
+facebook::velox::UnscaledLongDecimal
+numeric_limits<facebook::velox::UnscaledLongDecimal>::max() {
+  // Returning 10^38 - 1.
+  return facebook::velox::UnscaledLongDecimal(
+      facebook::velox::DecimalUtil::kPowersOfTen[38] - 1);
+}
+
+facebook::velox::UnscaledLongDecimal
+numeric_limits<facebook::velox::UnscaledLongDecimal>::min() {
+  // Returning -10^38 - 1.
+  return facebook::velox::UnscaledLongDecimal(
+      -facebook::velox::DecimalUtil::kPowersOfTen[38] + 1);
+}
 
 string to_string(facebook::velox::int128_t x) {
   if (x == 0) {

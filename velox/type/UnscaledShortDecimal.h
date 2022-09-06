@@ -102,13 +102,7 @@ struct hash<facebook::velox::UnscaledShortDecimal> {
 template <>
 class numeric_limits<facebook::velox::UnscaledShortDecimal> {
  public:
-  static facebook::velox::UnscaledShortDecimal min() {
-    return facebook::velox::UnscaledShortDecimal(
-        std::numeric_limits<int64_t>::min());
-  }
-  static facebook::velox::UnscaledShortDecimal max() {
-    return facebook::velox::UnscaledShortDecimal(
-        std::numeric_limits<int64_t>::max());
-  }
+  static facebook::velox::UnscaledShortDecimal min();
+  static facebook::velox::UnscaledShortDecimal max();
 };
 } // namespace std
