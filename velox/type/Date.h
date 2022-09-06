@@ -111,8 +111,7 @@ struct fmt::formatter<facebook::velox::Date> {
 
   template <typename FormatContext>
   auto format(const facebook::velox::Date& d, FormatContext& ctx) {
-    auto x = std::to_string(d);
-    return fmt::format_to(ctx.out(), "{}", x);
+    return fmt::format_to(ctx.out(), "{}", std::to_string(d));
   }
 };
 
