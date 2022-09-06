@@ -70,8 +70,8 @@ class ReduceFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& /* outputType */,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     VELOX_CHECK_EQ(args.size(), 4);
 
     // Flatten input array.
@@ -86,11 +86,11 @@ class ReduceFunction : public exec::VectorFunction {
 
     SelectivityVector arrayRows(flatArray->size(), false);
     BufferPtr elementIndices =
-        allocateIndices(flatArray->size(), context->pool());
+        allocateIndices(flatArray->size(), context.pool());
 
     const auto& initialState = args[1];
     auto partialResult =
-        BaseVector::create(initialState->type(), rows.end(), context->pool());
+        BaseVector::create(initialState->type(), rows.end(), context.pool());
 
     // Process null and empty arrays.
     auto* rawNulls = flatArray->rawNulls();
@@ -105,8 +105,8 @@ class ReduceFunction : public exec::VectorFunction {
 
     // Fix finalSelection at "rows" unless already fixed.
     VarSetter finalSelection(
-        context->mutableFinalSelection(), &rows, context->isFinalSelection());
-    VarSetter isFinalSelection(context->mutableIsFinalSelection(), false);
+        context.mutableFinalSelection(), &rows, context.isFinalSelection());
+    VarSetter isFinalSelection(context.mutableIsFinalSelection(), false);
 
     // Iteratively apply input function to array elements.
     // First, apply input function to first elements of all arrays.
@@ -132,7 +132,7 @@ class ReduceFunction : public exec::VectorFunction {
 
         std::vector<VectorPtr> lambdaArgs = {state, nthElement};
         entry.callable->apply(
-            arrayRows, rows, nullptr, context, lambdaArgs, &partialResult);
+            arrayRows, rows, nullptr, &context, lambdaArgs, &partialResult);
         state = partialResult;
         n++;
       }
@@ -143,7 +143,7 @@ class ReduceFunction : public exec::VectorFunction {
     while (auto entry = outputFuncIt.next()) {
       std::vector<VectorPtr> lambdaArgs = {partialResult};
       entry.callable->apply(
-          *entry.rows, rows, nullptr, context, lambdaArgs, result);
+          *entry.rows, rows, nullptr, &context, lambdaArgs, &result);
     }
   }
 
