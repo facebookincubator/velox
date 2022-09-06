@@ -251,6 +251,27 @@ TEST(TypeTest, parseStringToDate) {
   EXPECT_EQ(parseDate("2135-11-09").days(), 60577);
 }
 
+TEST(TypeTest, dateFormat) {
+  auto parseDate = [](const std::string& dateStr) {
+    Date returnDate;
+    parseTo(dateStr, returnDate);
+    return returnDate;
+  };
+
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("2015-12-24")), std::string("2015-12-24"));
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("1970-01-01")), std::string("1970-01-01"));
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("2000-03-10")), std::string("2000-03-10"));
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("1945-05-20")), std::string("1945-05-20"));
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("2135-11-09")), std::string("2135-11-09"));
+  EXPECT_EQ(
+      fmt::format("{}", parseDate("1812-04-15")), std::string("1812-04-15"));
+}
+
 TEST(TypeTest, map) {
   auto map0 = MAP(INTEGER(), ARRAY(BIGINT()));
   EXPECT_EQ(map0->toString(), "MAP<INTEGER,ARRAY<BIGINT>>");
