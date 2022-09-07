@@ -16,9 +16,13 @@
 
 #pragma once
 
+#include <folly/Range.h>
 #include <string>
+//#include "DecoderUtil.h"
 
 namespace facebook::velox::dwio::common {
+
+using RowSet = folly::Range<const int32_t*>;
 
 enum CompressionKind {
   CompressionKind_NONE = 0,
@@ -36,5 +40,23 @@ enum CompressionKind {
 std::string compressionKindToString(CompressionKind kind);
 
 constexpr uint64_t DEFAULT_COMPRESSION_BLOCK_SIZE = 256 * 1024;
+
+enum class RowSetDensity {
+  kFull = 0,
+  kDense = 1,
+  kSparse = 2
+
+};
+
+enum class RowSetNullability { kNoNull = 0, kPartialNulls = 1, kAllNulls = 2 };
+
+static FOLLY_ALWAYS_INLINE RowSetNullability rowSetNullability(
+    const RowSet& rows,
+    const uint64_t* FOLLY_NULLABLE nulls,
+    uint64_t nullsOffset,
+    uint64_t totalNumNulls) {
+  uint32_t numRows = rows.size();
+  uint64_t totalNumRows = rows[numRows - 1] + 1;
+}
 
 } // namespace facebook::velox::dwio::common

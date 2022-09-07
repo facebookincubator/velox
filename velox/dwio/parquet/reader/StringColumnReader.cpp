@@ -16,7 +16,7 @@
 
 #include "velox/dwio/parquet/reader/StringColumnReader.h"
 #include "velox/dwio/common/BufferUtil.h"
-#include "velox/dwio/dwrf/common/DecoderUtil.h"
+//#include "velox/dwio/dwrf/common/DecoderUtil.h"
 
 namespace facebook::velox::parquet {
 

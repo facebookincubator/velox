@@ -67,7 +67,10 @@ target_link_libraries(
   ${TEST_LINK_LIBS})
 
 # The bit unpacking benchmark tests require arrow and duckdb
+message(STATUS "VELOX_ENABLE_ARROW ${VELOX_ENABLE_ARROW}")
 if(VELOX_ENABLE_ARROW)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mbmi2 -mbmi -mavx")
+
   add_executable(velox_dwio_common_bitunpacking_test BitUnpackingTest.cpp)
   add_test(velox_dwio_common_bitunpacking_test
            velox_dwio_common_bitunpacking_test)

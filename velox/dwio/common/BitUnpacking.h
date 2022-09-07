@@ -19,6 +19,8 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/common/exception/Exception.h"
 
+using RowSet = folly::Range<const int32_t*>;
+
 #if defined(__AVX2__) and defined(__BMI2__)
 
 #include <immintrin.h>
@@ -79,13 +81,76 @@ static constexpr const uint64_t kPdepMask32[] = {
     0x07ffffff07ffffff, 0x0fffffff0fffffff, 0x1fffffff1fffffff,
     0x3fffffff3fffffff, 0x7fffffff7fffffff, 0xffffffffffffffff};
 
+static constexpr const uint64_t kPdepMaskRows8[9][8] = {
+    0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+
+   };
+
+static constexpr const uint64_t kRows8[256] = {
+    0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+
+    };
+
+static constexpr const uint64_t kShuffleMaskRows8[9][8] = {
+    0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,0x0000000000000000,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+    0x0000000000000001,0x0000000000000002,0x0000000000000003,0x0000000000000004,0x0000000000000005,0x0000000000000006,0x0000000000000007,0x0000000000000008,
+    0x0000000000000003,0x000000000000000c,0x000000000000000f,0x0000000000000030,0x0000000000000033,0x000000000000003c,0x000000000000003f,0x00000000000000c0,
+
+    };
+
+inline void unpack8_1(
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
+    uint64_t inputBufferLen,
+    uint64_t numValues,
+    uint8_t* FOLLY_NONNULL & outputBuffer) {
+
+  DWIO_ENSURE((numValues & 0x7) == 0);
+  DWIO_ENSURE(inputBufferLen * 8 >= numValues);
+
+  uint64_t numBytes = (numValues + 7) / 8;
+  auto readEndOffset = inputBuffer + numBytes;
+
+  // Process bitWidth bytes (8 values) a time. Note that for bitWidth 8, the
+  // performance of direct memcpy is about the same as this solution.
+  while (inputBuffer <= readEndOffset) {
+    // Using memcpy() here may result in non-optimized loops by clong.
+    uint8_t val = *inputBuffer;
+    *reinterpret_cast<uint64_t*>(outputBuffer) = kRows8[val];
+
+    inputBuffer ++;
+    outputBuffer += 8;
+  }
+}
+
 // Unpack numValues number of uint16_t values with bitWidth in
 // [1, 4] range.
 static inline void unpack1to4(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
 
   uint64_t numBytesPerTime = (bitWidth * 16 + 7) / 8;
@@ -129,9 +194,9 @@ static inline void unpack1to4(
 // clang.
 static inline void unpack5to8(
     const uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
 
   auto readEndOffset = inputBuffer + (numValues * bitWidth + 7) / 8;
@@ -173,9 +238,9 @@ static inline void unpack5to8(
 
 // Unpack numValues number of uint16_t values with bitWidth = 8.
 static inline void unpack8_cast(
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t numBytes = (numValues * 8 + 7) / 8;
   auto readEndOffset = inputBuffer + numBytes;
 
@@ -211,9 +276,9 @@ static inline void unpack8_cast(
 // Unpack numValues number of uint16_t values with bitWidth in {9, 11, 13, 15}.
 static inline void unpack9to15(
     const uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask16[bitWidth];
 
   uint8_t bytes2 = bitWidth / 2;
@@ -245,9 +310,9 @@ static inline void unpack9to15(
 
 // Unpack numValues number of uint16_t values with bitWidth = 16
 static inline void unpack16(
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t numBytes = numValues * 2;
   std::memcpy(outputBuffer, inputBuffer, numBytes);
 
@@ -258,9 +323,9 @@ static inline void unpack16(
 // Unpack numValues number of uint32_t values with bitWidth in [5, 8] range.
 static inline void unpack1to7(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask8[bitWidth];
 
   uint64_t numBytes = (numValues * bitWidth + 7) / 8;
@@ -296,9 +361,9 @@ static inline void unpack1to7(
 
 // Unpack numValues number of uint32_t values with bitWidth = 8.
 static inline void unpack8(
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t numBytes = (numValues * 8 + 7) / 8;
   auto readEndOffset = inputBuffer + numBytes;
 
@@ -316,9 +381,9 @@ static inline void unpack8(
 // Unpack numValues number of uint32_t values with bitWidth in [9, 15] range.
 inline void unpack9to15(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask16[bitWidth];
 
   uint8_t shift1 = bitWidth * 4;
@@ -349,9 +414,9 @@ inline void unpack9to15(
 
 // Unpack numValues number of uint32_t values with bitWidth = 16.
 static inline void unpack16(
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t numBytes = (numValues * 16 + 7) / 8;
   auto readEndOffset = inputBuffer + numBytes;
 
@@ -369,9 +434,9 @@ static inline void unpack16(
 // Unpack numValues number of uint32_t values with bitWidth in [17, 21] range.
 static inline void unpack17to21(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask32[bitWidth];
 
   uint8_t rightShift1 = bitWidth * 2;
@@ -405,9 +470,9 @@ static inline void unpack17to21(
 // Unpack numValues number of uint32_t values with bitWidth in [22, 31] range.
 static inline void unpack22to31(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t pdepMask = kPdepMask32[bitWidth];
 
   uint8_t rightShift1 = bitWidth * 2;
@@ -441,9 +506,9 @@ static inline void unpack22to31(
 
 // Unpack numValues number of uint16_t values with bitWidth = 16
 static inline void unpack32(
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   uint64_t numBytes = numValues * 4;
   std::memcpy(outputBuffer, inputBuffer, numBytes);
 
@@ -457,10 +522,10 @@ static inline void unpack32(
 /// packed values.
 inline void unpack(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t inputBufferLen,
     uint64_t numValues,
-    uint8_t*& outputBuffer) {
+    uint8_t* FOLLY_NONNULL & outputBuffer) {
   DWIO_ENSURE(bitWidth >= 1 && bitWidth <= 8);
   DWIO_ENSURE((numValues & 0x7) == 0);
   DWIO_ENSURE(inputBufferLen * 8 >= bitWidth * numValues);
@@ -496,10 +561,10 @@ inline void unpack(
 /// packed values.
 inline void unpack(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t inputBufferLen,
     uint64_t numValues,
-    uint16_t*& outputBuffer) {
+    uint16_t* FOLLY_NONNULL & outputBuffer) {
   DWIO_ENSURE(bitWidth >= 1 && bitWidth <= 16);
   DWIO_ENSURE((numValues & 0x7) == 0);
   DWIO_ENSURE(inputBufferLen * 8 >= bitWidth * numValues);
@@ -540,10 +605,10 @@ inline void unpack(
 /// packed values.
 inline void unpack(
     uint8_t bitWidth,
-    const uint8_t*& inputBuffer,
+    const uint8_t* FOLLY_NONNULL & inputBuffer,
     uint64_t inputBufferLen,
     uint64_t numValues,
-    uint32_t*& outputBuffer) {
+    uint32_t* FOLLY_NONNULL & outputBuffer) {
   DWIO_ENSURE(bitWidth >= 1 && bitWidth <= 32);
   DWIO_ENSURE((numValues & 0x7) == 0);
   DWIO_ENSURE(inputBufferLen * 8 >= bitWidth * numValues);
@@ -600,6 +665,8 @@ inline void unpack(
   }
 }
 
+#if 0
+// Uncomment to run to generate the masks
 void generatePdepMasks(uint8_t outBitWidth) {
   uint8_t numBatches = 64 / outBitWidth;
   for (uint8_t i = 0; i <= outBitWidth; i++) {
@@ -613,6 +680,7 @@ void generatePdepMasks(uint8_t outBitWidth) {
   }
   std::cout << std::endl;
 }
+#endif
 } // namespace facebook::velox::dwio::common
 
 #else

@@ -18,6 +18,7 @@
 
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/common/BitUnpacking.h"
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/TypeUtil.h"
@@ -44,11 +45,65 @@ class RleDecoder : public dwio::common::IntDecoder<isSigned> {
     VELOX_UNREACHABLE();
   }
 
-  void next(
-      int64_t* FOLLY_NONNULL /*data*/,
-      uint64_t /*numValues*/,
-      const uint64_t* FOLLY_NULLABLE /*nulls*/) override {
+  virtual void next(
+      int64_t* FOLLY_NONNULL data,
+      uint64_t numValues,
+      const uint64_t* FOLLY_NULLABLE nulls) override {
     VELOX_UNREACHABLE();
+  }
+
+  // The rows are full, and no nulls
+  template <typename T>
+  void next(T* FOLLY_NONNULL& outputBuffer, uint64_t numValues) {
+    while (numValues > 0) {
+      if (numRemainingUnpackedValues_ > 0) {
+        auto numValuesToRead =
+            std::min<uint32_t>(numValues, numRemainingUnpackedValues_);
+        copyRemainingUnpackedValues(outputBuffer, numValuesToRead);
+
+        numValues -= numValuesToRead;
+      } else {
+        if (remainingValues_ == 0) {
+          readHeader();
+        }
+
+        auto numValuesToRead = std::min<uint32_t>(numValues, remainingValues_);
+        if (repeating_) {
+          std::fill(outputBuffer, outputBuffer + numValuesToRead, value_);
+          outputBuffer += numValuesToRead;
+          remainingValues_ -= numValuesToRead;
+        } else {
+          remainingUnpackedValuesOffset_ = 0;
+          // The parquet standard requires the bit packed values are always a
+          // multiple of 8. So we read a multiple of 8 values each time
+          dwio::common::unpack(
+              bitWidth_,
+              reinterpret_cast<const uint8_t * FOLLY_NONNULL&>(
+                  super::bufferStart),
+              super::bufferEnd - super::bufferStart,
+              numValuesToRead & 0xffff'fff8,
+              //              outputBuffer);
+              reinterpret_cast<T * FOLLY_NONNULL&>(outputBuffer));
+          remainingValues_ -= (numValuesToRead & 0xffff'fff8);
+
+          // Unpack the next 8 values to remainingUnpackedValues_ if necessary
+          if ((numValuesToRead & 7) != 0) {
+            T* output = reinterpret_cast<T*>(remainingUnpackedValues_);
+            dwio::common::unpack(
+                bitWidth_,
+                reinterpret_cast<const uint8_t*>(super::bufferStart),
+                super::bufferEnd - super::bufferStart,
+                8,
+                output);
+
+            copyRemainingUnpackedValues(outputBuffer, numValuesToRead | 7);
+            remainingValues_ -= 8;
+          }
+        }
+
+        numValues -= numValuesToRead;
+      }
+    }
   }
 
   void skip(uint64_t numValues) override {
@@ -235,6 +290,7 @@ class RleDecoder : public dwio::common::IntDecoder<isSigned> {
         skip<false>(tailSkip, 0, nullptr);
       }
     } else {
+      //      x
       bulkScan<hasFilter, hasHook, false>(rowsAsRange, nullptr, visitor);
     }
   }
@@ -387,6 +443,23 @@ class RleDecoder : public dwio::common::IntDecoder<isSigned> {
     }
   }
 
+  template <typename T>
+  inline void copyRemainingUnpackedValues(
+      T* FOLLY_NONNULL& outputBuffer,
+      int8_t numValues) {
+    VELOX_CHECK_LE(numValues, numRemainingUnpackedValues_);
+
+    std::memcpy(
+        outputBuffer,
+        reinterpret_cast<T*>(remainingUnpackedValues_) +
+            remainingUnpackedValuesOffset_,
+        numValues);
+
+    outputBuffer += numValues;
+    numRemainingUnpackedValues_ -= numValues;
+    remainingUnpackedValuesOffset_ += numValues;
+  }
+
   const int8_t bitWidth_;
   const int8_t byteWidth_;
   const uint64_t bitMask_;
@@ -395,6 +468,10 @@ class RleDecoder : public dwio::common::IntDecoder<isSigned> {
   int64_t value_;
   int8_t bitOffset_{0};
   bool repeating_;
+
+  uint64_t remainingUnpackedValues_[8];
+  int8_t remainingUnpackedValuesOffset_{0};
+  int8_t numRemainingUnpackedValues_{0};
 };
 
 } // namespace facebook::velox::parquet

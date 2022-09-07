@@ -42,7 +42,7 @@ class IntDecoder {
         useVInts(useVInts),
         numBytes(numBytes) {}
 
-  // Constructs for use in Parquet /Alphawhere the buffer is always preloaded.
+  // Constructs for use in Parquet/Alpha where the buffer is always preloaded.
   IntDecoder(const char* FOLLY_NONNULL start, const char* FOLLY_NONNULL end)
       : bufferStart(start), bufferEnd(end), useVInts(false), numBytes(0) {}
 
@@ -172,6 +172,86 @@ class IntDecoder {
         bitOffset;
   }
 
+  static inline uint64_t readVuLong(
+      const char* FOLLY_NONNULL & bufferStart,
+      const char* FOLLY_NONNULL bufferEnd) {
+    if (LIKELY(bufferEnd - bufferStart >= folly::kMaxVarintLength64)) {
+      const char* p = bufferStart;
+      uint64_t val;
+      do {
+        int64_t b;
+        b = *p++;
+        val = (b & 0x7f);
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 7;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 14;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 21;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 28;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 35;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 42;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 49;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x7f) << 56;
+        if (UNLIKELY(b >= 0)) {
+          break;
+        }
+        b = *p++;
+        val |= (b & 0x01) << 63;
+        if (LIKELY(b >= 0)) {
+          break;
+        } else {
+          DWIO_RAISE(fmt::format(
+              "Invalid encoding: likely corrupt data.  bytes remaining: {} , byte: {}, val: {}",
+              bufferEnd - bufferStart,
+              b,
+              val));
+        }
+      } while (false);
+      bufferStart = p;
+      return val;
+    } else {
+      int64_t result = 0;
+      int64_t offset = 0;
+      signed char ch;
+      do {
+        ch = *(bufferStart++);
+        result |= (ch & BASE_128_MASK) << offset;
+        offset += 7;
+      } while (ch < 0);
+      return result;
+    }
+  }
+
  protected:
   template <typename T>
   void bulkReadFixed(uint64_t size, T* FOLLY_NONNULL result);
@@ -227,8 +307,8 @@ class IntDecoder {
   }
 
   const std::unique_ptr<dwio::common::SeekableInputStream> inputStream;
-  const char* FOLLY_NULLABLE bufferStart;
-  const char* FOLLY_NULLABLE bufferEnd;
+  const char* FOLLY_NONNULL bufferStart;
+  const char* FOLLY_NONNULL bufferEnd;
   const bool useVInts;
   const uint32_t numBytes;
 };
@@ -250,84 +330,7 @@ FOLLY_ALWAYS_INLINE signed char IntDecoder<isSigned>::readByte() {
 
 template <bool isSigned>
 FOLLY_ALWAYS_INLINE uint64_t IntDecoder<isSigned>::readVuLong() {
-  if (LIKELY(bufferEnd - bufferStart >= folly::kMaxVarintLength64)) {
-    const char* p = bufferStart;
-    uint64_t val;
-    do {
-      int64_t b;
-      b = *p++;
-      val = (b & 0x7f);
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 7;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 14;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 21;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 28;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 35;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 42;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 49;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x7f) << 56;
-      if (UNLIKELY(b >= 0)) {
-        break;
-      }
-      b = *p++;
-      val |= (b & 0x01) << 63;
-      if (LIKELY(b >= 0)) {
-        break;
-      } else {
-        DWIO_RAISE(fmt::format(
-            "Invalid encoding: likely corrupt data.  bytes remaining: {} , useVInts: {}, numBytes: {}, Input Stream Name: {}, byte: {}, val: {}",
-            bufferEnd - bufferStart,
-            useVInts,
-            numBytes,
-            inputStream->getName(),
-            b,
-            val));
-      }
-    } while (false);
-    bufferStart = p;
-    return val;
-  } else {
-    int64_t result = 0;
-    int64_t offset = 0;
-    signed char ch;
-    do {
-      ch = readByte();
-      result |= (ch & BASE_128_MASK) << offset;
-      offset += 7;
-    } while (ch < 0);
-    return result;
-  }
+  return readVuLong(bufferStart, bufferEnd);
 }
 
 template <bool isSigned>

@@ -43,6 +43,7 @@ std::vector<uint8_t> output(kNumValues * sizeof(uint32_t), 0);
 uint8_t* outputBuffer = output.data();
 
 std::vector<uint32_t> rows(kNumValues);
+std::vector<uint8_t> rowsBitmap(kNumValues);
 
 // BENCHMARK_NAMED_PARAM was not used to reduce the noise caused by not
 // inlining.
@@ -1665,6 +1666,13 @@ BENCHMARK(velox_1_8) {
       1, inputIter, BYTES(1), kNumValues, outputIter);
 }
 
+BENCHMARK(velox_1_8_direct) {
+  const uint8_t* inputIter = inputBuffer;
+  uint8_t* outputIter = outputBuffer;
+  facebook::velox::dwio::common::unpack8_1(
+      inputIter, BYTES(1), kNumValues, outputIter);
+}
+
 BENCHMARK(velox_2_8) {
   const uint8_t* inputIter = inputBuffer;
   uint8_t* outputIter = outputBuffer;
@@ -2207,6 +2215,8 @@ int32_t decode1To24(
   return i;
 }
 
+uint32_t numRows;
+
 BENCHMARK(intdecoder_1_32) {
   const uint64_t* inputIter = reinterpret_cast<const uint64_t*>(inputBuffer);
   uint32_t* outputIter = reinterpret_cast<uint32_t*>(outputBuffer);
@@ -2484,11 +2494,37 @@ void populateInputBuffer(
   }
 }
 
+uint32_t populateRows(float fillFactor) {
+  uint32_t numRows = 0;
+  uint32_t currentRow = 0;
+  while (currentRow < kNumValues && numRows < kNumValues) {
+    currentRow += rand() % (int)(1.0 / fillFactor) + 1;
+    rows[numRows++] = currentRow;
+  }
+
+  uint32_t rowsIndex = 0;
+  for (int i = 0; i < numRows / 8; i += 8) {
+    uint8_t bitmap = 0;
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+    bitmap |= 1 << (rows[rowsIndex++] - currentRow);
+
+    rowsBitmap[i] = bitmap;
+  }
+  return numRows;
+}
+
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   populateInputBuffer(16, inputBuffer, BYTES(16));
-  std::iota(rows.begin(), rows.end(), 0);
+  //  std::iota(rows.begin(), rows.end(), 0);
+  numRows = populateRows(0.05);
 
   runBenchmarks();
 
