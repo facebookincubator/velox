@@ -62,12 +62,11 @@ macro(build_folly)
   set(FOLLY_BENCHMARK_STATIC_LIB
       "${FOLLY_PREFIX}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}follybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX}"
   )
-  # TODO Correctly use CMAKE_CXX_FLAGS defined on the project. Using them makes folly linking
-  # issues as described on:
-  # https://github.com/facebook/folly/blob/main/folly/container/detail/F14IntrinsicsAvailability.h#L32-L34
-  set(CMAKE_CXX_FLAGS_FOLLY "-mavx2 -mfma -mavx -mf16c -mlzcnt -std=c++17")
+  if(NOT SCRIPT_CXX_FLAGS)
+    GET_SCRIPT_CXX_FLAGS()
+  endif()
   set(FOLLY_CMAKE_ARGS
-      "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS_FOLLY}"
+      "-DCMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}"
       -DCMAKE_CXX_STANDARD=17
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
       "-DCMAKE_INSTALL_PREFIX=${FOLLY_PREFIX}")

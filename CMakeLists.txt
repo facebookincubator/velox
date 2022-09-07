@@ -167,16 +167,24 @@ set(POSITION_INDEPENDENT_CODE True)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS)
+# Helper function to retrieve compiler flags
+function(GET_SCRIPT_CXX_FLAGS)
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE HELPER_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS)
 
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
-endif()
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  set(SCRIPT_CXX_FLAGS
+      "${HELPER_CXX_FLAGS}"
+      PARENT_SCOPE)
+endfunction()
+
+GET_SCRIPT_CXX_FLAGS()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
