@@ -154,7 +154,8 @@ class SubstraitVeloxPlanConverter {
   /// conditions in the binary tree structure into a vector.
   void flattenConditions(
       const ::substrait::Expression& sFilter,
-      std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions);
+      std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,
+      std::vector<::substrait::Expression_SingularOrList>& singularOrLists);
 
   /// Used to find the function specification in the constructed function map.
   std::string findFuncSpec(uint64_t id);
@@ -266,7 +267,8 @@ class SubstraitVeloxPlanConverter {
   /// Returns whether the args of a scalar function being field or
   /// field with literal. If yes, extract and set the field index.
   bool fieldOrWithLiteral(
-      const ::substrait::Expression_ScalarFunction& function,
+      const ::google::protobuf::RepeatedPtrField<::substrait::FunctionArgument>&
+          arguments,
       uint32_t& fieldIndex);
 
   /// Separate the functions to be two parts:
@@ -277,7 +279,8 @@ class SubstraitVeloxPlanConverter {
       const std::vector<::substrait::Expression_ScalarFunction>&
           scalarFunctions,
       std::vector<::substrait::Expression_ScalarFunction>& subfieldFunctions,
-      std::vector<::substrait::Expression_ScalarFunction>& remainingFunctions);
+      std::vector<::substrait::Expression_ScalarFunction>& remainingFunctions,
+      std::vector<::substrait::Expression_SingularOrList>& singularOrLists);
 
   /// Returns whether a function can be pushed down.
   bool canPushdownCommonFunction(
@@ -296,26 +299,19 @@ class SubstraitVeloxPlanConverter {
       const ::substrait::Expression_ScalarFunction& scalarFunction,
       const std::unordered_set<uint32_t>& inCols);
 
+  bool canPushdownSingularList(
+      const ::substrait::Expression_SingularOrList& singularList);
+
   /// Returns a set of unique column indices for IN function to be pushed down.
   std::unordered_set<uint32_t> getInColIndices(
-      const std::vector<::substrait::Expression_ScalarFunction>&
-          scalarFunctions);
-
-  /// Return the column index from IN function, and check whether the
-  /// IN function is valid.
-  uint32_t getColumnIndexFromIn(
-      const ::substrait::Expression_ScalarFunction& scalarFunction);
+      const std::vector<::substrait::Expression_SingularOrList>&
+          singularOrLists);
 
   /// Check whether the chidren functions of this scalar function have the same
   /// column index. Curretly used to check whether the two chilren functions of
   /// 'or' expression are effective on the same column.
   bool chidrenFunctionsOnSameField(
       const ::substrait::Expression_ScalarFunction& function);
-
-  /// Extract the list from in function, and set it to the filter info.
-  void setInValues(
-      const ::substrait::Expression_ScalarFunction& scalarFunction,
-      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap);
 
   /// Extract the scalar function, and set the filter info for different types
   /// of columns. If reverse is true, the opposite filter info will be set.
@@ -324,6 +320,13 @@ class SubstraitVeloxPlanConverter {
       const std::vector<TypePtr>& inputTypeList,
       std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap,
       bool reverse = false);
+
+  uint32_t getColumnIndexFromSingularOrList(
+      const ::substrait::Expression_SingularOrList& singularOrList);
+
+  void setSingularListValues(
+      const ::substrait::Expression_SingularOrList& singularOrList,
+      std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap);
 
   /// Set the filter info for a column base on the information
   /// extracted from filter condition.
@@ -385,7 +388,9 @@ class SubstraitVeloxPlanConverter {
       const std::vector<std::string>& inputNameList,
       const std::vector<TypePtr>& inputTypeList,
       const std::vector<::substrait::Expression_ScalarFunction>&
-          subfieldFunctions);
+          subfieldFunctions,
+      const std::vector<::substrait::Expression_SingularOrList>&
+          singularOrLists);
 
   /// Connect all remaining functions with 'and' relation
   /// for the use of remaingFilter in Hive Connector.
@@ -394,6 +399,17 @@ class SubstraitVeloxPlanConverter {
       std::vector<TypePtr> inputTypeList,
       const std::vector<::substrait::Expression_ScalarFunction>&
           remainingFunctions);
+
+  core::TypedExprPtr connectWithAnd(
+      core::TypedExprPtr remainingFilter,
+      std::vector<std::string> inputNameList,
+      std::vector<TypePtr> inputTypeList,
+      const std::vector<::substrait::Expression_SingularOrList>&
+          singularOrLists);
+
+  core::TypedExprPtr connectWithAnd(
+      core::TypedExprPtr filters,
+      core::TypedExprPtr expr);
 
   /// Set the phase of Aggregation.
   void setPhase(
