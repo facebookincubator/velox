@@ -46,6 +46,9 @@ add_executable(
   RoundRobinPartitionFunctionTest.cpp
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
+  PartitionAndSerialize.cpp
+  ShuffleWrite.cpp
+  SparkShuffleTest.cpp
   SpillTest.cpp
   SpillerTest.cpp
   StreamingAggregationTest.cpp

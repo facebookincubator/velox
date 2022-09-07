@@ -26,7 +26,8 @@ std::unique_ptr<VectorSerde>& getVectorSerde() {
 } // namespace
 
 bool registerVectorSerde(std::unique_ptr<VectorSerde> serde) {
-  VELOX_CHECK(!getVectorSerde().get(), "Vector serde is already registered");
+  //  VELOX_CHECK(!getVectorSerde().get(), "Vector serde is already
+  //  registered");
   getVectorSerde() = std::move(serde);
   return true;
 }
