@@ -304,6 +304,13 @@ set(FOLLY_WITH_DEPENDENCIES
     ${FMT}
     ${gflags_LIBRARIES})
 
+if(NOT ${VELOX_BUILD_MINIMAL})
+  list(APPEND FOLLY_WITH_DEPENDENCIES
+  ${LZ4}
+  ${ZSTD}
+  ${ZLIB_LIBRARIES})
+endif()
+
 set(FOLLY ${FOLLY_LIBRARIES})
 set(FOLLY_BENCHMARK Folly::follybenchmark)
 
