@@ -764,8 +764,16 @@ TEST_F(CastExprTest, decimalToDecimal) {
       testComplexCast(
           "c0",
           makeNullableLongDecimalFlatVector(
-              {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 0)),
+              {DecimalUtil::kPowersOfTen[38] - 1}, DECIMAL(38, 0)),
           makeNullableLongDecimalFlatVector(
               {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 1))),
-      "Cannot cast DECIMAL '170141183460469231731687303715884105727' to DECIMAL(38,1)");
+      "Cannot cast DECIMAL '99999999999999999999999999999999999999' to DECIMAL(38,1)");
+  VELOX_ASSERT_THROW(
+      testComplexCast(
+          "c0",
+          makeNullableLongDecimalFlatVector(
+              {-DecimalUtil::kPowersOfTen[38] + 1}, DECIMAL(38, 0)),
+          makeNullableLongDecimalFlatVector(
+              {std::numeric_limits<int128_t>::max()}, DECIMAL(38, 1))),
+      "Cannot cast DECIMAL '-99999999999999999999999999999999999999' to DECIMAL(38,1)");
 }

@@ -27,7 +27,7 @@ namespace facebook::velox {
 /// A static class that holds helper functions for DECIMAL type.
 class DecimalUtil {
  public:
-  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision];
+  static const int128_t kPowersOfTen[LongDecimalType::kMaxPrecision + 1];
 
   /// Helper function to convert a decimal value to string.
   template <typename T>
