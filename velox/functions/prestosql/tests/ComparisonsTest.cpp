@@ -20,6 +20,11 @@
 using namespace facebook::velox;
 
 class ComparisonsTest : public functions::test::FunctionBaseTest {
+ public:
+  ComparisonsTest() {
+    this->options_.parseDecimalAsDouble = false;
+  }
+
  protected:
   template <typename T>
   void testDistinctFrom(
@@ -98,18 +103,17 @@ TEST_F(ComparisonsTest, betweenDate) {
 }
 
 TEST_F(ComparisonsTest, betweenDecimal) {
-  this->options_.parseDecimalAsDouble = false;
   auto runAndCompare = [&](const std::string& exprStr,
                            VectorPtr input,
-                           std::vector<bool>& expectedResult) {
+                           VectorPtr expectedResult) {
     auto actual = evaluate<SimpleVector<bool>>(exprStr, makeRowVector({input}));
-    for (auto i = 0; i < expectedResult.size(); ++i) {
-      EXPECT_EQ(actual->valueAt(i), expectedResult[i]);
-    }
+    test::assertEqualVectors(actual, expectedResult);
   };
+
   auto shortFlat = makeNullableShortDecimalFlatVector(
       {100, 250, 300, 500, std::nullopt}, DECIMAL(3, 2));
-  std::vector<bool> expectedResult{false, true, true, false, false};
+  auto expectedResult =
+      makeNullableFlatVector<bool>({false, true, true, false, std::nullopt});
 
   runAndCompare("c0 between 2.00 and 3.00", shortFlat, expectedResult);
 
@@ -123,14 +127,11 @@ TEST_F(ComparisonsTest, betweenDecimal) {
 }
 
 TEST_F(ComparisonsTest, eqDecimal) {
-  auto runAndCompare = [&](const std::string& expr,
-                           std::vector<VectorPtr>& inputs,
-                           std::vector<bool>& expectedResult) {
+  auto runAndCompare = [&](std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
     auto actual =
         evaluate<SimpleVector<bool>>("c0 == c1", makeRowVector(inputs));
-    for (auto i = 0; i < expectedResult.size(); ++i) {
-      EXPECT_EQ(actual->valueAt(i), expectedResult[i]);
-    }
+    test::assertEqualVectors(actual, expectedResult);
   };
 
   std::vector<VectorPtr> inputs = {
@@ -138,15 +139,16 @@ TEST_F(ComparisonsTest, eqDecimal) {
           {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
       makeNullableShortDecimalFlatVector(
           {1, 2, 3, -3, std::nullopt, 5}, DECIMAL(10, 5))};
-  auto expected = std::vector<bool>{true, false, true, true, false, false};
-  runAndCompare("c0 == c1", inputs, expected);
+  auto expected = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+  runAndCompare(inputs, expected);
 
   // Test with different data types.
   inputs = {
       makeShortDecimalFlatVector({1}, DECIMAL(10, 5)),
       makeShortDecimalFlatVector({1}, DECIMAL(10, 4))};
   VELOX_ASSERT_THROW(
-      runAndCompare("c0 == c1", inputs, expected),
+      runAndCompare(inputs, expected),
       "Scalar function signature is not supported: eq(SHORT_DECIMAL(10,5),"
       " SHORT_DECIMAL(10,4))");
 }
