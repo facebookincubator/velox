@@ -184,7 +184,7 @@ function(GET_SCRIPT_CXX_FLAGS)
       PARENT_SCOPE)
 endfunction()
 
-GET_SCRIPT_CXX_FLAGS()
+get_script_cxx_flags()
 message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
