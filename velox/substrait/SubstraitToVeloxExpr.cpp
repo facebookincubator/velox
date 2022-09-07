@@ -276,11 +276,14 @@ core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::SingularOrList& singularOrList,
     const RowTypePtr& inputType) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
-  auto inLists = singularOrList.options().data()[0];
+  // TODO: other options?
+  auto inLists = singularOrList.options();
+  VELOX_CHECK(inLists.size() > 0, "At least one option is needed.");
   params.reserve(2);
   // first is the value, second is the list
   params.emplace_back(toVeloxExpr(singularOrList.value(), inputType));
-  params.emplace_back(toVeloxExpr(*inLists, inputType));
+  // TODO: is this the correct way to use SingularOrList?
+  params.emplace_back(toVeloxExpr(inLists[0], inputType));
   return std::make_shared<const core::CallTypedExpr>(
       BOOLEAN(), std::move(params), "in");
 }

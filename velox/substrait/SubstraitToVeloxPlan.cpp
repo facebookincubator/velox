@@ -890,10 +890,9 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toSubfieldFilters(
             inputTypeList,
             colInfoMap,
             true);
-      } else if (expr.has_singular_or_list()) {
-        VELOX_UNSUPPORTED("Not in SingularOrList not supported.");
       } else {
-        VELOX_NYI("Scalar function or SingularOrList expected.");
+        // TODO: support push down of Not In.
+        VELOX_NYI("Scalar function expected.");
       }
       continue;
     }
@@ -952,6 +951,7 @@ bool SubstraitVeloxPlanConverter::fieldOrWithLiteral(
   }
 
   if (arguments.size() != 2) {
+    // Not the field and literal combination.
     return false;
   }
   bool fieldExists = false;
@@ -1011,89 +1011,64 @@ bool SubstraitVeloxPlanConverter::chidrenFunctionsOnSameField(
 
 bool SubstraitVeloxPlanConverter::canPushdownCommonFunction(
     const ::substrait::Expression_ScalarFunction& scalarFunction,
-    const std::unordered_set<uint32_t>& inCols,
-    const std::string& filterName) {
+    const std::string& filterName,
+    uint32_t& fieldIdx) {
   // Condtions can be pushed down.
   std::unordered_set<std::string> supportedCommonFunctions = {
       sIsNotNull, sGte, sGt, sLte, sLt, sEqual};
-  uint32_t fieldIdx;
-  if (supportedCommonFunctions.find(filterName) ==
-          supportedCommonFunctions.end() ||
-      !fieldOrWithLiteral(scalarFunction.arguments(), fieldIdx)) {
-    // The arg should be field or field with literal.
-    return false;
-  }
 
-  if (inCols.find(fieldIdx) == inCols.end()) {
-    return true;
-  } else if (filterName == sIsNotNull) {
-    // IN can only coexist with isNotNull in pushdown.
-    return true;
-  } else {
-    return false;
+  bool canPushdown = false;
+  if (supportedCommonFunctions.find(filterName) !=
+          supportedCommonFunctions.end() &&
+      fieldOrWithLiteral(scalarFunction.arguments(), fieldIdx)) {
+    // The arg should be field or field with literal.
+    canPushdown = true;
   }
+  return canPushdown;
 }
 
 bool SubstraitVeloxPlanConverter::canPushdownNot(
     const ::substrait::Expression_ScalarFunction& scalarFunction,
-    const std::unordered_set<uint32_t>& inCols,
-    std::unordered_set<uint32_t>& notEqualCols) {
+    const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
+        rangeRecorders) {
   VELOX_CHECK(
       scalarFunction.arguments().size() == 1,
       "Only one arg is expected for Not.");
   auto notArg = scalarFunction.arguments()[0];
   if (!getExprFromFunctionArgument(notArg).has_scalar_function()) {
-    // Not with a Boolean Literal is not supported curretly.
+    // Not for a Boolean Literal or Or List is not supported curretly.
     // It can be pushed down with an AlwaysTrue or AlwaysFalse Range.
     return false;
   }
 
-  auto nameSpec = subParser_->findSubstraitFuncSpec(
+  auto argFunction = subParser_->findSubstraitFuncSpec(
       functionMap_,
       getExprFromFunctionArgument(notArg)
           .scalar_function()
           .function_reference());
-  auto functionName = subParser_->getSubFunctionName(nameSpec);
+  auto functionName = subParser_->getSubFunctionName(argFunction);
 
   std::unordered_set<std::string> supportedNotFunctions = {
       sGte, sGt, sLte, sLt, sEqual};
+
   uint32_t fieldIdx;
   bool isFieldOrWithLiteral = fieldOrWithLiteral(
       getExprFromFunctionArgument(notArg).scalar_function().arguments(),
       fieldIdx);
-  if (supportedNotFunctions.find(functionName) == supportedNotFunctions.end() ||
-      !isFieldOrWithLiteral || inCols.find(fieldIdx) != inCols.end()) {
-    // If there is already a IN filter for this column, Not condtion
-    // cannot be pushed down.
-    return false;
-  }
 
-  // Mutiple not(equal) conditons cannot be pushed down because
-  // the multiple range is in OR relation while AND relation is
-  // actually needed.
-  if (functionName == sEqual) {
-    for (const auto& eqArg :
-         getExprFromFunctionArgument(notArg).scalar_function().arguments()) {
-      if (!getExprFromFunctionArgument(eqArg).has_selection()) {
-        continue;
-      }
-      uint32_t colIdx = subParser_->parseReferenceSegment(
-          getExprFromFunctionArgument(eqArg).selection().direct_reference());
-      // If one not(equal) condition for this column already exists,
-      // this function cannot be pushed down then.
-      if (notEqualCols.find(colIdx) == notEqualCols.end()) {
-        notEqualCols.insert(colIdx);
-      } else {
-        return false;
-      }
-    }
+  if (supportedNotFunctions.find(functionName) != supportedNotFunctions.end() &&
+      isFieldOrWithLiteral &&
+      rangeRecorders.at(fieldIdx)->setCertainRangeForFunction(
+          functionName, true /*reverse*/)) {
+    return true;
   }
-  return true;
+  return false;
 }
 
 bool SubstraitVeloxPlanConverter::canPushdownOr(
     const ::substrait::Expression_ScalarFunction& scalarFunction,
-    const std::unordered_set<uint32_t>& inCols) {
+    const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
+        rangeRecorders) {
   // OR Conditon whose chidren functions are on different columns is not
   // supported to be pushed down.
   if (!chidrenFunctionsOnSameField(scalarFunction)) {
@@ -1103,12 +1078,8 @@ bool SubstraitVeloxPlanConverter::canPushdownOr(
   std::unordered_set<std::string> supportedOrFunctions = {
       sIsNotNull, sGte, sGt, sLte, sLt, sEqual};
 
-  bool inExists = false;
   for (const auto& arg : scalarFunction.arguments()) {
     if (getExprFromFunctionArgument(arg).has_scalar_function()) {
-      // Or relation betweeen literals is not supported to be pushded down
-      // currently.
-      return false;
       auto nameSpec = subParser_->findSubstraitFuncSpec(
           functionMap_,
           getExprFromFunctionArgument(arg)
@@ -1122,45 +1093,25 @@ bool SubstraitVeloxPlanConverter::canPushdownOr(
           fieldIdx);
       if (supportedOrFunctions.find(functionName) ==
               supportedOrFunctions.end() ||
-          !isFieldOrWithLiteral || inCols.find(fieldIdx) != inCols.end()) {
+          !isFieldOrWithLiteral ||
+          !rangeRecorders.at(fieldIdx)->setCertainRangeForFunction(
+              functionName, false /*reverse*/, true /*forOrRelation*/)) {
         // The arg should be field or field with literal.
-        // If there is already a IN filter for this column, OR condtion
-        // cannot be pushed down.
         return false;
-      }
-
-      if (functionName == sIsNotNull) {
-        std::vector<std::string> types;
-        subParser_->getSubFunctionTypes(nameSpec, types);
-        if (std::find(types.begin(), types.end(), sI32) != types.end() ||
-            std::find(types.begin(), types.end(), sI64) != types.end()) {
-          // BigintMultiRange can only accept vector of BigintRange.
-          return false;
-        }
       }
     } else if (getExprFromFunctionArgument(arg).has_singular_or_list()) {
       auto singularOrList = getExprFromFunctionArgument(arg).singular_or_list();
+      if (!canPushdownSingularOrList(singularOrList, true)) {
+        return false;
+      }
       uint32_t fieldIdx = getColumnIndexFromSingularOrList(singularOrList);
-      if (inCols.find(fieldIdx) != inCols.end()) {
+      // Disable IN pushdown for int-like types.
+      if (!rangeRecorders.at(fieldIdx)->setInRange(true /*forOrRelation*/)) {
         return false;
       }
-      auto literals = singularOrList.options()[0].literal().list().values();
-
-      std::vector<std::string> types;
-      for (auto& literal : literals) {
-        auto type = literal.literal_type_case();
-        if (type != ::substrait::Expression_Literal::LiteralTypeCase::kI32 &&
-            type != ::substrait::Expression_Literal::LiteralTypeCase::kI64) {
-          return false;
-        }
-      }
-      if (inExists) {
-        // OR relation of several IN functions is not supported to be pushed
-        // down currently.
-        return false;
-      }
-      inExists = true;
     } else {
+      // Or relation betweeen other expressions is not supported to be pushded
+      // down currently.
       return false;
     }
   }
@@ -1222,14 +1173,48 @@ void SubstraitVeloxPlanConverter::separateFilters(
   }
 }
 
-bool SubstraitVeloxPlanConverter::canPushdownSingularList(
-    const ::substrait::Expression_SingularOrList& singularList) {
-  if (singularList.value().has_selection()) {
-    return true;
-  } else if (singularList.value().has_scalar_function()) {
-    uint32_t fieldIdx;
-    return fieldOrWithLiteral(
-        singularList.value().scalar_function().arguments(), fieldIdx);
+bool SubstraitVeloxPlanConverter::RangeRecorder::setCertainRangeForFunction(
+    const std::string& functionName,
+    bool reverse,
+    bool forOrRelation) {
+  if (functionName == sLt || functionName == sLte) {
+    if (reverse) {
+      return setLeftBound(forOrRelation);
+    } else {
+      return setRightBound(forOrRelation);
+    }
+  }
+  if (functionName == sGt || functionName == sGte) {
+    if (reverse) {
+      return setRightBound(forOrRelation);
+    } else {
+      return setLeftBound(forOrRelation);
+    }
+  }
+  if (functionName == sEqual) {
+    if (reverse) {
+      // Not equal means lt or gt.
+      return setMultiRange();
+    } else {
+      return setLeftBound(forOrRelation) && setRightBound(forOrRelation);
+    }
+  }
+  if (functionName == sOr) {
+    if (reverse) {
+      // Not supported.
+      return false;
+    } else {
+      return setMultiRange();
+    }
+  }
+  if (functionName == sIsNotNull) {
+    if (reverse) {
+      // Not supported.
+      return false;
+    } else {
+      // Is not null can always coexist with the other range.
+      return true;
+    }
   }
   return false;
 }
@@ -1695,90 +1680,89 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::mapToFilters(
 core::TypedExprPtr SubstraitVeloxPlanConverter::connectWithAnd(
     std::vector<std::string> inputNameList,
     std::vector<TypePtr> inputTypeList,
-    const std::vector<::substrait::Expression_ScalarFunction>&
-        remainingFunctions) {
-  if (remainingFunctions.size() == 0) {
+    const std::vector<::substrait::Expression_ScalarFunction>& scalarFunctions,
+    const std::vector<::substrait::Expression_SingularOrList>&
+        singularOrLists) {
+  if (scalarFunctions.size() == 0 && singularOrLists.size() == 0) {
     return nullptr;
   }
   auto inputType = ROW(std::move(inputNameList), std::move(inputTypeList));
-  auto remainingFilter =
-      exprConverter_->toVeloxExpr(remainingFunctions[0], inputType);
-  if (remainingFunctions.size() == 1) {
-    return remainingFilter;
+
+  // Filter for scalar functions.
+  std::shared_ptr<const core::ITypedExpr> scalarFilter = nullptr;
+  if (scalarFunctions.size() > 0) {
+    scalarFilter = exprConverter_->toVeloxExpr(scalarFunctions[0], inputType);
+    // Will connect multiple functions with AND.
+    uint32_t idx = 1;
+    while (idx < scalarFunctions.size()) {
+      scalarFilter = connectWithAnd(
+          scalarFilter,
+          exprConverter_->toVeloxExpr(scalarFunctions[idx], inputType));
+      idx += 1;
+    }
   }
-  // Will connect multiple functions with AND.
-  uint32_t idx = 1;
-  while (idx < remainingFunctions.size()) {
-    std::vector<std::shared_ptr<const core::ITypedExpr>> params;
-    params.reserve(2);
-    params.emplace_back(remainingFilter);
-    params.emplace_back(
-        exprConverter_->toVeloxExpr(remainingFunctions[idx], inputType));
-    remainingFilter = std::make_shared<const core::CallTypedExpr>(
-        BOOLEAN(), std::move(params), "and");
-    idx += 1;
+
+  // Filter for OrList.
+  std::shared_ptr<const core::ITypedExpr> orListFilter = nullptr;
+  if (singularOrLists.size() > 0) {
+    orListFilter = exprConverter_->toVeloxExpr(singularOrLists[0], inputType);
+    uint32_t idx = 1;
+    while (idx < singularOrLists.size()) {
+      orListFilter = connectWithAnd(
+          orListFilter,
+          exprConverter_->toVeloxExpr(singularOrLists[idx], inputType));
+      idx += 1;
+    }
   }
-  return remainingFilter;
+
+  VELOX_CHECK(
+      scalarFilter != nullptr || orListFilter != nullptr,
+      "One filter should be valid.");
+  if (scalarFilter != nullptr && orListFilter != nullptr) {
+    return connectWithAnd(scalarFilter, orListFilter);
+  }
+  return scalarFilter ? scalarFilter : orListFilter;
 }
 
 core::TypedExprPtr SubstraitVeloxPlanConverter::connectWithAnd(
-    core::TypedExprPtr filters,
-    std::vector<std::string> inputNameList,
-    std::vector<TypePtr> inputTypeList,
-    const std::vector<::substrait::Expression_SingularOrList>&
-        singularOrLists) {
-  auto inputType = ROW(std::move(inputNameList), std::move(inputTypeList));
-  if (singularOrLists.size() == 0) {
-    return filters;
-  }
-  auto singularOrListFilter =
-      exprConverter_->toVeloxExpr(singularOrLists[0], inputType);
-  if (filters == nullptr) {
-    filters = singularOrListFilter;
-  } else {
-    filters = connectWithAnd(filters, singularOrListFilter);
-  }
-  uint32_t idx = 1;
-  while (idx < singularOrLists.size()) {
-    filters = connectWithAnd(
-        filters, exprConverter_->toVeloxExpr(singularOrLists[idx], inputType));
-  }
-  return filters;
-}
-
-core::TypedExprPtr SubstraitVeloxPlanConverter::connectWithAnd(
-    core::TypedExprPtr filters,
-    core::TypedExprPtr expr) {
+    core::TypedExprPtr leftExpr,
+    core::TypedExprPtr rightExpr) {
   std::vector<core::TypedExprPtr> params;
   params.reserve(2);
-  params.emplace_back(filters);
-  params.emplace_back(expr);
+  params.emplace_back(leftExpr);
+  params.emplace_back(rightExpr);
   return std::make_shared<const core::CallTypedExpr>(
       BOOLEAN(), std::move(params), "and");
 }
 
-std::unordered_set<uint32_t> SubstraitVeloxPlanConverter::getInColIndices(
-    const std::vector<::substrait::Expression_SingularOrList>&
-        singularOrLists) {
-  std::unordered_set<uint32_t> inCols;
-  for (const auto& singularOrList : singularOrLists) {
-    {
-      VELOX_CHECK(
-          singularOrList.options_size() == 1,
-          "Options list size 1 expected in SingularOrList expression.");
-      bool hasField = false;
-      if (singularOrList.value().has_scalar_function()) {
-        auto scalarFunc = singularOrList.value().scalar_function();
-        hasField = getExprFromFunctionArgument(scalarFunc.arguments()[0])
-                       .has_selection();
-      } else if (singularOrList.value().has_selection()) {
-        hasField = true;
-      }
-      VELOX_CHECK(hasField == true, "Field expected.");
+bool SubstraitVeloxPlanConverter::canPushdownSingularOrList(
+    const ::substrait::Expression_SingularOrList& singularOrList,
+    bool disableIntLike) {
+  VELOX_CHECK(
+      singularOrList.options_size() == 1,
+      "Only one options list is expected in SingularOrList expression.");
+  // Check whether the value is field.
+  bool hasField = singularOrList.value().has_selection();
+  // TODO: improve the logic here.
+  auto literals = singularOrList.options()[0].literal().list().values();
+  std::vector<std::string> types;
+  for (auto& literal : literals) {
+    auto type = literal.literal_type_case();
+    // Only BigintValues and BytesValues are supported.
+    if (type != ::substrait::Expression_Literal::LiteralTypeCase::kI32 &&
+        type != ::substrait::Expression_Literal::LiteralTypeCase::kI64 &&
+        type != ::substrait::Expression_Literal::LiteralTypeCase::kString) {
+      return false;
     }
-    inCols.insert(getColumnIndexFromSingularOrList(singularOrList));
+    // BigintMultiRange can only accept BigintRange, so disableIntLike is set to
+    // true for OR pushdown of int-like types.
+    if (disableIntLike &&
+        (type == ::substrait::Expression_Literal::LiteralTypeCase::kI32 ||
+         type == ::substrait::Expression_Literal::LiteralTypeCase::kI64)) {
+      return false;
+    }
   }
-  return inCols;
+  return hasField;
 }
 
 uint32_t SubstraitVeloxPlanConverter::getColumnIndexFromSingularOrList(
@@ -1791,6 +1775,8 @@ uint32_t SubstraitVeloxPlanConverter::getColumnIndexFromSingularOrList(
                     .selection();
   } else if (singularOrList.value().has_selection()) {
     selection = singularOrList.value().selection();
+  } else {
+    VELOX_FAIL("Unsupported type in IN pushdown.");
   }
   return subParser_->parseReferenceSegment(selection.direct_reference());
 }

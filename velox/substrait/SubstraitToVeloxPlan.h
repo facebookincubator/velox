@@ -171,6 +171,84 @@ class SubstraitVeloxPlanConverter {
       std::vector<const ::substrait::Expression::FieldReference*>& rightExprs);
 
  private:
+  /// Memory pool.
+  memory::MemoryPool* pool_;
+
+  /// Range filter recorder for a field is used to make sure only the conditions
+  /// that can coexist for this field being pushed down with a range filter.
+  class RangeRecorder {
+   public:
+    /// Set the existence of values range and returns whether this condition can
+    /// coexist with existing conditions for one field. Conditions in OR
+    /// relation can coexist with each other.
+    bool setInRange(bool forOrRelation = false) {
+      if (forOrRelation) {
+        return true;
+      }
+      if (inRange_ || multiRange_ || leftBound_ || rightBound_) {
+        return false;
+      }
+      inRange_ = true;
+      return true;
+    }
+
+    /// Set the existence of left bound and returns whether it can coexist with
+    /// existing conditions for this field.
+    bool setLeftBound(bool forOrRelation = false) {
+      if (forOrRelation) {
+        return true;
+      }
+      if (leftBound_ || inRange_ || multiRange_) {
+        return false;
+      }
+      leftBound_ = true;
+      return true;
+    }
+
+    /// Set the existence of right bound and returns whether it can coexist with
+    /// existing conditions for this field.
+    bool setRightBound(bool forOrRelation = false) {
+      if (forOrRelation) {
+        return true;
+      }
+      if (rightBound_ || inRange_ || multiRange_) {
+        return false;
+      }
+      rightBound_ = true;
+      return true;
+    }
+
+    /// Set the multi-range and returns whether it can coexist with
+    /// existing conditions for this field.
+    bool setMultiRange() {
+      if (inRange_ || multiRange_ || leftBound_ || rightBound_) {
+        return false;
+      }
+      multiRange_ = true;
+      return true;
+    }
+
+    /// Set certain existence according to function name and returns whether it
+    /// can coexist with existing conditions for this field.
+    bool setCertainRangeForFunction(
+        const std::string& functionName,
+        bool reverse = false,
+        bool forOrRelation = false);
+
+   private:
+    /// The existence of values range.
+    bool inRange_ = false;
+
+    /// The existence of left bound.
+    bool leftBound_ = false;
+
+    /// The existence of right bound.
+    bool rightBound_ = false;
+
+    /// The existence of multi-range.
+    bool multiRange_ = false;
+  };
+
   /// Filter info for a column used in filter push down.
   class FilterInfo {
    public:
@@ -276,31 +354,39 @@ class SubstraitVeloxPlanConverter {
   /// HiveConnector, and remaining functions to be handled by the
   /// remainingFilter in HiveConnector.
   void separateFilters(
+      const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
+          rangeRecorders,
       const std::vector<::substrait::Expression_ScalarFunction>&
           scalarFunctions,
       std::vector<::substrait::Expression_ScalarFunction>& subfieldFunctions,
       std::vector<::substrait::Expression_ScalarFunction>& remainingFunctions,
-      std::vector<::substrait::Expression_SingularOrList>& singularOrLists);
+      const std::vector<::substrait::Expression_SingularOrList>&
+          singularOrLists,
+      std::vector<::substrait::Expression_SingularOrList>& subfieldrOrLists,
+      std::vector<::substrait::Expression_SingularOrList>& remainingrOrLists);
 
   /// Returns whether a function can be pushed down.
   bool canPushdownCommonFunction(
       const ::substrait::Expression_ScalarFunction& scalarFunction,
-      const std::unordered_set<uint32_t>& inCols,
-      const std::string& filterName);
+      const std::string& filterName,
+      uint32_t& fieldIdx);
 
   /// Returns whether a NOT function can be pushed down.
   bool canPushdownNot(
       const ::substrait::Expression_ScalarFunction& scalarFunction,
-      const std::unordered_set<uint32_t>& inCols,
-      std::unordered_set<uint32_t>& notEqualCols);
+      const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
+          rangeRecorders);
 
   /// Returns whether a OR function can be pushed down.
   bool canPushdownOr(
       const ::substrait::Expression_ScalarFunction& scalarFunction,
-      const std::unordered_set<uint32_t>& inCols);
+      const std::unordered_map<uint32_t, std::shared_ptr<RangeRecorder>>&
+          rangeRecorders);
 
-  bool canPushdownSingularList(
-      const ::substrait::Expression_SingularOrList& singularList);
+  /// Returns whether a SingularOrList can be pushed down.
+  bool canPushdownSingularOrList(
+      const ::substrait::Expression_SingularOrList& singularOrList,
+      bool disableIntLike = false);
 
   /// Returns a set of unique column indices for IN function to be pushed down.
   std::unordered_set<uint32_t> getInColIndices(
@@ -321,9 +407,11 @@ class SubstraitVeloxPlanConverter {
       std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap,
       bool reverse = false);
 
+  /// Extract SingularOrList and returns the field index.
   uint32_t getColumnIndexFromSingularOrList(
       const ::substrait::Expression_SingularOrList& singularOrList);
 
+  /// Extract SingularOrList and set it to the filter info map.
   void setSingularListValues(
       const ::substrait::Expression_SingularOrList& singularOrList,
       std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap);
@@ -394,22 +482,18 @@ class SubstraitVeloxPlanConverter {
 
   /// Connect all remaining functions with 'and' relation
   /// for the use of remaingFilter in Hive Connector.
-  std::shared_ptr<const core::ITypedExpr> connectWithAnd(
+  core::TypedExprPtr connectWithAnd(
       std::vector<std::string> inputNameList,
       std::vector<TypePtr> inputTypeList,
       const std::vector<::substrait::Expression_ScalarFunction>&
-          remainingFunctions);
-
-  core::TypedExprPtr connectWithAnd(
-      core::TypedExprPtr remainingFilter,
-      std::vector<std::string> inputNameList,
-      std::vector<TypePtr> inputTypeList,
+          remainingFunctions,
       const std::vector<::substrait::Expression_SingularOrList>&
           singularOrLists);
 
+  /// Connect the left and right expressions with 'and' relation.
   core::TypedExprPtr connectWithAnd(
-      core::TypedExprPtr filters,
-      core::TypedExprPtr expr);
+      core::TypedExprPtr leftExpr,
+      core::TypedExprPtr rightExpr);
 
   /// Set the phase of Aggregation.
   void setPhase(
