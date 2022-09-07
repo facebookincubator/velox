@@ -255,6 +255,18 @@ decimalAddSubtractSignature() {
           .build()};
 }
 
+std::vector<std::shared_ptr<exec::FunctionSignature>> decimalDivideSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .returnType("DECIMAL(r_precision, r_scale)")
+              .argumentType("DECIMAL(a_precision, a_scale)")
+              .argumentType("DECIMAL(b_precision, b_scale)")
+              .variableConstraint(
+                  "r_precision",
+                  "min(38, a_precision + b_scale + max(0, b_scale - a_scale))")
+              .variableConstraint("r_scale", "max(a_scale, b_scale)")
+              .build()};
+}
+
 template <typename Operation>
 std::shared_ptr<exec::VectorFunction> createDecimalFunction(
     const std::string& name,
@@ -327,4 +339,9 @@ VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_decimal_mul,
     decimalMultiplySignature(),
     createDecimalFunction<Multiply>);
+
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
+    udf_decimal_div,
+    decimalDivideSignature(),
+    createDecimalFunction<Divide>);
 }; // namespace facebook::velox::functions

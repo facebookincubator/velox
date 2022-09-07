@@ -288,16 +288,12 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
       VeloxRuntimeError);
 
   // Long decimal limits.
-  try {
-    testDecimalExpr<TypeKind::LONG_DECIMAL>(
-        {},
-        "c0 / 0.001",
-        {makeLongDecimalFlatVector(
-            {std::numeric_limits<int128_t>::min()}, DECIMAL(38, 0))});
-    FAIL();
-  } catch (VeloxUserError& ex) {
-    EXPECT_EQ(
-        ex.message(),
-        "integer overflow: -170141183460469231731687303715884105728 * 1000000");
-  }
+  VELOX_ASSERT_THROW(
+      testDecimalExpr<TypeKind::LONG_DECIMAL>(
+          {},
+          "c0 / 0.01",
+          {makeLongDecimalFlatVector(
+              {facebook::velox::DecimalUtil::kPowersOfTen[38] - 1},
+              DECIMAL(38, 0))}),
+      "integer overflow: 99999999999999999999999999999999999999 * 100");
 }
