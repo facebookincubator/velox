@@ -122,7 +122,7 @@ std::vector<TestParam> getTestParams() {
 
 class MinMaxByAggregationTestBase : public AggregationTestBase {
  protected:
-  MinMaxByAggregationTestBase() : numValues_(7) {}
+  MinMaxByAggregationTestBase() : numValues_(6) {}
 
   void SetUp() override;
 
