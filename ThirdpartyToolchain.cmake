@@ -86,13 +86,6 @@ macro(build_folly)
     list(APPEND FOLLY_LINK_LIBRARIES ${OPENSSL_LIBRARIES})
   endif()
 
-  # LIBLZMA INTERFACE_LINK_LIBRARIES REQUIRED
-  find_package(LibLZMA MODULE)
-  set(FOLLY_HAVE_LIBLZMA ${LIBLZMA_FOUND})
-  if(LIBLZMA_FOUND)
-    list(APPEND FOLLY_LINK_LIBRARIES ${LIBLZMA_LIBRARIES})
-  endif()
-
   add_dependencies(toolchain folly)
   add_library(Folly::follybenchmark STATIC IMPORTED)
   add_library(Folly::folly STATIC IMPORTED)

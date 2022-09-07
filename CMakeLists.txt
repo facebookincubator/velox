@@ -277,6 +277,12 @@ if(NOT ${VELOX_BUILD_MINIMAL})
   find_package(ZLIB)
   find_library(SNAPPY snappy)
 endif()
+if(${VELOX_BUILD_TESTING})
+  # TODO velox_dwio_dwrf_decompression_testTestDecompression.cpp includes
+  # folly/compression/Compression.h which might be compiled requiring LibLZMA.
+  # Fix to not require it.
+  find_package(LibLZMA QUIET MODULE)
+endif()
 
 find_library(RE2 re2 REQUIRED)
 
@@ -306,6 +312,10 @@ set(FOLLY_WITH_DEPENDENCIES
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   list(APPEND FOLLY_WITH_DEPENDENCIES ${LZ4} ${ZSTD} ${ZLIB_LIBRARIES})
+endif()
+# TODO See if we can get rid of requiring to link LIBLZMA
+if(${VELOX_BUILD_TESTING})
+  list(APPEND FOLLY_WITH_DEPENDENCIES ${LIBLZMA_LIBRARIES})
 endif()
 
 set(FOLLY ${FOLLY_LIBRARIES})
