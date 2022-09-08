@@ -26,16 +26,17 @@ Core Library
 
 .. _vector view: https://github.com/facebookincubator/velox/discussions/2212
 
-Substrait Extensions
-====================
+Substrait Extension
+===================
 
-* Add support for ROW, ARRAY, and MAP types in Substrait to Velox conversion.
+* Add support for ROW, ARRAY, and MAP types.
 
 
-Arrow Extensions
-================
+Arrow Extension
+===============
 
-* Improve Arrow to Velox conversion for ARRAY and MAP types, and add support for dictionary.
+* Add support for dictionary encoding.
+* Improve support for ARRAY and MAP types.
 
 Presto Functions
 ================
@@ -45,28 +46,28 @@ Presto Functions
 * Add :func:`max_data_size_for_stats` aggregate function that is used for computing statistics.
 * Add :func:`is_json_scalar`, :func:`json_array_length`, :func:`json_array_contains` functions.
 * Add support for TIMESTAMP WITH TIME ZONE in :func:`date_trunc` function.
-* Add support for parsing `month` string (prefix "Jan" or the full name "January") in Joda library.
+* Add support for parsing `month` string (prefix "Jan" or the full name "January") in :func:`parse_datetime` function.
 * Update :func:`min`, :func:`max` aggregate functions to use the same type for input, intermediate, and final results.
 * Update :func:`sum` aggregate function to check for integer overflow.
-* Add simd support for :func:`eq`, :func:`neq`, :func:`lt`, :func:`gt`, :func:`lte`, :func:`gte` functions.
+* Optimize :func:`eq`, :func:`neq`, :func:`lt`, :func:`gt`, :func:`lte`, :func:`gte` functions using SIMD.
 
 Hive Connector
 ==============
 
-* Add support for INTEGER dictionary, FLOAT, DOUBLE, STRING types to native Parquet reader.
-* Add GZIP, Snappy compression support to native Parquet reader.
+* Add support for FLOAT, DOUBLE, and STRING types to native Parquet reader.
+* Add support for dictionary encoded INTEGER columns to native Parquet reader.
+* Add GZIP and Snappy compression support to native Parquet reader.
 * Add support for DATE type in ORC reader.
 
 Performance and Correctness
 ===========================
 
 * Add q9, q15, q16 to TPC-H benchmark.
-* Optimize memory allocation by `specializing vector readers`_ for constant and flat primitives based on the arguments.
+* Optimize memory allocation by specializing vector readers based on the arguments. :pr:`1956`
 * Add benchmark for vector view.
 * Publish microbenchmark results to `conbench`_.
 
 .. _conbench: https://velox-conbench.voltrondata.run/
-.. _specializing vector readers: https://github.com/facebookincubator/velox/pull/1956
 
 Debugging Experience
 ====================
