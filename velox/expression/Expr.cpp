@@ -417,7 +417,7 @@ bool Expr::checkGetSharedSubexprValues(
   if (!rows.isSubset(*sharedSubexprRows_)) {
     LocalSelectivityVector missingRowsHolder(context, rows);
     auto missingRows = missingRowsHolder.get();
-    VELOX_DCHECK(missingRows);
+    VELOX_DCHECK_NOT_NULL(missingRows);
     missingRows->deselect(*sharedSubexprRows_);
 
     // Add the missingRows to sharedSubexprRows_ that will eventually be
@@ -428,7 +428,7 @@ bool Expr::checkGetSharedSubexprValues(
     LocalSelectivityVector newFinalSelectionHolder(
         context, *sharedSubexprRows_);
     auto newFinalSelection = newFinalSelectionHolder.get();
-    VELOX_DCHECK(newFinalSelection);
+    VELOX_DCHECK_NOT_NULL(newFinalSelection);
     if (!context.isFinalSelection()) {
       // In case currently set finalSelection does not include all rows in
       // sharedSubexprRows_.
@@ -710,7 +710,7 @@ void Expr::evalEncodings(
             }
           }
           wrappedResult =
-              context.applyWrapToPeeledResult(this, peeledResult, rows);
+              context.applyWrapToPeeledResult(this->type(), peeledResult, rows);
         }
       }
       if (wrappedResult != nullptr) {
@@ -1215,7 +1215,7 @@ bool Expr::applyFunctionWithPeeling(
   VectorPtr peeledResult;
   applyFunction(*newRows, context, peeledResult);
   VectorPtr wrappedResult =
-      context.applyWrapToPeeledResult(this, peeledResult, rows);
+      context.applyWrapToPeeledResult(this->type(), peeledResult, rows);
   context.moveOrCopyResult(wrappedResult, rows, result);
   return true;
 }

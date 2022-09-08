@@ -50,7 +50,7 @@ EvalCtx::EvalCtx(core::ExecCtx* execCtx)
 }
 
 VectorPtr EvalCtx::applyWrapToPeeledResult(
-    Expr* FOLLY_NONNULL expr,
+    const TypePtr& outputType,
     VectorPtr peeledResult,
     const SelectivityVector& rows) {
   VectorPtr wrappedResult;
@@ -58,7 +58,7 @@ VectorPtr EvalCtx::applyWrapToPeeledResult(
     if (!peeledResult) {
       // If all rows are null, make a constant null vector of the right type.
       wrappedResult =
-          BaseVector::createNullConstant(expr->type(), rows.size(), pool());
+          BaseVector::createNullConstant(outputType, rows.size(), pool());
     } else {
       BufferPtr nulls;
       if (!rows.isAllSelected()) {

@@ -77,7 +77,7 @@ class EvalCtx {
   // Wraps the 'peeledResult' in the wrap produced by the last peeling in
   // EvalEncoding() and returns the vector created as a result.
   VectorPtr applyWrapToPeeledResult(
-      Expr* FOLLY_NONNULL expr,
+      const TypePtr& outputType,
       VectorPtr peeledResult,
       const SelectivityVector& rows);
 
