@@ -2252,10 +2252,11 @@ TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
                makeFlatVector<int64_t>({1, 2, 3, 4}))),
        makeConstant<int64_t>(1, 4)});
 
+  // Case 1: When the input to the common sub-expression is a dictionary.
   // c2 > 1 is a common sub-expression. It is used in 3 top-level expressions.
-  // In the first expression, c2 > 1 is evaluated for rows 3, 4.
+  // In the first expression, c2 > 1 is evaluated for rows 2, 3.
   // In the second expression, c2 > 1 is evaluated for rows 0, 1.
-  // In the third expression. c2 > 1 returns pre-computed results for rows 3, 4
+  // In the third expression. c2 > 1 returns pre-computed results for rows 2, 3
   auto results = makeRowVector(evaluateMultiple(
       {"c0 = 2 AND c2 > 1", "c0 = 1 AND c2 > 1", "c1 = 20 AND c2 > 1"}, data));
   auto expectedResults = makeRowVector(
@@ -2264,13 +2265,34 @@ TEST_F(ExprTest, commonSubExpressionWithEncodedInput) {
        makeFlatVector<bool>({false, false, true, false})});
   assertEqualVectors(expectedResults, results);
 
-  // Similarly, for when the input to the common subexpression is constant.
+  // Case 2: When the input to the common sub-expression is a constant.
   results = makeRowVector(evaluateMultiple(
       {"c0 = 2 AND c3 > 3", "c0 = 1 AND c3 > 3", "c1 = 20 AND c3 > 3"}, data));
   expectedResults = makeRowVector(
       {makeFlatVector<bool>({false, false, false, false}),
        makeFlatVector<bool>({false, false, false, false}),
        makeFlatVector<bool>({false, false, false, false})});
+  assertEqualVectors(expectedResults, results);
+
+  // Case 3: When cached rows in sub-expression are not present in final
+  // selection.
+  // In the first expression, c2 > 1 is evaluated for rows 2, 3.
+  // In the second expression, c0 = 1 filters out row 2, 3 and the OR
+  // expression sets the final selection to rows 0, 1. Finally, c2 > 1 is
+  // evaluated for rows 0, 1. If finalSelection was not updated to the union of
+  // cached rows and the existing finalSelection then the vector containing
+  // cached values would have been override.
+  // In the third expression. c2 > 1 returns pre-computed results for rows 3, 4
+  // verifying that the vector containing cached values was not overridden.
+  results = makeRowVector(evaluateMultiple(
+      {"c0 = 2 AND c2 > 1",
+       "c0 = 1 AND ( c1 = 20 OR c2 > 1 )",
+       "c1 = 20 AND c2 > 1"},
+      data));
+  expectedResults = makeRowVector(
+      {makeFlatVector<bool>({false, false, true, false}),
+       makeFlatVector<bool>({false, true, false, false}),
+       makeFlatVector<bool>({false, false, true, false})});
   assertEqualVectors(expectedResults, results);
 }
 
