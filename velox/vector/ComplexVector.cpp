@@ -451,6 +451,12 @@ void ArrayVectorBase::copyRangesImpl(
 }
 
 namespace {
+
+struct IndexRange {
+  vector_size_t begin;
+  vector_size_t size;
+};
+
 std::optional<int32_t> compareArrays(
     const BaseVector& left,
     const BaseVector& right,
