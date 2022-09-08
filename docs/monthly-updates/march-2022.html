@@ -168,7 +168,7 @@ For every row, the code reads an array of maps stored at that row.</p>
 <p>Now consider a function that generates Array&lt;int64_t&gt; as an output. The result vector can be written as the following.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="n">VectorPtr</span><span class="w"> </span><span class="n">result</span><span class="p">;</span><span class="w"></span>
 <span class="c1">// Here type is ArrayType(BIGINT()).</span>
-<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">pool_</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="n">BaseVector</span><span class="o">::</span><span class="n">ensureWritable</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">pool_</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
 
 <span class="c1">// Define a vector writer. ArrayWriterT is a temp holder. Eventually, Array will be used</span>
 <span class="c1">// once old writers are deprecated.</span>

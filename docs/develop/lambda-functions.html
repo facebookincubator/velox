@@ -130,9 +130,9 @@ type Callable which allows for evaluating the lambda on a set of rows.</p>
 <span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">apply</span><span class="p">(</span><span class="w"></span>
 <span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">SelectivityVector</span><span class="o">&amp;</span><span class="w"> </span><span class="n">rows</span><span class="p">,</span><span class="w"></span>
 <span class="w">      </span><span class="n">BufferPtr</span><span class="w"> </span><span class="n">wrapCapture</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">*</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">EvalCtx</span><span class="o">&amp;</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"></span>
 <span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">args</span><span class="p">,</span><span class="w"></span>
-<span class="w">      </span><span class="n">VectorPtr</span><span class="o">*</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
+<span class="w">      </span><span class="n">VectorPtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">result</span><span class="p">);</span><span class="w"></span>
 <span class="p">};</span><span class="w"></span>
 </pre></div>
 </div>
