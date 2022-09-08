@@ -16,7 +16,6 @@ Core Library
 
 * Add support for Right Semi Join.
 * Add basic :ref:`Window operator<window-node>`.
-* Add support for parsing `month` string (prefix "Jan" or the full name "January") in Joda library.
 * Add support for spilling `order by`.
 * Add support for zero-copy `vector view`_.
 * Add support for DECIMAL addition and subtraction functions.
@@ -46,6 +45,7 @@ Presto Functions
 * Add :func:`max_data_size_for_stats` aggregate function that is used for computing statistics.
 * Add :func:`is_json_scalar`, :func:`json_array_length`, :func:`json_array_contains` functions.
 * Add support for TIMESTAMP WITH TIME ZONE in :func:`date_trunc` function.
+* Add support for parsing `month` string (prefix "Jan" or the full name "January") in Joda library.
 * Update :func:`min`, :func:`max` aggregate functions to use the same type for input, intermediate, and final results.
 * Update :func:`sum` aggregate function to check for integer overflow.
 * Add simd support for :func:`eq`, :func:`neq`, :func:`lt`, :func:`gt`, :func:`lte`, :func:`gte` functions.
