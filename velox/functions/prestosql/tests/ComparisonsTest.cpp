@@ -21,7 +21,7 @@ using namespace facebook::velox;
 
 class ComparisonsTest : public functions::test::FunctionBaseTest {
  public:
-  ComparisonsTest() {
+  void SetUp() override {
     this->options_.parseDecimalAsDouble = false;
   }
 
