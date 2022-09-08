@@ -79,13 +79,11 @@ macro(build_folly)
   set_target_properties(
     Folly::follybenchmark
     PROPERTIES IMPORTED_LOCATION "${FOLLY_BENCHMARK_STATIC_LIB}"
-               INTERFACE_INCLUDE_DIRECTORIES "${FOLLY_INCLUDE_DIR}"
-               INTERFACE_LINK_LIBRARIES "${FOLLY_LINK_LIBRARIES}")
+               INTERFACE_INCLUDE_DIRECTORIES "${FOLLY_INCLUDE_DIR}")
   set_target_properties(
     Folly::folly
     PROPERTIES IMPORTED_LOCATION "${FOLLY_STATIC_LIB}"
-               INTERFACE_INCLUDE_DIRECTORIES "${FOLLY_INCLUDE_DIR}"
-               INTERFACE_LINK_LIBRARIES "${FOLLY_LINK_LIBRARIES}")
+               INTERFACE_INCLUDE_DIRECTORIES "${FOLLY_INCLUDE_DIR}")
 
   add_dependencies(Folly::folly folly)
 
