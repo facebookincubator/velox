@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include <core/Expressions.h>
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
 /// Return the Velox type according to the typename.
 TypePtr toVeloxType(const std::string& typeName);
+
+/// Return the Substrait type signature according to the type
+std::string substraitSignature(const TypePtr& type);
 
 } // namespace facebook::velox::substrait

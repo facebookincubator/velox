@@ -18,6 +18,7 @@
 
 #include "velox/core/PlanNode.h"
 
+#include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/type.pb.h"
 
@@ -25,15 +26,25 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitTypeConvertor {
  public:
+  VeloxToSubstraitTypeConvertor(
+      const SubstraitExtensionCollectorPtr& extensionCollector)
+      : extensionCollector_(extensionCollector) {}
   /// Convert Velox RowType to Substrait NamedStruct.
   const ::substrait::NamedStruct& toSubstraitNamedStruct(
       google::protobuf::Arena& arena,
-      const velox::RowTypePtr& rowType);
+      const velox::RowTypePtr& rowType) const;
 
   /// Convert Velox Type to Substrait Type.
   const ::substrait::Type& toSubstraitType(
       google::protobuf::Arena& arena,
-      const velox::TypePtr& type);
+      const velox::TypePtr& type) const;
+
+ private:
+  /// The function Collector used to collect the type reference.
+  const SubstraitExtensionCollectorPtr extensionCollector_;
 };
+
+using VeloxToSubstraitTypeConvertorPtr =
+    std::shared_ptr<const VeloxToSubstraitTypeConvertor>;
 
 } // namespace facebook::velox::substrait

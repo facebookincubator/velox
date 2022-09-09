@@ -19,19 +19,25 @@
 #include <google/protobuf/arena.h>
 #include <string>
 #include <typeinfo>
-
 #include "velox/core/PlanNode.h"
-#include "velox/type/Type.h"
-
+#include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/VeloxToSubstraitExpr.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
+  /// constructor VeloxToSubstraitPlanConvertor
+  VeloxToSubstraitPlanConvertor();
+
+  /// constructor VeloxToSubstraitPlanConvertor with given extensionCollector.
+  VeloxToSubstraitPlanConvertor(
+      const SubstraitExtensionCollectorPtr& extensionCollector);
+
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -72,21 +78,16 @@ class VeloxToSubstraitPlanConvertor {
       const std::shared_ptr<const core::AggregationNode>& aggregateNode,
       ::substrait::AggregateRel* aggregateRel);
 
-  /// Construct the function map between the Velox function name and index.
-  void constructFunctionMap();
-
-  ///  Fetch all functions from Velox's registry and create Substrait extensions
-  ///  for these.
-  ::substrait::Plan& addExtensionFunc(google::protobuf::Arena& arena);
-
   /// The Expression converter used to convert Velox representations into
   /// Substrait expressions.
-  std::shared_ptr<VeloxToSubstraitExprConvertor> exprConvertor_;
+  VeloxToSubstraitExprConvertorPtr exprConvertor_;
 
-  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
+  /// The Type converter used to conver velox representation into Substrait
+  /// type.
+  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
 
-  /// The map storing the relations between the function name and the function
-  /// id. Will be constructed based on the Velox representation.
-  std::unordered_map<std::string, uint64_t> functionMap_;
+  /// The extension Collector used to collect function & type reference.
+  SubstraitExtensionCollectorPtr extensionCollector_;
 };
+
 } // namespace facebook::velox::substrait
