@@ -154,6 +154,16 @@ bool isNullOnFailure(
   }
 }
 
+core::FieldAccessTypedExprPtr makeFieldAccessExpr(
+    const std::string& name,
+    const TypePtr& type,
+    core::FieldAccessTypedExprPtr input) {
+  if (input) {
+    return std::make_shared<core::FieldAccessTypedExpr>(type, input, name);
+  }
+
+  return std::make_shared<core::FieldAccessTypedExpr>(type, name);
+}
 } // namespace
 
 namespace facebook::velox::substrait {
@@ -167,19 +177,25 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     case ::substrait::Expression::FieldReference::ReferenceTypeCase::
         kDirectReference: {
       const auto& directRef = substraitField.direct_reference();
-      int32_t colIdx = substraitParser_.parseReferenceSegment(directRef);
-      const auto& inputNames = inputType->names();
-      const int64_t inputSize = inputNames.size();
-      if (colIdx <= inputSize) {
-        const auto& inputTypes = inputType->children();
-        // Convert type to row.
-        return std::make_shared<core::FieldAccessTypedExpr>(
-            inputTypes[colIdx],
-            std::make_shared<core::InputTypedExpr>(inputTypes[colIdx]),
-            inputNames[colIdx]);
-      } else {
-        VELOX_FAIL("Missing the column with id '{}' .", colIdx);
+      core::FieldAccessTypedExprPtr fieldAccess{nullptr};
+      const auto* tmp = &directRef.struct_field();
+
+      auto inputColumnType = inputType;
+      for (;;) {
+        auto idx = tmp->field();
+        fieldAccess = makeFieldAccessExpr(
+            inputColumnType->nameOf(idx),
+            inputColumnType->childAt(idx),
+            fieldAccess);
+
+        if (!tmp->has_child()) {
+          break;
+        }
+
+        inputColumnType = asRowType(inputColumnType->childAt(idx));
+        tmp = &tmp->child().struct_field();
       }
+      return fieldAccess;
     }
     default:
       VELOX_NYI(
