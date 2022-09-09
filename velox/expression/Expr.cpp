@@ -1409,7 +1409,7 @@ void ExprSet::eval(
   // will load b only for rows where f(a) is true. However, h(b) projection
   // needs all rows for "b".
   for (const auto& field : multiplyReferencedFields_) {
-    context->ensureFieldLoaded(field->index(*context), rows);
+    context.ensureFieldLoaded(field->index(context), rows);
   }
 
   for (int32_t i = begin; i < end; ++i) {
