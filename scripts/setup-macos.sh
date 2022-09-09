@@ -116,7 +116,7 @@ function install_velox_deps {
   run_and_time install_ranges_v3
   run_and_time install_fmt
   run_and_time install_double_conversion
-  run_and_time install_folly
+  #run_and_time install_folly
   run_and_time install_re2
 }
 
