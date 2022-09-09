@@ -54,6 +54,9 @@ macro(build_folly)
     # Fetch the content using previously declared details
     FetchContent_Populate(folly)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
+    # Avoid possible errors for some known warnings on folly
+    target_compile_options(folly PUBLIC -Wno-deprecated-declarations
+                                        -Wno-unused-variable)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})

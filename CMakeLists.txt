@@ -216,8 +216,7 @@ if("${ENABLE_ALL_WARNINGS}")
   endif()
 
   set(KNOWN_WARNINGS
-      "-Wno-deprecated-declarations \
-       -Wno-unused \
+      "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
