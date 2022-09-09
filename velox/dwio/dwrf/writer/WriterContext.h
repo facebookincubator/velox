@@ -74,6 +74,8 @@ class WriterContext : public CompressionBufferPool {
         generalPool_, compressionBlockSize + PAGE_HEADER_SIZE);
   }
 
+  virtual ~WriterContext() = default;
+
   bool hasStream(const DwrfStreamIdentifier& stream) const {
     return streams_.find(stream) != streams_.end();
   }
