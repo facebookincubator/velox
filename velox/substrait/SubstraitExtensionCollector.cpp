@@ -50,7 +50,6 @@ void SubstraitExtensionCollector::addExtensionFunctionsToPlan(
   }
 }
 
-
 void SubstraitExtensionCollector::addExtensionTypesToPlan(
     ::substrait::Plan* plan) const {
   using SimpleExtensionURI = ::substrait::extensions::SimpleExtensionURI;
@@ -68,8 +67,7 @@ void SubstraitExtensionCollector::addExtensionTypesToPlan(
       extensionUri = uri->second;
     }
 
-    auto extensionType =
-        plan->add_extensions()->mutable_extension_type();
+    auto extensionType = plan->add_extensions()->mutable_extension_type();
     extensionType->set_extension_uri_reference(
         extensionUri->extension_uri_anchor());
     extensionType->set_type_anchor(referenceNum);
