@@ -59,14 +59,11 @@ macro(build_folly)
   if(NOT folly_POPULATED)
     # Fetch the content using previously declared details
     FetchContent_Populate(folly)
+    add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
   endif()
-  add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
-
-  # Currently failing OpenSSL due to deprecation warning being used on folly.
-  # The above does not fix the issue.
-  find_package(OpenSSL 1.1.1 MODULE REQUIRED)
-  set(FOLLY_LIBRARIES ${OPENSSL_LIBRARIES})
-  list(APPEND FOLLY_LIBRARIES folly)
+  set(FOLLY_BENCHMARK_STATIC_LIB
+    ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
+  set(FOLLY_LIBRARIES folly)
 endmacro()
 #===================================END FOLLY============================================
 
@@ -96,7 +93,7 @@ macro(resolve_dependency DEPENDENCY_NAME)
     list(APPEND FIND_PACKAGE_ARGUMENTS ${ARG_REQUIRED_VERSION})
   endif()
   if(${DEPENDENCY_NAME}_SOURCE STREQUAL "AUTO")
-    find_package(${FIND_PACKAGE_ARGUMENTS})
+    find_package(${FIND_PACKAGE_ARGUMENTS} QUIET)
     if(${${PACKAGE_NAME}_FOUND})
       set(${DEPENDENCY_NAME}_SOURCE "SYSTEM")
     else()

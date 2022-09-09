@@ -216,7 +216,8 @@ if("${ENABLE_ALL_WARNINGS}")
   endif()
 
   set(KNOWN_WARNINGS
-      "-Wno-unused \
+      "-Wno-deprecated-declarations \
+       -Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
@@ -279,12 +280,19 @@ set(folly_SOURCE AUTO)
 resolve_dependency(folly)
 
 set(FOLLY_WITH_DEPENDENCIES
-    ${FOLLY_LIBRARIES} ${Boost_LIBRARIES} ${DOUBLE_CONVERSION_LIBRARIES}
-    ${EVENT} ${SNAPPY} ${CMAKE_DL_LIBS} ${FMT})
+    ${FOLLY_LIBRARIES}
+    ${Boost_LIBRARIES}
+    ${DOUBLE_CONVERSION}
+    ${EVENT}
+    ${SNAPPY}
+    ${CMAKE_DL_LIBS}
+    ${FMT})
 
-# TODO: Fix link to follybenchmark library to be retrieved on FetchContent
-# when building folly. This is just a hack to test build.
-set(FOLLY_BENCHMARK "/velox/_build/release/_deps/folly-build/folly/libfollybenchmark.a")
+if(DEFINED FOLLY_BENCHMARK_STATIC_LIB)
+  set(FOLLY_BENCHMARK ${FOLLY_BENCHMARK_STATIC_LIB})
+else()
+  set(FOLLY_BENCHMARK Folly::follybenchmark)
+endif()
 
 if(NOT ${VELOX_BUILD_MINIMAL})
   find_package(BZip2 MODULE)
