@@ -47,32 +47,18 @@ namespace {
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
   // Assume only accepts a single plan fragment.
-
-  // Construct the function map based on the Velox plan.
-  constructFunctionMap();
-
-  // Construct the expression converter.
-  exprConvertor_ =
-      std::make_shared<VeloxToSubstraitExprConvertor>(functionMap_);
-
-  ::substrait::Plan* substraitPlan =
+  auto* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-
-  // Add Extension Functions.
-  substraitPlan->MergeFrom(addExtensionFunc(arena));
-
-  // Add unknown type in extension.
-  auto unknownType = substraitPlan->add_extensions()->mutable_extension_type();
-
-  unknownType->set_extension_uri_reference(0);
-  unknownType->set_type_anchor(0);
-  unknownType->set_name("UNKNOWN");
 
   // Do conversion.
   ::substrait::RelRoot* rootRel =
       substraitPlan->add_relations()->mutable_root();
 
   toSubstrait(arena, plan, rootRel->mutable_input());
+
+  // Add Extension Functions.
+  extensionCollector_->addExtensionsToPlan(substraitPlan);
+
   // Set RootRel names.
   for (const auto& name : plan->outputType()->names()) {
     rootRel->add_names(name);
@@ -87,26 +73,22 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     ::substrait::Rel* rel) {
   if (auto filterNode =
           std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
-    auto filterRel = rel->mutable_filter();
-    toSubstrait(arena, filterNode, filterRel);
+    toSubstrait(arena, filterNode, rel->mutable_filter());
     return;
   }
   if (auto valuesNode =
           std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
-    ::substrait::ReadRel* readRel = rel->mutable_read();
-    toSubstrait(arena, valuesNode, readRel);
+    toSubstrait(arena, valuesNode, rel->mutable_read());
     return;
   }
   if (auto projectNode =
           std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
-    ::substrait::ProjectRel* projectRel = rel->mutable_project();
-    toSubstrait(arena, projectNode, projectRel);
+    toSubstrait(arena, projectNode, rel->mutable_project());
     return;
   }
   if (auto aggregationNode =
           std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-    ::substrait::AggregateRel* aggregateRel = rel->mutable_aggregate();
-    toSubstrait(arena, aggregationNode, aggregateRel);
+    toSubstrait(arena, aggregationNode, rel->mutable_aggregate());
     return;
   }
 }
@@ -278,6 +260,9 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     // Aggregation function name.
     const auto& funName = aggregatesExpr->name();
     // set aggFunction args.
+
+    std::vector<TypePtr> arguments;
+    arguments.reserve(aggregatesExpr->inputs().size());
     for (const auto& expr : aggregatesExpr->inputs()) {
       // If the expr is CallTypedExpr, people need to do project firstly.
       if (auto aggregatesExprInput =
@@ -286,16 +271,23 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       } else {
         aggFunction->add_args()->MergeFrom(
             exprConvertor_->toSubstraitExpr(arena, expr, inputType));
+
+        arguments.emplace_back(expr->type());
       }
     }
 
-    // Set substrait aggregate Function reference and output type.
-    if (functionMap_.find(funName) != functionMap_.end()) {
-      aggFunction->set_function_reference(functionMap_[funName]);
-    } else {
-      VELOX_NYI("Couldn't find the aggregate function '{}' ", funName);
-    }
+    const auto& referenceId =
+        extensionCollector_->getFunctionReference(funName, arguments);
 
+    VELOX_CHECK(
+        referenceId.has_value(),
+        "Fail to get function reference for aggregate expression {}",
+        aggregatesExpr->toString());
+
+    // Set substrait aggregate Function reference.
+    aggFunction->set_function_reference(referenceId.value());
+
+    // Set substrait aggregate output type.
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
 
@@ -305,80 +297,6 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
 
   // Direct output.
   aggregateRel->mutable_common()->mutable_direct();
-}
-
-void VeloxToSubstraitPlanConvertor::constructFunctionMap() {
-  // TODO: Fetch all functions from velox's registry.
-
-  functionMap_["plus"] = 0;
-  functionMap_["multiply"] = 1;
-  functionMap_["lt"] = 2;
-  functionMap_["divide"] = 3;
-  functionMap_["count"] = 4;
-  functionMap_["sum"] = 5;
-  functionMap_["mod"] = 6;
-  functionMap_["eq"] = 7;
-}
-
-::substrait::Plan& VeloxToSubstraitPlanConvertor::addExtensionFunc(
-    google::protobuf::Arena& arena) {
-  // TODO: Fetch all functions from velox's registry and add them into substrait
-  // extensions.
-  // Now we just work around this part and add one function as dummy version to
-  // pass filter and project round-trip test.
-  auto substraitPlan =
-      google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
-
-  auto extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(0);
-  extensionFunction->set_name("add:opt_i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(1);
-  extensionFunction->set_name("multiply:opt_i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(1);
-  extensionFunction->set_function_anchor(2);
-  extensionFunction->set_name("lt:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(3);
-  extensionFunction->set_name("divide:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(4);
-  extensionFunction->set_name("count:opt_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(5);
-  extensionFunction->set_name("sum:opt_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(6);
-  extensionFunction->set_name("modulus:i32_i32");
-
-  extensionFunction =
-      substraitPlan->add_extensions()->mutable_extension_function();
-  extensionFunction->set_extension_uri_reference(0);
-  extensionFunction->set_function_anchor(7);
-  extensionFunction->set_name("equal:i64_i64");
-
-  return *substraitPlan;
 }
 
 } // namespace facebook::velox::substrait

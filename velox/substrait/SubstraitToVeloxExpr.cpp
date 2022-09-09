@@ -85,6 +85,9 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     case ::substrait::Expression_Literal::LiteralTypeCase::kFp64:
       return std::make_shared<core::ConstantTypedExpr>(
           variant(substraitLit.fp64()));
+    case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
+      return std::make_shared<core::ConstantTypedExpr>(
+          variant(substraitLit.var_char().value()));
     case ::substrait::Expression_Literal::LiteralTypeCase::kNull: {
       auto veloxType =
           toVeloxType(substraitParser_.parseType(substraitLit.null())->type);
@@ -127,10 +130,34 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       return toVeloxExpr(substraitExpr.selection(), inputType);
     case ::substrait::Expression::RexTypeCase::kCast:
       return toVeloxExpr(substraitExpr.cast(), inputType);
+    case ::substrait::Expression::RexTypeCase::kIfThen:
+      return toVeloxExpr(substraitExpr.if_then(), inputType);
     default:
       VELOX_NYI(
           "Substrait conversion not supported for Expression '{}'", typeCase);
   }
+}
+
+std::shared_ptr<const core::ITypedExpr>
+SubstraitVeloxExprConverter::toVeloxExpr(
+    const ::substrait::Expression_IfThen& substraitIfThen,
+    const RowTypePtr& inputType) {
+  std::vector<std::shared_ptr<const core::ITypedExpr>> params;
+  params.reserve(substraitIfThen.ifs_size() + 1);
+  core::TypedExprPtr resultType;
+  for (auto& ifExpr : substraitIfThen.ifs()) {
+    auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
+    params.emplace_back(ifClauseExpr);
+    auto thenClauseExpr = toVeloxExpr(ifExpr.then(), inputType);
+    params.emplace_back(thenClauseExpr);
+    resultType = thenClauseExpr;
+  }
+
+  auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
+  params.emplace_back(elseClauseExpr);
+
+  return std::make_shared<const core::CallTypedExpr>(
+      resultType->type(), std::move(params), "if");
 }
 
 } // namespace facebook::velox::substrait
