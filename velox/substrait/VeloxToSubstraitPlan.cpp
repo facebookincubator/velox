@@ -43,36 +43,24 @@ namespace {
 
 } // namespace
 
-VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor()
-    : VeloxToSubstraitPlanConvertor(
-          std::make_shared<SubstraitExtensionCollector>()) {}
-
-VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
-    const SubstraitExtensionCollectorPtr& extensionCollector)
-    : extensionCollector_(extensionCollector) {
-  // Construct the if/Then call converter
-  auto ifThenCallConverter =
-      std::make_shared<VeloxToSubstraitIfThenConverter>();
-  // Construct the scalar function converter.
-  auto scalaFunctionConverter =
-      std::make_shared<VeloxToSubstraitScalarFunctionConverter>(
-          extensionCollector_, typeConvertor_);
-
-  std::vector<VeloxToSubstraitCallConverterPtr> callConvertors;
-  callConvertors.emplace_back(ifThenCallConverter);
-  callConvertors.emplace_back(scalaFunctionConverter);
-
-  // Construct the expression converter.
-  exprConvertor_ = std::make_shared<VeloxToSubstraitExprConvertor>(
-      typeConvertor_, callConvertors);
-}
-
 ::substrait::Plan& VeloxToSubstraitPlanConvertor::toSubstrait(
     google::protobuf::Arena& arena,
     const core::PlanNodePtr& plan) {
-  // Assume only accepts a single plan fragment.
-  auto* substraitPlan =
+  // Construct the extension colllector.
+  extensionCollector_ = std::make_shared<SubstraitExtensionCollector>();
+  // Construct the expression converter.
+  exprConvertor_ =
+      std::make_shared<VeloxToSubstraitExprConvertor>(extensionCollector_);
+
+  auto substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
+
+  // Add unknown type in extension.
+  auto unknownType = substraitPlan->add_extensions()->mutable_extension_type();
+
+  unknownType->set_extension_uri_reference(0);
+  unknownType->set_type_anchor(0);
+  unknownType->set_name("UNKNOWN");
 
   // Do conversion.
   ::substrait::RelRoot* rootRel =
@@ -80,7 +68,7 @@ VeloxToSubstraitPlanConvertor::VeloxToSubstraitPlanConvertor(
 
   toSubstrait(arena, plan, rootRel->mutable_input());
 
-  // Add Extension Functions.
+  // Add Extension Functions after convert.
   extensionCollector_->addExtensionsToPlan(substraitPlan);
 
   // Set RootRel names.
@@ -97,22 +85,26 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     ::substrait::Rel* rel) {
   if (auto filterNode =
           std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
-    toSubstrait(arena, filterNode, rel->mutable_filter());
+    auto filterRel = rel->mutable_filter();
+    toSubstrait(arena, filterNode, filterRel);
     return;
   }
   if (auto valuesNode =
           std::dynamic_pointer_cast<const core::ValuesNode>(planNode)) {
-    toSubstrait(arena, valuesNode, rel->mutable_read());
+    ::substrait::ReadRel* readRel = rel->mutable_read();
+    toSubstrait(arena, valuesNode, readRel);
     return;
   }
   if (auto projectNode =
           std::dynamic_pointer_cast<const core::ProjectNode>(planNode)) {
-    toSubstrait(arena, projectNode, rel->mutable_project());
+    ::substrait::ProjectRel* projectRel = rel->mutable_project();
+    toSubstrait(arena, projectNode, projectRel);
     return;
   }
   if (auto aggregationNode =
           std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-    toSubstrait(arena, aggregationNode, rel->mutable_aggregate());
+    ::substrait::AggregateRel* aggregateRel = rel->mutable_aggregate();
+    toSubstrait(arena, aggregationNode, aggregateRel);
     return;
   }
 }
@@ -303,15 +295,9 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     const auto& referenceId =
         extensionCollector_->getFunctionReference(funName, arguments);
 
-    VELOX_CHECK(
-        referenceId.has_value(),
-        "Fail to get function reference for aggregate expression {}",
-        aggregatesExpr->toString());
-
     // Set substrait aggregate Function reference.
-    aggFunction->set_function_reference(referenceId.value());
+    aggFunction->set_function_reference(referenceId);
 
-    // Set substrait aggregate output type.
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));
 

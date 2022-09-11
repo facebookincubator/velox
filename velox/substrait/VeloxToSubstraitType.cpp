@@ -22,7 +22,7 @@ namespace facebook::velox::substrait {
 
 const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
     google::protobuf::Arena& arena,
-    const velox::TypePtr& type) const {
+    const velox::TypePtr& type) {
   ::substrait::Type* substraitType =
       google::protobuf::Arena::CreateMessage<::substrait::Type>(&arena);
   switch (type->kind()) {
@@ -158,29 +158,11 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
       substraitType->set_allocated_struct_(substraitStruct);
       break;
     }
-    case velox::TypeKind::DATE: {
-      ::substrait::Type_Date* subDate =
-          google::protobuf::Arena::CreateMessage<::substrait::Type_Date>(
-              &arena);
-      subDate->set_nullability(
-          ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
-      substraitType->set_allocated_date(subDate);
-      break;
-    }
     case velox::TypeKind::UNKNOWN: {
-      // velox unknown type binding to substrait unknown type
       auto substraitUserDefined =
           google::protobuf::Arena::CreateMessage<::substrait::Type_UserDefined>(
               &arena);
-
-      const auto& referenceId = extensionCollector_->getTypeReference(type);
-
-      VELOX_CHECK(
-          referenceId.has_value(),
-          "Fail to get type reference for type {}",
-          type->toString());
-
-      substraitUserDefined->set_type_reference(referenceId.value());
+      substraitUserDefined->set_type_reference(0);
       substraitUserDefined->set_nullability(
           ::substrait::Type_Nullability_NULLABILITY_NULLABLE);
       substraitType->set_allocated_user_defined(substraitUserDefined);
@@ -198,7 +180,7 @@ const ::substrait::Type& VeloxToSubstraitTypeConvertor::toSubstraitType(
 const ::substrait::NamedStruct&
 VeloxToSubstraitTypeConvertor::toSubstraitNamedStruct(
     google::protobuf::Arena& arena,
-    const velox::RowTypePtr& rowType) const {
+    const velox::RowTypePtr& rowType) {
   ::substrait::NamedStruct* substraitNamedStruct =
       google::protobuf::Arena::CreateMessage<::substrait::NamedStruct>(&arena);
 

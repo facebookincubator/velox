@@ -17,7 +17,8 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
-#include "velox/substrait/VeloxToSubstraitCallConverter.h"
+
+#include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/VeloxToSubstraitType.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 
@@ -25,13 +26,11 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitExprConvertor {
  public:
-  /// @param callConverters: A collection of CallConverter
-  /// each of which is responsible for convert Velox CallTypedExpr into
-  /// Corresponding Substrait Expression.
+  /// @param extensionCollector:  ExtensionCollector storing the relations
+  /// between the function signature and the function id.
   explicit VeloxToSubstraitExprConvertor(
-      const VeloxToSubstraitTypeConvertorPtr& typeConvertor,
-      const std::vector<VeloxToSubstraitCallConverterPtr>& callConverters)
-      : typeConvertor_(typeConvertor), callConverters_(callConverters) {}
+      const SubstraitExtensionCollectorPtr& extensionCollector)
+      : extensionCollector_(extensionCollector) {}
 
   /// Convert Velox Expression to Substrait Expression.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -97,8 +96,9 @@ class VeloxToSubstraitExprConvertor {
       google::protobuf::Arena& arena,
       const velox::variant& variantValue);
 
-  const VeloxToSubstraitTypeConvertorPtr typeConvertor_;
-  const std::vector<VeloxToSubstraitCallConverterPtr> callConverters_;
+  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
+
+  SubstraitExtensionCollectorPtr extensionCollector_;
 };
 
 using VeloxToSubstraitExprConvertorPtr =

@@ -28,7 +28,7 @@ class TypeUtilsTest : public ::testing::Test {
       const TypePtr& type,
       const std::string& expectedType) {
     SCOPED_TRACE(type->toString());
-    auto substraitType = substraitSignature(type);
+    auto substraitType = toSubstraitSignature(type);
     ASSERT_EQ(substraitType, expectedType);
   }
 };

@@ -125,7 +125,7 @@ TypePtr toVeloxType(const std::string& typeName) {
   }
 }
 
-std::string substraitSignature(const TypePtr& type) {
+std::string toSubstraitSignature(const TypePtr& type) {
   const auto& typeKind = type->kind();
   switch (typeKind) {
     case TypeKind::BOOLEAN:
@@ -163,7 +163,7 @@ std::string substraitSignature(const TypePtr& type) {
     case TypeKind::UNKNOWN:
       return "u!name";
     default:
-      VELOX_NYI(
+      VELOX_UNSUPPORTED(
           "Substrait type signature conversion not supported for type {}.",
           type->toString());
   }

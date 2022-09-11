@@ -21,7 +21,8 @@ add_executable(
   JsonToProtoConverter.cpp
   VeloxSubstraitRoundTripPlanConverterTest.cpp
   VeloxToSubstraitTypeTest.cpp
-  TypeUtilsTest.cpp)
+  TypeUtilsTest.cpp
+  SubstraitExtensionCollectorTest.cpp)
 
 add_dependencies(velox_plan_conversion_test velox_substrait_plan_converter)
 

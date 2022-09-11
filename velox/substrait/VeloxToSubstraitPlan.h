@@ -19,25 +19,20 @@
 #include <google/protobuf/arena.h>
 #include <string>
 #include <typeinfo>
+
 #include "velox/core/PlanNode.h"
+#include "velox/type/Type.h"
+
 #include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/substrait/VeloxToSubstraitExpr.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
 /// Convert the Velox plan into Substrait plan.
 class VeloxToSubstraitPlanConvertor {
  public:
-  /// constructor VeloxToSubstraitPlanConvertor
-  VeloxToSubstraitPlanConvertor();
-
-  /// constructor VeloxToSubstraitPlanConvertor with given extensionCollector.
-  VeloxToSubstraitPlanConvertor(
-      const SubstraitExtensionCollectorPtr& extensionCollector);
-
   /// Convert Velox PlanNode into Substrait Plan.
   /// @param vPlan Velox query plan to convert.
   /// @param arena Arena to use for allocating Substrait plan objects.
@@ -84,9 +79,10 @@ class VeloxToSubstraitPlanConvertor {
 
   /// The Type converter used to conver velox representation into Substrait
   /// type.
-  VeloxToSubstraitTypeConvertorPtr typeConvertor_;
+  std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
 
-  /// The extension Collector used to collect function & type reference.
+  /// The Extension collector storing the relations between the function
+  /// signature and the function id.
   SubstraitExtensionCollectorPtr extensionCollector_;
 };
 

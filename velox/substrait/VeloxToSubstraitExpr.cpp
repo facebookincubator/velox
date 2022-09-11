@@ -129,18 +129,39 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
     google::protobuf::Arena& arena,
     const std::shared_ptr<const core::CallTypedExpr>& callTypeExpr,
     const RowTypePtr& inputType) {
-  SubstraitExprConverter topLevelConverter =
-      [&](const core::TypedExprPtr& typeExpr) {
-        return this->toSubstraitExpr(arena, typeExpr, inputType);
-      };
-  for (const auto& cc : callConverters_) {
-    auto expressionOption = cc->convert(callTypeExpr, arena, topLevelConverter);
-    if (expressionOption.has_value()) {
-      return *expressionOption.value();
+  ::substrait::Expression* substraitExpr =
+      google::protobuf::Arena::CreateMessage<::substrait::Expression>(&arena);
+
+  auto inputs = callTypeExpr->inputs();
+  auto& functionName = callTypeExpr->name();
+
+  // The processing is different for different function names.
+  // TODO add support for if Expr and switch Expr
+  if (functionName != "if" && functionName != "switch") {
+    ::substrait::Expression_ScalarFunction* scalarExpr =
+        substraitExpr->mutable_scalar_function();
+
+    std::vector<TypePtr> types;
+    types.reserve(callTypeExpr->inputs().size());
+    for (auto& typedExpr : callTypeExpr->inputs()) {
+      types.emplace_back(typedExpr->type());
     }
+
+    scalarExpr->set_function_reference(
+        extensionCollector_->getFunctionReference(functionName, types));
+
+    for (auto& arg : inputs) {
+      scalarExpr->add_args()->MergeFrom(toSubstraitExpr(arena, arg, inputType));
+    }
+
+    scalarExpr->mutable_output_type()->MergeFrom(
+        typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
+
+  } else {
+    VELOX_NYI("Unsupported function name '{}'", functionName);
   }
 
-  VELOX_NYI("Unsupported function name '{}'", callTypeExpr->name());
+  return *substraitExpr;
 }
 
 const ::substrait::Expression_Literal&

@@ -24,24 +24,11 @@
 namespace facebook::velox::substrait {
 
 struct FunctionId {
-  /// function uri
   std::string uri;
-  /// function signature
   std::string signature;
 
   bool operator==(const FunctionId& other) const {
     return (uri == other.uri && signature == other.signature);
-  }
-};
-
-struct TypeId {
-  /// type uri
-  std::string uri;
-  /// type name
-  std::string name;
-
-  bool operator==(const TypeId& other) const {
-    return (uri == other.uri && name == other.name);
   }
 };
 
@@ -53,9 +40,6 @@ class ExtensionIdResolver {
   FunctionId resolve(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments) const;
-
-  /// resolve typeId by given velox type
-  TypeId resolve(const TypePtr& type) const;
 };
 
 using ExtensionIdResolverPtr = std::shared_ptr<const ExtensionIdResolver>;
@@ -65,12 +49,9 @@ class SubstraitExtensionCollector {
  public:
   SubstraitExtensionCollector();
   /// get function reference by function name and arguments.
-  std::optional<int> getFunctionReference(
+  int getFunctionReference(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments);
-
-  /// get function reference by function name and arguments.
-  std::optional<int> getTypeReference(const TypePtr& type);
 
   /// add extension functions and types to Substrait plan.
   void addExtensionsToPlan(::substrait::Plan* plan) const;
@@ -83,22 +64,14 @@ class SubstraitExtensionCollector {
   class BiDirectionHashMap {
    public:
     void put(const int& key, const T& value);
-    std::unordered_map<int, T> forwardMap_;
+    std::map<int, T> forwardMap_;
     std::unordered_map<T, int> reverseMap_;
   };
-
-  /// add extension functions to Substrait plan.
-  void addExtensionFunctionsToPlan(::substrait::Plan* plan) const;
-
-  /// add extension types to Substrait plan.
-  void addExtensionTypesToPlan(::substrait::Plan* plan) const;
 
   /// the count of extension function reference in a substrait plan.
   int functionReference_ = -1;
   /// extension function collected in substrait plan.
   std::shared_ptr<BiDirectionHashMap<FunctionId>> extensionFunctions_;
-  /// extension function collected in substrait plan.
-  std::shared_ptr<BiDirectionHashMap<TypeId>> extensionTypes_;
 
   ExtensionIdResolverPtr extensionIdResolver_;
 };
@@ -116,16 +89,6 @@ struct hash<facebook::velox::substrait::FunctionId> {
   size_t operator()(const facebook::velox::substrait::FunctionId& k) const {
     size_t val = hash<std::string>()(k.uri);
     val = val * 31 + hash<std::string>()(k.signature);
-    return val;
-  }
-};
-
-/// hash function of facebook::velox::substrait::TypeId
-template <>
-struct hash<facebook::velox::substrait::TypeId> {
-  size_t operator()(const facebook::velox::substrait::TypeId& k) const {
-    size_t val = hash<std::string>()(k.uri);
-    val = val * 31 + hash<std::string>()(k.name);
     return val;
   }
 };
