@@ -2,7 +2,8 @@
 Function Coverage
 =================
 
-Here is a list of all scalar and aggregate Presto functions with functions that are available in Velox highlighted.
+Here is a list of all scalar and aggregate Presto functions with functions that
+are available in Velox highlighted.
 
 .. raw:: html
 
@@ -12,6 +13,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     table.coverage td:nth-child(6) {background-color: lightblue;}
     table.coverage tr:nth-child(1) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(1) td:nth-child(2) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(1) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(1) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(2) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(2) td:nth-child(2) {background-color: #6BA81E;}
@@ -24,6 +26,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     table.coverage tr:nth-child(4) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(5) td:nth-child(2) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(5) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(5) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(6) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(6) td:nth-child(2) {background-color: #6BA81E;}
@@ -31,6 +34,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     table.coverage tr:nth-child(6) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(2) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(7) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(8) td:nth-child(1) {background-color: #6BA81E;}
@@ -66,6 +70,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     table.coverage tr:nth-child(18) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(18) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(18) td:nth-child(5) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(19) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(19) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(19) td:nth-child(4) {background-color: #6BA81E;}
     table.coverage tr:nth-child(19) td:nth-child(5) {background-color: #6BA81E;}
@@ -107,9 +112,11 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     table.coverage tr:nth-child(35) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(36) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(37) td:nth-child(1) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(37) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(38) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(38) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(38) td:nth-child(3) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(38) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(38) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(39) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(39) td:nth-child(3) {background-color: #6BA81E;}
@@ -193,13 +200,13 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     ========================================  ========================================  ========================================  ========================================  ========================================  ==  ========================================
     Scalar Functions                                                                                                                                                                                                      Aggregate Functions
     ================================================================================================================================================================================================================  ==  ========================================
-    :func:`abs`                               :func:`date_diff`                         is_json_scalar                            render                                    st_points                                     :func:`approx_distinct`                 
+    :func:`abs`                               :func:`date_diff`                         :func:`is_json_scalar`                    render                                    st_points                                     :func:`approx_distinct`                 
     :func:`acos`                              :func:`date_format`                       :func:`is_nan`                            repeat                                    st_polygon                                    :func:`approx_most_frequent`            
     all_match                                 :func:`date_parse`                        is_subnet_of                              :func:`replace`                           st_relate                                     :func:`approx_percentile`               
     any_match                                 :func:`date_trunc`                        jaccard_index                             :func:`reverse`                           st_startpoint                                 :func:`approx_set`                      
-    array_average                             :func:`day`                               json_array_contains                       rgb                                       st_symdifference                              :func:`arbitrary`                       
+    array_average                             :func:`day`                               :func:`json_array_contains`               rgb                                       st_symdifference                              :func:`arbitrary`                       
     :func:`array_distinct`                    :func:`day_of_month`                      json_array_get                            :func:`round`                             st_touches                                    :func:`array_agg`                       
-    :func:`array_duplicates`                  :func:`day_of_week`                       json_array_length                         :func:`rpad`                              st_union                                      :func:`avg`                             
+    :func:`array_duplicates`                  :func:`day_of_week`                       :func:`json_array_length`                 :func:`rpad`                              st_union                                      :func:`avg`                             
     :func:`array_except`                      :func:`day_of_year`                       json_extract                              :func:`rtrim`                             st_within                                     :func:`bitwise_and_agg`                 
     array_frequency                           :func:`degrees`                           :func:`json_extract_scalar`               scale_qdigest                             st_x                                          :func:`bitwise_or_agg`                  
     array_has_duplicates                      :func:`dow`                               json_format                               :func:`second`                            st_xmax                                       :func:`bool_and`                        
@@ -211,7 +218,7 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     :func:`array_position`                    :func:`exp`                               line_interpolate_point                    :func:`sign`                              strrpos                                       classification_recall                   
     array_remove                              expand_envelope                           line_locate_point                         simplify_geometry                         :func:`substr`                                classification_thresholds               
     :func:`array_sort`                        features                                  :func:`ln`                                :func:`sin`                               :func:`tan`                                   convex_hull_agg                         
-    array_sum                                 :func:`filter`                            localtime                                 :func:`slice`                             :func:`tanh`                                  :func:`corr`                            
+    :func:`array_sum`                         :func:`filter`                            localtime                                 :func:`slice`                             :func:`tanh`                                  :func:`corr`                            
     array_union                               flatten                                   localtimestamp                            spatial_partitions                        timezone_hour                                 :func:`count`                           
     :func:`arrays_overlap`                    flatten_geometry_collections              :func:`log10`                             :func:`split`                             timezone_minute                               :func:`count_if`                        
     :func:`asin`                              :func:`floor`                             :func:`log2`                              :func:`split_part`                        :func:`to_base`                               :func:`covar_pop`                       
@@ -229,8 +236,8 @@ Here is a list of all scalar and aggregate Presto functions with functions that 
     bing_tile_zoom_level                      from_ieee754_32                           map_zip_with                              st_contains                               :func:`to_unixtime`                           learn_libsvm_classifier                 
     bing_tiles_around                         from_ieee754_64                           :func:`md5`                               st_convexhull                             :func:`to_utf8`                               learn_libsvm_regressor                  
     binomial_cdf                              from_iso8601_date                         merge_hll                                 st_coorddim                               :func:`transform`                             learn_regressor                         
-    :func:`bit_count`                         from_iso8601_timestamp                    merge_khll                                st_crosses                                transform_keys                                make_set_digest                         
-    :func:`bitwise_and`                       :func:`from_unixtime`                     :func:`millisecond`                       st_difference                             transform_values                              :func:`map_agg`                         
+    :func:`bit_count`                         from_iso8601_timestamp                    merge_khll                                st_crosses                                :func:`transform_keys`                        make_set_digest                         
+    :func:`bitwise_and`                       :func:`from_unixtime`                     :func:`millisecond`                       st_difference                             :func:`transform_values`                      :func:`map_agg`                         
     :func:`bitwise_arithmetic_shift_right`    from_utf8                                 :func:`minute`                            st_dimension                              :func:`trim`                                  :func:`map_union`                       
     :func:`bitwise_left_shift`                geometry_as_geojson                       :func:`mod`                               st_disjoint                               truncate                                      map_union_sum                           
     :func:`bitwise_logical_shift_right`       geometry_from_geojson                     :func:`month`                             st_distance                               typeof                                        :func:`max`                             

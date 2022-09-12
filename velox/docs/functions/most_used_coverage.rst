@@ -2,7 +2,8 @@
 Most Used Function Coverage
 ===========================
 
-Here is a list of most used scalar and aggregate Presto functions with functions that are available in Velox highlighted.
+Here is a list of most used scalar and aggregate Presto functions with functions
+that are available in Velox highlighted.
 
 .. raw:: html
 
@@ -26,6 +27,7 @@ Here is a list of most used scalar and aggregate Presto functions with functions
     table.coverage tr:nth-child(3) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(3) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(1) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(4) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(4) td:nth-child(7) {background-color: #6BA81E;}
@@ -39,6 +41,7 @@ Here is a list of most used scalar and aggregate Presto functions with functions
     table.coverage tr:nth-child(6) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(6) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(6) td:nth-child(4) {background-color: #6BA81E;}
+    table.coverage tr:nth-child(6) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(6) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(1) {background-color: #6BA81E;}
     table.coverage tr:nth-child(7) td:nth-child(2) {background-color: #6BA81E;}
@@ -100,9 +103,9 @@ Here is a list of most used scalar and aggregate Presto functions with functions
     :func:`map`                  :func:`date_format`          :func:`element_at`           :func:`strpos`               :func:`arrays_overlap`           :func:`count`              
     :func:`lower`                :func:`json_extract_scalar`  :func:`abs`                  flatten                      from_big_endian_64               :func:`sum`                
     json_format                  :func:`array_sort`           :func:`round`                :func:`trim`                 :func:`md5`                      :func:`max`                
-    :func:`upper`                transform_values             :func:`map_filter`           map_zip_with                 :func:`xxhash64`                 :func:`array_agg`          
+    :func:`upper`                :func:`transform_values`     :func:`map_filter`           map_zip_with                 :func:`xxhash64`                 :func:`array_agg`          
     :func:`split`                :func:`map_entries`          :func:`regexp_extract`       :func:`year`                 :func:`to_hex`                   :func:`arbitrary`          
-    :func:`random`               :func:`concat`               :func:`map_values`           :func:`slice`                transform_keys                   :func:`min`                
+    :func:`random`               :func:`concat`               :func:`map_values`           :func:`slice`                :func:`transform_keys`           :func:`min`                
     :func:`floor`                :func:`cardinality`          :func:`map_keys`             :func:`month`                bing_tile_quadkey                :func:`max_by`             
     :func:`contains`             sequence                     :func:`reduce`               any_match                    :func:`to_utf8`                  :func:`approx_distinct`    
     :func:`map_concat`           :func:`substr`               :func:`greatest`             :func:`bitwise_and`          crc32                            :func:`count_if`           
