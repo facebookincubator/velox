@@ -33,6 +33,6 @@ void JsonToProtoConverter::readFromFile(
   VELOX_CHECK(
       status.ok(),
       "Failed to parse Substrait JSON: {} {}",
-      status.error_code(),
-      status.error_message());
+      status.code(),
+      status.message());
 }
