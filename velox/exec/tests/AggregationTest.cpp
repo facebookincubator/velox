@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "utils/SumNonPODAggregate.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -26,7 +27,6 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 #include "velox/expression/FunctionSignature.h"
-#include "utils/SumNonPODAggregate.h"
 
 using facebook::velox::core::QueryConfig;
 using facebook::velox::exec::Aggregate;
