@@ -42,7 +42,7 @@ inline UnscaledShortDecimal checkedPlus(
   int64_t result;
   bool overflow =
       __builtin_add_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
     VELOX_ARITHMETIC_ERROR(
         "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
   }
@@ -80,9 +80,9 @@ inline UnscaledShortDecimal checkedMinus(
   int64_t result;
   bool overflow =
       __builtin_sub_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
     VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+        "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
   }
   return UnscaledShortDecimal(result);
 }
@@ -96,7 +96,7 @@ inline UnscaledLongDecimal checkedMinus(
       __builtin_sub_overflow(a.unscaledValue(), b.unscaledValue(), &result);
   if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
     VELOX_ARITHMETIC_ERROR(
-        "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+        "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
   }
 
   return UnscaledLongDecimal(result);
@@ -119,7 +119,7 @@ inline UnscaledShortDecimal checkedMultiply(
   int64_t result;
   bool overflow =
       __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow)) {
+  if (UNLIKELY(overflow || !UnscaledShortDecimal::valueInRange(result))) {
     VELOX_ARITHMETIC_ERROR(
         "Decimal overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
   }
@@ -133,31 +133,12 @@ inline UnscaledLongDecimal checkedMultiply(
   int128_t result;
   bool overflow =
       __builtin_mul_overflow(a.unscaledValue(), b.unscaledValue(), &result);
-  if (UNLIKELY(overflow)) {
+  if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
     VELOX_ARITHMETIC_ERROR(
         "Decimal overflow: {} * {}", a.unscaledValue(), b.unscaledValue());
   }
   return UnscaledLongDecimal(result);
 }
-
-template <typename R, typename A>
-struct UnscaledDecimalArithmetic {
-  static_assert(
-      std::is_same<R, UnscaledLongDecimal>::value ||
-      std::is_same<R, UnscaledShortDecimal>::value);
-  static_assert(
-      std::is_same<A, UnscaledLongDecimal>::value ||
-      std::is_same<A, UnscaledShortDecimal>::value);
-
-  static inline R checkedMultiply(const A& a, const int128_t& b) {
-    int128_t result;
-    bool overflow = __builtin_mul_overflow(a.unscaledValue(), b, &result);
-    if (UNLIKELY(overflow || !UnscaledLongDecimal::valueInRange(result))) {
-      VELOX_ARITHMETIC_ERROR("Decimal overflow: {} * {}", a.unscaledValue(), b);
-    }
-    return R(result);
-  }
-};
 
 template <typename T>
 T checkedDivide(const T& a, const T& b) {

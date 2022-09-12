@@ -108,10 +108,8 @@ class Addition {
 #endif
   {
     r = checkedPlus<R>(
-        UnscaledDecimalArithmetic<R, A>::checkedMultiply(
-            a, DecimalUtil::kPowersOfTen[aRescale]),
-        UnscaledDecimalArithmetic<R, B>::checkedMultiply(
-            b, DecimalUtil::kPowersOfTen[bRescale]));
+        checkedMultiply<R>(R(a), R(DecimalUtil::kPowersOfTen[aRescale])),
+        checkedMultiply<R>(R(b), R(DecimalUtil::kPowersOfTen[bRescale])));
   }
 
   inline static uint8_t
@@ -145,10 +143,8 @@ class Subtraction {
 #endif
   {
     r = checkedMinus<R>(
-        UnscaledDecimalArithmetic<R, A>::checkedMultiply(
-            a, DecimalUtil::kPowersOfTen[aRescale]),
-        UnscaledDecimalArithmetic<R, B>::checkedMultiply(
-            b, DecimalUtil::kPowersOfTen[bRescale]));
+        checkedMultiply<R>(R(a), R(DecimalUtil::kPowersOfTen[aRescale])),
+        checkedMultiply<R>(R(b), R(DecimalUtil::kPowersOfTen[bRescale])));
   }
 
   inline static uint8_t
@@ -171,9 +167,9 @@ class Multiply {
   template <typename R, typename A, typename B>
   inline static void
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
-    r = UnscaledDecimalArithmetic<R, R>::checkedMultiply(
-        UnscaledDecimalArithmetic<R, A>::checkedMultiply(a, b.unscaledValue()),
-        DecimalUtil::kPowersOfTen[aRescale + bRescale]);
+    r = checkedMultiply<R>(
+        checkedMultiply<R>(R(a), R(b)),
+        R(DecimalUtil::kPowersOfTen[aRescale + bRescale]));
   }
 
   inline static uint8_t
