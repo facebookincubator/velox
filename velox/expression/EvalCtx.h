@@ -235,6 +235,8 @@ class EvalCtx {
         rows, type, execCtx_->pool(), result, &execCtx_->vectorPool());
   }
 
+  void ensureErrorsVectorSize(ErrorVectorPtr& vector, vector_size_t size) const;
+
  private:
   core::ExecCtx* const FOLLY_NONNULL execCtx_;
   ExprSet* FOLLY_NULLABLE const exprSet_;
