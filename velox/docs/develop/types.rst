@@ -2,7 +2,7 @@
 Types
 =====
 
-Velox supports scalar types and complex types. These types cover both
+Velox supports scalar types and complex types. These types cover most of the
 Presto and Spark data types.
 
 Scalar Types
@@ -51,5 +51,5 @@ it simplifies the implementation.
 
 Complex Types
 ~~~~~~~~~~~~~
-Velox supports the ARRAY, MAP, and ROW / STRUCT complex types.
+Velox supports the ARRAY, MAP, and ROW complex types.
 

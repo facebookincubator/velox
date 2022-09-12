@@ -9,7 +9,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
 
     develop/types
     develop/vectors
-    develop/simple-vector-functions
+    develop/scalar-functions
     develop/aggregate-functions
     develop/lambda-functions
     develop/expression-evaluation
