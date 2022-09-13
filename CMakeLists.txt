@@ -214,13 +214,9 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits")
   endif()
-  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
-        "-Wno-nullability-completeness \
-         -Wno-unused \
-         -Wno-unused-parameter \
-         -Wno-overloaded-virtual")
-  endif()
+  # if(CMAKE_SYSTEM_NAME MATCHES "Darwin") set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
+  # "-Wno-nullability-completeness \ -Wno-unused \ -Wno-unused-parameter \
+  # -Wno-overloaded-virtual") endif()
 
   set(KNOWN_WARNINGS
       "-Wno-unused \
