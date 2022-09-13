@@ -47,11 +47,8 @@ endif()
 macro(build_folly)
   message(STATUS "Building Folly from source")
   set(FOLLY_CXX_FLAGS
-      -Wno-deprecated-declarations
-      -Wno-nullability-completeness
-      -Wno-unused
-      -Wno-unused-parameter
-      -Wno-overloaded-virtual)
+      -Wno-deprecated-declarations -Wno-nullability-completeness -Wno-unused
+      -Wno-unused-parameter -Wno-overloaded-virtual)
   FetchContent_Declare(
     folly
     URL ${FOLLY_SOURCE_URL}
