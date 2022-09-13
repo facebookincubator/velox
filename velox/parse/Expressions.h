@@ -288,7 +288,8 @@ class CallExpr : public core::IExpr {
 
   std::shared_ptr<const IExpr> withInputs(
       std::vector<std::shared_ptr<const IExpr>> inputs) const override {
-    return std::make_shared<CallExpr>(std::string{name_}, std::move(inputs), alias_);
+    return std::make_shared<CallExpr>(
+        std::string{name_}, std::move(inputs), alias_);
   }
 
   std::string toString() const override {

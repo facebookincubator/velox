@@ -222,7 +222,9 @@ class FieldAccessTypedExpr : public ITypedExpr {
  public:
   /// Used as a leaf in an expression tree specifying input column by name.
   FieldAccessTypedExpr(TypePtr type, std::string name)
-      : ITypedExpr{std::move(type)}, name_(std::move(name)), isInputColumn_(true) {}
+      : ITypedExpr{std::move(type)},
+        name_(std::move(name)),
+        isInputColumn_(true) {}
 
   /// Used as a dereference expression which selects a subfield in a struct by
   /// name.
