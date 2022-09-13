@@ -39,8 +39,6 @@
 #include <folly/fibers/FiberManager.h> // @manual
 #endif
 
-using namespace std;
-
 namespace facebook::velox::process {
 
 StackTrace::StackTrace(int32_t skipFrames) {
@@ -90,7 +88,7 @@ void StackTrace::create(int32_t skipFrames) {
 ///////////////////////////////////////////////////////////////////////////////
 // reporting functions
 
-const vector<string>& StackTrace::toStrVector() const {
+const std::vector<std::string>& StackTrace::toStrVector() const {
   folly::call_once(bt_vector_flag_, [&] {
     size_t frame = 0;
     static folly::Indestructible<folly::fbstring> myname{
@@ -107,7 +105,7 @@ const vector<string>& StackTrace::toStrVector() const {
   return bt_vector_;
 }
 
-const string& StackTrace::toString() const {
+const std::string& StackTrace::toString() const {
   folly::call_once(bt_flag_, [&] {
     const auto& vec = toStrVector();
     size_t needed = 0;
@@ -123,14 +121,14 @@ const string& StackTrace::toString() const {
   return bt_;
 }
 
-string StackTrace::log(const char* errorType, string* out /* = NULL */) const {
-  string pid = folly::to<string>(getProcessId());
+std::string StackTrace::log(const char* errorType, std::string* out /* = NULL */) const {
+  std::string pid = folly::to<std::string>(getProcessId());
 
-  string msg;
+  std::string msg;
   msg += "Host: " + getHostName();
   msg += "\nProcessID: " + pid;
   msg += "\nThreadID: " +
-      folly::to<string>(reinterpret_cast<uintptr_t>(getThreadId()));
+      folly::to<std::string>(reinterpret_cast<uintptr_t>(getThreadId()));
   msg += "\nName: " + getAppName();
   msg += "\nType: ";
   if (errorType) {
@@ -142,8 +140,8 @@ string StackTrace::log(const char* errorType, string* out /* = NULL */) const {
   msg += toString();
   msg += "\n";
 
-  string tracefn = "/tmp/stacktrace." + pid + ".log";
-  ofstream f(tracefn.c_str());
+  std::string tracefn = "/tmp/stacktrace." + pid + ".log";
+  std::ofstream f(tracefn.c_str());
   if (f) {
     f << msg;
     f.close();
@@ -173,7 +171,7 @@ inline string translateFrameImpl(void* addressPtr) {
 } // namespace
 #endif
 
-string StackTrace::translateFrame(void* addressPtr, bool /*lineNumbers*/) {
+std::string StackTrace::translateFrame(void* addressPtr, bool /*lineNumbers*/) {
 #if VELOX_HAS_SYMBOLIZER
   return folly::fibers::runInMainContext(
       [addressPtr]() { return translateFrameImpl(addressPtr); });
@@ -183,7 +181,7 @@ string StackTrace::translateFrame(void* addressPtr, bool /*lineNumbers*/) {
 #endif
 }
 
-string StackTrace::demangle(const char* mangled) {
+std::string StackTrace::demangle(const char* mangled) {
   return folly::demangle(mangled).toStdString();
 }
 
