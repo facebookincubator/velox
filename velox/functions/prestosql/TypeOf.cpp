@@ -23,12 +23,12 @@ class TypeOfFunction : public exec::VectorFunction {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       const TypePtr& outputType,
-      exec::EvalCtx* context,
-      VectorPtr* result) const override {
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
     auto typeString = args[0]->type()->toString();
     auto localResult = BaseVector::createConstant(
-        variant::binary(typeString), rows.end(), context->pool());
-    context->moveOrCopyResult(localResult, rows, result);
+        velox::variant(typeString), rows.end(), context.pool());
+    context.moveOrCopyResult(localResult, rows, result);
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
