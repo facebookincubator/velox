@@ -11,81 +11,87 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
+if(${VELOX_BUILD_TEST_UTILS}
+   OR ${VELOX_BUILD_TESTING}
+   OR ${VELOX_ENABLE_BENCHMARKS_BASIC})
+  add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
+  target_link_libraries(velox_vector_test_lib velox_vector)
+endif()
 
-target_link_libraries(velox_vector_test_lib velox_vector)
+if(${VELOX_BUILD_TESTING})
+  add_executable(
+    velox_vector_test
+    VectorCompareTest.cpp
+    VectorMakerTest.cpp
+    VectorPoolTest.cpp
+    VectorTest.cpp
+    VectorToStringTest.cpp
+    VectorEstimateFlatSizeTest.cpp
+    VectorPrepareForReuseTest.cpp
+    DecodedVectorTest.cpp
+    SelectivityVectorTest.cpp
+    EnsureWritableVectorTest.cpp
+    IsWritableVectorTest.cpp
+    LazyVectorTest.cpp
+    MayHaveNullsRecursiveTest.cpp)
 
-add_executable(
-  velox_vector_test
-  VectorCompareTest.cpp
-  VectorMakerTest.cpp
-  VectorPoolTest.cpp
-  VectorTest.cpp
-  VectorToStringTest.cpp
-  VectorEstimateFlatSizeTest.cpp
-  VectorPrepareForReuseTest.cpp
-  DecodedVectorTest.cpp
-  SelectivityVectorTest.cpp
-  EnsureWritableVectorTest.cpp
-  IsWritableVectorTest.cpp
-  LazyVectorTest.cpp
-  MayHaveNullsRecursiveTest.cpp)
+  add_test(velox_vector_test velox_vector_test)
 
-add_test(velox_vector_test velox_vector_test)
+  target_link_libraries(
+    velox_vector_test
+    velox_vector_test_lib
+    velox_buffer
+    velox_vector
+    velox_serialization
+    velox_memory
+    velox_presto_serializer
+    ${Boost_ATOMIC_LIBRARIES}
+    ${Boost_CONTEXT_LIBRARIES}
+    ${Boost_DATE_TIME_LIBRARIES}
+    ${Boost_FILESYSTEM_LIBRARIES}
+    ${Boost_PROGRAM_OPTIONS_LIBRARIES}
+    ${Boost_REGEX_LIBRARIES}
+    ${Boost_THREAD_LIBRARIES}
+    ${Boost_SYSTEM_LIBRARIES}
+    gtest
+    gtest_main
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${DOUBLE_CONVERSION}
+    ${gflags_LIBRARIES}
+    glog::glog
+    ${FMT}
+    dl)
 
-target_link_libraries(
-  velox_vector_test
-  velox_vector_test_lib
-  velox_buffer
-  velox_vector
-  velox_serialization
-  velox_memory
-  velox_presto_serializer
-  ${Boost_ATOMIC_LIBRARIES}
-  ${Boost_CONTEXT_LIBRARIES}
-  ${Boost_DATE_TIME_LIBRARIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
-  ${Boost_PROGRAM_OPTIONS_LIBRARIES}
-  ${Boost_REGEX_LIBRARIES}
-  ${Boost_THREAD_LIBRARIES}
-  ${Boost_SYSTEM_LIBRARIES}
-  gtest
-  gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${DOUBLE_CONVERSION}
-  ${gflags_LIBRARIES}
-  glog::glog
-  ${FMT}
-  dl)
+  add_executable(simple_vector_test SimpleVectorTest.cpp
+                                    ToStringUtilityTest.cpp)
 
-add_executable(simple_vector_test SimpleVectorTest.cpp ToStringUtilityTest.cpp)
+  add_test(simple_vector_test simple_vector_test)
 
-add_test(simple_vector_test simple_vector_test)
+  target_link_libraries(
+    simple_vector_test
+    velox_vector
+    velox_buffer
+    velox_type
+    velox_vector_test_lib
+    gtest
+    gtest_main
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${gflags_LIBRARIES}
+    glog::glog
+    ${FMT})
 
-target_link_libraries(
-  simple_vector_test
-  velox_vector
-  velox_buffer
-  velox_type
-  velox_vector_test_lib
-  gtest
-  gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
-  glog::glog
-  ${FMT})
+  add_executable(bias_vector_test BiasVectorTest.cpp)
 
-add_executable(bias_vector_test BiasVectorTest.cpp)
+  add_test(bias_vector_test bias_vector_test)
 
-add_test(bias_vector_test bias_vector_test)
-
-target_link_libraries(
-  bias_vector_test
-  velox_vector
-  Boost::filesystem
-  gtest
-  gtest_main
-  ${FOLLY_WITH_DEPENDENCIES}
-  ${gflags_LIBRARIES}
-  glog::glog
-  ${FMT})
+  target_link_libraries(
+    bias_vector_test
+    velox_vector
+    Boost::filesystem
+    gtest
+    gtest_main
+    ${FOLLY_WITH_DEPENDENCIES}
+    ${gflags_LIBRARIES}
+    glog::glog
+    ${FMT})
+endif()
