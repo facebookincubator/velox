@@ -295,5 +295,5 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
           {makeLongDecimalFlatVector(
               {facebook::velox::DecimalUtil::kPowersOfTen[38] - 1},
               DECIMAL(38, 0))}),
-      "integer overflow: 99999999999999999999999999999999999999 * 100");
+      "Decimal overflow: 99999999999999999999999999999999999999 * 100");
 }
