@@ -46,6 +46,7 @@ endif()
 
 macro(build_folly)
   message(STATUS "Building Folly from source")
+  # Avoid possible errors for some known warnings on folly
   set(FOLLY_CXX_FLAGS
       -Wno-deprecated-declarations -Wno-nullability-completeness -Wno-unused
       -Wno-unused-parameter -Wno-overloaded-virtual)
@@ -57,8 +58,6 @@ macro(build_folly)
     # Fetch the content using previously declared details
     FetchContent_Populate(folly)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
-    # Avoid possible errors for some known warnings on folly
-    target_compile_options(folly PRIVATE -Wno-deprecated-declarations)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
