@@ -215,8 +215,7 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-type-limits")
   endif()
   if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
-        "-Wno-nullability-completeness")
+    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS "-Wno-nullability-completeness")
   endif()
 
   set(KNOWN_WARNINGS
