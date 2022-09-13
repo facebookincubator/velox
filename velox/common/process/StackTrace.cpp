@@ -157,11 +157,11 @@ std::string StackTrace::log(
 
 #if VELOX_HAS_SYMBOLIZER
 namespace {
-inline string translateFrameImpl(void* addressPtr) {
+inline std::string translateFrameImpl(void* addressPtr) {
   // TODO: lineNumbers has been disabled since 2009.
   using namespace folly::symbolizer;
 
-  uintptr_t address = reinterpret_cast<uintptr_t>(addressPtr);
+  std::uintptr_t address = std::reinterpret_cast<std::uintptr_t>(addressPtr);
   Symbolizer symbolizer(LocationInfoMode::DISABLED);
   SymbolizedFrame frame;
   symbolizer.symbolize(address, frame);
