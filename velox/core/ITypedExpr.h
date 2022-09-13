@@ -23,7 +23,7 @@ namespace facebook::velox::core {
 /* a strongly-typed expression, such as literal, function call, etc... */
 class ITypedExpr {
  public:
-  ITypedExpr(std::shared_ptr<const Type> type)
+  explicit ITypedExpr(std::shared_ptr<const Type> type)
       : type_{std::move(type)}, inputs_{} {}
 
   ITypedExpr(
