@@ -290,7 +290,9 @@ std::string Base64::decode(folly::StringPiece encoded) {
   return output;
 }
 
-void Base64::decode(const std::pair<const char*, int32_t>& payload, std::string& output) {
+void Base64::decode(
+    const std::pair<const char*, int32_t>& payload,
+    std::string& output) {
   size_t out_len = payload.second / 4 * 3;
   output.resize(out_len, '\0');
   out_len = Base64::decode(payload.first, payload.second, &output[0], out_len);

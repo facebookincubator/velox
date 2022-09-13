@@ -121,7 +121,9 @@ const std::string& StackTrace::toString() const {
   return bt_;
 }
 
-std::string StackTrace::log(const char* errorType, std::string* out /* = NULL */) const {
+std::string StackTrace::log(
+    const char* errorType,
+    std::string* out /* = NULL */) const {
   std::string pid = folly::to<std::string>(getProcessId());
 
   std::string msg;
