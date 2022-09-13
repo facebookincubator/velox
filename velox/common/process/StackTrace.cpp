@@ -161,7 +161,7 @@ inline std::string translateFrameImpl(void* addressPtr) {
   // TODO: lineNumbers has been disabled since 2009.
   using namespace folly::symbolizer;
 
-  std::uintptr_t address = std::reinterpret_cast<std::uintptr_t>(addressPtr);
+  std::uintptr_t address = reinterpret_cast<std::uintptr_t>(addressPtr);
   Symbolizer symbolizer(LocationInfoMode::DISABLED);
   SymbolizedFrame frame;
   symbolizer.symbolize(address, frame);
