@@ -193,26 +193,24 @@ class Divide {
   apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
     VELOX_CHECK_NE(b.unscaledValue(), 0, "Division by zero");
     int resultSign = 1;
-    auto unsignedDividendRescaled = a.unscaledValue();
-    if (a.unscaledValue() < 0) {
+    R unsignedDividendRescaled(a);
+    if (a < 0) {
       resultSign = -1;
-      unsignedDividendRescaled = -unsignedDividendRescaled;
+      unsignedDividendRescaled *= -1;
     }
-    auto unsignedDivisor = b.unscaledValue();
-    if (b.unscaledValue() < 0) {
+    R unsignedDivisor(b);
+    if (b < 0) {
       resultSign *= -1;
       unsignedDivisor *= -1;
     }
-    unsignedDividendRescaled =
-        checkedMultiply<R>(
-            R(unsignedDividendRescaled), R(DecimalUtil::kPowersOfTen[aRescale]))
-            .unscaledValue();
-    auto quotient = unsignedDividendRescaled / unsignedDivisor;
-    auto remainder = unsignedDividendRescaled % unsignedDivisor;
+    unsignedDividendRescaled = checkedMultiply<R>(
+        unsignedDividendRescaled, R(DecimalUtil::kPowersOfTen[aRescale]));
+    R quotient = unsignedDividendRescaled / unsignedDivisor;
+    R remainder = unsignedDividendRescaled % unsignedDivisor;
     if (remainder * 2 >= unsignedDivisor) {
-      quotient++;
+      ++quotient;
     }
-    r.setUnscaledValue(resultSign * quotient);
+    r = quotient * resultSign;
   }
 
   inline static uint8_t

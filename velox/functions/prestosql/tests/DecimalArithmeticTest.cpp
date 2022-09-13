@@ -283,9 +283,9 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
       {makeShortDecimalFlatVector({-34, 5, 65, 90, 2, -49}, DECIMAL(2, 1))});
 
   // Divide by zero.
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(
       testDecimalExpr<TypeKind::SHORT_DECIMAL>({}, "c0 / 0.0", {shortFlat}),
-      VeloxRuntimeError);
+      "Division by zero");
 
   // Long decimal limits.
   VELOX_ASSERT_THROW(
@@ -293,7 +293,6 @@ TEST_F(DecimalArithmeticTest, decimalDivTest) {
           {},
           "c0 / 0.01",
           {makeLongDecimalFlatVector(
-              {facebook::velox::DecimalUtil::kPowersOfTen[38] - 1},
-              DECIMAL(38, 0))}),
+              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
       "Decimal overflow: 99999999999999999999999999999999999999 * 100");
 }
