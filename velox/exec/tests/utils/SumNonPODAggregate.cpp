@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "SumNonPODAggregate.h"
+#include "velox/exec/tests/utils/SumNonPODAggregate.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashAggregation.h"
 #include "velox/expression/FunctionSignature.h"
