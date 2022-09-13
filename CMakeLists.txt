@@ -214,13 +214,18 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits")
   endif()
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
+        "-Wno-nullability-completeness")
+  endif()
 
   set(KNOWN_WARNINGS
       "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
+       ${KNOWN_COMPILER_SPECIFIC_WARNINGS} \
+       ${KNOWN_SYSTEM_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
