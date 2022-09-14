@@ -89,8 +89,10 @@ above could be re-written as follows:</p>
 </div>
 <p>The argument list must start with an output parameter “result” followed by the
 function arguments. The “result” argument must be a reference. Function
-arguments must be const references. The C++ types of the arguments must match
-Velox types as specified in the following mapping:</p>
+arguments must be const references. The C++ types of the function arguments and
+the result argument must match <a class="reference internal" href="types.html"><span class="doc">Velox types</span></a>.
+Since the result argument must be a reference, some of the types listed below
+have a different result argument type:</p>
 <table class="docutils align-default">
 <colgroup>
 <col style="width: 14%" />
@@ -104,45 +106,13 @@ Velox types as specified in the following mapping:</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>BOOLEAN</p></td>
-<td><p>bool</p></td>
-<td><p>bool</p></td>
-</tr>
-<tr class="row-odd"><td><p>TINYINT</p></td>
-<td><p>int8_t</p></td>
-<td><p>int8_t</p></td>
-</tr>
-<tr class="row-even"><td><p>SMALLINT</p></td>
-<td><p>int16_t</p></td>
-<td><p>int16_t</p></td>
-</tr>
-<tr class="row-odd"><td><p>INTEGER</p></td>
-<td><p>int32_t</p></td>
-<td><p>int32_t</p></td>
-</tr>
-<tr class="row-even"><td><p>BIGINT</p></td>
-<td><p>int64_t</p></td>
-<td><p>int64_t</p></td>
-</tr>
-<tr class="row-odd"><td><p>REAL</p></td>
-<td><p>float</p></td>
-<td><p>float</p></td>
-</tr>
-<tr class="row-even"><td><p>DOUBLE</p></td>
-<td><p>double</p></td>
-<td><p>double</p></td>
-</tr>
-<tr class="row-odd"><td><p>VARCHAR</p></td>
+<tr class="row-even"><td><p>VARCHAR</p></td>
 <td><p>StringView</p></td>
 <td><p>out_type&lt;Varchar&gt;</p></td>
 </tr>
-<tr class="row-even"><td><p>VARBINARY</p></td>
+<tr class="row-odd"><td><p>VARBINARY</p></td>
 <td><p>StringView</p></td>
 <td><p>out_type&lt;Varbinary&gt;</p></td>
-</tr>
-<tr class="row-odd"><td><p>TIMESTAMP</p></td>
-<td><p>Timestamp</p></td>
-<td><p>Timestamp</p></td>
 </tr>
 <tr class="row-even"><td><p>ARRAY</p></td>
 <td><p>arg_type&lt;Array&lt;E&gt;&gt;</p></td>
@@ -411,6 +381,10 @@ we need to call registerFunction again:</p>
 </pre></div>
 </div>
 <p>We need to call registerFunction for each signature we want to support.</p>
+<p>For decimal arguments, we use UnscaledLongDecimal or UnscaledShortDecimal for
+registration. Simple functions always require decimal arguments to have the same
+precision and scale. We must explicitly <code class="xref py py-func docutils literal notranslate"><span class="pre">cast()</span></code> the decimal arguments if
+required before passing them to simple functions.</p>
 </section>
 <section id="codegen">
 <h3>Codegen<a class="headerlink" href="#codegen" title="Permalink to this headline">¶</a></h3>
@@ -501,7 +475,7 @@ and values of nullable input maps. Note that keys in the map are assumed to be a
 <p>The object supports the following methods:</p>
 <ul class="simple">
 <li><p>arg_type&lt;E&gt; value()      : unchecked access to the underlying value.</p></li>
-<li><p>arg_type&lt;E&gt; operator <a href="#id1"><span class="problematic" id="id2">*</span></a>() : unchecked access to the underlying value.</p></li>
+<li><p>arg_type&lt;E&gt; operator *() : unchecked access to the underlying value.</p></li>
 <li><p>bool has_value()         : return true if the value is not null.</p></li>
 <li><p>bool operator()          : return true if the value is not null.</p></li>
 </ul>
@@ -616,7 +590,7 @@ the code below shows an example function mapSum, sums up the keys and values.</p
 <ul class="simple">
 <li><p>first : arg_type&lt;K&gt; | null_free_arg_type&lt;K&gt;</p></li>
 <li><p>second: OptionalAccessor&lt;V&gt; | null_free_arg_type&lt;V&gt;</p></li>
-<li><p>MapView&lt;K, V&gt;::Element participates in struct binding: auto [v, k] = <a href="#id3"><span class="problematic" id="id4">*</span></a>map.begin();</p></li>
+<li><p>MapView&lt;K, V&gt;::Element participates in struct binding: auto [v, k] = *map.begin();</p></li>
 </ul>
 <p>Note: iterator de-referencing and iterator pointer de-referencing result in temporaries. Hence those can be bound to
 const references or value variables but not normal references.</p>
@@ -653,7 +627,7 @@ assigned. And in such a case, the assignment has undefined behavior.</p>
 </div>
 </section>
 <section id="outputs-writer-types">
-<h4>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Permalink to this headline">¶</a></h4>
+<span id="outputs-write"></span><h4>Outputs (Writer Types)<a class="headerlink" href="#outputs-writer-types" title="Permalink to this headline">¶</a></h4>
 <p>Outputs of complex types are represented using special writers that are designed in a way that
 minimizes data copying by writing directly to Velox vectors.</p>
 <p><strong>ArrayWriter&lt;V&gt;</strong></p>
@@ -1071,8 +1045,8 @@ instead of the explicit try-catch block above:</p>
 wraps the “call” and “callNullable” methods in a try-catch and reports errors
 using context.setError.</p>
 </section>
-<section id="id5">
-<h3>Registration<a class="headerlink" href="#id5" title="Permalink to this headline">¶</a></h3>
+<section id="id1">
+<h3>Registration<a class="headerlink" href="#id1" title="Permalink to this headline">¶</a></h3>
 <p>Use exec::registerVectorFunction to register a stateless vector function.</p>
 <div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="kt">bool</span><span class="w"> </span><span class="n">registerVectorFunction</span><span class="p">(</span><span class="w"></span>
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"></span>
@@ -1125,7 +1099,7 @@ once and reuse it for all the batches of data.</p>
 </div>
 </section>
 <section id="function-signature">
-<span id="id6"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
+<span id="id2"></span><h3>Function signature<a class="headerlink" href="#function-signature" title="Permalink to this headline">¶</a></h3>
 <p>It is recommended to use FunctionSignatureBuilder to create FunctionSignature
 instances. FunctionSignatureBuilder and FunctionSignature support Java-like
 generics, variable number of arguments and lambdas. Here are some examples.</p>
@@ -1180,6 +1154,22 @@ element of the array and returns a new array of the results.</p>
 <span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;array(U)&quot;</span><span class="p">)</span><span class="w"></span>
 <span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;array(T)&quot;</span><span class="p">)</span><span class="w"></span>
 <span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;function(T, U)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">();</span><span class="w"></span>
+</pre></div>
+</div>
+<p>The signature of a function that handles DECIMAL types can additionally take
+variables and constraints to represent the precision and scale values.
+The constraints are evaluated using a type calculator built from Flex and Bison
+tools. The decimal arithmetic addition function has the following signature:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// decimal, decimal -&gt; decimal</span>
+<span class="n">exec</span><span class="o">::</span><span class="n">FunctionSignatureBuilder</span><span class="p">()</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">returnType</span><span class="p">(</span><span class="s">&quot;DECIMAL(r_precision, r_scale)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;DECIMAL(a_precision, a_scale)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">argumentType</span><span class="p">(</span><span class="s">&quot;DECIMAL(b_precision, b_scale)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">variableConstraint</span><span class="p">(</span><span class="w"></span>
+<span class="w">      </span><span class="s">&quot;r_precision&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">      </span><span class="s">&quot;min(38, max(a_precision - a_scale, b_precision - b_scale) + max(a_scale, b_scale) + 1)&quot;</span><span class="p">)</span><span class="w"></span>
+<span class="w">  </span><span class="p">.</span><span class="n">variableConstraint</span><span class="p">(</span><span class="s">&quot;r_scale&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;max(a_scale, b_scale)&quot;</span><span class="p">)</span><span class="w"></span>
 <span class="w">  </span><span class="p">.</span><span class="n">build</span><span class="p">();</span><span class="w"></span>
 </pre></div>
 </div>
@@ -1343,7 +1333,7 @@ functions are listed in alphabetical order.</p>
 <li><a class="reference internal" href="#result-vector">Result vector</a></li>
 <li><a class="reference internal" href="#simple-implementation">Simple implementation</a></li>
 <li><a class="reference internal" href="#try-expression-support">TRY expression support</a></li>
-<li><a class="reference internal" href="#id5">Registration</a></li>
+<li><a class="reference internal" href="#id1">Registration</a></li>
 <li><a class="reference internal" href="#function-signature">Function signature</a></li>
 </ul>
 </li>

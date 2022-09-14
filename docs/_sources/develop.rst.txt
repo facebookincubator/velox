@@ -7,6 +7,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
 .. toctree::
     :maxdepth: 1
 
+    develop/types
     develop/vectors
     develop/scalar-functions
     develop/aggregate-functions
@@ -16,6 +17,7 @@ This guide is intended for Velox contributors and developers of Velox-based appl
     develop/arena
     develop/aggregations
     develop/joins
+    develop/anti-join
     develop/operators
     develop/task
     develop/simd

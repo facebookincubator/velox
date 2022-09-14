@@ -15,7 +15,7 @@
     <script src="../_static/doctools.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Plan Nodes and Operators" href="operators.html" />
+    <link rel="next" title="Anti joins" href="anti-join.html" />
     <link rel="prev" title="Aggregations" href="aggregations.html" /> 
   </head><body>
     <div class="related" role="navigation" aria-label="related navigation">
@@ -25,7 +25,7 @@
           <a href="../genindex.html" title="General Index"
              accesskey="I">index</a></li>
         <li class="right" >
-          <a href="operators.html" title="Plan Nodes and Operators"
+          <a href="anti-join.html" title="Anti joins"
              accesskey="N">next</a> |</li>
         <li class="right" >
           <a href="aggregations.html" title="Aggregations"
@@ -302,12 +302,13 @@ by setting boolean flag “broadcast” in the PartitionedOutputNode to true.</p
 </section>
 <section id="anti-joins">
 <h3>Anti Joins<a class="headerlink" href="#anti-joins" title="Permalink to this headline">¶</a></h3>
-<p>Anti join is used for queries like this:</p>
+<p>Anti join is used for queries with NOT IN &lt;subquery&gt; clause:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="k">key</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="k">key</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">u</span><span class="p">)</span><span class="w"></span>
 </pre></div>
 </div>
 <p>Anti join returns probe-side rows which have no match in the build side. The
-exact semantics of the anti join is tricky:</p>
+exact semantics of the anti join is tricky. These are described in detail in
+a separate article: <a class="reference internal" href="anti-join.html"><span class="doc">Anti joins</span></a>.</p>
 <ol class="arabic simple">
 <li><p>when the build side contains an entry with a null in any of the join keys, the join returns no rows;</p></li>
 <li><p>when the build side is empty, the join returns all rows, including rows with null join keys;</p></li>
@@ -315,7 +316,7 @@ exact semantics of the anti join is tricky:</p>
 </ol>
 <p>The cases (1) and (2) cannot be identified locally (unless the join runs in
 broadcast mode) as they require knowledge about the whole build side. It is
-necessar to know whether the combined build side across all nodes is empty and
+necessary to know whether the combined build side across all nodes is empty and
 if not if it contains a null key. To provide this information locally,
 PartitionedOutput operator supports a mode where it replicates all rows with
 nulls in the partitioning keys to all destinations and in case there are no
@@ -429,8 +430,8 @@ of how to build and execute a plan with a hash or merge join.</p>
   </div>
   <div>
     <h4>Next topic</h4>
-    <p class="topless"><a href="operators.html"
-                          title="next chapter">Plan Nodes and Operators</a></p>
+    <p class="topless"><a href="anti-join.html"
+                          title="next chapter">Anti joins</a></p>
   </div>
   <div role="note" aria-label="source link">
     <h3>This Page</h3>
@@ -460,7 +461,7 @@ of how to build and execute a plan with a hash or merge join.</p>
           <a href="../genindex.html" title="General Index"
              >index</a></li>
         <li class="right" >
-          <a href="operators.html" title="Plan Nodes and Operators"
+          <a href="anti-join.html" title="Anti joins"
              >next</a> |</li>
         <li class="right" >
           <a href="aggregations.html" title="Aggregations"
