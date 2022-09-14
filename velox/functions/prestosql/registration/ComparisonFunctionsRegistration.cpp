@@ -66,6 +66,20 @@ void registerComparisonFunctions() {
       UnscaledLongDecimal,
       UnscaledLongDecimal,
       UnscaledLongDecimal>({"between"});
+  registerFunction<
+      GtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gt"});
+  registerFunction<GtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gt"});
+  registerFunction<
+      LtFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lt"});
+  registerFunction<LtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lt"});
 }
 
 } // namespace facebook::velox::functions

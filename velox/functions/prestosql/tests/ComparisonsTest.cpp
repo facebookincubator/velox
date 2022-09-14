@@ -153,6 +153,47 @@ TEST_F(ComparisonsTest, eqDecimal) {
       " SHORT_DECIMAL(10,4))");
 }
 
+TEST_F(ComparisonsTest, gtLtDecimal) {
+  auto runAndCompare = [&](std::string expr,
+                           std::vector<VectorPtr>& inputs,
+                           VectorPtr expectedResult) {
+    auto actual = evaluate<SimpleVector<bool>>(expr, makeRowVector(inputs));
+    test::assertEqualVectors(actual, expectedResult);
+  };
+
+  // Short Decimals test.
+  std::vector<VectorPtr> inputs = {
+      makeNullableShortDecimalFlatVector(
+          {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
+      makeNullableShortDecimalFlatVector(
+          {0, 2, 3, -5, std::nullopt, 5}, DECIMAL(10, 5))};
+  auto expected = makeNullableFlatVector<bool>(
+      {true, std::nullopt, false, true, std::nullopt, false});
+  runAndCompare("c0 > c1", inputs, expected);
+  runAndCompare("c1 < c0", inputs, expected);
+
+  // Long Decimals test.
+  inputs = {
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue(),
+           std::nullopt,
+           3,
+           UnscaledLongDecimal::min().unscaledValue() + 1,
+           std::nullopt,
+           4},
+          DECIMAL(38, 5)),
+      makeNullableLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue() - 1,
+           2,
+           3,
+           UnscaledLongDecimal::min().unscaledValue(),
+           std::nullopt,
+           5},
+          DECIMAL(38, 5))};
+  runAndCompare("c0 > c1", inputs, expected);
+  runAndCompare("c1 < c0", inputs, expected);
+};
+
 TEST_F(ComparisonsTest, eqArray) {
   auto test =
       [&](const std::optional<std::vector<std::optional<int64_t>>>& array1,
