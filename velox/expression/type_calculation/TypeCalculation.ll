@@ -35,9 +35,11 @@ int yyFlexLexer::yylex() {
 
 #include "velox/expression/type_calculation/TypeCalculation.h"
 
-void facebook::velox::expression::calculation::evaluate(const std::string& calculation, std::unordered_map<std::string, int>& variables) {
+int facebook::velox::expression::calculation::evaluate(const std::string& calculation, const std::unordered_map<std::string, std::optional<int>>& variables) {
     std::istringstream is(calculation);
-    facebook::velox::expression::calculate::Scanner scanner{ is, std::cerr, variables };
+    int result;
+    facebook::velox::expression::calculate::Scanner scanner{ is, std::cerr, variables, result};
     facebook::velox::expression::calculate::Parser parser{ &scanner };
     parser.parse();
+    return result;
 }

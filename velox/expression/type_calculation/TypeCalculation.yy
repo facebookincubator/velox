@@ -38,7 +38,7 @@
 
 %%
 
-calc    : VAR ASSIGN iexp           { scanner->setValue($1, $3); }
+calc    :  iexp                     { scanner->setResult($1); }
         | error                     { yyerrok; }
         ;
 
