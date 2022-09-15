@@ -67,8 +67,10 @@ class SubstraitExtensionCollector {
   template <class T>
   class BiDirectionHashMap {
    public:
-    /// If the forwardMap_ does not contain the key, then the key and value will be written, otherwise the value will be overwritten,
-    /// If the reverseMap_ does not contain the value, then the value and key will be written, otherwise the key will be overwritten.
+    /// If the forwardMap_ does not contain the key, then the key and value will
+    /// be written, otherwise the value will be overwritten, If the reverseMap_
+    /// does not contain the value, then the value and key will be written,
+    /// otherwise the key will be overwritten.
     void put(const int& key, const T& value);
 
     std::map<int, T> forwardMap_;
