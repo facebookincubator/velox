@@ -25,9 +25,15 @@
 namespace facebook::velox::substrait {
 
 struct ExtensionFunctionId {
-  /// Substrait extension uri.
+  /// Substrait extension YAML file uri.
   std::string uri;
-  /// Substrait extension function signature.
+
+  /// Substrait signature used in the function extension declaration is a
+  /// combination of the name of the function along with a list of input
+  /// argument types.The format is as follows : <function
+  /// name>:<short_arg_type0>_<short_arg_type1>_..._<short_arg_typeN> for more
+  /// detail information about the argument type please refer to link
+  /// https://substrait.io/extensions/#function-signature-compound-names
   std::string signature;
 
   bool operator==(const ExtensionFunctionId& other) const {
