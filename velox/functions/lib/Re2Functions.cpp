@@ -26,74 +26,6 @@
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::functions {
-
-std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern) {
-  vector_size_t patternLength = pattern.size();
-  vector_size_t i = 0;
-  // Index of the first % or _ character.
-  vector_size_t wildcardStart = -1;
-  // Index of the first character that is not % and not _.
-  vector_size_t fixedPatternStart = -1;
-  // Total number of % characters.
-  vector_size_t anyCharacterWildcardCount = 0;
-  // Total number of _ characters.
-  vector_size_t singleCharacterWildcardCount = 0;
-  auto patternStr = pattern.data();
-
-  while (i < patternLength) {
-    if (patternStr[i] == '%' || patternStr[i] == '_') {
-      // Ensures that pattern has a single contiguous stream of wildcard
-      // characters.
-      if (wildcardStart != -1) {
-        return std::make_pair(PatternKind::kGeneric, 0);
-      }
-      // Look till the last contiguous wildcard character, starting from this
-      // index, is found, or the end of pattern is reached.
-      wildcardStart = i;
-      while (i < patternLength &&
-             (patternStr[i] == '%' || patternStr[i] == '_')) {
-        singleCharacterWildcardCount += (patternStr[i] == '_');
-        anyCharacterWildcardCount += (patternStr[i] == '%');
-        i++;
-      }
-    } else {
-      // Ensure that pattern has a single fixed pattern.
-      if (fixedPatternStart != -1) {
-        return std::make_pair(PatternKind::kGeneric, 0);
-      }
-      // Look till the end of fixed pattern, starting from this index, is found,
-      // or the end of pattern is reached.
-      fixedPatternStart = i;
-      while (i < patternLength &&
-             (patternStr[i] != '%' && patternStr[i] != '_')) {
-        i++;
-      }
-    }
-  }
-
-  // Pattern contains wildcard characters only.
-  if (fixedPatternStart == -1) {
-    if (!anyCharacterWildcardCount) {
-      return {PatternKind::kExactlyN, singleCharacterWildcardCount};
-    }
-    return {PatternKind::kAtLeastN, singleCharacterWildcardCount};
-  }
-  // Pattern contains no wildcard characters (is a fixed pattern).
-  if (wildcardStart == -1) {
-    return {PatternKind::kFixed, patternLength};
-  }
-  // Pattern is generic if it has '_' wildcard characters and a fixed pattern.
-  if (singleCharacterWildcardCount) {
-    return {PatternKind::kGeneric, 0};
-  }
-  // Classify pattern as prefix pattern or suffix pattern based on the
-  // positions of the fixed pattern and contiguous wildcard character stream.
-  if (fixedPatternStart < wildcardStart) {
-    return {PatternKind::kPrefix, wildcardStart};
-  }
-  return {PatternKind::kSuffix, patternLength - fixedPatternStart};
-}
-
 namespace {
 
 using ::facebook::velox::exec::EvalCtx;
@@ -477,10 +409,8 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
  public:
   OptimizedLikeWithMemcmp(
       StringView pattern,
-      vector_size_t reducedPatternLength) {
-    pattern_ = pattern;
-    reducedPatternLength_ = reducedPatternLength;
-  }
+      vector_size_t reducedPatternLength)
+      : pattern_{pattern}, reducedPatternLength_{reducedPatternLength} {}
 
   bool match(StringView input) const {
     switch (P) {
@@ -873,6 +803,73 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> re2ExtractSignatures() {
           .argumentType("integer")
           .build(),
   };
+}
+
+std::pair<PatternKind, vector_size_t> determinePatternKind(StringView pattern) {
+  vector_size_t patternLength = pattern.size();
+  vector_size_t i = 0;
+  // Index of the first % or _ character.
+  vector_size_t wildcardStart = -1;
+  // Index of the first character that is not % and not _.
+  vector_size_t fixedPatternStart = -1;
+  // Total number of % characters.
+  vector_size_t anyCharacterWildcardCount = 0;
+  // Total number of _ characters.
+  vector_size_t singleCharacterWildcardCount = 0;
+  auto patternStr = pattern.data();
+
+  while (i < patternLength) {
+    if (patternStr[i] == '%' || patternStr[i] == '_') {
+      // Ensures that pattern has a single contiguous stream of wildcard
+      // characters.
+      if (wildcardStart != -1) {
+        return std::make_pair(PatternKind::kGeneric, 0);
+      }
+      // Look till the last contiguous wildcard character, starting from this
+      // index, is found, or the end of pattern is reached.
+      wildcardStart = i;
+      while (i < patternLength &&
+             (patternStr[i] == '%' || patternStr[i] == '_')) {
+        singleCharacterWildcardCount += (patternStr[i] == '_');
+        anyCharacterWildcardCount += (patternStr[i] == '%');
+        i++;
+      }
+    } else {
+      // Ensure that pattern has a single fixed pattern.
+      if (fixedPatternStart != -1) {
+        return std::make_pair(PatternKind::kGeneric, 0);
+      }
+      // Look till the end of fixed pattern, starting from this index, is found,
+      // or the end of pattern is reached.
+      fixedPatternStart = i;
+      while (i < patternLength &&
+             (patternStr[i] != '%' && patternStr[i] != '_')) {
+        i++;
+      }
+    }
+  }
+
+  // Pattern contains wildcard characters only.
+  if (fixedPatternStart == -1) {
+    if (!anyCharacterWildcardCount) {
+      return {PatternKind::kExactlyN, singleCharacterWildcardCount};
+    }
+    return {PatternKind::kAtLeastN, singleCharacterWildcardCount};
+  }
+  // Pattern contains no wildcard characters (is a fixed pattern).
+  if (wildcardStart == -1) {
+    return {PatternKind::kFixed, patternLength};
+  }
+  // Pattern is generic if it has '_' wildcard characters and a fixed pattern.
+  if (singleCharacterWildcardCount) {
+    return {PatternKind::kGeneric, 0};
+  }
+  // Classify pattern as prefix pattern or suffix pattern based on the
+  // positions of the fixed pattern and contiguous wildcard character stream.
+  if (fixedPatternStart < wildcardStart) {
+    return {PatternKind::kPrefix, wildcardStart};
+  }
+  return {PatternKind::kSuffix, patternLength - fixedPatternStart};
 }
 
 std::shared_ptr<exec::VectorFunction> makeLike(
