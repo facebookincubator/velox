@@ -17,49 +17,47 @@
 #pragma once
 
 #include <optional>
+#include "velox/substrait/VeloxSubstraitSignature.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
-struct FunctionId {
+struct ExtensionFunctionId {
+  /// Substrait extension uri.
   std::string uri;
+  /// Substrait extension function signature.
   std::string signature;
 
-  bool operator==(const FunctionId& other) const {
+  bool operator==(const ExtensionFunctionId& other) const {
     return (uri == other.uri && signature == other.signature);
   }
-};
 
-/// A ExtensionIdResolver is intend to used to resolve functionId or typeId
-class ExtensionIdResolver {
- public:
-  /// resolve functionId by given velox function name and function
-  /// arguments .
-  FunctionId resolve(
+  /// Given a function name and function arguments and return  a mating
+  /// extension functionId.
+  static ExtensionFunctionId create(
       const std::string& functionName,
-      const std::vector<TypePtr>& arguments) const;
+      const std::vector<TypePtr>& arguments);
 };
 
-using ExtensionIdResolverPtr = std::shared_ptr<const ExtensionIdResolver>;
-
-/// Maintains a mapping for function and function reference
+/// Assigns unique IDs to function signatures using ExtensionFunctionId.
 class SubstraitExtensionCollector {
  public:
   SubstraitExtensionCollector();
-  /// get function reference by function name and arguments.
+
+  /// Given function name and arguments and return functionId using FunctionId.
   int getFunctionReference(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments);
 
-  /// add extension functions and types to Substrait plan.
+  /// add extension functions to Substrait plan.
   void addExtensionsToPlan(::substrait::Plan* plan) const;
 
  private:
   /// A bi-direction hash map to keep the relation between reference number and
-  /// either function or type anchor.
-  /// @T either FunctionAnchor or TypeAnchor
+  /// either function or type signature.
+  /// @T FunctionId
   template <class T>
   class BiDirectionHashMap {
    public:
@@ -71,9 +69,7 @@ class SubstraitExtensionCollector {
   /// the count of extension function reference in a substrait plan.
   int functionReference_ = -1;
   /// extension function collected in substrait plan.
-  std::shared_ptr<BiDirectionHashMap<FunctionId>> extensionFunctions_;
-
-  ExtensionIdResolverPtr extensionIdResolver_;
+  std::shared_ptr<BiDirectionHashMap<ExtensionFunctionId>> extensionFunctions_;
 };
 
 using SubstraitExtensionCollectorPtr =
@@ -83,10 +79,11 @@ using SubstraitExtensionCollectorPtr =
 
 namespace std {
 
-/// hash function of facebook::velox::substrait::FunctionAnchor
+/// hash function of facebook::velox::substrait::ExtensionFunctionId
 template <>
-struct hash<facebook::velox::substrait::FunctionId> {
-  size_t operator()(const facebook::velox::substrait::FunctionId& k) const {
+struct hash<facebook::velox::substrait::ExtensionFunctionId> {
+  size_t operator()(
+      const facebook::velox::substrait::ExtensionFunctionId& k) const {
     size_t val = hash<std::string>()(k.uri);
     val = val * 31 + hash<std::string>()(k.signature);
     return val;

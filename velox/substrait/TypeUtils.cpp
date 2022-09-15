@@ -125,48 +125,4 @@ TypePtr toVeloxType(const std::string& typeName) {
   }
 }
 
-std::string toSubstraitSignature(const TypePtr& type) {
-  const auto& typeKind = type->kind();
-  switch (typeKind) {
-    case TypeKind::BOOLEAN:
-      return "bool";
-    case TypeKind::TINYINT:
-      return "i8";
-    case TypeKind::SMALLINT:
-      return "i16";
-    case TypeKind::INTEGER:
-      return "i32";
-    case TypeKind::BIGINT:
-      return "i64";
-    case TypeKind::REAL:
-      return "fp32";
-    case TypeKind::DOUBLE:
-      return "fp64";
-    case TypeKind::VARCHAR:
-      return "str";
-    case TypeKind::VARBINARY:
-      return "vbin";
-    case TypeKind::TIMESTAMP:
-      return "ts";
-    case TypeKind::DATE:
-      return "date";
-    case TypeKind::SHORT_DECIMAL:
-      return "dec";
-    case TypeKind::LONG_DECIMAL:
-      return "dec";
-    case TypeKind::ARRAY:
-      return "list";
-    case TypeKind::MAP:
-      return "map";
-    case TypeKind::ROW:
-      return "struct";
-    case TypeKind::UNKNOWN:
-      return "u!name";
-    default:
-      VELOX_UNSUPPORTED(
-          "Substrait type signature conversion not supported for type {}.",
-          type->toString());
-  }
-}
-
 } // namespace facebook::velox::substrait

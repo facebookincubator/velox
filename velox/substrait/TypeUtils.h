@@ -21,8 +21,4 @@ namespace facebook::velox::substrait {
 /// Return the Velox type according to the typename.
 TypePtr toVeloxType(const std::string& typeName);
 
-/// Return the Substrait type signature according to the type
-/// Substrait type signature is a short name
-std::string toSubstraitSignature(const TypePtr& type);
-
 } // namespace facebook::velox::substrait

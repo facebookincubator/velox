@@ -15,27 +15,52 @@
  */
 
 #include "velox/substrait/SubstraitExtensionCollector.h"
-#include "velox/substrait/TypeUtils.h"
 
 namespace facebook::velox::substrait {
 
-SubstraitExtensionCollector::SubstraitExtensionCollector() {
-  extensionFunctions_ = std::make_shared<BiDirectionHashMap<FunctionId>>();
-  extensionIdResolver_ = std::make_shared<ExtensionIdResolver>();
+namespace {
+std::string toString(
+    const std::string& functionName,
+    const std::vector<facebook::velox::TypePtr>& inputs) {
+  std::ostringstream signature;
+  signature << functionName << "(";
+  for (auto i = 0; i < inputs.size(); i++) {
+    if (i > 0) {
+      signature << ", ";
+    }
+    signature << inputs[i]->toString();
+  }
+  signature << ")";
+  return signature.str();
 }
+
+std::string toString(
+    const std::vector<const facebook::velox::exec::FunctionSignature*>&
+        signatures) {
+  std::stringstream out;
+  for (auto i = 0; i < signatures.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << signatures[i]->toString();
+  }
+  return out.str();
+}
+
+} // namespace
 
 int SubstraitExtensionCollector::getFunctionReference(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments) {
-  const auto& functionId =
-      extensionIdResolver_->resolve(functionName, arguments);
-  const auto& anchorReference =
-      extensionFunctions_->reverseMap_.find(functionId);
-  if (anchorReference != extensionFunctions_->reverseMap_.end()) {
-    return anchorReference->second;
+  const auto& extensionFunctionId =
+      ExtensionFunctionId::create(functionName, arguments);
+  const auto& extensionFunctionAnchorIt =
+      extensionFunctions_->reverseMap_.find(extensionFunctionId);
+  if (extensionFunctionAnchorIt != extensionFunctions_->reverseMap_.end()) {
+    return extensionFunctionAnchorIt->second;
   }
   ++functionReference_;
-  extensionFunctions_->put(functionReference_, functionId);
+  extensionFunctions_->put(functionReference_, extensionFunctionId);
   return functionReference_;
 }
 
@@ -73,21 +98,21 @@ void SubstraitExtensionCollector::addExtensionsToPlan(
   }
 }
 
-FunctionId ExtensionIdResolver::resolve(
-    const std::string& funcName,
-    const std::vector<TypePtr>& arguments) const {
-  if (arguments.empty()) {
-    return {"", funcName};
-  }
-  std::vector<std::string> typeSignature;
-  typeSignature.reserve(arguments.size());
-  for (const auto& arg : arguments) {
-    typeSignature.emplace_back(toSubstraitSignature(arg));
-  }
-  std::string signature = funcName + ":" + folly::join("_", typeSignature);
-  // TODO: currently we just treat the engine-own function signatures as
-  // substrait extension function signature.
-  return {"", signature};
+SubstraitExtensionCollector::SubstraitExtensionCollector() {
+  extensionFunctions_ =
+      std::make_shared<BiDirectionHashMap<ExtensionFunctionId>>();
+}
+
+ExtensionFunctionId ExtensionFunctionId::create(
+    const std::string& functionName,
+    const std::vector<TypePtr>& arguments) {
+  const auto& substraitFunctionSignature =
+      VeloxSubstraitSignature::toSubstraitSignature(functionName, arguments);
+
+  /// TODO: Currently we treat all velox registry based function signatures as
+  /// custom substrait extension, so no uri link and leave it as empty.
+  const std::string uri;
+  return {uri, substraitFunctionSignature};
 }
 
 } // namespace facebook::velox::substrait

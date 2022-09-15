@@ -50,7 +50,8 @@ set(SRCS
     SubstraitExtensionCollector.cpp
     VeloxToSubstraitExpr.cpp
     VeloxToSubstraitPlan.cpp
-    VeloxToSubstraitType.cpp)
+    VeloxToSubstraitType.cpp
+    VeloxSubstraitSignature.cpp)
 
 add_library(velox_substrait_plan_converter ${SRCS})
 target_include_directories(velox_substrait_plan_converter
