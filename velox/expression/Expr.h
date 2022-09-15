@@ -380,6 +380,17 @@ class Expr {
   ExprStats stats_;
 };
 
+/// Translates row number of the outer vector into row number of the inner
+/// vector using DecodedVector.
+SelectivityVector* FOLLY_NONNULL translateToInnerRows(
+    const SelectivityVector& rows,
+    DecodedVector& decoded,
+    LocalSelectivityVector& newRowsHolder);
+
+/// Generate a selectivity vector of a single row.
+SelectivityVector* FOLLY_NONNULL
+singleRow(LocalSelectivityVector& holder, vector_size_t row);
+
 using ExprPtr = std::shared_ptr<Expr>;
 
 // A set of Exprs that get evaluated together. Common subexpressions
@@ -389,7 +400,7 @@ using ExprPtr = std::shared_ptr<Expr>;
 class ExprSet {
  public:
   explicit ExprSet(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      std::vector<core::TypedExprPtr>&& source,
       core::ExecCtx* FOLLY_NONNULL execCtx,
       bool enableConstantFolding = true);
 
@@ -462,7 +473,7 @@ class ExprSet {
 class ExprSetSimplified : public ExprSet {
  public:
   ExprSetSimplified(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      std::vector<core::TypedExprPtr>&& source,
       core::ExecCtx* FOLLY_NONNULL execCtx)
       : ExprSet(std::move(source), execCtx, /*enableConstantFolding*/ false) {}
 
@@ -488,7 +499,7 @@ class ExprSetSimplified : public ExprSet {
 // Factory method that takes `kExprEvalSimplified` (query parameter) into
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
-    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* FOLLY_NONNULL execCtx);
 
 /// Returns a string representation of the expression trees annotated with

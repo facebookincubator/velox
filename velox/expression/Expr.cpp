@@ -490,8 +490,17 @@ inline void setPeeled(
   peeled[fieldIndex] = leaf;
 }
 
-/// Translates row number of the outer vector into row number of the inner
-/// vector using DecodedVector.
+void setDictionaryWrapping(
+    DecodedVector& decoded,
+    const SelectivityVector& rows,
+    BaseVector& firstWrapper,
+    EvalCtx& context) {
+  auto wrapping = decoded.dictionaryWrapping(firstWrapper, rows);
+  context.setDictionaryWrap(
+      std::move(wrapping.indices), std::move(wrapping.nulls));
+}
+} // namespace
+
 SelectivityVector* translateToInnerRows(
     const SelectivityVector& rows,
     DecodedVector& decoded,
@@ -523,17 +532,6 @@ SelectivityVector* singleRow(
   rows->updateBounds();
   return rows;
 }
-
-void setDictionaryWrapping(
-    DecodedVector& decoded,
-    const SelectivityVector& rows,
-    BaseVector& firstWrapper,
-    EvalCtx& context) {
-  auto wrapping = decoded.dictionaryWrapping(firstWrapper, rows);
-  context.setDictionaryWrap(
-      std::move(wrapping.indices), std::move(wrapping.nulls));
-}
-} // namespace
 
 Expr::PeelEncodingsResult Expr::peelEncodings(
     EvalCtx& context,
@@ -1315,7 +1313,7 @@ void Expr::appendInputs(std::stringstream& stream) const {
 }
 
 ExprSet::ExprSet(
-    std::vector<std::shared_ptr<const core::ITypedExpr>>&& sources,
+    std::vector<core::TypedExprPtr>&& sources,
     core::ExecCtx* execCtx,
     bool enableConstantFolding)
     : execCtx_(execCtx) {
@@ -1448,7 +1446,7 @@ void ExprSetSimplified::eval(
 }
 
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
-    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* execCtx) {
   if (execCtx->queryCtx()->config().exprEvalSimplified() ||
       FLAGS_force_eval_simplified) {
