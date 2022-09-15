@@ -55,13 +55,13 @@ int SubstraitExtensionCollector::getReferenceNumber(
   const auto& extensionFunctionId =
       ExtensionFunctionId::create(functionName, arguments);
   const auto& extensionFunctionAnchorIt =
-      extensionFunctions_->reverseMap_.find(extensionFunctionId);
-  if (extensionFunctionAnchorIt != extensionFunctions_->reverseMap_.end()) {
+      extensionFunctions_->reverseMap().find(extensionFunctionId);
+  if (extensionFunctionAnchorIt != extensionFunctions_->reverseMap().end()) {
     return extensionFunctionAnchorIt->second;
   }
-  ++functionReference_;
-  extensionFunctions_->put(functionReference_, extensionFunctionId);
-  return functionReference_;
+  ++functionReferenceNumber;
+  extensionFunctions_->put(functionReferenceNumber, extensionFunctionId);
+  return functionReferenceNumber;
 }
 
 template <typename T>
@@ -77,7 +77,7 @@ void SubstraitExtensionCollector::addExtensionsToPlan(
   using SimpleExtensionURI = ::substrait::extensions::SimpleExtensionURI;
   int uriPos = 1;
   std::unordered_map<std::string, SimpleExtensionURI*> uris;
-  for (auto& [referenceNum, functionId] : extensionFunctions_->forwardMap_) {
+  for (auto& [referenceNum, functionId] : extensionFunctions_->forwardMap()) {
     SimpleExtensionURI* extensionUri;
     const auto uri = uris.find(functionId.uri);
     if (uri == uris.end()) {

@@ -25,7 +25,6 @@ namespace facebook::velox::substrait::test {
 
 class VeloxSubstraitSignatureTest : public ::testing::Test {
  protected:
- protected:
   void SetUp() override {
     Test::SetUp();
     functions::prestosql::registerAllScalarFunctions();

@@ -82,7 +82,7 @@ class VeloxToSubstraitPlanConvertor {
   std::shared_ptr<VeloxToSubstraitTypeConvertor> typeConvertor_;
 
   /// The Extension collector storing the relations between the function
-  /// signature and the function id.
+  /// signature and the function reference number.
   SubstraitExtensionCollectorPtr extensionCollector_;
 };
 

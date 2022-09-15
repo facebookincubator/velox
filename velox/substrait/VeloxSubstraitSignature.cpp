@@ -55,7 +55,6 @@ std::string VeloxSubstraitSignature::toVeloxSignature(
 const exec::FunctionSignature& VeloxSubstraitSignature::resolveFunction(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments) {
-  //  resolvedFunction
   const auto veloxScalarFunctions = velox::getFunctionSignatures();
   const auto scalarFunctionsIt = veloxScalarFunctions.find(functionName);
   if (scalarFunctionsIt != veloxScalarFunctions.end()) {
@@ -166,7 +165,6 @@ std::string VeloxSubstraitSignature::toSubstraitSignature(
 std::string VeloxSubstraitSignature::toSubstraitSignature(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments) {
-  // Due to can't find and/or/not/xor function signature in velox registry
   if (functionName == "and" || functionName == "or" || functionName == "xor") {
     return functionName + ":bool_bool";
   }

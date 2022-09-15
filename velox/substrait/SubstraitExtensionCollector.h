@@ -33,7 +33,7 @@ struct ExtensionFunctionId {
   /// argument types.The format is as follows : <function
   /// name>:<short_arg_type0>_<short_arg_type1>_..._<short_arg_typeN> for more
   /// detail information about the argument type please refer to link
-  /// https://substrait.io/extensions/#function-signature-compound-names
+  /// https://substrait.io/extensions/#function-signature-compound-names.
   std::string signature;
 
   bool operator==(const ExtensionFunctionId& other) const {
@@ -57,7 +57,7 @@ class SubstraitExtensionCollector {
       const std::string& functionName,
       const std::vector<TypePtr>& arguments);
 
-  /// add extension functions to Substrait plan.
+  /// Add extension functions to Substrait plan.
   void addExtensionsToPlan(::substrait::Plan* plan) const;
 
  private:
@@ -73,13 +73,20 @@ class SubstraitExtensionCollector {
     /// otherwise the key will be overwritten.
     void put(const int& key, const T& value);
 
+    std::map<int, T>& forwardMap() {
+      return forwardMap_;
+    }
+
+    std::unordered_map<T, int>& reverseMap() {
+      return reverseMap_;
+    }
+
+   private:
     std::map<int, T> forwardMap_;
     std::unordered_map<T, int> reverseMap_;
   };
 
-  /// the count of extension function reference in a substrait plan.
-  int functionReference_ = -1;
-  /// extension function collected in substrait plan.
+  int functionReferenceNumber = -1;
   std::shared_ptr<BiDirectionHashMap<ExtensionFunctionId>> extensionFunctions_;
 };
 
@@ -90,7 +97,7 @@ using SubstraitExtensionCollectorPtr =
 
 namespace std {
 
-/// hash function of facebook::velox::substrait::ExtensionFunctionId
+/// Hash function of facebook::velox::substrait::ExtensionFunctionId.
 template <>
 struct hash<facebook::velox::substrait::ExtensionFunctionId> {
   size_t operator()(
