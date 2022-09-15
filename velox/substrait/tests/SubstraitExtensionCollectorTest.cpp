@@ -79,16 +79,19 @@ TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
   // Act
   extensionCollector_->addExtensionsToPlan(substraitPlan);
 
-  //Assert
+  // Assert
   ASSERT_EQ(substraitPlan->extensions().size(), 8);
   ASSERT_EQ(
       substraitPlan->extensions(0).extension_function().name(), "plus:i32_i32");
   ASSERT_EQ(
-      substraitPlan->extensions(1).extension_function().name(), "divide:i32_i32");
+      substraitPlan->extensions(1).extension_function().name(),
+      "divide:i32_i32");
   ASSERT_EQ(
-      substraitPlan->extensions(2).extension_function().name(), "cardinality:list");
+      substraitPlan->extensions(2).extension_function().name(),
+      "cardinality:list");
   ASSERT_EQ(
-      substraitPlan->extensions(3).extension_function().name(), "array_sum:list");
+      substraitPlan->extensions(3).extension_function().name(),
+      "array_sum:list");
   ASSERT_EQ(
       substraitPlan->extensions(4).extension_function().name(), "sum:i32");
   ASSERT_EQ(
@@ -97,8 +100,6 @@ TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
       substraitPlan->extensions(6).extension_function().name(), "avg:i16");
   ASSERT_EQ(
       substraitPlan->extensions(7).extension_function().name(), "count:any");
-
-
 }
 
 } // namespace facebook::velox::substrait::test
