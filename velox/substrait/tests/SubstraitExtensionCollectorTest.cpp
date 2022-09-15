@@ -29,14 +29,14 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
     Test::SetUp();
     functions::prestosql::registerAllScalarFunctions();
   }
-  int getFunctionReference(
+  int getReferenceNumber(
       const std::string& functionName,
       std::vector<TypePtr>&& arguments) {
     int functionReferenceId1 =
-        extensionCollector_->getFunctionReference(functionName, arguments);
+        extensionCollector_->getReferenceNumber(functionName, arguments);
     // Repeat the call to make sure properly de-duplicated.
     int functionReferenceId2 =
-        extensionCollector_->getFunctionReference(functionName, arguments);
+        extensionCollector_->getReferenceNumber(functionName, arguments);
     EXPECT_EQ(functionReferenceId1, functionReferenceId2);
     return functionReferenceId2;
   }
@@ -45,32 +45,32 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
       std::make_shared<SubstraitExtensionCollector>();
 };
 
-TEST_F(SubstraitExtensionCollectorTest, getFunctionReference) {
-  ASSERT_EQ(getFunctionReference("plus", {INTEGER(), INTEGER()}), 0);
-  ASSERT_EQ(getFunctionReference("divide", {INTEGER(), INTEGER()}), 1);
-  ASSERT_EQ(getFunctionReference("cardinality", {ARRAY(INTEGER())}), 2);
-  ASSERT_EQ(getFunctionReference("array_sum", {ARRAY(INTEGER())}), 3);
-  ASSERT_EQ(getFunctionReference("sum", { INTEGER()}), 4);
-  ASSERT_EQ(getFunctionReference("avg", { INTEGER()}), 5);
-  ASSERT_EQ(getFunctionReference("avg", { ROW({DOUBLE(),BIGINT()})}), 6);
-  ASSERT_EQ(getFunctionReference("count", { INTEGER()}), 7);
+TEST_F(SubstraitExtensionCollectorTest, getReferenceNumber) {
+  ASSERT_EQ(getReferenceNumber("plus", {INTEGER(), INTEGER()}), 0);
+  ASSERT_EQ(getReferenceNumber("divide", {INTEGER(), INTEGER()}), 1);
+  ASSERT_EQ(getReferenceNumber("cardinality", {ARRAY(INTEGER())}), 2);
+  ASSERT_EQ(getReferenceNumber("array_sum", {ARRAY(INTEGER())}), 3);
+  ASSERT_EQ(getReferenceNumber("sum", {INTEGER()}), 4);
+  ASSERT_EQ(getReferenceNumber("avg", {INTEGER()}), 5);
+  ASSERT_EQ(getReferenceNumber("avg", {ROW({DOUBLE(), BIGINT()})}), 6);
+  ASSERT_EQ(getReferenceNumber("count", {INTEGER()}), 7);
 
   auto functionType = std::make_shared<const FunctionType>(
       std::vector<TypePtr>{INTEGER(), VARCHAR()}, BIGINT());
   std::vector<TypePtr> types = {MAP(INTEGER(), VARCHAR()), functionType};
-  ASSERT_ANY_THROW(getFunctionReference("transform_keys", std::move(types)));
+  ASSERT_ANY_THROW(getReferenceNumber("transform_keys", std::move(types)));
 }
 
 TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
   // Arrange
-  getFunctionReference("plus", {INTEGER(), INTEGER()});
-  getFunctionReference("divide", {INTEGER(), INTEGER()});
-  getFunctionReference("cardinality", {ARRAY(INTEGER())});
-  getFunctionReference("array_sum", {ARRAY(INTEGER())});
-  getFunctionReference("sum", { INTEGER()});
-  getFunctionReference("avg", { INTEGER()});
-  getFunctionReference("avg", { ROW({DOUBLE(),BIGINT()})});
-  getFunctionReference("count", { INTEGER()});
+  getReferenceNumber("plus", {INTEGER(), INTEGER()});
+  getReferenceNumber("divide", {INTEGER(), INTEGER()});
+  getReferenceNumber("cardinality", {ARRAY(INTEGER())});
+  getReferenceNumber("array_sum", {ARRAY(INTEGER())});
+  getReferenceNumber("sum", {INTEGER()});
+  getReferenceNumber("avg", {INTEGER()});
+  getReferenceNumber("avg", {ROW({DOUBLE(), BIGINT()})});
+  getReferenceNumber("count", {INTEGER()});
 
   google::protobuf::Arena arena;
   auto* substraitPlan =

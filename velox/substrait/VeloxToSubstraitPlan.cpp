@@ -293,7 +293,7 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
     }
 
     auto referenceId =
-        extensionCollector_->getFunctionReference(funName, arguments);
+        extensionCollector_->getReferenceNumber(funName, arguments);
 
     aggFunction->set_function_reference(referenceId);
 

@@ -49,7 +49,7 @@ std::string toString(
 
 } // namespace
 
-int SubstraitExtensionCollector::getFunctionReference(
+int SubstraitExtensionCollector::getReferenceNumber(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments) {
   const auto& extensionFunctionId =
