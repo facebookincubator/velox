@@ -47,6 +47,7 @@ add_executable(
   RowContainerTest.cpp
   MemoryCapExceededTest.cpp
   SpillTest.cpp
+  SpillOperatorGroupTest.cpp
   SpillerTest.cpp
   StreamingAggregationTest.cpp
   TableScanTest.cpp
@@ -79,7 +80,7 @@ target_link_libraries(
   velox_test_util
   velox_type
   velox_serialization
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_functions_json
   velox_vector
   velox_vector_fuzzer
@@ -112,6 +113,6 @@ target_link_libraries(
   velox_vector
   velox_vector_test_lib
   velox_exec
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_tpch_connector
   velox_memory)

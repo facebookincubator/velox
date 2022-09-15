@@ -29,8 +29,6 @@ add_library(
   HashBuild.cpp
   HashPartitionFunction.cpp
   HashProbe.cpp
-  Spill.cpp
-  Spiller.cpp
   HashTable.cpp
   JoinBridge.cpp
   Limit.cpp
@@ -46,6 +44,8 @@ add_library(
   PartitionedOutputBufferManager.cpp
   PlanNodeStats.cpp
   RowContainer.cpp
+  Spill.cpp
+  SpillOperatorGroup.cpp
   Spiller.cpp
   StreamingAggregation.cpp
   TableScan.cpp
@@ -73,7 +73,10 @@ target_link_libraries(
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
-  add_subdirectory(benchmarks)
 elseif(${VELOX_BUILD_TEST_UTILS})
   add_subdirectory(tests/utils)
+endif()
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
 endif()

@@ -23,8 +23,8 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/type/Variant.h"
 #include "velox/vector/FlatVector.h"
-#include "velox/vector/tests/VectorMaker.h"
-#include "velox/vector/tests/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public testing::Test,
@@ -34,6 +34,10 @@ class OperatorTestBase : public testing::Test,
   ~OperatorTestBase() override;
 
   void SetUp() override;
+
+  /// Allow base classes to register custom vector serde.
+  /// By default, registers Presto-compatible serde.
+  virtual void registerVectorSerde();
 
   static void SetUpTestCase();
 

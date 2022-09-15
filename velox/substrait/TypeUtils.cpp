@@ -15,6 +15,7 @@
  */
 
 #include "velox/substrait/TypeUtils.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 namespace {

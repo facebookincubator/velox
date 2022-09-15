@@ -29,7 +29,7 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 DEFINE_int32(steps, 10, "Number of expressions to generate and execute.");
 
@@ -163,7 +163,7 @@ std::optional<bool> isDeterministic(
   // Check if this is a simple function.
   if (auto simpleFunctionEntry =
           exec::SimpleFunctions().resolveFunction(functionName, argTypes)) {
-    return simpleFunctionEntry->getMetadata()->isDeterministic();
+    return simpleFunctionEntry->getMetadata().isDeterministic();
   }
 
   // Vector functions are a bit more complicated. We need to fetch the list of

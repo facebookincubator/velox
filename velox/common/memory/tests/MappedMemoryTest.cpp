@@ -17,6 +17,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/AllocationPool.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/memory/MmapArena.h"
 
 #include <thread>
 
@@ -412,6 +413,8 @@ TEST_P(MappedMemoryTest, increasingSizeWithThreadsTest) {
   threads.reserve(numThreads);
   for (int32_t i = 0; i < numThreads; ++i) {
     allocations.emplace_back(makeEmptyAllocations(500));
+  }
+  for (int32_t i = 0; i < numThreads; ++i) {
     threads.push_back(std::thread([this, &allocations, i]() {
       allocateIncreasing(10, 1000, 1000, allocations[i]);
     }));
@@ -693,6 +696,143 @@ TEST_P(MappedMemoryTest, stlMappedMemoryAllocator) {
     auto p = alloc.allocate(1);
     EXPECT_THROW(alloc.deallocate(p, 1ULL << 62), VeloxException);
     alloc.deallocate(p, 1);
+  }
+}
+
+class MmapArenaTest : public testing::Test {
+ public:
+  // 32 MB arena space
+  static constexpr uint64_t kArenaCapacityBytes = 1l << 25;
+
+ protected:
+  void SetUp() override {
+    rng_.seed(1);
+  }
+
+  void* allocateAndPad(MmapArena* arena, uint64_t bytes) {
+    void* buffer = arena->allocate(bytes);
+    memset(buffer, 0xff, bytes);
+    return buffer;
+  }
+
+  void unpadAndFree(MmapArena* arena, void* buffer, uint64_t bytes) {
+    memset(buffer, 0x00, bytes);
+    arena->free(buffer, bytes);
+  }
+
+  uint64_t randomPowTwo(uint64_t lowerBound, uint64_t upperBound) {
+    lowerBound = bits::nextPowerOfTwo(lowerBound);
+    auto attemptedUpperBound = bits::nextPowerOfTwo(upperBound);
+    upperBound = attemptedUpperBound == upperBound ? upperBound
+                                                   : attemptedUpperBound / 2;
+    uint64_t moveSteps;
+    if (lowerBound == 0) {
+      uint64_t one = 1;
+      moveSteps =
+          (folly::Random::rand64(
+               bits::countLeadingZeros(one) + 1 -
+                   bits::countLeadingZeros(upperBound),
+               rng_) +
+           1);
+      return moveSteps == 0 ? 0 : (1l << (moveSteps - 1));
+    }
+    moveSteps =
+        (folly::Random::rand64(
+             bits::countLeadingZeros(lowerBound) -
+                 bits::countLeadingZeros(upperBound),
+             rng_) +
+         1);
+    return lowerBound << moveSteps;
+  }
+
+  folly::Random::DefaultGenerator rng_;
+};
+
+TEST_F(MmapArenaTest, basic) {
+  // 0 Byte lower bound for revealing edge cases.
+  const uint64_t kAllocLowerBound = 0;
+
+  // 1 KB upper bound
+  const uint64_t kAllocUpperBound = 1l << 10;
+  std::unique_ptr<MmapArena> arena =
+      std::make_unique<MmapArena>(kArenaCapacityBytes);
+  memset(arena->address(), 0x00, kArenaCapacityBytes);
+
+  std::unordered_map<uint64_t, uint64_t> allocations;
+
+  // First phase allocate only
+  for (size_t i = 0; i < 1000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+
+  // Second phase alloc and free called in an interleaving way
+  for (size_t i = 0; i < 10000; i++) {
+    auto bytes = randomPowTwo(kAllocLowerBound, kAllocUpperBound);
+    allocations.emplace(
+        reinterpret_cast<uint64_t>(allocateAndPad(arena.get(), bytes)), bytes);
+
+    auto itrToFree = allocations.begin();
+    auto bytesFree = itrToFree->second;
+    unpadAndFree(
+        arena.get(), reinterpret_cast<void*>(itrToFree->first), bytesFree);
+    allocations.erase(itrToFree);
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+
+  // Third phase free only
+  auto itr = allocations.begin();
+  while (itr != allocations.end()) {
+    auto bytes = itr->second;
+    unpadAndFree(arena.get(), reinterpret_cast<void*>(itr->first), bytes);
+    itr++;
+  }
+  EXPECT_TRUE(arena->checkConsistency());
+}
+
+TEST_F(MmapArenaTest, managedMmapArenas) {
+  {
+    // Test natural growing of ManagedMmapArena
+    std::unique_ptr<ManagedMmapArenas> managedArenas =
+        std::make_unique<ManagedMmapArenas>(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+    void* alloc1 = managedArenas->allocate(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+    void* alloc2 = managedArenas->allocate(kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
+
+    managedArenas->free(alloc2, kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
+    managedArenas->free(alloc1, kArenaCapacityBytes);
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+  }
+
+  {
+    // Test growing of ManagedMmapArena due to fragmentation
+    std::unique_ptr<ManagedMmapArenas> managedArenas =
+        std::make_unique<ManagedMmapArenas>(kArenaCapacityBytes);
+    const uint64_t kNumAllocs = 128;
+    const uint64_t kAllocSize = kArenaCapacityBytes / kNumAllocs;
+    std::vector<uint64_t> evenAllocAddresses;
+    for (int i = 0; i < kNumAllocs; i++) {
+      auto* allocResult = managedArenas->allocate(kAllocSize);
+      if (i % 2 == 0) {
+        evenAllocAddresses.emplace_back(
+            reinterpret_cast<uint64_t>(allocResult));
+      }
+    }
+    EXPECT_EQ(managedArenas->arenas().size(), 1);
+
+    // Free every other allocations so that the single MmapArena is fragmented
+    // that it can no longer handle allocations of size larger than kAllocSize
+    for (auto address : evenAllocAddresses) {
+      managedArenas->free(reinterpret_cast<void*>(address), kAllocSize);
+    }
+
+    managedArenas->allocate(kAllocSize * 2);
+    EXPECT_EQ(managedArenas->arenas().size(), 2);
   }
 }
 

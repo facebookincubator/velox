@@ -14,7 +14,7 @@
 
 add_executable(
   velox_row_test UnsafeRowSerializerTest.cpp UnsafeRowDeserializerTest.cpp
-                 UnsafeRowFuzzTests.cpp UnsafeRowBatchSerdeFuzzTests.cpp)
+                 UnsafeRowFuzzTests.cpp)
 
 add_test(velox_row_test velox_row_test)
 
@@ -22,7 +22,7 @@ target_link_libraries(
   velox_row_test
   velox_row
   velox_exec
-  velox_exec_test_util
+  velox_exec_test_lib
   velox_functions_lib
   velox_functions_prestosql
   velox_presto_serializer

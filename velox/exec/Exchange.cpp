@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 #include "velox/exec/Exchange.h"
-#include <velox/buffer/Buffer.h>
 #include <velox/common/base/Exceptions.h>
-#include <velox/common/memory/MappedMemory.h>
 #include <velox/common/memory/Memory.h>
 #include "velox/exec/PartitionedOutputBufferManager.h"
+#include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
 
@@ -91,9 +90,7 @@ class LocalExchangeSource : public ExchangeSource {
     if (atEnd_) {
       return false;
     }
-    bool pending = requestPending_;
-    requestPending_ = true;
-    return !pending;
+    return !requestPending_.exchange(true);
   }
 
   void request() override {

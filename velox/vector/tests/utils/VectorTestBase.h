@@ -16,7 +16,7 @@
 #pragma once
 
 #include "velox/vector/FlatVector.h"
-#include "velox/vector/tests/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <gtest/gtest.h>
 
@@ -33,6 +33,10 @@ void assertCopyableVector(const VectorPtr& vector);
 
 class VectorTestBase {
  protected:
+  VectorTestBase() {
+    pool_->setMemoryUsageTracker(memory::MemoryUsageTracker::create());
+  }
+
   template <typename T>
   using EvalType = typename CppToType<T>::NativeType;
 
