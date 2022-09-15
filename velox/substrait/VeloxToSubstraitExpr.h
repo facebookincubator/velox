@@ -26,8 +26,6 @@ namespace facebook::velox::substrait {
 
 class VeloxToSubstraitExprConvertor {
  public:
-  /// @param extensionCollector:  ExtensionCollector storing the relations
-  /// between the function signature and the function id.
   explicit VeloxToSubstraitExprConvertor(
       const SubstraitExtensionCollectorPtr& extensionCollector)
       : extensionCollector_(extensionCollector) {}

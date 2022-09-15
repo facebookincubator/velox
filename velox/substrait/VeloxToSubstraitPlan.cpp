@@ -68,7 +68,7 @@ namespace {
 
   toSubstrait(arena, plan, rootRel->mutable_input());
 
-  // Add Extension Functions after convert.
+  // Add extensions for all functions and types seen in the plan.
   extensionCollector_->addExtensionsToPlan(substraitPlan);
 
   // Set RootRel names.
@@ -292,10 +292,9 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
-    const auto& referenceId =
+    auto referenceId =
         extensionCollector_->getFunctionReference(funName, arguments);
 
-    // Set substrait aggregate Function reference.
     aggFunction->set_function_reference(referenceId);
 
     aggFunction->mutable_output_type()->MergeFrom(
