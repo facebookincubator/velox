@@ -175,6 +175,14 @@ class CastExpr : public SpecialForm {
       const TypePtr& fromType,
       const TypePtr& toType);
 
+  void applyPeeled(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType,
+      const TypePtr& toType,
+      VectorPtr& result);
+
   // When enabled the error in casting leads to null being returned.
   const bool nullOnFailure_;
 
