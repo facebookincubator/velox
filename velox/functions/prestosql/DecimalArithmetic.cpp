@@ -190,7 +190,7 @@ class Divide {
  public:
   template <typename R, typename A, typename B>
   inline static void
-  apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t bRescale) {
+  apply(R& r, const A& a, const B& b, uint8_t aRescale, uint8_t /*bRescale*/) {
     VELOX_CHECK_NE(b.unscaledValue(), 0, "Division by zero");
     int resultSign = 1;
     R unsignedDividendRescaled(a);
@@ -221,7 +221,7 @@ class Divide {
   inline static std::pair<uint8_t, uint8_t> computeResultPrecisionScale(
       const uint8_t aPrecision,
       const uint8_t aScale,
-      const uint8_t bPrecision,
+      const uint8_t /*bPrecision*/,
       const uint8_t bScale) {
     return {
         std::min(38, aPrecision + bScale + std::max(0, bScale - aScale)),
