@@ -16,6 +16,7 @@
 
 #include "velox/substrait/SubstraitExtensionCollector.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/PlanNode.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
@@ -29,6 +30,7 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
     Test::SetUp();
     functions::prestosql::registerAllScalarFunctions();
   }
+
   int getReferenceNumber(
       const std::string& functionName,
       std::vector<TypePtr>&& arguments) {
@@ -41,24 +43,63 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
     return functionReferenceId2;
   }
 
+  int getReferenceNumber(
+      const std::string& functionName,
+      std::vector<TypePtr>&& arguments,
+      const core::AggregationNode::Step step) {
+    int functionReferenceId1 =
+        extensionCollector_->getReferenceNumber(functionName, arguments, step);
+    // Repeat the call to make sure properly de-duplicated.
+    int functionReferenceId2 =
+        extensionCollector_->getReferenceNumber(functionName, arguments, step);
+    EXPECT_EQ(functionReferenceId1, functionReferenceId2);
+    return functionReferenceId2;
+  }
+
   SubstraitExtensionCollectorPtr extensionCollector_ =
       std::make_shared<SubstraitExtensionCollector>();
 };
 
-TEST_F(SubstraitExtensionCollectorTest, getReferenceNumber) {
+TEST_F(SubstraitExtensionCollectorTest, getReferenceNumberForScalarFunction) {
   ASSERT_EQ(getReferenceNumber("plus", {INTEGER(), INTEGER()}), 0);
   ASSERT_EQ(getReferenceNumber("divide", {INTEGER(), INTEGER()}), 1);
   ASSERT_EQ(getReferenceNumber("cardinality", {ARRAY(INTEGER())}), 2);
   ASSERT_EQ(getReferenceNumber("array_sum", {ARRAY(INTEGER())}), 3);
-  ASSERT_EQ(getReferenceNumber("sum", {INTEGER()}), 4);
-  ASSERT_EQ(getReferenceNumber("avg", {INTEGER()}), 5);
-  ASSERT_EQ(getReferenceNumber("avg", {ROW({DOUBLE(), BIGINT()})}), 6);
-  ASSERT_EQ(getReferenceNumber("count", {INTEGER()}), 7);
 
   auto functionType = std::make_shared<const FunctionType>(
       std::vector<TypePtr>{INTEGER(), VARCHAR()}, BIGINT());
   std::vector<TypePtr> types = {MAP(INTEGER(), VARCHAR()), functionType};
   ASSERT_ANY_THROW(getReferenceNumber("transform_keys", std::move(types)));
+}
+
+TEST_F(
+    SubstraitExtensionCollectorTest,
+    getReferenceNumberForAggregateFunction) {
+  // Sum aggregate function have same argument type for each aggregation step.
+  ASSERT_EQ(
+      getReferenceNumber(
+          "sum", {INTEGER()}, core::AggregationNode::Step::kSingle),
+      0);
+
+  // Partial avg aggregate function should use primitive integral type.
+  ASSERT_EQ(
+      getReferenceNumber(
+          "avg", {INTEGER()}, core::AggregationNode::Step::kPartial),
+      1);
+
+  // Final avg aggregate function should use struct type, like 'ROW<DOUBLE,BIGINT>'
+  ASSERT_EQ(
+      getReferenceNumber(
+          "avg",
+          {ROW({DOUBLE(), BIGINT()})},
+          core::AggregationNode::Step::kFinal),
+      2);
+
+  // Count aggregate function have same argument type for each aggregation step.
+  ASSERT_EQ(
+      getReferenceNumber(
+          "count", {INTEGER()}, core::AggregationNode::Step::kFinal),
+      3);
 }
 
 TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
@@ -97,9 +138,9 @@ TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
   ASSERT_EQ(
       substraitPlan->extensions(5).extension_function().name(), "avg:i32");
   ASSERT_EQ(
-      substraitPlan->extensions(6).extension_function().name(), "avg:i16");
+      substraitPlan->extensions(6).extension_function().name(), "avg:struct");
   ASSERT_EQ(
-      substraitPlan->extensions(7).extension_function().name(), "count:any");
+      substraitPlan->extensions(7).extension_function().name(), "count:i32");
 }
 
 } // namespace facebook::velox::substrait::test

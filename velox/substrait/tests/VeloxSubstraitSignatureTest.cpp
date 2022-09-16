@@ -16,10 +16,10 @@
 
 #include "velox/substrait/VeloxSubstraitSignature.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::substrait;
-#include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 
 namespace facebook::velox::substrait::test {
 
@@ -29,10 +29,9 @@ class VeloxSubstraitSignatureTest : public ::testing::Test {
     Test::SetUp();
     functions::prestosql::registerAllScalarFunctions();
   }
+
   static std::string toSubstraitSignature(const TypePtr& type) {
-    const auto typeSignature =
-        exec::TypeSignature{mapTypeKindToName(type->kind()), {}};
-    return VeloxSubstraitSignature::toSubstraitSignature(typeSignature);
+    return VeloxSubstraitSignature::toSubstraitSignature(type->kind());
   }
 
   static std::string toSubstraitSignature(
@@ -43,7 +42,7 @@ class VeloxSubstraitSignatureTest : public ::testing::Test {
   }
 };
 
-TEST_F(VeloxSubstraitSignatureTest, toSubstraitSignature_with_type) {
+TEST_F(VeloxSubstraitSignatureTest, toSubstraitSignatureWithType) {
   ASSERT_EQ(toSubstraitSignature(BOOLEAN()), "bool");
 
   ASSERT_EQ(toSubstraitSignature(TINYINT()), "i8");
@@ -67,15 +66,13 @@ TEST_F(VeloxSubstraitSignatureTest, toSubstraitSignature_with_type) {
   ASSERT_EQ(toSubstraitSignature(ROW({ROW({INTEGER()})})), "struct");
   ASSERT_EQ(toSubstraitSignature(UNKNOWN()), "u!name");
 
-  ASSERT_EQ(VeloxSubstraitSignature::toSubstraitSignature({"T", {}}), "any");
-
   ASSERT_ANY_THROW(toSubstraitSignature(INTERVAL_DAY_TIME()));
 }
 
 TEST_F(
     VeloxSubstraitSignatureTest,
-    toSubstraitSignature_with_functionNameAndArguments) {
-  ASSERT_EQ(toSubstraitSignature("eq", {INTEGER(), INTEGER()}), "eq:any_any");
+    toSubstraitSignatureWithFunctionNameAndArguments) {
+  ASSERT_EQ(toSubstraitSignature("eq", {INTEGER(), INTEGER()}), "eq:i32_i32");
   ASSERT_EQ(toSubstraitSignature("gt", {INTEGER(), INTEGER()}), "gt:i32_i32");
   ASSERT_EQ(toSubstraitSignature("lt", {INTEGER(), INTEGER()}), "lt:i32_i32");
   ASSERT_EQ(toSubstraitSignature("gte", {INTEGER(), INTEGER()}), "gte:i32_i32");
@@ -83,10 +80,10 @@ TEST_F(
 
   ASSERT_EQ(
       toSubstraitSignature("and", {BOOLEAN(), BOOLEAN()}), "and:bool_bool");
-  ASSERT_EQ(toSubstraitSignature("or", {INTEGER(), INTEGER()}), "or:bool_bool");
-  ASSERT_EQ(toSubstraitSignature("not", {INTEGER(), INTEGER()}), "not:bool");
+  ASSERT_EQ(toSubstraitSignature("or", {BOOLEAN(), BOOLEAN()}), "or:bool_bool");
+  ASSERT_EQ(toSubstraitSignature("not", {BOOLEAN()}), "not:bool");
   ASSERT_EQ(
-      toSubstraitSignature("xor", {INTEGER(), INTEGER()}), "xor:bool_bool");
+      toSubstraitSignature("xor", {BOOLEAN(), BOOLEAN()}), "xor:bool_bool");
 
   ASSERT_EQ(
       toSubstraitSignature("between", {INTEGER(), INTEGER(), INTEGER()}),
@@ -105,7 +102,7 @@ TEST_F(
 
   ASSERT_EQ(toSubstraitSignature("sum", {INTEGER()}), "sum:i32");
   ASSERT_EQ(toSubstraitSignature("avg", {INTEGER()}), "avg:i32");
-  ASSERT_EQ(toSubstraitSignature("count", {INTEGER()}), "count:any");
+  ASSERT_EQ(toSubstraitSignature("count", {INTEGER()}), "count:i32");
 
   auto functionType = std::make_shared<const FunctionType>(
       std::vector<TypePtr>{INTEGER(), VARCHAR()}, BIGINT());

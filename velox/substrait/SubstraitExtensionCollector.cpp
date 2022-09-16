@@ -18,50 +18,23 @@
 
 namespace facebook::velox::substrait {
 
-namespace {
-std::string toString(
-    const std::string& functionName,
-    const std::vector<facebook::velox::TypePtr>& inputs) {
-  std::ostringstream signature;
-  signature << functionName << "(";
-  for (auto i = 0; i < inputs.size(); i++) {
-    if (i > 0) {
-      signature << ", ";
-    }
-    signature << inputs[i]->toString();
-  }
-  signature << ")";
-  return signature.str();
-}
-
-std::string toString(
-    const std::vector<const facebook::velox::exec::FunctionSignature*>&
-        signatures) {
-  std::stringstream out;
-  for (auto i = 0; i < signatures.size(); ++i) {
-    if (i > 0) {
-      out << ", ";
-    }
-    out << signatures[i]->toString();
-  }
-  return out.str();
-}
-
-} // namespace
-
 int SubstraitExtensionCollector::getReferenceNumber(
     const std::string& functionName,
     const std::vector<TypePtr>& arguments) {
-  const auto& extensionFunctionId =
-      ExtensionFunctionId::create(functionName, arguments);
-  const auto& extensionFunctionAnchorIt =
-      extensionFunctions_->reverseMap().find(extensionFunctionId);
-  if (extensionFunctionAnchorIt != extensionFunctions_->reverseMap().end()) {
-    return extensionFunctionAnchorIt->second;
-  }
-  ++functionReferenceNumber;
-  extensionFunctions_->put(functionReferenceNumber, extensionFunctionId);
-  return functionReferenceNumber;
+  const auto& substraitFunctionSignature =
+      VeloxSubstraitSignature::toSubstraitSignature(functionName, arguments);
+  /// TODO: Currently we treat all velox registry based function signatures as
+  /// custom substrait extension, so no uri link and leave it as empty.
+  return getReferenceNumber({"", substraitFunctionSignature});
+}
+
+int SubstraitExtensionCollector::getReferenceNumber(
+    const std::string& functionName,
+    const std::vector<TypePtr>& arguments,
+    const core::AggregationNode::Step aggregationStep) {
+  // TODO: Ignore aggregationStep for now, will refactor when introduce velox
+  // registry for function signature binding
+  return getReferenceNumber(functionName, arguments);
 }
 
 template <typename T>
@@ -103,16 +76,16 @@ SubstraitExtensionCollector::SubstraitExtensionCollector() {
       std::make_shared<BiDirectionHashMap<ExtensionFunctionId>>();
 }
 
-ExtensionFunctionId ExtensionFunctionId::create(
-    const std::string& functionName,
-    const std::vector<TypePtr>& arguments) {
-  const auto& substraitFunctionSignature =
-      VeloxSubstraitSignature::toSubstraitSignature(functionName, arguments);
-
-  /// TODO: Currently we treat all velox registry based function signatures as
-  /// custom substrait extension, so no uri link and leave it as empty.
-  const std::string uri;
-  return {uri, substraitFunctionSignature};
+int SubstraitExtensionCollector::getReferenceNumber(
+    const ExtensionFunctionId& extensionFunctionId) {
+  const auto& extensionFunctionAnchorIt =
+      extensionFunctions_->reverseMap().find(extensionFunctionId);
+  if (extensionFunctionAnchorIt != extensionFunctions_->reverseMap().end()) {
+    return extensionFunctionAnchorIt->second;
+  }
+  ++functionReferenceNumber;
+  extensionFunctions_->put(functionReferenceNumber, extensionFunctionId);
+  return functionReferenceNumber;
 }
 
 } // namespace facebook::velox::substrait

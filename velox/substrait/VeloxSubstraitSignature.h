@@ -16,41 +16,21 @@
 
 #pragma once
 
-#include "velox/expression/FunctionSignature.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::substrait {
 
 class VeloxSubstraitSignature {
  public:
-  /// Given a velox type name, return the Substrait type signature, throw if no
+  /// Given a velox type kind, return the Substrait type signature, throw if no
   /// match found.
-  static std::string toSubstraitSignature(
-      const exec::TypeSignature& typeSignature);
+  static std::string toSubstraitSignature(const TypeKind typeKind);
 
-  /// Given a velox function name and argument types, return a matching function
-  /// signature, throw if no match found.
-  static const exec::FunctionSignature& resolveFunction(
-      const std::string& functionName,
-      const std::vector<TypePtr>& arguments);
-
-  /// Given a velox function name and argument types, return the substrait
-  /// function signature.
+  /// Given a velox scalar function name and argument types, return the
+  /// substrait function signature.
   static std::string toSubstraitSignature(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments);
-
-  /// Given a velox function name and argument types, return the velox function
-  /// signature.
-  static std::string toVeloxSignature(
-      const std::string& functionName,
-      const std::vector<facebook::velox::TypePtr>& inputs);
-
-  /// Given a collection of function signature, return the velox function
-  /// signatures join by the ',' delimiter.
-  static std::string toVeloxSignature(
-      const std::vector<const facebook::velox::exec::FunctionSignature*>&
-          signatures);
 };
 
 } // namespace facebook::velox::substrait

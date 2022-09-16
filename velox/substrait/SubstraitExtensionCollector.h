@@ -17,6 +17,8 @@
 #pragma once
 
 #include <optional>
+#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
 #include "velox/substrait/VeloxSubstraitSignature.h"
 #include "velox/substrait/proto/substrait/algebra.pb.h"
 #include "velox/substrait/proto/substrait/plan.pb.h"
@@ -39,12 +41,6 @@ struct ExtensionFunctionId {
   bool operator==(const ExtensionFunctionId& other) const {
     return (uri == other.uri && signature == other.signature);
   }
-
-  /// Given a function name and function arguments and return  a mating
-  /// extension functionId.
-  static ExtensionFunctionId create(
-      const std::string& functionName,
-      const std::vector<TypePtr>& arguments);
 };
 
 /// Assigns unique IDs to function signatures using ExtensionFunctionId.
@@ -52,10 +48,18 @@ class SubstraitExtensionCollector {
  public:
   SubstraitExtensionCollector();
 
-  /// Given function name and arguments and return functionId using FunctionId.
+  /// Given a scalar function name and argument types, return the functionId
+  /// using ExtensionFunctionId.
   int getReferenceNumber(
       const std::string& functionName,
       const std::vector<TypePtr>& arguments);
+
+  /// Given an aggregate function name and argument types and aggregation Step,
+  /// return the functionId using ExtensionFunctionId.
+  int getReferenceNumber(
+      const std::string& functionName,
+      const std::vector<TypePtr>& arguments,
+      core::AggregationNode::Step aggregationStep);
 
   /// Add extension functions to Substrait plan.
   void addExtensionsToPlan(::substrait::Plan* plan) const;
@@ -63,7 +67,7 @@ class SubstraitExtensionCollector {
  private:
   /// A bi-direction hash map to keep the relation between reference number and
   /// either function or type signature.
-  /// @T FunctionId
+  /// @T ExtensionFunctionId
   template <class T>
   class BiDirectionHashMap {
    public:
@@ -85,6 +89,9 @@ class SubstraitExtensionCollector {
     std::map<int, T> forwardMap_;
     std::unordered_map<T, int> reverseMap_;
   };
+
+  /// Assigns unique IDs to function signatures using ExtensionFunctionId.
+  int getReferenceNumber(const ExtensionFunctionId& extensionFunctionId);
 
   int functionReferenceNumber = -1;
   std::shared_ptr<BiDirectionHashMap<ExtensionFunctionId>> extensionFunctions_;
