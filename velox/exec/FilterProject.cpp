@@ -16,6 +16,7 @@
 #include "velox/exec/FilterProject.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -75,6 +76,22 @@ FilterProject::FilterProject(
   }
   numExprs_ = allExprs.size();
   exprs_ = makeExprSetFromFlag(std::move(allExprs), operatorCtx_->execCtx());
+
+  if (numExprs_ > 0 && !identityProjections_.empty()) {
+    auto inputType = project ? project->sources()[0]->outputType()
+                             : filter->sources()[0]->outputType();
+    std::unordered_set<uint32_t> distinctFieldIndexes;
+    for (auto field : exprs_->distinctFields()) {
+      auto fieldIndex = inputType->getChildIdx(field->name());
+      distinctFieldIndexes.insert(fieldIndex);
+    }
+    for (auto identityField : identityProjections_) {
+      if (distinctFieldIndexes.find(identityField.inputChannel) !=
+          distinctFieldIndexes.end()) {
+        multiplyReferencedFieldIndices_.push_back(identityField.inputChannel);
+      }
+    }
+  }
 }
 
 void FilterProject::addInput(RowVectorPtr input) {
@@ -117,6 +134,13 @@ RowVectorPtr FilterProject::getOutput() {
   auto* rows = localRows.get();
   rows->setAll();
   EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
+
+  // Pre-load lazy vectors which are referenced by both expressions and identity
+  // projections.
+  for (auto fieldIdx : multiplyReferencedFieldIndices_) {
+    evalCtx.ensureFieldLoaded(fieldIdx, *rows);
+  }
+
   if (!hasFilter_) {
     numProcessedInputRows_ = size;
     VELOX_CHECK(!isIdentityProjection_);

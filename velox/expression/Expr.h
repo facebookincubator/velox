@@ -426,6 +426,10 @@ class ExprSet {
     return exprs_[index];
   }
 
+  const std::vector<FieldReference*>& distinctFields() const {
+    return distinctFields_;
+  }
+
   // Flags a shared subexpression which needs to be reset (e.g. previously
   // computed results must be deleted) when evaluating new batch of data.
   void addToReset(const std::shared_ptr<Expr>& expr) {
@@ -446,6 +450,9 @@ class ExprSet {
   void clearSharedSubexprs();
 
   std::vector<std::shared_ptr<Expr>> exprs_;
+
+  // The distinct references to input columns among all expressions in ExprSet.
+  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
 
   // Fields referenced by multiple expressions in ExprSet.
   std::unordered_set<FieldReference * FOLLY_NONNULL> multiplyReferencedFields_;
