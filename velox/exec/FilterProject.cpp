@@ -80,14 +80,14 @@ FilterProject::FilterProject(
   if (numExprs_ > 0 && !identityProjections_.empty()) {
     auto inputType = project ? project->sources()[0]->outputType()
                              : filter->sources()[0]->outputType();
-    std::unordered_set<uint32_t> distinctFieldIndexes;
+    std::unordered_set<uint32_t> distinctFieldIndices;
     for (auto field : exprs_->distinctFields()) {
       auto fieldIndex = inputType->getChildIdx(field->name());
-      distinctFieldIndexes.insert(fieldIndex);
+      distinctFieldIndices.insert(fieldIndex);
     }
     for (auto identityField : identityProjections_) {
-      if (distinctFieldIndexes.find(identityField.inputChannel) !=
-          distinctFieldIndexes.end()) {
+      if (distinctFieldIndices.find(identityField.inputChannel) !=
+          distinctFieldIndices.end()) {
         multiplyReferencedFieldIndices_.push_back(identityField.inputChannel);
       }
     }
@@ -132,6 +132,7 @@ RowVectorPtr FilterProject::getOutput() {
   vector_size_t size = input_->size();
   LocalSelectivityVector localRows(*operatorCtx_->execCtx(), size);
   auto* rows = localRows.get();
+  VELOX_DCHECK_NOT_NULL(rows)
   rows->setAll();
   EvalCtx evalCtx(operatorCtx_->execCtx(), exprs_.get(), input_.get());
 

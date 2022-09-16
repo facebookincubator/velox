@@ -90,6 +90,6 @@ class FilterProject : public Operator {
   // If c1 is a LazyVector and f(c0) AND g(c1) expression is evaluated first, it
   // will load c1 only for rows where f(c0) is true. However, c1 identity
   // projection needs all rows.
-  std::vector<int32_t> multiplyReferencedFieldIndices_;
+  std::vector<column_index_t> multiplyReferencedFieldIndices_;
 };
 } // namespace facebook::velox::exec

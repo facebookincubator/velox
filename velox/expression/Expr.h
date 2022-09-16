@@ -386,6 +386,12 @@ using ExprPtr = std::shared_ptr<Expr>;
 // can be deduplicated. This is the top level handle on an expression
 // and is used also if only one Expr is to be evaluated. TODO: Rename to
 // ExprList.
+// Note: Caller must ensure that lazy vectors associated with field references
+// used by the expressions in this ExprSet are pre-loaded (before running
+// evaluation on them) if they are also used/referenced outside the context of
+// this ExprSet. If however such an association cannot be made with certainty,
+// then its advisable to pre-load all lazy vectors to avoid issues associated
+// with partial loading.
 class ExprSet {
  public:
   explicit ExprSet(
