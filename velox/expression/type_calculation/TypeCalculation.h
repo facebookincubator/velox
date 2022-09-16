@@ -20,7 +20,7 @@
 #include <unordered_map>
 
 namespace facebook::velox::expression::calculation {
-int evaluate(
+void evaluate(
     const std::string& calculation,
-    const std::unordered_map<std::string, std::optional<int>>& variables);
+    std::unordered_map<std::string, std::optional<int>>& variables);
 }

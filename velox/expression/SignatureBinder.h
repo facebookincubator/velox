@@ -56,18 +56,17 @@ class SignatureBinder {
   static TypePtr tryResolveType(
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, TypePtr>& typeParameters) {
-    const std::unordered_map<std::string, std::optional<int>> integerParameters;
     const std::unordered_map<std::string, std::string> constraints;
+    std::unordered_map<std::string, std::optional<int>> integerParameters;
     return tryResolveType(
-        typeSignature, typeParameters, integerParameters, constraints);
+        typeSignature, typeParameters, constraints, integerParameters);
   }
   // Returns concrete return type or null if couldn't fully resolve.
   static TypePtr tryResolveType(
       const exec::TypeSignature& typeSignature,
       const std::unordered_map<std::string, TypePtr>& typeParameters,
-      const std::unordered_map<std::string, std::optional<int>>&
-          integerParameters,
-      const std::unordered_map<std::string, std::string>& constraints);
+      const std::unordered_map<std::string, std::string>& constraints,
+      std::unordered_map<std::string, std::optional<int>>& integerParameters);
 
  private:
   bool tryBind(

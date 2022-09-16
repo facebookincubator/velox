@@ -33,11 +33,16 @@ bool isPositiveInteger(const std::string& str) {
       }) == str.end();
 }
 
+std::string buildCalculation(
+    const std::string& variable,
+    const std::string& calculation) {
+  return fmt::format("{}={}", variable, calculation);
+}
+
 TypePtr inferDecimalType(
     const exec::TypeSignature& typeSignature,
-    const std::unordered_map<std::string, std::optional<int>>&
-        integerParameters,
-    const std::unordered_map<std::string, std::string>& constraints) {
+    const std::unordered_map<std::string, std::string>& constraints,
+    std::unordered_map<std::string, std::optional<int>>& integerParameters) {
   if (typeSignature.parameters().size() != 2) {
     // Decimals must have two parameters.
     return nullptr;
@@ -50,15 +55,21 @@ TypePtr inferDecimalType(
   if (isPositiveInteger(precisionVar)) {
     // Handle constant.
     precision = atoi(precisionVar.c_str());
-  } else if (integerParameters.count(precisionVar) > 0) {
-    const auto it = integerParameters.at(precisionVar);
+  } else if (auto it = integerParameters.find(precisionVar);
+             it != integerParameters.end()) {
     // Check if it is already computed.
-    if (it.has_value()) {
-      precision = it.value();
-    } else if (constraints.count(precisionVar) > 0) {
+    if (it->second.has_value()) {
+      precision = it->second.value();
+    } else if (auto ct = constraints.find(precisionVar);
+               ct != constraints.end()) {
       // Check constraints and evaluate.
-      precision = expression::calculation::evaluate(
-          constraints.at(precisionVar), integerParameters);
+      auto precisionCalculation = buildCalculation(precisionVar, ct->second);
+      expression::calculation::evaluate(
+          precisionCalculation, integerParameters);
+      const auto result = integerParameters.at(precisionVar);
+      VELOX_CHECK(
+          result.has_value(), "Variable {} calculation failed.", precisionVar)
+      precision = result.value();
     } else {
       // Cannot evaluate further.
       return nullptr;
@@ -70,15 +81,19 @@ TypePtr inferDecimalType(
   if (isPositiveInteger(scaleVar)) {
     // Handle constant.
     scale = atoi(scaleVar.c_str());
-  } else if (integerParameters.count(scaleVar) > 0) {
-    const auto it = integerParameters.at(scaleVar);
+  } else if (auto it = integerParameters.find(scaleVar);
+             it != integerParameters.end()) {
     // Check if it is already computed.
-    if (it.has_value()) {
-      scale = it.value();
-    } else if (constraints.count(scaleVar) > 0) {
+    if (it->second.has_value()) {
+      scale = it->second.value();
+    } else if (auto ct = constraints.find(scaleVar); ct != constraints.end()) {
       // Check constraints and evaluate.
-      scale = expression::calculation::evaluate(
-          constraints.at(scaleVar), integerParameters);
+      auto scaleCalculation = buildCalculation(scaleVar, ct->second);
+      expression::calculation::evaluate(scaleCalculation, integerParameters);
+      const auto result = integerParameters.at(scaleVar);
+      VELOX_CHECK(
+          result.has_value(), "Variable {} calculation failed.", scaleVar)
+      scale = result.value();
     } else {
       // Cannot evaluate further.
       return nullptr;
@@ -181,6 +196,7 @@ bool SignatureBinder::tryBind(
 
     const auto& params = typeSignature.parameters();
     // Integer parameters have to be resolved here.
+    // We assume integer parameters start from the first parameter if present.
     if (params.size() > 0 &&
         integerParameters_.count(params[0].baseName()) != 0) {
       return tryBindIntegerParameters(params, actualType);
@@ -201,8 +217,7 @@ bool SignatureBinder::tryBind(
       "Variables with parameters are not supported");
 
   // Resolve type parameters parameters.
-  if (typeParameters_.count(baseName) != 0) {
-    auto it = typeParameters_.find(baseName);
+  if (auto it = typeParameters_.find(baseName); it != typeParameters_.end()) {
     if (it->second == nullptr) {
       it->second = actualType;
       return true;
@@ -215,28 +230,27 @@ bool SignatureBinder::tryBind(
 TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature) {
   return tryResolveType(
-      typeSignature, typeParameters_, integerParameters_, constraints_);
+      typeSignature, typeParameters_, constraints_, integerParameters_);
 }
 
 // static
 TypePtr SignatureBinder::tryResolveType(
     const exec::TypeSignature& typeSignature,
     const std::unordered_map<std::string, TypePtr>& typeParameters,
-    const std::unordered_map<std::string, std::optional<int>>&
-        integerParameters,
-    const std::unordered_map<std::string, std::string>& constraints) {
+    const std::unordered_map<std::string, std::string>& constraints,
+    std::unordered_map<std::string, std::optional<int>>& integerParameters) {
   const auto baseName = typeSignature.baseName();
   if (isConcreteType(typeParameters, integerParameters, baseName)) {
     auto typeName = boost::algorithm::to_upper_copy(baseName);
     if (isDecimalName(typeName) || isCommonDecimalName(typeName)) {
-      return inferDecimalType(typeSignature, integerParameters, constraints);
+      return inferDecimalType(typeSignature, constraints, integerParameters);
     }
     const auto& params = typeSignature.parameters();
     std::vector<TypePtr> children;
     children.reserve(params.size());
     for (auto& param : params) {
       auto type =
-          tryResolveType(param, typeParameters, integerParameters, constraints);
+          tryResolveType(param, typeParameters, constraints, integerParameters);
       if (!type) {
         return nullptr;
       }

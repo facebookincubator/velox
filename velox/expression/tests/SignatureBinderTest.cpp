@@ -251,12 +251,11 @@ TEST(SignatureBinderTest, decimals) {
               exec::TypeSignature("DECIMAL", {}), {}),
           nullptr);
       // Missing constraint value.
+      std::unordered_map<std::string, std::optional<int>> integerVariable;
+      integerVariable[typeSignature.parameters()[0].baseName()] = {};
       ASSERT_EQ(
           exec::SignatureBinder::tryResolveType(
-              typeSignature,
-              {},
-              {{typeSignature.parameters()[0].baseName(), {}}},
-              {}),
+              typeSignature, {}, {}, integerVariable),
           nullptr);
     }
     // Type parameter + constraint = error.

@@ -30,13 +30,12 @@ class Scanner : public yyFlexLexer {
   Scanner(
       std::istream& arg_yyin,
       std::ostream& arg_yyout,
-      const std::unordered_map<std::string, std::optional<int>>& values,
-      int& result)
-      : yyFlexLexer(&arg_yyin, &arg_yyout), values_(values), result_(result){};
+      std::unordered_map<std::string, std::optional<int>>& values)
+      : yyFlexLexer(&arg_yyin, &arg_yyout), values_(values){};
   int lex(Parser::semantic_type* yylval);
 
-  void setResult(int value) {
-    result_ = value;
+  void setValue(const std::string& varName, int value) {
+    values_[varName] = value;
   }
 
   int getValue(const std::string& varName) const {
@@ -46,8 +45,7 @@ class Scanner : public yyFlexLexer {
   }
 
  private:
-  const std::unordered_map<std::string, std::optional<int>>& values_;
-  int& result_;
+  std::unordered_map<std::string, std::optional<int>>& values_;
 };
 
 } // namespace facebook::velox::expression::calculate
