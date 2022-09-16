@@ -48,20 +48,11 @@ void SubstraitExtensionCollector::BiDirectionHashMap<T>::put(
 void SubstraitExtensionCollector::addExtensionsToPlan(
     ::substrait::Plan* plan) const {
   using SimpleExtensionURI = ::substrait::extensions::SimpleExtensionURI;
-  int uriPos = 1;
-  std::unordered_map<std::string, SimpleExtensionURI*> uris;
+  // Currently we don't introduce any substrait extension YAML files, so always
+  // only have one URI.
+  SimpleExtensionURI* extensionUri = plan->add_extension_uris();
+  extensionUri->set_extension_uri_anchor(1);
   for (auto& [referenceNum, functionId] : extensionFunctions_->forwardMap()) {
-    SimpleExtensionURI* extensionUri;
-    const auto uri = uris.find(functionId.uri);
-    if (uri == uris.end()) {
-      extensionUri = plan->add_extension_uris();
-      extensionUri->set_extension_uri_anchor(++uriPos);
-      extensionUri->set_uri(functionId.uri);
-      uris[functionId.uri] = extensionUri;
-    } else {
-      extensionUri = uri->second;
-    }
-
     auto extensionFunction =
         plan->add_extensions()->mutable_extension_function();
     extensionFunction->set_extension_uri_reference(
