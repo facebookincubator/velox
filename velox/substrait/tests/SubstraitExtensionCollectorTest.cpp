@@ -87,7 +87,8 @@ TEST_F(
           "avg", {INTEGER()}, core::AggregationNode::Step::kPartial),
       1);
 
-  // Final avg aggregate function should use struct type, like 'ROW<DOUBLE,BIGINT>'
+  // Final avg aggregate function should use struct type, like
+  // 'ROW<DOUBLE,BIGINT>'
   ASSERT_EQ(
       getReferenceNumber(
           "avg",
