@@ -71,7 +71,10 @@
 <dt class="sig sig-object py" id="clamp">
 <span class="sig-name descname"><span class="pre">clamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">low</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">high</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#clamp" title="Permalink to this definition">¶</a></dt>
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">low</span></code> if <code class="docutils literal notranslate"><span class="pre">x</span></code> is less than <code class="docutils literal notranslate"><span class="pre">low</span></code>. Returns <code class="docutils literal notranslate"><span class="pre">high</span></code> if <code class="docutils literal notranslate"><span class="pre">x</span></code> is greater than <code class="docutils literal notranslate"><span class="pre">high</span></code>.
-Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> otherwise. <code class="docutils literal notranslate"><span class="pre">low</span></code> must be less than or equal to <code class="docutils literal notranslate"><span class="pre">high</span></code>.</p>
+Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> otherwise.</p>
+<p><code class="docutils literal notranslate"><span class="pre">low</span></code> is expected to be less than or equal to <code class="docutils literal notranslate"><span class="pre">high</span></code>. This expection is not
+verified for performance reasons. Returns <code class="docutils literal notranslate"><span class="pre">high</span></code> for all values of <code class="docutils literal notranslate"><span class="pre">x</span></code>
+when <code class="docutils literal notranslate"><span class="pre">low</span></code> is greater than <code class="docutils literal notranslate"><span class="pre">high</span></code>.</p>
 </dd></dl>
 
 <dl class="py function">
