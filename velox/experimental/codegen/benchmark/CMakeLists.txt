@@ -25,7 +25,7 @@ target_link_libraries(
   velox_hive_connector
   ${FOLLY_BENCHMARK}
   ${FOLLY_WITH_DEPENDENCIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Boost::filesystem
   gtest
   gtest_main
   ${GFLAGS_LIBRARIES}
@@ -89,7 +89,7 @@ target_link_libraries(
   velox_codegen_code_generator
   ${FOLLY_BENCHMARK}
   ${FOLLY_WITH_DEPENDENCIES}
-  ${Boost_FILESYSTEM_LIBRARIES}
+  Boost::filesystem
   gtest
   gtest_main
   ${GFLAGS_LIBRARIES}

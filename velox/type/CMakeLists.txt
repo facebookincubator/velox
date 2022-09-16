@@ -39,5 +39,5 @@ target_link_libraries(
   velox_exception
   velox_serialization
   velox_external_date
-  ${Boost_REGEX_LIBRARIES}
+  Boost::regex
   ${FOLLY_WITH_DEPENDENCIES})

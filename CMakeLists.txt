@@ -227,17 +227,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(Boost_USE_MULTITHREADED TRUE)
 find_package(
-  Boost
-  1.66.0
-  REQUIRED
-  program_options
-  context
-  filesystem
-  regex
-  thread
-  system
-  date_time
-  atomic)
+  Boost 1.66.0 REQUIRED
+  COMPONENTS program_options
+             context
+             filesystem
+             regex
+             thread
+             system
+             date_time
+             atomic)
 include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 
 # Range-v3 will be enable when the codegen code actually lands keeping it here
