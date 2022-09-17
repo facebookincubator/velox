@@ -28,6 +28,12 @@ ADD scripts /velox/scripts/
 # are required to avoid tzdata installation
 # to prompt for region selection.
 ENV DEBIAN_FRONTEND="noninteractive" TZ=${tz}
+
+# NUM_THREADS
+# This will override NUM_THREADS in the Makefile,
+# to limit threads used for the compilation.
+ENV NUM_THREADS=
+
 RUN /velox/scripts/setup-ubuntu.sh
 
 WORKDIR /velox

@@ -135,7 +135,12 @@ Use the following commands:
 
 ```shell
 $ docker-compose build ubuntu-cpp
-$ docker-compose run ubuntu-cpp
+$ docker-compose run --rm ubuntu-cpp
+```
+If the compilation uses too many resources, you can limit the number
+of threads deployed in the container by doing:
+```shell
+$ docker-compose run -e NUM_THREADS=<NUM_THREADS_TO_USE> --rm ubuntu-cpp
 ```
 
 ## Contributing

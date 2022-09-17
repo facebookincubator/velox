@@ -18,6 +18,9 @@ services:
     # Usage:
     #   docker-compose build ubuntu-cpp
     #   docker-compose run --rm ubuntu-cpp
+    #   or
+    #   docker-compose run -e NUM_THREADS=<NUMBER_OF_THREADS_TO_USE> --rm ubuntu-cpp
+    #   to set the number of threads used during compilation
     image: facebookincubator/velox:amd64-ubuntu-22.04-cpp
     build:
       context: .
@@ -26,6 +29,6 @@ services:
       - .:/velox:delegated
     command: &cpp-command >
       /bin/bash -c "
-        make &&
+        make NUM_THREADS=$${NUM_THREADS} &&
         cd _build/release &&
-        ctest -j 16 -VV --output-on-failure"
+        ctest -j16 -VV --output-on-failure"
