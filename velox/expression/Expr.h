@@ -206,12 +206,30 @@ class Expr {
     return stats_;
   }
 
- private:
+  // Adds nulls from 'rawNulls' to positions of 'result' given by
+  // 'rows'. Ensures that '*result' is writable, of sufficient size
+  // and that it can take nulls. Makes a new '*result' when
+  // appropriate.
+  void addNulls(
+      const SelectivityVector& rows,
+      const uint64_t* FOLLY_NULLABLE rawNulls,
+      EvalCtx& context,
+      VectorPtr& result);
+
+  auto& vectorFunction() const {
+    return vectorFunction_;
+  }
+
+  auto& inputValues() {
+    return inputValues_;
+  }
+
   void setAllNulls(
       const SelectivityVector& rows,
       EvalCtx& context,
       VectorPtr& result) const;
 
+ private:
   struct PeelEncodingsResult {
     SelectivityVector* FOLLY_NULLABLE newRows;
     SelectivityVector* FOLLY_NULLABLE newFinalSelection;
@@ -247,16 +265,6 @@ class Expr {
 
   void
   evalAll(const SelectivityVector& rows, EvalCtx& context, VectorPtr& result);
-
-  // Adds nulls from 'rawNulls' to positions of 'result' given by
-  // 'rows'. Ensures that '*result' is writable, of sufficient size
-  // and that it can take nulls. Makes a new '*result' when
-  // appropriate.
-  void addNulls(
-      const SelectivityVector& rows,
-      const uint64_t* FOLLY_NULLABLE rawNulls,
-      EvalCtx& context,
-      VectorPtr& result);
 
   // Checks 'inputValues_' for peelable wrappers (constants,
   // dictionaries etc) and applies the function of 'this' to distinct
@@ -386,10 +394,16 @@ using ExprPtr = std::shared_ptr<Expr>;
 // can be deduplicated. This is the top level handle on an expression
 // and is used also if only one Expr is to be evaluated. TODO: Rename to
 // ExprList.
+// Note: Caller must ensure that lazy vectors associated with field references
+// used by the expressions in this ExprSet are pre-loaded (before running
+// evaluation on them) if they are also used/referenced outside the context of
+// this ExprSet. If however such an association cannot be made with certainty,
+// then its advisable to pre-load all lazy vectors to avoid issues associated
+// with partial loading.
 class ExprSet {
  public:
   explicit ExprSet(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      std::vector<core::TypedExprPtr>&& source,
       core::ExecCtx* FOLLY_NONNULL execCtx,
       bool enableConstantFolding = true);
 
@@ -418,12 +432,20 @@ class ExprSet {
     return execCtx_;
   }
 
+  auto size() const {
+    return exprs_.size();
+  }
+
   const std::vector<std::shared_ptr<Expr>>& exprs() const {
     return exprs_;
   }
 
   const std::shared_ptr<Expr>& expr(int32_t index) const {
     return exprs_[index];
+  }
+
+  const std::vector<FieldReference*>& distinctFields() const {
+    return distinctFields_;
   }
 
   // Flags a shared subexpression which needs to be reset (e.g. previously
@@ -447,6 +469,9 @@ class ExprSet {
 
   std::vector<std::shared_ptr<Expr>> exprs_;
 
+  // The distinct references to input columns among all expressions in ExprSet.
+  std::vector<FieldReference * FOLLY_NONNULL> distinctFields_;
+
   // Fields referenced by multiple expressions in ExprSet.
   std::unordered_set<FieldReference * FOLLY_NONNULL> multiplyReferencedFields_;
 
@@ -462,7 +487,7 @@ class ExprSet {
 class ExprSetSimplified : public ExprSet {
  public:
   ExprSetSimplified(
-      std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+      std::vector<core::TypedExprPtr>&& source,
       core::ExecCtx* FOLLY_NONNULL execCtx)
       : ExprSet(std::move(source), execCtx, /*enableConstantFolding*/ false) {}
 
@@ -488,7 +513,7 @@ class ExprSetSimplified : public ExprSet {
 // Factory method that takes `kExprEvalSimplified` (query parameter) into
 // account and instantiates the correct ExprSet class.
 std::unique_ptr<ExprSet> makeExprSetFromFlag(
-    std::vector<std::shared_ptr<const core::ITypedExpr>>&& source,
+    std::vector<core::TypedExprPtr>&& source,
     core::ExecCtx* FOLLY_NONNULL execCtx);
 
 /// Returns a string representation of the expression trees annotated with
