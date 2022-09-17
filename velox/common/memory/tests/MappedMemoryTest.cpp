@@ -26,8 +26,6 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-DECLARE_int32(velox_memory_pool_mb);
-
 namespace facebook::velox::memory {
 
 static constexpr uint64_t kMaxMappedMemory = 128UL * 1024 * 1024;

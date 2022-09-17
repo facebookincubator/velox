@@ -193,8 +193,9 @@ bool MappedMemoryImpl::allocate(
   free(out);
 
   auto mix = allocationSize(numPages, minSizeClass);
+  auto veloxUseMalloc = flags::getInstance().getVeloxUseMalloc();
 
-  if (FLAGS_velox_use_malloc) {
+  if (veloxUseMalloc) {
     if (beforeAllocCB) {
       uint64_t bytesAllocated = 0;
       for (int32_t i = 0; i < mix.numSizes; ++i) {
@@ -293,7 +294,8 @@ int64_t MappedMemoryImpl::free(Allocation& allocation) {
     return 0;
   }
   MachinePageCount numFreed = 0;
-  if (FLAGS_velox_use_malloc) {
+  auto veloxUseMalloc = flags::getInstance().getVeloxUseMalloc();
+  if (veloxUseMalloc) {
     for (int32_t i = 0; i < allocation.numRuns(); ++i) {
       PageRun run = allocation.runAt(i);
       numFreed += run.numPages();
@@ -333,7 +335,8 @@ void MappedMemoryImpl::freeContiguousImpl(ContiguousAllocation& allocation) {
 }
 
 bool MappedMemoryImpl::checkConsistency() const {
-  if (FLAGS_velox_use_malloc) {
+  auto veloxUseMalloc = flags::getInstance().getVeloxUseMalloc();
+  if (veloxUseMalloc) {
     return true;
   }
   throw std::runtime_error("Not implemented");

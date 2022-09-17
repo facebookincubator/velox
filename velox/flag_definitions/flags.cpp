@@ -14,65 +14,81 @@
  * limitations under the License.
  */
 
-#include <gflags/gflags.h>
+#include "velox/flag_definitions/flags.h"
 
-// Used in velox/builder/SimpleVectorBuilder.cpp
+namespace facebook::velox::flags {
+namespace po = boost::program_options;
 
-DEFINE_int32(
-    max_block_value_set_length,
-    5,
-    "Max entries per column that the block meta-record stores for pre-flight "
-    "filtering optimization");
+VeloxFlags::VeloxFlags() {
+  po::options_description options = addOptions();
+  po::basic_parsed_options<char> parsedOptions(&options);
+  po::store(parsedOptions, vm_);
+  po::notify(vm_);
+}
 
-// Used in velox/common/memory/Memory.cpp
+void VeloxFlags::init(int argc, const char* const argv[]) {
+  po::store(po::parse_command_line(argc, argv, addOptions()), vm_);
+  po::notify(vm_);
+}
 
-DEFINE_int32(
-    memory_usage_aggregation_interval_millis,
-    2,
-    "Interval to compute aggregate memory usage for all nodes");
+void VeloxFlags::init(std::map<std::string, std::string> options) {
+  std::stringstream sout;
 
-// Used in velox/common/memory/MappedMemory.cpp
+  for (auto kv = options.begin(); kv != options.end(); kv++) {
+    sout << kv->first << "=" << kv->second << std::endl;
+  }
 
-DEFINE_int32(
-    velox_memory_pool_mb,
-    4 * 1024,
-    "Size of file cache/operator working memory in MB");
+  vm_.clear();
+  po::store(po::parse_config_file(sout, addOptions()), vm_);
+  po::notify(vm_);
+}
 
-DEFINE_bool(
-    velox_use_malloc,
-    true,
-    "Use malloc for file cache and large operator allocations");
+po::options_description VeloxFlags::addOptions() {
+  po::options_description options("Velox flags.");
+  options.add_options()(
+      "avx2",
+      po::value<bool>()->default_value(true),
+      "Enables use of AVX2 when available")(
+      "bmi2",
+      po::value<bool>()->default_value(true),
+      "Enables use of BMI2 when available")(
+      "max_block_value_set_length",
+      po::value<int32_t>()->default_value(5),
+      "Max entries per column that the block meta-record stores for pre-flight "
+      "filtering optimization")(
+      "memory_usage_aggregation_interval_millis",
+      po::value<int32_t>()->default_value(2),
+      "Interval to compute aggregate memory usage for all nodes")(
+      "velox_memory_pool_mb",
+      po::value<int32_t>()->default_value(4 * 1024),
+      "Size of file cache/operator working memory in MB")(
+      "velox_use_malloc",
+      po::value<bool>()->default_value(true),
+      "Use malloc for file cache and large operator allocations")(
+      "velox_time_allocations",
+      po::value<bool>()->default_value(true),
+      "Record time and volume for large allocation/free")(
+      "velox_exception_system_stacktrace_enabled",
+      po::value<bool>()->default_value(true),
+      "Enable the stacktrace for system type of VeloxException")(
+      "velox_exception_user_stacktrace_enabled",
+      po::value<bool>()->default_value(false),
+      "Enable the stacktrace for user type of VeloxException")(
+      "velox_exception_user_stacktrace_rate_limit_ms",
+      po::value<int32_t>()->default_value(0),
+      "Min time interval in milliseconds between stack traces captured in"
+      " user type of VeloxException; off when set to 0 (the default)")(
+      "velox_exception_system_stacktrace_rate_limit_ms",
+      po::value<int32_t>()->default_value(0),
+      "Min time interval in milliseconds between stack traces captured in"
+      " system type of VeloxException; off when set to 0 (the default)");
 
-DEFINE_bool(
-    velox_time_allocations,
-    true,
-    "Record time and volume for large allocation/free");
+  return options;
+}
 
-// Used in common/base/VeloxException.cpp
-DEFINE_bool(
-    velox_exception_user_stacktrace_enabled,
-    false,
-    "Enable the stacktrace for user type of VeloxException");
+VeloxFlags& getInstance() {
+  static VeloxFlags instance;
+  return instance;
+}
 
-DEFINE_bool(
-    velox_exception_system_stacktrace_enabled,
-    true,
-    "Enable the stacktrace for system type of VeloxException");
-
-DEFINE_int32(
-    velox_exception_user_stacktrace_rate_limit_ms,
-    0, // effectively turns off rate-limiting
-    "Min time interval in milliseconds between stack traces captured in"
-    " user type of VeloxException; off when set to 0 (the default)");
-
-DEFINE_int32(
-    velox_exception_system_stacktrace_rate_limit_ms,
-    0, // effectively turns off rate-limiting
-    "Min time interval in milliseconds between stack traces captured in"
-    " system type of VeloxException; off when set to 0 (the default)");
-
-// Used in common/base/ProcessBase.cpp
-
-DEFINE_bool(avx2, true, "Enables use of AVX2 when available");
-
-DEFINE_bool(bmi2, true, "Enables use of BMI2 when available");
+} // namespace facebook::velox::flags

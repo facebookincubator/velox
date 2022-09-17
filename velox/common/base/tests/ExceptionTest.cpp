@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/flag_definitions/flags.h"
 
 struct Counter {
   mutable int counter = 0;
@@ -70,17 +71,34 @@ void verifyVeloxException(
       });
 }
 
+namespace {
+
+void setStackTracesEnabled(bool user, bool system) {
+  facebook::velox::flags::getInstance().init({
+      {"velox_exception_user_stacktrace_enabled", std::to_string(user)},
+      {"velox_exception_system_stacktrace_enabled", std::to_string(system)},
+  });
+}
+
+void setRateLimits(int32_t user, int32_t system) {
+  facebook::velox::flags::getInstance().init({
+      {"velox_exception_user_stacktrace_rate_limit_ms", std::to_string(user)},
+      {"velox_exception_system_stacktrace_rate_limit_ms",
+       std::to_string(system)},
+  });
+}
+
+} // namespace
+
 void testExceptionTraceCollectionControl(bool userException, bool enabled) {
   // Disable rate control in the test.
-  FLAGS_velox_exception_user_stacktrace_rate_limit_ms = 0;
-  FLAGS_velox_exception_system_stacktrace_rate_limit_ms = 0;
+
+  setRateLimits(0, 0);
 
   if (userException) {
-    FLAGS_velox_exception_user_stacktrace_enabled = enabled ? true : false;
-    FLAGS_velox_exception_system_stacktrace_enabled = folly::Random::oneIn(2);
+    setStackTracesEnabled(enabled, folly::Random::oneIn(2));
   } else {
-    FLAGS_velox_exception_system_stacktrace_enabled = enabled ? true : false;
-    FLAGS_velox_exception_user_stacktrace_enabled = folly::Random::oneIn(2);
+    setStackTracesEnabled(folly::Random::oneIn(2), enabled);
   }
   try {
     if (userException) {
@@ -108,8 +126,10 @@ void testExceptionTraceCollectionControl(bool userException, bool enabled) {
     SCOPED_TRACE(fmt::format(
         "enabled: {}, user flag: {}, sys flag: {}",
         enabled,
-        FLAGS_velox_exception_user_stacktrace_enabled,
-        FLAGS_velox_exception_system_stacktrace_enabled));
+        facebook::velox::flags::getInstance()
+            .getVeloxExceptionUserStackTraceEnabled(),
+        facebook::velox::flags::getInstance()
+            .getVeloxExceptionSystemStackTraceEnabled()));
     ASSERT_EQ(
         userException,
         e.exceptionType() == ::facebook::velox::VeloxException::Type::kUser);
@@ -122,8 +142,7 @@ void testExceptionTraceCollectionRateControl(
     bool hasRateLimit) {
   // Disable rate control in the test.
   // Enable trace rate control in the test.
-  FLAGS_velox_exception_user_stacktrace_enabled = true;
-  FLAGS_velox_exception_system_stacktrace_enabled = true;
+  setStackTracesEnabled(true, true);
   // Set rate control interval to a large value to avoid time related test
   // flakiness.
   const int kRateLimitIntervalMs = 4000;
@@ -135,17 +154,13 @@ void testExceptionTraceCollectionRateControl(
         std::chrono::milliseconds(kRateLimitIntervalMs)); // NOLINT
   }
   if (userException) {
-    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-        hasRateLimit ? kRateLimitIntervalMs : 0;
-    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-        folly::Random::rand32();
+    setRateLimits(
+        hasRateLimit ? kRateLimitIntervalMs : 0, folly::Random::rand32());
   } else {
     // Set rate control to a large interval to avoid time related test
     // flakiness.
-    FLAGS_velox_exception_system_stacktrace_rate_limit_ms =
-        hasRateLimit ? kRateLimitIntervalMs : 0;
-    FLAGS_velox_exception_user_stacktrace_rate_limit_ms =
-        folly::Random::rand32();
+    setRateLimits(
+        folly::Random::rand32(), hasRateLimit ? kRateLimitIntervalMs : 0);
   }
   for (int iter = 0; iter < 3; ++iter) {
     try {
@@ -175,8 +190,10 @@ void testExceptionTraceCollectionRateControl(
           "userException: {}, hasRateLimit: {}, user limit: {}ms, sys limit: {}ms",
           userException,
           hasRateLimit,
-          FLAGS_velox_exception_user_stacktrace_rate_limit_ms,
-          FLAGS_velox_exception_system_stacktrace_rate_limit_ms));
+          facebook::velox::flags::getInstance()
+              .getVeloxExceptionUserStackTraceRateLimitMs(),
+          facebook::velox::flags::getInstance()
+              .getVeloxExceptionSystemStackTraceRateLimitMs()));
       ASSERT_EQ(
           userException,
           e.exceptionType() == ::facebook::velox::VeloxException::Type::kUser);

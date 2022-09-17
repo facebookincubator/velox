@@ -28,10 +28,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 #include "velox/common/time/Timer.h"
-
-DECLARE_bool(velox_use_malloc);
-DECLARE_int32(velox_memory_pool_mb);
-DECLARE_bool(velox_time_allocations);
+#include "velox/flag_definitions/flags.h"
 
 namespace facebook::velox::memory {
 
@@ -97,7 +94,8 @@ struct Stats {
 
   template <typename Op>
   void recordAllocate(int64_t bytes, int32_t count, Op op) {
-    if (FLAGS_velox_time_allocations) {
+    auto veloxTimeAllocations = flags::getInstance().getVeloxTimeAllocations();
+    if (veloxTimeAllocations) {
       auto index = sizeIndex(bytes);
       velox::ClockTimer timer(sizes[index].allocateClocks);
       op();
@@ -110,7 +108,8 @@ struct Stats {
 
   template <typename Op>
   void recordFree(int64_t bytes, Op op) {
-    if (FLAGS_velox_time_allocations) {
+    auto veloxTimeAllocations = flags::getInstance().getVeloxTimeAllocations();
+    if (veloxTimeAllocations) {
       auto index = sizeIndex(bytes);
       ClockTimer timer(sizes[index].freeClocks);
       op();
@@ -178,7 +177,8 @@ class MappedMemory : public std::enable_shared_from_this<MappedMemory> {
 
     PageRun(void* FOLLY_NONNULL address, MachinePageCount numPages) {
       auto word = reinterpret_cast<uint64_t>(address); // NOLINT
-      if (!FLAGS_velox_use_malloc) {
+      auto veloxUseMalloc = flags::getInstance().getVeloxUseMalloc();
+      if (!veloxUseMalloc) {
         VELOX_CHECK(
             (word & (kPageSize - 1)) == 0,
             "Address is not page-aligned for PageRun");

@@ -20,7 +20,7 @@
 #include <optional>
 
 #include "velox/common/base/BitUtil.h"
-DECLARE_bool(bmi2); // NOLINT
+#include "velox/flag_definitions/flags.h"
 
 namespace facebook {
 namespace velox {
@@ -123,7 +123,8 @@ void runScatterBits(int32_t n, bool isSimple) {
   std::vector<uint64_t> mask;
   std::vector<uint64_t> target;
   BENCHMARK_SUSPEND {
-    FLAGS_bmi2 = !isSimple; // NOLINT
+    flags::getInstance().init({{"bmi2", "false"}});
+
     setupScatterBits(source, numSource, mask, target);
   }
   auto sourceBits = reinterpret_cast<const char*>(source.data());
@@ -132,7 +133,10 @@ void runScatterBits(int32_t n, bool isSimple) {
     bits::scatterBits(
         numSource, target.size() * 64, sourceBits, mask.data(), targetBits);
   }
-  FLAGS_bmi2 = true; // NOLINT
+
+  BENCHMARK_SUSPEND {
+    flags::getInstance().init({{"bmi2", "true"}});
+  };
 }
 
 BENCHMARK(BM_scatterBitsSimple, n) {

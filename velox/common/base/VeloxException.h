@@ -28,11 +28,6 @@
 
 #include "velox/common/process/StackTrace.h"
 
-DECLARE_bool(velox_exception_user_stacktrace_enabled);
-DECLARE_bool(velox_exception_system_stacktrace_enabled);
-
-DECLARE_int32(velox_exception_user_stacktrace_rate_limit_ms);
-DECLARE_int32(velox_exception_system_stacktrace_rate_limit_ms);
 
 namespace facebook {
 namespace velox {

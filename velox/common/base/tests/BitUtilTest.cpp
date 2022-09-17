@@ -15,14 +15,12 @@
  */
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/flag_definitions/flags.h"
 
 #include <unordered_set>
 
 #include <folly/Random.h>
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
-
-DECLARE_bool(bmi2); // NOLINT
 
 namespace facebook {
 namespace velox {
@@ -649,10 +647,13 @@ TEST_F(BitUtilTest, scatterBits) {
   std::vector<char> reference(kSize * 8);
   auto sourceAsChar = reinterpret_cast<char*>(source.data());
   scatterBits(numInMask, kNumBits, sourceAsChar, maskData, test.data());
+  auto setBMI = [](bool flag) {
+    flags::getInstance().init({{"bmi2", std::to_string(flag)}});
+  };
   // Generate the reference output with the non-BMI implementation.
-  FLAGS_bmi2 = false; // NOLINT
+  setBMI(false);
   scatterBits(numInMask, kNumBits, sourceAsChar, maskData, reference.data());
-  FLAGS_bmi2 = true; // NOLINT
+  setBMI(true);
   EXPECT_EQ(reference, test);
   // Repeat the same in place.
   scatterBits(numInMask, kNumBits, sourceAsChar, maskData, sourceAsChar);

@@ -18,6 +18,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/ConstantExpr.h"
+#include "velox/flag_definitions/flags.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -133,7 +134,9 @@ class ExprEncodingsTest
  protected:
   void SetUp() override {
     // This test throws a lot of exceptions, so turn off stack trace capturing.
-    FLAGS_velox_exception_user_stacktrace_enabled = false;
+    facebook::velox::flags::getInstance().init({
+        {"velox_exception_user_stacktrace_enabled", "false"},
+    });
 
     functions::prestosql::registerAllScalarFunctions();
     parse::registerTypeResolver();

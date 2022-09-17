@@ -16,6 +16,7 @@
 
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/common/base/Portability.h"
+#include "velox/flag_definitions/flags.h"
 
 #include <sys/mman.h>
 
@@ -137,7 +138,8 @@ MachinePageCount MmapAllocator::freeInternal(Allocation& allocation) {
       ClockTimer timer(clocks);
       pages = sizeClass->free(allocation);
     }
-    if (pages && FLAGS_velox_time_allocations) {
+    auto veloxTimeAllocation = flags::getInstance().getVeloxTimeAllocations();
+    if (pages && veloxTimeAllocation) {
       // Increment the free time only if the allocation contained
       // pages in the class. Note that size class indices in the
       // allocator are not necessarily the same as in the stats.

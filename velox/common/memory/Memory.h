@@ -40,7 +40,6 @@
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
-DECLARE_int32(memory_usage_aggregation_interval_millis);
 
 namespace facebook {
 namespace velox {
