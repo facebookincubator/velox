@@ -123,6 +123,14 @@ TEST_F(DecimalArithmeticTest, add) {
           {makeLongDecimalFlatVector(
               {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
       "Decimal overflow: 99999999999999999999999999999999999999 + 1");
+
+  VELOX_ASSERT_THROW(
+      testDecimalExpr<TypeKind::LONG_DECIMAL>(
+          {},
+          "c0 + 0.01",
+          {makeLongDecimalFlatVector(
+              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
+      "Decimal overflow: 99999999999999999999999999999999999999 * 100");
 }
 
 TEST_F(DecimalArithmeticTest, subtract) {
