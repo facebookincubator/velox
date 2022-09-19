@@ -76,28 +76,26 @@ macro(build_dependency DEPENDENCY_NAME)
   endif()
 endmacro()
 
-# - Macro to resolve thirparty dependencies.
+# * Macro to resolve thirparty dependencies.
 #
-# Provides the macro resolve_dependency().
-# This macro will allow us to find the dependency via the usage of find_package
-# or use the custom build_dependency(DEPENDENCY_NAME) macro to download and build
-# the third party dependency.
+# Provides the macro resolve_dependency(). This macro will allow us to find the
+# dependency via the usage of find_package or use the custom
+# build_dependency(DEPENDENCY_NAME) macro to download and build the third party
+# dependency.
 #
-#    resolve_dependency(DEPENDENCY_NAME
-#         [REQUIRED_VERSION <required_version>]
-#    )
+# resolve_dependency(DEPENDENCY_NAME [REQUIRED_VERSION <required_version>] )
 #
 # The resolve_dependency() macro can be used to define a thirdparty dependency.
 #
-# ${DEPENDENCY_NAME}_SOURCE is expected to be set to either AUTO, SYSTEM or BUNDLED.
-# If ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will try to find the corresponding package
-# via find_package and if not found it will call the build_dependency macro to
-# download and build the third party dependency.
-# If ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will force to find via find_package.
-# If ${DEPENDENCY_NAME}_SOURCE is BUNDLED it will force to build from source.
+# ${DEPENDENCY_NAME}_SOURCE is expected to be set to either AUTO, SYSTEM or
+# BUNDLED. If ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will try to find the
+# corresponding package via find_package and if not found it will call the
+# build_dependency macro to download and build the third party dependency. If
+# ${DEPENDENCY_NAME}_SOURCE is SYSTEM it will force to find via find_package. If
+# ${DEPENDENCY_NAME}_SOURCE is BUNDLED it will force to build from source.
 #
-# If REQUIRED_VERSION is provided it will be used as the VERSION to be used
-# on the find_package(DEPENDENCY_NAME [version]) call.
+# If REQUIRED_VERSION is provided it will be used as the VERSION to be used on
+# the find_package(DEPENDENCY_NAME [version]) call.
 macro(resolve_dependency DEPENDENCY_NAME)
   set(options)
   set(one_value_args REQUIRED_VERSION)
