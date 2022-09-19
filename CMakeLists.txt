@@ -17,7 +17,10 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake" ${CMAKE_MODULE_PATH})
 # set the project name
 project(velox)
 
+# Include our ThirdPartyToolchain dependencies macros
 include(ThirdpartyToolchain.cmake)
+# Include to Check whether the CXX compiler supports a given flag
+include(CheckCXXCompilerFlag)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -214,17 +217,22 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits")
   endif()
-  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS "-Wno-nullability-completeness")
+  check_cxx_compiler_flag(-Wnullability-completeness
+                          COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
+  if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
+    list(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS
+         "-Wno-nullability-completeness")
   endif()
+  # if(CMAKE_SYSTEM_NAME MATCHES "Darwin") set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
+  # "-Wno-nullability-completeness") endif()
 
   set(KNOWN_WARNINGS
       "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS} \
-       ${KNOWN_SYSTEM_SPECIFIC_WARNINGS}")
+       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
+  # ${KNOWN_SYSTEM_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
