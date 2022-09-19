@@ -28,7 +28,7 @@ inline bool isCommonDecimalName(const std::string& typeName) {
   return (typeName == "DECIMAL");
 }
 
-enum class ParameterType { TYPE_PARAMETER, INTEGER_PARAMETER };
+enum class ParameterType : int8_t { kTypeParameter, kIntegerParameter };
 
 /// TypeVariableConstraint holds both, type parameters (e.g. K or V in map(K,
 /// V)), and integer parameters with optional constraints (e.g. "r_precision =
@@ -49,11 +49,11 @@ class TypeVariableConstraint {
   }
 
   bool isTypeParameter() const {
-    return type_ == ParameterType::TYPE_PARAMETER;
+    return type_ == ParameterType::kTypeParameter;
   }
 
   bool isIntegerParameter() const {
-    return type_ == ParameterType::INTEGER_PARAMETER;
+    return type_ == ParameterType::kIntegerParameter;
   }
 
   bool operator==(const TypeVariableConstraint& rhs) const {
@@ -206,7 +206,7 @@ class FunctionSignatureBuilder {
  public:
   FunctionSignatureBuilder& typeVariable(std::string name) {
     typeVariableConstraints_.emplace_back(
-        name, "", ParameterType::TYPE_PARAMETER);
+        name, "", ParameterType::kTypeParameter);
     return *this;
   }
 
@@ -214,7 +214,7 @@ class FunctionSignatureBuilder {
       std::string name,
       std::optional<std::string> constraint = std::nullopt) {
     typeVariableConstraints_.emplace_back(
-        name, constraint, ParameterType::INTEGER_PARAMETER);
+        name, constraint, ParameterType::kIntegerParameter);
     return *this;
   }
 
@@ -257,7 +257,7 @@ class AggregateFunctionSignatureBuilder {
  public:
   AggregateFunctionSignatureBuilder& typeVariable(std::string name) {
     typeVariableConstraints_.emplace_back(
-        name, "", ParameterType::TYPE_PARAMETER);
+        name, "", ParameterType::kTypeParameter);
     return *this;
   }
 
@@ -265,7 +265,7 @@ class AggregateFunctionSignatureBuilder {
       std::string name,
       std::optional<std::string> constraint = std::nullopt) {
     typeVariableConstraints_.emplace_back(
-        name, constraint, ParameterType::INTEGER_PARAMETER);
+        name, constraint, ParameterType::kIntegerParameter);
     return *this;
   }
 

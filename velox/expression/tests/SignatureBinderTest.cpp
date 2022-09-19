@@ -262,7 +262,7 @@ TEST(SignatureBinderTest, decimals) {
     {
       VELOX_ASSERT_THROW(
           exec::TypeVariableConstraint(
-              "TypeName", "a = b", exec::ParameterType::TYPE_PARAMETER),
+              "TypeName", "a = b", exec::ParameterType::kTypeParameter),
           "Type parameters cannot have constraints");
     }
   }
