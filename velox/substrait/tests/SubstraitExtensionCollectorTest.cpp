@@ -34,19 +34,19 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
   int getReferenceNumber(
       const std::string& functionName,
       std::vector<TypePtr>&& arguments) {
-    int functionReferenceId1 =
+    int referenceNumber1 =
         extensionCollector_->getReferenceNumber(functionName, arguments);
     // Repeat the call to make sure properly de-duplicated.
-    int functionReferenceId2 =
+    int referenceNumber2 =
         extensionCollector_->getReferenceNumber(functionName, arguments);
-    EXPECT_EQ(functionReferenceId1, functionReferenceId2);
-    return functionReferenceId2;
+    EXPECT_EQ(referenceNumber1, referenceNumber2);
+    return referenceNumber1;
   }
 
   int getReferenceNumber(
       const std::string& functionName,
       std::vector<TypePtr>&& arguments,
-      const core::AggregationNode::Step step) {
+      core::AggregationNode::Step step) {
     int functionReferenceId1 =
         extensionCollector_->getReferenceNumber(functionName, arguments, step);
     // Repeat the call to make sure properly de-duplicated.
@@ -104,7 +104,6 @@ TEST_F(
 }
 
 TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
-  // Arrange
   getReferenceNumber("plus", {INTEGER(), INTEGER()});
   getReferenceNumber("divide", {INTEGER(), INTEGER()});
   getReferenceNumber("cardinality", {ARRAY(INTEGER())});
@@ -118,10 +117,8 @@ TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
   auto* substraitPlan =
       google::protobuf::Arena::CreateMessage<::substrait::Plan>(&arena);
 
-  // Act
   extensionCollector_->addExtensionsToPlan(substraitPlan);
 
-  // Assert
   ASSERT_EQ(substraitPlan->extensions().size(), 8);
   ASSERT_EQ(
       substraitPlan->extensions(0).extension_function().name(), "plus:i32_i32");

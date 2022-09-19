@@ -292,10 +292,10 @@ void VeloxToSubstraitPlanConvertor::toSubstrait(
       }
     }
 
-    auto referenceId = extensionCollector_->getReferenceNumber(
+    auto referenceNumber = extensionCollector_->getReferenceNumber(
         funName, arguments, aggregateNode->step());
 
-    aggFunction->set_function_reference(referenceId);
+    aggFunction->set_function_reference(referenceNumber);
 
     aggFunction->mutable_output_type()->MergeFrom(
         typeConvertor_->toSubstraitType(arena, aggregatesExpr->type()));

@@ -67,7 +67,7 @@ class SubstraitExtensionCollector {
  private:
   /// A bi-direction hash map to keep the relation between reference number and
   /// either function or type signature.
-  /// @T ExtensionFunctionId
+  /// @tparam ExtensionFunctionId
   template <class T>
   class BiDirectionHashMap {
    public:
@@ -77,11 +77,11 @@ class SubstraitExtensionCollector {
     /// otherwise the key will be overwritten.
     void put(const int& key, const T& value);
 
-    std::map<int, T>& forwardMap() {
+    const std::map<int, T>& forwardMap() const {
       return forwardMap_;
     }
 
-    std::unordered_map<T, int>& reverseMap() {
+    const std::unordered_map<T, int>& reverseMap() const {
       return reverseMap_;
     }
 

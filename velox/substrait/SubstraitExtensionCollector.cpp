@@ -23,8 +23,8 @@ int SubstraitExtensionCollector::getReferenceNumber(
     const std::vector<TypePtr>& arguments) {
   const auto& substraitFunctionSignature =
       VeloxSubstraitSignature::toSubstraitSignature(functionName, arguments);
-  /// TODO: Currently we treat all velox registry based function signatures as
-  /// custom substrait extension, so no uri link and leave it as empty.
+  // TODO: Currently we treat all velox registry based function signatures as
+  // custom substrait extension, so no uri link and leave it as empty.
   return getReferenceNumber({"", substraitFunctionSignature});
 }
 
