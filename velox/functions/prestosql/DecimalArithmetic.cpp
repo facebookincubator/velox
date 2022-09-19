@@ -107,9 +107,20 @@ class Addition {
 #endif
 #endif
   {
-    r = checkedPlus<R>(
-        checkedMultiply<R>(R(a), R(DecimalUtil::kPowersOfTen[aRescale])),
-        checkedMultiply<R>(R(b), R(DecimalUtil::kPowersOfTen[bRescale])));
+    int128_t aRescaled;
+    int128_t bRescaled;
+    if (__builtin_mul_overflow(
+            a.unscaledValue(),
+            DecimalUtil::kPowersOfTen[aRescale],
+            &aRescaled) ||
+        __builtin_mul_overflow(
+            b.unscaledValue(),
+            DecimalUtil::kPowersOfTen[bRescale],
+            &bRescaled)) {
+      VELOX_ARITHMETIC_ERROR(
+          "Decimal overflow: {} + {}", a.unscaledValue(), b.unscaledValue());
+    }
+    r = checkedPlus<R>(R(aRescaled), R(bRescaled));
   }
 
   inline static uint8_t
@@ -142,9 +153,20 @@ class Subtraction {
 #endif
 #endif
   {
-    r = checkedMinus<R>(
-        checkedMultiply<R>(R(a), R(DecimalUtil::kPowersOfTen[aRescale])),
-        checkedMultiply<R>(R(b), R(DecimalUtil::kPowersOfTen[bRescale])));
+    int128_t aRescaled;
+    int128_t bRescaled;
+    if (__builtin_mul_overflow(
+            a.unscaledValue(),
+            DecimalUtil::kPowersOfTen[aRescale],
+            &aRescaled) ||
+        __builtin_mul_overflow(
+            b.unscaledValue(),
+            DecimalUtil::kPowersOfTen[bRescale],
+            &bRescaled)) {
+      VELOX_ARITHMETIC_ERROR(
+          "Decimal overflow: {} - {}", a.unscaledValue(), b.unscaledValue());
+    }
+    r = checkedMinus<R>(R(aRescaled), R(bRescaled));
   }
 
   inline static uint8_t

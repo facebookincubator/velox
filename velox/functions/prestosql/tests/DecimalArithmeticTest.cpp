@@ -131,7 +131,7 @@ TEST_F(DecimalArithmeticTest, add) {
           "c0 + 0.01",
           {makeLongDecimalFlatVector(
               {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
-      "Decimal overflow: 99999999999999999999999999999999999999 * 100");
+      "Decimal overflow: 99999999999999999999999999999999999999 + 1");
   // Rescaling RHS overflows.
   VELOX_ASSERT_THROW(
       testDecimalExpr<TypeKind::LONG_DECIMAL>(
@@ -139,7 +139,7 @@ TEST_F(DecimalArithmeticTest, add) {
           "0.01 + c0",
           {makeLongDecimalFlatVector(
               {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
-      "Decimal overflow: 99999999999999999999999999999999999999 * 100");
+      "Decimal overflow: 1 + 99999999999999999999999999999999999999");
 }
 
 TEST_F(DecimalArithmeticTest, subtract) {
@@ -213,15 +213,15 @@ TEST_F(DecimalArithmeticTest, subtract) {
           "c0 - 0.01",
           {makeLongDecimalFlatVector(
               {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0))}),
-      "Decimal overflow: -99999999999999999999999999999999999999 * 100");
+      "Decimal overflow: -99999999999999999999999999999999999999 - 1");
   // Rescaling RHS overflows.
   VELOX_ASSERT_THROW(
       testDecimalExpr<TypeKind::LONG_DECIMAL>(
           {},
           "0.01 - c0",
           {makeLongDecimalFlatVector(
-              {UnscaledLongDecimal::max().unscaledValue()}, DECIMAL(38, 0))}),
-      "Decimal overflow: 99999999999999999999999999999999999999 * 100");
+              {UnscaledLongDecimal::min().unscaledValue()}, DECIMAL(38, 0))}),
+      "Decimal overflow: 1 - -99999999999999999999999999999999999999");
 }
 
 TEST_F(DecimalArithmeticTest, multiply) {
