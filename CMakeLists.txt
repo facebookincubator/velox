@@ -19,8 +19,6 @@ project(velox)
 
 # Include our ThirdPartyToolchain dependencies macros
 include(ThirdpartyToolchain.cmake)
-# Include to Check whether the CXX compiler supports a given flag
-include(CheckCXXCompilerFlag)
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
@@ -55,7 +53,6 @@ option(VELOX_ENABLE_PARQUET "Enable Parquet support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_BUILD_TEST_UTILS "Enable Velox test utilities" OFF)
 
-# Trigger rebuild
 if(${VELOX_BUILD_MINIMAL})
   # Enable and disable components for velox base build
   set(VELOX_BUILD_TESTING OFF)
@@ -218,22 +215,17 @@ if("${ENABLE_ALL_WARNINGS}")
          -Wno-strict-aliasing \
          -Wno-type-limits")
   endif()
-  check_cxx_compiler_flag(-Wnullability-completeness
-                          COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
-  if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
-    list(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS
-         "-Wno-nullability-completeness")
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    set(KNOWN_SYSTEM_SPECIFIC_WARNINGS "-Wno-nullability-completeness")
   endif()
-  # if(CMAKE_SYSTEM_NAME MATCHES "Darwin") set(KNOWN_SYSTEM_SPECIFIC_WARNINGS
-  # "-Wno-nullability-completeness") endif()
 
   set(KNOWN_WARNINGS
       "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}")
-  # ${KNOWN_SYSTEM_SPECIFIC_WARNINGS}")
+       ${KNOWN_COMPILER_SPECIFIC_WARNINGS} \
+       ${KNOWN_SYSTEM_SPECIFIC_WARNINGS}")
 
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
