@@ -1,0 +1,49 @@
+name: Build & Push Docker Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/*.dockfile
+      - scripts/*.dockerfile
+      - .github/workflows/docker.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v3
+      
+      - name: Build and push circleci
+        env:
+          CPU_TARGET: avx
+        uses: docker/build-push-action@v3
+        with:
+          context: scripts
+          file: circleci-container.dockfile
+          build-args:
+            - cpu_target=${{ env.CPU_TARGET }}
+         # push: ${{ github.repository == 'facebookincubator/velox' }}
+          tags: ghcr.io/facebookincubator/velox:circle-ci-latest
+
+      - name: Build and push ubuntu
+        uses: docker/build-push-action@v3
+        with:
+          file: scripts/ubuntu-22.04-cpp.dockerfile
+         # push: ${{ github.repository == 'facebookincubator/velox' }}
+          tags: ghcr.io/facebookincubator/velox:amd64-ubuntu-22.04-cpp
