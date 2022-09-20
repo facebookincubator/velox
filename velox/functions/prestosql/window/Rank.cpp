@@ -42,11 +42,11 @@ class RankFunction : public exec::WindowFunction {
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
     auto* rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
-    auto* peerGroupStartsTyped = peerGroupStarts->as<vector_size_t>();
+    auto* rawPeerStarts = peerGroupStarts->as<vector_size_t>();
     for (int i = 0; i < numRows; i++) {
-      auto peerGroupStartsValue = peerGroupStartsTyped[i];
-      if (peerGroupStartsValue != currentPeerGroupStart_) {
-        currentPeerGroupStart_ = peerGroupStartsValue;
+      auto start = rawPeerStarts[i];
+      if (start != currentPeerGroupStart_) {
+        currentPeerGroupStart_ = start;
         rank_ += previousPeerCount_;
         previousPeerCount_ = 0;
       }
@@ -64,7 +64,6 @@ class RankFunction : public exec::WindowFunction {
 
 } // namespace
 
-// Signature of this function is : row_number() -> bigint.
 void registerRank(const std::string& name) {
   std::vector<exec::FunctionSignaturePtr> signatures{
       exec::FunctionSignatureBuilder().returnType("bigint").build(),

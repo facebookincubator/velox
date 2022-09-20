@@ -295,8 +295,8 @@ void Window::callApplyForPartitionRows(
   auto bufferSize = numRows * sizeof(vector_size_t);
   peerStartBuffer_->setSize(bufferSize);
   peerEndBuffer_->setSize(bufferSize);
-  auto rawPeerStartBuffer = peerStartBuffer_->asMutable<vector_size_t>();
-  auto rawPeerEndBuffer = peerEndBuffer_->asMutable<vector_size_t>();
+  auto rawPeerStarts = peerStartBuffer_->asMutable<vector_size_t>();
+  auto rawPeerEnds = peerEndBuffer_->asMutable<vector_size_t>();
 
   std::vector<vector_size_t*> rawFrameStartBuffers;
   std::vector<vector_size_t*> rawFrameEndBuffers;
@@ -341,8 +341,8 @@ void Window::callApplyForPartitionRows(
       }
     }
 
-    rawPeerStartBuffer[j] = peerStartRow_;
-    rawPeerEndBuffer[j] = peerEndRow_ - 1;
+    rawPeerStarts[j] = peerStartRow_;
+    rawPeerEnds[j] = peerEndRow_ - 1;
 
     // TODO: Calculate frame buffer values.
   }
