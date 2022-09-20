@@ -25,10 +25,8 @@ services:
     build:
       context: .
       dockerfile: scripts/ubuntu-22.04-cpp.dockerfile
+    environment:
+      - NUM_THREADS=8 # default value for NUM_THREADS
     volumes:
       - .:/velox:delegated
-    command: &cpp-command >
-      /bin/bash -c "
-        make NUM_THREADS=$${NUM_THREADS} &&
-        cd _build/release &&
-        ctest -j16 -VV --output-on-failure"
+    command: scripts/docker-command.sh
