@@ -37,8 +37,7 @@ jobs:
         with:
           context: scripts
           file: circleci-container.dockfile
-          build-args:
-            - cpu_target=${{ env.CPU_TARGET }}
+          build-args: cpu_target=${{ env.CPU_TARGET }}
          # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
           tags: ghcr.io/facebookincubator/velox:circle-ci-latest
 
