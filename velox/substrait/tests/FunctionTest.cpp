@@ -94,7 +94,7 @@ TEST_F(FunctionTest, constructFunctionMap) {
   auto functionMap = planConverter_->getFunctionMap();
   ASSERT_EQ(functionMap.size(), 9);
 
-  std::string function = planConverter_->findFunction(1);
+  std::string function = planConverter_->findFuncSpec(1);
   ASSERT_EQ(function, "lte:fp64_fp64");
 
   function = planConverter_->findFuncSpec(2);
@@ -112,13 +112,13 @@ TEST_F(FunctionTest, constructFunctionMap) {
   function = planConverter_->findFuncSpec(6);
   ASSERT_EQ(function, "sum:opt_fp64");
 
-  function = planConverter_->findFunction(7);
+  function = planConverter_->findFuncSpec(7);
   ASSERT_EQ(function, "count:opt_fp64");
 
   function = planConverter_->findFuncSpec(8);
   ASSERT_EQ(function, "count:opt_i32");
 
-  function = planConverter_->findFunction(9);
+  function = planConverter_->findFuncSpec(9);
   ASSERT_EQ(function, "is_not_null:fp64");
 }
 

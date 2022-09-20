@@ -254,9 +254,9 @@ void SubstraitParser::getSubFunctionTypes(
 std::string SubstraitParser::findVeloxFunction(
     const std::unordered_map<uint64_t, std::string>& functionMap,
     uint64_t id) const {
-  std::string funcSpec = findFunctionSpec(functionMap, id);
-  std::string_view funcName = getNameBeforeDelimiter(funcSpec, ":");
-  return mapToVeloxFunction({funcName.begin(), funcName.end()});
+  std::string funcSpec = findSubstraitFuncSpec(functionMap, id);
+  std::string funcName = getSubFunctionName(funcSpec);
+  return mapToVeloxFunction(funcName);
 }
 
 std::string SubstraitParser::mapToVeloxFunction(

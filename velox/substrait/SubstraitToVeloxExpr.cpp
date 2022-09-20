@@ -252,8 +252,8 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::ScalarFunction& sFunc,
     const RowTypePtr& inputType) {
   std::vector<core::TypedExprPtr> params;
-  params.reserve(substraitFunc.arguments().size());
-  for (const auto& sArg : substraitFunc.arguments()) {
+  params.reserve(sFunc.arguments().size());
+  for (const auto& sArg : sFunc.arguments()) {
     params.emplace_back(toVeloxExpr(sArg.value(), inputType));
   }
   const auto& veloxFunction =
@@ -272,18 +272,50 @@ SubstraitVeloxExprConverter::toVeloxExpr(
       toVeloxType(typeName), std::move(params), veloxFunction);
 }
 
+std::shared_ptr<const core::ConstantTypedExpr>
+SubstraitVeloxExprConverter::literalsToConstantExpr(
+    const std::vector<::substrait::Expression::Literal>& literals) {
+  std::vector<variant> variants;
+  variants.reserve(literals.size());
+  VELOX_CHECK(literals.size() > 0, "List should have at least one item.");
+  std::optional<TypePtr> literalType = std::nullopt;
+  for (const auto& literal : literals) {
+    auto veloxVariant = toVeloxExpr(literal)->value();
+    if (!literalType.has_value()) {
+      literalType = veloxVariant.inferType();
+    }
+    variants.emplace_back(veloxVariant);
+  }
+  VELOX_CHECK(literalType.has_value(), "Type expected.");
+  // Create flat vector from the variants.
+  VectorPtr vector =
+      setVectorFromVariants(literalType.value(), variants, pool_);
+  // Create array vector from the flat vector.
+  ArrayVectorPtr arrayVector =
+      toArrayVector(literalType.value(), vector, pool_);
+  // Wrap the array vector into constant vector.
+  auto constantVector = BaseVector::wrapInConstant(1, 0, arrayVector);
+  return std::make_shared<const core::ConstantTypedExpr>(constantVector);
+}
+
 core::TypedExprPtr SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::SingularOrList& singularOrList,
     const RowTypePtr& inputType) {
+  VELOX_CHECK(
+      singularOrList.options_size() > 0, "At least one option is expected.");
+  auto options = singularOrList.options();
+  std::vector<::substrait::Expression::Literal> literals;
+  literals.reserve(options.size());
+  for (const auto& option : options) {
+    VELOX_CHECK(option.has_literal(), "Literal is expected as option.");
+    literals.emplace_back(option.literal());
+  }
+
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
-  // TODO: other options?
-  auto inLists = singularOrList.options();
-  VELOX_CHECK(inLists.size() > 0, "At least one option is needed.");
   params.reserve(2);
-  // first is the value, second is the list
+  // First param is the value, second param is the list.
   params.emplace_back(toVeloxExpr(singularOrList.value(), inputType));
-  // TODO: is this the correct way to use SingularOrList?
-  params.emplace_back(toVeloxExpr(inLists[0], inputType));
+  params.emplace_back(literalsToConstantExpr(literals));
   return std::make_shared<const core::CallTypedExpr>(
       BOOLEAN(), std::move(params), "in");
 }
@@ -326,33 +358,13 @@ SubstraitVeloxExprConverter::toVeloxExpr(
           veloxType, variant::null(veloxType->kind()));
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kList: {
-      // List is used in 'in' expression. Will wrap a constant
-      // vector with an array vector inside to create the constant expression.
-      std::vector<variant> variants;
-      variants.reserve(substraitLit.list().values().size());
-      VELOX_CHECK(
-          substraitLit.list().values().size() > 0,
-          "List should have at least one item.");
-      std::optional<TypePtr> literalType = std::nullopt;
+      // Literals in List are put in a constant vector.
+      std::vector<::substrait::Expression::Literal> literals;
+      literals.reserve(substraitLit.list().values().size());
       for (const auto& literal : substraitLit.list().values()) {
-        auto typedVariant = toTypedVariant(literal);
-        if (!literalType.has_value()) {
-          literalType = typedVariant->variantType;
-        }
-        variants.emplace_back(typedVariant->veloxVariant);
+        literals.emplace_back(literal);
       }
-      VELOX_CHECK(literalType.has_value(), "Type expected.");
-      // Create flat vector from the variants.
-      VectorPtr vector =
-          setVectorFromVariants(literalType.value(), variants, pool_);
-      // Create array vector from the flat vector.
-      ArrayVectorPtr arrayVector =
-          toArrayVector(literalType.value(), vector, pool_);
-      // Wrap the array vector into constant vector.
-      auto constantVector = BaseVector::wrapInConstant(1, 0, arrayVector);
-      auto constantExpr =
-          std::make_shared<core::ConstantTypedExpr>(constantVector);
-      return constantExpr;
+      return literalsToConstantExpr(literals);
     }
     case ::substrait::Expression_Literal::LiteralTypeCase::kVarChar:
       return std::make_shared<core::ConstantTypedExpr>(
@@ -452,31 +464,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
-    const ::substrait::Expression& sExpr,
-    const RowTypePtr& inputType) {
-  std::shared_ptr<const core::ITypedExpr> veloxExpr;
-  auto typeCase = sExpr.rex_type_case();
-  switch (typeCase) {
-    case ::substrait::Expression::RexTypeCase::kLiteral:
-      return toVeloxExpr(sExpr.literal());
-    case ::substrait::Expression::RexTypeCase::kScalarFunction:
-      return toVeloxExpr(sExpr.scalar_function(), inputType);
-    case ::substrait::Expression::RexTypeCase::kSelection:
-      return toVeloxExpr(sExpr.selection(), inputType);
-    case ::substrait::Expression::RexTypeCase::kCast:
-      return toVeloxExpr(sExpr.cast(), inputType);
-    case ::substrait::Expression::RexTypeCase::kIfThen:
-      return toVeloxExpr(sExpr.if_then(), inputType);
-    case ::substrait::Expression::RexTypeCase::kSingularOrList:
-      return toVeloxExpr(sExpr.singular_or_list(), inputType);
-    default:
-      VELOX_NYI(
-          "Substrait conversion not supported for Expression '{}'", typeCase);
-  }
-}
-
-std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression::IfThen& ifThenExpr,
     const RowTypePtr& inputType) {
   VELOX_CHECK(ifThenExpr.ifs().size() > 0, "If clause expected.");
@@ -514,25 +501,26 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 
 std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
-    const ::substrait::Expression_IfThen& substraitIfThen,
+    const ::substrait::Expression& sExpr,
     const RowTypePtr& inputType) {
-  std::vector<core::TypedExprPtr> inputs;
-  if (substraitIfThen.has_else_()) {
-    inputs.reserve(substraitIfThen.ifs_size() * 2 + 1);
-  } else {
-    inputs.reserve(substraitIfThen.ifs_size() * 2);
-  }
-
-  TypePtr resultType;
-  for (auto& ifExpr : substraitIfThen.ifs()) {
-    auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
-    inputs.emplace_back(ifClauseExpr);
-    auto thenClauseExpr = toVeloxExpr(ifExpr.then(), inputType);
-    inputs.emplace_back(thenClauseExpr);
-
-    if (!thenClauseExpr->type()->containsUnknown()) {
-      resultType = thenClauseExpr->type();
-    }
+  std::shared_ptr<const core::ITypedExpr> veloxExpr;
+  auto typeCase = sExpr.rex_type_case();
+  switch (typeCase) {
+    case ::substrait::Expression::RexTypeCase::kLiteral:
+      return toVeloxExpr(sExpr.literal());
+    case ::substrait::Expression::RexTypeCase::kScalarFunction:
+      return toVeloxExpr(sExpr.scalar_function(), inputType);
+    case ::substrait::Expression::RexTypeCase::kSelection:
+      return toVeloxExpr(sExpr.selection(), inputType);
+    case ::substrait::Expression::RexTypeCase::kCast:
+      return toVeloxExpr(sExpr.cast(), inputType);
+    case ::substrait::Expression::RexTypeCase::kIfThen:
+      return toVeloxExpr(sExpr.if_then(), inputType);
+    case ::substrait::Expression::RexTypeCase::kSingularOrList:
+      return toVeloxExpr(sExpr.singular_or_list(), inputType);
+    default:
+      VELOX_NYI(
+          "Substrait conversion not supported for Expression '{}'", typeCase);
   }
 }
 

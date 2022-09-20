@@ -265,7 +265,7 @@ bool SubstraitToVeloxPlanValidator::validate(
           planConverter_->findFuncSpec(aggFunction.function_reference()));
       toVeloxType(subParser_->parseType(aggFunction.output_type())->type);
       for (const auto& arg : aggFunction.arguments()) {
-        auto typeCase = getExprFromFunctionArgument(arg).rex_type_case();
+        auto typeCase = arg.value().rex_type_case();
         switch (typeCase) {
           case ::substrait::Expression::RexTypeCase::kSelection:
           case ::substrait::Expression::RexTypeCase::kLiteral:

@@ -217,12 +217,13 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
   // Each measure represents one aggregate expression.
   std::vector<core::CallTypedExprPtr> aggExprs;
   aggExprs.reserve(sAgg.measures().size());
-
+  std::vector<core::FieldAccessTypedExprPtr> aggregateMasks;
+  aggregateMasks.reserve(sAgg.measures().size());
   for (const auto& smea : sAgg.measures()) {
     core::FieldAccessTypedExprPtr aggregateMask;
-    ::substrait::Expression substraitAggMask = measure.filter();
+    ::substrait::Expression substraitAggMask = smea.filter();
     // Get Aggregation Masks.
-    if (measure.has_filter()) {
+    if (smea.has_filter()) {
       if (substraitAggMask.ByteSizeLong() == 0) {
         aggregateMask = {};
       } else {
@@ -238,8 +239,8 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
     std::vector<std::shared_ptr<const core::ITypedExpr>> aggParams;
     aggParams.reserve(aggFunction.arguments().size());
     for (const auto& arg : aggFunction.arguments()) {
-      aggParams.emplace_back(exprConverter_->toVeloxExpr(
-          getExprFromFunctionArgument(arg), inputType));
+      aggParams.emplace_back(
+          exprConverter_->toVeloxExpr(arg.value(), inputType));
     }
     auto aggVeloxType =
         toVeloxType(subParser_->parseType(aggFunction.output_type())->type);
@@ -249,8 +250,6 @@ std::shared_ptr<const core::PlanNode> SubstraitVeloxPlanConverter::toVeloxAgg(
   }
 
   bool ignoreNullKeys = false;
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> aggregateMasks(
-      sAgg.measures().size());
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       preGroupingExprs = {};
 
@@ -291,8 +290,7 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   int colIdx = 0;
   for (const auto& expr : projectExprs) {
     expressions.emplace_back(exprConverter_->toVeloxExpr(expr, inputType));
-    projectNames.emplace_back(
-        substraitParser_->makeNodeName(planNodeId_, colIdx));
+    projectNames.emplace_back(subParser_->makeNodeName(planNodeId_, colIdx));
     colIdx += 1;
   }
 
@@ -351,13 +349,13 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
   auto childNode = convertSingleInput<::substrait::FilterRel>(filterRel);
   const auto& inputType = childNode->outputType();
   const auto& sExpr = filterRel.condition();
-  std::shared_ptr<const core::PlanNode>
 
-      return std::make_shared<core::FilterNode>(
-          nextPlanNodeId(),
-          exprConverter_->toVeloxExpr(sExpr, inputType),
-          childNode);
+  return std::make_shared<core::FilterNode>(
+      nextPlanNodeId(),
+      exprConverter_->toVeloxExpr(sExpr, inputType),
+      childNode);
 }
+
 bool isPushDownSupportedByFormat(
     const dwio::common::FileFormat& format,
     connector::hive::SubfieldFilters& subfieldFilters) {
@@ -656,12 +654,12 @@ core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
 }
 
 core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::RelRoot& root) {
+    const ::substrait::RelRoot& sRoot) {
   // TODO: Use the names as the output names for the whole computing.
-  const auto& names = root.names();
-  if (root.has_input()) {
-    const auto& rel = root.input();
-    return toVeloxPlan(rel);
+  const auto& sNames = sRoot.names();
+  if (sRoot.has_input()) {
+    const auto& sRel = sRoot.input();
+    return toVeloxPlan(sRel);
   }
   VELOX_FAIL("Input is expected in RelRoot.");
 }
@@ -773,9 +771,7 @@ void SubstraitVeloxPlanConverter::flattenConditions(
       if (subParser_->getSubFunctionName(filterNameSpec) == "and") {
         for (const auto& sCondition : sFunc.arguments()) {
           flattenConditions(
-              getExprFromFunctionArgument(sCondition),
-              scalarFunctions,
-              singularOrLists);
+              sCondition.value(), scalarFunctions, singularOrLists);
         }
       } else {
         scalarFunctions.emplace_back(sFunc);
@@ -795,33 +791,35 @@ std::string SubstraitVeloxPlanConverter::findFuncSpec(uint64_t id) {
   return subParser_->findSubstraitFuncSpec(functionMap_, id);
 }
 
-core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::Plan& substraitPlan,
-    memory::MemoryPool* pool) {
-  VELOX_CHECK(
-      checkTypeExtension(substraitPlan),
-      "The type extension only have unknown type.")
-  // Construct the function map based on the Substrait representation.
-  constructFunctionMap(substraitPlan);
+int32_t SubstraitVeloxPlanConverter::streamIsInput(
+    const ::substrait::ReadRel& sRead) {
+  if (sRead.has_local_files()) {
+    const auto& fileList = sRead.local_files().items();
+    if (fileList.size() == 0) {
+      VELOX_FAIL("At least one file path is expected.");
+    }
 
-  // In fact, only one RelRoot or Rel is expected here.
-  VELOX_CHECK_EQ(substraitPlan.relations_size(), 1);
-  const auto& rel = substraitPlan.relations(0);
-  if (rel.has_root()) {
-    return toVeloxPlan(rel.root(), pool);
-  }
-  if (rel.has_rel()) {
-    return toVeloxPlan(rel.rel(), pool);
-  }
-  VELOX_FAIL("Input is expected in RelRoot.");
-}
+    // The stream input will be specified with the format of
+    // "iterator:${index}".
+    std::string filePath = fileList[0].uri_file();
+    std::string prefix = "iterator:";
+    std::size_t pos = filePath.find(prefix);
+    if (pos == std::string::npos) {
+      return -1;
+    }
 
-core::PlanNodePtr SubstraitVeloxPlanConverter::toVeloxPlan(
-    const ::substrait::Plan& substraitPlan,
-    memory::MemoryPool* pool) {
-  // Construct the function map based on the Substrait representation.
-  constructFuncMap(sPlan);
-  VELOX_FAIL("RelRoot or Rel is expected in Plan.");
+    // Get the index.
+    std::string idxStr = filePath.substr(pos + prefix.size(), filePath.size());
+    try {
+      return stoi(idxStr);
+    } catch (const std::exception& err) {
+      VELOX_FAIL(err.what());
+    }
+  }
+  if (validationMode_) {
+    return -1;
+  }
+  VELOX_FAIL("Local file is expected.");
 }
 
 void SubstraitVeloxPlanConverter::extractJoinKeys(
@@ -840,17 +838,17 @@ void SubstraitVeloxPlanConverter::extractJoinKeys(
               functionMap_, visited->scalar_function().function_reference()));
       const auto& args = visited->scalar_function().arguments();
       if (funcName == "and") {
-        expressions.push_back(&getExprFromFunctionArgument(args[0]));
-        expressions.push_back(&getExprFromFunctionArgument(args[1]));
+        expressions.push_back(&args[0].value());
+        expressions.push_back(&args[1].value());
       } else if (funcName == "eq") {
         VELOX_CHECK(std::all_of(
             args.cbegin(),
             args.cend(),
             [](const ::substrait::FunctionArgument& arg) {
-              return getExprFromFunctionArgument(arg).has_selection();
+              return arg.value().has_selection();
             }));
-        leftExprs.push_back(&getExprFromFunctionArgument(args[0]).selection());
-        rightExprs.push_back(&getExprFromFunctionArgument(args[1]).selection());
+        leftExprs.push_back(&args[0].value().selection());
+        rightExprs.push_back(&args[1].value().selection());
       } else {
         VELOX_NYI("Join condition {} not supported.", funcName);
       }
@@ -881,12 +879,11 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toSubfieldFilters(
     auto filterName = subParser_->getSubFunctionName(filterNameSpec);
     if (filterName == sNot) {
       VELOX_CHECK(scalarFunction.arguments().size() == 1);
-      auto expr = getExprFromFunctionArgument(scalarFunction.arguments()[0]);
+      auto expr = scalarFunction.arguments()[0].value();
       if (expr.has_scalar_function()) {
         // Set its chid to filter info with reverse enabled.
         setFilterMap(
-            getExprFromFunctionArgument(scalarFunction.arguments()[0])
-                .scalar_function(),
+            scalarFunction.arguments()[0].value().scalar_function(),
             inputTypeList,
             colInfoMap,
             true);
@@ -903,18 +900,16 @@ connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::toSubfieldFilters(
           scalarFunction.arguments().cbegin(),
           scalarFunction.arguments().cend(),
           [](const ::substrait::FunctionArgument& arg) {
-            return getExprFromFunctionArgument(arg).has_scalar_function() ||
-                getExprFromFunctionArgument(arg).has_singular_or_list();
+            return arg.value().has_scalar_function() ||
+                arg.value().has_singular_or_list();
           }));
       // Set the chidren functions to filter info. They should be
       // effective to the same field.
       for (const auto& arg : scalarFunction.arguments()) {
-        auto expr = getExprFromFunctionArgument(arg);
+        auto expr = arg.value();
         if (expr.has_scalar_function()) {
           setFilterMap(
-              getExprFromFunctionArgument(arg).scalar_function(),
-              inputTypeList,
-              colInfoMap);
+              arg.value().scalar_function(), inputTypeList, colInfoMap);
         } else if (expr.has_singular_or_list()) {
           setSingularListValues(expr.singular_or_list(), colInfoMap);
         } else {
@@ -938,12 +933,10 @@ bool SubstraitVeloxPlanConverter::fieldOrWithLiteral(
         arguments,
     uint32_t& fieldIndex) {
   if (arguments.size() == 1) {
-    if (getExprFromFunctionArgument(arguments[0]).has_selection()) {
+    if (arguments[0].value().has_selection()) {
       // Only field exists.
       fieldIndex = subParser_->parseReferenceSegment(
-          getExprFromFunctionArgument(arguments[0])
-              .selection()
-              .direct_reference());
+          arguments[0].value().selection().direct_reference());
       return true;
     } else {
       return false;
@@ -957,11 +950,11 @@ bool SubstraitVeloxPlanConverter::fieldOrWithLiteral(
   bool fieldExists = false;
   bool literalExists = false;
   for (const auto& param : arguments) {
-    auto typeCase = getExprFromFunctionArgument(param).rex_type_case();
+    auto typeCase = param.value().rex_type_case();
     switch (typeCase) {
       case ::substrait::Expression::RexTypeCase::kSelection:
         fieldIndex = subParser_->parseReferenceSegment(
-            getExprFromFunctionArgument(param).selection().direct_reference());
+            param.value().selection().direct_reference());
         fieldExists = true;
         break;
       case ::substrait::Expression::RexTypeCase::kLiteral:
@@ -980,19 +973,19 @@ bool SubstraitVeloxPlanConverter::chidrenFunctionsOnSameField(
   // Get the column indices of the chidren functions.
   std::vector<int32_t> colIndices;
   for (const auto& arg : function.arguments()) {
-    if (getExprFromFunctionArgument(arg).has_scalar_function()) {
-      auto scalarFunction = getExprFromFunctionArgument(arg).scalar_function();
+    if (arg.value().has_scalar_function()) {
+      auto scalarFunction = arg.value().scalar_function();
       for (const auto& param : scalarFunction.arguments()) {
-        if (getExprFromFunctionArgument(param).has_selection()) {
-          auto field = getExprFromFunctionArgument(param).selection();
+        if (param.value().has_selection()) {
+          auto field = param.value().selection();
           VELOX_CHECK(field.has_direct_reference());
           int32_t colIdx =
               subParser_->parseReferenceSegment(field.direct_reference());
           colIndices.emplace_back(colIdx);
         }
       }
-    } else if (getExprFromFunctionArgument(arg).has_singular_or_list()) {
-      auto singularOrList = getExprFromFunctionArgument(arg).singular_or_list();
+    } else if (arg.value().has_singular_or_list()) {
+      auto singularOrList = arg.value().singular_or_list();
       int32_t colIdx = getColumnIndexFromSingularOrList(singularOrList);
       colIndices.emplace_back(colIdx);
     } else {
@@ -1035,17 +1028,14 @@ bool SubstraitVeloxPlanConverter::canPushdownNot(
       scalarFunction.arguments().size() == 1,
       "Only one arg is expected for Not.");
   auto notArg = scalarFunction.arguments()[0];
-  if (!getExprFromFunctionArgument(notArg).has_scalar_function()) {
+  if (!notArg.value().has_scalar_function()) {
     // Not for a Boolean Literal or Or List is not supported curretly.
     // It can be pushed down with an AlwaysTrue or AlwaysFalse Range.
     return false;
   }
 
   auto argFunction = subParser_->findSubstraitFuncSpec(
-      functionMap_,
-      getExprFromFunctionArgument(notArg)
-          .scalar_function()
-          .function_reference());
+      functionMap_, notArg.value().scalar_function().function_reference());
   auto functionName = subParser_->getSubFunctionName(argFunction);
 
   std::unordered_set<std::string> supportedNotFunctions = {
@@ -1053,8 +1043,7 @@ bool SubstraitVeloxPlanConverter::canPushdownNot(
 
   uint32_t fieldIdx;
   bool isFieldOrWithLiteral = fieldOrWithLiteral(
-      getExprFromFunctionArgument(notArg).scalar_function().arguments(),
-      fieldIdx);
+      notArg.value().scalar_function().arguments(), fieldIdx);
 
   if (supportedNotFunctions.find(functionName) != supportedNotFunctions.end() &&
       isFieldOrWithLiteral &&
@@ -1079,18 +1068,14 @@ bool SubstraitVeloxPlanConverter::canPushdownOr(
       sIsNotNull, sGte, sGt, sLte, sLt, sEqual};
 
   for (const auto& arg : scalarFunction.arguments()) {
-    if (getExprFromFunctionArgument(arg).has_scalar_function()) {
+    if (arg.value().has_scalar_function()) {
       auto nameSpec = subParser_->findSubstraitFuncSpec(
-          functionMap_,
-          getExprFromFunctionArgument(arg)
-              .scalar_function()
-              .function_reference());
+          functionMap_, arg.value().scalar_function().function_reference());
       auto functionName = subParser_->getSubFunctionName(nameSpec);
 
       uint32_t fieldIdx;
       bool isFieldOrWithLiteral = fieldOrWithLiteral(
-          getExprFromFunctionArgument(arg).scalar_function().arguments(),
-          fieldIdx);
+          arg.value().scalar_function().arguments(), fieldIdx);
       if (supportedOrFunctions.find(functionName) ==
               supportedOrFunctions.end() ||
           !isFieldOrWithLiteral ||
@@ -1099,8 +1084,8 @@ bool SubstraitVeloxPlanConverter::canPushdownOr(
         // The arg should be field or field with literal.
         return false;
       }
-    } else if (getExprFromFunctionArgument(arg).has_singular_or_list()) {
-      auto singularOrList = getExprFromFunctionArgument(arg).singular_or_list();
+    } else if (arg.value().has_singular_or_list()) {
+      auto singularOrList = arg.value().singular_or_list();
       if (!canPushdownSingularOrList(singularOrList, true)) {
         return false;
       }
@@ -1295,14 +1280,14 @@ void SubstraitVeloxPlanConverter::setFilterMap(
   std::optional<uint32_t> colIdx;
   std::optional<::substrait::Expression_Literal> substraitLit;
   for (const auto& param : scalarFunction.arguments()) {
-    auto typeCase = getExprFromFunctionArgument(param).rex_type_case();
+    auto typeCase = param.value().rex_type_case();
     switch (typeCase) {
       case ::substrait::Expression::RexTypeCase::kSelection:
         colIdx = subParser_->parseReferenceSegment(
-            getExprFromFunctionArgument(param).selection().direct_reference());
+            param.value().selection().direct_reference());
         break;
       case ::substrait::Expression::RexTypeCase::kLiteral:
-        substraitLit = getExprFromFunctionArgument(param).literal();
+        substraitLit = param.value().literal();
         break;
       default:
         VELOX_NYI(
@@ -1570,21 +1555,6 @@ void SubstraitVeloxPlanConverter::constructSubfieldFilters(
       std::move(colFilters), inputName, filterInfo->nullAllowed_, filters);
 }
 
-void SubstraitVeloxPlanConverter::constructFunctionMap(
-    const ::substrait::Plan& substraitPlan) {
-  // Construct the function map based on the Substrait representation.
-  for (const auto& sExtension : substraitPlan.extensions()) {
-    if (!sExtension.has_extension_function()) {
-      continue;
-    }
-    const auto& sFmap = sExtension.extension_function();
-    auto id = sFmap.function_anchor();
-    auto name = sFmap.name();
-    functionMap_[id] = name;
-  }
-  exprConverter_ =
-      std::make_shared<SubstraitVeloxExprConverter>(pool_, functionMap_);
-}
 bool SubstraitVeloxPlanConverter::checkTypeExtension(
     const ::substrait::Plan& substraitPlan) {
   for (const auto& sExtension : substraitPlan.extensions()) {
@@ -1598,49 +1568,6 @@ bool SubstraitVeloxPlanConverter::checkTypeExtension(
     }
   }
   return true;
-}
-
-const std::string& SubstraitVeloxPlanConverter::findFunction(
-    uint64_t id) const {
-  return substraitParser_->findFunctionSpec(functionMap_, id);
-}
-
-void SubstraitVeloxPlanConverter::extractJoinKeys(
-    const ::substrait::Expression& joinExpression,
-    std::vector<const ::substrait::Expression::FieldReference*>& leftExprs,
-    std::vector<const ::substrait::Expression::FieldReference*>& rightExprs) {
-  std::vector<const ::substrait::Expression*> expressions;
-  expressions.push_back(&joinExpression);
-  while (!expressions.empty()) {
-    auto visited = expressions.back();
-    expressions.pop_back();
-    if (visited->rex_type_case() ==
-        ::substrait::Expression::RexTypeCase::kScalarFunction) {
-      const auto& funcName =
-          subParser_->getSubFunctionName(subParser_->findVeloxFunction(
-              functionMap_, visited->scalar_function().function_reference()));
-      const auto& args = visited->scalar_function().arguments();
-      if (funcName == "and") {
-        expressions.push_back(&getExprFromFunctionArgument(args[0]));
-        expressions.push_back(&getExprFromFunctionArgument(args[1]));
-      } else if (funcName == "eq") {
-        VELOX_CHECK(std::all_of(
-            args.cbegin(),
-            args.cend(),
-            [](const ::substrait::FunctionArgument& arg) {
-              return getExprFromFunctionArgument(arg).has_selection();
-            }));
-        leftExprs.push_back(&getExprFromFunctionArgument(args[0]).selection());
-        rightExprs.push_back(&getExprFromFunctionArgument(args[1]).selection());
-      } else {
-        VELOX_NYI("Join condition {} not supported.", funcName);
-      }
-    } else {
-      VELOX_FAIL(
-          "Unable to parse from join expression: {}",
-          joinExpression.DebugString());
-    }
-  }
 }
 
 connector::hive::SubfieldFilters SubstraitVeloxPlanConverter::mapToFilters(
@@ -1739,15 +1666,13 @@ bool SubstraitVeloxPlanConverter::canPushdownSingularOrList(
     const ::substrait::Expression_SingularOrList& singularOrList,
     bool disableIntLike) {
   VELOX_CHECK(
-      singularOrList.options_size() == 1,
-      "Only one options list is expected in SingularOrList expression.");
+      singularOrList.options_size() > 0, "At least one option is expected.");
   // Check whether the value is field.
   bool hasField = singularOrList.value().has_selection();
-  // TODO: improve the logic here.
-  auto literals = singularOrList.options()[0].literal().list().values();
-  std::vector<std::string> types;
-  for (auto& literal : literals) {
-    auto type = literal.literal_type_case();
+  auto options = singularOrList.options();
+  for (const auto& option : options) {
+    VELOX_CHECK(option.has_literal(), "Literal is expected as option.");
+    auto type = option.literal().literal_type_case();
     // Only BigintValues and BytesValues are supported.
     if (type != ::substrait::Expression_Literal::LiteralTypeCase::kI32 &&
         type != ::substrait::Expression_Literal::LiteralTypeCase::kI64 &&
@@ -1770,8 +1695,10 @@ uint32_t SubstraitVeloxPlanConverter::getColumnIndexFromSingularOrList(
   // Get the column index.
   ::substrait::Expression_FieldReference selection;
   if (singularOrList.value().has_scalar_function()) {
-    selection = getExprFromFunctionArgument(
-                    singularOrList.value().scalar_function().arguments()[0])
+    selection = singularOrList.value()
+                    .scalar_function()
+                    .arguments()[0]
+                    .value()
                     .selection();
   } else if (singularOrList.value().has_selection()) {
     selection = singularOrList.value().selection();
@@ -1784,23 +1711,19 @@ uint32_t SubstraitVeloxPlanConverter::getColumnIndexFromSingularOrList(
 void SubstraitVeloxPlanConverter::setSingularListValues(
     const ::substrait::Expression_SingularOrList& singularOrList,
     std::unordered_map<uint32_t, std::shared_ptr<FilterInfo>>& colInfoMap) {
+  VELOX_CHECK(
+      singularOrList.options_size() > 0, "At least one option is expected.");
   // Get the column index.
   uint32_t colIdx = getColumnIndexFromSingularOrList(singularOrList);
 
   // Get the value list.
+  auto options = singularOrList.options();
   std::vector<variant> variants;
-  VELOX_CHECK(
-      singularOrList.options_size() == 1,
-      "Options list size 1 expected in SingularOrList expression.");
-  auto option = singularOrList.options()[0];
-  VELOX_CHECK(
-      option.has_literal(),
-      "Options list has literal expected in SingularOrList expression.");
-  auto valueList = option.literal().list();
-  variants.reserve(valueList.values().size());
-  for (const auto& literal : valueList.values()) {
+  variants.reserve(options.size());
+  for (const auto& option : options) {
+    VELOX_CHECK(option.has_literal(), "Literal is expected as option.");
     variants.emplace_back(
-        exprConverter_->toTypedVariant(literal)->veloxVariant);
+        exprConverter_->toVeloxExpr(option.literal())->value());
   }
   // Set the value list to filter info.
   colInfoMap[colIdx]->setValues(variants);

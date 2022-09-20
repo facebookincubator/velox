@@ -29,6 +29,7 @@ using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec;
+namespace vestrait = facebook::velox::substrait;
 
 class Substrait2VeloxPlanConversionTest
     : public exec::test::HiveConnectorTestBase {
@@ -68,6 +69,13 @@ class Substrait2VeloxPlanConversionTest
 
   std::shared_ptr<exec::test::TempDirectoryPath> tmpDir_{
       exec::test::TempDirectoryPath::create()};
+  std::shared_ptr<vestrait::SubstraitVeloxPlanConverter> planConverter_ =
+      std::make_shared<vestrait::SubstraitVeloxPlanConverter>(
+          memoryPool_.get());
+
+ private:
+  std::unique_ptr<memory::MemoryPool> memoryPool_{
+      memory::getDefaultScopedMemoryPool()};
 };
 
 // This test will firstly generate mock TPC-H lineitem ORC file. Then, Velox's
@@ -271,7 +279,7 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
 
   // Read q6_first_stage.json and resume the Substrait plan.
   ::substrait::Plan substraitPlan;
-  JsonToProtoConverter::readFromFile(planPath, substraitPlan);
+  JsonToProtoConverter::readFromFile(subPlanPath, substraitPlan);
 
   // Convert to Velox PlanNode.
   facebook::velox::substrait::SubstraitVeloxPlanConverter planConverter(
@@ -283,6 +291,6 @@ TEST_F(Substrait2VeloxPlanConversionTest, q6) {
   });
 
   exec::test::AssertQueryBuilder(planNode)
-      .splits(makeSplits(planConverter, planNode))
+      .splits(makeSplits(*planConverter_, planNode))
       .assertResults(expectedResult);
 }

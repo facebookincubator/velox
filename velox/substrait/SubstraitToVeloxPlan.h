@@ -97,20 +97,16 @@ class SubstraitVeloxPlanConverter {
   /// Index: the index of the partition this item belongs to.
   /// Starts: the start positions in byte to read from the items.
   /// Lengths: the lengths in byte to read from the items.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::ReadRel& sRead);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::ReadRel& sRead);
 
   /// Used to convert Substrait Rel into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::Rel& sRel);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::Rel& sRel);
 
   /// Used to convert Substrait RelRoot into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::RelRoot& sRoot);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::RelRoot& sRoot);
 
   /// Used to convert Substrait Plan into Velox PlanNode.
-  std::shared_ptr<const core::PlanNode> toVeloxPlan(
-      const ::substrait::Plan& substraitPlan);
+  core::PlanNodePtr toVeloxPlan(const ::substrait::Plan& substraitPlan);
 
   /// Used to construct the function map between the index
   /// and the Substrait function name. Initialize the expression
