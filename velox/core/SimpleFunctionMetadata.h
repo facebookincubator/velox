@@ -28,6 +28,8 @@
 
 namespace facebook::velox::core {
 
+static std::string kPrecisionVariable = "a_precision";
+static std::string kScaleVariable = "a_scale";
 // Most UDFs are deterministic, hence this default value.
 template <class T, class = void>
 struct udf_is_deterministic : std::true_type {};
@@ -189,7 +191,7 @@ struct TypeAnalysis {
     if (isDecimalKind(CppToType<T>::typeKind)) {
       results.out << boost::algorithm::to_lower_copy(
                          std::string(CppToType<T>::name))
-                  << "(a_precision,a_scale)";
+                  << "(" << kPrecisionVariable << "," << kScaleVariable << ")";
     } else {
       results.out << boost::algorithm::to_lower_copy(
           std::string(CppToType<T>::name));
@@ -447,8 +449,15 @@ class SimpleFunctionMetadata : public ISimpleFunctionMetadata {
 
     builder.returnType(analysis.outputType);
 
+    bool isDecimalArg = false;
     for (const auto& arg : analysis.argsTypes) {
       builder.argumentType(arg);
+      isDecimalArg |= isDecimalTypeSignature(arg);
+    }
+
+    if (isDecimalArg) {
+      builder.integerVariable(kPrecisionVariable);
+      builder.integerVariable(kScaleVariable);
     }
 
     for (const auto& variable : analysis.variables) {
