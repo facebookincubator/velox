@@ -82,3 +82,9 @@ Ranking functions
 
 Returns a unique, sequential number for each row, starting with one, according to the ordering of rows
 within the window partition.
+
+.. function:: rank() -> bigint
+
+Returns the rank of a value in a group of values. The rank is one plus the number of rows preceding the
+row that are not peer with the row. Thus, the values in the ordering will produce gaps in the sequence.
+The ranking is performed for each window partition.
