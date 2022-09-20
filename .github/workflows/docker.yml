@@ -36,7 +36,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: scripts
-          file: circleci-container.dockfile
+          file: scripts/circleci-container.dockfile
           build-args: cpu_target=${{ env.CPU_TARGET }}
          # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
           tags: ghcr.io/facebookincubator/velox:circle-ci-latest
