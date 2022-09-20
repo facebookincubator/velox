@@ -1,6 +1,7 @@
 name: Build & Push Docker Images
 
 on:
+  pull_request:
   push:
     branches: [main]
     paths:
@@ -38,12 +39,12 @@ jobs:
           file: circleci-container.dockfile
           build-args:
             - cpu_target=${{ env.CPU_TARGET }}
-         # push: ${{ github.repository == 'facebookincubator/velox' }}
+         # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
           tags: ghcr.io/facebookincubator/velox:circle-ci-latest
 
       - name: Build and push ubuntu
         uses: docker/build-push-action@v3
         with:
           file: scripts/ubuntu-22.04-cpp.dockerfile
-         # push: ${{ github.repository == 'facebookincubator/velox' }}
+         # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
           tags: ghcr.io/facebookincubator/velox:amd64-ubuntu-22.04-cpp
