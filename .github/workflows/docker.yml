@@ -39,11 +39,11 @@ jobs:
           file: scripts/circleci-container.dockfile
           build-args: cpu_target=${{ env.CPU_TARGET }}
          # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
-          tags: ghcr.io/facebookincubator/velox:circle-ci-latest
+          tags: ghcr.io/${{ github.repository }}:circle-ci-latest
 
       - name: Build and push ubuntu
         uses: docker/build-push-action@v3
         with:
           file: scripts/ubuntu-22.04-cpp.dockerfile
          # push: ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
-          tags: ghcr.io/facebookincubator/velox:amd64-ubuntu-22.04-cpp
+          tags: ghcr.io/${{ github.repository }}:amd64-ubuntu-22.04-cpp
