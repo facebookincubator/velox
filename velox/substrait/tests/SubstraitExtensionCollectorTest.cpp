@@ -47,13 +47,31 @@ class SubstraitExtensionCollectorTest : public ::testing::Test {
       const std::string& functionName,
       std::vector<TypePtr>&& arguments,
       core::AggregationNode::Step step) {
-    int functionReferenceId1 =
+    int referenceNumber1 =
         extensionCollector_->getReferenceNumber(functionName, arguments, step);
     // Repeat the call to make sure properly de-duplicated.
-    int functionReferenceId2 =
+    int referenceNumber2 =
         extensionCollector_->getReferenceNumber(functionName, arguments, step);
-    EXPECT_EQ(functionReferenceId1, functionReferenceId2);
-    return functionReferenceId2;
+    EXPECT_EQ(referenceNumber1, referenceNumber2);
+    return referenceNumber2;
+  }
+
+  /// Given a substrait plan, return the sorted extension functions by the
+  /// function anchor.
+  ::google::protobuf::RepeatedPtrField<
+      ::substrait::extensions::SimpleExtensionDeclaration>
+  getSortedSubstraitExtension(const ::substrait::Plan* substraitPlan) {
+    auto substraitExtensions = substraitPlan->extensions();
+    std::sort(
+        substraitExtensions.begin(),
+        substraitExtensions.end(),
+        [](const ::substrait::extensions::SimpleExtensionDeclaration a,
+           const ::substrait::extensions::SimpleExtensionDeclaration b) {
+          return a.extension_function().function_anchor() <
+              b.extension_function().function_anchor();
+        });
+
+    return substraitExtensions;
   }
 
   SubstraitExtensionCollectorPtr extensionCollector_ =
@@ -119,26 +137,20 @@ TEST_F(SubstraitExtensionCollectorTest, addExtensionsToPlan) {
 
   extensionCollector_->addExtensionsToPlan(substraitPlan);
 
+  const auto& substraitExtensions = getSortedSubstraitExtension(substraitPlan);
+  auto getFunctionName = [&](auto id) {
+    return substraitExtensions[id].extension_function().name();
+  };
+
   ASSERT_EQ(substraitPlan->extensions().size(), 8);
-  ASSERT_EQ(
-      substraitPlan->extensions(0).extension_function().name(), "plus:i32_i32");
-  ASSERT_EQ(
-      substraitPlan->extensions(1).extension_function().name(),
-      "divide:i32_i32");
-  ASSERT_EQ(
-      substraitPlan->extensions(2).extension_function().name(),
-      "cardinality:list");
-  ASSERT_EQ(
-      substraitPlan->extensions(3).extension_function().name(),
-      "array_sum:list");
-  ASSERT_EQ(
-      substraitPlan->extensions(4).extension_function().name(), "sum:i32");
-  ASSERT_EQ(
-      substraitPlan->extensions(5).extension_function().name(), "avg:i32");
-  ASSERT_EQ(
-      substraitPlan->extensions(6).extension_function().name(), "avg:struct");
-  ASSERT_EQ(
-      substraitPlan->extensions(7).extension_function().name(), "count:i32");
+  ASSERT_EQ(getFunctionName(0), "plus:i32_i32");
+  ASSERT_EQ(getFunctionName(1), "divide:i32_i32");
+  ASSERT_EQ(getFunctionName(2), "cardinality:list");
+  ASSERT_EQ(getFunctionName(3), "array_sum:list");
+  ASSERT_EQ(getFunctionName(4), "sum:i32");
+  ASSERT_EQ(getFunctionName(5), "avg:i32");
+  ASSERT_EQ(getFunctionName(6), "avg:struct");
+  ASSERT_EQ(getFunctionName(7), "count:i32");
 }
 
 } // namespace facebook::velox::substrait::test

@@ -71,13 +71,13 @@ class SubstraitExtensionCollector {
   template <class T>
   class BiDirectionHashMap {
    public:
-    /// If the forwardMap_ does not contain the key, then the key and value will
-    /// be written, otherwise the value will be overwritten, If the reverseMap_
-    /// does not contain the value, then the value and key will be written,
-    /// otherwise the key will be overwritten.
-    void put(const int& key, const T& value);
+    /// For forwardMap_, if the specified key is not already associated with a
+    /// value, associates it with the given value and returns, else do nothing.
+    /// For reverseMap_, if the specified value is not already associated with a
+    /// key, associate it with the given key and returns, else do nothing.
+    void putIfAbsent(const int& key, const T& value);
 
-    const std::map<int, T>& forwardMap() const {
+    const std::unordered_map<int, ExtensionFunctionId> forwardMap() const {
       return forwardMap_;
     }
 
@@ -86,7 +86,7 @@ class SubstraitExtensionCollector {
     }
 
    private:
-    std::map<int, T> forwardMap_;
+    std::unordered_map<int, T> forwardMap_;
     std::unordered_map<T, int> reverseMap_;
   };
 

@@ -38,11 +38,15 @@ int SubstraitExtensionCollector::getReferenceNumber(
 }
 
 template <typename T>
-void SubstraitExtensionCollector::BiDirectionHashMap<T>::put(
+void SubstraitExtensionCollector::BiDirectionHashMap<T>::putIfAbsent(
     const int& key,
     const T& value) {
-  forwardMap_[key] = value;
-  reverseMap_[value] = key;
+  if (forwardMap_.find(key) == forwardMap_.end()) {
+    forwardMap_[key] = value;
+  }
+  if (reverseMap_.find(value) == reverseMap_.end()) {
+    reverseMap_[value] = key;
+  }
 }
 
 void SubstraitExtensionCollector::addExtensionsToPlan(
@@ -52,7 +56,9 @@ void SubstraitExtensionCollector::addExtensionsToPlan(
   // only have one URI.
   SimpleExtensionURI* extensionUri = plan->add_extension_uris();
   extensionUri->set_extension_uri_anchor(1);
-  for (auto& [referenceNum, functionId] : extensionFunctions_->forwardMap()) {
+
+  for (const auto& [referenceNum, functionId] :
+       extensionFunctions_->forwardMap()) {
     auto extensionFunction =
         plan->add_extensions()->mutable_extension_function();
     extensionFunction->set_extension_uri_reference(
@@ -75,7 +81,8 @@ int SubstraitExtensionCollector::getReferenceNumber(
     return extensionFunctionAnchorIt->second;
   }
   ++functionReferenceNumber;
-  extensionFunctions_->put(functionReferenceNumber, extensionFunctionId);
+  extensionFunctions_->putIfAbsent(
+      functionReferenceNumber, extensionFunctionId);
   return functionReferenceNumber;
 }
 
