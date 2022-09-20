@@ -80,6 +80,21 @@ void registerComparisonFunctions() {
       UnscaledShortDecimal>({"lt"});
   registerFunction<LtFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
       {"lt"});
+
+  registerFunction<
+      GteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"gte"});
+  registerFunction<GteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"gte"});
+  registerFunction<
+      LteFunction,
+      bool,
+      UnscaledShortDecimal,
+      UnscaledShortDecimal>({"lte"});
+  registerFunction<LteFunction, bool, UnscaledLongDecimal, UnscaledLongDecimal>(
+      {"lte"});
 }
 
 } // namespace facebook::velox::functions

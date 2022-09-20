@@ -26,8 +26,8 @@
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
-inline constexpr char kPrecisionVariable[] = "a_precision";
-inline constexpr char kScaleVariable[] = "a_scale";
+static inline constexpr char kPrecisionVariable[] = "a_precision";
+static inline constexpr char kScaleVariable[] = "a_scale";
 
 namespace facebook::velox::core {
 

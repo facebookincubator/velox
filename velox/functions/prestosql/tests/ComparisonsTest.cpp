@@ -169,8 +169,14 @@ TEST_F(ComparisonsTest, gtLtDecimal) {
           {0, 2, 3, -5, std::nullopt, 5}, DECIMAL(10, 5))};
   auto expected = makeNullableFlatVector<bool>(
       {true, std::nullopt, false, true, std::nullopt, false});
+  auto expected2 = makeNullableFlatVector<bool>(
+      {true, std::nullopt, true, true, std::nullopt, false});
+
   runAndCompare("c0 > c1", inputs, expected);
   runAndCompare("c1 < c0", inputs, expected);
+  // Gte/Lte
+  runAndCompare("c0 >= c1", inputs, expected2);
+  runAndCompare("c1 <= c0", inputs, expected2);
 
   // Long Decimals test.
   inputs = {
@@ -192,6 +198,10 @@ TEST_F(ComparisonsTest, gtLtDecimal) {
           DECIMAL(38, 5))};
   runAndCompare("c0 > c1", inputs, expected);
   runAndCompare("c1 < c0", inputs, expected);
+
+  // Gte/Lte
+  runAndCompare("c0 >= c1", inputs, expected2);
+  runAndCompare("c1 <= c0", inputs, expected2);
 };
 
 TEST_F(ComparisonsTest, eqArray) {
