@@ -1,0 +1,310 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
+
+    <title>VectorSaver: Encoding-Preserving Serialization &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css" />
+    <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+    <script src="../../_static/jquery.js"></script>
+    <script src="../../_static/underscore.js"></script>
+    <script src="../../_static/doctools.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Monthly Updates" href="../../monthly-updates.html" />
+    <link rel="prev" title="printExprWithStats" href="print-expr-with-stats.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="print-expr-with-stats.html" title="printExprWithStats"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" accesskey="U">Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">VectorSaver: Encoding-Preserving Serialization</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="vectorsaver-encoding-preserving-serialization">
+<h1>VectorSaver: Encoding-Preserving Serialization<a class="headerlink" href="#vectorsaver-encoding-preserving-serialization" title="Permalink to this headline">¶</a></h1>
+<p>When an error occurs during expression evaluation, it is useful to save the
+input vector as well as the expression to enable reproducing and debugging the
+error in isolation. Saving the input vector can also be useful when an error
+occurs in an operator. When saving vectors it is important to preserve the
+encodings, as often a bug can be reproduced only with a specific combination of
+dictionary or constant wrappers. Hence, we cannot reuse the Presto’s
+SerializedPage format and need to create a different serialization format.</p>
+<p>In this document we describe a binary serialization format that preserves the
+encoding. The implementation of this format can be found in VectorSaver.h/cpp.
+The examples of usage can be found in VectorSaverTest.cpp. This functionlity
+was introduced in <a class="reference external" href="https://github.com/facebookincubator/velox/pull/2563">#2563</a></p>
+<p>Before we proceed to describe the format, we’d like to show an example use case.</p>
+<section id="use-case">
+<h2>Use Case<a class="headerlink" href="#use-case" title="Permalink to this headline">¶</a></h2>
+<p>When an error happens during expression evaluation we save the input vector to a
+file and include the file path in the Context field of the exception along with
+the expression that was evaluated. The exception may look like this:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Error Source: RUNTIME
+Error Code: INVALID_STATE
+Reason: (8 vs. 12) Malformed dictionary, index array is shorter than DictionaryVector
+Retriable: False
+Expression: dictionaryIndices-&gt;size() &gt;= length * sizeof(vector_size_t)
+Context: concat(cast((c0) as VARCHAR), ,:VARCHAR). Input: /tmp/velox_vector_f7dneH.
+Function: DictionaryVector
+File: …/velox/vector/DictionaryVector-inl.h
+Line: 107
+</pre></div>
+</div>
+<p><strong>Input: /tmp/velox_vector_f7dneH</strong> in the <cite>Context:</cite> field shows the file path that
+contains the input data for the expression. We can load this file into a vector in a
+unit test or standalone program:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;fstream&gt;</span><span class="cp"></span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;velox/vector/VectorSaver.h&quot;</span><span class="cp"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="w"> </span><span class="nf">inputFile</span><span class="p">(</span><span class="s">&quot;/tmp/velox_vector_f7dneH&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">ifstream</span><span class="o">::</span><span class="n">binary</span><span class="p">);</span><span class="w"></span>
+<span class="k">auto</span><span class="w"> </span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">restoreVector</span><span class="p">(</span><span class="n">inputFile</span><span class="p">,</span><span class="w"> </span><span class="n">pool</span><span class="p">());</span><span class="w"></span>
+<span class="n">inputFile</span><span class="p">.</span><span class="n">close</span><span class="p">();</span><span class="w"></span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+<span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">data</span><span class="o">-&gt;</span><span class="n">toString</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span><span class="w"></span>
+</pre></div>
+</div>
+<p><strong>concat(cast((c0) as VARCHAR), ,:VARCHAR)</strong> shows the expression. We can
+evaluate it on the input vector (with minimal tweaking to replace
+<cite>,:VARCHAR</cite> with <cite>‘,’</cite>) to reproduce and debug the error:</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">evaluate</span><span class="p">(</span><span class="w"></span>
+<span class="w">    </span><span class="s">&quot;concat(cast((c0) as VARCHAR), &#39;,&#39;)&quot;</span><span class="p">,</span><span class="w"></span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">dynamic_pointer_cast</span><span class="o">&lt;</span><span class="n">RowVector</span><span class="o">&gt;</span><span class="p">(</span><span class="n">data</span><span class="p">));</span><span class="w"></span>
+</pre></div>
+</div>
+</section>
+<section id="serialization-format">
+<h2>Serialization Format<a class="headerlink" href="#serialization-format" title="Permalink to this headline">¶</a></h2>
+<p>Serialization of flat, constant and dictionary vectors is supported.
+Serialization of lazy, bias and sequence vectors is not supported. Most types
+are supported. Decimal, opaque and function types are not supported.</p>
+<section id="header">
+<h3>Header<a class="headerlink" href="#header" title="Permalink to this headline">¶</a></h3>
+<p>Vector serialization starts with a header:</p>
+<ul class="simple">
+<li><dl class="simple">
+<dt>Encoding. 4 bytes</dt><dd><ul>
+<li><p>0 - FLAT, 1 - CONSTANT, 2 - DICTIONARY</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><p>Type. Variable number of bytes.</p></li>
+<li><p>Size. 4 bytes.</p></li>
+</ul>
+</section>
+<section id="type">
+<h3>Type<a class="headerlink" href="#type" title="Permalink to this headline">¶</a></h3>
+<p>Scalar types are fully defined by the TypeKind enum. These are serialized into 4
+bytes that contain the integer value of the TypeKind.</p>
+<p>Complex types are serialized recursively. Array type is serialized into 4 bytes
+for TypeKind, followed by serialization of the element’s type. Map type is
+serialized into 4 bytes for TypeKind, followed by serialization of the key’s
+type, followed by serialization of the value’s type. Row type is serialized
+into 4 bytes for TypeKind, followed by 4 bytes for the number of children,
+followed by 1st child name, 1st child type, 2nd child name, 2nd child type,
+etc. Serialization of a child name starts with 4 bytes for name length,
+followed by that many bytes of the name itself.</p>
+<p>Serialization of decimal, opaque and function types is not supported.</p>
+</section>
+<section id="buffer">
+<h3>Buffer<a class="headerlink" href="#buffer" title="Permalink to this headline">¶</a></h3>
+<p>Serialization of nulls, values, strings, indices, offsets and sizes buffers
+starts with 4 bytes for buffer size, followed by that many bytes of the buffer
+content.</p>
+</section>
+<section id="flat-vector-of-scalar-type">
+<h3>Flat Vector of Scalar Type<a class="headerlink" href="#flat-vector-of-scalar-type" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
+<li><p>Nulls buffer (if present).</p></li>
+<li><p>Boolean indicating the presence of the values buffer. 1 byte.</p></li>
+<li><p>Values buffer (if present)</p></li>
+<li><p>Number of string buffers. 4-bytes.</p></li>
+<li><p>String buffers.</p></li>
+</ul>
+<p>StringView values are serialized using a
+<a class="reference external" href="https://en.wikipedia.org/wiki/Pointer_swizzling">pointer swizzling</a>-like
+mechanism.</p>
+<p>Inlined string views are serialized as is.</p>
+<p>To serialize a non-inlined string, we compute an offset within a contiguous
+piece of memory formed by arranging string buffers one after the other in the
+same order as stored in the stringBuffers vector. Then, serialize the string
+view as 4 bytes for size, 4 bytes of zeros, 8 bytes for offset.</p>
+<p>Both inlined and non-inlined string views serialize into 16 bytes each.</p>
+</section>
+<section id="flat-row-vector">
+<h3>Flat Row Vector<a class="headerlink" href="#flat-row-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
+<li><p>Nulls buffer (if present).</p></li>
+<li><p>Number of children. 4 bytes.</p></li>
+<li><p>Child vectors. Each vector is preceded by a boolean indicating whether the vector is null.</p></li>
+</ul>
+</section>
+<section id="flat-array-vector">
+<h3>Flat Array Vector<a class="headerlink" href="#flat-array-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
+<li><p>Nulls buffer (if present).</p></li>
+<li><p>Sizes buffer.</p></li>
+<li><p>Offsets buffer.</p></li>
+<li><p>Elements vector.</p></li>
+</ul>
+</section>
+<section id="flat-map-vector">
+<h3>Flat Map Vector<a class="headerlink" href="#flat-map-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
+<li><p>Nulls buffer (if present).</p></li>
+<li><p>Keys vector.</p></li>
+<li><p>Values vector.</p></li>
+</ul>
+</section>
+<section id="constant-vector">
+<h3>Constant Vector<a class="headerlink" href="#constant-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Is-null flag. 1 byte.</p></li>
+<li><p>Is-scalar-value boolean. 1 byte.</p></li>
+<li><dl class="simple">
+<dt>If scalar type:</dt><dd><ul>
+<li><p>Scalar value.</p></li>
+<li><p>If value is a non-inlined string, 4 bytes for the string size, followed by the string itself.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+<li><dl class="simple">
+<dt>If complex type:</dt><dd><ul>
+<li><p>Base vector</p></li>
+<li><p>Index into base vector. 4 bytes.</p></li>
+</ul>
+</dd>
+</dl>
+</li>
+</ul>
+</section>
+<section id="dictionary-vector">
+<h3>Dictionary Vector<a class="headerlink" href="#dictionary-vector" title="Permalink to this headline">¶</a></h3>
+<ul class="simple">
+<li><p>Header</p></li>
+<li><p>Boolean indicating the presence of the nulls buffer. 1 byte.</p></li>
+<li><p>Nulls buffer (if present).</p></li>
+<li><p>Indices buffer.</p></li>
+<li><p>Base vector.</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h3><a href="../../index.html">Table of Contents</a></h3>
+    <ul>
+<li><a class="reference internal" href="#">VectorSaver: Encoding-Preserving Serialization</a><ul>
+<li><a class="reference internal" href="#use-case">Use Case</a></li>
+<li><a class="reference internal" href="#serialization-format">Serialization Format</a><ul>
+<li><a class="reference internal" href="#header">Header</a></li>
+<li><a class="reference internal" href="#type">Type</a></li>
+<li><a class="reference internal" href="#buffer">Buffer</a></li>
+<li><a class="reference internal" href="#flat-vector-of-scalar-type">Flat Vector of Scalar Type</a></li>
+<li><a class="reference internal" href="#flat-row-vector">Flat Row Vector</a></li>
+<li><a class="reference internal" href="#flat-array-vector">Flat Array Vector</a></li>
+<li><a class="reference internal" href="#flat-map-vector">Flat Map Vector</a></li>
+<li><a class="reference internal" href="#constant-vector">Constant Vector</a></li>
+<li><a class="reference internal" href="#dictionary-vector">Dictionary Vector</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+  </div>
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="print-expr-with-stats.html"
+                          title="previous chapter">printExprWithStats</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="../../monthly-updates.html"
+                          title="next chapter">Monthly Updates</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/develop/debugging/vector-saver.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="related navigation">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="../../monthly-updates.html" title="Monthly Updates"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="print-expr-with-stats.html" title="printExprWithStats"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../develop.html" >Developer Guide</a> &#187;</li>
+          <li class="nav-item nav-item-2"><a href="../debugging.html" >Debugging Tools</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">VectorSaver: Encoding-Preserving Serialization</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+        &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 4.4.0.
+    </div>
+  </body>
+</html>
