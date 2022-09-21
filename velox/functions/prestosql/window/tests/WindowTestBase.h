@@ -43,7 +43,7 @@ class WindowTestBase : public OperatorTestBase {
     return vectors;
   }
 
-  void testWindowSql(
+  void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
       const std::string& overClause) {
@@ -52,26 +52,28 @@ class WindowTestBase : public OperatorTestBase {
     SCOPED_TRACE(windowSql);
     auto op = PlanBuilder().values(input).window({windowSql}).planNode();
 
-    auto* rowType = dynamic_cast<const RowType*>(input[0]->type().get());
-    std::string columnsString;
-    for (const auto& name : rowType->names()) {
-      columnsString = columnsString + name + ", ";
-    }
+    auto rowType = asRowType(input[0]->type());
+    std::string columnsString = folly::join(", ", rowType->names());
+    columnsString += ", ";
 
     assertQuery(
         op, fmt::format("SELECT {} {} FROM tmp", columnsString, windowSql));
   };
 
-  void testWindowClauses(
+  void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
       const std::vector<std::string> overClauses) {
     for (const auto& overClause : overClauses) {
-      testWindowSql(input, function, overClause);
+      testWindowFunction(input, function, overClause);
     }
   }
 
-  void twoColumnTests(
+  // This function operates on input RowVectors that have 2 columns.
+  // It verifies (for the windowFunction) SQL queries with varying over
+  // clauses. The over clauses covers all combinations of partition by
+  // and order by of the two input columns.
+  void testTwoColumnInput(
       const std::vector<RowVectorPtr>& vectors,
       const std::string& windowFunction) {
     VELOX_CHECK_EQ(vectors[0]->childrenSize(), 2);
@@ -91,7 +93,16 @@ class WindowTestBase : public OperatorTestBase {
         "partition by c0, c1",
     };
 
-    testWindowClauses(vectors, windowFunction, overClauses);
+    testWindowFunction(vectors, windowFunction, overClauses);
+
+    // Invoking with same vector set twice so that the underlying WindowFunction
+    // receives the same data set multiple times and does a full processing
+    // (partition, sort) + apply of it.
+    std::vector<RowVectorPtr> doubleInput;
+    doubleInput.insert(doubleInput.end(), vectors.begin(), vectors.end());
+    doubleInput.insert(doubleInput.end(), vectors.begin(), vectors.end());
+    createDuckDbTable(doubleInput);
+    testWindowFunction(doubleInput, windowFunction, overClauses);
   }
 };
 }; // namespace facebook::velox::window::test

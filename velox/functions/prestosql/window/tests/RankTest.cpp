@@ -33,7 +33,7 @@ TEST_F(RankTest, basic) {
           size, [](auto row) -> int32_t { return row % 7; }),
   });
 
-  twoColumnTests({vectors}, "rank");
+  testTwoColumnInput({vectors}, "rank");
 }
 
 TEST_F(RankTest, singlePartition) {
@@ -45,10 +45,7 @@ TEST_F(RankTest, singlePartition) {
       makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
   });
 
-  // Invoking with 2 vectors so that the underlying WindowFunction::apply() is
-  // called twice for the same partition.
-  std::vector<RowVectorPtr> input = {vectors, vectors};
-  twoColumnTests(input, "rank");
+  testTwoColumnInput({vectors}, "rank");
 }
 
 TEST_F(RankTest, randomInput) {
@@ -64,11 +61,18 @@ TEST_F(RankTest, randomInput) {
       "partition by c1 order by c0, c2, c3",
       "partition by c0 order by c1 desc, c2, c3",
       "partition by c1 order by c0 desc, c2, c3",
+      "partition by c0 order by c1",
+      "partition by c0 order by c2",
+      "partition by c0 order by c3",
+      "partition by c1 order by c0 desc",
+      "partition by c0, c1 order by c2, c3",
+      "partition by c0, c1 order by c2",
+      "partition by c0, c1 order by c2 desc",
       "order by c0, c1, c2, c3",
       "partition by c0, c1, c2, c3",
   };
 
-  testWindowClauses(vectors, "rank", overClauses);
+  testWindowFunction(vectors, "rank", overClauses);
 }
 
 }; // namespace
