@@ -67,6 +67,7 @@ MachinePageCount MappedMemory::ContiguousAllocation::numPages() const {
 
 // static
 void MappedMemory::destroyTestOnly() {
+  customInstance_ = nullptr;
   instance_ = nullptr;
 }
 

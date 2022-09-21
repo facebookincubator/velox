@@ -622,6 +622,13 @@ std::string Driver::toString() {
   out << "}";
   return out.str();
 }
+
+void Driver::checkTerminate() {
+  if (task()->shouldStop() == StopReason::kTerminate) {
+    VELOX_USER_FAIL("Cancelled");
+  }
+}
+
 SuspendedSection::SuspendedSection(Driver* FOLLY_NONNULL driver)
     : driver_(driver) {
   if (driver->task()->enterSuspended(driver->state()) != StopReason::kNone) {
@@ -630,13 +637,57 @@ SuspendedSection::SuspendedSection(Driver* FOLLY_NONNULL driver)
 }
 
 SuspendedSection::~SuspendedSection() {
-  if (driver_->task()->leaveSuspended(driver_->state()) != StopReason::kNone) {
-    VELOX_FAIL("Terminate detected when leaving suspended section");
-  }
+  driver_->task()->leaveSuspended(driver_->state());
 }
 
 std::string Driver::label() const {
   return fmt::format("<Driver {}:{}>", task()->taskId(), ctx_->driverId);
+}
+
+int64_t Driver::reclaimableBytes() const {
+  int64_t total = 0;
+  for (auto& op : operators_) {
+    total += op->reclaimableBytes();
+  }
+  return total;
+}
+
+bool Driver::growTaskMemory(
+    memory::MemoryUsageTracker::UsageType type,
+    int64_t size) {
+  bool result;
+  auto& tracker = *ctx_->task->pool()->getMemoryUsageTracker();
+  SuspendedSection::suspended(this, [&]() {
+    auto current = tracker.totalReservedBytes();
+    auto limit = tracker.maxTotalBytes();
+    if (current + size < limit) {
+      result = true;
+      return;
+    }
+    result = memory::MemoryManagerStrategy::instance()->reclaim(task(), size);
+  });
+  return result;
+}
+
+void Driver::spill(int64_t size) {
+  auto& tracker = *ctx_->task->pool()->getMemoryUsageTracker();
+  if (size > 0) {
+    // Prefer to spill last operator first, e.g. group by should spill
+    // before a colocated hash probe. Most often there will only be
+    // one spillable operator.
+    int64_t spilled = 0;
+    // Never try to reclaim less than 24MB.
+    constexpr int64_t kMinSpill = 24 << 20;
+    for (int32_t i = operators_.size() - 1; i >= 0; --i) {
+      auto op = operators_[i].get();
+      auto previous = tracker.getCurrentTotalBytes();
+      op->spill(std::max<int64_t>(size - spilled, kMinSpill));
+      spilled += previous - tracker.getCurrentTotalBytes();
+      if (spilled >= size) {
+        break;
+      }
+    }
+  }
 }
 
 std::string blockingReasonToString(BlockingReason reason) {

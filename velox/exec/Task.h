@@ -31,7 +31,7 @@ class PartitionedOutputBufferManager;
 class HashJoinBridge;
 class CrossJoinBridge;
 
-class Task : public std::enable_shared_from_this<Task> {
+class Task : public memory::MemoryConsumer, std::enable_shared_from_this<Task> {
  public:
   /// Creates a task to execute a plan fragment, but doesn't start execution
   /// until Task::start() method is called.
@@ -400,6 +400,28 @@ class Task : public std::enable_shared_from_this<Task> {
   // the Task stats. Clears 'stats'.
   void addOperatorStats(OperatorStats& stats);
 
+  /// Returns the number of running drivers.
+  // TODO(spershin): Deprecate this method gradually.
+  uint32_t numDrivers() const {
+    std::lock_guard<std::mutex> taskLock(mutex_);
+    return numRunningDrivers_;
+  }
+
+  memory::MemoryUsageTracker& tracker() const override {
+    return *pool_->getMemoryUsageTracker();
+  }
+
+  int64_t reclaimableBytes() const override;
+
+  // Tries to reclaim at least 'size' bytes of memory by shrinking
+  // allocations or reservations. The actual change in memory
+  // footprint should be retrieved from the Task's MemoryUsageTracker.
+  void reclaim(int64_t size) override;
+
+  // Returns the Driver running on the current thread or nullptr if the current
+  // thread is not running a Driver of 'this'.
+  Driver* FOLLY_NULLABLE thisDriver() const;
+
   // Returns kNone if no pause or terminate is requested. The thread count is
   // incremented if kNone is returned. If something else is returned the
   // calling thread should unwind and return itself to its pool.
@@ -474,6 +496,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::mutex& mutex() {
     return mutex_;
+  }
+
+  int32_t numThreads() const {
+    return numThreads_;
   }
 
  private:

@@ -37,6 +37,7 @@
 #include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/memory/MappedMemory.h"
+#include "velox/common/memory/MemoryManagerStrategy.h"
 #include "velox/common/memory/MemoryUsage.h"
 #include "velox/common/memory/MemoryUsageTracker.h"
 
@@ -587,6 +588,12 @@ class IMemoryManager {
   virtual bool reserve(int64_t size) = 0;
   // Subtracts from current total and regain memory quota.
   virtual void release(int64_t size) = 0;
+  virtual void registerConsumer(
+      MemoryConsumer* consumer,
+      const std::shared_ptr<MemoryConsumer>& consumerPtr) = 0;
+  virtual void unregisterConsumer(MemoryConsumer* consumer) = 0;
+
+  virtual std::shared_ptr<MemoryUsageTracker> getMemoryUsageTracker() const = 0;
 };
 
 // For now, users wanting multiple different allocators would need to
@@ -601,15 +608,15 @@ class MemoryManager final : public IMemoryManager {
   // the process singleton manager will be initialized with the given quota.
   FOLLY_EXPORT static MemoryManager<Allocator, ALIGNMENT>&
   getProcessDefaultManager(
-      int64_t quota = kMaxMemory,
+      int64_t maxBytes = kMaxMemory,
       bool ensureQuota = false) {
     static MemoryManager<Allocator, ALIGNMENT> manager{
-        Allocator::createDefaultAllocator(), quota};
+        Allocator::createDefaultAllocator(), maxBytes};
     auto actualQuota = manager.getMemoryQuota();
     VELOX_USER_CHECK(
-        !ensureQuota || actualQuota == quota,
+        !ensureQuota || actualQuota == maxBytes,
         "Process level manager manager created with input_quota: {}, current_quota: {}",
-        quota,
+        maxBytes,
         actualQuota);
 
     return manager;
@@ -634,6 +641,20 @@ class MemoryManager final : public IMemoryManager {
 
   Allocator& getAllocator();
 
+  std::shared_ptr<MemoryUsageTracker> getMemoryUsageTracker() const override {
+    return tracker_;
+  }
+
+  void registerConsumer(
+      MemoryConsumer* consumer,
+      const std::shared_ptr<MemoryConsumer>& consumerPtr) final {
+    MemoryManagerStrategy::instance()->registerConsumer(consumer, consumerPtr);
+  }
+
+  void unregisterConsumer(MemoryConsumer* consumer) final {
+    MemoryManagerStrategy::instance()->unregisterConsumer(consumer);
+  }
+
  private:
   VELOX_FRIEND_TEST(MemoryPoolImplTest, CapSubtree);
   VELOX_FRIEND_TEST(MemoryPoolImplTest, CapAllocation);
@@ -647,6 +668,8 @@ class MemoryManager final : public IMemoryManager {
   std::shared_ptr<MemoryPool> root_;
   mutable folly::SharedMutex mutex_;
   std::atomic_long totalBytes_{0};
+
+  std::shared_ptr<MemoryUsageTracker> tracker_;
 };
 
 template <typename Allocator, uint16_t ALIGNMENT>
@@ -914,7 +937,8 @@ MemoryManager<Allocator, ALIGNMENT>::MemoryManager(
           *this,
           kRootNodeName.str(),
           std::weak_ptr<MemoryPool>(),
-          memoryQuota)} {
+          memoryQuota)},
+      tracker_(MemoryUsageTracker::create()) {
   VELOX_USER_CHECK_GE(memoryQuota_, 0);
 }
 

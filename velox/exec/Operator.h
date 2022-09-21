@@ -373,6 +373,17 @@ class Operator {
     return stats_.planNodeId;
   }
 
+  // Returns an estimate of the maximum number of bytes that could be
+  // freed by calling spill().
+  virtual int64_t reclaimableBytes() const {
+    return 0;
+  }
+
+  // Tries to shrink the memory footprint of 'this' by at least
+  // 'minMemoryToReclaim' bytes. See the trackers of the different pools for the
+  // effect.
+  virtual void spill(int64_t /* minMemoryToReclaim */) {}
+
   // Registers 'translator' for mapping user defined PlanNode subclass instances
   // to user-defined Operators.
   static void registerOperator(std::unique_ptr<PlanNodeTranslator> translator);

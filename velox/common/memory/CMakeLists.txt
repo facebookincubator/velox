@@ -21,6 +21,7 @@ add_library(
   ByteStream.cpp
   HashStringAllocator.cpp
   Memory.cpp
+  MemoryManagerStrategy.cpp
   MemoryUsage.cpp
   MappedMemory.cpp
   MmapAllocator.cpp

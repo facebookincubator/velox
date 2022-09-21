@@ -27,6 +27,7 @@
 #include "velox/exec/Merge.h"
 #include "velox/exec/PartitionedOutputBufferManager.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/TaskMemoryStrategy.h"
 #if CODEGEN_ENABLED == 1
 #include "velox/experimental/codegen/CodegenLogger.h"
 #endif
@@ -146,6 +147,21 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       bufferManager_(PartitionedOutputBufferManager::getInstance()) {
+  auto strategy = memory::MemoryManagerStrategy::instance();
+  if (strategy->canResize()) {
+    auto tracker = memory::MemoryUsageTracker::create(
+        memory::MemoryUsageConfigBuilder().maxTotalMemory(0).build());
+    pool_->setMemoryUsageTracker(tracker);
+    tracker->setGrowCallback(
+        [&](memory::MemoryUsageTracker::UsageType type,
+            int64_t size,
+            memory::MemoryUsageTracker& /*limitingTracker*/) {
+          Driver* driver = thisDriver();
+          VELOX_CHECK(
+              driver, "Allocating Task memory outside of Driver threads");
+          return driver->growTaskMemory(type, size);
+        });
+  }
   auto memoryUsageTracker = pool_->getMemoryUsageTracker();
   if (memoryUsageTracker) {
     memoryUsageTracker->setMakeMemoryCapExceededMessage(
@@ -157,6 +173,7 @@ Task::Task(
 }
 
 Task::~Task() {
+  memory::getProcessDefaultMemoryManager().unregisterConsumer(this);
   try {
     if (hasPartitionedOutput_) {
       if (auto bufferManager = bufferManager_.lock()) {
@@ -166,6 +183,13 @@ Task::~Task() {
   } catch (const std::exception& e) {
     LOG(WARNING) << "Caught exception in ~Task(): " << e.what();
   }
+  // Remove the cap of 'this' from the total of the top tracker. The
+  // cap of a task level tracker is tracked as a reservation in the
+  // top tracker.
+  auto topTracker =
+      memory::getProcessDefaultMemoryManager().getMemoryUsageTracker();
+  topTracker->update(-tracker().maxTotalBytes());
+  memory::getProcessDefaultMemoryManager().unregisterConsumer(this);
 }
 
 velox::memory::MemoryPool* FOLLY_NONNULL Task::addDriverPool() {
@@ -363,9 +387,9 @@ void Task::start(
         factory->inputDriver, factory->outputDriver);
   }
 
-  // Register self for possible memory recovery callback. Do this
+  // Register self for possible memory reclaim callback. Do this
   // after sizing 'drivers_' but before starting the
-  // Drivers. 'drivers_' can be read by memory recovery or
+  // Drivers. 'drivers_' can be read by memory reclaim or
   // cancellation while Drivers are being made, so the array should
   // have final size from the start.
 
@@ -406,6 +430,9 @@ void Task::start(
   }
 
   std::unique_lock<std::mutex> l(self->mutex_);
+  // Register self for possible memory reclaim callback. Do this
+  // after creating the drivers but before starting them.
+  memory::getProcessDefaultMemoryManager().registerConsumer(self.get(), self);
 
   // For grouped execution we postpone driver creation up until the splits start
   // arriving, as we don't know what split groups we are going to get.
@@ -1524,6 +1551,64 @@ Task::getLocalExchangeQueues(
       "Incorrect local exchange ID: {}",
       planNodeId);
   return it->second.queues;
+}
+
+Driver* FOLLY_NULLABLE Task::thisDriver() const {
+  auto thisThread = std::this_thread::get_id();
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    for (auto& driver : drivers_) {
+      if (!driver) {
+        continue;
+      }
+      if (driver->state().thread == thisThread) {
+        return driver.get();
+      }
+    }
+  }
+  return nullptr;
+}
+
+int64_t Task::reclaimableBytes() const {
+  int64_t total = tracker().maxTotalBytes() - tracker().getCurrentUserBytes();
+  for (auto driver : drivers_) {
+    if (driver) {
+      total += driver->reclaimableBytes();
+    }
+  }
+  return total;
+}
+
+void Task::reclaim(int64_t size) {
+  VELOX_CHECK_EQ(numThreads_, 0, "reclaim expects paused task");
+  int32_t numDrivers = 0;
+  for (auto& driver : drivers_) {
+    if (driver) {
+      ++numDrivers;
+    }
+  }
+  if (!numDrivers) {
+    return;
+  }
+  int64_t reclaimed = 0;
+  auto& tracker = *pool_->getMemoryUsageTracker();
+  while (reclaimed < size) {
+    auto lastReclaimed = reclaimed;
+    for (auto& driver : drivers_) {
+      if (driver) {
+        auto previous = tracker.getCurrentTotalBytes();
+        driver->spill(std::max(TaskMemoryStrategy::kMinSpill, size));
+        reclaimed += previous - tracker.getCurrentTotalBytes();
+        if (reclaimed >= size) {
+          break;
+        }
+      }
+    }
+    if (reclaimed == lastReclaimed) {
+      // If nothing recovered in this sweep over drivers, give up.
+      break;
+    }
+  }
 }
 
 void Task::setError(const std::exception_ptr& exception) {

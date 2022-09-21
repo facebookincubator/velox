@@ -264,6 +264,24 @@ class Driver : public std::enable_shared_from_this<Driver> {
     return ctx_.get();
   }
 
+  // Checks terminate in Task and throws if needed.
+  void checkTerminate();
+  // Tries to spill 'size' or more bytes of memory from any
+  // of the operators in 'this'. The effect is seen in the tracker of the Task
+  // of 'this'. 'this' must be off thread or in a suspended state.
+  void spill(int64_t size);
+
+  // Attempts to increase the limit of the tracker of the Task of
+  // 'this' by 'size'. this will make a serious effort to raise the
+  // limit, including spilling other queries and will fail only if
+  // this really was not possible. Returns true if the limit was
+  // raised by at least 'size'. The caller must be a thread of the
+  // Task of 'this'.
+  bool growTaskMemory(memory::MemoryUsageTracker::UsageType type, int64_t size);
+
+  // Returns an estimate of the bytes that can be reclaimed by spill().
+  int64_t reclaimableBytes() const;
+
   const std::shared_ptr<Task>& task() const {
     return ctx_->task;
   }
@@ -421,10 +439,21 @@ struct DriverFactory {
 // which also means that they are instantaneously killable or spillable.
 class SuspendedSection {
  public:
+  // Runs 'body' as a suspended section. Checks for termination requested after
+  // exiting the section.
+  template <typename Body>
+  static void suspended(Driver* FOLLY_NONNULL driver, Body body) {
+    {
+      SuspendedSection section(driver);
+      body();
+    }
+    driver->checkTerminate();
+  }
+
+ private:
   explicit SuspendedSection(Driver* FOLLY_NONNULL driver);
   ~SuspendedSection();
 
- private:
   Driver* FOLLY_NONNULL driver_;
 };
 

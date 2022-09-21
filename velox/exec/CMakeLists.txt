@@ -51,6 +51,7 @@ add_library(
   TableScan.cpp
   TableWriter.cpp
   Task.cpp
+  TaskMemoryStrategy.cpp
   TopN.cpp
   Unnest.cpp
   Values.cpp

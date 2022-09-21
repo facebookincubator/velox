@@ -144,7 +144,7 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
       (folly::hasher<uint64_t>()(++spillTestCounter_)) % 100 <=
           spillConfig.testSpillPct) {
     const int64_t rowsToSpill = std::max<int64_t>(1, numRows / 10);
-    spill(
+    spillRows(
         numRows - rowsToSpill,
         outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow));
     return;
@@ -182,13 +182,13 @@ void OrderBy::ensureInputFits(const RowVectorPtr& input) {
   }
   const int64_t rowsToSpill = std::max<int64_t>(
       1, targetIncrementBytes / (data_->fixedRowSize() + outOfLineBytesPerRow));
-  spill(
+  spillRows(
       std::max<int64_t>(0, numRows - rowsToSpill),
       std::max<int64_t>(
           0, outOfLineBytes - (rowsToSpill * outOfLineBytesPerRow)));
 }
 
-void OrderBy::spill(int64_t targetRows, int64_t targetBytes) {
+void OrderBy::spillRows(int64_t targetRows, int64_t targetBytes) {
   VELOX_CHECK_GE(targetRows, 0);
   VELOX_CHECK_GE(targetBytes, 0);
 

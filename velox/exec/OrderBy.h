@@ -76,7 +76,7 @@ class OrderBy : public Operator {
   // frees the data in the 'data_'. This is called by ensureInputFits or by
   // external memory management. In the latter case, the Driver of this will be
   // in a paused state and off thread.
-  void spill(int64_t targetRows, int64_t targetBytes);
+  void spillRows(int64_t targetRows, int64_t targetBytes);
 
   memory::MappedMemory* FOLLY_NONNULL const mappedMemory_;
 

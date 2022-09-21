@@ -144,7 +144,7 @@ class MemoryUsageTracker
             .build());
   }
 
-  virtual ~MemoryUsageTracker() = default;
+  virtual ~MemoryUsageTracker();
 
   // Increments the reservation for 'this' so that we can allocate at
   // least 'size' bytes on top of the current allocation. This is used
@@ -158,26 +158,33 @@ class MemoryUsageTracker
     {
       std::lock_guard<std::mutex> l(mutex_);
       increment = reserveLocked(size);
-      minReservation_ += increment;
+      minReservation_ = reservation_.load();
     }
     if (increment) {
       checkAndPropagateReservationIncrement(increment, true);
     }
   }
 
-  // Release unused reservation. Used reservation will be released as the
-  // allocations are freed.
+  // If a minimum reservation has been set with reserve(), resets the
+  // minimum reservation. If the current usage is below the minimum
+  // reservation, decreases reservation and usage down to the rounded
+  // actual usage.
   void release() {
-    int64_t remaining;
+    int64_t freeable;
     {
+      if (!minReservation_) {
+        return;
+      }
       std::lock_guard<std::mutex> l(mutex_);
-      remaining = reservation_ - usedReservation_;
-      reservation_ = 0;
+      auto reservationByUsage = quantizedSize(usedReservation_);
+      freeable = reservation_ - reservationByUsage;
+      if (reservation_ > reservationByUsage) {
+        reservation_ = reservationByUsage;
+      }
       minReservation_ = 0;
-      usedReservation_ = 0;
     }
-    if (remaining) {
-      decrementUsage(type_, remaining);
+    if (freeable) {
+      decrementUsage(type_, freeable);
     }
   }
 
@@ -298,6 +305,8 @@ class MemoryUsageTracker
   /// unlikely. Otherwise attempts the reservation increment and returns
   /// true if succeeded.
   bool maybeReserve(int64_t increment);
+
+  std::string toString() const;
 
  protected:
   static constexpr int64_t kMB = 1 << 20;

@@ -16,6 +16,7 @@
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <velox/exec/Driver.h>
+#include <velox/exec/TaskMemoryStrategy.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -31,6 +32,29 @@ using facebook::velox::test::BatchMaker;
 
 // A PlanNode that passes its input to its output and makes variable
 // memory reservations.
+class TestingConsumerNode : public core::PlanNode {
+ public:
+  explicit TestingConsumerNode(std::shared_ptr<const core::PlanNode> input)
+      : PlanNode("consumer"), sources_{input} {}
+
+  const std::shared_ptr<const RowType>& outputType() const override {
+    return sources_[0]->outputType();
+  }
+
+  const std::vector<std::shared_ptr<const PlanNode>>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "consumer";
+  }
+
+  void addDetails(std::stringstream& /* stream */) const override {}
+
+ private:
+  std::vector<std::shared_ptr<const core::PlanNode>> sources_;
+};
+
 // A PlanNode that passes its input to its output and periodically
 // pauses and resumes other Tasks.
 class TestingPauserNode : public core::PlanNode {
@@ -102,7 +126,8 @@ class DriverTest : public OperatorTestBase {
       // applies to second column
       std::function<bool(int64_t)> filterFunc = nullptr,
       int32_t* filterHits = nullptr,
-      bool addTestingPauser = false) {
+      bool addTestingPauser = false,
+      bool addTestingConsumer = false) {
     std::vector<RowVectorPtr> batches;
     for (int32_t i = 0; i < numBatches; ++i) {
       batches.push_back(std::dynamic_pointer_cast<RowVector>(
@@ -133,6 +158,12 @@ class DriverTest : public OperatorTestBase {
       expressions.push_back(fmt::format("{} AS expr", project));
 
       planBuilder.project(expressions);
+    }
+    if (addTestingConsumer) {
+      planBuilder.addNode(
+          [](std::string /*id*/, std::shared_ptr<const core::PlanNode> input) {
+            return std::make_shared<TestingConsumerNode>(input);
+          });
     }
     if (addTestingPauser) {
       planBuilder.addNode([](std::string id, core::PlanNodePtr input) {
@@ -544,8 +575,8 @@ class TestingPauser : public Operator {
       test_->registerForWakeup(&future_);
       return nullptr;
     }
-    {
-      SuspendedSection noCancel(operatorCtx_->driver());
+
+    SuspendedSection::suspended(operatorCtx_->driver(), [&]() {
       sleep(1);
       if (counter_ % 7 == 0) {
         // Every 7th time, stop and resume other Tasks. This operation is
@@ -564,7 +595,7 @@ class TestingPauser : public Operator {
           Task::resume(task);
         }
       }
-    }
+    });
 
     return std::move(input_);
   }
@@ -801,6 +832,223 @@ TEST_F(DriverTest, driverCreationThrow) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).maxDrivers(5).copyResults(pool()),
       "Can only create 1 'throw driver'.");
+}
+
+namespace {
+// An operator that passes through its input but maintains a varying
+// memory allocation. For example, a distinct with spilling would have a similar
+// behavior.
+class TestingConsumer : public Operator {
+ public:
+  TestingConsumer(
+      DriverCtx* ctx,
+      int32_t id,
+      std::shared_ptr<const TestingConsumerNode> node,
+      int32_t sequence)
+      : Operator(ctx, node->outputType(), id, node->id(), "consumer"),
+        reclaimableTracker_(
+            operatorCtx_->pool()->getMemoryUsageTracker()->addChild(
+                false,
+                memory::MemoryUsageConfigBuilder().build())),
+        sequence_(sequence) {}
+
+  bool needsInput() const override {
+    return !noMoreInput_ && !input_;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    if (!input_) {
+      return nullptr;
+    }
+    int64_t size = 10 << 20;
+    if (!tryReserve(reclaimableTracker_, size)) {
+      VELOX_FAIL("Out of memory");
+    }
+
+    // Use the reserved memory.
+    reclaimableTracker_->update(reclaimableTracker_->getAvailableReservation());
+    // The reservation is converted to allocation.
+    reclaimableTracker_->release();
+    return std::move(input_);
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+  int64_t reclaimableBytes() const override {
+    auto size = reclaimableTracker_->getCurrentTotalBytes();
+    if (size > 40 << 20) {
+      return size / 3;
+    }
+    return 0;
+  }
+
+  void spill(int64_t size) override {
+    auto initialSize = reclaimableTracker_->getCurrentTotalBytes();
+    int64_t freed = std::min(size, initialSize);
+    reclaimableTracker_->update(-freed);
+    reclaimableTracker_->release();
+    auto newSize = reclaimableTracker_->getCurrentTotalBytes();
+    if (initialSize - newSize < freed / 2) {
+      LOG(INFO) << "Freeing under half of requested " << initialSize - newSize;
+    }
+  }
+
+  void close() override {
+    reclaimableTracker_->release();
+    reclaimableTracker_->update(-reclaimableTracker_->getCurrentUserBytes());
+  }
+
+ private:
+  static bool tryReserve(
+      const std::shared_ptr<memory::MemoryUsageTracker>& tracker,
+      int64_t reservationSize) {
+    try {
+      tracker->reserve(reservationSize);
+      return true;
+    } catch (const VeloxRuntimeError& e) {
+      if (e.errorCode() != ::facebook::velox::error_code::kMemCapExceeded) {
+        // If it is not MemCapExceeded exception, rethrow original exception.
+        throw;
+      }
+    }
+    return false;
+  }
+
+  std::shared_ptr<memory::MemoryUsageTracker> reclaimableTracker_;
+  const int32_t sequence_;
+};
+
+class ConsumerNodeFactory : public Operator::PlanNodeTranslator {
+ public:
+  ConsumerNodeFactory(
+      uint32_t maxDrivers,
+      std::atomic<int32_t>& sequence,
+      DriverTest* testInstance)
+      : maxDrivers_{maxDrivers},
+        sequence_{sequence},
+        testInstance_{testInstance} {}
+
+  std::unique_ptr<Operator> toOperator(
+      DriverCtx* ctx,
+      int32_t id,
+      const std::shared_ptr<const core::PlanNode>& node) override {
+    if (auto consumer =
+            std::dynamic_pointer_cast<const TestingConsumerNode>(node)) {
+      return std::make_unique<TestingConsumer>(ctx, id, consumer, ++sequence_);
+    }
+    return nullptr;
+  }
+
+  std::optional<uint32_t> maxDrivers(
+      const std::shared_ptr<const core::PlanNode>& node) override {
+    if (auto consumer =
+            std::dynamic_pointer_cast<const TestingConsumerNode>(node)) {
+      return maxDrivers_;
+    }
+    return std::nullopt;
+  }
+
+ private:
+  uint32_t maxDrivers_;
+  std::atomic<int32_t>& sequence_;
+  DriverTest* testInstance_;
+};
+} // namespace
+
+TEST_F(DriverTest, memoryReservation) {
+  // Simulates 20 concurrent Tasks each with 5 Drivers. The Drivers
+  // try to grow by 10MB at each batch of input from the source. Each
+  // source produces 200 batches, so the total growth is 2G * 100
+  // drivers. The total memory for running the tasks is 8G. All
+  // drivers are capable of lowering their memory reservation by
+  // 1/3. This means that any 10MB increase can be satisfied by
+  // shrinking a sufficient number of other Drivers by 1/3 of their
+  // held size. A shirinkage of less than 10MB will not be
+  // attempted. So we set the max to 8G so that if all drivers were at
+  // their unshrinkable sizem, i.e. 30MB, there would be memory to go
+  // around, otherwise we would not be guaranteed a successful
+  // run. All drivers will potentially be queued waiting for their
+  // 10MB extra memory. If the total were <= the sum of max concurrent
+  // growth requests we could have a situation where no memory could
+  // be reclaimed. We set the total to be 4G and the maximum of
+  // concurrent outstanding requests to be 1G so that the growth
+  // requests can be satisfied one after the other.
+  constexpr int32_t kNumTasks = 20;
+  constexpr int32_t kThreadsPerTask = 5;
+  constexpr int64_t kProcessBytes = 4UL << 30;
+  static bool initialized = false;
+  // Initialize once so that can run with gtest_repeat.
+  if (!initialized) {
+    memory::MemoryManagerStrategy::registerFactory(
+        [&]() { return std::make_unique<TaskMemoryStrategy>(kProcessBytes); });
+    initialized = true;
+  }
+  auto topTracker =
+      memory::getProcessDefaultMemoryManager().getMemoryUsageTracker();
+
+  static std::atomic<int32_t> sequence{0};
+  // Use a static variable to pass the test instance to the create
+  // function of the testing operator. The testing operator registers
+  // all its Tasks in the test instance to create inter-Task pauses.
+  static DriverTest* testInstance;
+  testInstance = this;
+
+  Operator::registerOperator(std::make_unique<ConsumerNodeFactory>(
+      kThreadsPerTask, sequence, testInstance));
+
+  auto& manager = memory::getProcessDefaultMemoryManager();
+  std::vector<int32_t> counters;
+  counters.reserve(kNumTasks);
+  std::vector<CursorParameters> params;
+  params.resize(kNumTasks);
+  int32_t hits;
+  auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(20);
+  for (int32_t i = 0; i < kNumTasks; ++i) {
+    params[i].queryCtx = core::QueryCtx::createForTest(
+        std::make_shared<core::MemConfig>(), executor);
+    params[i].planNode = makeValuesFilterProject(
+        rowType_,
+        "m1 % 10 > 0",
+        "m1 % 3 + m2 % 5 + m3 % 7 + m4 % 11 + m5 % 13 + m6 % 17 + m7 % 19",
+        200,
+        1'000,
+        [](int64_t num) { return num % 10 > 0; },
+        &hits,
+        false,
+        true);
+    params[i].maxDrivers = kThreadsPerTask;
+  }
+  std::vector<std::thread> threads;
+  threads.reserve(kNumTasks);
+  for (int32_t i = 0; i < kNumTasks; ++i) {
+    counters.push_back(0);
+    threads.push_back(std::thread([this, &params, &counters, i]() {
+      try {
+        readResults(params[i], ResultOperation::kRead, 10'000, &counters[i], i);
+      } catch (const std::exception& e) {
+        LOG(INFO) << "Reservation task errored out " << e.what();
+      }
+    }));
+  }
+  for (int32_t i = 0; i < kNumTasks; ++i) {
+    threads[i].join();
+    EXPECT_EQ(counters[i], kThreadsPerTask * hits);
+    EXPECT_TRUE(stateFutures_.at(i).isReady());
+  }
+  executor->join();
+  // The limits are released into topTracker at destruction.
+  tasks_.clear();
+  EXPECT_EQ(0, topTracker->getCurrentUserBytes());
 }
 
 int main(int argc, char** argv) {

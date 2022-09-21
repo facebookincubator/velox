@@ -33,9 +33,14 @@ std::shared_ptr<MemoryUsageTracker> MemoryUsageTracker::create(
   return std::make_shared<SharedMemoryUsageTracker>(parent, type, config);
 }
 
+MemoryUsageTracker::~MemoryUsageTracker() {}
+
 void MemoryUsageTracker::checkAndPropagateReservationIncrement(
     int64_t increment,
     bool updateMinReservation) {
+  if (!increment) {
+    return;
+  }
   std::exception_ptr exception;
   try {
     incrementUsage(type_, increment);
@@ -137,6 +142,17 @@ bool MemoryUsageTracker::maybeReserve(int64_t increment) {
     candidate = candidate->parent_.get();
   }
   return false;
+}
+
+std::string MemoryUsageTracker::toString() const {
+  std::stringstream out;
+  out << "<tracker total " << (getCurrentTotalBytes() >> 20) << " available "
+      << (getAvailableReservation() >> 20);
+  if (maxTotalBytes() != kMaxMemory) {
+    out << "limit " << (maxTotalBytes() >> 20);
+  }
+  out << ">";
+  return out.str();
 }
 
 SimpleMemoryTracker::SimpleMemoryTracker(const MemoryUsageConfig& config)
