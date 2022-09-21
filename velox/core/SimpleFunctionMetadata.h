@@ -26,10 +26,11 @@
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
+inline constexpr char kPrecisionVariable[] = "a_precision";
+inline constexpr char kScaleVariable[] = "a_scale";
+
 namespace facebook::velox::core {
 
-static std::string kPrecisionVariable = "a_precision";
-static std::string kScaleVariable = "a_scale";
 // Most UDFs are deterministic, hence this default value.
 template <class T, class = void>
 struct udf_is_deterministic : std::true_type {};
