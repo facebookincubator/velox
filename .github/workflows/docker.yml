@@ -36,16 +36,16 @@ jobs:
       
       - uses: actions/checkout@v3
       
-      - name: Build and Push circle-ci
-        uses: docker/build-push-action@v3
-        with:
-          context: scripts
-          file: scripts/circleci-container.dockfile
-          build-args: cpu_target=avx
-          push: true # ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
-          tags: ghcr.io/assignuser/velox-dev:circleci-avx
+      # - name: Build and Push circle-ci
+      #   uses: docker/build-push-action@v3
+      #   with:
+      #     context: scripts
+      #     file: scripts/circleci-container.dockfile
+      #     build-args: cpu_target=avx
+      #     push: true # ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
+      #     tags: ghcr.io/assignuser/velox-dev:circleci-avx
 
-      - name: Build and Push Check
+      - name: Build and Push check
         uses: docker/build-push-action@v3
         with:
           context: scripts
@@ -63,7 +63,7 @@ jobs:
           push: true # ${{ github.repository == 'facebookincubator/velox' && github.event != 'pull_request'}}
           tags: ghcr.io/assignuser/velox-dev:torcharrow-avx
 
-      - name: Build and Push Dev-Image 
+      - name: Build and Push dev-image 
         uses: docker/build-push-action@v3
         with:
           file: scripts/ubuntu-22.04-cpp.dockerfile
