@@ -54,7 +54,7 @@ inline bool isOssFile(const std::string_view filename) {
 }
 
 inline bool isS3File(const std::string_view filename) {
-  // TODO: Each implementation should be registered as separate filesystem
+  // TODO: Each prefix should be implemented as its own filesystem.
   return isS3AwsFile(filename) || isS3aFile(filename) || isOssFile(filename);
 }
 
@@ -67,6 +67,13 @@ inline void bucketAndKeyFromS3Path(
   key = path.substr(firstSep + 1);
 }
 
+// TODO: Correctness check for bucket name.
+// 1. Length between 3 and 63:
+//    3 < length(bucket) < 63
+// 2. Mandatory label notation - regexp:
+//    regexp="(^[a-z0-9])([.-]?[a-z0-9]+){2,62}([/]?$)"
+// 3. Disallowed IPv4 notation - regexp:
+//    regexp="^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}[/]?$"
 inline std::string s3URI(const std::string& bucket) {
   return std::string(kS3Scheme) + bucket;
 }
@@ -78,7 +85,7 @@ inline std::string s3URI(const std::string& bucket, const std::string& key) {
 inline std::string s3Path(const std::string_view& path) {
   // Remove one of the prefixes 's3://', 'oss://', 's3a://' if any from the
   // given path.
-  // TODO: Each implementation should be registered as separate filesystem
+  // TODO: Each prefix should be implemented as its own filesystem.
   if (isS3AwsFile(path)) {
     return std::string(path.substr(kS3Scheme.length()));
   } else if (isS3aFile(path)) {
