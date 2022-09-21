@@ -137,8 +137,8 @@ Use the following commands:
 $ docker-compose build ubuntu-cpp
 $ docker-compose run --rm ubuntu-cpp
 ```
-If the compilation uses too many resources, you can limit the number
-of threads deployed in the container by doing:
+If you want to increase or decrease the number of threads used when building Velox
+you can override the `NUM_THREADS` environment variable by doing:
 ```shell
 $ docker-compose run -e NUM_THREADS=<NUM_THREADS_TO_USE> --rm ubuntu-cpp
 ```
