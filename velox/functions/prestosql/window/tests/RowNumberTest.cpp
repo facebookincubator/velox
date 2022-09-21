@@ -33,7 +33,6 @@ TEST_F(RowNumberTest, basic) {
           size, [](auto row) -> int32_t { return row % 7; }),
   });
 
-  createDuckDbTable({vectors});
   twoColumnTests({vectors}, "row_number");
 }
 
@@ -49,7 +48,6 @@ TEST_F(RowNumberTest, singlePartition) {
   // Invoking with 2 vectors so that the underlying WindowFunction::apply() is
   // called twice for the same partition.
   std::vector<RowVectorPtr> input = {vectors, vectors};
-  createDuckDbTable(input);
   twoColumnTests(input, "row_number");
 }
 

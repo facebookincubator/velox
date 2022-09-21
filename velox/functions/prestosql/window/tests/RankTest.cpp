@@ -24,16 +24,15 @@ namespace {
 class RankTest : public WindowTestBase {};
 
 TEST_F(RankTest, basic) {
-  vector_size_t size = 100;
+  vector_size_t size = 1000;
 
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(
-          size, [](auto row) -> int32_t { return row % 5; }),
+          size, [](auto row) -> int32_t { return row % 10; }),
       makeFlatVector<int32_t>(
           size, [](auto row) -> int32_t { return row % 7; }),
   });
 
-  createDuckDbTable({vectors});
   twoColumnTests({vectors}, "rank");
 }
 
@@ -43,13 +42,12 @@ TEST_F(RankTest, singlePartition) {
 
   auto vectors = makeRowVector({
       makeFlatVector<int32_t>(size, [](auto /* row */) { return 1; }),
-      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row % 50; }),
   });
 
   // Invoking with 2 vectors so that the underlying WindowFunction::apply() is
   // called twice for the same partition.
   std::vector<RowVectorPtr> input = {vectors, vectors};
-  createDuckDbTable(input);
   twoColumnTests(input, "rank");
 }
 

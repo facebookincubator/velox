@@ -75,6 +75,8 @@ class WindowTestBase : public OperatorTestBase {
       const std::vector<RowVectorPtr>& vectors,
       const std::string& windowFunction) {
     VELOX_CHECK_EQ(vectors[0]->childrenSize(), 2);
+    createDuckDbTable(vectors);
+
     std::vector<std::string> overClauses = {
         "partition by c0 order by c1",
         "partition by c1 order by c0",
