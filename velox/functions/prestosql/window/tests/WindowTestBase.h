@@ -47,17 +47,17 @@ class WindowTestBase : public OperatorTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
       const std::string& overClause) {
-    auto windowSql = fmt::format("{}() over ({})", function, overClause);
+    auto functionSql = fmt::format("{}() over ({})", function, overClause);
 
-    SCOPED_TRACE(windowSql);
-    auto op = PlanBuilder().values(input).window({windowSql}).planNode();
+    SCOPED_TRACE(functionSql);
+    auto op = PlanBuilder().values(input).window({functionSql}).planNode();
 
     auto rowType = asRowType(input[0]->type());
     std::string columnsString = folly::join(", ", rowType->names());
     columnsString += ", ";
 
     assertQuery(
-        op, fmt::format("SELECT {} {} FROM tmp", columnsString, windowSql));
+        op, fmt::format("SELECT {} {} FROM tmp", columnsString, functionSql));
   };
 
   void testWindowFunction(
@@ -74,10 +74,10 @@ class WindowTestBase : public OperatorTestBase {
   // clauses. The over clauses covers all combinations of partition by
   // and order by of the two input columns.
   void testTwoColumnInput(
-      const std::vector<RowVectorPtr>& vectors,
+      const std::vector<RowVectorPtr>& input,
       const std::string& windowFunction) {
-    VELOX_CHECK_EQ(vectors[0]->childrenSize(), 2);
-    createDuckDbTable(vectors);
+    VELOX_CHECK_EQ(input[0]->childrenSize(), 2);
+    createDuckDbTable(input);
 
     std::vector<std::string> overClauses = {
         "partition by c0 order by c1",
@@ -93,14 +93,14 @@ class WindowTestBase : public OperatorTestBase {
         "partition by c0, c1",
     };
 
-    testWindowFunction(vectors, windowFunction, overClauses);
+    testWindowFunction(input, windowFunction, overClauses);
 
     // Invoking with same vector set twice so that the underlying WindowFunction
     // receives the same data set multiple times and does a full processing
     // (partition, sort) + apply of it.
     std::vector<RowVectorPtr> doubleInput;
-    doubleInput.insert(doubleInput.end(), vectors.begin(), vectors.end());
-    doubleInput.insert(doubleInput.end(), vectors.begin(), vectors.end());
+    doubleInput.insert(doubleInput.end(), input.begin(), input.end());
+    doubleInput.insert(doubleInput.end(), input.begin(), input.end());
     createDuckDbTable(doubleInput);
     testWindowFunction(doubleInput, windowFunction, overClauses);
   }
