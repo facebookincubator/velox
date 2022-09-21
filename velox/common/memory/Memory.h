@@ -423,6 +423,18 @@ class MemoryPoolImpl : public MemoryPoolBase {
       std::weak_ptr<MemoryPool> parent,
       int64_t cap = kMaxMemory);
 
+  ~MemoryPoolImpl() {
+    if (const auto& tracker = getMemoryUsageTracker()) {
+      auto remainingBytes = tracker->getCurrentUserBytes();
+      VELOX_CHECK_EQ(
+          0,
+          remainingBytes,
+          "Memory pool should be destroyed only after all allocated memory "
+          "has been freed. Remaining bytes allocated: {}",
+          remainingBytes);
+    }
+  }
+
   // Actual memory allocation operations. Can be delegated.
   // Access global MemoryManager to check usage of current node and enforce
   // memory cap accordingly. Since MemoryManager walks the MemoryPoolImpl
