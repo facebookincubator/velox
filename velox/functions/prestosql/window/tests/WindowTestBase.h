@@ -54,10 +54,9 @@ class WindowTestBase : public OperatorTestBase {
 
     auto rowType = asRowType(input[0]->type());
     std::string columnsString = folly::join(", ", rowType->names());
-    columnsString += ", ";
 
     assertQuery(
-        op, fmt::format("SELECT {} {} FROM tmp", columnsString, functionSql));
+        op, fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql));
   };
 
   void testWindowFunction(
