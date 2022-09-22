@@ -237,7 +237,7 @@ class RowContainer {
       const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
       int32_t numRows,
       RowColumn col,
-      VectorPtr result);
+      VectorPtr& result);
 
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
@@ -247,7 +247,7 @@ class RowContainer {
       int32_t numRows,
       RowColumn col,
       vector_size_t resultOffset,
-      VectorPtr result);
+      VectorPtr& result);
 
   /// Copies the values from the array pointed to by 'rows' at 'col' into
   /// 'result' (starting at 'resultOffset') for the rows at positions in
@@ -258,7 +258,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       RowColumn col,
       vector_size_t resultOffset,
-      VectorPtr result);
+      VectorPtr& result);
 
   // Copies the values at 'columnIndex' into 'result' for the
   // 'numRows' rows pointed to by 'rows'. If an entry in 'rows' is null, sets
@@ -267,7 +267,7 @@ class RowContainer {
       const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
       int32_t numRows,
       int32_t columnIndex,
-      VectorPtr result) {
+      VectorPtr& result) {
     extractColumn(rows, numRows, columnAt(columnIndex), result);
   }
 
@@ -279,7 +279,7 @@ class RowContainer {
       int32_t numRows,
       int32_t columnIndex,
       int32_t resultOffset,
-      VectorPtr result) {
+      VectorPtr& result) {
     extractColumn(rows, numRows, columnAt(columnIndex), resultOffset, result);
   }
 
@@ -292,7 +292,7 @@ class RowContainer {
       folly::Range<const vector_size_t*> rowNumbers,
       int32_t columnIndex,
       const vector_size_t resultOffset,
-      VectorPtr result) {
+      VectorPtr& result) {
     extractColumn(
         rows, rowNumbers, columnAt(columnIndex), resultOffset, result);
   }
@@ -625,7 +625,7 @@ class RowContainer {
       int32_t numRows,
       RowColumn column,
       int32_t resultOffset,
-      VectorPtr result) {
+      VectorPtr& result) {
     if (rowNumbers.size() > 0) {
       extractColumnTypedInternal<true, Kind>(
           rows, rowNumbers, numRows, column, resultOffset, result);
@@ -642,7 +642,7 @@ class RowContainer {
       int32_t numRows,
       RowColumn column,
       int32_t resultOffset,
-      VectorPtr result) {
+      VectorPtr& result) {
     if (Kind == TypeKind::ROW || Kind == TypeKind::ARRAY ||
         Kind == TypeKind::MAP) {
       extractComplexType<useRowNumbers>(
@@ -730,7 +730,7 @@ class RowContainer {
       numRowsInternal = rowNumbers.size();
     }
     auto maxRows = numRowsInternal + resultOffset;
-    VELOX_DCHECK_LE(maxRows, result->size());
+    result->resize(maxRows);
     BufferPtr nullBuffer = result->mutableNulls(maxRows);
     auto nulls = nullBuffer->asMutable<uint64_t>();
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
@@ -765,7 +765,7 @@ class RowContainer {
     if constexpr (useRowNumbers) {
       numRowsInternal = rowNumbers.size();
     }
-    VELOX_DCHECK_LE(numRowsInternal + resultOffset, result->size());
+    result->resize(numRowsInternal + resultOffset);
 
     for (int32_t i = 0, j = resultOffset; i < numRowsInternal; ++i, ++j) {
       const char* row;
@@ -796,7 +796,7 @@ class RowContainer {
     }
 
     auto maxRows = numRowsInternal + resultOffset;
-    VELOX_DCHECK_LE(maxRows, result->size());
+    result->resize(maxRows);
 
     BufferPtr valuesBuffer = result->mutableValues(maxRows);
     auto values = valuesBuffer->asMutableRange<T>();
@@ -829,7 +829,7 @@ class RowContainer {
     if constexpr (useRowNumbers) {
       numRowsInternal = rowNumbers.size();
     }
-    VELOX_DCHECK_LE(numRowsInternal + resultOffset, result->size());
+    result->resize(numRowsInternal + resultOffset);
     for (int32_t i = 0, j = resultOffset; i < numRowsInternal; ++i, ++j) {
       const char* row;
       if constexpr (useRowNumbers) {
@@ -1001,7 +1001,7 @@ class RowContainer {
       int32_t numRows,
       RowColumn column,
       int32_t resultOffset,
-      VectorPtr result) {
+      VectorPtr& result) {
     ByteStream stream;
     auto nullByte = column.nullByte();
     auto nullMask = column.nullMask();
@@ -1010,7 +1010,7 @@ class RowContainer {
     if constexpr (useRowNumbers) {
       numRowsInternal = rowNumbers.size();
     }
-    VELOX_DCHECK_LE(numRowsInternal + resultOffset, result->size());
+    result->resize(numRowsInternal + resultOffset);
 
     for (int i = 0, j = resultOffset; i < numRowsInternal; ++i, ++j) {
       const char* row;
@@ -1256,7 +1256,7 @@ inline void RowContainer::extractColumnTyped<TypeKind::OPAQUE>(
     int32_t /*numRows*/,
     RowColumn /*column*/,
     int32_t /*resultOffset*/,
-    VectorPtr /*result*/) {
+    VectorPtr& /*result*/) {
   VELOX_UNSUPPORTED("RowContainer doesn't support values of type OPAQUE");
 }
 
@@ -1264,7 +1264,7 @@ inline void RowContainer::extractColumn(
     const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
     int32_t numRows,
     RowColumn column,
-    VectorPtr result) {
+    VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped,
       result->typeKind(),
@@ -1281,7 +1281,7 @@ inline void RowContainer::extractColumn(
     int32_t numRows,
     RowColumn column,
     int32_t resultOffset,
-    VectorPtr result) {
+    VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped,
       result->typeKind(),
@@ -1298,7 +1298,7 @@ inline void RowContainer::extractColumn(
     folly::Range<const vector_size_t*> rowNumbers,
     RowColumn column,
     int32_t resultOffset,
-    VectorPtr result) {
+    VectorPtr& result) {
   VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       extractColumnTyped,
       result->typeKind(),
