@@ -103,14 +103,14 @@ commands:
 executors:
   build:
     docker:
-      - image :  ghcr.io/facebookincubator/velox-dev:circleci-avx
+      - image : prestocpp/velox-avx-circleci:mikesh-20220717
     resource_class: 2xlarge
     environment:
         CC:  /opt/rh/gcc-toolset-9/root/bin/gcc
         CXX: /opt/rh/gcc-toolset-9/root/bin/g++
   check:
     docker:
-      - image :  ghcr.io/facebookincubator/velox-dev:check-avx
+      - image : prestocpp/velox-check:mikesh-20210609
   doc-gen:
     docker:
       - image : prestocpp/velox-circleci:sagarm-20220131
