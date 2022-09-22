@@ -72,6 +72,14 @@ class ValueHook {
   }
 };
 
+// Debug information produced by loading a LazyVector.
+struct LoadInfo {
+  // Rows for which the load sets a value.
+  SelectivityVector rows;
+  // Additional debug comment, e.g. origin file / column.
+  std::string loadString;
+};
+
 // Produces values for a LazyVector for a set of positions.
 class VectorLoader {
  public:
@@ -83,17 +91,18 @@ class VectorLoader {
   // subset of the rows that were intended to be loadable when the
   // loader was created. This may be called once in the lifetime of
   // 'this'.
-  void load(RowSet rows, ValueHook* hook, VectorPtr* result);
+  std::string load(RowSet rows, ValueHook* hook, VectorPtr* result);
 
   // Converts 'rows' into a RowSet and calls load(). Provided for
   // convenience in loading LazyVectors in expression evaluation.
-  void load(const SelectivityVector& rows, ValueHook* hook, VectorPtr* result);
+  LoadInfo
+  load(const SelectivityVector& rows, ValueHook* hook, VectorPtr* result);
 
  protected:
-  virtual void
+  virtual std::string
   loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) = 0;
 
-  virtual void loadInternal(
+  virtual LoadInfo loadInternal(
       const SelectivityVector& rows,
       ValueHook* hook,
       VectorPtr* result);
@@ -164,7 +173,8 @@ class LazyVector : public BaseVector {
     if (!vector_ && type_->kind() == TypeKind::ROW) {
       vector_ = BaseVector::create(type_, rows.back() + 1, pool_);
     }
-    loader_->load(rows, hook, &vector_);
+    loadInfo_.loadString = loader_->load(rows, hook, &vector_);
+    loadInfo_.rows = toSelectivityVector(rows);
   }
 
   std::optional<int32_t> compare(
@@ -198,7 +208,7 @@ class LazyVector : public BaseVector {
         vector_ = BaseVector::create(type_, 0, pool_);
       }
       SelectivityVector allRows(BaseVector::length_);
-      loader_->load(allRows, nullptr, &vector_);
+      loadInfo_ = loader_->load(allRows, nullptr, &vector_);
       VELOX_CHECK(vector_);
       if (vector_->encoding() == VectorEncoding::Simple::LAZY) {
         vector_ = vector_->asUnchecked<LazyVector>()->loadedVectorShared();
@@ -280,6 +290,10 @@ class LazyVector : public BaseVector {
       SelectivityVector& baseRows);
 
  private:
+  std::string toSummaryString() const override;
+
+  static SelectivityVector toSelectivityVector(RowSet rows);
+
   std::unique_ptr<VectorLoader> loader_;
 
   // True if all values are loaded.
@@ -287,6 +301,8 @@ class LazyVector : public BaseVector {
   // Vector to hold loaded values. This may be present before load for
   // reuse. If loading is with ValueHook, this will not be created.
   mutable VectorPtr vector_;
+
+  mutable LoadInfo loadInfo_;
 };
 
 } // namespace facebook::velox

@@ -52,6 +52,13 @@ void DecodedVector::decode(
     bool loadLazy) {
   reset(rows.end());
   loadLazy_ = loadLazy;
+  operand_ = &vector;
+  if (rows.end() > vector.size()) {
+    auto rowsCopy = rows;
+    rowsCopy.updateBounds();
+    VELOX_CHECK_LE(
+        rowsCopy.end(), vector.size(), "Vector: {}", vector.toString(true));
+  }
   if (loadLazy_ && (isLazyNotLoaded(vector) || vector.isLazy())) {
     decode(*vector.loadedVector(), rows);
     return;
@@ -204,6 +211,7 @@ void DecodedVector::applyDictionaryWrapper(
   }
 
   auto newIndices = dictionaryVector.wrapInfo()->as<vector_size_t>();
+  int32_t numIndices = dictionaryVector.size();
   auto newNulls = dictionaryVector.rawNulls();
   if (newNulls) {
     hasExtraNulls_ = true;
@@ -225,6 +233,15 @@ void DecodedVector::applyDictionaryWrapper(
   rows.applyToSelected([&](vector_size_t row) {
     if (!nulls_ || !bits::isBitNull(nulls_, row)) {
       auto wrappedIndex = currentIndices[row];
+      if (static_cast<uint32_t>(wrappedIndex) >= numIndices) {
+        VELOX_FAIL(
+            "BVEC {} Bad index {} <= {} row {}  decoding  {}",
+            wrappedIndex,
+            numIndices,
+            row,
+            operand_->toString(true),
+            dictionaryVector.toString());
+      }
       if (newNulls && bits::isBitNull(newNulls, wrappedIndex)) {
         bits::setNull(copiedNulls, row);
       } else {

@@ -330,6 +330,10 @@ BlockingReason Exchange::isBlocked(ContinueFuture* FOLLY_NONNULL future) {
 
   ContinueFuture dataFuture;
   currentPage_ = exchangeClient_->next(&atEnd_, &dataFuture);
+  if (currentPage_) {
+    stats_.addRuntimeStat(
+        "exchangeBytes", RuntimeCounter(currentPage_->size()));
+  }
   if (currentPage_ || atEnd_) {
     if (atEnd_ && noMoreSplits_) {
       operatorCtx_->task()->multipleSplitsFinished(stats_.numSplits);

@@ -19,6 +19,8 @@
 
 #include "velox/codegen/Codegen.h"
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/process/TraceContext.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/CrossJoinBuild.h"
 #include "velox/exec/Exchange.h"
@@ -30,6 +32,7 @@
 #if CODEGEN_ENABLED == 1
 #include "velox/experimental/codegen/CodegenLogger.h"
 #endif
+#include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::exec {
 
@@ -129,6 +132,8 @@ std::string makeUuid() {
 }
 } // namespace
 
+void ensureDebugRegistered();
+
 Task::Task(
     const std::string& taskId,
     core::PlanFragment planFragment,
@@ -146,6 +151,7 @@ Task::Task(
       consumerSupplier_(std::move(consumerSupplier)),
       onError_(onError),
       bufferManager_(PartitionedOutputBufferManager::getInstance()) {
+  ensureDebugRegistered();
   auto memoryUsageTracker = pool_->getMemoryUsageTracker();
   if (memoryUsageTracker) {
     memoryUsageTracker->setMakeMemoryCapExceededMessage(
@@ -1821,4 +1827,82 @@ std::string Task::getErrorMsgOnMemCapExceeded(
   }
   return out.str();
 }
+
+void doCommand(std::string command) {
+  auto cache =
+      dynamic_cast<cache::AsyncDataCache*>(memory::MappedMemory::getInstance());
+  if (command == "dropram") {
+    if (!cache) {
+      LOG(ERROR) << "No cache to drop";
+      return;
+    }
+    LOG(INFO) << "VELOXCMD: Dropping RAM cache";
+    cache->clear();
+    return;
+  }
+  if (command == "dropssd") {
+    if (!cache) {
+      LOG(ERROR) << "VELOXCMD: No cache to drop";
+      return;
+    }
+
+    LOG(INFO) << "VELOXCMD: Dropping SSD and RAM cache";
+    if (cache->ssdCache()) {
+      cache->ssdCache()->clear();
+    }
+    cache->clear();
+    return;
+  }
+
+  if (command == "status") {
+    LOG(INFO) << "VELOXCMD: " << process::TraceContext::statusLine();
+    return;
+  }
+  auto equals = strchr(command.c_str(), '=');
+  if (equals) {
+    int32_t equalsOffset = equals - command.c_str();
+    std::string flag(command.data(), equalsOffset);
+    std::string value(
+        command.data() + equalsOffset + 1, command.size() - equalsOffset);
+    LOG(INFO) << "VELOXCMD set " << flag << "=" << value << ": "
+              << gflags::SetCommandLineOption(flag.c_str(), value.c_str());
+    return;
+  }
+  LOG(ERROR) << "VELOXCMD: Did not understand veloxcmd.txt: " << command;
+}
+
+class DebugActionFunction : public exec::VectorFunction {
+ public:
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      exec::EvalCtx& context,
+      VectorPtr& result) const override {
+    auto string = dynamic_cast<ConstantVector<StringView>*>(args[0].get());
+    VELOX_CHECK(string, "debug_action requires a literal string argument");
+    std::string action = string->valueAt(0);
+    auto length = action.size();
+    const char* buffer = action.c_str();
+    int32_t start = 0;
+    for (auto i = 0; i < length; ++i) {
+      if (buffer[i] == ';') {
+        doCommand(std::string(buffer + start, i - start));
+        start = i + 1;
+      }
+    }
+    if (length - start > 0) {
+      doCommand(std::string(buffer + start, length - start));
+    }
+  }
+};
+
+void ensureDebugRegistered() {
+  static bool initialized;
+  if (!initialized) {
+    // VELOX_REGISTER_VECTOR_FUNCTION(DebugActionFunction, "debug_action");
+    initialized = true;
+  }
+}
+
 } // namespace facebook::velox::exec

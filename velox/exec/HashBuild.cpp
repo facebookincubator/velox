@@ -260,11 +260,15 @@ void HashBuild::noMoreInput() {
             operatorCtx_->driverCtx()->splitGroupId, planNodeId())
         ->setAntiJoinHasNullKeys();
   } else {
-    bool hasOthers = !otherTables.empty();
-    table_->prepareJoinTable(
-        std::move(otherTables),
-        hasOthers ? operatorCtx_->task()->queryCtx()->executor() : nullptr);
-
+    uint64_t buildMicros = 0;
+    {
+      MicrosecondTimer builtTimer(&buildMicros);
+      bool hasOthers = !otherTables.empty();
+      table_->prepareJoinTable(
+          std::move(otherTables),
+          hasOthers ? operatorCtx_->task()->queryCtx()->executor() : nullptr);
+    }
+    stats_.addRuntimeStat("buildNanos", RuntimeCounter(buildMicros * 1000));
     addRuntimeStats();
 
     operatorCtx_->task()
@@ -275,6 +279,9 @@ void HashBuild::noMoreInput() {
 }
 
 void HashBuild::addRuntimeStats() {
+  stats_.addRuntimeStat(
+      "joinBuildBytes", RuntimeCounter(table_->allocatedBytes()));
+
   // Report range sizes and number of distinct values for the join keys.
   const auto& hashers = table_->hashers();
   uint64_t asRange;

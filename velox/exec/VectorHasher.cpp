@@ -378,7 +378,8 @@ void VectorHasher::lookupValueIdsTyped(
     const DecodedVector& decoded,
     SelectivityVector& rows,
     raw_vector<uint64_t>& hashes,
-    uint64_t* result) const {
+    uint64_t* result,
+    bool noNulls) const {
   using T = typename TypeTraits<Kind>::NativeType;
   if (decoded.isConstantMapping()) {
     if (decoded.isNullAt(rows.begin())) {
@@ -398,21 +399,25 @@ void VectorHasher::lookupValueIdsTyped(
       });
     }
   } else if (decoded.isIdentityMapping()) {
-    rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
-      if (decoded.isNullAt(row)) {
-        if (multiplier_ == 1) {
-          result[row] = 0;
+    if (Kind == TypeKind::BIGINT && isRange_ && noNulls) {
+      lookupIdsRange64(decoded, rows, result);
+    } else {
+      rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
+        if (decoded.isNullAt(row)) {
+          if (multiplier_ == 1) {
+            result[row] = 0;
+          }
+          return;
         }
-        return;
-      }
-      T value = decoded.valueAt<T>(row);
-      uint64_t id = lookupValueId(value);
-      if (id == kUnmappable) {
-        rows.setValid(row, false);
-        return;
-      }
-      result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
-    });
+        T value = decoded.valueAt<T>(row);
+        uint64_t id = lookupValueId(value);
+        if (id == kUnmappable) {
+          rows.setValid(row, false);
+          return;
+        }
+        result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+      });
+    }
     rows.updateBounds();
   } else {
     hashes.resize(decoded.base()->size());
@@ -441,11 +446,88 @@ void VectorHasher::lookupValueIdsTyped(
   }
 }
 
+template <int8_t kWidth, typename Callable>
+void forBatches(const SelectivityVector& rows, Callable func) {
+  constexpr int32_t unitMask = (1 << kWidth) - 1;
+  auto bits = rows.asRange().bits();
+  bits::forEachWord(
+      rows.begin(),
+      rows.end(),
+      [&](auto index, uint64_t mask) {
+        uint64_t active = bits[index] & mask;
+        if (!active) {
+          return;
+        }
+        int32_t skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+        active >>= skip;
+        auto first = skip;
+        while (active) {
+          if (active & unitMask) {
+            func(index * 64 + first, active & unitMask);
+            first += kWidth;
+            active >>= kWidth;
+          } else {
+            skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+            active >>= skip;
+            first += skip;
+          }
+        }
+      },
+      [&](auto index) {
+        uint64_t active = bits[index];
+        if (!active) {
+          return;
+        }
+        int32_t skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+        active >>= skip;
+        auto first = skip;
+        while (active) {
+          if (active & unitMask) {
+            func(index * 64 + first, active & unitMask);
+            first += kWidth;
+            active >>= kWidth;
+          } else {
+            skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+            active >>= skip;
+            first += skip;
+          }
+        }
+      });
+}
+
+void VectorHasher::lookupIdsRange64(
+    const DecodedVector& decoded,
+    SelectivityVector& rows,
+    uint64_t* result) const {
+  auto lower = xsimd::batch<int64_t>::broadcast(min_);
+  auto upper = xsimd::batch<int64_t>::broadcast(max_);
+  auto data = decoded.data<int64_t>();
+  auto offset = lower - 1;
+  auto bits = rows.asMutableRange().bits();
+  forBatches<4>(rows, [&](auto index, auto mask) {
+    auto values = xsimd::batch<int64_t>::load_unaligned(data + index);
+    uint64_t outOfRange = simd::toBitMask((lower > values) | (values > upper));
+    if (outOfRange) {
+      bits[index / 64] &= ~(outOfRange << (index & 63));
+    }
+    if (outOfRange != 0xf) {
+      if (multiplier_ == 1) {
+        (values - offset).store_unaligned(result + index);
+      } else {
+        (xsimd::batch<int64_t>::load_unaligned(result + index) +
+         (xsimd::batch<int64_t>::broadcast(multiplier_) * (values - offset)))
+            .store_unaligned(result + index);
+      }
+    }
+  });
+}
+
 void VectorHasher::lookupValueIds(
     const BaseVector& values,
     SelectivityVector& rows,
     ScratchMemory& scratchMemory,
-    raw_vector<uint64_t>& result) const {
+    raw_vector<uint64_t>& result,
+    bool noNulls) const {
   scratchMemory.decoded.decode(values, rows);
   VALUE_ID_TYPE_DISPATCH(
       lookupValueIdsTyped,
@@ -453,7 +535,8 @@ void VectorHasher::lookupValueIds(
       scratchMemory.decoded,
       rows,
       scratchMemory.hashes,
-      result.data());
+      result.data(),
+      noNulls);
 }
 
 void VectorHasher::hash(
@@ -494,7 +577,6 @@ void VectorHasher::analyze(
   VALUE_ID_TYPE_DISPATCH(
       analyzeTyped, typeKind_, groups, numGroups, offset, nullByte, nullMask);
 }
-
 template <>
 void VectorHasher::analyzeValue(StringView value) {
   int size = value.size();

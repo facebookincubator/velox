@@ -40,9 +40,10 @@ static void writeIOWallTimeStat(size_t ioTimeStartMicros) {
   }
 }
 
-void VectorLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {
+std::string
+VectorLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {
   const auto ioTimeStartMicros = getCurrentTimeMicro();
-  loadInternal(rows, hook, result);
+  auto loadString = loadInternal(rows, hook, result);
   writeIOWallTimeStat(ioTimeStartMicros);
 
   if (hook) {
@@ -53,18 +54,20 @@ void VectorLoader::load(RowSet rows, ValueHook* hook, VectorPtr* result) {
       pWriter->addRuntimeStat("loadedToValueHook", RuntimeCounter(rows.size()));
     }
   }
+  return loadString;
 }
 
-void VectorLoader::load(
+LoadInfo VectorLoader::load(
     const SelectivityVector& rows,
     ValueHook* hook,
     VectorPtr* result) {
   const auto ioTimeStartMicros = getCurrentTimeMicro();
-  loadInternal(rows, hook, result);
+  auto loadInfo = loadInternal(rows, hook, result);
   writeIOWallTimeStat(ioTimeStartMicros);
+  return loadInfo;
 }
 
-void VectorLoader::loadInternal(
+LoadInfo VectorLoader::loadInternal(
     const SelectivityVector& rows,
     ValueHook* hook,
     VectorPtr* result) {
@@ -72,17 +75,18 @@ void VectorLoader::loadInternal(
     const auto& indices = DecodedVector::consecutiveIndices();
     assert(!indices.empty());
     if (rows.end() <= indices.size()) {
-      load(
-          RowSet(&indices[rows.begin()], rows.end() - rows.begin()),
-          hook,
-          result);
-      return;
+      return LoadInfo{
+          rows,
+          load(
+              RowSet(&indices[rows.begin()], rows.end() - rows.begin()),
+              hook,
+              result)};
     }
   }
   std::vector<vector_size_t> positions(rows.countSelected());
   int index = 0;
   rows.applyToSelected([&](vector_size_t row) { positions[index++] = row; });
-  load(positions, hook, result);
+  return LoadInfo{rows, load(positions, hook, result)};
 }
 
 VectorPtr LazyVector::slice(vector_size_t offset, vector_size_t length) const {
@@ -184,6 +188,28 @@ void LazyVector::ensureLoadedRows(
   // initialization of dictionaries, sequences, etc. on top of lazy vector
   // after it has been loaded, even if loaded via some other path.
   vector->loadedVector();
+}
+
+std::string LazyVector::toSummaryString() const {
+  std::stringstream out;
+  out << BaseVector::toSummaryString();
+  if (vector_) {
+    out << " loaded " << vector_->toString(true) << " loaded for "
+        << loadInfo_.rows.toString() << ": " << loadInfo_.loadString;
+  } else {
+    out << " not loaded";
+  }
+  return out.str();
+}
+
+// static
+SelectivityVector LazyVector::toSelectivityVector(RowSet rows) {
+  SelectivityVector vector(rows.back() + 1, false);
+  for (auto row : rows) {
+    vector.setValid(row, true);
+  }
+  vector.updateBounds();
+  return vector;
 }
 
 } // namespace facebook::velox

@@ -43,14 +43,27 @@ class HivePartitionFunctionTest : public ::testing::Test,
           << "at " << i << ": " << vector->toString(i);
     }
 
+<<<<<<< HEAD
+    // Retry the same with nested dictionaries where indices out of range
+    // indices are bad. Ensure that out of scope indices are not accessed.
+=======
     // Retry the same with nested dictionaries where indices  for some
     // non-referenced rows are bad.
+>>>>>>> h-bm2-dev
     auto innerIndices = makeIndicesInReverse(size);
     auto outerIndices = makeIndices(size, [](auto i) { return i; });
     outerIndices->asMutable<vector_size_t>()[size - 1] =
         std::numeric_limits<int32_t>().max();
+<<<<<<< HEAD
+    auto dictValues = BaseVector::wrapInDictionary(
+        nullptr,
+        outerIndices,
+        size - 1,
+        BaseVector::wrapInDictionary(nullptr, innerIndices, size, vector));
+=======
     auto dictValues = wrapInDictionary(
         outerIndices, size - 1, wrapInDictionary(innerIndices, vector));
+>>>>>>> h-bm2-dev
     rowVector = makeRowVector({dictValues});
     partitionFunction.partition(*rowVector, partitions);
     for (auto i = 0; i < size - 1; ++i) {
