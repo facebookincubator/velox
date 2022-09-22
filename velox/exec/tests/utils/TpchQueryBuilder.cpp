@@ -121,6 +121,8 @@ TpchPlan TpchQueryBuilder::getQueryPlan(int queryId) const {
   switch (queryId) {
     case 1:
       return getQ1Plan();
+    case 2:
+      return getQ2Plan();
     case 3:
       return getQ3Plan();
     case 5:
@@ -211,6 +213,203 @@ TpchPlan TpchQueryBuilder::getQ1Plan() const {
   TpchPlan context;
   context.plan = std::move(plan);
   context.dataFiles[lineitemPlanNodeId] = getTableFilePaths(kLineitem);
+  context.dataFileFormat = format_;
+  return context;
+}
+
+TpchPlan TpchQueryBuilder::getQ2Plan() const {
+  std::vector<std::string> supplierColumnsSubQuery = {
+      "s_suppkey", "s_nationkey"};
+  std::vector<std::string> nationColumnsSubQuery = {
+      "n_nationkey", "n_regionkey"};
+  std::vector<std::string> partColumns = {
+      "p_partkey", "p_mfgr", "p_size", "p_type"};
+  std::vector<std::string> supplierColumns = {
+      "s_nationkey",
+      "s_acctbal",
+      "s_address",
+      "s_comment",
+      "s_name",
+      "s_phone",
+      "s_suppkey"};
+  std::vector<std::string> partsuppColumns = {
+      "ps_partkey", "ps_suppkey", "ps_supplycost"};
+  std::vector<std::string> nationColumns = {
+      "n_nationkey", "n_name", "n_regionkey"};
+  std::vector<std::string> regionColumns = {"r_regionkey", "r_name"};
+
+  auto supplierRowTypeSubQuery = getRowType(kSupplier, supplierColumnsSubQuery);
+  const auto& supplierFileColumnsSubQuery = getFileColumnNames(kSupplier);
+  auto partsuppRowTypeSubQuery = getRowType(kPartsupp, partsuppColumns);
+  const auto& partsuppFileColumnsSubQuery = getFileColumnNames(kPartsupp);
+  auto nationRowTypeSubQuery = getRowType(kNation, nationColumnsSubQuery);
+  const auto& nationFileColumnsSubQuery = getFileColumnNames(kNation);
+  auto regionRowTypeSubQuery = getRowType(kRegion, regionColumns);
+  const auto& regionFileColumnsSubQuery = getFileColumnNames(kRegion);
+  auto partRowType = getRowType(kPart, partColumns);
+  const auto& partFileColumns = getFileColumnNames(kPart);
+  auto supplierRowType = getRowType(kSupplier, supplierColumns);
+  const auto& supplierFileColumns = getFileColumnNames(kSupplier);
+  auto partsuppRowType = getRowType(kPartsupp, partsuppColumns);
+  const auto& partsuppFileColumns = getFileColumnNames(kPartsupp);
+  auto nationRowType = getRowType(kNation, nationColumns);
+  const auto& nationFileColumns = getFileColumnNames(kNation);
+  auto regionRowType = getRowType(kRegion, regionColumns);
+  const auto& regionFileColumns = getFileColumnNames(kRegion);
+
+  const std::string regionNameFilter = "r_name = 'EUROPE'";
+  const std::vector<std::string> supplierCommonColumns = {
+      "s_acctbal", "s_name", "s_address", "s_phone", "s_comment"};
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId supplierScanIdSubQuery;
+  core::PlanNodeId partsuppScanIdSubQuery;
+  core::PlanNodeId nationScanIdSubQuery;
+  core::PlanNodeId regionScanIdSubQuery;
+  core::PlanNodeId partScanId;
+  core::PlanNodeId supplierScanId;
+  core::PlanNodeId partsuppScanId;
+  core::PlanNodeId nationScanId;
+  core::PlanNodeId regionScanId;
+
+  auto regionSubQuery = PlanBuilder(planNodeIdGenerator)
+                            .tableScan(
+                                kRegion,
+                                regionRowTypeSubQuery,
+                                regionFileColumnsSubQuery,
+                                {regionNameFilter})
+                            .capturePlanNodeId(regionScanIdSubQuery)
+                            .planNode();
+
+  auto nationJoinRegionSubQuery =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kNation, nationRowTypeSubQuery, nationFileColumnsSubQuery)
+          .capturePlanNodeId(nationScanIdSubQuery)
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              regionSubQuery,
+              "",
+              {"n_nationkey"})
+          .planNode();
+
+  auto supplierJoinNationJoinRegionSubQuery =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kSupplier, supplierRowTypeSubQuery, supplierFileColumnsSubQuery)
+          .capturePlanNodeId(supplierScanIdSubQuery)
+          .hashJoin(
+              {"s_nationkey"},
+              {"n_nationkey"},
+              nationJoinRegionSubQuery,
+              "",
+              {"s_suppkey"})
+          .planNode();
+
+  auto part =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kPart, partRowType, partFileColumns, {}, "p_type like '%BRASS'")
+          .capturePlanNodeId(partScanId)
+          .filter("p_size = 15")
+          .planNode();
+
+  auto region =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kRegion, regionRowType, regionFileColumns, {regionNameFilter})
+          .capturePlanNodeId(regionScanId)
+          .planNode();
+
+  auto nationJoinRegion =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kNation, nationRowType, nationFileColumns)
+          .capturePlanNodeId(nationScanId)
+          .hashJoin(
+              {"n_regionkey"},
+              {"r_regionkey"},
+              region,
+              "",
+              {"n_nationkey", "n_name"})
+          .planNode();
+
+  auto supplierJoinNationJoinRegion =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kSupplier, supplierRowType, supplierFileColumns)
+          .capturePlanNodeId(supplierScanId)
+          .hashJoin(
+              {"s_nationkey"},
+              {"n_nationkey"},
+              nationJoinRegion,
+              "",
+              mergeColumnNames(supplierCommonColumns, {"s_suppkey", "n_name"}))
+          .planNode();
+
+  auto partsuppJoinPartJoinSupplierJoinNationJoinRegion =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(kPartsupp, partsuppRowType, partsuppFileColumns)
+          .capturePlanNodeId(partsuppScanId)
+          .hashJoin(
+              {"ps_partkey"},
+              {"p_partkey"},
+              part,
+              "",
+              {"ps_suppkey", "ps_supplycost", "p_partkey", "p_mfgr"})
+          .hashJoin(
+              {"ps_suppkey"},
+              {"s_suppkey"},
+              supplierJoinNationJoinRegion,
+              "",
+              mergeColumnNames(
+                  supplierCommonColumns,
+                  {"ps_supplycost", "p_partkey", "p_mfgr", "n_name"}))
+          .planNode();
+
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .tableScan(
+              kPartsupp, partsuppRowTypeSubQuery, partsuppFileColumnsSubQuery)
+          .capturePlanNodeId(partsuppScanIdSubQuery)
+          .hashJoin(
+              {"ps_suppkey"},
+              {"s_suppkey"},
+              supplierJoinNationJoinRegionSubQuery,
+              "",
+              {"ps_supplycost", "ps_partkey"})
+          .partialAggregation(
+              {"ps_partkey"}, {"min(ps_supplycost) AS min_supplycost"})
+          .localPartition({"ps_partkey"})
+          .finalAggregation()
+          .hashJoin(
+              {"ps_partkey"},
+              {"p_partkey"},
+              partsuppJoinPartJoinSupplierJoinNationJoinRegion,
+              "ps_supplycost = min_supplycost",
+              mergeColumnNames(
+                  supplierCommonColumns, {"p_partkey", "p_mfgr", "n_name"}))
+          .orderBy({"s_acctbal DESC", "n_name", "s_name", "p_partkey"}, false)
+          .project(
+              {"s_acctbal",
+               "s_name",
+               "n_name",
+               "p_partkey",
+               "p_mfgr",
+               "s_address",
+               "s_phone",
+               "s_comment"})
+          .planNode();
+
+  TpchPlan context;
+  context.plan = std::move(plan);
+  context.dataFiles[supplierScanIdSubQuery] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanIdSubQuery] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanIdSubQuery] = getTableFilePaths(kNation);
+  context.dataFiles[regionScanIdSubQuery] = getTableFilePaths(kRegion);
+  context.dataFiles[partScanId] = getTableFilePaths(kPart);
+  context.dataFiles[supplierScanId] = getTableFilePaths(kSupplier);
+  context.dataFiles[partsuppScanId] = getTableFilePaths(kPartsupp);
+  context.dataFiles[nationScanId] = getTableFilePaths(kNation);
+  context.dataFiles[regionScanId] = getTableFilePaths(kRegion);
   context.dataFileFormat = format_;
   return context;
 }

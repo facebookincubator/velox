@@ -169,7 +169,7 @@ class ParquetTpchTestBase : public testing::Test {
       std::make_pair(
           "supplier",
           R"(COPY (SELECT s_suppkey, s_name, s_address, s_nationkey, s_phone,
-         s_acctbal::DOUBLE, s_comment FROM {})
+         s_acctbal::DOUBLE as acctbal, s_comment FROM {})
          TO '{}' (FORMAT 'parquet', CODEC 'ZSTD', ROW_GROUP_SIZE {}))"),
       std::make_pair(
           "partsupp",
