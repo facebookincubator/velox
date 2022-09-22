@@ -162,24 +162,24 @@ TEST_F(ComparisonsTest, gtLtDecimal) {
   };
 
   // Short Decimals test.
-  std::vector<VectorPtr> inputs = {
+  std::vector<VectorPtr> shortDecimalInputs = {
       makeNullableShortDecimalFlatVector(
           {1, std::nullopt, 3, -3, std::nullopt, 4}, DECIMAL(10, 5)),
       makeNullableShortDecimalFlatVector(
           {0, 2, 3, -5, std::nullopt, 5}, DECIMAL(10, 5))};
-  auto expected = makeNullableFlatVector<bool>(
+  auto expectedGtLt = makeNullableFlatVector<bool>(
       {true, std::nullopt, false, true, std::nullopt, false});
-  auto expected2 = makeNullableFlatVector<bool>(
+  auto expectedGteLte = makeNullableFlatVector<bool>(
       {true, std::nullopt, true, true, std::nullopt, false});
 
-  runAndCompare("c0 > c1", inputs, expected);
-  runAndCompare("c1 < c0", inputs, expected);
+  runAndCompare("c0 > c1", shortDecimalInputs, expectedGtLt);
+  runAndCompare("c1 < c0", shortDecimalInputs, expectedGtLt);
   // Gte/Lte
-  runAndCompare("c0 >= c1", inputs, expected2);
-  runAndCompare("c1 <= c0", inputs, expected2);
+  runAndCompare("c0 >= c1", shortDecimalInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", shortDecimalInputs, expectedGteLte);
 
   // Long Decimals test.
-  inputs = {
+  std::vector<VectorPtr> longDecimalsInputs = {
       makeNullableLongDecimalFlatVector(
           {UnscaledLongDecimal::max().unscaledValue(),
            std::nullopt,
@@ -196,12 +196,12 @@ TEST_F(ComparisonsTest, gtLtDecimal) {
            std::nullopt,
            5},
           DECIMAL(38, 5))};
-  runAndCompare("c0 > c1", inputs, expected);
-  runAndCompare("c1 < c0", inputs, expected);
+  runAndCompare("c0 > c1", longDecimalsInputs, expectedGtLt);
+  runAndCompare("c1 < c0", longDecimalsInputs, expectedGtLt);
 
   // Gte/Lte
-  runAndCompare("c0 >= c1", inputs, expected2);
-  runAndCompare("c1 <= c0", inputs, expected2);
+  runAndCompare("c0 >= c1", longDecimalsInputs, expectedGteLte);
+  runAndCompare("c1 <= c0", longDecimalsInputs, expectedGteLte);
 };
 
 TEST_F(ComparisonsTest, eqArray) {
