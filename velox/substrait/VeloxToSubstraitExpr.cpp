@@ -134,8 +134,6 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
   auto inputs = callTypeExpr->inputs();
   auto& functionName = callTypeExpr->name();
 
-  // The processing is different for different function names.
-  // TODO add support for if Expr and switch Expr
   if (functionName != "if" && functionName != "switch") {
     ::substrait::Expression_ScalarFunction* scalarExpr =
         substraitExpr->mutable_scalar_function();
@@ -158,7 +156,24 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
         typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
 
   } else {
-    VELOX_NYI("Unsupported function name '{}'", functionName);
+    if (callTypeExpr->inputs().size() % 2 != 1) {
+      VELOX_NYI(
+          "Number of arguments are always going to be odd for if/then or switch expression");
+    }
+
+    // For today's version of Substrait, you'd have to use IfThen if you need
+    // the switch cases to be call typed expression.
+    auto ifThenExpr = substraitExpr->mutable_if_then();
+    auto last = callTypeExpr->inputs().size() - 1;
+    for (int i = 0; i < last; i += 2) {
+      auto ifClauseExpr = ifThenExpr->add_ifs();
+      ifClauseExpr->mutable_if_()->MergeFrom(
+          toSubstraitExpr(arena, callTypeExpr->inputs().at(i), inputType));
+      ifClauseExpr->mutable_then()->MergeFrom(
+          toSubstraitExpr(arena, callTypeExpr->inputs().at(i + 1), inputType));
+    }
+    ifThenExpr->mutable_else_()->MergeFrom(
+        toSubstraitExpr(arena, callTypeExpr->inputs().at(last), inputType));
   }
 
   return *substraitExpr;
