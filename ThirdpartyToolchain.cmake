@@ -95,7 +95,9 @@ endmacro()
 # ${DEPENDENCY_NAME}_SOURCE is BUNDLED it will force to build from source.
 #
 # If REQUIRED_VERSION is provided it will be used as the VERSION to be used on
-# the find_package(DEPENDENCY_NAME [version]) call.
+# the find_package(DEPENDENCY_NAME [version]) call. In the case of setting
+# ${DEPENDENCY_NAME}_SOURCE to SYSTEM if the dependency is not found the build
+# will fail and will not fall back to download and build from source.
 macro(resolve_dependency DEPENDENCY_NAME)
   set(options)
   set(one_value_args REQUIRED_VERSION)
