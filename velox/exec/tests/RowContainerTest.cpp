@@ -32,89 +32,21 @@ using namespace facebook::velox::test;
 
 class RowContainerTest : public exec::test::RowContainerTestBase {
  protected:
-  void testExtractColumnForOddRows(
+  void testExtractColumn(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
-      const VectorPtr& expected) {
-    auto verifyResults = [&](const VectorPtr& result) {
-      auto size = rows.size();
-      EXPECT_EQ(size, result->size());
-      for (vector_size_t row = 0; row < size; ++row) {
-        if (row % 2 == 0) {
-          EXPECT_TRUE(result->isNullAt(row)) << "at " << row;
-        } else {
-          EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
-              << "at " << row << ": expected " << expected->toString(row)
-              << ", got " << result->toString();
-        }
-      }
-    };
-
-    auto result =
-        testExtractColumnBasicForOddRows(container, rows, column, expected);
-    verifyResults(result);
-    auto resultRowNumbers = testExtractColumnRowNumbersForOddRows(
-        container, rows, column, expected);
-    verifyResults(resultRowNumbers);
+      const VectorPtr& expected,
+      int offset = 0) {
+    // This set of tests uses all variations of the extractColumn API to copy
+    // column value for all rows in the container.
+    testExtractColumnAllRows(container, rows, column, expected, offset);
+    // This set of tests use extractColumn with an out-of-order pattern
+    // and repetitions.
+    testExtractColumnOutOfOrder(container, rows, column, expected, offset);
   }
 
-  VectorPtr testExtractColumnBasicForOddRows(
-      RowContainer& container,
-      const std::vector<char*>& rows,
-      int column,
-      const VectorPtr& expected) {
-    auto size = rows.size();
-
-    // Extract only odd rows.
-    std::vector<char*> oddRows(size, nullptr);
-    for (auto i = 1; i < size; i += 2) {
-      oddRows[i] = rows[i];
-    }
-
-    auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(oddRows.data(), size, column, result);
-    return result;
-  }
-
-  VectorPtr testExtractColumnRowNumbersForOddRows(
-      RowContainer& container,
-      const std::vector<char*>& rows,
-      int column,
-      const VectorPtr& expected) {
-    auto size = rows.size();
-
-    // Set the first row in 'oddRows' to be null, and all the
-    // even row numbers point to it.
-    std::vector<char*> oddRows(size, nullptr);
-    for (auto i = 1; i < size; i++) {
-      oddRows[i] = rows[i];
-    }
-
-    // Extract only odd rows.
-    // Test using extractColumn (with rowNumbers) API.
-    // The rowNumbersBuffer has values like 0, 1, 0, 3, 0, 5, 0, 7, etc
-    // This tests the case that the rowNumber values are repeated and are
-    // also out of order.
-    std::vector<vector_size_t> rowNumbersVector;
-    rowNumbersVector.resize(size);
-    for (int i = 0; i < size; i++) {
-      if (i % 2 == 0) {
-        rowNumbersVector[i] = 0;
-      } else {
-        rowNumbersVector[i] = i;
-      }
-    }
-
-    auto result = BaseVector::create(expected->type(), size, pool_.get());
-    folly::Range<const vector_size_t*> rowNumbersVectorRange =
-        folly::Range(rowNumbersVector.data(), size);
-    container.extractColumn(
-        oddRows.data(), rowNumbersVectorRange, column, 0, result);
-    return result;
-  }
-
-  void testExtractColumnForAllRows(
+  void testExtractColumnAllRows(
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
@@ -122,53 +54,125 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       int offset = 0) {
     auto size = rows.size();
 
-    // Test using extractColumn API.
-    auto result = BaseVector::create(expected->type(), size, pool_.get());
-    container.extractColumn(rows.data(), size, column, result);
-    assertEqualVectors(expected, result);
+    auto testBasic = [&](vector_size_t offset = 0) -> void {
+      // Test extractColumn from offset 0.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(rows.data(), size, column, result);
+      assertEqualVectors(expected, result);
 
-    // Test using extractColumn API (with offset).
-    if (size >= offset) {
-      auto result2 =
-          BaseVector::create(expected->type(), size + offset, pool_.get());
-      container.extractColumn(rows.data(), size, column, offset, result2);
-      EXPECT_EQ(result2->compare(expected.get(), offset, 0), 0);
-    }
+      // Test extractColumn from offset.
+      container.extractColumn(rows.data(), size, column, offset, result);
+      EXPECT_EQ(result->compare(expected.get(), offset, 0), 0);
+    };
 
-    // Test using extractColumn (with rowNumbers) API.
-    std::vector<vector_size_t> rowNumbersVector;
-    rowNumbersVector.resize(size);
-    for (int i = 0; i < size; i++) {
-      rowNumbersVector[i] = i;
-    }
-    auto resultForRowNumbers =
-        BaseVector::create(expected->type(), size, pool_.get());
-    folly::Range<const vector_size_t*> rowNumbersVectorRange =
-        folly::Range(rowNumbersVector.data(), size);
-    container.extractColumn(
-        rows.data(), rowNumbersVectorRange, column, 0, resultForRowNumbers);
-    assertEqualVectors(expected, resultForRowNumbers);
+    auto testRowNumbers = [&](vector_size_t offset = 0) -> void {
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
 
-    // Test using extractColumn (with rowNumbers and a non-zero result vector
-    // offset).
-    if (size >= offset) {
-      std::vector<vector_size_t> rowNumbersVector2;
-      rowNumbersVector2.resize(size - offset);
+      std::vector<vector_size_t> rowNumbers;
+      rowNumbers.resize(size - offset);
       for (int i = 0; i < size - offset; i++) {
-        rowNumbersVector2[i] = i + offset;
+        rowNumbers[i] = i + offset;
       }
-      auto resultForRowNumbers2 =
-          BaseVector::create(expected->type(), size, pool_.get());
-      folly::Range<const vector_size_t*> rowNumbersVectorRange2 =
-          folly::Range(rowNumbersVector2.data(), size - offset);
+      folly::Range<const vector_size_t*> rowNumbersRange =
+          folly::Range(rowNumbers.data(), size - offset);
       container.extractColumn(
-          rows.data(),
-          rowNumbersVectorRange2,
-          column,
-          offset,
-          resultForRowNumbers2);
-      EXPECT_EQ(
-          expected->compare(resultForRowNumbers2.get(), offset, offset), 0);
+          rows.data(), rowNumbersRange, column, offset, result);
+      EXPECT_EQ(expected->compare(result.get(), offset, offset), 0);
+    };
+
+    // Test using extractColumn API.
+    testBasic();
+    // Test using extractColumn (with rowNumbers) API.
+    testRowNumbers();
+
+    // Test with offset.
+    if (size >= offset) {
+      testBasic(offset);
+      testRowNumbers(offset);
+    }
+  }
+
+  void testExtractColumnOutOfOrder(
+      RowContainer& container,
+      const std::vector<char*>& rows,
+      int column,
+      const VectorPtr& expected,
+      int offset = 0) {
+    auto size = rows.size();
+
+    // In this test the extractColumn API is operated on an out-of-order
+    // input (either the base input data or the rowNumbers). The new ordering
+    // has null in even positions and retains odd positions from the original
+    // input.
+
+    // This is a helper method for result verification for the out of order
+    // results.
+    auto verifyResults = [&](const VectorPtr& result, int offset = 0) {
+      EXPECT_EQ(size, result->size());
+      for (vector_size_t i = offset; i < size; ++i) {
+        if (i % 2 == 0) {
+          EXPECT_TRUE(result->isNullAt(i)) << "at " << i;
+        } else {
+          EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+              << "at " << i << ": expected " << expected->toString(i)
+              << ", got " << result->toString();
+        }
+      }
+    };
+
+    auto testBasic = [&](vector_size_t offset = 0) -> void {
+      // Construct an input source with null in even
+      // positions and that retains the original rows in
+      // odd positions. Copy its rows
+      std::vector<char*> input(size, nullptr);
+      for (auto i = 1; i < size; i += 2) {
+        input[i] = rows[i];
+      }
+
+      // Test extractColumn from offset 0.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      container.extractColumn(input.data(), size, column, result);
+      verifyResults(result);
+
+      // Test extractColumn from offset.
+      container.extractColumn(
+          input.data() + offset, size - offset, column, offset, result);
+      verifyResults(result, offset);
+    };
+
+    auto testRowNumbers = [&](vector_size_t offset = 0) -> void {
+      // Setup input rows vector so that the first row is null.
+      std::vector<char*> input(rows);
+      input[0] = nullptr;
+
+      // The rowNumbersBuffer has values like 0, 1, 0, 3, 0, 5, 0, 7, etc
+      // This tests the case of column extraction where the rowNumber values
+      // are repeated and are also out of order.
+      std::vector<vector_size_t> rowNumbers;
+      auto rowNumbersSize = size - offset;
+      rowNumbers.resize(rowNumbersSize);
+
+      for (int i = 0; i < rowNumbersSize; i++) {
+        if ((i + offset) % 2 == 0) {
+          rowNumbers[i] = 0;
+        } else {
+          rowNumbers[i] = i + offset;
+        }
+      }
+
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
+      folly::Range<const vector_size_t*> rowNumbersRange =
+          folly::Range(rowNumbers.data(), rowNumbersSize);
+      container.extractColumn(
+          input.data(), rowNumbersRange, column, offset, result);
+      verifyResults(result, offset);
+    };
+
+    testBasic();
+    testRowNumbers();
+    if (size >= offset) {
+      testBasic(offset);
+      testRowNumbers(offset);
     }
   }
 
@@ -198,9 +202,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       rowContainer->store(decoded, row, rows[row], 0);
     }
 
-    testExtractColumnForAllRows(*rowContainer, rows, 0, input);
-
-    testExtractColumnForOddRows(*rowContainer, rows, 0, input);
+    testExtractColumn(*rowContainer, rows, 0, input);
     return rowContainer;
   }
 
@@ -475,9 +477,7 @@ TEST_F(RowContainerTest, types) {
   auto copy = std::static_pointer_cast<RowVector>(
       BaseVector::create(batch->type(), batch->size(), pool_.get()));
   for (auto column = 0; column < batch->childrenSize(); ++column) {
-    testExtractColumnForAllRows(
-        *data, rows, column, batch->childAt(column), kOffset);
-    testExtractColumnForOddRows(*data, rows, column, batch->childAt(column));
+    testExtractColumn(*data, rows, column, batch->childAt(column), kOffset);
 
     auto extracted = copy->childAt(column);
     extracted->resize(kNumRows);
