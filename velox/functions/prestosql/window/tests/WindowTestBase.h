@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/OperatorTestBase.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -30,43 +28,14 @@ class WindowTestBase : public OperatorTestBase {
   }
 
   std::vector<RowVectorPtr>
-  makeVectors(const RowTypePtr& rowType, vector_size_t size, int numVectors) {
-    std::vector<RowVectorPtr> vectors;
-    VectorFuzzer::Options options;
-    options.vectorSize = size;
-    VectorFuzzer fuzzer(options, pool_.get(), 0);
-    for (int32_t i = 0; i < numVectors; ++i) {
-      auto vector =
-          std::dynamic_pointer_cast<RowVector>(fuzzer.fuzzRow(rowType));
-      vectors.push_back(vector);
-    }
-    return vectors;
-  }
+  makeVectors(const RowTypePtr& rowType, vector_size_t size, int numVectors);
 
+  // This function tests SQL queries for the window function and
+  // the specified overClauses with the input RowVectors.
   void testWindowFunction(
       const std::vector<RowVectorPtr>& input,
       const std::string& function,
-      const std::string& overClause) {
-    auto functionSql = fmt::format("{}() over ({})", function, overClause);
-
-    SCOPED_TRACE(functionSql);
-    auto op = PlanBuilder().values(input).window({functionSql}).planNode();
-
-    auto rowType = asRowType(input[0]->type());
-    std::string columnsString = folly::join(", ", rowType->names());
-
-    assertQuery(
-        op, fmt::format("SELECT {}, {} FROM tmp", columnsString, functionSql));
-  };
-
-  void testWindowFunction(
-      const std::vector<RowVectorPtr>& input,
-      const std::string& function,
-      const std::vector<std::string> overClauses) {
-    for (const auto& overClause : overClauses) {
-      testWindowFunction(input, function, overClause);
-    }
-  }
+      const std::vector<std::string> overClauses);
 
   // This function operates on input RowVectors that have 2 columns.
   // It verifies (for the windowFunction) SQL queries with varying over
@@ -74,34 +43,12 @@ class WindowTestBase : public OperatorTestBase {
   // and order by of the two input columns.
   void testTwoColumnInput(
       const std::vector<RowVectorPtr>& input,
-      const std::string& windowFunction) {
-    VELOX_CHECK_EQ(input[0]->childrenSize(), 2);
-    createDuckDbTable(input);
+      const std::string& windowFunction);
 
-    std::vector<std::string> overClauses = {
-        "partition by c0 order by c1",
-        "partition by c1 order by c0",
-        "partition by c0 order by c1 desc",
-        "partition by c1 order by c0 desc",
-        // No partition by clause.
-        "order by c0, c1",
-        "order by c1, c0",
-        "order by c0 asc, c1 desc",
-        "order by c1 asc, c0 desc",
-        // No order by clause.
-        "partition by c0, c1",
-    };
-
-    testWindowFunction(input, windowFunction, overClauses);
-
-    // Invoking with same vector set twice so that the underlying WindowFunction
-    // receives the same data set multiple times and does a full processing
-    // (partition, sort) + apply of it.
-    std::vector<RowVectorPtr> doubleInput;
-    doubleInput.insert(doubleInput.end(), input.begin(), input.end());
-    doubleInput.insert(doubleInput.end(), input.begin(), input.end());
-    createDuckDbTable(doubleInput);
-    testWindowFunction(doubleInput, windowFunction, overClauses);
-  }
+ private:
+  void testWindowFunction(
+      const std::vector<RowVectorPtr>& input,
+      const std::string& function,
+      const std::string& overClause);
 };
 }; // namespace facebook::velox::window::test
