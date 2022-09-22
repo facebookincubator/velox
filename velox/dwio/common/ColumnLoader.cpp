@@ -37,10 +37,8 @@ static void scatter(RowSet rows, VectorPtr* result) {
 }
 } // namespace
 
-void ColumnLoader::loadInternal(
-    RowSet rows,
-    ValueHook* hook,
-    VectorPtr* result) {
+std::string
+ColumnLoader::loadInternal(RowSet rows, ValueHook* hook, VectorPtr* result) {
   VELOX_CHECK_EQ(
       version_,
       structReader_->numReads(),
@@ -89,6 +87,7 @@ void ColumnLoader::loadInternal(
       scatter(rows, result);
     }
   }
+  return structReader_->debugString();
 }
 
 } // namespace facebook::velox::dwio::common
