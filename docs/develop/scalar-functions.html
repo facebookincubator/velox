@@ -1253,6 +1253,18 @@ result. Here is an example of a test for simple function “sqrt”:</p>
 <p>For both simple and vector functions, their names are case insensitive. Function
 names are converted to lower case automatically when the functions are
 registered and when they are resolved for a given expression.</p>
+<p>The following names are reserved for special forms and cannot be used as function
+names:</p>
+<ul class="simple">
+<li><p>and</p></li>
+<li><p>or</p></li>
+<li><p>cast</p></li>
+<li><p>if</p></li>
+<li><p>switch</p></li>
+<li><p>coalesce</p></li>
+<li><p>try</p></li>
+<li><p>row_constructor</p></li>
+</ul>
 </section>
 <section id="function-resolution-order">
 <h2>Function Resolution order<a class="headerlink" href="#function-resolution-order" title="Permalink to this headline">¶</a></h2>

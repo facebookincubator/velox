@@ -136,13 +136,14 @@ processes the expressions and creates trees of exec::Expr class instances.</p>
 <p>ExprSet accepts multiple expressions and identifies common subexpressions across
 all of them so that they can be calculated just once. FilterProject operator
 benefits from this capability as it creates a single ExprSet for all of the
-filter and project expressions.</p>
+filter and project expressions. The compilation steps also flattens adjacent
+AND, OR and concat-line expressions and performs constant folding.</p>
 <p>Each node in the expression tree is transformed to a corresponding instance of
 the exec::Expr class.</p>
 <table class="docutils align-default">
 <colgroup>
-<col style="width: 26%" />
-<col style="width: 74%" />
+<col style="width: 31%" />
+<col style="width: 69%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>core::ITypedExpr node</p></th>
@@ -158,11 +159,12 @@ the exec::Expr class.</p>
 </tr>
 <tr class="row-even"><td><p>CallTypedExpr</p></td>
 <td><ul class="simple">
-<li><p>Expr if function name points to a simple or vector function;</p></li>
 <li><p>CastExpr if function name is “cast”;</p></li>
 <li><p>ConjunctExpr if function name is “and” or “or”;</p></li>
 <li><p>SwitchExpr if function name is “if” or “switch”;</p></li>
+<li><p>CoalesceExpr if function name is “coalesce”</p></li>
 <li><p>TryExpr if function name is “try”;</p></li>
+<li><p>Expr if function name is none of the above.</p></li>
 </ul>
 </td>
 </tr>
@@ -178,26 +180,17 @@ the exec::Expr class.</p>
 special form expressions or functions (vectorized or simple). The lookup is
 performed in the following order and the search stops on the first match:</p>
 <ul class="simple">
-<li><p>Check if name matches one of special forms</p></li>
-<li><p>Check if name and signature (e.g. input types) matches one of simple functions</p></li>
-<li><p>Check if name matches one of vectorized functions</p></li>
+<li><p>Check if name matches one of special forms.</p></li>
+<li><p>Check if name and signature (i.e. input types) matches one of vectorized functions.</p></li>
+<li><p>Check if name and signature (i.e. input types) matches one of simple functions.</p></li>
 </ul>
+<section id="common-subexpression-detection">
+<h4>Common SubExpression Detection<a class="headerlink" href="#common-subexpression-detection" title="Permalink to this headline">¶</a></h4>
 <p>The following diagram shows the expression tree for the <strong>strpos(upper
 (a), ‘FOO’) &gt; 0 OR strpos(upper(a), ‘BAR’) &gt; 0</strong> expression. Here, <strong>upper
 (a)</strong> is a common subexpression. It is represented by a single instance of Expr
 class which appears twice in the tree.</p>
 <a class="reference internal image-reference" href="../_images/cse.png"><img alt="../_images/cse.png" class="align-center" src="../_images/cse.png" style="width: 600px;" /></a>
-<section id="constant-folding">
-<h4>Constant Folding<a class="headerlink" href="#constant-folding" title="Permalink to this headline">¶</a></h4>
-<p>Once we have a tree of executable expressions (exec::Expr), ExprSet identifies
-deterministic subexpressions which do not depend on any columns, evaluates
-these and replaces them with a single constant expression. This optimization is
-called constant folding.</p>
-<p>For example, in the expression <strong>upper(a) &gt; upper(‘Foo’)</strong> subexpression <strong>upper
-(‘Foo’)</strong> is deterministic and doesn’t depend on any columns. It will be
-evaluated during compilation time and replaced by a single ConstantExpr
-node <strong>FOO</strong>.</p>
-<a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" /></a>
 </section>
 <section id="flatten-ands-and-ors">
 <h4>Flatten ANDs and ORs<a class="headerlink" href="#flatten-ands-and-ors" title="Permalink to this headline">¶</a></h4>
@@ -237,6 +230,18 @@ an expression like g(f(a, f(b, c)), f(d, f(b, c))), the compiler would
 identify f(b, c) as a common sub-expression. With flattening, the expression
 will be re-writen as g(f(a, b, c), f(d, b, c)) and no common sub-expression
 will be identified.</p>
+</section>
+<section id="constant-folding">
+<h4>Constant Folding<a class="headerlink" href="#constant-folding" title="Permalink to this headline">¶</a></h4>
+<p>Once we have a tree of executable expressions (exec::Expr), ExprSet identifies
+deterministic subexpressions which do not depend on any columns, evaluates
+these and replaces them with a single constant expression. This optimization is
+called constant folding.</p>
+<p>For example, in the expression <strong>upper(a) &gt; upper(‘Foo’)</strong> subexpression <strong>upper
+(‘Foo’)</strong> is deterministic and doesn’t depend on any columns. It will be
+evaluated during compilation time and replaced by a single ConstantExpr
+node <strong>FOO</strong>.</p>
+<a class="reference internal image-reference" href="../_images/constant-folding.png"><img alt="../_images/constant-folding.png" class="align-center" src="../_images/constant-folding.png" style="width: 600px;" /></a>
 </section>
 <section id="expression-metadata">
 <h4>Expression Metadata<a class="headerlink" href="#expression-metadata" title="Permalink to this headline">¶</a></h4>
@@ -406,9 +411,10 @@ vector must be preserved or can be overwritten.</p>
 <li><a class="reference internal" href="#expression-trees">Expression Trees</a></li>
 <li><a class="reference internal" href="#id1">Expression Evaluation</a><ul>
 <li><a class="reference internal" href="#compilation">Compilation</a><ul>
-<li><a class="reference internal" href="#constant-folding">Constant Folding</a></li>
+<li><a class="reference internal" href="#common-subexpression-detection">Common SubExpression Detection</a></li>
 <li><a class="reference internal" href="#flatten-ands-and-ors">Flatten ANDs and ORs</a></li>
 <li><a class="reference internal" href="#flatten-concat-like-functions">Flatten concat-like functions</a></li>
+<li><a class="reference internal" href="#constant-folding">Constant Folding</a></li>
 <li><a class="reference internal" href="#expression-metadata">Expression Metadata</a></li>
 </ul>
 </li>
