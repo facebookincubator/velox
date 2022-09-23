@@ -48,8 +48,7 @@ macro(build_folly)
   message(STATUS "Building Folly from source")
   # FOLLY_CXX_FLAGS is used internally on folly to define CMAKE_CXX_FLAGS.
   # Define some known warnings to avoid possible errors on some OS/archs
-  set(FOLLY_CXX_FLAGS -Wno-nullability-completeness -Wno-unused
-                      -Wno-unused-parameter -Wno-overloaded-virtual)
+  set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual)
   FetchContent_Declare(
     folly
     URL ${FOLLY_SOURCE_URL}
