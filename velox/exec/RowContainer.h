@@ -254,7 +254,8 @@ class RowContainer {
   /// Copies the values from the array pointed to by 'rows' at 'col' into
   /// 'result' (starting at 'resultOffset') for the rows at positions in
   /// the 'rowNumbers' array. If a 'row' is null, sets
-  /// corresponding row in 'result' to null.
+  /// corresponding row in 'result' to null. The positions in 'rowNumbers'
+  /// array can repeat and also appear out of order.
   static void extractColumn(
       const char* FOLLY_NONNULL const* FOLLY_NONNULL rows,
       folly::Range<const vector_size_t*> rowNumbers,

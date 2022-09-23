@@ -36,14 +36,19 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       RowContainer& container,
       const std::vector<char*>& rows,
       int column,
-      const VectorPtr& expected,
-      int offset = 0) {
+      const VectorPtr& expected) {
     // This set of tests uses all variations of the extractColumn API to copy
-    // column value for all rows in the container.
-    testExtractColumnAllRows(container, rows, column, expected, offset);
+    // column value for all rows in the container. Run these with offset 0
+    // and offset to skip the first 1/3 rows.
+    testExtractColumnAllRows(container, rows, column, expected, 0);
+    testExtractColumnAllRows(
+        container, rows, column, expected, rows.size() / 3);
     // This set of tests use extractColumn with an out-of-order pattern
-    // and repetitions.
-    testExtractColumnOutOfOrder(container, rows, column, expected, offset);
+    // and repetitions. Run these with offset 0 and offset to skip the first
+    // 1/3 rows.
+    testExtractColumnOutOfOrder(container, rows, column, expected, 0);
+    testExtractColumnOutOfOrder(
+        container, rows, column, expected, rows.size() / 3);
   }
 
   void testExtractColumnAllRows(
@@ -51,22 +56,26 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected,
-      int offset = 0) {
+      vector_size_t offset) {
     auto size = rows.size();
 
-    auto testBasic = [&](vector_size_t offset = 0) -> void {
-      // Test extractColumn from offset 0.
+    auto testBasic = [&]() {
+      // Test the legacy API that didn't use the offset parameter and copied to
+      // the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(rows.data(), size, column, result);
       assertEqualVectors(expected, result);
+    };
 
+    auto testBasicWithOffset = [&]() {
       // Test extractColumn from offset.
+      auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(
           rows.data(), size - offset, column, offset, result);
       EXPECT_EQ(result->compare(expected.get(), offset, 0), 0);
     };
 
-    auto testRowNumbers = [&](vector_size_t offset = 0) -> void {
+    auto testRowNumbers = [&]() {
       auto result = BaseVector::create(expected->type(), size, pool_.get());
 
       std::vector<vector_size_t> rowNumbers;
@@ -83,14 +92,9 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
 
     // Test using extractColumn API.
     testBasic();
+    testBasicWithOffset();
     // Test using extractColumn (with rowNumbers) API.
     testRowNumbers();
-
-    // Test with offset.
-    if (size >= offset) {
-      testBasic(offset);
-      testRowNumbers(offset);
-    }
   }
 
   void testExtractColumnOutOfOrder(
@@ -98,7 +102,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       const std::vector<char*>& rows,
       int column,
       const VectorPtr& expected,
-      int offset = 0) {
+      vector_size_t offset) {
     auto size = rows.size();
 
     // In this test the extractColumn API is operated on an out-of-order
@@ -121,7 +125,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       }
     };
 
-    auto testBasic = [&](vector_size_t offset = 0) -> void {
+    auto testBasic = [&]() {
       // Construct an input source with null in even
       // positions and that retains the original rows in
       // odd positions. Copy its rows
@@ -130,7 +134,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
         input[i] = rows[i];
       }
 
-      // Test extractColumn from offset 0.
+      // Test the extractColumn API that didn't use the offset parameter
+      // and copies to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(input.data(), size, column, result);
       verifyResults(result);
@@ -141,7 +146,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       verifyResults(result, offset);
     };
 
-    auto testRowNumbers = [&](vector_size_t offset = 0) -> void {
+    auto testRowNumbers = [&]() {
       // Setup input rows vector so that the first row is null.
       std::vector<char*> input(rows);
       input[0] = nullptr;
@@ -171,10 +176,6 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
 
     testBasic();
     testRowNumbers();
-    if (size >= offset) {
-      testBasic(offset);
-      testRowNumbers(offset);
-    }
   }
 
   void checkSizes(std::vector<char*>& rows, RowContainer& data) {
@@ -383,9 +384,6 @@ TEST_F(RowContainerTest, storeExtractArrayOfVarchar) {
 
 TEST_F(RowContainerTest, types) {
   constexpr int32_t kNumRows = 100;
-  // This value is used when testing extractColumn with a row offset
-  // value. This number should be < kNumRows for triggering the test.
-  const int32_t kOffset = 10;
   auto batch = makeDataset(
       ROW(
           {{"bool_val", BOOLEAN()},
@@ -478,7 +476,7 @@ TEST_F(RowContainerTest, types) {
   auto copy = std::static_pointer_cast<RowVector>(
       BaseVector::create(batch->type(), batch->size(), pool_.get()));
   for (auto column = 0; column < batch->childrenSize(); ++column) {
-    testExtractColumn(*data, rows, column, batch->childAt(column), kOffset);
+    testExtractColumn(*data, rows, column, batch->childAt(column));
 
     auto extracted = copy->childAt(column);
     extracted->resize(kNumRows);
