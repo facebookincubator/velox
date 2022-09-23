@@ -48,7 +48,8 @@ macro(build_folly)
   message(STATUS "Building Folly from source")
   # FOLLY_CXX_FLAGS is used internally on folly to define CMAKE_CXX_FLAGS.
   # Define some known warnings to avoid possible errors on some OS/archs
-  set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual)
+  set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual
+                      -Wno-stringop-overflow)
   FetchContent_Declare(
     folly
     URL ${FOLLY_SOURCE_URL}
@@ -58,9 +59,8 @@ macro(build_folly)
     FetchContent_Populate(folly)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
     # Avoid possible errors for known warning if SSL>3 is used
-    target_compile_options(
-      folly PUBLIC -Wno-nullability-completeness -Wno-deprecated-declarations
-                   -Wno-stringop-overflow)
+    target_compile_options(folly PUBLIC -Wno-nullability-completeness
+                                        -Wno-deprecated-declarations)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
