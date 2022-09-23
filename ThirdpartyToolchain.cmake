@@ -58,8 +58,9 @@ macro(build_folly)
     FetchContent_Populate(folly)
     add_subdirectory(${folly_SOURCE_DIR} ${folly_BINARY_DIR})
     # Avoid possible errors for known warning if SSL>3 is used
-    target_compile_options(folly PUBLIC -Wno-nullability-completeness
-                                        -Wno-deprecated-declarations)
+    target_compile_options(
+      folly PUBLIC -Wno-nullability-completeness -Wno-deprecated-declarations
+                   -Wno-stringop-overflow)
   endif()
   set(FOLLY_BENCHMARK_STATIC_LIB
       ${folly_BINARY_DIR}/folly/libfollybenchmark${CMAKE_STATIC_LIBRARY_SUFFIX})
