@@ -61,7 +61,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       assertEqualVectors(expected, result);
 
       // Test extractColumn from offset.
-      container.extractColumn(rows.data(), size, column, offset, result);
+      container.extractColumn(
+          rows.data(), size - offset, column, offset, result);
       EXPECT_EQ(result->compare(expected.get(), offset, 0), 0);
     };
 
