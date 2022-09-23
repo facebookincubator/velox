@@ -69,8 +69,8 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
     };
 
     auto testBasic = [&]() {
-      // Test the legacy API that didn't use the offset parameter and copied to
-      // the start of the result vector.
+      // Test the extractColumn API that didn't use the offset parameter and
+      // copied to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(rows.data(), size, column, result);
       assertEqualVectors(expected, result);
