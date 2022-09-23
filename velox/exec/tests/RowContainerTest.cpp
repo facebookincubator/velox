@@ -59,6 +59,15 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       vector_size_t offset) {
     auto size = rows.size();
 
+    auto testEqualVectors = [](const VectorPtr& lhs,
+                               const VectorPtr& rhs,
+                               vector_size_t lhsIndex,
+                               vector_size_t rhsIndex) {
+      for (auto i = 0; i < lhs->size() - lhsIndex; i++) {
+        EXPECT_TRUE(lhs->equalValueAt(rhs.get(), lhsIndex + i, rhsIndex + i));
+      }
+    };
+
     auto testBasic = [&]() {
       // Test the legacy API that didn't use the offset parameter and copied to
       // the start of the result vector.
@@ -72,7 +81,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(
           rows.data(), size - offset, column, offset, result);
-      EXPECT_EQ(result->compare(expected.get(), offset, 0), 0);
+      testEqualVectors(result, expected, offset, 0);
     };
 
     auto testRowNumbers = [&]() {
@@ -87,7 +96,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
           folly::Range(rowNumbers.data(), size - offset);
       container.extractColumn(
           rows.data(), rowNumbersRange, column, offset, result);
-      EXPECT_EQ(expected->compare(result.get(), offset, offset), 0);
+      testEqualVectors(result, expected, offset, offset);
     };
 
     // Test using extractColumn API.
