@@ -150,6 +150,10 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     }
   }
 
+  VELOX_CHECK(
+      resultType != nullptr,
+      "Result type not found during convert Substrait IfThen to velox CallTypedExpr");
+
   auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
   params.emplace_back(elseClauseExpr);
 
