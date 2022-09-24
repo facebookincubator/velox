@@ -256,12 +256,15 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, avg) {
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, caseWhen) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
-  auto plan = PlanBuilder()
-                  .values(vectors)
-                  .project({"case when c0=1 then c1 when c0=2 then c2 else c3  end as x"})
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(vectors)
+          .project(
+              {"case when c0=1 then c1 when c0=2 then c2 else c3  end as x"})
+          .planNode();
   assertPlanConversion(
-      plan, "SELECT case when c0=1 then c1 when c0=2 then c2 else c3  end as x  FROM tmp");
+      plan,
+      "SELECT case when c0=1 then c1 when c0=2 then c2 else c3  end as x  FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, ifThen) {
