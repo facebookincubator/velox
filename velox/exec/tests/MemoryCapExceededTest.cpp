@@ -60,8 +60,11 @@ TEST_F(MemoryCapExceededTest, singleDriver) {
                   .planNode();
   auto queryCtx = core::QueryCtx::createForTest();
   queryCtx->pool()->setMemoryUsageTracker(
-      memory::MemoryUsageTracker::create(
-          memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(kMaxBytes).maxTotalMemory(kMaxBytes).build()));
+      memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder()
+                                             .maxUserMemory(kMaxBytes)
+                                             .maxSystemMemory(kMaxBytes)
+                                             .maxTotalMemory(kMaxBytes)
+                                             .build()));
   CursorParameters params;
   params.planNode = plan;
   params.queryCtx = queryCtx;
@@ -100,8 +103,11 @@ TEST_F(MemoryCapExceededTest, multipleDrivers) {
                   .planNode();
   auto queryCtx = core::QueryCtx::createForTest();
   queryCtx->pool()->setMemoryUsageTracker(
-      memory::MemoryUsageTracker::create(
-          memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(kMaxBytes).maxTotalMemory(kMaxBytes).build()));
+      memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder()
+                                             .maxUserMemory(kMaxBytes)
+                                             .maxSystemMemory(kMaxBytes)
+                                             .maxTotalMemory(kMaxBytes)
+                                             .build()));
 
   CursorParameters params;
   params.planNode = plan;
