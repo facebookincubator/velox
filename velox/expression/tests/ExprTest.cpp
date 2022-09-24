@@ -2235,7 +2235,13 @@ TEST_F(ExprTest, constantToSql) {
 }
 
 TEST_F(ExprTest, toSql) {
-  auto rowType = ROW({"a", "b", "c.d"}, {INTEGER(), BIGINT(), VARCHAR()});
+  auto rowType =
+      ROW({"a", "b", "c.d", "e", "f"},
+          {INTEGER(),
+           BIGINT(),
+           VARCHAR(),
+           ARRAY(BIGINT()),
+           MAP(VARCHAR(), DOUBLE())});
 
   // CAST.
   testToSql("a + 3", rowType);
@@ -2274,6 +2280,12 @@ TEST_F(ExprTest, toSql) {
       "element_at(map(array[1, 2, 3], array['a', 'b', 'c']), a)", rowType);
   testToSql("row_constructor(a, b, 'test')", rowType);
   testToSql("row_constructor(true, 1.5, 'abc', array[1, 2, 3])", rowType);
+
+  // Lambda functions.
+  testToSql("filter(e, x -> (x > 10))", rowType);
+  testToSql("transform(e, x -> x + b)", rowType);
+  testToSql("map_filter(f, (k, v) -> (v > 10::double))", rowType);
+  testToSql("reduce(e, b, (s, x) -> s + x, s -> s * 10)", rowType);
 }
 
 namespace {
@@ -2420,31 +2432,13 @@ TEST_F(ExprTest, conjunctExceptionContext) {
 TEST_F(ExprTest, lambdaExceptionContext) {
   auto array = makeArrayVector<int64_t>(
       10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
-  core::Expressions::registerLambda(
-      "lambda1",
-      ROW({"x"}, {BIGINT()}),
-      ROW({ARRAY(BIGINT())}),
-      parse::parseExpr("x / 0 > 1", options_),
-      execCtx_->pool());
+
   assertError(
-      "filter(c0, function('lambda1'))",
+      "filter(c0, x -> (x / 0 > 1))",
       array,
       "divide(x, 0:BIGINT)",
       "filter(c0, (x) -> gt(divide(x, 0:BIGINT), 1:BIGINT))",
       "division by zero");
-
-  core::Expressions::registerLambda(
-      "lambda2",
-      ROW({"x"}, {BIGINT()}),
-      ROW({"c1"}, {INTEGER()}),
-      parse::parseExpr("x / c1 > 1", options_),
-      execCtx_->pool());
-  assertError(
-      "filter(c0, function('lambda2'))",
-      array,
-      "filter(c0, (x, c1) -> gt(divide(x, cast((c1) as BIGINT)), 1:BIGINT))",
-      "Same as context.",
-      "Field not found: c1. Available fields are: c0.");
 }
 
 /// Verify that null inputs result in exceptions, not crashes.
@@ -2469,21 +2463,15 @@ TEST_F(ExprTest, invalidInputs) {
 TEST_F(ExprTest, lambdaWithRowField) {
   auto array = makeArrayVector<int64_t>(
       10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
-  auto row = vectorMaker_.rowVector(
+  auto row = makeRowVector(
       {"val"},
       {makeFlatVector<int64_t>(10, [](vector_size_t row) { return row; })});
-  core::Expressions::registerLambda(
-      "lambda1",
-      ROW({"x"}, {BIGINT()}),
-      ROW({"c0", "c1"}, {ROW({"val"}, {BIGINT()}), ARRAY(BIGINT())}),
-      parse::parseExpr("x + c0.val >= 0", options_),
-      execCtx_->pool());
 
-  auto rowVector = vectorMaker_.rowVector({"c0", "c1"}, {row, array});
+  auto rowVector = makeRowVector({"c0", "c1"}, {row, array});
 
   // We use strpos and c1 to ensure that the constant is peeled before calling
   // always_throws, not before the try.
-  auto evalResult = evaluate("filter(c1, function('lambda1'))", rowVector);
+  auto evalResult = evaluate("filter(c1, x -> (x + c0.val >= 0))", rowVector);
 
   assertEqualVectors(array, evalResult);
 }

@@ -17,6 +17,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/core/Expressions.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/functions/FunctionRegistry.h"
 #include "velox/parse/VariantToVector.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ConstantVector.h"
@@ -25,13 +26,6 @@ namespace facebook::velox::core {
 
 // static
 Expressions::TypeResolverHook Expressions::resolverHook_;
-
-std::unordered_map<std::string, std::shared_ptr<core::LambdaTypedExpr>>&
-Expressions::lambdaRegistry() {
-  static std::unordered_map<std::string, std::shared_ptr<core::LambdaTypedExpr>>
-      lambdas;
-  return lambdas;
-}
 
 namespace {
 std::vector<TypePtr> getTypes(const std::vector<TypedExprPtr>& inputs) {
@@ -172,40 +166,126 @@ TypedExprPtr createWithImplicitCast(
   return std::make_shared<CallTypedExpr>(
       type, std::move(inputs), std::string{expr->getFunctionName()});
 }
+
+bool isLambdaArgument(const exec::TypeSignature& typeSignature) {
+  return typeSignature.baseName() == "function";
+}
+
+bool hasLambdaArgument(const exec::FunctionSignature& signature) {
+  for (const auto& type : signature.argumentTypes()) {
+    if (isLambdaArgument(type)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 } // namespace
 
-std::shared_ptr<const LambdaTypedExpr> Expressions::lookupLambdaExpr(
-    std::shared_ptr<const IExpr> expr) {
-  if (auto callExpr = std::dynamic_pointer_cast<const CallExpr>(expr)) {
-    if ("function" == callExpr->getFunctionName()) {
-      auto inputs = callExpr->getInputs();
-      if (inputs.size() != 1) {
-        return nullptr;
-      }
-      if (auto constant =
-              std::dynamic_pointer_cast<const ConstantExpr>(inputs[0])) {
-        auto it = lambdaRegistry().find(constant->value().value<std::string>());
-        if (it != lambdaRegistry().end()) {
-          return it->second;
+// static
+TypedExprPtr Expressions::inferTypes(
+    const std::shared_ptr<const core::IExpr>& expr,
+    const TypePtr& inputRow,
+    memory::MemoryPool* pool,
+    const std::vector<TypePtr>& lambdaInputTypes) {
+  VELOX_CHECK_NOT_NULL(expr);
+
+  if (auto lambdaExpr = std::dynamic_pointer_cast<const LambdaExpr>(expr)) {
+    auto names = lambdaExpr->inputNames();
+    auto body = lambdaExpr->body();
+
+    VELOX_CHECK_LE(names.size(), lambdaInputTypes.size());
+    std::vector<TypePtr> types;
+    for (auto i = 0; i < names.size(); ++i) {
+      types.push_back(lambdaInputTypes[i]);
+    }
+
+    auto signature = ROW(std::move(names), std::move(types));
+
+    names = inputRow->asRow().names();
+    types = inputRow->asRow().children();
+    for (auto i = 0; i < signature->size(); ++i) {
+      names.push_back(signature->names()[i]);
+      types.push_back(signature->childAt(i));
+    }
+
+    auto lambdaRow = ROW(std::move(names), std::move(types));
+
+    return std::make_shared<LambdaTypedExpr>(
+        signature, inferTypes(body, lambdaRow, pool));
+  }
+
+  if (auto call = std::dynamic_pointer_cast<const CallExpr>(expr)) {
+    if (!expr->getInputs().empty()) {
+      auto allSignatures = getFunctionSignatures();
+      auto it = allSignatures.find(call->getFunctionName());
+      if (it != allSignatures.end()) {
+        const auto& signatures = it->second;
+        for (const auto& signature : signatures) {
+          if (hasLambdaArgument(*signature)) {
+            VELOX_CHECK_EQ(
+                1,
+                signatures.size(),
+                "Lambda functions with multiple signatures are not supported. "
+                "Lambda function {} has {} signatures.",
+                call->getFunctionName(),
+                signatures.size());
+            VELOX_CHECK_EQ(
+                signature->argumentTypes().size(),
+                expr->getInputs().size(),
+                "Lambda function signature is not supported: {}({} arguments)."
+                "Supported signature has {} arguments: {}.",
+                call->getFunctionName(),
+                expr->getInputs().size(),
+                signature->argumentTypes().size(),
+                signature->toString());
+
+            // Resolve non-lambda arguments first.
+            auto numArgs = expr->getInputs().size();
+            std::vector<TypedExprPtr> children(numArgs);
+            std::vector<TypePtr> childTypes(numArgs);
+            for (auto i = 0; i < numArgs; ++i) {
+              if (!isLambdaArgument(signature->argumentTypes()[i])) {
+                children[i] = inferTypes(expr->getInputs()[i], inputRow, pool);
+                childTypes[i] = children[i]->type();
+              }
+            }
+
+            // Resolve lambda arguments.
+            exec::SignatureBinder binder(*signature, childTypes);
+            binder.tryBind();
+            for (auto i = 0; i < numArgs; ++i) {
+              auto argSignature = signature->argumentTypes()[i];
+              if (isLambdaArgument(argSignature)) {
+                std::vector<TypePtr> lambdaTypes;
+                for (auto j = 0; j < argSignature.parameters().size() - 1;
+                     ++j) {
+                  auto type =
+                      binder.tryResolveType(argSignature.parameters()[j]);
+                  VELOX_CHECK_NOT_NULL(
+                      type,
+                      "Cannot resolve lambda argument type: {}.",
+                      argSignature.toString());
+                  lambdaTypes.push_back(type);
+                }
+
+                children[i] = inferTypes(
+                    expr->getInputs()[i], inputRow, pool, lambdaTypes);
+              }
+            }
+
+            return createWithImplicitCast(std::move(call), std::move(children));
+          }
         }
       }
     }
   }
-  return nullptr;
-}
 
-TypedExprPtr Expressions::inferTypes(
-    const std::shared_ptr<const core::IExpr>& expr,
-    const TypePtr& inputRow,
-    memory::MemoryPool* pool) {
-  VELOX_CHECK_NOT_NULL(expr);
-  if (auto lambdaExpr = lookupLambdaExpr(expr)) {
-    return lambdaExpr;
-  }
   std::vector<TypedExprPtr> children;
   for (auto& child : expr->getInputs()) {
-    children.push_back(inferTypes(child, inputRow, pool));
+    children.push_back(inferTypes(child, inputRow, pool, lambdaInputTypes));
   }
+
   if (auto fae = std::dynamic_pointer_cast<const FieldAccessExpr>(expr)) {
     VELOX_CHECK(
         !fae->getFieldName().empty(), "Anonymous columns are not supported");
