@@ -105,6 +105,14 @@ The query ranks orders for each clerk by price:</p>
 <section id="ranking-functions">
 <h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py" id="rank">
+<span class="sig-name descname"><span class="pre">rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#rank" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the rank of a value in a group of values. The rank is one plus the number of rows preceding the
+row that are not peer with the row. Thus, the values in the ordering will produce gaps in the sequence.
+The ranking is performed for each window partition.</p>
+<dl class="py function">
 <dt class="sig sig-object py" id="row_number">
 <span class="sig-name descname"><span class="pre">row_number</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#row_number" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>

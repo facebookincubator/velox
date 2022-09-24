@@ -356,6 +356,44 @@ depth-first order. For each node a sequence of operations is performed.</p>
 <li><p><strong>Finalize</strong> - Set nulls for rows that were removed from evaluation due to null inputs. If any encoding was peeled off, use it to wrap the result. If the expression is a shared subexpression and there is a partial result from prior evaluation, incorporate it into the final result, then save the result for future use.</p></li>
 </ol>
 </section>
+<section id="flat-no-nulls-fast-path">
+<h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Permalink to this headline">¶</a></h4>
+<p>When evaluating simple expressions on short vectors (&lt; 1000 rows), the overhead
+of handling nulls and encodings is visible. To optimize these use cases,
+expression evaluation takes flat-no-nulls fast path
+(Expr::evalFlatNoNulls). This path applies automatically when inputs are flat
+vectors or constants with no nulls and all sub-expressions are guaranteed to
+produce flat-or-constant-no-nulls results given flat-or-constant-no-nulls
+inputs.</p>
+<p>An example of a workload that benefits from this optimization is basic arithmetic
+over non-null floats found in many machine learning pre-processing workloads.</p>
+<p>All simple functions are guaranteed to return flat-or-constant-no-nulls result
+for flat-or-constant-no-nulls inputs.</p>
+<p>Vector functions that have this property must indicate so by overriding
+supportsFlatNoNullsFastPath method.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">/// Returns true if (1) supports evaluation on all constant inputs of size &gt;</span>
+<span class="c1">/// 1; (2) returns flat or constant result when inputs are all flat, all</span>
+<span class="c1">/// constant or a mix of flat and constant; (3) guarantees that if all inputs</span>
+<span class="c1">/// are not null, the result is also not null.</span>
+<span class="k">virtual</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">supportsFlatNoNullsFastPath</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</pre></div>
+</div>
+<p>Special forms support flat-no-nulls fast path in some cases, but not all.</p>
+<ul class="simple">
+<li><p>AND / OR support flat-no-nulls fast path if all sub-expressions support
+flat-no-nulls fast path.</p></li>
+<li><p>IF and SWITCH support flat-no-nulls fast path if else clause if specified and
+all sub-expressions support flat-no-nulls fast path.</p></li>
+<li><p>COALESCE supports flat-no-nulls fast path if all sub-expressions support
+flat-no-nulls fast path.</p></li>
+<li><p>CAST doesn’t support flat-no-nulls fast path.</p></li>
+<li><p>TRY doesnt’t support flat-no-nulls fast path.</p></li>
+</ul>
+<p>It is possible for some sub-expressions to take the fast path while others
+go through the regular path.</p>
+</section>
 <section id="error-handling-in-and-or-try">
 <h4>Error Handling in AND, OR, TRY<a class="headerlink" href="#error-handling-in-and-or-try" title="Permalink to this headline">¶</a></h4>
 <p>When evaluating AND expression, If some input generates an error for a row on
@@ -382,13 +420,15 @@ most often first.</p>
 </section>
 <section id="evaluation-of-if-switch">
 <h4>Evaluation of IF, SWITCH<a class="headerlink" href="#evaluation-of-if-switch" title="Permalink to this headline">¶</a></h4>
-<p>SWITCH expression evaluation goes through the following steps:
-* Evaluate the first condition on all rows.
-* Evaluate the first “then” clause on a subset of rows where the first condition is true and produce a partially populated result vector.
-* Evaluate the second condition on rows where the first condition is not true.
-* Evaluate the second “then” clause on a subset of rows where the second condition. Pass the partially populated result vector to Expr::eval when evaluating the “then” clause and expect the expression to update the result vector with the calculated values for the specified rows while preserving the already calculated results.
-* Continue to process all the (condition, then clause) pairs. Terminate early if run out of rows.
-* Finally, evaluate the else clause for the remaining rows. If the else clause is not specified, set nulls for the remaining rows.</p>
+<p>SWITCH expression evaluation goes through the following steps:</p>
+<ul class="simple">
+<li><p>Evaluate the first condition on all rows.</p></li>
+<li><p>Evaluate the first “then” clause on a subset of rows where the first condition is true and produce a partially populated result vector.</p></li>
+<li><p>Evaluate the second condition on rows where the first condition is not true.</p></li>
+<li><p>Evaluate the second “then” clause on a subset of rows where the second condition. Pass the partially populated result vector to Expr::eval when evaluating the “then” clause and expect the expression to update the result vector with the calculated values for the specified rows while preserving the already calculated results.</p></li>
+<li><p>Continue to process all the (condition, then clause) pairs. Terminate early if run out of rows.</p></li>
+<li><p>Finally, evaluate the else clause for the remaining rows. If the else clause is not specified, set nulls for the remaining rows.</p></li>
+</ul>
 <p>SWITCH expression sets EvalCtx::isFinalSelection flag to false. The expressions
 are expected to use this flag to decide whether the partially populated result
 vector must be preserved or can be overwritten.</p>
@@ -424,6 +464,7 @@ vector must be preserved or can be overwritten.</p>
 <li><a class="reference internal" href="#memoizing-the-dictionaries">Memoizing the Dictionaries</a></li>
 <li><a class="reference internal" href="#handling-nulls">Handling Nulls</a></li>
 <li><a class="reference internal" href="#evaluation-algorithm">Evaluation Algorithm</a></li>
+<li><a class="reference internal" href="#flat-no-nulls-fast-path">Flat No-Nulls Fast Path</a></li>
 <li><a class="reference internal" href="#error-handling-in-and-or-try">Error Handling in AND, OR, TRY</a></li>
 <li><a class="reference internal" href="#adaptive-conjunct-reordering-in-and-and-or">Adaptive Conjunct Reordering in AND and OR</a></li>
 <li><a class="reference internal" href="#evaluation-of-if-switch">Evaluation of IF, SWITCH</a></li>
