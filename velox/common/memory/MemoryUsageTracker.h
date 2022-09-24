@@ -128,22 +128,6 @@ class MemoryUsageTracker
     return create(nullptr, UsageType::kUserMem, config);
   }
 
-  // FIXME(venkatra): Remove this once presto_cpp is updated to use above
-  // function.
-  static std::shared_ptr<MemoryUsageTracker> create(
-      int64_t maxUserMemory,
-      int64_t maxSystemMemory,
-      int64_t maxTotalMemory) {
-    return create(
-        nullptr,
-        UsageType::kUserMem,
-        MemoryUsageConfigBuilder()
-            .maxUserMemory(maxUserMemory)
-            .maxSystemMemory(maxSystemMemory)
-            .maxTotalMemory(maxTotalMemory)
-            .build());
-  }
-
   virtual ~MemoryUsageTracker() = default;
 
   // Increments the reservation for 'this' so that we can allocate at

@@ -872,7 +872,7 @@ TEST_F(AggregationTest, spill) {
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = core::QueryCtx::createForTest();
   queryCtx->pool()->setMemoryUsageTracker(
-      velox::memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+      memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(0).maxTotalMemory(kMaxBytes).build()));
   auto task =
       AssertQueryBuilder(PlanBuilder()
                              .values(batches)
@@ -966,7 +966,7 @@ TEST_F(AggregationTest, spillWithEmptyPartition) {
     auto tempDirectory = exec::test::TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::createForTest();
     queryCtx->pool()->setMemoryUsageTracker(
-        velox::memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+        memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(0).maxTotalMemory(kMaxBytes).build()));
 
 #ifndef NDEBUG
     SCOPED_TESTVALUE_SET(
@@ -1085,7 +1085,7 @@ TEST_F(AggregationTest, spillWithNonSpillingPartition) {
   auto tempDirectory = exec::test::TempDirectoryPath::create();
   auto queryCtx = core::QueryCtx::createForTest();
   queryCtx->pool()->setMemoryUsageTracker(
-      velox::memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+      memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(0).maxTotalMemory(kMaxBytes).build()));
 
   auto task =
       AssertQueryBuilder(PlanBuilder()

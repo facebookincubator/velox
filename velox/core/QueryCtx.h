@@ -145,7 +145,11 @@ class QueryCtx : public Context {
         kQueryRootMemoryPool);
     static const auto kUnlimited = std::numeric_limits<int64_t>::max();
     pool_->setMemoryUsageTracker(
-        memory::MemoryUsageTracker::create(kUnlimited, kUnlimited, kUnlimited));
+        memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder()
+                                               .maxUserMemory(kUnlimited)
+                                               .maxSystemMemory(kUnlimited)
+                                               .maxTotalMemory(kUnlimited)
+                                               .build()));
   }
 
   static constexpr const char* FOLLY_NONNULL kQueryRootMemoryPool =

@@ -423,7 +423,7 @@ TEST_F(OrderByTest, spill) {
   auto queryCtx = core::QueryCtx::createForTest();
   constexpr int64_t kMaxBytes = 20LL << 20; // 20 MB
   queryCtx->pool()->setMemoryUsageTracker(
-      memory::MemoryUsageTracker::create(kMaxBytes, 0, kMaxBytes));
+      memory::MemoryUsageTracker::create(memory::MemoryUsageConfigBuilder().maxUserMemory(kMaxBytes).maxSystemMemory(0).maxTotalMemory(kMaxBytes).build()));
   // Set 'kSpillableReservationGrowthPct' to an extreme large value to trigger
   // disk spilling by failed memory growth reservation.
   queryCtx->setConfigOverridesUnsafe(
