@@ -258,44 +258,20 @@ TEST_F(VeloxSubstraitRoundTripPlanConverterTest, caseWhen) {
   createDuckDbTable(vectors);
   auto plan = PlanBuilder()
                   .values(vectors)
-                  .project({"case when c0=1 then c1 else c2  end as x"})
+                  .project({"case when c0=1 then c1 when c0=2 then c2 else c3  end as x"})
                   .planNode();
   assertPlanConversion(
-      plan, "SELECT case when c0=1 then c1 else c2  end as x  FROM tmp");
-
-  plan =
-      PlanBuilder()
-          .values(vectors)
-          .project({"case when c0=1 then c1 when c0=2 then c2 else 1 end as x"})
-          .planNode();
-
-  assertPlanConversion(
-      plan,
-      "SELECT case when c0=1 then c1 when c0=2 then c2 else 1  end as x  FROM tmp");
+      plan, "SELECT case when c0=1 then c1 when c0=2 then c2 else c3  end as x  FROM tmp");
 }
 
 TEST_F(VeloxSubstraitRoundTripPlanConverterTest, ifThen) {
   auto vectors = makeVectors(3, 4, 2);
   createDuckDbTable(vectors);
-  auto plan =
-      PlanBuilder().values(vectors).project({"if (1=1, 0, 1) as x"}).planNode();
-  assertPlanConversion(plan, "SELECT if (1=1, 0, 1) as x  FROM tmp");
-
-  plan =
-      PlanBuilder().values(vectors).project({"if (1=1, 0) as x"}).planNode();
-  assertPlanConversion(plan, "SELECT if (1=1, 0) as x  FROM tmp");
-
-  plan = PlanBuilder()
-             .values(vectors)
-             .project({"if (c0=1, c0, c1) as x"})
-             .planNode();
-  assertPlanConversion(plan, "SELECT if (c0=0, c0, c1) as x  FROM tmp");
-
-  plan = PlanBuilder()
-             .values(vectors)
-             .project({"if (c0=1, c0, c1) as x"})
-             .planNode();
-  assertPlanConversion(plan, "SELECT if (c0=0, c0 + 2, c1 + 2) as x  FROM tmp");
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"if (c0=1, c0 + 1, c1 + 2) as x"})
+                  .planNode();
+  assertPlanConversion(plan, "SELECT if (c0=1, c0 + 1, c1 + 2) as x  FROM tmp");
 }
 
 int main(int argc, char** argv) {
