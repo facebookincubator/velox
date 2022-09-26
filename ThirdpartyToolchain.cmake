@@ -48,9 +48,9 @@ endif()
 macro(build_folly)
   message(STATUS "Building Folly from source")
   # FOLLY_CXX_FLAGS is used internally on folly to define some extra
-  # CMAKE_CXX_FLAGS. Define some known warnings to avoid possible errors on some
+  # CMAKE_CXX_FLAGS for some known warnings to avoid possible errors on some
   # OS/archs
-  set(EXTRA_FOLLY_CXX_FLAGS -Wno-deprecated-declarations)
+  set(EXTRA_CXX_FLAGS -Wno-deprecated-declarations)
   check_cxx_compiler_flag(-Wnullability-completeness
                           COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   if(COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
