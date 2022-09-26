@@ -284,7 +284,9 @@ jobs:
             conbench cpp-micro --run-name="$run_name" --run-reason="$run_reason"
       - run:
           name: "Analyze benchmark regressions and post to Github"
-          command: python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
+          command: |
+            export GITHUB_APP_PRIVATE_KEY=$(echo $GITHUB_APP_PRIVATE_KEY_ENCODED | base64 -d)
+            python3.8 scripts/benchmark-github-status.py --z-score-threshold 50
       - store_artifacts:
           path: '_build/debug/.ninja_log'
       - save_cache:
