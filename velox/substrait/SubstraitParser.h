@@ -93,13 +93,17 @@ class SubstraitParser {
   /// keyword. For those functions with different names in Substrait and Velox,
   /// a mapping relation should be added here.
   std::unordered_map<std::string, std::string> substraitVeloxFunctionMap_ = {
-      {"add", "plus"},
-      {"subtract", "minus"},
-      {"modulus", "mod"},
-      {"not_equal", "neq"},
+      {"is_not_null", "isnotnull"}, /*Spark functions.*/
+      {"is_null", "isnull"},
+      {"equal", "equalto"}, 
+      {"lt", "lessthan"},
+      {"lte", "lessthanorequal"},
+      {"gt", "greaterthan"},
+      {"gte", "greaterthanorequal"},
+      {"not_equal", "notequalto"},
       {"ends_with", "endswith"},
       {"starts_with", "startswith"},
-      {"equal", "eq"}};
+      {"modulus", "mod"} /*Presto functions.*/};
 };
 
 } // namespace facebook::velox::substrait

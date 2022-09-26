@@ -204,20 +204,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 }
 
 std::shared_ptr<const core::ITypedExpr>
-SubstraitVeloxExprConverter::toIsNotNullExpr(
-    const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
-    const TypePtr& outputType) {
-  // Convert is_not_null to not(is_null).
-  auto isNullExpr = std::make_shared<const core::CallTypedExpr>(
-      outputType, std::move(params), "is_null");
-  std::vector<std::shared_ptr<const core::ITypedExpr>> notParams;
-  notParams.reserve(1);
-  notParams.emplace_back(isNullExpr);
-  return std::make_shared<const core::CallTypedExpr>(
-      outputType, std::move(notParams), "not");
-}
-
-std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toExtractExpr(
     const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
     const TypePtr& outputType) {
@@ -239,6 +225,7 @@ SubstraitVeloxExprConverter::toExtractExpr(
     exprParams.reserve(1);
     exprParams.emplace_back(params[1]);
     if (from == "YEAR") {
+      // Use PrestoSql year function.
       return std::make_shared<const core::CallTypedExpr>(
           outputType, std::move(exprParams), "year");
     }
@@ -262,10 +249,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
 
   if (veloxFunction == "extract") {
     return toExtractExpr(std::move(params), toVeloxType(typeName));
-  }
-
-  if (veloxFunction == "is_not_null") {
-    return toIsNotNullExpr(std::move(params), toVeloxType(typeName));
   }
 
   return std::make_shared<const core::CallTypedExpr>(

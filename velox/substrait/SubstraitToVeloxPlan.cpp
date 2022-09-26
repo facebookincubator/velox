@@ -840,7 +840,7 @@ void SubstraitVeloxPlanConverter::extractJoinKeys(
       if (funcName == "and") {
         expressions.push_back(&args[0].value());
         expressions.push_back(&args[1].value());
-      } else if (funcName == "eq") {
+      } else if (funcName == "eq" || funcName == "equalto") {
         VELOX_CHECK(std::all_of(
             args.cbegin(),
             args.cend(),

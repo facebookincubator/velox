@@ -65,11 +65,6 @@ class SubstraitVeloxExprConverter {
       const ::substrait::Expression::Cast& castExpr,
       const RowTypePtr& inputType);
 
-  /// Create expression for is_not_null.
-  std::shared_ptr<const core::ITypedExpr> toIsNotNullExpr(
-      const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
-      const TypePtr& outputType);
-
   /// Create expression for extract.
   std::shared_ptr<const core::ITypedExpr> toExtractExpr(
       const std::vector<std::shared_ptr<const core::ITypedExpr>>& params,
