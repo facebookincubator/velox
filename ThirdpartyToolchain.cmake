@@ -60,6 +60,10 @@ macro(build_folly)
   if(COMPILER_HAS_W_STRINGOP_OVERFLOW)
     list(APPEND EXTRA_CXX_FLAGS -Wno-stringop-overflow)
   endif()
+  check_cxx_compiler_flag(-Wundef-prefix COMPILER_HAS_W_UNDEF_PREFIX)
+  if(COMPILER_HAS_W_UNDEF_PREFIX)
+    list(APPEND EXTRA_CXX_FLAGS -Wno-undef-prefix)
+  endif()
   set(FOLLY_CXX_FLAGS -Wno-unused -Wno-unused-parameter -Wno-overloaded-virtual
                       ${EXTRA_CXX_FLAGS})
   FetchContent_Declare(
