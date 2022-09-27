@@ -141,14 +141,14 @@ bool SignatureBinder::tryBind() {
   }
 
   for (auto i = 0; i < formalArgsCnt && i < actualTypes_.size(); i++) {
-    if (!tryBind(formalArgs[i], actualTypes_[i])) {
+    if (!SignatureBinderBase::tryBind(formalArgs[i], actualTypes_[i])) {
       return false;
     }
   }
   return true;
 }
 
-bool SignatureBinder::checkOrSetIntegerParameter(
+bool SignatureBinderBase::checkOrSetIntegerParameter(
     const std::string& parameterName,
     int value) {
   auto it = integerParameters_.find(parameterName);
@@ -164,7 +164,7 @@ bool SignatureBinder::checkOrSetIntegerParameter(
   return true;
 }
 
-bool SignatureBinder::tryBindIntegerParameters(
+bool SignatureBinderBase::tryBindIntegerParameters(
     const std::vector<exec::TypeSignature>& parameters,
     const TypePtr& actualType) {
   // Decimal types
@@ -177,7 +177,7 @@ bool SignatureBinder::tryBindIntegerParameters(
   return false;
 }
 
-bool SignatureBinder::tryBind(
+bool SignatureBinderBase::tryBind(
     const exec::TypeSignature& typeSignature,
     const TypePtr& actualType) {
   if (isAny(typeSignature)) {
