@@ -26,11 +26,6 @@
 using facebook::velox::Type;
 using facebook::velox::TypeKind;
 
-#define VELOX_THROW_CONDITION(condition, error) \
-  if ((condition)) {                            \
-    throw std::invalid_argument(error);         \
-  }
-
 namespace {
 /// Returns true only if 'str' contains digits.
 bool isPositiveInteger(const std::string& str) {
@@ -76,26 +71,26 @@ HiveTypeParser::HiveTypeParser() {
 std::shared_ptr<const Type> HiveTypeParser::parse(const std::string& ser) {
   remaining_ = folly::StringPiece(ser);
   Result result = parseType();
-  VELOX_THROW_CONDITION(
-      remaining_.size() != 0 && (TokenType::EndOfStream != lookAhead()),
+  VELOX_CHECK(
+      !(remaining_.size() != 0 && (TokenType::EndOfStream != lookAhead())),
       "Input remaining after type parsing");
   return result.type;
 }
 
 Result HiveTypeParser::parseType() {
   Token nt = nextToken();
-  VELOX_THROW_CONDITION(nt.isEOS(), "Unexpected end of stream parsing type!!!");
+  VELOX_CHECK(!nt.isEOS(), "Unexpected end of stream parsing type!!!");
   if (nt.isValidType() && nt.isPrimitiveType()) {
     if (isDecimalKind(nt.typeKind())) {
       eatToken(TokenType::LeftRoundBracket);
       Token precision = nextToken();
-      VELOX_THROW_CONDITION(
-          !isPositiveInteger(precision.value.toString()),
+      VELOX_CHECK(
+          isPositiveInteger(precision.value.toString()),
           "Decimal precision must be a positive integer");
       eatToken(TokenType::Comma);
       Token scale = nextToken();
-      VELOX_THROW_CONDITION(
-          !isPositiveInteger(scale.value.toString()),
+      VELOX_CHECK(
+          isPositiveInteger(scale.value.toString()),
           "Decimal scale must be a positive integer");
       eatToken(TokenType::RightRoundBracket);
       return Result{DECIMAL(
@@ -112,24 +107,23 @@ Result HiveTypeParser::parseType() {
         return Result{velox::ROW(
             std::move(resultList.names), std::move(resultList.typelist))};
       case velox::TypeKind::MAP: {
-        VELOX_THROW_CONDITION(
-            resultList.typelist.size() != 2,
+        VELOX_CHECK(
+            resultList.typelist.size() == 2,
             "wrong param count for map type def");
         return Result{
             velox::MAP(resultList.typelist.at(0), resultList.typelist.at(1))};
       }
       case velox::TypeKind::ARRAY: {
-        VELOX_THROW_CONDITION(
-            resultList.typelist.size() != 1,
+        VELOX_CHECK(
+            resultList.typelist.size() == 1,
             "wrong param count for array type def");
         return Result{velox::ARRAY(resultList.typelist.at(0))};
       }
       default:
-        throw std::invalid_argument{
-            "unsupported kind: " + std::to_string((int)nt.typeKind())};
+        VELOX_FAIL("unsupported kind: " + std::to_string((int)nt.typeKind()));
     }
   } else {
-    throw std::invalid_argument(fmt::format(
+    VELOX_FAIL(fmt::format(
         "Unexpected token {} at {}", nt.value, remaining_.toString()));
   }
 }
@@ -170,7 +164,7 @@ Token HiveTypeParser::eatToken(TokenType tokenType, bool ignorePredefined) {
     return token;
   }
 
-  throw std::invalid_argument("Unexpected token " + token.remaining.toString());
+  VELOX_FAIL("Unexpected token " + token.remaining.toString());
 }
 
 Token HiveTypeParser::nextToken(bool ignorePredefined) {
@@ -213,7 +207,7 @@ TokenAndRemaining HiveTypeParser::nextToken(
     return makeExtendedToken(getMetadata(TokenType::Identifier), sp, len);
   }
 
-  throw std::invalid_argument("Bad Token at " + sp.toString());
+  VELOX_FAIL("Bad Token at " + sp.toString());
 }
 
 TokenType Token::tokenType() const {

@@ -20,6 +20,7 @@
 #include "gtest/gtest-message.h"
 #include "gtest/gtest-test-part.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/type/fbhive/HiveTypeParser.h"
 
 using facebook::velox::TypeKind;
@@ -95,12 +96,16 @@ TEST(FbHive, structNames) {
 
 TEST(FbHive, unionDeprecation) {
   HiveTypeParser parser;
-  try {
-    parser.parse("uniontype< bigint , int, float>");
-  } catch (const std::invalid_argument& e) {
-    EXPECT_STREQ(
-        "Unexpected token uniontype at < bigint , int, float>", e.what());
-  }
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype< bigint , int, float>"),
+      "Unexpected token uniontype at < bigint , int, float>");
+  VELOX_ASSERT_THROW(
+      parser.parse("struct<a:uniontype<int,string>>"),
+      "Unexpected token uniontype at <int,string>>");
+  VELOX_ASSERT_THROW(
+      parser.parse(
+          "struct<a:map<int,array<struct<a:map<string,int>,b:array<int>,c:uniontype<int,float>>>>>"),
+      "Unexpected token uniontype at <int,float>>>>>");
 }
 
 TEST(FbHive, nested2) {
@@ -111,20 +116,34 @@ TEST(FbHive, nested2) {
 
 TEST(FbHive, badParse) {
   HiveTypeParser parser;
-  ASSERT_THROW(parser.parse("   "), std::invalid_argument);
-  ASSERT_THROW(
-      parser.parse("uniontype< bigint , int, float"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("badid"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("struct<int, bigint>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("list<>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("map<>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("uniontype<>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("list<int, bigint>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("map<int>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("short_decimal<20, 10>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("short_decimal(20, 10>"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("short_decimal(a, 10)"), std::invalid_argument);
-  ASSERT_THROW(parser.parse("long_decimal(20, b)"), std::invalid_argument);
+  VELOX_ASSERT_THROW(
+      parser.parse("   "), "Unexpected end of stream parsing type!!!");
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype< bigint , int, float"),
+      "Unexpected token uniontype at < bigint , int, float");
+  VELOX_ASSERT_THROW(parser.parse("badid"), "Unexpected token badid at ");
+  VELOX_ASSERT_THROW(
+      parser.parse("struct<int, bigint>"), "Unexpected token  bigint>");
+  VELOX_ASSERT_THROW(parser.parse("list<>"), "Unexpected token list at <>");
+  VELOX_ASSERT_THROW(
+      parser.parse("map<>"), "wrong param count for map type def");
+  VELOX_ASSERT_THROW(
+      parser.parse("uniontype<>"), "Unexpected token uniontype at <>");
+  VELOX_ASSERT_THROW(
+      parser.parse("list<int, bigint>"),
+      "Unexpected token list at <int, bigint>");
+  VELOX_ASSERT_THROW(
+      parser.parse("map<int>"), "wrong param count for map type def");
+  VELOX_ASSERT_THROW(
+      parser.parse("short_decimal<20, 10>"), "Unexpected token 20, 10>");
+  VELOX_ASSERT_THROW(
+      parser.parse("short_decimal(20, 10>"), "Unexpected token ");
+  VELOX_ASSERT_THROW(
+      parser.parse("short_decimal(a, 10)"),
+      "Decimal precision must be a positive integer");
+  VELOX_ASSERT_THROW(
+      parser.parse("long_decimal(20, b)"),
+      "Decimal scale must be a positive integer");
 }
 
 TEST(FbHive, caseInsensitive) {
