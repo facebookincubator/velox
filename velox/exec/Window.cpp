@@ -102,14 +102,22 @@ Window::Window(
 void Window::createWindowFunctions(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     const RowTypePtr& inputType) {
+  auto getConstExprValue = [&](const std::string constExprString) {
+    std::stringstream stream(constExprString);
+    vector_size_t constExprValue;
+    stream >> constExprValue;
+    return constExprValue;
+  };
+
   auto fieldArgToChannel =
       [&](const core::TypedExprPtr arg) -> std::optional<column_index_t> {
     if (arg) {
+      if (auto isConstExpr =
+              std::dynamic_pointer_cast<const core::ConstantTypedExpr>(arg)) {
+        return getConstExprValue(isConstExpr->toString());
+      }
       std::optional<column_index_t> argChannel =
           exprToChannel(arg.get(), inputType);
-      VELOX_CHECK(
-          argChannel.value() != kConstantChannel,
-          "Window doesn't allow constant arguments or frame end-points");
       return argChannel;
     }
     return std::nullopt;

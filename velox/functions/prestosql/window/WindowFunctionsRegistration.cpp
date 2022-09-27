@@ -22,6 +22,7 @@ extern void registerRank(const std::string& name);
 extern void registerDenseRank(const std::string& name);
 extern void registerPercentRank(const std::string& name);
 extern void registerCumeDist(const std::string& name);
+extern void registerNtile(const std::string& name);
 
 void registerWindowFunctions() {
   window::registerRowNumber("row_number");
@@ -29,6 +30,7 @@ void registerWindowFunctions() {
   window::registerDenseRank("dense_rank");
   window::registerPercentRank("percent_rank");
   window::registerCumeDist("cume_dist");
+  window::registerNtile("ntile");
 }
 
 } // namespace facebook::velox::window

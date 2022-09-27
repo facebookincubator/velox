@@ -76,7 +76,7 @@ class WindowFunction {
   static std::unique_ptr<WindowFunction> create(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,
-      const std::vector<column_index_t>& argIndices,
+      const std::vector<column_index_t>& argValues,
       const TypePtr& resultType,
       memory::MemoryPool* pool);
 
@@ -87,13 +87,15 @@ class WindowFunction {
 
 /// Information from the Window operator that is useful for the function logic.
 /// @param argTypes  Vector of the types of the input arguments to the function
-/// @param argIndices  Vector of the positions of the corresponding input
-/// argument column in the input row of the Operator. These indices are used
-/// to access data from the WindowPartition object.
+/// @param argValues  Vector of arguments, representing the integral argument
+/// value for constant arguments and the argument positions of the corresponding
+/// input argument columns in the input row of the Operator for non constant
+/// arguments. For non constant arguments, these indices are used to access data
+/// from the WindowPartition object.
 ///  @param resultType  Type of the result of the function.
 using WindowFunctionFactory = std::function<std::unique_ptr<WindowFunction>(
     const std::vector<TypePtr>& argTypes,
-    const std::vector<column_index_t>& argIndices,
+    const std::vector<column_index_t>& argValues,
     const TypePtr& resultType,
     memory::MemoryPool* pool)>;
 
