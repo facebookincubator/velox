@@ -36,12 +36,8 @@ struct SumCount {
 //       INPUT TYPE    |     SUM             |     AVG
 //   ------------------|---------------------|------------------
 //     REAL            |     DOUBLE          |    REAL
-//     SHORT_DECIMAL   |     LONG_DECIMAL    |    SHORT_DECIMAL
-//     LONG_DECIMAL    |     LONG_DECIMAL    |    LONG_DECIMAL
 //     ALL INTs        |     DOUBLE          |    DOUBLE
 //
-// input types and double for other input types.
-// T is the input type for partial aggregation. Not used for final aggregation.
 template <typename TInput, typename TAccumulator, typename ResultType>
 class AverageAggregate : public exec::Aggregate {
  public:
