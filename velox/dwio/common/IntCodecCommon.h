@@ -26,6 +26,7 @@ constexpr uint32_t LONG_BYTE_SIZE = 8;
 
 constexpr uint64_t BASE_128_MASK = 0x7f;
 constexpr uint64_t BASE_256_MASK = 0xff;
+constexpr __int128_t INT128_BASE_256_MASK = 0xff;
 
 // Timezone constants
 constexpr int64_t SECONDS_PER_HOUR = 60 * 60;

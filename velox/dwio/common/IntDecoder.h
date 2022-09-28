@@ -187,6 +187,7 @@ class IntDecoder {
   uint64_t readVuLong();
   int64_t readVsLong();
   int64_t readLongLE();
+  int128_t readInt128();
 
   // Applies 'visitor to 'numRows' consecutive values.
   template <typename Visitor>
@@ -408,6 +409,43 @@ inline int64_t IntDecoder<isSigned>::readLong() {
   } else {
     return readLongLE();
   }
+}
+
+template <bool isSigned>
+inline int128_t IntDecoder<isSigned>::readInt128() {
+  int128_t result = 0;
+  if (!bigEndian) {
+    VELOX_NYI();
+  }
+  if (bufferStart && bufferStart + sizeof(int128_t) <= bufferEnd) {
+    bufferStart += numBytes;
+
+    auto valueOffset = bufferStart - numBytes;
+    result = *(valueOffset) >= 0 ? 0 : -1;
+    memcpy(
+        reinterpret_cast<char*>(&result) + (16 - numBytes),
+        reinterpret_cast<const char*>(valueOffset),
+        numBytes);
+    auto low = __builtin_bswap64(result >> 64);
+    auto high = __builtin_bswap64(result);
+    return buildInt128(high, low);
+  }
+  char b;
+  int128_t offset = 0;
+  for (uint32_t i = 0; i < numBytes; ++i) {
+    b = readByte();
+    result |= (b & INT128_BASE_256_MASK) << offset;
+    offset += 8;
+  }
+
+  int128_t value = (result >= 0) ? 0 : -1;
+  memcpy(
+      reinterpret_cast<char*>(&value) + (16 - numBytes),
+      reinterpret_cast<const char*>(&result),
+      numBytes);
+  auto low = __builtin_bswap64(value >> 64);
+  auto high = __builtin_bswap64(value);
+  return buildInt128(high, low);
 }
 
 template <>
