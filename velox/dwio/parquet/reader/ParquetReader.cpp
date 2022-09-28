@@ -248,7 +248,8 @@ std::shared_ptr<const ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
             maxRepeat,
             maxDefine,
             precision,
-            scale);
+            scale,
+            type_length);
 
     if (schemaElement.repetition_type ==
         thrift::FieldRepetitionType::REPEATED) {
@@ -354,9 +355,9 @@ TypePtr ReaderBase::convertType(
 
       case thrift::ConvertedType::DECIMAL:
         VELOX_CHECK(
-            !schemaElement.__isset.precision || !schemaElement.__isset.scale,
+            schemaElement.__isset.precision && schemaElement.__isset.scale,
             "DECIMAL requires a length and scale specifier!");
-        VELOX_UNSUPPORTED("Decimal type is not supported yet");
+        return DECIMAL(schemaElement.precision, schemaElement.scale);
 
       case thrift::ConvertedType::UTF8:
         switch (schemaElement.type) {
