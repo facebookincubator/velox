@@ -50,11 +50,6 @@ struct UnscaledShortDecimal {
   int64_t unscaledValue() const {
     return unscaledValue_;
   }
-
-  void setUnscaledValue(const int64_t unscaledValue) {
-    unscaledValue_ = unscaledValue;
-  }
-
   bool operator==(const UnscaledShortDecimal& other) const {
     return unscaledValue_ == other.unscaledValue_;
   }
@@ -89,6 +84,11 @@ struct UnscaledShortDecimal {
 
   UnscaledShortDecimal operator*(int value) const {
     return UnscaledShortDecimal(unscaledValue_ * value);
+  }
+
+  UnscaledShortDecimal& operator+=(const UnscaledShortDecimal& value) {
+    unscaledValue_ += value.unscaledValue_;
+    return *this;
   }
 
   UnscaledShortDecimal& operator*=(int value) {

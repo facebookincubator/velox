@@ -17,6 +17,7 @@
 #pragma once
 
 #include <string>
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/type/Type.h"
 #include "velox/type/UnscaledLongDecimal.h"
@@ -79,5 +80,34 @@ class DecimalUtil {
       return UnscaledLongDecimal(rescaledValue);
     }
   }
-};
+
+  template <typename R, typename A, typename B>
+  inline static void divideWithRoundUp(
+      R& r,
+      const A& a,
+      const B& b,
+      uint8_t aRescale,
+      uint8_t /*bRescale*/) {
+    VELOX_CHECK_NE(b.unscaledValue(), 0, "Division by zero");
+    int resultSign = 1;
+    R unsignedDividendRescaled(a);
+    if (a < 0) {
+      resultSign = -1;
+      unsignedDividendRescaled *= -1;
+    }
+    R unsignedDivisor(b);
+    if (b < 0) {
+      resultSign *= -1;
+      unsignedDivisor *= -1;
+    }
+    unsignedDividendRescaled = checkedMultiply<R>(
+        unsignedDividendRescaled, R(DecimalUtil::kPowersOfTen[aRescale]));
+    R quotient = unsignedDividendRescaled / unsignedDivisor;
+    R remainder = unsignedDividendRescaled % unsignedDivisor;
+    if (remainder * 2 >= unsignedDivisor) {
+      ++quotient;
+    }
+    r = quotient * resultSign;
+  }
+}; // DecimalUtil
 } // namespace facebook::velox

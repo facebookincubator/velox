@@ -135,6 +135,16 @@ struct UnscaledLongDecimal {
     return UnscaledLongDecimal(static_cast<int64_t>(value));
   }
 
+  UnscaledLongDecimal& operator+=(const UnscaledLongDecimal& value) {
+    unscaledValue_ += value.unscaledValue_;
+    return *this;
+  }
+
+  UnscaledLongDecimal& operator+=(const UnscaledShortDecimal& value) {
+    unscaledValue_ += value.unscaledValue();
+    return *this;
+  }
+
   UnscaledLongDecimal& operator*=(int value) {
     unscaledValue_ *= value;
     return *this;

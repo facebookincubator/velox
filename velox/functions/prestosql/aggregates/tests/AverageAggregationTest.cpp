@@ -13,8 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
+#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/parse/TypeResolver.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -198,6 +202,50 @@ TEST_F(AverageAggregationTest, partialResults) {
                   .planNode();
 
   assertQuery(plan, "SELECT row(4950, 100)");
+}
+
+TEST_F(AverageAggregationTest, avgDecimal) {
+  // facebook::velox::exec::test::AggregateTypeResolver resolver(step);
+  auto runAndCompare = [&](const std::string& exprStr,
+                           std::vector<VectorPtr> input,
+                           VectorPtr expectedResult) {
+    // Need to use PlanBuilder as it registers a AggregateTypeResolver Vs
+    // evaluate which would compile the expressions through Simple/Vector
+    // function resolvers.
+    PlanBuilder builder;
+    builder.values({makeRowVector(input)});
+    builder.singleAggregation({}, {"avg(c0)"});
+    AssertQueryBuilder queryBuilder(builder.planNode());
+    std::vector<RowVectorPtr> expectedRowVector = {
+        makeRowVector({expectedResult})};
+    queryBuilder.assertResults(expectedRowVector);
+  };
+  auto shortDecimal = makeNullableShortDecimalFlatVector(
+      {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
+  auto shortExpected = makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1));
+  runAndCompare("avg(c0)", {shortDecimal}, shortExpected);
+
+  auto longDecimal = makeNullableLongDecimalFlatVector(
+      {buildInt128(10, 100),
+       buildInt128(10, 200),
+       buildInt128(10, 300),
+       buildInt128(10, 400),
+       buildInt128(10, 500),
+       std::nullopt},
+      DECIMAL(23, 4));
+  auto longExpected =
+      makeLongDecimalFlatVector({buildInt128(10, 300)}, DECIMAL(23, 4));
+  runAndCompare("avg(c0)", {longDecimal}, longExpected);
+
+  // Round-up average.
+  shortDecimal =
+      makeNullableShortDecimalFlatVector({100, 400, 510}, DECIMAL(3, 2));
+  shortExpected = makeShortDecimalFlatVector({337}, DECIMAL(3, 2));
+  runAndCompare("avg(c0)", {shortDecimal}, shortExpected);
+
+  longDecimal = makeLongDecimalFlatVector(
+      {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0));
+  // runAndCompare("avg(c0)", {longDecimal}, shortExpected);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
