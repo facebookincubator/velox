@@ -136,32 +136,37 @@ std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression_IfThen& substraitIfThen,
     const RowTypePtr& inputType) {
-  std::vector<core::TypedExprPtr> params;
+  std::vector<core::TypedExprPtr> inputs;
+  if (substraitIfThen.has_else_()) {
+    inputs.reserve(substraitIfThen.ifs_size() * 2 + 1);
+  } else {
+    inputs.reserve(substraitIfThen.ifs_size() * 2);
+  }
 
-  core::TypedExprPtr resultType;
+  TypePtr resultType;
   for (auto& ifExpr : substraitIfThen.ifs()) {
     auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
-    params.emplace_back(ifClauseExpr);
+    inputs.emplace_back(ifClauseExpr);
     auto thenClauseExpr = toVeloxExpr(ifExpr.then(), inputType);
-    params.emplace_back(thenClauseExpr);
+    inputs.emplace_back(thenClauseExpr);
 
     if (!thenClauseExpr->type()->containsUnknown()) {
-      resultType = thenClauseExpr;
+      resultType = thenClauseExpr->type();
     }
   }
 
   if (substraitIfThen.has_else_()) {
     auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
-    params.emplace_back(elseClauseExpr);
+    inputs.emplace_back(elseClauseExpr);
     if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
-      resultType = elseClauseExpr;
+      resultType = elseClauseExpr->type();
     }
   }
 
   VELOX_CHECK_NOT_NULL(resultType, "Result type not found");
 
   return std::make_shared<const core::CallTypedExpr>(
-      resultType->type(), std::move(params), "if");
+      resultType, std::move(inputs), "if");
 }
 
 } // namespace facebook::velox::substrait
