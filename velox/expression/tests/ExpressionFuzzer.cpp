@@ -68,6 +68,12 @@ DEFINE_bool(
     false,
     "Disable constant-folding in the common evaluation path.");
 
+DEFINE_bool(
+    enable_varargs_function_test,
+    false,
+    "Enable fuzzer tests for functions that are able to take variadic "
+    "arguments");
+
 namespace facebook::velox::test {
 
 namespace {
@@ -244,6 +250,11 @@ std::optional<CallableSignature> processSignature(
   // Don't support functions with parameterized signatures.
   if (!signature.typeVariableConstraints().empty()) {
     LOG(WARNING) << "Skipping unsupported signature: " << functionName
+                 << signature.toString();
+    return std::nullopt;
+  }
+  if (signature.variableArity() && !FLAGS_enable_varargs_function_test) {
+    LOG(WARNING) << "Skipping variadic function signature: " << functionName
                  << signature.toString();
     return std::nullopt;
   }
