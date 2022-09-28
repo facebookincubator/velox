@@ -161,19 +161,18 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
 
     size_t inputsSize = callTypeExpr->inputs().size();
     bool hasElseInput = inputsSize % 2 == 1;
-    size_t last = hasElseInput ? inputsSize - 1 : inputsSize;
 
     auto ifThenExpr = substraitExpr->mutable_if_then();
-    for (int i = 0; i < last; i += 2) {
+    for (int i = 0; i < inputsSize / 2; i++) {
       auto ifClauseExpr = ifThenExpr->add_ifs();
       ifClauseExpr->mutable_if_()->MergeFrom(
-          toSubstraitExpr(arena, callTypeExpr->inputs().at(i), inputType));
-      ifClauseExpr->mutable_then()->MergeFrom(
-          toSubstraitExpr(arena, callTypeExpr->inputs().at(i + 1), inputType));
+          toSubstraitExpr(arena, callTypeExpr->inputs().at(i * 2), inputType));
+      ifClauseExpr->mutable_then()->MergeFrom(toSubstraitExpr(
+          arena, callTypeExpr->inputs().at(i * 2 + 1), inputType));
     }
     if (hasElseInput) {
-      ifThenExpr->mutable_else_()->MergeFrom(
-          toSubstraitExpr(arena, callTypeExpr->inputs().at(last), inputType));
+      ifThenExpr->mutable_else_()->MergeFrom(toSubstraitExpr(
+          arena, callTypeExpr->inputs().at(inputsSize - 1), inputType));
     }
   }
 
