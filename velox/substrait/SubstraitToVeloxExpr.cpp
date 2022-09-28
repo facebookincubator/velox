@@ -136,7 +136,7 @@ std::shared_ptr<const core::ITypedExpr>
 SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression_IfThen& substraitIfThen,
     const RowTypePtr& inputType) {
-  std::vector<std::shared_ptr<const core::ITypedExpr>> params;
+  std::vector<core::TypedExprPtr> params;
 
   core::TypedExprPtr resultType;
   for (auto& ifExpr : substraitIfThen.ifs()) {
@@ -155,12 +155,6 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     params.emplace_back(elseClauseExpr);
     if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
       resultType = elseClauseExpr;
-    }
-  } else {
-    if (resultType) {
-      auto elseNull = std::make_shared<core::ConstantTypedExpr>(
-          variant::null(resultType->type()->kind()));
-      params.emplace_back(elseNull);
     }
   }
 

@@ -161,9 +161,9 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
 
     size_t inputsSize = callTypeExpr->inputs().size();
     bool hasElseInput = inputsSize % 2 == 1;
+    size_t last = hasElseInput ? inputsSize - 1 : inputsSize;
 
     auto ifThenExpr = substraitExpr->mutable_if_then();
-    size_t last = hasElseInput ? inputsSize - 1 : inputsSize;
     for (int i = 0; i < last; i += 2) {
       auto ifClauseExpr = ifThenExpr->add_ifs();
       ifClauseExpr->mutable_if_()->MergeFrom(
