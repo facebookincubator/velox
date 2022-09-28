@@ -156,15 +156,14 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
         typeConvertor_->toSubstraitType(arena, callTypeExpr->type()));
 
   } else {
-    if (callTypeExpr->inputs().size() % 2 != 1) {
-      VELOX_NYI(
-          "Number of arguments are always going to be odd for if/then or switch expression");
-    }
-
     // For today's version of Substrait, you'd have to use IfThen if you need
     // the switch cases to be call typed expression.
+
+    size_t inputsSize = callTypeExpr->inputs().size();
+    bool hasElseInput = inputsSize % 2 == 1;
+
     auto ifThenExpr = substraitExpr->mutable_if_then();
-    auto last = callTypeExpr->inputs().size() - 1;
+    size_t last = hasElseInput ? inputsSize - 1 : inputsSize;
     for (int i = 0; i < last; i += 2) {
       auto ifClauseExpr = ifThenExpr->add_ifs();
       ifClauseExpr->mutable_if_()->MergeFrom(
@@ -172,8 +171,10 @@ const ::substrait::Expression& VeloxToSubstraitExprConvertor::toSubstraitExpr(
       ifClauseExpr->mutable_then()->MergeFrom(
           toSubstraitExpr(arena, callTypeExpr->inputs().at(i + 1), inputType));
     }
-    ifThenExpr->mutable_else_()->MergeFrom(
-        toSubstraitExpr(arena, callTypeExpr->inputs().at(last), inputType));
+    if (hasElseInput) {
+      ifThenExpr->mutable_else_()->MergeFrom(
+          toSubstraitExpr(arena, callTypeExpr->inputs().at(last), inputType));
+    }
   }
 
   return *substraitExpr;

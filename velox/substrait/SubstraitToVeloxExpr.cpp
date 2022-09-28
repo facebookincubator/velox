@@ -137,7 +137,7 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     const ::substrait::Expression_IfThen& substraitIfThen,
     const RowTypePtr& inputType) {
   std::vector<std::shared_ptr<const core::ITypedExpr>> params;
-  params.reserve(substraitIfThen.ifs_size() + 1);
+
   core::TypedExprPtr resultType;
   for (auto& ifExpr : substraitIfThen.ifs()) {
     auto ifClauseExpr = toVeloxExpr(ifExpr.if_(), inputType);
@@ -150,12 +150,21 @@ SubstraitVeloxExprConverter::toVeloxExpr(
     }
   }
 
-  VELOX_CHECK(
-      resultType != nullptr,
-      "Result type not found during convert Substrait IfThen to velox CallTypedExpr");
+  if (substraitIfThen.has_else_()) {
+    auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
+    params.emplace_back(elseClauseExpr);
+    if (!resultType && !elseClauseExpr->type()->containsUnknown()) {
+      resultType = elseClauseExpr;
+    }
+  } else {
+    if (resultType) {
+      auto elseNull = std::make_shared<core::ConstantTypedExpr>(
+          variant::null(resultType->type()->kind()));
+      params.emplace_back(elseNull);
+    }
+  }
 
-  auto elseClauseExpr = toVeloxExpr(substraitIfThen.else_(), inputType);
-  params.emplace_back(elseClauseExpr);
+  VELOX_CHECK_NOT_NULL(resultType, "Result type not found");
 
   return std::make_shared<const core::CallTypedExpr>(
       resultType->type(), std::move(params), "if");
