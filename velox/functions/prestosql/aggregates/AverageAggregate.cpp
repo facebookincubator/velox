@@ -24,9 +24,9 @@ namespace facebook::velox::aggregate {
 
 namespace {
 
-template <typename TSumType>
+template <typename TSum>
 struct SumCount {
-  TSumType sum{0};
+  TSum sum{0};
   int64_t count{0};
 };
 
@@ -350,8 +350,13 @@ bool registerAverageAggregate(const std::string& name) {
           checkSumCountRowType(
               inputType,
               "Input type for final aggregation must be (sum:double, count:bigint) struct");
-          return std::make_unique<AverageAggregate<int64_t, double, double>>(
-              resultType);
+          if (resultType->kind() == TypeKind::DOUBLE) {
+            return std::make_unique<AverageAggregate<int64_t, double, double>>(
+                resultType);
+          } else {
+            return std::make_unique<AverageAggregate<int64_t, double, float>>(
+                resultType);
+          }
         }
       });
   return true;
