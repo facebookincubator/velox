@@ -21,7 +21,7 @@
 
 namespace facebook::velox::window {
 
-// Represent different window rank functions.
+// Types of rank functions.
 enum class RankType {
   kRank,
   kDenseRank,
@@ -30,7 +30,7 @@ enum class RankType {
 
 namespace {
 
-template <RankType type>
+template <RankType TRank, typename TResult>
 class RankFunction : public exec::WindowFunction {
  public:
   explicit RankFunction(const TypePtr& resultType)
@@ -52,47 +52,28 @@ class RankFunction : public exec::WindowFunction {
       const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
     auto* rawPeerStarts = peerGroupStarts->as<vector_size_t>();
-
-    void* rawValues = nullptr;
-    switch (type) {
-      case RankType::kRank:
-      case RankType::kDenseRank: {
-        rawValues = result->asFlatVector<int64_t>()->mutableRawValues();
-        break;
-      }
-      case RankType::kPercentRank: {
-        rawValues = result->asFlatVector<double>()->mutableRawValues();
-        break;
-      }
-    }
+    auto rawValues = result->asFlatVector<TResult>()->mutableRawValues();
 
     for (int i = 0; i < numRows; i++) {
       auto start = rawPeerStarts[i];
       if (start != currentPeerGroupStart_) {
         currentPeerGroupStart_ = start;
-        if constexpr (type == RankType::kDenseRank) {
-          rank_ += (previousPeerCount_ != 0);
+        if constexpr (TRank == RankType::kDenseRank) {
+          if (previousPeerCount_ > 0) {
+            ++rank_;
+          }
         } else {
           rank_ += previousPeerCount_;
         }
         previousPeerCount_ = 0;
       }
 
-      switch (type) {
-        case RankType::kRank: {
-          ((int64_t*)rawValues)[resultOffset + i] = rank_;
-          break;
-        }
-        case RankType::kDenseRank: {
-          ((int64_t*)rawValues)[resultOffset + i] = rank_;
-          break;
-        }
-        case RankType::kPercentRank: {
-          ((double*)rawValues)[resultOffset + i] = (numPartitionRows_ == 1)
-              ? 0
-              : double(rank_ - 1) / (numPartitionRows_ - 1);
-          break;
-        }
+      if constexpr (TRank == RankType::kPercentRank) {
+        rawValues[resultOffset + i] = (numPartitionRows_ == 1)
+            ? 0
+            : double(rank_ - 1) / (numPartitionRows_ - 1);
+      } else {
+        rawValues[resultOffset + i] = rank_;
       }
       previousPeerCount_ += 1;
     }
@@ -107,7 +88,7 @@ class RankFunction : public exec::WindowFunction {
 
 } // namespace
 
-template <RankType type>
+template <RankType TRank, typename TResult>
 void registerRankInternal(
     const std::string& name,
     const std::string& returnType) {
@@ -124,18 +105,18 @@ void registerRankInternal(
           const TypePtr& resultType,
           velox::memory::MemoryPool* /*pool*/)
           -> std::unique_ptr<exec::WindowFunction> {
-        return std::make_unique<RankFunction<type>>(resultType);
+        return std::make_unique<RankFunction<TRank, TResult>>(resultType);
       });
 }
 
 void registerRank(const std::string& name) {
-  registerRankInternal<RankType::kRank>(name, "bigint");
+  registerRankInternal<RankType::kRank, int64_t>(name, "bigint");
 }
 void registerDenseRank(const std::string& name) {
-  registerRankInternal<RankType::kDenseRank>(name, "bigint");
+  registerRankInternal<RankType::kDenseRank, int64_t>(name, "bigint");
 }
 void registerPercentRank(const std::string& name) {
-  registerRankInternal<RankType::kPercentRank>(name, "double");
+  registerRankInternal<RankType::kPercentRank, double>(name, "double");
 }
 
 } // namespace facebook::velox::window

@@ -85,7 +85,7 @@ not produce gaps in the sequence.
 
 .. function:: percent_rank() -> double
 
-Returns the percentage ranking of a value in group of values. The result is ``(r - 1) / (n - 1)`` where ``r``
+Returns the percentage ranking of a value in a group of values. The result is ``(r - 1) / (n - 1)`` where ``r``
 is the ``rank()`` of the row and ``n`` is the total number of rows in the window partition.
 
 .. function:: rank() -> bigint

@@ -55,10 +55,8 @@ TEST_F(RankTest, singlePartition) {
 TEST_F(RankTest, singleRowPartitions) {
   vector_size_t size = 1000;
   auto vectors = makeRowVector({
-      makeFlatVector<int32_t>(
-          size, [](auto row) -> int32_t { return row % 1000; }),
-      makeFlatVector<int32_t>(
-          size, [](auto row) -> int32_t { return row % 1000; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
   });
 
   testTwoColumnInput({vectors}, "rank");
