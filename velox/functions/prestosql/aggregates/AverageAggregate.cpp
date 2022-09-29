@@ -350,12 +350,18 @@ bool registerAverageAggregate(const std::string& name) {
           checkSumCountRowType(
               inputType,
               "Input type for final aggregation must be (sum:double, count:bigint) struct");
-          if (resultType->kind() == TypeKind::DOUBLE) {
-            return std::make_unique<AverageAggregate<int64_t, double, double>>(
-                resultType);
-          } else {
-            return std::make_unique<AverageAggregate<int64_t, double, float>>(
-                resultType);
+          switch (resultType->kind()) {
+            case TypeKind::REAL:
+              return std::make_unique<AverageAggregate<int64_t, double, float>>(
+                  resultType);
+            case TypeKind::DOUBLE:
+            case TypeKind::ROW:
+              return std::make_unique<
+                  AverageAggregate<int64_t, double, double>>(resultType);
+            default:
+              VELOX_FAIL(
+                  "Unsupported result type for final aggregation: {}",
+                  resultType->kindName());
           }
         }
       });
