@@ -38,7 +38,7 @@ struct SumCount {
 //     REAL            |     DOUBLE          |    REAL
 //     ALL INTs        |     DOUBLE          |    DOUBLE
 //
-template <typename TInput, typename TAccumulator, typename ResultType>
+template <typename TInput, typename TAccumulator, typename TResult>
 class AverageAggregate : public exec::Aggregate {
  public:
   explicit AverageAggregate(TypePtr resultType) : exec::Aggregate(resultType) {}
@@ -60,12 +60,7 @@ class AverageAggregate : public exec::Aggregate {
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
-    // Real input type in Presto has special case and returns REAL, not DOUBLE.
-    if (resultType_->isDouble()) {
-      extractValuesImpl<double>(groups, numGroups, result);
-    } else {
-      extractValuesImpl<float>(groups, numGroups, result);
-    }
+    extractValuesImpl(groups, numGroups, result);
   }
 
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
@@ -270,7 +265,6 @@ class AverageAggregate : public exec::Aggregate {
     return exec::Aggregate::value<SumCount<TAccumulator>>(group);
   }
 
-  template <typename TResult>
   void extractValuesImpl(char** groups, int32_t numGroups, VectorPtr* result) {
     auto vector = (*result)->as<FlatVector<TResult>>();
     VELOX_CHECK(vector);
