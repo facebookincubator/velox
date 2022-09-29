@@ -314,8 +314,12 @@ class AverageAggregate : public exec::Aggregate {
                                   TResult,
                                   UnscaledShortDecimal>)&&std::
                                  is_same_v<TAccumulator, int128_t>) {
-          DecimalUtil::divideWithRoundUp<TResult, int128_t, TResult>(
-              rawValues[i], sumCount->sum, TResult(sumCount->count), 0, 0);
+          // Need to perform integer division here as the intermediate sums may
+          // overflow decimal limits.
+          int128_t result = 0;
+          DecimalUtil::divideWithRoundUp<int128_t, int128_t, int64_t>(
+              result, sumCount->sum, sumCount->count, 0, 0);
+          rawValues[i] = TResult(result);
         }
       }
     }

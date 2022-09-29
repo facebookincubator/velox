@@ -243,9 +243,17 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   shortExpected = makeShortDecimalFlatVector({337}, DECIMAL(3, 2));
   runAndCompare("avg(c0)", {shortDecimal}, shortExpected);
 
+  // Decimal average when total sum crosses decimal limits but not integer
+  // limits.
   longDecimal = makeLongDecimalFlatVector(
       {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0));
-  // runAndCompare("avg(c0)", {longDecimal}, shortExpected);
+  // Average result is 50000000000000000000000000000000000000.
+  runAndCompare(
+      "avg(c0)",
+      {longDecimal},
+      makeLongDecimalFlatVector(
+          {buildInt128(0x259DA6542D43623D, 0x04C5112000000000)},
+          DECIMAL(38, 0)));
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
