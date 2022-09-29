@@ -79,6 +79,12 @@ struct UnscaledLongDecimal {
   explicit UnscaledLongDecimal(UnscaledShortDecimal value)
       : unscaledValue_(value.unscaledValue()) {}
 
+  // explicit UnscaledLongDecimal(const UnscaledShortDecimal& value)
+  //     : unscaledValue_(value.unscaledValue()) {}
+
+  // explicit UnscaledLongDecimal(const UnscaledLongDecimal& value)
+  //     : unscaledValue_(value.unscaledValue()) {}
+
   static UnscaledLongDecimal min() {
     return UnscaledLongDecimal(kMin);
   }
@@ -101,6 +107,10 @@ struct UnscaledLongDecimal {
 
   bool operator!=(const UnscaledLongDecimal& other) const {
     return unscaledValue_ != other.unscaledValue_;
+  }
+
+  bool operator!=(int other) const {
+    return unscaledValue_ != other;
   }
 
   bool operator<(const UnscaledLongDecimal& other) const {
@@ -224,3 +234,20 @@ class numeric_limits<facebook::velox::UnscaledLongDecimal> {
   }
 };
 } // namespace std
+
+/// fmt::formatter<> specialization required for error message formatting
+/// in VELOX checks.
+template <>
+struct fmt::formatter<facebook::velox::UnscaledLongDecimal> {
+  template <typename ParseContext>
+  constexpr auto parse(ParseContext& ctx) {
+    return ctx.begin();
+  }
+
+  template <typename FormatContext>
+  auto format(
+      const facebook::velox::UnscaledLongDecimal& d,
+      FormatContext& ctx) {
+    return fmt::format_to(ctx.out(), "{}", std::to_string(d.unscaledValue()));
+  }
+};
