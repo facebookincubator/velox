@@ -105,6 +105,20 @@ The query ranks orders for each clerk by price:</p>
 <section id="ranking-functions">
 <h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py" id="dense_rank">
+<span class="sig-name descname"><span class="pre">dense_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#dense_rank" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the rank of a value in a group of values. This is similar to rank(), except that tie values do
+not produce gaps in the sequence.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="percent_rank">
+<span class="sig-name descname"><span class="pre">percent_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span></span></span><a class="headerlink" href="#percent_rank" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the percentage ranking of a value in a group of values. The result is <code class="docutils literal notranslate"><span class="pre">(r</span> <span class="pre">-</span> <span class="pre">1)</span> <span class="pre">/</span> <span class="pre">(n</span> <span class="pre">-</span> <span class="pre">1)</span></code> where <code class="docutils literal notranslate"><span class="pre">r</span></code>
+is the <code class="docutils literal notranslate"><span class="pre">rank()</span></code> of the row and <code class="docutils literal notranslate"><span class="pre">n</span></code> is the total number of rows in the window partition.</p>
+<dl class="py function">
 <dt class="sig sig-object py" id="rank">
 <span class="sig-name descname"><span class="pre">rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#rank" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
