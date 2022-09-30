@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/tests/AggregationTestBase.h"
-#include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -220,40 +220,51 @@ TEST_F(AverageAggregationTest, avgDecimal) {
         makeRowVector({expectedResult})};
     queryBuilder.assertResults(expectedRowVector);
   };
-  auto shortDecimal = makeNullableShortDecimalFlatVector(
-      {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
-  auto shortExpected = makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1));
-  runAndCompare("avg(c0)", {shortDecimal}, shortExpected);
-
-  auto longDecimal = makeNullableLongDecimalFlatVector(
-      {buildInt128(10, 100),
-       buildInt128(10, 200),
-       buildInt128(10, 300),
-       buildInt128(10, 400),
-       buildInt128(10, 500),
-       std::nullopt},
-      DECIMAL(23, 4));
-  auto longExpected =
-      makeLongDecimalFlatVector({buildInt128(10, 300)}, DECIMAL(23, 4));
-  runAndCompare("avg(c0)", {longDecimal}, longExpected);
-
-  // Round-up average.
-  shortDecimal =
-      makeNullableShortDecimalFlatVector({100, 400, 510}, DECIMAL(3, 2));
-  shortExpected = makeShortDecimalFlatVector({337}, DECIMAL(3, 2));
-  runAndCompare("avg(c0)", {shortDecimal}, shortExpected);
-
-  // Decimal average when total sum crosses decimal limits but not integer
-  // limits.
-  longDecimal = makeLongDecimalFlatVector(
-      {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0));
-  // Average result is 50000000000000000000000000000000000000.
   runAndCompare(
       "avg(c0)",
-      {longDecimal},
+      {makeNullableShortDecimalFlatVector(
+          {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1))},
+      makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1)));
+
+  runAndCompare(
+      "avg(c0)",
+      {makeNullableLongDecimalFlatVector(
+          {buildInt128(10, 100),
+           buildInt128(10, 200),
+           buildInt128(10, 300),
+           buildInt128(10, 400),
+           buildInt128(10, 500),
+           std::nullopt},
+          DECIMAL(23, 4))},
+      makeLongDecimalFlatVector({buildInt128(10, 300)}, DECIMAL(23, 4)));
+
+  // Round-up average.
+  runAndCompare(
+      "avg(c0)",
+      {makeNullableShortDecimalFlatVector({100, 400, 510}, DECIMAL(3, 2))},
+      makeShortDecimalFlatVector({337}, DECIMAL(3, 2)));
+
+  // Decimal average when total sum crosses decimal limits but not integer
+  // limits. Average result is 50000000000000000000000000000000000000.
+  runAndCompare(
+      "avg(c0)",
+      {makeLongDecimalFlatVector(
+          {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0))},
       makeLongDecimalFlatVector(
           {buildInt128(0x259DA6542D43623D, 0x04C5112000000000)},
           DECIMAL(38, 0)));
+
+  // Decimal total sum exceeds int128_t max limit.
+  std::vector<int128_t> intVector;
+  for (int i = 0; i < 100; ++i) {
+    intVector.push_back(UnscaledLongDecimal::max().unscaledValue());
+  }
+  VELOX_ASSERT_THROW(
+      runAndCompare(
+          "avg(c0)",
+          {makeLongDecimalFlatVector(intVector, DECIMAL(38, 0))},
+          makeLongDecimalFlatVector({1}, DECIMAL(38, 0))),
+      "integer overflow: 99999999999999999999999999999999999999 + 99999999999999999999999999999999999999");
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test
