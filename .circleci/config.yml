@@ -222,7 +222,8 @@ jobs:
           no_output_timeout: 1h
 
   linux-benchmarks-basic:
-    executor: build
+    machine: true
+    resource_class: facebookincubator/velox-dedicated
     environment:
       CONBENCH_URL: https://velox-conbench.voltrondata.run/
     steps:
