@@ -200,7 +200,7 @@ reordering during execution of the AND and OR expressions.</p>
 <a class="reference internal image-reference" href="../_images/flatten-and.png"><img alt="../_images/flatten-and.png" class="align-center" src="../_images/flatten-and.png" style="width: 600px;" /></a>
 </section>
 <section id="flatten-concat-like-functions">
-<h4>Flatten concat-like functions<a class="headerlink" href="#flatten-concat-like-functions" title="Permalink to this headline">¶</a></h4>
+<span id="expr-flatten-concat"></span><h4>Flatten concat-like functions<a class="headerlink" href="#flatten-concat-like-functions" title="Permalink to this headline">¶</a></h4>
 <p>Functions that behave like associative operators can declare support for
 flattening. In that case, adjacent nodes of the same function are
 consolidated into one.</p>
@@ -357,7 +357,7 @@ depth-first order. For each node a sequence of operations is performed.</p>
 </ol>
 </section>
 <section id="flat-no-nulls-fast-path">
-<h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Permalink to this headline">¶</a></h4>
+<span id="expr-flat-no-nulls"></span><h4>Flat No-Nulls Fast Path<a class="headerlink" href="#flat-no-nulls-fast-path" title="Permalink to this headline">¶</a></h4>
 <p>When evaluating simple expressions on short vectors (&lt; 1000 rows), the overhead
 of handling nulls and encodings is visible. To optimize these use cases,
 expression evaluation takes flat-no-nulls fast path
