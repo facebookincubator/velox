@@ -28,6 +28,12 @@
 #include "velox/common/memory/MappedMemory.h"
 #include "velox/common/memory/MmapArena.h"
 
+#if XSIMD_WITH_AVX2
+#define SIMD_WORD_COUNT 4
+#else
+#define SIMD_WORD_COUNT 2
+#endif
+
 namespace facebook::velox::memory {
 
 // Denotes a number of pages of one size class, i.e. one page consists
@@ -189,7 +195,7 @@ class MmapAllocator : public MappedMemory {
     static constexpr int32_t kNoLastLookup = -1;
     // Number of bits in 'mappedPages_' for one bit in
     // 'mappedFreeLookup_'.
-    static constexpr int32_t kPagesPerLookupBit = 512;
+    static constexpr int32_t kPagesPerLookupBit = SIMD_WORD_COUNT * 128;
     // Number of extra 0 uint64's at te end of allocation bitmaps for SIMD
     // checks.
     static constexpr int32_t kSimdTail = 8;
