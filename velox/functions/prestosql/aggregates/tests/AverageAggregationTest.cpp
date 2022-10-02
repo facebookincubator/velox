@@ -208,22 +208,28 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   // facebook::velox::exec::test::AggregateTypeResolver resolver(step);
   auto runAndCompare = [&](const std::string& exprStr,
                            std::vector<VectorPtr> input,
-                           VectorPtr expectedResult) {
+                           VectorPtr expectedResult,
+                           bool isSingle = true) {
     // Need to use PlanBuilder as it registers a AggregateTypeResolver Vs
     // evaluate which would compile the expressions through Simple/Vector
     // function resolvers.
     PlanBuilder builder;
     builder.values({makeRowVector(input)});
-    builder.singleAggregation({}, {"avg(c0)"});
+    if (isSingle) {
+      builder.singleAggregation({}, {"avg(c0)"});
+    } else {
+      builder.partialAggregation({}, {"avg(c0)"});
+    }
     AssertQueryBuilder queryBuilder(builder.planNode());
     std::vector<RowVectorPtr> expectedRowVector = {
         makeRowVector({expectedResult})};
     queryBuilder.assertResults(expectedRowVector);
   };
+  auto shortDecimal = makeNullableShortDecimalFlatVector(
+      {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1));
   runAndCompare(
       "avg(c0)",
-      {makeNullableShortDecimalFlatVector(
-          {1'000, 2'000, 3'000, 4'000, 5'000, std::nullopt}, DECIMAL(10, 1))},
+      {shortDecimal},
       makeShortDecimalFlatVector({3'000}, DECIMAL(10, 1)));
 
   runAndCompare(
@@ -244,27 +250,20 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       {makeNullableShortDecimalFlatVector({100, 400, 510}, DECIMAL(3, 2))},
       makeShortDecimalFlatVector({337}, DECIMAL(3, 2)));
 
-  // Decimal average when total sum crosses decimal limits but not integer
-  // limits. Average result is 50000000000000000000000000000000000000.
-  runAndCompare(
-      "avg(c0)",
-      {makeLongDecimalFlatVector(
-          {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0))},
-      makeLongDecimalFlatVector(
-          {buildInt128(0x259DA6542D43623D, 0x04C5112000000000)},
-          DECIMAL(38, 0)));
-
-  // Decimal total sum exceeds int128_t max limit.
-  std::vector<int128_t> intVector;
-  for (int i = 0; i < 100; ++i) {
-    intVector.push_back(UnscaledLongDecimal::max().unscaledValue());
-  }
+  // Decimal overflow.
   VELOX_ASSERT_THROW(
       runAndCompare(
           "avg(c0)",
-          {makeLongDecimalFlatVector(intVector, DECIMAL(38, 0))},
+          {makeLongDecimalFlatVector(
+              {UnscaledLongDecimal::max().unscaledValue(), 1}, DECIMAL(38, 0))},
           makeLongDecimalFlatVector({1}, DECIMAL(38, 0))),
-      "integer overflow: 99999999999999999999999999999999999999 + 99999999999999999999999999999999999999");
+      "Decimal overflow: 99999999999999999999999999999999999999 + 1");
+
+  // Partial Aggregation.
+  auto longDecimal = makeLongDecimalFlatVector({15'000}, DECIMAL(38, 1));
+  auto countVector = makeConstant<int64_t>(5, 1, BIGINT());
+  auto expected = makeRowVector({longDecimal, countVector});
+  runAndCompare("avg(c0)", {shortDecimal}, expected, false);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test

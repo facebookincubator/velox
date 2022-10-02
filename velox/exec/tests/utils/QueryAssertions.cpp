@@ -438,6 +438,9 @@ velox::variant rowVariantAt(const VectorPtr& vector, vector_size_t row) {
       values.push_back(arrayVariantAt(child, row));
     } else if (child->typeKind() == TypeKind::MAP) {
       values.push_back(mapVariantAt(child, row));
+    } else if (child->typeKind() == TypeKind::LONG_DECIMAL) {
+      auto value = variantAt<TypeKind::LONG_DECIMAL>(child, row);
+      values.push_back(value);
     } else {
       auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
           variantAt, child->typeKind(), child, row);

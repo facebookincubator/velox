@@ -76,12 +76,6 @@ struct UnscaledLongDecimal {
   explicit UnscaledLongDecimal(UnscaledShortDecimal value)
       : unscaledValue_(value.unscaledValue()) {}
 
-  // explicit UnscaledLongDecimal(const UnscaledShortDecimal& value)
-  //     : unscaledValue_(value.unscaledValue()) {}
-
-  // explicit UnscaledLongDecimal(const UnscaledLongDecimal& value)
-  //     : unscaledValue_(value.unscaledValue()) {}
-
   static UnscaledLongDecimal min() {
     return UnscaledLongDecimal(kMin);
   }
@@ -142,15 +136,9 @@ struct UnscaledLongDecimal {
     return UnscaledLongDecimal(static_cast<int64_t>(value));
   }
 
-  UnscaledLongDecimal& operator+=(const UnscaledLongDecimal& value) {
-    unscaledValue_ += value.unscaledValue_;
-    return *this;
-  }
+  UnscaledLongDecimal& operator+=(const UnscaledLongDecimal& value);
 
-  UnscaledLongDecimal& operator+=(const UnscaledShortDecimal& value) {
-    unscaledValue_ += value.unscaledValue();
-    return *this;
-  }
+  UnscaledLongDecimal& operator+=(const UnscaledShortDecimal& value);
 
   UnscaledLongDecimal& operator*=(int value) {
     unscaledValue_ *= value;
