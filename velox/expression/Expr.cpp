@@ -16,6 +16,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <parse/ExpressionsParser.h>
 #include <fstream>
 
 #include "velox/common/base/Exceptions.h"
@@ -375,6 +376,100 @@ std::optional<std::string> generateFilePath(
 }
 } // namespace
 
+// static
+bool ExprSaver::saveData(
+    const BaseVector* FOLLY_NONNULL vector,
+    const char* FOLLY_NONNULL basePath,
+    std::string& storedPath,
+    std::string& failMsg) {
+  auto dataPath = generateFilePath(basePath, "vector");
+  if (!dataPath.has_value()) {
+    failMsg = "Failed to create file for saving input vector.";
+    return false;
+  }
+
+  // Persist vector to disk
+  try {
+    std::ofstream outputFile(dataPath.value(), std::ofstream::binary);
+    saveVector(*vector, outputFile);
+    outputFile.close();
+    storedPath = dataPath.value();
+  } catch (std::exception& e) {
+    failMsg = fmt::format(
+        "Failed to save input vector to {}. Reasons: '{}'",
+        dataPath.value(),
+        e.what());
+    return false;
+  } catch (...) {
+    failMsg =
+        fmt::format("Failed to save input vector to {}.", dataPath.value());
+    return false;
+  }
+  return true;
+}
+
+// static
+bool ExprSaver::saveData(
+    std::ostream& out,
+    const char* FOLLY_NONNULL basePath,
+    std::string& storedPath,
+    std::string& failMsg) {
+  auto dataPath = generateFilePath(basePath, "vector");
+  if (!dataPath.has_value()) {
+    failMsg = "Failed to create file for saving input vector.";
+    return false;
+  }
+  try {
+    std::ofstream outputFile(dataPath.value(), std::ofstream::binary);
+    outputFile << out.rdbuf();
+    outputFile.close();
+    storedPath = dataPath.value();
+  } catch (std::exception& e) {
+    failMsg = fmt::format(
+        "Failed to save input vector to {}. Reasons: '{}'",
+        dataPath.value(),
+        e.what());
+    return false;
+  } catch (...) {
+    failMsg =
+        fmt::format("Failed to save input vector to {}.", dataPath.value());
+    return false;
+  }
+  return true;
+}
+
+// static
+bool ExprSaver::saveSql(
+    const std::string& sql,
+    const char* FOLLY_NONNULL basePath,
+    std::string& storedPath,
+    std::string& failMsg) {
+  auto sqlPath = generateFilePath(basePath, "sql");
+  if (!sqlPath.has_value()) {
+    failMsg = "Failed to create file for saving expression SQL.";
+    return false;
+  }
+
+  // Persist sql to disk
+  try {
+    std::ofstream outputFile(sqlPath.value(), std::ofstream::binary);
+    outputFile.write(sql.data(), sql.size());
+    outputFile.close();
+    storedPath = sqlPath.value();
+  } catch (std::exception& e) {
+    failMsg = fmt::format(
+        "Failed to save expression SQL to {}. Reasons: '{}'",
+        sqlPath.value(),
+        e.what());
+    return false;
+  } catch (...) {
+    failMsg =
+        fmt::format("Failed to save expression SQL to {}.", sqlPath.value());
+    return false;
+  }
+  return true;
+}
+
 void ExprExceptionContext::persistDataAndSql(const char* basePath) {
   // Exception already persisted or failed to persist. We don't persist again in
   // this situation.
@@ -382,39 +477,46 @@ void ExprExceptionContext::persistDataAndSql(const char* basePath) {
     return;
   }
 
-  auto dataPath = generateFilePath(basePath, "vector");
-  auto sqlPath = generateFilePath(basePath, "sql");
-  if (!dataPath.has_value()) {
-    dataPath_ = "Failed to create file for saving input vector.";
+  if (!ExprSaver::saveData(vector_, basePath, dataPath_, dataPath_) ||
+      !ExprSaver::saveSql(expr_->toSql(), basePath, sqlPath_, dataPath_)) {
     return;
   }
-  if (!sqlPath.has_value()) {
-    sqlPath_ = "Failed to create file for saving expression SQL.";
-    return;
+}
+
+// static
+std::shared_ptr<BaseVector> ExprRestorer::restoreData(const char* dataPath) {
+  std::ifstream inputFile(dataPath, std::ifstream::binary);
+  VELOX_CHECK(!inputFile.fail(), "Cannot open file: {}", dataPath);
+
+  auto result = facebook::velox::restoreVector(
+      inputFile,
+      &memory::MemoryManager<>::getProcessDefaultManager().getRoot());
+  inputFile.close();
+  return result;
+}
+
+// static
+std::string ExprRestorer::restoreSql(const char* sqlPath) {
+  std::ifstream inputFile(sqlPath, std::ifstream::binary);
+
+  // Find out file size.
+  auto begin = inputFile.tellg();
+  inputFile.seekg(0, std::ios::end);
+  auto end = inputFile.tellg();
+
+  auto fileSize = end - begin;
+  if (fileSize == 0) {
+    return "";
   }
 
-  // Persist vector to disk
-  try {
-    std::ofstream outputFile(dataPath.value(), std::ofstream::binary);
-    saveVector(*vector_, outputFile);
-    outputFile.close();
-    dataPath_ = dataPath.value();
-  } catch (...) {
-    dataPath_ =
-        fmt::format("Failed to save input vector to {}.", dataPath.value());
-  }
+  // Read the file.
+  std::string sql;
+  sql.resize(fileSize);
 
-  // Persist sql to disk
-  try {
-    auto sql = expr_->toSql();
-    std::ofstream outputFile(sqlPath.value(), std::ofstream::binary);
-    outputFile.write(sql.data(), sql.size());
-    outputFile.close();
-    sqlPath_ = sqlPath.value();
-  } catch (...) {
-    sqlPath_ =
-        fmt::format("Failed to save expression SQL to {}.", sqlPath.value());
-  }
+  inputFile.seekg(begin);
+  inputFile.read(sql.data(), fileSize);
+  inputFile.close();
+  return sql;
 }
 
 void Expr::evalFlatNoNulls(

@@ -63,25 +63,71 @@ struct ExprStats {
   }
 };
 
+class ExprSaver {
+ public:
+  /// Persist the passed in 'RowVector' on disk. The data will be persisted at
+  /// $basePath/velox_vector_xxx that will be returned by storedPath.
+  /// Returns true if persistence is successful, false otherwise. In the case of
+  /// unsuccessful persistence, the reason will be returned by failMsg.
+  static bool saveData(
+      const BaseVector* FOLLY_NONNULL vector,
+      const char* FOLLY_NONNULL basePath,
+      std::string& storedPath,
+      std::string& failMsg);
+
+  /// Same as above saveData() but takes a serialized vector as input.
+  static bool saveData(
+      std::ostream& out,
+      const char* FOLLY_NONNULL basePath,
+      std::string& storedPath,
+      std::string& failMsg);
+
+  /// Persist the passed in 'Expr' on disk in the form of sql. The sql will be
+  /// persisted at $basePath/velox_sql_xxx that will be returned by storedPath.
+  /// Returns true if persistence is successful, false otherwise. In the case of
+  /// unsuccessful persistence, the reason will be returned by failMsg.
+  static bool saveSql(
+      const std::string& sql,
+      const char* FOLLY_NONNULL basePath,
+      std::string& storedPath,
+      std::string& failMsg);
+};
+
+class ExprRestorer {
+ public:
+  /// Restores 'Expr' from previously saved files by 'ExprSaver'.
+  static std::string restoreSql(const char* FOLLY_NONNULL sqlPath);
+
+  /// Restores 'BaseVector' from previouly saved files by 'ExprSaver'.
+  static std::shared_ptr<BaseVector> restoreData(
+      const char* FOLLY_NONNULL dataPath);
+};
+
 /// Data needed to generate exception context for the top-level expression. It
 /// also provides functionality to persist both data and sql to disk for
 /// debugging purpose
 class ExprExceptionContext {
  public:
-  ExprExceptionContext(
+  explicit ExprExceptionContext(
       const Expr* FOLLY_NONNULL expr,
       const RowVector* FOLLY_NONNULL vector)
       : expr_(expr), vector_(vector) {}
 
-  /// Persist data and sql on disk. Data will be persisted in $basePath/vector
-  /// and sql will be persisted in $basePath/sql
+  explicit ExprExceptionContext(
+      const std::string& dataPath,
+      const std::string& sqlPath)
+      : dataPath_(dataPath), sqlPath_(sqlPath) {}
+
+  /// Persist data and sql on disk. Data will be persisted in
+  /// $basePath/velox_vector_xxx and sql will be persisted in
+  /// $basePath/velox_sql_xxx
   void persistDataAndSql(const char* FOLLY_NONNULL basePath);
 
-  const Expr* FOLLY_NONNULL expr() const {
+  const Expr* FOLLY_NULLABLE expr() const {
     return expr_;
   }
 
-  const RowVector* FOLLY_NONNULL vector() const {
+  const RowVector* FOLLY_NULLABLE vector() const {
     return vector_;
   }
 
