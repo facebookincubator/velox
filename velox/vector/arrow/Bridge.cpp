@@ -759,6 +759,23 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema) {
       }
       break;
 
+    case 'd': { // decimal types.
+      try {
+        std::string::size_type sz;
+        // Parse "d:".
+        if (format[1] == ':') {
+          int precision = std::stoi(&format[2], &sz);
+          // Parse ",".
+          if (format[2 + sz] == ',') {
+            int scale = std::stoi(&format[2 + sz + 1], &sz);
+            return DECIMAL(precision, scale);
+          }
+        }
+      } catch (std::invalid_argument) {
+        // Fall through.
+      }
+    }
+
     // Complex types.
     case '+': {
       switch (format[1]) {
