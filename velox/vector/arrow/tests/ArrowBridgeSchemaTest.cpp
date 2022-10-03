@@ -243,7 +243,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*DECIMAL(20, 15), *testSchemaImport("d:20,15"));
   VELOX_ASSERT_THROW(
       *testSchemaImport("d2,15"),
-      "Unable to convert 'd2,15' ArrowSchema format type to Velox.");
+      "Unable to convert 'd2,15' ArrowSchema decimal format to Velox decimal");
 }
 
 TEST_F(ArrowBridgeSchemaImportTest, complexTypes) {

@@ -763,16 +763,14 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema) {
       try {
         std::string::size_type sz;
         // Parse "d:".
-        if (format[1] == ':') {
-          int precision = std::stoi(&format[2], &sz);
-          // Parse ",".
-          if (format[2 + sz] == ',') {
-            int scale = std::stoi(&format[2 + sz + 1], &sz);
-            return DECIMAL(precision, scale);
-          }
-        }
-      } catch (std::invalid_argument) {
-        // Fall through.
+        int precision = std::stoi(&format[2], &sz);
+        // Parse ",".
+        int scale = std::stoi(&format[2 + sz + 1], &sz);
+        return DECIMAL(precision, scale);
+      } catch (std::invalid_argument& err) {
+        VELOX_USER_FAIL(
+            "Unable to convert '{}' ArrowSchema decimal format to Velox decimal",
+            format);
       }
     }
 
