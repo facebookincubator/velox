@@ -123,6 +123,9 @@ TEST_F(ArrowBridgeSchemaExportTest, scalar) {
 
   testScalarType(TIMESTAMP(), "ttn");
   testScalarType(DATE(), "tdD");
+
+  testScalarType(DECIMAL(10, 4), "d:10,4");
+  testScalarType(DECIMAL(20, 5), "d:20,5");
 }
 
 TEST_F(ArrowBridgeSchemaExportTest, nested) {
