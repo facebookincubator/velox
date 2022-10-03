@@ -67,7 +67,7 @@ void extractColumns(
     }
     child->resize(rows.size());
     table->rows()->extractColumn(
-        rows.data(), rows.size(), projection.inputChannel, child);
+        rows.data(), rows.size(), projection.inputChannel, *child.get());
   }
 }
 

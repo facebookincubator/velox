@@ -125,7 +125,8 @@ void Spiller::extractSpill(folly::Range<char**> rows, RowVectorPtr& resultPtr) {
   auto result = resultPtr.get();
   auto& types = container_->columnTypes();
   for (auto i = 0; i < types.size(); ++i) {
-    container_->extractColumn(rows.data(), rows.size(), i, result->childAt(i));
+    container_->extractColumn(
+        rows.data(), rows.size(), i, *result->childAt(i).get());
   }
   auto& aggregates = container_->aggregates();
   auto numKeys = types.size();

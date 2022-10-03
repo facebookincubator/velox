@@ -282,7 +282,7 @@ void OrderBy::getOutputWithoutSpill() {
         returningRows_.data() + numRowsReturned_,
         output_->size(),
         columnProjection.inputChannel,
-        output_->childAt(columnProjection.outputChannel));
+        *output_->childAt(columnProjection.outputChannel).get());
   }
   numRowsReturned_ += output_->size();
 }

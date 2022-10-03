@@ -417,7 +417,7 @@ RowVectorPtr Window::getOutput() {
         sortedRows_.data() + numProcessedRows_,
         numOutputRows,
         i,
-        result->childAt(i));
+        *result->childAt(i).get());
   }
 
   // Construct vectors for the window function output columns.

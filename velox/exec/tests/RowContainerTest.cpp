@@ -72,7 +72,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       // Test the extractColumn API that didn't use the offset parameter and
       // copied to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(rows.data(), size, column, result);
+      container.extractColumn(rows.data(), size, column, *result.get());
       assertEqualVectors(expected, result);
     };
 
@@ -80,7 +80,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       // Test extractColumn from offset.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
       container.extractColumn(
-          rows.data(), size - offset, column, offset, result);
+          rows.data(), size - offset, column, offset, *result.get());
       testEqualVectors(result, expected, offset, 0);
     };
 
@@ -95,7 +95,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       folly::Range<const vector_size_t*> rowNumbersRange =
           folly::Range(rowNumbers.data(), size - offset);
       container.extractColumn(
-          rows.data(), rowNumbersRange, column, offset, result);
+          rows.data(), rowNumbersRange, column, offset, *result.get());
       testEqualVectors(result, expected, offset, offset);
     };
 
@@ -146,12 +146,12 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       // Test the extractColumn API that didn't use the offset parameter
       // and copies to the start of the result vector.
       auto result = BaseVector::create(expected->type(), size, pool_.get());
-      container.extractColumn(input.data(), size, column, result);
+      container.extractColumn(input.data(), size, column, *result.get());
       verifyResults(result);
 
       // Test extractColumn from offset.
       container.extractColumn(
-          input.data() + offset, size - offset, column, offset, result);
+          input.data() + offset, size - offset, column, offset, *result.get());
       verifyResults(result, offset);
     };
 
@@ -179,7 +179,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
       folly::Range<const vector_size_t*> rowNumbersRange =
           folly::Range(rowNumbers.data(), rowNumbersSize);
       container.extractColumn(
-          input.data(), rowNumbersRange, column, offset, result);
+          input.data(), rowNumbersRange, column, offset, *result.get());
       verifyResults(result, offset);
     };
 
@@ -265,7 +265,7 @@ class RowContainerTest : public exec::test::RowContainerTestBase {
         return rowContainer->compare(l, r, 0, {nullsFirst, ascending}) < 0;
       });
       VectorPtr result = BaseVector::create(type, numRows, pool_.get());
-      rowContainer->extractColumn(rows.data(), numRows, 0, result);
+      rowContainer->extractColumn(rows.data(), numRows, 0, *result.get());
       assertEqualVectors(expected, result);
     }
 
@@ -489,7 +489,7 @@ TEST_F(RowContainerTest, types) {
 
     auto extracted = copy->childAt(column);
     extracted->resize(kNumRows);
-    data->extractColumn(rows.data(), rows.size(), column, extracted);
+    data->extractColumn(rows.data(), rows.size(), column, *extracted.get());
     raw_vector<uint64_t> hashes(kNumRows);
     auto source = batch->childAt(column);
     auto columnType = batch->type()->as<TypeKind::ROW>().childAt(column);

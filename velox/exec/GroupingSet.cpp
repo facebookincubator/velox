@@ -450,7 +450,7 @@ void GroupingSet::extractGroups(
   auto totalKeys = rows.keyTypes().size();
   for (int32_t i = 0; i < totalKeys; ++i) {
     auto keyVector = result->childAt(i);
-    rows.extractColumn(groups.data(), groups.size(), i, keyVector);
+    rows.extractColumn(groups.data(), groups.size(), i, *keyVector.get());
   }
   for (int32_t i = 0; i < aggregates_.size(); ++i) {
     aggregates_[i]->finalize(groups.data(), groups.size());
