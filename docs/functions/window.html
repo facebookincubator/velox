@@ -105,6 +105,15 @@ The query ranks orders for each clerk by price:</p>
 <section id="ranking-functions">
 <h1>Ranking functions<a class="headerlink" href="#ranking-functions" title="Permalink to this headline">¶</a></h1>
 <dl class="py function">
+<dt class="sig sig-object py" id="cume_dist">
+<span class="sig-name descname"><span class="pre">cume_dist</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#cume_dist" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<p>Returns the cumulative distribution of a value in a group of values. The result is the number of rows
+preceding or peer with the row in the window ordering of the window partition divided by the total
+number of rows in the window partition. Thus, any tie values in the ordering will evaluate to the same
+distribution value.</p>
+<dl class="py function">
 <dt class="sig sig-object py" id="dense_rank">
 <span class="sig-name descname"><span class="pre">dense_rank</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span><a class="headerlink" href="#dense_rank" title="Permalink to this definition">¶</a></dt>
 <dd></dd></dl>
