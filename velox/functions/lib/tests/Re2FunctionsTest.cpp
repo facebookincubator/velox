@@ -562,6 +562,34 @@ TEST_F(Re2FunctionsTest, likePatternSuffix) {
   EXPECT_TRUE(like(input, generateString(kAnyWildcardCharacter) + input));
 }
 
+TEST_F(Re2FunctionsTest, likePatternGeneric) {
+  auto like = [&](std::string str, std::string pattern) {
+    auto likeResult = evaluateOnce<bool>(
+        fmt::format("like(c0, '{}')", pattern), std::make_optional(str));
+    VELOX_CHECK(likeResult, "Like operator evaluation failed");
+    return *likeResult;
+  };
+
+  EXPECT_TRUE(like("a", "%_%"));
+  EXPECT_TRUE(like("abcde", "%b_de"));
+  EXPECT_TRUE(like("ABCDE", "%C_E"));
+  EXPECT_TRUE(like("abcde", "%_cde"));
+  EXPECT_TRUE(like("ABCDE", "%_DE"));
+  EXPECT_TRUE(like("abcde", "_%de"));
+  EXPECT_TRUE(like("ABCDE", "_%DE"));
+  EXPECT_TRUE(like("abcde", "_%e"));
+  EXPECT_TRUE(like("ABCDE", "%_E"));
+  EXPECT_FALSE(like("", "%_"));
+  EXPECT_FALSE(like("abcde", "%c_de"));
+  EXPECT_FALSE(like("ABCDE", "%B_E"));
+  EXPECT_FALSE(like("abcde", "_%c_de"));
+  EXPECT_FALSE(like("ABCDE", "_%B_E"));
+  EXPECT_FALSE(like("abcde", "%be"));
+  EXPECT_FALSE(like("ABCDE", "__de"));
+  EXPECT_FALSE(like("abcde", "%_ce"));
+  EXPECT_FALSE(like("ABCDE", "%b_e"));
+}
+
 TEST_F(Re2FunctionsTest, likePatternAndEscape) {
   auto like = ([&](std::optional<std::string> str,
                    std::optional<std::string> pattern,

@@ -463,6 +463,141 @@ class OptimizedLikeWithMemcmp final : public VectorFunction {
   vector_size_t reducedPatternLength_;
 };
 
+bool checkIfValidPattern(const StringView& pattern, const char escapeChar) {
+  auto patternString = pattern.getString();
+  auto n = patternString.size();
+  std::set<char> validCharacters = {'%', '_', escapeChar};
+
+  for (auto i = 0; i < n - 1; i++) {
+    if (patternString[i] == escapeChar &&
+        validCharacters.find(patternString[i + 1]) == validCharacters.end()) {
+      return false;
+    }
+  }
+  return (patternString[n - 1] != escapeChar);
+}
+
+bool matchPattern(
+    const char* input,
+    const char* pattern,
+    const vector_size_t& inputLength,
+    const vector_size_t& patternLength,
+    const std::optional<char> escapeChar) {
+  vector_size_t idxInput = 0;
+  vector_size_t idxPattern = 0;
+
+  for (; idxPattern < patternLength && idxInput < inputLength; idxPattern++) {
+    if (escapeChar && escapeChar.value() == pattern[idxPattern]) {
+      idxPattern++;
+      if (pattern[idxPattern] != input[idxInput]) {
+        return false;
+      }
+      idxInput++;
+    } else if (pattern[idxPattern] == '_') {
+      idxInput++;
+    } else if (pattern[idxPattern] == '%') {
+      idxPattern++;
+      while (idxPattern < patternLength && pattern[idxPattern] == '%') {
+        idxPattern++;
+      }
+      if (idxPattern == patternLength) {
+        return true;
+      }
+
+      for (; idxInput < inputLength; idxInput++) {
+        if (matchPattern(
+                input + idxInput,
+                pattern + idxPattern,
+                inputLength - idxInput,
+                patternLength - idxPattern,
+                escapeChar)) {
+          return true;
+        }
+      }
+      return false;
+    } else if (input[idxInput] == pattern[idxPattern]) {
+      idxInput++;
+    } else {
+      return false;
+    }
+  }
+
+  while (idxPattern < patternLength && pattern[idxPattern] == '%') {
+    idxPattern++;
+  }
+  return idxPattern == patternLength && idxInput == inputLength;
+}
+
+class LikeRecursive final : public VectorFunction {
+ public:
+  LikeRecursive(StringView pattern, std::optional<char> escapeChar)
+      : pattern_(pattern.data()), escapeChar_(escapeChar) {
+    if (escapeChar) {
+      validPattern_ = checkIfValidPattern(pattern, escapeChar.value());
+    } else {
+      validPattern_ = true;
+    }
+  }
+
+  void apply(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& /* outputType */,
+      EvalCtx& context,
+      VectorPtr& resultRef) const final {
+    VELOX_CHECK(args.size() == 2 || args.size() == 3);
+
+    if (!validPattern_) {
+      auto error = std::make_exception_ptr(std::invalid_argument(
+          "Escape character must be followed by '%%', '_' or the escape character itself\""));
+      rows.applyToSelected([&](auto row) { context.setError(row, error); });
+      return;
+    }
+
+    FlatVector<bool>& result = ensureWritableBool(rows, context, resultRef);
+
+    exec::DecodedArgs decodedArgs(rows, args, context);
+    auto toSearch = decodedArgs.at(0);
+    auto patternCharArr = pattern_.data();
+    const vector_size_t n = strlen(patternCharArr);
+    if (toSearch->isIdentityMapping()) {
+      auto rawStrings = toSearch->data<StringView>();
+      rows.applyToSelected([&](vector_size_t i) {
+        result.set(
+            i,
+            matchPattern(
+                rawStrings[i].data(),
+                patternCharArr,
+                rawStrings[i].size(),
+                n,
+                escapeChar_));
+      });
+      return;
+    }
+
+    if (toSearch->isConstantMapping()) {
+      bool match = matchPattern(
+          toSearch->valueAt<StringView>(0).data(),
+          patternCharArr,
+          toSearch->valueAt<StringView>(0).size(),
+          n,
+          escapeChar_);
+      rows.applyToSelected([&](vector_size_t i) { result.set(i, match); });
+      return;
+    }
+
+    // Since the likePattern and escapeChar (2nd and 3rd args) are both
+    // constants, so the first arg is expected to be either of flat or constant
+    // vector only. This code path is unreachable.
+    VELOX_UNREACHABLE();
+  }
+
+ private:
+  bool validPattern_;
+  StringView pattern_;
+  std::optional<char> escapeChar_;
+};
+
 class LikeWithRe2 final : public VectorFunction {
  public:
   LikeWithRe2(StringView pattern, std::optional<char> escapeChar)
@@ -947,10 +1082,10 @@ std::shared_ptr<exec::VectorFunction> makeLike(
         return std::make_shared<OptimizedLikeWithMemcmp<PatternKind::kSuffix>>(
             pattern, reducedLength);
       default:
-        return std::make_shared<LikeWithRe2>(pattern, escapeChar);
+        return std::make_shared<LikeRecursive>(pattern, escapeChar);
     }
   }
-  return std::make_shared<LikeWithRe2>(pattern, escapeChar);
+  return std::make_shared<LikeRecursive>(pattern, escapeChar);
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>> likeSignatures() {
